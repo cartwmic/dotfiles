@@ -169,6 +169,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 |---|---|
 | `id` | kgate's job id, also the pod's name |
 | `cluster` | `homelab` or `ag1` |
+| `cpu_limit`, `quota_wait_s` | AG1 only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
 | `repo`, `cwd`, `head` | repo name, working directory, Mac HEAD |

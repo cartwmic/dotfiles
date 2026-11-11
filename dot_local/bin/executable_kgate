@@ -797,6 +797,7 @@ class Job:
         if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
             raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
         self.rec["quota_wait_s"] = 0
+        self.rec["cpu_limit"] = prof["cpu_limit"] or cpu  # the effective limit, which the pod's build parallelism follows
         if self.o.node:
             raise Unavailable("AG1 does not take --node; the cluster schedules the pod")
 

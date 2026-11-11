@@ -1573,6 +1573,11 @@ class Ag1Black(unittest.TestCase):
         self.assertEqual((c["resources"]["requests"]["cpu"], c["resources"]["limits"]["cpu"]), ("2", "5"))
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["GOMAXPROCS"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"]), ("5", "-j5", "5", "5"))
+        self.assertEqual((self.records()[-1]["cpu"], self.records()[-1]["cpu_limit"]), (2, 5))
+
+    def test_the_record_carries_the_effective_cpu_limit_even_when_it_defaults(self):
+        self.run_kgate("--", "true")
+        self.assertEqual((self.records()[-1]["cpu"], self.records()[-1]["cpu_limit"]), (2, 2))
 
     def test_a_cpu_limit_below_the_request_is_refused(self):
         self.profile(extra="cpu_limit = 1")
