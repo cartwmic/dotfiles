@@ -8,6 +8,7 @@ heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few o
 
     kgate cancel [--wait SECONDS] JOB_ID      stop that one job (kgate's id or the run-and-wake id; exact match only)
     kgate cancel --list                       the jobs that are running now
+    kgate kc2-setup                           write ~/.kube/kgate-cluster (once, for profiles with cluster = "kc2")
 
 `cancel` is the only supported way to stop a job: it signals that job's one client and nothing else. Never pkill.
 
@@ -29,6 +30,10 @@ Contract
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
   there is one); the full output is in <id>.log beside it.
+
+KC2 (cluster = "kc2" in the profile): the same contract on the Axon KC2 cluster2 cluster, namespace jobs, through local
+kubectl and ~/.kube/kgate-cluster (`kgate kc2-setup` writes that file once). No Secrets, no python3 in the pod: the pod side is a
+POSIX sh script that prints the same markers. See "KC2" in docs/kgate.md.
 
 Env: KGATE_SSH (default: the one line in ~/.config/kgate/host, rendered from the chezmoi data key sshHosts.kgate), KGATE_SSH_KEY (default ~/.ssh/homelab).
 The same file runs in the pod as `kgate.py --pod JOB.json`: it verifies the tree hash, checks the tool versions,
@@ -75,6 +80,15 @@ OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 PREFER_NODES = ("cartwmic-g14-wsl",)
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
+# KC2 (Axon) cluster2: constants, not configuration. The kubeconfig holds only this one context, so us1 and us2 are unreachable through kgate.
+KC2_KUBECONFIG = os.path.expanduser("~/.kube/kgate-cluster")
+KC2_CONTEXT = "example-ctx"
+KC2_NAMESPACE = "jobs"
+KC2_REGISTRY = "registry.example"
+KC2_DEADLINE_S = 7200
+KC2_USER = "65532:65532"  # the example-worker image's user
+KC2_SETUP = "run `kgate kc2-setup` once (it writes %s from the %s context of ~/.kube/config)" % (KC2_KUBECONFIG, KC2_CONTEXT)
+KC2_TREE_ROOTS = ("Users", "Volumes", "private")  # where a Mac worktree lives; only these get an emptyDir, so nothing in the image is hidden
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
 UNAVAILABLE = 69
 USAGE = 64
@@ -131,13 +145,16 @@ def tree_hash(root, files):
 
 # ---------------------------------------------------------------- pure: profile, versions, pod spec
 
+MEM_SIZE = r"[1-9][0-9]*(Mi|Gi)"
+
+
 def parse_profile(text):
     """Profile TOML -> dict with image, cpu, memory, memory_limit, tools {name: (version, cmd|None)}, secrets {ENV: op ref}, services."""
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -158,15 +175,20 @@ def parse_profile(text):
     prefer = raw.get("prefer_nodes", True)
     if not isinstance(prefer, bool):
         raise Unavailable("profile prefer_nodes must be true or false, got %r" % (prefer,))
-    user = raw.get("user", "1000:1000")
+    cluster = raw.get("cluster", "homelab")
+    if cluster not in ("homelab", "kc2"):
+        raise Unavailable("profile cluster must be \"homelab\" or \"kc2\", got %r" % (cluster,))
+    ephemeral = raw.get("ephemeral_storage")
+    if ephemeral is not None and (cluster != "kc2" or not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral)):
+        raise Unavailable("profile ephemeral_storage is for cluster = \"kc2\" only and must look like 20Gi, got %r" % (ephemeral,))
+    user = raw.get("user", KC2_USER if cluster == "kc2" else "1000:1000")
     if not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
-            "tools": tools, "secrets": secrets, "services": services}
+            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral}
 
 
-MEM_SIZE = r"[1-9][0-9]*(Mi|Gi)"
 
 
 def mem_bytes(size):
@@ -238,6 +260,97 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
         pod["imagePullSecrets"] = [{"name": job + "-pull"}]
     items.append({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": job, "labels": labels}, "spec": pod})
     return {"apiVersion": "v1", "kind": "List", "items": items}
+
+
+def kc2_roots(*paths):
+    """The top-level directories (/Users for /Users/me/git/repo) that get an emptyDir, so the shipped tree unpacks at its own absolute path as a non-root user."""
+    roots = sorted({"/" + p.lstrip("/").split("/")[0] for p in paths})
+    bad = [r for r in roots if r[1:] not in KC2_TREE_ROOTS]
+    if bad:
+        raise Unavailable("the tree is under %s; kgate on KC2 unpacks only under /%s" % (", ".join(bad), ", /".join(KC2_TREE_ROOTS)))
+    return roots
+
+
+def pod_manifests_kc2(job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots):
+    """The one Pod for an KC2 job, as a List. No Secrets, no pull Secret, no hostPath, no affinity: KC2 policy (Kyverno, quota, Role) decides."""
+    labels = {"app": "kgate", "kgate-job": job, "example.org/owner": "team", "example.org/pillar": "dems"}
+    env = [{"name": "KGATE_OUT", "value": "/out"}, {"name": "CI", "value": "1"},
+           {"name": "npm_config_cache", "value": "/cache/npm"},
+           {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+           {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
+           {"name": "MAKEFLAGS", "value": "-j%d" % cpu},
+           {"name": "HOME", "value": "/cache/home"}, {"name": "GOCACHE", "value": "/cache/go-build"},
+           {"name": "GOMODCACHE", "value": "/cache/gomod"}, {"name": "GOMAXPROCS", "value": str(cpu)}]
+    mounts = [("tree%d" % i, r) for i, r in enumerate(roots)] + [("cache", "/cache"), ("out", "/out")]
+    container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
+                 "command": ["sleep", "86400"],  # no tini in the image; longer than the pod's deadline, so the deadline ends it
+                 "env": env,
+                 "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                 "resources": {"requests": {"cpu": str(cpu), "memory": memory, "ephemeral-storage": ephemeral},
+                               "limits": {"cpu": str(cpu), "memory": memory_limit, "ephemeral-storage": ephemeral}},
+                 "volumeMounts": [{"name": n, "mountPath": path} for n, path in mounts]}
+    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": KC2_DEADLINE_S,
+           "automountServiceAccountToken": False,
+           "securityContext": {"runAsNonRoot": True, "runAsUser": uid, "runAsGroup": gid, "seccompProfile": {"type": "RuntimeDefault"}},
+           "volumes": [{"name": n, "emptyDir": {}} for n, _ in mounts],
+           "containers": [container]}
+    meta = {"name": job, "labels": labels, "annotations": {"cluster-autoscaler.kubernetes.io/safe-to-evict": "true"}}
+    return {"apiVersion": "v1", "kind": "List", "items": [{"apiVersion": "v1", "kind": "Pod", "metadata": meta, "spec": pod}]}
+
+
+def job_sh(job):
+    """The job as a POSIX sh file for pod_sh: variables, the tool checks as kg_tools, the command as the positional parameters."""
+    q = shlex.quote
+    lines = ["ID=" + q(job["id"]), "ROOT=" + q(job["root"]), "CWD=" + q(job["cwd"]), "TREE=" + q(job["tree"]), "kg_tools() {"]
+    lines += ["  kg_check %s %s %s || return" % (q(name), q(version), q(cmd or name + " --version")) for name, (version, cmd) in job["tools"].items()]
+    lines += ["  :", "}", "set -- " + " ".join(q(a) for a in job["argv"])]
+    return "\n".join(lines) + "\n"
+
+
+# The pod side on KC2, where the image has no python3. It prints the markers `kgate.py --pod` prints, so the Mac side reads both the same way.
+# Usage: sh kgate.sh DIR. DIR holds job.sh (job_sh) and files.nul (the shipped file list, NUL-separated).
+POD_SH = r"""#!/bin/sh
+dir=$1
+. "$dir/job.sh"
+say() { printf 'kgate[%s]: %s\n' "$ID" "$*"; }
+say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)"
+mkdir -p "$HOME" 2>/dev/null
+# the tree hash: a throwaway repo and index holding exactly the shipped files, hashed as bytes (no line-ending or filter conversion)
+tmp=$dir/hash
+rm -rf "$tmp"; mkdir -p "$tmp/git/info"
+printf '* -text -eol -filter -ident -working-tree-encoding\n' > "$tmp/git/info/attributes"
+g() { GIT_INDEX_FILE=$tmp/index git -c core.autocrlf=false -c core.safecrlf=false -c safe.directory='*' --git-dir="$tmp/git" --work-tree="$ROOT" "$@"; }
+git init -q --bare "$tmp/git" >/dev/null 2>&1
+found=$(g update-index --add --info-only -z --stdin < "$dir/files.nul" 2>"$tmp/err" && g write-tree --missing-ok 2>>"$tmp/err")
+if [ "$found" != "$TREE" ]; then
+  say "hash MISMATCH expected=$TREE found=${found:-git failed: $(head -c 200 "$tmp/err" | tr '\n' ' ')}"
+  exit 70
+fi
+say "hash ok $found"
+# the tools: the expected version must appear in the command's output as a whole version
+n=0
+kg_check() {
+  out=$(cd "$CWD" && sh -c "$3" 2>&1); rc=$?
+  esc=$(printf '%s' "$2" | sed 's/[][\.*^$+?(){}|]/\\&/g')
+  if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -Eq "(^|[^0-9.]|(^|[^0-9])[.])${esc}(\$|[^0-9.]|[.](\$|[^0-9]))"; then
+    line=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | head -n 1 | cut -c 1-120 | sed 's/\\/\\\\/g; s/"/\\"/g')
+    say "preflight FAILED tool=$1 expected=$2 found=\"${line:-no output}\" ($3 exit $rc)"
+    return 71
+  fi
+  n=$((n + 1))
+}
+kg_tools || exit 71
+say "preflight ok $n tools"
+cg=${KGATE_CGROUP:-/sys/fs/cgroup}
+say "running $*"
+( cd "$CWD" && exec "$@" )
+code=$?
+peak=unknown
+[ -r "$cg/memory.peak" ] && peak="$(cat "$cg/memory.peak") cgroup"
+printf '\n'; say "peak $peak"
+say "end $(date +%s) exit $code"
+exit "$code"
+"""
 
 
 MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|preflight)\b(.*)"
@@ -438,7 +551,8 @@ def forget(*paths):
 
 
 class Cluster:
-    """The one adapter: kubectl on the control plane over ssh. Nothing else on this machine touches the cluster."""
+    """The homelab adapter: kubectl on the control plane over ssh. Nothing else on this machine touches the cluster."""
+    name = "homelab"
 
     def __init__(self, host, key):
         self.ssh = ["ssh", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=8",
@@ -452,6 +566,63 @@ class Cluster:
 
     def popen(self, kargs, stdin, stdout):
         return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
+
+    def configured(self):
+        return bool(HOST)
+
+    def check(self):
+        if not HOST:
+            raise Unavailable("no cluster host: set KGATE_SSH, or set sshHosts.kgate (address, user) in ~/.config/chezmoi/chezmoi.yaml "
+                              "so chezmoi renders ~/.config/kgate/host (docs/profiles.md, \"Local data keys\")")
+        done = self.run(["get", "namespace", NAMESPACE, "-o", "name"])
+        if done.returncode != 0:
+            why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
+            raise Unavailable("cluster unreachable (%s): %s" % (HOST, why))
+
+    def object_names(self, job_id):
+        return ["pod/" + job_id, "secret/" + job_id + "-env", "secret/" + job_id + "-pull"]
+
+    def exec_script(self, job_id):
+        return "tar -xf - --no-same-owner -C / && exec python3 /tmp/%s/kgate.py --pod /tmp/%s/job.json" % (job_id, job_id)
+
+
+class Kc2Cluster(Cluster):
+    """The KC2 adapter: local kubectl with a kubeconfig that holds only KC2 cluster2, always with that context and namespace. The Role there
+    allows pods, pods/exec and pods/log only, so there are no Secrets and the sweep and cleanup touch pods only."""
+    name = "kc2"
+
+    def __init__(self):
+        pass
+
+    def argv(self, kargs):
+        return ["kubectl", "--kubeconfig", KC2_KUBECONFIG, "--context", KC2_CONTEXT, "-n", KC2_NAMESPACE, *kargs]
+
+    def run(self, kargs, stdin=b""):
+        return subprocess.run(self.argv(kargs), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def popen(self, kargs, stdin, stdout):
+        return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
+
+    def configured(self):
+        return os.path.exists(KC2_KUBECONFIG)
+
+    def check(self):
+        if not self.configured():
+            raise Unavailable("%s is missing: %s" % (KC2_KUBECONFIG, KC2_SETUP))
+        try:
+            done = self.run(["auth", "can-i", "create", "pods", "--request-timeout=30s"])
+        except OSError as e:
+            raise Unavailable("cannot run kubectl for KC2: %s" % e)
+        if done.stdout.decode(errors="replace").strip() != "yes":
+            why = (done.stderr.decode(errors="replace").strip().splitlines() or [done.stdout.decode(errors="replace").strip() or "no message"])[-1]
+            raise Unavailable("KC2 not reachable or not allowed to create pods in %s: sign in with `als az login -e kc2` (or `az login`) on the KC2 VPN, "
+                              "then run the job again (kubectl: %s)" % (KC2_NAMESPACE, why))
+
+    def object_names(self, job_id):
+        return ["pod/" + job_id]
+
+    def exec_script(self, job_id):
+        return "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job_id, job_id)
 
 
 def op_token():
@@ -484,19 +655,44 @@ def op_read(ref):
 
 
 def check_reachable(cluster):
-    if not HOST:
-        raise Unavailable("no cluster host: set KGATE_SSH, or set sshHosts.kgate (address, user) in ~/.config/chezmoi/chezmoi.yaml "
-                          "so chezmoi renders ~/.config/kgate/host (docs/profiles.md, \"Local data keys\")")
-    done = cluster.run(["get", "namespace", NAMESPACE, "-o", "name"])
-    if done.returncode != 0:
-        why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
-        raise Unavailable("cluster unreachable (%s): %s" % (HOST, why))
+    cluster.check()
 
 
 def delete_job_objects(cluster, job_id):
-    """Delete one job's pod and its two Secrets (the names the job created). Returns the kubectl result."""
-    names = ["pod/" + job_id, "secret/" + job_id + "-env", "secret/" + job_id + "-pull"]
-    return cluster.run(["delete", *names, "--ignore-not-found", "--grace-period=0", "--wait=true"])
+    """Delete one job's pod and the Secrets it created (none on KC2). Returns the kubectl result."""
+    return cluster.run(["delete", *cluster.object_names(job_id), "--ignore-not-found", "--grace-period=0", "--wait=true"])
+
+
+def kc2_setup():
+    """Write KC2_KUBECONFIG from the KC2 cluster2 context of ~/.kube/config, that context only, with kubelogin's --login switched to azurecli
+    (the token then comes from `az login`, with no browser sign-in per job). Mode 600."""
+    done = subprocess.run(["kubectl", "--kubeconfig", os.path.expanduser("~/.kube/config"), "config", "view", "--raw", "--minify",
+                           "--context", KC2_CONTEXT, "-o", "json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if done.returncode != 0:
+        print("kgate kc2-setup: no %s context in ~/.kube/config: %s" % (KC2_CONTEXT, done.stderr.decode(errors="replace").strip()), file=sys.stderr)
+        return UNAVAILABLE
+    cfg = json.loads(done.stdout)
+    if len(cfg.get("clusters") or []) != 1 or len(cfg.get("users") or []) != 1 or len(cfg.get("contexts") or []) != 1:
+        print("kgate kc2-setup: expected exactly one cluster, user and context for %s" % KC2_CONTEXT, file=sys.stderr)
+        return UNAVAILABLE
+    ex = cfg["users"][0].get("user", {}).get("exec")
+    if not ex or ex.get("command") != "kubelogin":
+        print("kgate kc2-setup: the %s user does not sign in through kubelogin; not changed" % KC2_CONTEXT, file=sys.stderr)
+        return UNAVAILABLE
+    args = [a for a in ex.get("args") or []]
+    if "--login" in args and args.index("--login") + 1 < len(args):
+        args[args.index("--login") + 1] = "azurecli"
+    else:
+        args = [a for a in args if not a.startswith("--login=")] + ["--login", "azurecli"]
+    ex["args"] = args
+    cfg["current-context"] = KC2_CONTEXT
+    os.makedirs(os.path.dirname(KC2_KUBECONFIG), exist_ok=True)
+    tmp = KC2_KUBECONFIG + ".%d.tmp" % os.getpid()
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, KC2_KUBECONFIG)
+    print("kgate kc2-setup: wrote %s (context %s, mode 600). Sign in with `als az login -e kc2` (or `az login`) on the KC2 VPN." % (KC2_KUBECONFIG, KC2_CONTEXT))
+    return 0
 
 
 class Job:
@@ -512,7 +708,7 @@ class Job:
         self.log = open(self.logpath, "ab", buffering=0)
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
-                    "cmd": shlex.join(opts.command), "repo": None, "head": None, "tree": None, "node": None, "image": None,
+                    "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
                     "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
         self.cluster = Cluster(HOST, KEY)
@@ -537,7 +733,7 @@ class Job:
         os.makedirs(os.path.dirname(self.entry), exist_ok=True)
         write_json_atomic(self.entry, {"id": self.id, "job": self.rec["job"] or None, "pid": os.getpid(), "start": ident[0],
                                        "proc_cmd": ident[1], "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
-                                       "node": self.rec["node"]})
+                                       "node": self.rec["node"], "cluster": self.cluster.name})
 
     def unregister(self):
         forget(self.entry, self.cancel_marker)
@@ -547,18 +743,25 @@ class Job:
     def settings(self, wt):
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
-        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {}, "services": []}
+        prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
+                "services": [], "cluster": "homelab", "ephemeral_storage": None}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
             self.rec["profile"] = path
         elif o.profile:
             raise Unavailable("profile %s not found" % path)
+        if prof["cluster"] == "kc2":  # before any refusal, so the record says kc2 and cleanup never reaches for the homelab
+            self.cluster = Kc2Cluster()
+            self.rec["cluster"] = "kc2"
+            self.register()
         image = o.image or prof["image"]
         cpu = o.cpu if o.cpu is not None else (prof["cpu"] if prof["cpu"] is not None else 2)
         mem = o.mem or prof["memory"] or "4Gi"
         mem_limit = o.mem_limit or prof["memory_limit"] or mem
         check_settings(image, cpu, mem, mem_limit)
+        if prof["cluster"] == "kc2":
+            self.use_kc2(image, prof)
         if prof["services"]:
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node in NEVER_NODES:
@@ -568,12 +771,25 @@ class Job:
         self.rec.update(image=image, cpu=cpu, mem=mem, mem_limit=mem_limit)
         return image, cpu, mem, mem_limit, prof
 
+    def use_kc2(self, image, prof):
+        """The profile says cluster = "kc2": refuse what KC2 cannot take."""
+        if prof["secrets"]:
+            raise Unavailable("a profile for KC2 cannot have [secrets]: the Role there has no Secrets, and none are created")
+        if not image.startswith(KC2_REGISTRY + "/"):
+            raise Unavailable("an KC2 image must come from %s (nodes pull it with their own identity), got %s" % (KC2_REGISTRY, image.split("@")[0]))
+        if int(prof["user"].split(":")[0]) == 0:
+            raise Unavailable("an KC2 pod runs as non-root; the profile user is %s" % prof["user"])
+        if self.o.node:
+            raise Unavailable("KC2 does not take --node; the cluster schedules the pod")
+
     def reachable(self):
         check_reachable(self.cluster)
 
     def sweep(self):
         """Remove what an earlier client that died left behind: finished pods, and Secrets whose pod is gone."""
         self.cluster.run(["delete", "pod", "-l", "app=kgate", "--field-selector=status.phase!=Running,status.phase!=Pending", "--wait=false"])
+        if self.cluster.name == "kc2":  # no Secrets there
+            return
         pods = self.cluster.run(["get", "pods", "-l", "app=kgate", "-o", "json"])
         secrets = self.cluster.run(["get", "secrets", "-l", "app=kgate", "-o", "json"])
         try:
@@ -618,7 +834,7 @@ class Job:
 
     def execute(self, tar_bytes):
         """One exec: unpack, verify, run. Returns (markers, transport exit)."""
-        script = ("tar -xf - --no-same-owner -C / && exec python3 /tmp/%s/kgate.py --pod /tmp/%s/job.json" % (self.id, self.id))
+        script = self.cluster.exec_script(self.id)
         read, write = os.pipe()
         proc = self.cluster.popen(["exec", "-i", self.id, "--", "sh", "-c", script], stdin=subprocess.PIPE, stdout=write)
         os.close(write)
@@ -660,7 +876,7 @@ class Job:
         self.note("/out -> %s (%d files)" % (target, self.rec["out_files"]))
 
     def cleanup(self):
-        if not HOST:  # no cluster address: nothing was created, and an ssh attempt would only add noise to the exit-69 message
+        if not self.cluster.configured():  # no cluster address or kubeconfig: nothing was created, and an attempt would only add noise to the exit-69 message
             return
         done = delete_job_objects(self.cluster, self.id)
         self.rec["cleanup"] = done.returncode == 0
@@ -681,20 +897,28 @@ class Job:
                "uid": int(prof["user"].split(":")[0]), "gid": int(prof["user"].split(":")[1]),
                "own": [wt] + ([common] if not common.startswith(wt + "/") else []),
                "tools": {k: list(v) for k, v in prof["tools"].items()}}
-        tar_bytes = archive(wt, common, files, {"tmp/%s/job.json" % self.id: json.dumps(job).encode(),
-                                                "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()})
+        if self.cluster.name == "kc2":
+            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"]}).encode(),
+                       "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
+                       "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
+        else:
+            shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
+        tar_bytes = archive(wt, common, files, shipped)
         self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
         self.reachable()
         self.sweep()
         secret_env = {k: op_read(ref) for k, ref in prof["secrets"].items()}
         host = image.split("/")[0]
         pull = None
-        if host in PULL:
+        if host in PULL and self.cluster.name != "kc2":
             pull = (host, PULL[host][0], op_read(PULL[host][1]))
         limit = "" if mem_limit == mem else ", %s limit" % mem_limit
         self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
-        self.start_pod(pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit,
-                                          prefer_nodes=prof["prefer_nodes"]))
+        if self.cluster.name == "kc2":
+            manifests = pod_manifests_kc2(self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], kc2_roots(wt, common))
+        else:
+            manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"])
+        self.start_pod(manifests)
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         self.register()  # again, now that the node is known (kgate cancel --list shows it)
@@ -749,6 +973,7 @@ def parse_args(argv):
 USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]\n" \
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
+             "       kgate kc2-setup                          write ~/.kube/kgate-cluster once (for profiles with cluster = \"kc2\")\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac). See docs/kgate.md."
 
 
@@ -819,7 +1044,7 @@ def report_end(rec):
 
 def cancel_orphan(state, e):
     """The client is gone and wrote no end line: delete exactly this job's pod and Secrets, and write the end line."""
-    cluster = Cluster(HOST, KEY)
+    cluster = Kc2Cluster() if e.get("cluster") == "kc2" else Cluster(HOST, KEY)
     try:
         check_reachable(cluster)
     except Unavailable as err:
@@ -836,7 +1061,7 @@ def cancel_orphan(state, e):
     t0 = int(e["id"].split("-")[1])
     now = time.time()
     rec = {"id": e["id"], "job": e.get("job"), "start": utc(t0), "end": utc(now), "duration_s": round(now - t0, 3), "cwd": e.get("cwd"),
-           "cmd": e.get("cmd"), "node": e.get("node"), "ran": None, "exit": 143, "reason": CANCELLED + " (client already gone)",
+           "cmd": e.get("cmd"), "cluster": cluster.name, "node": e.get("node"), "ran": None, "exit": 143, "reason": CANCELLED + " (client already gone)",
            "cleanup": done.returncode == 0, "cancelled": True}
     with open(os.path.join(state, "log.jsonl"), "a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -916,6 +1141,8 @@ def main(argv):
         return pod_main(argv[1])
     if argv[:1] == ["cancel"]:
         return cancel_main(argv[1:])
+    if argv[:1] == ["kc2-setup"]:
+        return kc2_setup() if len(argv) == 1 else (print(USAGE_TEXT, file=sys.stderr), USAGE)[1]
     try:
         opts = parse_args(argv)
     except SystemExit as e:
