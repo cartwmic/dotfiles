@@ -25,21 +25,14 @@ PERSONAL = "Merging and deploying approved work is yours to do: if checks pass a
 SEAT_HEADING = "## Agent seats and models"
 SEAT_ROWS = (
     "| Coordinator | Opus 5.5 medium |",
+    "| Lead | Opus 5.5 medium |",
     "| Planner | Sonnet 5.5 high |",
     "| Reviewer | Opus 5.5 medium |",
+    "| Builder | Haiku 5.5 xhigh or Sonnet 5.5 high; use Sonnet 5.5 high on failure, or when the work is ambiguous |",
 )
-# Lead, builder and browser rows differ by profile.
-PROFILE_ROWS = {
-    "personal": (
-        "| Lead | Sonnet 5.5 high |",
-        "| Builder | Haiku 5.5 xhigh; escalate to Sonnet 5.5 high on failure, or when the work is ambiguous |",
-        "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
-    ),
-    "axon-work-computer": (
-        "| Lead | Opus 5.5 medium |",
-        "| Builder | Haiku 5.5 xhigh or Sonnet 5.5 high; use Sonnet 5.5 high on failure, or when the work is ambiguous |",
-        "| Browser work | Sonnet 5.5 high |",
-    ),
+BROWSER = {
+    "personal": "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
+    "axon-work-computer": "| Browser work | Sonnet 5.5 high |",
 }
 ESCALATION = (
     "Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: "
@@ -98,7 +91,7 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(profile == "personal", "## Personal computer" in text)
 
 
-    def test_seat_table_once_per_harness_with_the_right_profile_rows(self):
+    def test_seat_table_once_per_harness_with_the_right_browser_row(self):
         for name, template in TEMPLATES.items():
             for profile in ("personal", "axon-work-computer", "termux"):
                 with self.subTest(harness=name, profile=profile):
@@ -107,10 +100,10 @@ class InstructionProfileTests(unittest.TestCase):
                         self.assertNotIn(SEAT_HEADING, text)
                         continue
                     self.assertEqual(text.count(SEAT_HEADING), 1)
-                    for row in SEAT_ROWS + PROFILE_ROWS[profile]:
+                    for row in SEAT_ROWS:
                         self.assertEqual(text.count(row), 1)
-                    for seat in ("Lead", "Builder", "Browser work"):
-                        self.assertEqual(text.count(f"| {seat} |"), 1)
+                    self.assertEqual(text.count("| Browser work |"), 1)
+                    self.assertEqual(text.count(BROWSER[profile]), 1)
                     self.assertEqual(("Terra" in text), profile == "personal")
 
 
