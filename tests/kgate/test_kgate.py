@@ -409,8 +409,11 @@ class Black(unittest.TestCase):
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
              "KGATE_SSH": host, "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **self.op_env(), **(env or {})}
         # the module reads KGATE_SSH at import, so run the script as a process
-        return subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE,
+        return subprocess.run([*self.launcher(), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, timeout=120)
+
+    def launcher(self):
+        return [sys.executable, str(SCRIPT)]
 
     def records(self):
         path = self.state / "kgate" / "log.jsonl"
@@ -1329,6 +1332,19 @@ class Ag1Black(unittest.TestCase):
     """The AG1 adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
     for _name in ("kgate", "records", "calls", "op_token_checks", "op_env"):
         locals()[_name] = getattr(Black, _name)
+
+    def launcher(self):
+        # The production allow-list of tree roots (/Users, /Volumes, /private) is kept. The temp dirs of these tests are under /tmp on Linux,
+        # so the script runs through a stub that adds that one top directory to the constant. test_roots_... asserts the real constant.
+        top = self.repo.parts[1]
+        stub = self.tmp / "ag1_launch.py"
+        stub.write_text("import importlib.machinery, importlib.util, sys\n"
+                        "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                        "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                        "loader.exec_module(K)\n"
+                        "K.AG1_TREE_ROOTS = K.AG1_TREE_ROOTS + (%r,)\n"
+                        "sys.exit(K.main(sys.argv[2:]))\n" % top)
+        return [sys.executable, str(stub), str(SCRIPT)]
 
     def setUp(self):
         Black.setUp(self)
