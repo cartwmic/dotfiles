@@ -235,20 +235,18 @@ On AG1 the history is a single synthetic commit, and the Mac's uncommitted and u
 
 Exit codes are the same (CMD's code, 64, 69). With the VPN off or the `az login` lapsed, the job exits 69 with the sign-in hint. kgate never falls back to the Mac. The namespace quota is 6 pods, 8 CPU and 32Gi requested. The namespace is shared by every lead's jobs. A create call that the quota refuses (`exceeded quota`) is not fatal: kgate prints `kgate: waiting for quota: <the quota message>` (and a new line when the message changes), retries the create with backoff (5 s, doubling to 60 s) until the job's `--wait` deadline, and records the time spent as `quota_wait_s` (0 when it did not wait; AG1 records only). At the deadline it exits 69 with `quota not available within <N>s: <message>`. Only a Forbidden create error that says `exceeded quota:` is waited for. If a requested amount in that message is above the quota's own limit for it (`requested` greater than `limited`), waiting can never succeed, and kgate exits 69 at once with `request exceeds the namespace quota: <message>`. Any other create error is also an immediate 69. `kgate cancel` works while a job waits for quota.
 
-Sizing. The profile requests little and may burst to 8 CPUs, so several jobs fit the quota's requests (6 pods; requests 8 CPU / 32Gi; limits 16 CPU / 64Gi today; ephemeral-storage 40Gi requested / 60Gi limit):
+Sizing. The profile requests little and may burst to 8 CPUs, so many jobs fit the quota. The current quota is the one ops/k8s-deploy #542472 set (merged 2026-11-11, 55c40e7): 16 pods; requests 24 CPU / 96Gi / 100Gi ephemeral-storage; limits 96 CPU / 160Gi / 160Gi ephemeral-storage. Before it the quota was 6 pods; requests 8 CPU / 32Gi / 40Gi; limits 16 CPU / 64Gi / 60Gi.
 
 | | cpu (request) | cpu_limit | memory | memory_limit | ephemeral | per job against the quota |
 |---|---|---|---|---|---|---|
 | investigator-ai | 2 | 8 | 6Gi | 10Gi | 8Gi | requests 2 CPU, 6Gi, 8Gi; limits 8 CPU, 10Gi |
 
-The quota binds differently today and after ops/k8s-deploy #542472:
+| quota | investigator-ai jobs that fit |
+|---|---|
+| current (#542472) | **12**: `limits.cpu` 96 / 8 = 12 is the binding limit (requests: 24 CPU / 2 = 12, 96Gi / 6Gi = 16; memory limits 160Gi / 10Gi = 16; ephemeral 100Gi / 8Gi = 12; pods 16) |
+| before #542472 | 2: `limits.cpu` 16 / 8 = 2 (requests alone allowed 4) |
 
-| | pods | requests (cpu / memory / ephemeral) | limits (cpu / memory / ephemeral) | investigator-ai jobs that fit |
-|---|---|---|---|---|
-| now | 6 | 8 / 32Gi / 40Gi | 16 / 64Gi / 60Gi | **2**: `limits.cpu` 16 / 8 = 2 is the binding limit (requests alone would allow 4) |
-| after #542472 | 16 | 24 / 96Gi / 100Gi | 96 / 160Gi / 160Gi | **12**: `limits.cpu` 96 / 8 = 12 (requests: 24 / 2 = 12; memory limits 160 / 10 = 16; pods 16) |
-
-Until #542472 merges a third job waits for quota (see above). Measured on the full race gate: 129 s total at 8 CPU requested and limited; 186 s total (167 s in the pod) at 2 requested, 5 limit. Peak memory (cgroup, page cache included) was 3.74 GB and 3.79 GB in two runs, so 6Gi / 10Gi leaves room. Line-ending, filter, `ident` and `working-tree-encoding` conversions are switched off for the hash on the pod side (and the Mac side hashes bytes), so a repo with a converting `.gitattributes` still hashes the same.
+A job that does not fit waits for quota (see above). Measured on the full race gate: 129 s total at 8 CPU requested and limited; 137.6 s total (119 s in the pod) at the shipped 2 requested / 8 limit; 186 s total (167 s in the pod) at 2 / 5. Bursting to the limit gives back full speed. Peak memory (cgroup, page cache included) was 3.74 GB and 3.79 GB in two runs, so 6Gi / 10Gi leaves room. Line-ending, filter, `ident` and `working-tree-encoding` conversions are switched off for the hash on the pod side (and the Mac side hashes bytes), so a repo with a converting `.gitattributes` still hashes the same.
 
 ## Gate profile
 
