@@ -35,9 +35,9 @@
 {{- end -}}
 {{- $ssh := dict -}}
 {{- if $sshNeed -}}{{- $ssh = .sshHosts -}}{{- end -}}
-{{- /* Reachability probe for the phone Match blocks. macOS keeps its BSD nc (-G is that nc's connect timeout); Linux has no such flag, and Omarchy ships no nc, so it uses bash's /dev/tcp under coreutils timeout. */ -}}
+{{- /* Reachability probe for the phone Match blocks. macOS keeps its BSD nc (-G is that nc's connect timeout). Linux has no such flag and Omarchy ships no nc, so it uses bash's /dev/tcp under coreutils timeout; /usr/bin/bash is explicit because ssh runs exec through the login shell, zsh here, and zsh has no /dev/tcp. */ -}}
 {{- $probe := `/usr/bin/nc -z -G 1 -w 1 %s 8022 >/dev/null 2>&1` -}}
-{{- if ne .chezmoi.os "darwin" -}}{{- $probe = `timeout 1 bash -c \"exec 3<>/dev/tcp/%s/8022\" >/dev/null 2>&1` -}}{{- end -}}
+{{- if ne .chezmoi.os "darwin" -}}{{- $probe = `/usr/bin/timeout 1 /usr/bin/bash -c ': </dev/tcp/%s/8022' >/dev/null 2>&1` -}}{{- end -}}
 set -eu
 
 PHONE_BEGIN='# >>> chezmoi-managed: phone ssh >>>'
@@ -150,6 +150,9 @@ $HOMELAB_BEGIN
 # a stale 'cartwmic-homelab - user1' that no homelab host authorizes). Without
 # this pin those get offered first and can exhaust MaxAuthTries before the
 # right key is ever tried.
+{{- if ne .chezmoi.os "darwin" }}
+# (The 1Password IdentityAgent above is macOS-only; on Linux nothing here sets one, and IdentitiesOnly just pins the key.)
+{{- end }}
 Host mac-mini cartwmic-server remote
     HostName {{ $ssh.server.address }}
     User {{ $ssh.server.user }}
