@@ -4,9 +4,10 @@
 cluster = "ag1"
 # The cursor-worker image: go, git, golangci-lint, GOPROXY set to Nexus. No python3, no tini.
 image  = "devaxonhub.azurecr.us/ecom/cursor-worker:20261019-4057e58-b62a51a@sha256:0c2639c2682478f1ba4da70371c7156eaf357fbcb4d2fa4842b5890a04e835ac"
-# Requests are small so several jobs fit the shared namespace quota (6 pods; requests 8 CPU / 32Gi; limits 16 CPU / 64Gi today; ephemeral-storage 40Gi
-# requested / 60Gi limit). Each job may burst to 8 CPU (cpu_limit, which also sets GOMAXPROCS and the build jobs). With limits.cpu at 16 only 2 such jobs
-# fit at once; ops/k8s-deploy #542472 raises it to 96 (12 jobs). kgate waits for quota in the meantime. The full race gate peaked at 3.97 GB (cgroup, page cache included).
+# Requests are small so several jobs fit the shared namespace quota. Each job may burst to 8 CPU (cpu_limit, which also sets GOMAXPROCS and the build jobs).
+# Quota today (6 pods; requests 8 CPU / 32Gi / 40Gi ephemeral; limits 16 CPU / 64Gi / 60Gi): 2 jobs fit, bound by limits.cpu 16 / 8.
+# After ops/k8s-deploy #542472 (16 pods; requests 24 CPU / 96Gi / 100Gi; limits 96 CPU / 160Gi / 160Gi): 12 jobs fit, bound by limits.cpu 96 / 8.
+# kgate waits for quota in the meantime. The full race gate's peak was 3.74 to 3.79 GB (cgroup, page cache included).
 cpu    = 2
 cpu_limit = 8
 memory = "6Gi"

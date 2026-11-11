@@ -1074,10 +1074,13 @@ if a[:2] == ["create", "-f"]:
     n = int(open(creates).read()) + 1 if os.path.exists(creates) else 1
     open(creates, "w").write(str(n))
     quota = os.environ.get("FAKE_QUOTA", "")   # "N": refuse the first N creates; "always": refuse every create. The used CPU changes after the first.
-    if quota and (quota == "always" or n <= int(quota)):
+    if quota and quota != "impossible" and (quota == "always" or n <= int(quota)):
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: xlab-offload, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
+    if quota == "impossible":   # asks for more than the namespace's own limit: waiting cannot help
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: xlab-offload, requested: limits.cpu=16,requests.cpu=2, used: limits.cpu=0,requests.cpu=0, limited: limits.cpu=8,requests.cpu=8\n'); sys.exit(1)
     if os.environ.get("FAKE_CREATE_ERROR"):
-        sys.stderr.write("Error from server (Forbidden): pods is forbidden: violates PodSecurity\n"); sys.exit(1)
+        text = os.environ["FAKE_CREATE_ERROR"]
+        sys.stderr.write((text if text != "1" else "Error from server (Forbidden): pods is forbidden: violates PodSecurity") + "\n"); sys.exit(1)
     active = os.path.join(os.environ["XDG_STATE_HOME"], "kgate", "active")
     entries = [json.load(open(os.path.join(active, n))) for n in sorted(os.listdir(active))] if os.path.isdir(active) else []
     log({"manifest": json.load(sys.stdin), "registry": entries}); sys.exit(0)
@@ -1142,12 +1145,63 @@ class Ag1Profile(unittest.TestCase):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
-    def test_quota_retry_backs_off_5_10_20_40_then_60(self):
-        d, seen = K.QUOTA_FIRST_DELAY, []
-        for _ in range(7):
-            seen.append(d)
-            d = min(d * 2, K.QUOTA_MAX_DELAY)
-        self.assertEqual(seen, [5, 10, 20, 40, 60, 60, 60])
+    def test_the_real_retry_loop_backs_off_5_10_20_40_60_60_and_never_past_the_deadline(self):
+        """Drives Job.start_pod with a fake clock and a cluster that refuses six creates: the sleeps are the loop's own."""
+        import argparse
+        class Clock:
+            now, slept = 1000.0, []
+            def time(self):
+                return self.now
+            def sleep(self, secs):
+                self.slept.append(secs)
+                self.now += secs
+        class Cluster:
+            name, creates = "ag1", 0
+            def run(self, kargs, stdin=b""):
+                if kargs[0] == "create":
+                    self.creates += 1
+                    ok = self.creates > 6
+                    err = b"" if ok else b'Error from server (Forbidden): pods "x" is forbidden: exceeded quota: ns, requested: requests.cpu=1, used: requests.cpu=8, limited: requests.cpu=8'
+                    return subprocess.CompletedProcess(kargs, 0 if ok else 1, b"", err)
+                pod = {"spec": {"nodeName": "n"}, "status": {"phase": "Running", "containerStatuses": [{"ready": True}]}}
+                return subprocess.CompletedProcess(kargs, 0, json.dumps(pod).encode(), b"")
+        clock, real, job, job2 = Clock(), K.time, None, None
+        with tempfile.TemporaryDirectory() as state:
+            old_env = os.environ.get("XDG_STATE_HOME")
+            os.environ["XDG_STATE_HOME"] = state
+            K.time = clock
+            try:
+                job = K.Job(argparse.Namespace(command=["true"], wait=3600))
+                job.cluster, job.console = Cluster(), False
+                job.start_pod({"items": []})
+                self.assertEqual(clock.slept, [5, 10, 20, 40, 60, 60])
+                self.assertEqual(job.rec["quota_wait_s"], 195.0)
+                clock.slept.clear()
+                job2 = K.Job(argparse.Namespace(command=["true"], wait=30))     # a deadline 30 s away: the last sleep is cut to fit
+                job2.cluster, job2.console = Cluster(), False
+                job2.cluster.creates = -10**6
+                with self.assertRaises(K.Unavailable) as ctx:
+                    job2.start_pod({"items": []})
+                self.assertEqual(clock.slept, [5, 10, 15])
+                self.assertRegex(str(ctx.exception), r"^quota not available within 30s: exceeded quota: ns, requested")
+            finally:
+                for j in (job, job2):
+                    if j:
+                        j.log.close()
+                K.time = real
+                if old_env is None:
+                    os.environ.pop("XDG_STATE_HOME", None)
+                else:
+                    os.environ["XDG_STATE_HOME"] = old_env
+
+    def test_quota_impossible_reads_requested_against_limited(self):
+        base = "exceeded quota: ns, requested: %s, used: %s, limited: %s"
+        self.assertFalse(K.quota_impossible(base % ("requests.cpu=2", "requests.cpu=8", "requests.cpu=8")))
+        self.assertTrue(K.quota_impossible(base % ("requests.cpu=9", "requests.cpu=0", "requests.cpu=8")))
+        self.assertTrue(K.quota_impossible(base % ("limits.cpu=2,requests.memory=33Gi", "limits.cpu=0,requests.memory=0", "limits.cpu=8,requests.memory=32Gi")))
+        self.assertFalse(K.quota_impossible(base % ("requests.memory=512Mi", "requests.memory=1Gi", "requests.memory=1Gi")))
+        self.assertTrue(K.quota_impossible(base % ("requests.cpu=1500m", "requests.cpu=0", "requests.cpu=1")))
+        self.assertFalse(K.quota_impossible("exceeded quota: unparsable"))
 
     def test_bad_cluster_or_ephemeral_storage_is_refused(self):
         for bad in ('cluster = "us1"', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "ag1"\nephemeral_storage = "20G"', 'cluster = "ag1"\nephemeral_storage = 20'):
@@ -1552,6 +1606,39 @@ class Ag1Black(unittest.TestCase):
         self.assertRegex(rec["reason"], r"^quota not available within 2s: exceeded quota: xlab-offload, requested: requests.cpu=2, used: requests.cpu=\d+, limited: requests.cpu=8$")
         self.assertGreaterEqual(rec["quota_wait_s"], 1.5)
         self.assertTrue(rec["cleanup"])
+
+    def test_a_request_above_the_namespace_limit_is_69_at_once_not_a_wait(self):
+        done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_QUOTA": "impossible"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertRegex(rec["reason"], r"^request exceeds the namespace quota: exceeded quota: xlab-offload, requested: limits.cpu=16,requests.cpu=2")
+        self.assertEqual(int((self.fake / "creates").read_text()), 1)
+        self.assertLess(rec["duration_s"], 30)
+
+    def test_exceeded_quota_text_outside_a_forbidden_create_error_is_not_a_wait(self):
+        done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_CREATE_ERROR": "error: the webhook said exceeded quota: please stop"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertTrue(self.records()[-1]["reason"].startswith("could not create the pod: "))
+        self.assertEqual(int((self.fake / "creates").read_text()), 1)
+
+    def test_kgate_cancel_while_the_job_waits_for_quota(self):
+        env = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "",
+               "KGATE_SSH_KEY": "/dev/null", **self.op_env(), "FAKE_QUOTA": "always"}
+        proc = subprocess.Popen([*self.launcher(), "--wait", "300", "--", "true"], cwd=self.repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        for line in proc.stdout:
+            if "waiting for quota" in line:
+                break
+        else:
+            self.fail("the job never reached the quota wait")
+        job_id = next(json.loads(p.read_text())["id"] for p in (self.state / "kgate" / "active").glob("*.json"))
+        done = self.run_kgate("cancel", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(proc.wait(timeout=30), 143)
+        rec = [r for r in self.records() if r["id"] == job_id][0]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"], rec["cluster"]), (143, "cancelled by kgate cancel", True, True, "ag1"))
+        self.assertIn(["delete", "pod/" + job_id, "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
+        self.assertEqual(list((self.state / "kgate" / "active").glob("*.json")), [])
 
     def test_any_other_create_error_is_an_immediate_69(self):
         done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_CREATE_ERROR": "1"})

@@ -87,6 +87,7 @@ AG1_CONTEXT = "ag1-main-va-dems2"
 AG1_NAMESPACE = "xlab-offload"
 AG1_REGISTRY = "devaxonhub.azurecr.us"
 AG1_DEADLINE_S = 7200
+QUOTA_REFUSAL = re.compile(r"Forbidden\b.*\bexceeded quota: ", re.S)  # a Forbidden create error from the ResourceQuota admission
 QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
 AG1_USER = "65532:65532"  # the cursor-worker image's user
 AG1_SETUP = "run `kgate ag1-setup` once (it writes %s from the %s context of ~/.kube/config)" % (AG1_KUBECONFIG, AG1_CONTEXT)
@@ -274,6 +275,31 @@ def ag1_roots(*paths):
     if bad:
         raise Unavailable("the tree is under %s; kgate on AG1 unpacks only under /%s" % (", ".join(bad), ", /".join(AG1_TREE_ROOTS)))
     return roots
+
+
+QTY_SUFFIX = {"m": 1e-3, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
+              "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "Pi": 2**50, "Ei": 2**60}
+
+
+def parse_qty(text):
+    m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([A-Za-z]*)", text.strip())
+    if not m or (m.group(2) and m.group(2) not in QTY_SUFFIX):
+        return None
+    return float(m.group(1)) * (QTY_SUFFIX[m.group(2)] if m.group(2) else 1)
+
+
+def quota_impossible(msg):
+    """True when the quota error says a requested amount is above the namespace's own limit for it: waiting can never help.
+    msg: `exceeded quota: NAME, requested: a=2,b=1Gi, used: a=8,b=0, limited: a=8,b=32Gi`."""
+    m = re.search(r"requested: (.*?), used: (.*?), limited: (.*)$", msg)
+    if not m:
+        return False
+    sides = [dict(kv.strip().split("=", 1) for kv in part.split(",") if "=" in kv) for part in m.groups()]
+    for key, asked in sides[0].items():
+        asked, cap = parse_qty(asked), parse_qty(sides[2].get(key, ""))
+        if asked is not None and cap is not None and asked > cap:
+            return True
+    return False
 
 
 def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None):
@@ -831,10 +857,12 @@ class Job:
             if done.returncode == 0:
                 break
             err = done.stderr.decode(errors="replace").strip()
-            if self.cluster.name != "ag1" or "exceeded quota" not in err:
+            if self.cluster.name != "ag1" or not QUOTA_REFUSAL.search(err):
                 raise Unavailable("could not create the pod: " + err)
             # The shared namespace quota is full (other jobs hold it). Nothing was created, so create again until the --wait deadline.
-            msg = " ".join(err[err.index("exceeded quota"):].split())[:300]
+            msg = " ".join(err[err.index("exceeded quota:"):].split())[:300]
+            if quota_impossible(msg):
+                raise Unavailable("request exceeds the namespace quota: " + msg)
             waited_from = waited_from or time.time()
             self.rec["quota_wait_s"] = round(time.time() - waited_from, 1)
             if msg != last_msg:
