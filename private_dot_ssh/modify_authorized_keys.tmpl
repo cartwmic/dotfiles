@@ -9,6 +9,9 @@
 #
 # Matching is done on the base64 key blob (field 2), so changing the
 # trailing comment never causes a duplicate to be appended.
+#
+# The key is appended on every OS, Linux included (Michael, ask 845: "Add it").
+# The file is a .tmpl only because it was one while the Linux append waited on his answer.
 
 set -eu
 
@@ -22,8 +25,6 @@ existing=${existing%x}
 # Pass the existing content through verbatim.
 printf '%s' "$existing"
 
-{{ if or (ne .chezmoi.os "linux") (eq .profile "termux") -}}
-{{- /* Linux: our key is not appended until Michael says yes (that box has NOPASSWD sudo and port 22 open); when he does, drop this guard. Termux is exempt in case its chezmoi reports linux. */ -}}
 # Append our key only if the blob is absent.
 if ! printf '%s' "$existing" | grep -qF "$BLOB"; then
 	case "$existing" in
@@ -34,4 +35,3 @@ if ! printf '%s' "$existing" | grep -qF "$BLOB"; then
 	esac
 	printf '%s\n' "$KEY"
 fi
-{{ end -}}

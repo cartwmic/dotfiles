@@ -79,21 +79,19 @@ def authorized_keys(chezmoi_os, existing, profile="personal"):
 
 @unittest.skipUnless(CHEZMOI, "chezmoi is required")
 class AuthorizedKeysTests(unittest.TestCase):
-    def test_every_os_passes_foreign_keys_through_untouched(self):
+    def test_every_os_appends_the_dotfiles_key_once_and_keeps_existing_lines(self):
+        # Michael's decision on ask 845: Linux gets the key too.
         for os_name in ("darwin", "linux"):
-            self.assertTrue(authorized_keys(os_name, FOREIGN).startswith(FOREIGN), os_name)
+            once = authorized_keys(os_name, FOREIGN)
+            self.assertTrue(once.startswith(FOREIGN), os_name)
+            self.assertEqual(once.count(OURS), 1, os_name)
+            self.assertEqual(authorized_keys(os_name, once), once, os_name)   # idempotent: appended once
+            self.assertEqual(authorized_keys(os_name, "").count(OURS), 1, os_name)
 
-    def test_off_linux_the_dotfiles_key_is_appended_once(self):
-        once = authorized_keys("darwin", FOREIGN)
-        self.assertEqual(once.count(OURS), 1)
-        self.assertEqual(authorized_keys("darwin", once), once)
-
-    def test_linux_does_not_append_it_until_michael_says_yes(self):
-        self.assertEqual(authorized_keys("linux", FOREIGN), FOREIGN)
-        self.assertEqual(authorized_keys("linux", ""), "")
-
-    def test_termux_still_gets_it_even_if_its_chezmoi_reports_linux(self):
-        self.assertEqual(authorized_keys("linux", FOREIGN, profile="termux").count(OURS), 1)
+    def test_a_file_without_a_final_newline_still_gets_the_key_on_its_own_line(self):
+        out = authorized_keys("linux", FOREIGN.rstrip("\n"))
+        self.assertEqual(out.splitlines()[0] + "\n", FOREIGN)
+        self.assertEqual(out.count(OURS), 1)
 
 
 if __name__ == "__main__":
