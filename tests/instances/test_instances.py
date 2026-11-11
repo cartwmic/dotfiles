@@ -49,6 +49,7 @@ DOMAIN = "gui/%d" % os.getuid()
 
 
 def render(template, data, home="/Users/test"):
+    data = {**data, "chezmoi": {"os": "darwin"}}   # these are the Mac's units and wrapper, whatever OS runs the suite (the Linux ones: test_systemd.py)
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "chezmoi.yaml"
         config.write_text("{}\n")  # no hooks from the developer's own config
