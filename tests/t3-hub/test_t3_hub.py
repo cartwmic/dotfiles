@@ -418,8 +418,11 @@ class ProfileGateTest(unittest.TestCase):
             self.assertEqual(self.hub_paths(profile), set(), profile)
         if DARWIN:
             self.assertEqual(self.hub_paths("personal"), {".t3", ".t3/userdata", ".t3/userdata/settings.json", CLAUDE_FILE})
+        elif sys.platform.startswith("linux"):
+            # personal Linux manages the settings file (worktreesDirectory), not the hub's Claude settings file; LinuxSettingsTest runs it
+            self.assertEqual(self.hub_paths("personal"), {".t3", ".t3/userdata", ".t3/userdata/settings.json"}, "personal on Linux")
         else:
-            self.assertEqual(self.hub_paths("personal"), set(), "personal on Linux or WSL")
+            self.assertEqual(self.hub_paths("personal"), set())
 
     def test_bad_switch_value_fails_the_render(self):
         env = Env()
@@ -429,6 +432,43 @@ class ProfileGateTest(unittest.TestCase):
                 env.chezmoi("managed")
         finally:
             env.close()
+
+
+class LinuxSettingsTest(unittest.TestCase):
+    """Personal Linux applies the settings script with the hub n/a: worktreesDirectory in the home directory, the window, no hub instance.
+
+    The chezmoi OS is overridden to linux, so this runs the same on the Mac's CI job.
+    """
+
+    def render(self, chezmoi_os="linux"):
+        env = Env(codex_active=False)
+        try:
+            data = json.dumps({"chezmoi": {"os": chezmoi_os}})
+            home = str(env.home)
+            script = env.chezmoi("execute-template", "--override-data", data, stdin=(REPO / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text())
+        finally:
+            env.close()
+        return script, home
+
+    def test_worktrees_go_to_the_home_directory_and_no_hub_instance_appears(self):
+        script, home = self.render()
+        out = json.loads(run_script(script, FIXTURE))
+        self.assertEqual(out["worktreesDirectory"], home + "/t3-worktrees")
+        self.assertFalse(set(OURS) & set(out["providerInstances"]))
+        self.assertEqual(out["providerInstances"]["codex"], json.loads(FIXTURE)["providerInstances"]["codex"], "the codex instance is left alone without the hub")
+        for i in WINDOW_IDS:
+            self.assertEqual(out["providerInstances"][i]["config"]["autoCompactWindow"], WINDOW)
+        self.assertNotIn("displayName", out["providerInstances"]["coordinator"])
+        self.assertNotIn("usageLimitSources", out)
+
+    def test_a_second_apply_changes_nothing(self):
+        script, _ = self.render()
+        once = run_script(script, FIXTURE)
+        self.assertEqual(run_script(script, once), once)
+
+    def test_the_mac_still_gets_workshop(self):
+        script, _ = self.render("darwin")
+        self.assertIn("WORKTREES_DIR='%s'" % WORKTREES, script)
 
 
 if __name__ == "__main__":

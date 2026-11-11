@@ -1,0 +1,40 @@
+#!/bin/sh
+# T3 Code as a systemd user service on Linux (personal; .chezmoiignore). Runs when the PATH drop-in changes, and on a machine that has no T3 service yet.
+# drop-in: {{ include "dot_config/systemd/user/t3code.service.d/10-path.conf.tmpl" | sha256sum }}
+#
+# T3 writes t3code.service itself (`t3 service install`; ExecStart is pinned to the installed version), so dotfiles never templates that unit. It owns
+# only the drop-in t3code.service.d/10-path.conf (the PATH). This script:
+#   1. installs T3 (https://t3.codes/install.sh puts `t3` in ~/.local/bin) when `t3` is not on PATH;
+#   2. runs `t3 service install` when ~/.config/systemd/user/t3code.service does not exist yet;
+#   3. daemon-reloads so systemd reads the drop-in, and restarts the service only when step 2 just created it (the PATH reaches a
+#      service only when it starts; an existing, running T3 is never restarted here: `systemctl --user restart t3code.service` is the owner's call).
+# A host with no systemd user manager gets a notice and a clean exit.
+set -eu
+log() { printf '[t3_service_linux] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+if [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]; then log INFO "WSL: T3 runs on the Windows side; nothing to set up"; exit 0; fi
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; T3 service not set up"
+  exit 0
+fi
+export PATH="$HOME/.local/bin:$PATH"
+unit="$HOME/.config/systemd/user/t3code.service"
+if ! command -v t3 >/dev/null 2>&1; then
+  log INFO "installing T3 (https://t3.codes/install.sh)"
+  curl -fsSL https://t3.codes/install.sh | sh || { log ERROR "T3 install failed"; exit 1; }
+  command -v t3 >/dev/null 2>&1 || { log ERROR "t3 is still not on PATH after the install"; exit 1; }
+fi
+fresh=no
+if [ ! -f "$unit" ]; then
+  log INFO "running: t3 service install"
+  t3 service install || { log ERROR "t3 service install failed"; exit 1; }
+  fresh=yes
+fi
+systemctl --user daemon-reload
+if [ "$fresh" = yes ]; then
+  systemctl --user restart t3code.service || { log ERROR "could not restart t3code.service; see: journalctl --user -u t3code"; exit 1; }
+  log INFO "t3code.service installed and restarted with the PATH drop-in"
+else
+  log INFO "t3code.service exists; systemd reloaded (a running T3 keeps its old PATH until: systemctl --user restart t3code.service)"
+fi
