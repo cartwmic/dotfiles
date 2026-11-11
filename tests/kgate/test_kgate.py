@@ -1216,7 +1216,7 @@ class PodSh(unittest.TestCase):
         self.cg = self.tmp / "cg"
         self.cg.mkdir()
 
-    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678"):
+    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False):
         job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files, "head": head,
                "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}}
         (self.job / "job.sh").write_text(K.job_sh(job))
@@ -1227,6 +1227,9 @@ class PodSh(unittest.TestCase):
         aside, self.podgit = self.tmp / "gitaside", self.tmp / "podgit"
         shutil.rmtree(self.podgit, True)
         (self.tree / ".git").rename(aside)
+        if lock_main:   # a stale ref lock: git cannot move main to the new commit
+            (self.tree / ".git" / "refs" / "heads" / "main.lock").parent.mkdir(parents=True)
+            (self.tree / ".git" / "refs" / "heads" / "main.lock").write_text("")
         try:
             done = subprocess.run(["sh", str(self.job / "kgate.sh"), str(self.job)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                   env={**os.environ, "HOME": str(self.tmp / "home"), "KGATE_CGROUP": str(self.cg), "KGATE_NODE": "n1", **(env or {})}, timeout=60)
@@ -1373,6 +1376,15 @@ class PodSh(unittest.TestCase):
         self.assertEqual(done.returncode, 70)
         self.assertNotEqual(self.podgit_run("rev-parse", "--verify", "-q", "HEAD").returncode, 0)
 
+    def test_a_commit_that_fails_after_the_hashes_matched_is_its_own_marker_and_69_not_a_mismatch(self):
+        done, _ = self.run_sh(argv=("sh", "-c", "echo SHOULD-NOT-RUN"), lock_main=True)
+        self.assertEqual(done.returncode, 69, done.stdout)
+        seen = self.markers(done.stdout)
+        self.assertTrue(seen["commit"].startswith("FAILED git commit failed:"), done.stdout)
+        self.assertNotIn("MISMATCH", done.stdout)
+        self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+        self.assertNotIn("running", seen)
+
     def test_no_head_on_the_mac_gives_an_empty_kgate_head(self):
         done, _ = self.run_sh(argv=("sh", "-c", 'echo "[$KGATE_HEAD]"'), head=None)
         self.assertIn("[]", done.stdout)
@@ -1431,8 +1443,8 @@ class Ag1Black(unittest.TestCase):
                         "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
                         "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                         "loader.exec_module(K)\n"
-                        "K.AG1_TREE_ROOTS = K.AG1_TREE_ROOTS + (%r,)\n"
-                        "sys.exit(K.main(sys.argv[2:]))\n" % top)
+                        "K.AG1_TREE_ROOTS = %s\n"
+                        "sys.exit(K.main(sys.argv[2:]))\n" % ("(%r,)" % self.only_root if getattr(self, "only_root", None) else "K.AG1_TREE_ROOTS + (%r,)" % top))
         return [sys.executable, str(stub), str(SCRIPT)]
 
     def setUp(self):
@@ -1471,6 +1483,21 @@ class Ag1Black(unittest.TestCase):
         self.assertEqual((self.state / "kgate" / (rec["id"] + ".out") / "result.txt").read_text(), "result\n")
         files = (self.fake / "jobroot" / "cache" / rec["id"] / "files.nul").read_bytes().split(b"\0")[:-1]
         self.assertEqual(sorted(files), [b".gitignore", b"kgate.toml", b"tracked.txt", b"untracked.txt"])  # not ignored.txt
+
+    def test_a_linked_worktree_whose_common_dir_is_outside_the_allow_list_is_accepted(self):
+        """The common dir is not shipped on AG1, so only the worktree's own top directory needs an emptyDir and a place on the allow-list."""
+        linked = Path(tempfile.mkdtemp(prefix="kl-", dir=os.path.expanduser("~"))).resolve() / "wt"
+        self.addCleanup(shutil.rmtree, linked.parent, True)
+        git(self.repo, "worktree", "add", "-q", "-b", "other", str(linked))
+        if linked.parts[1] == self.repo.parts[1]:
+            self.skipTest("the main repo and the worktree share a top directory here")
+        self.only_root = linked.parts[1]
+        self.repo = linked
+        done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; test ! -e .git/commondir && echo own-repo")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
+        mounts = [m["mountPath"] for m in manifest["items"][0]["spec"]["containers"][0]["volumeMounts"]]
+        self.assertEqual(mounts, ["/" + linked.parts[1], "/cache", "/out"], "no emptyDir for the common dir's top directory")
 
     def test_the_ag1_archive_has_no_git_entries_and_the_pod_builds_the_repo(self):
         done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; echo KGATE_HEAD=$KGATE_HEAD")

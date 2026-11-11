@@ -24,7 +24,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 
 ## What it does
 
-1. Ships the git worktree of the current directory to one pod: tracked and untracked non-ignored files, the `.git` file and the shared git folder, all at the same absolute path. Ignored files (`node_modules`, `target`) stay here. A submodule is refused.
+1. Ships the git worktree of the current directory to one pod: tracked and untracked non-ignored files, the `.git` file and the shared git folder (on AG1 no `.git`: see "AG1"), all at the same absolute path. Ignored files (`node_modules`, `target`) stay here. A submodule is refused.
 2. **Tree hash.** Before sending, it computes the git tree hash of the shipped files (what `git write-tree` gives for an index of exactly those files). The pod recomputes it after unpacking. If they differ, the job fails and CMD never runs.
 3. **Version preflight.** The pod checks each tool in the profile. A mismatch fails the job and prints the tool, expected and found.
 4. Runs CMD with the output streaming back live. CMD's exit code is kgate's.
@@ -208,7 +208,7 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml --
 
 **Pod side, no Python.** The image has no `python3`, so the pod runs `sh /cache/<id>/kgate.sh` (the `POD_SH` constant in the script) instead of `kgate.py --pod`. It prints the same `kgate[<id>]: start|hash|preflight|running|peak|end` markers, so the Mac side reads them unchanged.
 
-- Repo and hash: no `.git` is shipped. The script makes a fresh repo at the tree root, adds exactly the shipped file list (`files.nul`) to its index hashed as bytes (`core.autocrlf=false`, `safe.directory=*`, and an `info/attributes` that turns text, eol, filter, ident and working-tree-encoding conversion off), and compares `git write-tree` with the Mac's hash. Only on a match it makes one commit (author and committer `kgate`, date 2000-01-01, so the same tree gives the same commit) on `main`. Tools then find a working `HEAD` (`git rev-parse`, `go build`'s VCS stamping). The Mac's real HEAD is in `KGATE_HEAD` in CMD's env and in the record's `head`.
+- Repo and hash: no `.git` is shipped. The script makes a fresh repo at the tree root, adds exactly the shipped file list (`files.nul`) to its index hashed as bytes (`core.autocrlf=false`, `safe.directory=*`, and an `info/attributes` that turns text, eol, filter, ident and working-tree-encoding conversion off), and compares `git write-tree` with the Mac's hash. Only on a match it makes one commit (if git cannot commit, the pod prints `commit FAILED git commit failed: ...` and exits 69, and kgate fails the job with that reason, CMD not run) (author and committer `kgate`, date 2000-01-01, so the same tree gives the same commit) on `main`. Tools then find a working `HEAD` (`git rev-parse`, `go build`'s VCS stamping). The Mac's real HEAD is in `KGATE_HEAD` in CMD's env and in the record's `head`.
 - Tools: as the Python side. The expected version must appear in the command's output as a whole version. A Go gate needs `cmd = "go version"`, because `go --version` is not a flag.
 - CMD runs in the same directory. Peak memory is read from `memory.peak` (`unknown` when the kernel has none). The end line carries CMD's exit code.
 - Exit codes inside the pod: CMD's, 70 for a hash mismatch, 71 for a tool mismatch. The Mac side checks that kubectl's exit code equals the reported one.
@@ -230,7 +230,7 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml --
 | Cleanup | pod and two Secrets | pod only |
 | Image needs | `tini`, `python3` 3.11+ | `sh`, `tar`, `git` |
 
-On AG1 the history is a single synthetic commit: `git log`, `git describe`, `git blame` and tags show nothing of the real history. A command that needs history must run locally or on the homelab (which still ships `.git`).
+On AG1 the history is a single synthetic commit, and the Mac's uncommitted and untracked shipped files are in it, so `git status` and `git diff` in the pod show a clean tree (use the Mac's `git status` to see what changed). `git log`, `git describe`, `git blame` and tags show nothing of the real history. A command that needs history must run locally or on the homelab (which still ships `.git`).
 
 Exit codes are the same (CMD's code, 64, 69). With the VPN off or the `az login` lapsed, the job exits 69 with the sign-in hint. kgate never falls back to the Mac. The namespace quota is 6 pods, 8 CPU and 32Gi requested. A job whose requests would exceed it is refused at once by the create call (`exceeded quota`), and kgate exits 69 with that message; it does not wait. The investigator-ai profile requests 8 CPUs, the whole quota, so its jobs run one at a time. Line-ending, filter, `ident` and `working-tree-encoding` conversions are switched off for the hash on the pod side (and the Mac side hashes bytes), so a repo with a converting `.gitattributes` still hashes the same.
 
