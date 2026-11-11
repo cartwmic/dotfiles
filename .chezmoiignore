@@ -178,10 +178,21 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- if ne .chezmoi.os "darwin" }}
 # launchd only.
 .local/user_scripts/instances_reconcile.sh
-75_instances_reconcile.sh
 # The shared wait-then-bootstrap helper those scripts and the LaunchAgent loaders (71, 72, 73) source.
 .local/share/launchd-reload
 .local/share/launchd-reload/**
+{{- end }}
+
+{{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
+# The coordinator's systemd user unit and the script that installs it (cartwmic/coordinator): personal Linux. Inert copy, like the plists above.
+.local/share/instances/systemd
+.local/share/instances/systemd/**
+.local/user_scripts/instances_reconcile_systemd.sh
+{{- end }}
+
+{{- if and (ne .chezmoi.os "darwin") (not (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}
+# The wrapper that runs the reconcile script on apply: macOS (launchd, both profiles) and personal Linux (systemd).
+75_instances_reconcile.sh
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
@@ -261,10 +272,23 @@ Library/Preferences/pnpm/**
 .pi/agent/extensions/system-one/**
 {{- end }}
 
+{{- $t3Linux := and (eq .profile "personal") (eq .chezmoi.os "linux") }}
 {{- if eq (includeTemplate "t3_hub" .) "n/a" }}
 # T3 provider instances that route through the homelab CLIProxy hub: personal Mac only (docs/profiles.md). With t3Hub.enabled
 # false the files stay managed so the next apply removes the instances, the settings file and the Codex block.
+# Personal Linux keeps the settings file (hub mode n/a there: only worktreesDirectory and the auto-compact window are written).
+{{- if not $t3Linux }}
 .t3
 .t3/**
+{{- end }}
 .config/t3-hub-claude-settings.json
+{{- end }}
+
+{{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
+# T3 Code as a systemd user service (personal Linux): the PATH drop-in for the unit T3 writes itself, and the script that installs T3 and that unit.
+.config/systemd/user/t3code.service.d
+.config/systemd/user/t3code.service.d/**
+74_t3_service_linux.sh
+# The portable GitHub credential helper for git (personal Linux). macOS keeps its own setup; the work profile has no Linux machine.
+76_git_credential_linux.sh
 {{- end }}

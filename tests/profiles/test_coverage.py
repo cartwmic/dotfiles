@@ -2,7 +2,7 @@
 
 Runs `chezmoi managed` against the real source for personal and axon-work-computer with a minimal config
 (no read-source-state hook, no secrets) and a throwaway HOME. Gates that also need darwin only show up on macOS;
-rows marked "(macOS)" are skipped elsewhere.
+rows marked "(macOS)" or "(Linux)" are skipped on the other OS.
 """
 import os
 import re
@@ -17,6 +17,7 @@ DOC = REPO / "docs/profiles.md"
 PROFILES = ("personal", "axon-work-computer")
 NEEDED = "reason needed (owner)"
 DARWIN = sys.platform == "darwin"
+LINUX = sys.platform.startswith("linux")
 
 
 def managed(profile):
@@ -34,7 +35,7 @@ def managed(profile):
 
 
 def rows():
-    """(paths, profile, macos_only, reason) for each coverage table row in docs/profiles.md (the table ends at "## Local data keys")."""
+    """(paths, profile, os_flag, reason) for each coverage table row in docs/profiles.md (the table ends at "## Local data keys")."""
     out = []
     for line in DOC.read_text().split("\n## Local data keys")[0].splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -43,7 +44,9 @@ def rows():
         profile = cells[1].split()[0]
         if profile not in PROFILES:
             raise AssertionError("row %r: profile must be one of %s" % (line, PROFILES))
-        out.append((re.findall(r"`([^`]+)`", cells[0]), profile, "(macOS)" in cells[1], cells[2]))
+        flags = {"(macOS)": DARWIN, "(Linux)": LINUX}
+        runs_here = all(here for flag, here in flags.items() if flag in cells[1])   # a gate that also needs another OS cannot be checked here
+        out.append((re.findall(r"`([^`]+)`", cells[0]), profile, runs_here, cells[2]))
     return out
 
 
@@ -71,13 +74,13 @@ class CoverageTest(unittest.TestCase):
 
     def test_every_row_is_still_one_profile(self):
         stale, skipped = [], 0
-        for paths, profile, macos, _ in self.rows:
-            if macos and not DARWIN:
+        for paths, profile, runs_here, _ in self.rows:
+            if not runs_here:
                 skipped += 1
                 continue
             stale += ["%s: %s" % (profile, x) for x in paths if not any(covers(x, p) for p in self.only[profile])]
         if skipped:
-            print("\nprofiles: skipped %d (macOS) rows off darwin" % skipped, file=sys.stderr)
+            print("\nprofiles: skipped %d (macOS or Linux) rows on the other OS" % skipped, file=sys.stderr)
         self.assertEqual(stale, [], "rows in docs/profiles.md whose path is gone or no longer one-profile")
 
     def test_reasons_needed_are_counted(self):

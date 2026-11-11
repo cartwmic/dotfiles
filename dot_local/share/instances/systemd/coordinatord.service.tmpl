@@ -1,0 +1,22 @@
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | replace "%" "%%" -}}
+{{- $home := .chezmoi.homeDir | replace "%" "%%" -}}
+# The coordinator daemon (src/coordinatord/main.ts), from the checkout of cartwmic/coordinator. Linux twin of local.coordinatord.plist next to it
+# (../launchd): same command, same PATH rule, restart after a crash but not after a clean stop. Source of the unit file that
+# instances_reconcile_systemd.sh installs into ~/.config/systemd/user for an opted-in instance.
+[Unit]
+Description=coordinatord (the coordinator daemon)
+After=network-online.target t3code.service
+Wants=t3code.service
+
+[Service]
+# Home, not the checkout, as in the plist: main.ts is loaded by its absolute path and the daemon does not use its working directory.
+WorkingDirectory=%h
+# node, herdr, op and git must be found from here (the mise shims, then the user's and T3's bin directories); the coordinator pane's shell has its own PATH.
+Environment=PATH={{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --experimental-strip-types --disable-warning=ExperimentalWarning {{ $repo }}/src/coordinatord/main.ts
+# KeepAlive SuccessfulExit=false and ThrottleInterval 10 in the plist: restart after a crash or kill -9, stay stopped after a clean `systemctl --user stop`.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

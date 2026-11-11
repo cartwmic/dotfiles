@@ -213,7 +213,9 @@ class DeployTest(unittest.TestCase):
         block = ignore[ignore.index("# launchd only."):]
         block = block[:block.index("{{- end }}")]
         self.assertIn(".local/share/launchd-reload", block)
-        self.assertIn("75_instances_reconcile.sh", block)
+        self.assertIn(".local/user_scripts/instances_reconcile.sh", block)
+        # the wrapper also runs on personal Linux (systemd): its own rule, still off on every other OS
+        self.assertIn('75_instances_reconcile.sh', ignore[ignore.index("The wrapper that runs the reconcile script"):])
 
     def test_the_helper_is_posix_sh(self):
         r = subprocess.run(["/bin/sh", "-n", str(LIB)], capture_output=True, text=True)

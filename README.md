@@ -70,10 +70,16 @@ case "$profile" in
   personal|axon-work-computer) ;;
   *) printf 'Choose a supported desktop profile.\n' >&2; exit 1 ;;
 esac
-# Ubuntu/WSL needs zsh; modern macOS already provides it.
+# Ubuntu/WSL and Arch (Omarchy) need zsh as the login shell; modern macOS already provides it. The zsh files carry the `op` shim and the
+# 1Password token env the stack needs at login (see "Linux on Arch (Omarchy)").
 if [ "$(uname -s)" = Linux ]; then
-  sudo apt-get update && sudo apt-get install -y zsh
-  sudo chsh "$USER" -s /usr/bin/zsh
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update && sudo apt-get install -y zsh
+    sudo chsh "$USER" -s /usr/bin/zsh
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -S --needed zsh
+    sudo chsh -s /usr/bin/zsh "$USER"
+  fi
 fi
 mkdir -p "$(dirname "$config")"
 printf 'data:\n  profile: "%s"\n' "$profile" > "$config"
@@ -565,6 +571,35 @@ data:
 
 Tests: `python3 -m unittest discover -s tests/instances -v` (renders against golden units, the work unit against what the coordinator's setup script installs, the reconcile script against a stub `launchctl` with exact call lists, and a scratch-HOME `chezmoi apply` on macOS). `python3 tests/instances/mutate.py` checks the suite catches deliberate breaks of the safety rules, the work variant and the files that feed the script.
 
+## Linux on Arch (Omarchy)
+
+The personal profile also runs the coordinator stack on an Omarchy box (Arch Linux ARM on Asahi, systemd). It is the Linux twin of the personal Mac: the same opt-in flag, the same rules, systemd user units where macOS has LaunchAgents. Nothing here changes what macOS renders (`python3 tests/profiles/render_diff.py --base <main checkout>` compares both profiles as darwin).
+
+**What the dotfiles need from the machine.** `git`, `curl`, `zsh` installed (the `setup-ubuntu-essentials` task only checks for `cc make curl git zsh unzip zip perl` on a host without `apt-get` and prints the `pacman` line for what is missing; it installs nothing and never runs `chsh`; the login shell is set by the fresh-install block above, `sudo chsh -s /usr/bin/zsh "$USER"`). zsh is the login shell on Linux too, because two things only reach shells that read `~/.zshenv`: the 1Password service-account token and the `op` shim in `PATH` (`dot_zshenv`). A bash login shell (Omarchy's default) never reads that file, so anything started from bash (a T3 or Herdr pane, `claude`, `pi`) would run `op` without the token. On an existing Omarchy box that is already installed, run the `chsh` line once and log in again.
+
+**What lands where (all personal, Linux):**
+
+| Piece | Source | Notes |
+|---|---|---|
+| Coordinator daemon | `dot_local/share/instances/systemd/coordinatord.service.tmpl` installed by `~/.local/user_scripts/instances_reconcile_systemd.sh` into `~/.config/systemd/user/coordinatord.service` | Same flag as macOS: `instances.coordinator.enabled: true` in the local chezmoi data. Checkout default `~/git/coordinator` (`instances.coordinator.repo` wins). Same safety rules as the launchd script: an apply never restarts a running daemon (`INSTANCES_RELOAD=coordinator chezmoi apply` does; a hand-made running unit is adopted and `enable`d so it also starts at boot, and its status stays "unit changed, NOT restarted" until that one reload), opt-out stops and removes only what dotfiles started or adopted. Logs go to the journal: `journalctl --user -u coordinatord`. Tests: `python3 -m unittest discover -s tests/instances -v`. |
+| T3 Code service | `run_onchange_after_74_t3_service_linux.sh.tmpl`, `dot_config/systemd/user/t3code.service.d/10-path.conf.tmpl` | T3 writes `t3code.service` itself (`t3 service install`, version-pinned `ExecStart`), so it is never templated. Dotfiles own the PATH drop-in and, on a box with no T3 service, the install (`https://t3.codes/install.sh`, then `t3 service install`). An existing T3 is daemon-reloaded, never restarted. |
+| T3 settings | `dot_t3/private_userdata/modify_settings.json.tmpl` | With the hub off on Linux it sets only `worktreesDirectory` (`~/t3-worktrees`; the Mac uses Workshop) and the auto-compact window. |
+| heavy-gate and its watchdog | `dot_local/bin/executable_heavy-gate`, `dot_config/systemd/user/heavy-gate-watchdog.service`, `run_onchange_after_73_heavy_gate_watchdog_systemd.sh.tmpl` | Reads `/proc/meminfo` and `/proc/loadavg`; no kernel pressure level on Linux, so memory free >= 30% is the whole memory rule. Same command line and exit codes. Tests: `python3 -m unittest discover -s tests/heavy-gate -v` (`test_linux.py`). |
+
+**Also personal WSL hosts.** The Linux gates match every personal Linux host, so a WSL host also gets the T3 settings file, the T3 drop-in and the systemd reconcile wrapper. Most of it is inert there (the instance flag is unset by default and the T3 install script skips WSL), but the git credential script replaces any GitHub helper the host already has (for example Windows Git Credential Manager) with `gh auth git-credential`, so git over HTTPS there then needs `gh auth login`.
+
+**Reproduce on a fresh box:** install `git curl zsh` with `pacman`, `chezmoi init` with the personal profile, set `instances.coordinator.enabled: true` and `sshHosts.*` in `~/.config/chezmoi/chezmoi.yaml`, `chezmoi apply`, then `systemctl --user status coordinatord t3code heavy-gate-watchdog`. Linger (so the units run without a login) and host packages are the machine's own setup, not these dotfiles. The git credential helper is `run_onchange_after_76_git_credential_linux.sh` (sets `credential.https://github.com.helper` and `credential.https://gist.github.com.helper` to `!gh auth git-credential`, replacing any version-pinned gh path; the header has the by-hand command and the undo); the dotfiles manage no other git config.
+
+**macOS-only pieces, and whether Linux needs them:**
+
+| macOS piece | Linux |
+|---|---|
+| agent-events LaunchAgent (`70_agent_events_launchd.sh`) | Not ported. It exports agent metrics to the homelab collector; the coordinator does not read them. |
+| QMD refresh LaunchAgent (`71_qmd_refresh_launchd.sh`) | Not ported. `qmd` itself installs through mise; the hourly index refresh is search freshness, not the coordinator. A systemd timer is the port if wanted. |
+| heavy-gate watchdog LaunchAgent (`72_...`) | Ported (the row above). |
+| Spotlight off for Workshop (`80_...`) and the agent scratch on Workshop (`81_...`, `.config/agent-scratch`) | `/Volumes/Workshop` is the Mac's disk; nothing to port. |
+| `Library/` plists for Retro and the work coordinator | Retro and the work (Matrix) coordinator are macOS. |
+
 ## Tool Management with mise
 
 mise selects Node.js and Python versions. rustup selects Rust toolchains:
@@ -610,6 +645,7 @@ dot_zsh_plugins.txt              # Antidote plugin list
 
 - **macOS**: Homebrew + mise
 - **Ubuntu/WSL**: apt + mise
+- **Arch Linux (Omarchy), personal profile**: pacman for host packages (the machine's own setup, not these dotfiles) + mise; see [Linux on Arch (Omarchy)](#linux-on-arch-omarchy)
 
 Desktop tool installation runs through the profile-gated mise bootstrap after `chezmoi apply`. Termux uses its own package setup in `termux/README.md`.
 
