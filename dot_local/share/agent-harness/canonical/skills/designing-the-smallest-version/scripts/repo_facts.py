@@ -62,8 +62,9 @@ NOTES = {
     'path_refs': 'tokens with a slash that name a tracked file or directory; ./ and ../ resolve from '
                  'the referring file; self and own-directory references are dropped; with --scope, '
                  'edges lists every scope-touching edge and other_edges the capped remainder',
-    'recent_commits_touching_scope': 'commits on REV in the last 14 days whose subject matches the '
-                                     'plan-word pattern and whose files touch scope',
+    'plan_word_commits_touching_scope': 'commits on REV in the last 14 days (counted from today) whose subject '
+                                          'matches the plan-word pattern and whose files touch scope; not all '
+                                          'recent commits',
     'branches_touching_scope': 'unmerged_patches counts branch commits with no patch-equivalent on REV '
                                '(git cherry); a local branch and its remote twin at the same commit are '
                                'one entry, with remote_ref',
@@ -107,8 +108,9 @@ def parse_args(argv):
     p.add_argument('--rev', default='HEAD')
     p.add_argument('--parts', help='TSV lines: GLOB<TAB>PART NAME, first match wins. '
                                    '* stays in one path segment, ** crosses /')
-    p.add_argument('--scope', nargs='+', metavar='GLOB',
-                   help='files to detail; glob rules as --parts; REPO must come first')
+    p.add_argument('--scope', nargs='+', action='extend', metavar='GLOB',
+                   help='files to detail; glob rules as --parts; repeat the flag or list many globs '
+                        '(all are kept); REPO must come first')
     p.add_argument('--since-days', type=int, default=120)
     p.add_argument('--max-commit-files', type=int, default=15)
     p.add_argument('--out', help='write JSON here instead of stdout')
@@ -574,7 +576,7 @@ def scope_report(repo, sha, globs, names, files, edges, texts, comps, flight):
         'tests': [{'file': p, 'scope_files': h} for p, h in found[:TESTS_CAP]],
         'cycles': cycle_rows([c for c in comps if chosen & set(c)]),
         'branches_touching_scope': scope_branches(repo, sha, specs, flight['worktrees']),
-        'recent_commits_touching_scope': plan_touching(repo, specs, flight['plan_commits_14d']),
+        'plan_word_commits_touching_scope': plan_touching(repo, specs, flight['plan_commits_14d']),
     }
 
 
