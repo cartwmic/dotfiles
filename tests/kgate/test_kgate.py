@@ -1040,7 +1040,7 @@ AG1_IMAGE = "devaxonhub.azurecr.us/ecom/cursor-worker:20261019-4057e58-b62a51a@s
 AG1_ARGS = ["--kubeconfig", "%HOME%/.kube/ag1-offload", "--context", "ag1-main-va-dems2", "-n", "xlab-offload"]
 
 FAKE_KUBECTL = r'''#!/usr/bin/env python3
-import json, os, subprocess, sys
+import json, os, shlex, shutil, subprocess, sys
 fake = os.environ["FAKE"]
 argv = sys.argv[1:]
 def log(entry):
@@ -1085,6 +1085,7 @@ if a[0] == "exec" and "-i" in a:
     job, script = a[2], a[-1]
     assert script == "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job, job), script
     data = sys.stdin.buffer.read()
+    open(os.path.join(fake, "shipped.tar"), "wb").write(data)
     jobroot = os.path.join(fake, "jobroot")
     os.makedirs(jobroot, exist_ok=True)   # /cache is the pod's emptyDir; here the job's own files go under FAKE
     tar = subprocess.run(["tar", "-xf", "-", "--no-same-owner", "-C", "/", "--exclude", "cache/kgate-*"], input=data)
@@ -1098,7 +1099,18 @@ if a[0] == "exec" and "-i" in a:
     os.makedirs(out, exist_ok=True)
     env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-ag1-node", HOME=os.path.join(fake, "pod-home"))
     d = "%s/cache/%s" % (jobroot, job)
-    sys.exit(subprocess.call(["sh", d + "/kgate.sh", d], env=env))
+    # A pod has no .git before the script runs. The test repo does, so it is set aside while the pod side runs and put back after.
+    root = next(l.split("=", 1)[1] for l in open(d + "/job.sh").read().splitlines() if l.startswith("ROOT="))
+    root = shlex.split(root)[0]
+    aside = os.path.join(fake, "gitaside")
+    os.rename(os.path.join(root, ".git"), aside)
+    try:
+        code = subprocess.call(["sh", d + "/kgate.sh", d], env=env)
+    finally:
+        if os.path.exists(os.path.join(root, ".git")):
+            shutil.move(os.path.join(root, ".git"), os.path.join(fake, "podgit"))
+        os.rename(aside, os.path.join(root, ".git"))
+    sys.exit(code)
 if a[0] == "exec":
     out = os.path.join(fake, "out")
     os.makedirs(out, exist_ok=True)
@@ -1204,15 +1216,31 @@ class PodSh(unittest.TestCase):
         self.cg = self.tmp / "cg"
         self.cg.mkdir()
 
-    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None):
-        job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files,
+    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False):
+        job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files, "head": head,
                "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}}
         (self.job / "job.sh").write_text(K.job_sh(job))
         (self.job / "files.nul").write_bytes(b"".join(os.fsencode(f) + b"\0" for f in self.files))
         (self.job / "kgate.sh").write_text(K.POD_SH)
-        done = subprocess.run(["sh", str(self.job / "kgate.sh"), str(self.job)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                              env={**os.environ, "HOME": str(self.tmp / "home"), "KGATE_CGROUP": str(self.cg), "KGATE_NODE": "n1", **(env or {})}, timeout=60)
+        # A pod has no .git before the script runs (none is shipped). This tree is a real repo (the tests use git on it), so it is set aside
+        # while the script runs, and the repo the script built is kept at self.podgit.
+        aside, self.podgit = self.tmp / "gitaside", self.tmp / "podgit"
+        shutil.rmtree(self.podgit, True)
+        (self.tree / ".git").rename(aside)
+        if lock_main:   # a stale ref lock: git cannot move main to the new commit
+            (self.tree / ".git" / "refs" / "heads" / "main.lock").parent.mkdir(parents=True)
+            (self.tree / ".git" / "refs" / "heads" / "main.lock").write_text("")
+        try:
+            done = subprocess.run(["sh", str(self.job / "kgate.sh"), str(self.job)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                  env={**os.environ, "HOME": str(self.tmp / "home"), "KGATE_CGROUP": str(self.cg), "KGATE_NODE": "n1", **(env or {})}, timeout=60)
+        finally:
+            if (self.tree / ".git").exists():
+                (self.tree / ".git").rename(self.podgit)
+            aside.rename(self.tree / ".git")
         return done, K.Markers("kgate-1-2")
+
+    def podgit_run(self, *args):
+        return subprocess.run(["git", "--git-dir", str(self.podgit), "--work-tree", str(self.tree), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def markers(self, text):
         m = K.Markers("kgate-1-2")
@@ -1321,11 +1349,84 @@ class PodSh(unittest.TestCase):
         done, _ = self.run_sh()
         self.assertEqual(self.markers(done.stdout)["peak"], "unknown")
 
-    def test_the_throwaway_index_leaves_the_trees_git_untouched(self):
-        before = subprocess.run(["git", "-C", str(self.tree), "status", "--porcelain"], stdout=subprocess.PIPE, text=True).stdout
+    def test_the_pod_side_builds_a_one_commit_repo_whose_tree_is_the_macs_hash(self):
+        done, _ = self.run_sh(argv=("sh", "-c", "git rev-parse HEAD; git log --format=%an,%ae,%cn,%s | wc -l; git status --porcelain | wc -l; echo KGATE_HEAD=$KGATE_HEAD"))
+        self.assertEqual(done.returncode, 0, done.stdout)
+        want = K.tree_hash(str(self.tree), self.files)
+        head = self.podgit_run("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(self.podgit_run("rev-parse", "HEAD^{tree}").stdout.strip(), want)
+        self.assertEqual(self.podgit_run("rev-list", "--count", "HEAD").stdout.strip(), "1")
+        self.assertEqual(self.podgit_run("log", "-1", "--date=raw", "--format=%an <%ae> %cn <%ce> %ad %cd").stdout.strip(), "kgate <kgate@localhost> kgate <kgate@localhost> 946684800 +0000 946684800 +0000")
+        self.assertEqual(self.podgit_run("status", "--porcelain").stdout, "", "a clean worktree: the index matches the files")
+        # CMD sees that repo: git works in its directory, and the Mac's real HEAD is in KGATE_HEAD
+        out = done.stdout.split("\n")
+        self.assertIn(head, out)
+        self.assertIn("KGATE_HEAD=1234567890abcdef1234567890abcdef12345678", out)
+        self.assertIn("1", [l.strip() for l in out])      # one commit; the status count line is 0
+
+    def test_the_synthetic_commit_is_the_same_every_time_and_leaves_no_git_identity_in_cmds_env(self):
         self.run_sh()
-        self.assertEqual(subprocess.run(["git", "-C", str(self.tree), "status", "--porcelain"], stdout=subprocess.PIPE, text=True).stdout, before)
-        self.assertEqual(list((self.tree / ".git").glob("index.lock")), [])
+        first = self.podgit_run("rev-parse", "HEAD").stdout
+        done, _ = self.run_sh(argv=("sh", "-c", "env | grep -c '^GIT_\\(AUTHOR\\|COMMITTER\\)' || true"))
+        self.assertEqual(self.podgit_run("rev-parse", "HEAD").stdout, first)
+        self.assertIn("\n0\n", done.stdout)
+
+    def test_a_mismatch_makes_no_commit(self):
+        done, _ = self.run_sh(tree="0" * 40)
+        self.assertEqual(done.returncode, 70)
+        self.assertNotEqual(self.podgit_run("rev-parse", "--verify", "-q", "HEAD").returncode, 0)
+
+    def test_a_commit_that_fails_after_the_hashes_matched_is_its_own_marker_and_69_not_a_mismatch(self):
+        done, _ = self.run_sh(argv=("sh", "-c", "echo SHOULD-NOT-RUN"), lock_main=True)
+        self.assertEqual(done.returncode, 69, done.stdout)
+        seen = self.markers(done.stdout)
+        self.assertTrue(seen["commit"].startswith("FAILED git commit failed:"), done.stdout)
+        self.assertNotIn("MISMATCH", done.stdout)
+        self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+        self.assertNotIn("running", seen)
+
+    def test_no_head_on_the_mac_gives_an_empty_kgate_head(self):
+        done, _ = self.run_sh(argv=("sh", "-c", 'echo "[$KGATE_HEAD]"'), head=None)
+        self.assertIn("[]", done.stdout)
+
+
+class Archive(unittest.TestCase):
+    """What is shipped: the homelab keeps .git and the shared git folder; AG1 ships the files and the extras only."""
+
+    def repo_and_linked(self):
+        tmp = Path(tempfile.mkdtemp(prefix="ka-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        main, linked = tmp / "main", tmp / "linked"
+        main.mkdir()
+        git(main, "init", "-q")
+        (main / "f").write_text("x\n")
+        git(main, "add", "-A")
+        git(main, "commit", "-q", "-m", "i")
+        git(main, "worktree", "add", "-q", str(linked))
+        return main, linked
+
+    def names(self, wt, history):
+        wt, common, files = K.worktree(str(wt))
+        data = K.archive(wt, common, files, {"cache/x/job.sh": b"j"}, history=history)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            return tar.getnames(), wt, common
+
+    def test_the_default_still_ships_dot_git_and_the_shared_git_folder(self):
+        main, linked = self.repo_and_linked()
+        names, wt, common = self.names(main, True)
+        self.assertIn((wt + "/.git/HEAD").lstrip("/"), names)
+        names, wt, common = self.names(linked, True)
+        self.assertIn((wt + "/.git").lstrip("/"), names)
+        self.assertIn((common + "/HEAD").lstrip("/"), names)
+
+    def test_without_history_there_is_no_git_entry_at_all_but_the_files_and_extras(self):
+        main, linked = self.repo_and_linked()
+        for wt in (main, linked):
+            names, root, common = self.names(wt, False)
+            self.assertEqual([n for n in names if re.search(r"(^|/)\.git(/|$)", n)], [])
+            self.assertIn((root + "/f").lstrip("/"), names)
+            self.assertIn("cache/x/job.sh", names)
 
 
 class Ag1Black(unittest.TestCase):
@@ -1342,8 +1443,8 @@ class Ag1Black(unittest.TestCase):
                         "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
                         "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                         "loader.exec_module(K)\n"
-                        "K.AG1_TREE_ROOTS = K.AG1_TREE_ROOTS + (%r,)\n"
-                        "sys.exit(K.main(sys.argv[2:]))\n" % top)
+                        "K.AG1_TREE_ROOTS = %s\n"
+                        "sys.exit(K.main(sys.argv[2:]))\n" % ("(%r,)" % self.only_root if getattr(self, "only_root", None) else "K.AG1_TREE_ROOTS + (%r,)" % top))
         return [sys.executable, str(stub), str(SCRIPT)]
 
     def setUp(self):
@@ -1382,6 +1483,36 @@ class Ag1Black(unittest.TestCase):
         self.assertEqual((self.state / "kgate" / (rec["id"] + ".out") / "result.txt").read_text(), "result\n")
         files = (self.fake / "jobroot" / "cache" / rec["id"] / "files.nul").read_bytes().split(b"\0")[:-1]
         self.assertEqual(sorted(files), [b".gitignore", b"kgate.toml", b"tracked.txt", b"untracked.txt"])  # not ignored.txt
+
+    def test_a_linked_worktree_whose_common_dir_is_outside_the_allow_list_is_accepted(self):
+        """The common dir is not shipped on AG1, so only the worktree's own top directory needs an emptyDir and a place on the allow-list."""
+        linked = Path(tempfile.mkdtemp(prefix="kl-", dir=os.path.expanduser("~"))).resolve() / "wt"
+        self.addCleanup(shutil.rmtree, linked.parent, True)
+        git(self.repo, "worktree", "add", "-q", "-b", "other", str(linked))
+        if linked.parts[1] == self.repo.parts[1]:
+            self.skipTest("the main repo and the worktree share a top directory here")
+        self.only_root = linked.parts[1]
+        self.repo = linked
+        done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; test ! -e .git/commondir && echo own-repo")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
+        mounts = [m["mountPath"] for m in manifest["items"][0]["spec"]["containers"][0]["volumeMounts"]]
+        self.assertEqual(mounts, ["/" + linked.parts[1], "/cache", "/out"], "no emptyDir for the common dir's top directory")
+
+    def test_the_ag1_archive_has_no_git_entries_and_the_pod_builds_the_repo(self):
+        done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; echo KGATE_HEAD=$KGATE_HEAD")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        import tarfile
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            names = tar.getnames()
+        self.assertEqual([n for n in names if re.search(r"(^|/)\.git(/|$)", n)], [])
+        self.assertTrue(any(n.endswith("/tracked.txt") for n in names))
+        rec = self.records()[-1]
+        self.assertIn("KGATE_HEAD=" + rec["head"], done.stdout)
+        self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
+        podhead = subprocess.run(["git", "--git-dir", str(self.fake / "podgit"), "rev-parse", "HEAD^{tree}"], stdout=subprocess.PIPE, text=True).stdout.strip()
+        self.assertEqual(podhead, rec["tree"])
+        self.assertTrue((self.repo / ".git").is_dir(), "the Mac-side repo was only set aside by the fake pod")
 
     def test_it_only_ever_talks_to_ag1_through_the_one_kubeconfig_and_never_to_homelab(self):
         self.run_kgate("--", "true")
