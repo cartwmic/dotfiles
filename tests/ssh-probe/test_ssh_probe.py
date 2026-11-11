@@ -41,10 +41,12 @@ class SshProbeTests(unittest.TestCase):
         _, found = probes("linux")
         self.assertEqual(len(found), 4)
         for probe in found:
+            self.assertEqual(probe.split()[:2], ["/usr/bin/timeout", "1"])
+            self.assertIn("/usr/bin/bash -c ': </dev/tcp/127.0.0.1/8022'", probe)   # explicit bash: ssh runs exec via the login shell (zsh), which has no /dev/tcp
             self.assertNotIn("-G", probe)
             self.assertNotIn("nc ", probe)
 
-    @unittest.skipUnless(shutil.which("bash") and shutil.which("timeout"), "bash and timeout are required")
+    @unittest.skipUnless(Path("/usr/bin/bash").exists() and Path("/usr/bin/timeout").exists(), "/usr/bin/bash and /usr/bin/timeout are required")
     def test_linux_probe_succeeds_on_an_open_port_and_fails_fast_on_a_closed_one(self):
         server = socket.socket()
         server.bind(("127.0.0.1", 0))
@@ -52,14 +54,46 @@ class SshProbeTests(unittest.TestCase):
         port = server.getsockname()[1]
         try:
             _, (probe, *_) = probes("linux")
-            # ssh hands the quoted string to the user's shell; undo the config-file escape of the inner quotes the way ssh does.
-            command = probe.replace('\\"', '"').replace("8022", str(port))
-            self.assertEqual(subprocess.run(["sh", "-c", command], timeout=10).returncode, 0)
+            command = probe.replace("8022", str(port))
+            self.assertEqual(subprocess.run(["zsh" if shutil.which("zsh") else "sh", "-c", command], timeout=10).returncode, 0)   # the login shell is zsh where installed
         finally:
             server.close()
         started = time.monotonic()
-        self.assertNotEqual(subprocess.run(["sh", "-c", command], timeout=10).returncode, 0)
+        self.assertNotEqual(subprocess.run(["zsh" if shutil.which("zsh") else "sh", "-c", command], timeout=10).returncode, 0)
         self.assertLess(time.monotonic() - started, 3)
+
+
+OURS = "AAAAC3NzaC1lZDI1NTE5AAAAIIe/9P7N9fERnMuJZoaiKQToUkAie/ktc6xz1QoNp5uH"
+FOREIGN = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfake pi-agent@mac\n"
+
+
+def authorized_keys(chezmoi_os, existing, profile="personal"):
+    data = {"profile": profile, "chezmoi": {"os": chezmoi_os, "homeDir": "/h"}}
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Path(tmp) / "c.yaml"
+        cfg.write_text("{}\n")
+        script = subprocess.run([CHEZMOI, "--source", str(ROOT), "--config", str(cfg), "execute-template", "--override-data", json.dumps(data)],
+                                input=(ROOT / "private_dot_ssh/modify_authorized_keys.tmpl").read_text(), text=True, capture_output=True, timeout=60, check=True).stdout
+        return subprocess.run(["sh", "-c", script], input=existing, text=True, capture_output=True, timeout=30, check=True).stdout
+
+
+@unittest.skipUnless(CHEZMOI, "chezmoi is required")
+class AuthorizedKeysTests(unittest.TestCase):
+    def test_every_os_passes_foreign_keys_through_untouched(self):
+        for os_name in ("darwin", "linux"):
+            self.assertTrue(authorized_keys(os_name, FOREIGN).startswith(FOREIGN), os_name)
+
+    def test_off_linux_the_dotfiles_key_is_appended_once(self):
+        once = authorized_keys("darwin", FOREIGN)
+        self.assertEqual(once.count(OURS), 1)
+        self.assertEqual(authorized_keys("darwin", once), once)
+
+    def test_linux_does_not_append_it_until_michael_says_yes(self):
+        self.assertEqual(authorized_keys("linux", FOREIGN), FOREIGN)
+        self.assertEqual(authorized_keys("linux", ""), "")
+
+    def test_termux_still_gets_it_even_if_its_chezmoi_reports_linux(self):
+        self.assertEqual(authorized_keys("linux", FOREIGN, profile="termux").count(OURS), 1)
 
 
 if __name__ == "__main__":
