@@ -235,7 +235,7 @@ class SettingsHookTest(unittest.TestCase):
 
     def test_other_profiles_prune_keys_they_emptied_and_touch_nothing_else(self):
         s = self.run_modify(PERSONAL, json.dumps(self.run_modify(WORK, '{"a": 1}')))
-        owned = {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "promptCacheTtl": "1h", "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}}}  # keys the script sets on every apply
+        owned = {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "promptCacheTtl": "1h", "advisorModel": "claude-fable-5-2", "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}}}  # keys the script sets on every apply
         self.assertEqual(s, {"a": 1, **owned})
         untouched = {"hooks": {"Stop": []}, **owned}
         self.assertEqual(self.run_modify(PERSONAL, json.dumps(untouched)), untouched)
@@ -244,6 +244,11 @@ class SettingsHookTest(unittest.TestCase):
         for profile in (WORK, PERSONAL):
             for text in ("", "{}", '{"promptCacheTtl": "5m"}'):
                 self.assertEqual(self.run_modify(profile, text)["promptCacheTtl"], "1h", (profile, text))
+
+    def test_advisor_model_is_fable_5_2_on_both_desktop_profiles(self):
+        for profile in (WORK, PERSONAL):
+            for text in ("", "{}", '{"advisorModel": "opus"}'):
+                self.assertEqual(self.run_modify(profile, text)["advisorModel"], "claude-fable-5-2", (profile, text))
 
     def test_non_object_input_fails(self):
         r = subprocess.run(["sh", str(self.scripts[WORK])], input="[1]", capture_output=True, text=True, timeout=30)
