@@ -1159,9 +1159,10 @@ class Ag1PodSpec(unittest.TestCase):
         self.assertEqual((env["HOME"], env["GOCACHE"], env["GOMODCACHE"], env["GOMAXPROCS"]), ("/cache/home", "/cache/go-build", "/cache/gomod", "6"))
         self.assertEqual((env["KGATE_OUT"], env["CI"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"]), ("/out", "1", "-j6", "6"))
 
-    def test_roots_are_the_top_directories_and_never_a_system_one(self):
-        self.assertEqual(K.ag1_roots("/Users/me/git/r", "/Users/me/git/r/.git", "/home/x/r"), ["/Users", "/home"])
-        for bad in ("/usr/src/r", "/cache/r", "/out/r", "/var/x", "/"):
+    def test_roots_are_the_top_directories_and_only_from_the_allow_list(self):
+        self.assertEqual(K.ag1_roots("/Users/me/git/r", "/Users/me/git/r/.git", "/Volumes/x/r"), ["/Users", "/Volumes"])
+        self.assertEqual(K.ag1_roots("/Volumes/W/r", "/private/var/r"), ["/Volumes", "/private"])
+        for bad in ("/usr/src/r", "/cache/r", "/out/r", "/var/x", "/", "/home/x/r", "/tmp/r", "/etc/r", "/Users2/r"):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.ag1_roots(bad)
 
@@ -1190,7 +1191,8 @@ class PodSh(unittest.TestCase):
         (t / "with space.txt").write_text("space\n")
         (t / "üñí.txt").write_text("unicode\n")
         (t / "crlf.txt").write_bytes(b"line\r\nline\r\n")
-        (t / ".gitattributes").write_text("* text=auto eol=lf\n")   # a repo that asks git to convert line endings: the hash must still be of the bytes
+        (t / "utf16.txt").write_bytes("wide \u00fc\n".encode("utf-16"))
+        (t / ".gitattributes").write_text("* text=auto eol=lf\nutf16.txt working-tree-encoding=UTF-16\n")   # a repo that asks git to convert line endings: the hash must still be of the bytes
         (t / "link").symlink_to("a/b")
         (t / "dangling").symlink_to("nowhere")
         self.files = sorted(os.fsdecode(f) for f in subprocess.run(["git", "-C", str(t), "ls-files", "-co", "-z"], check=True, stdout=subprocess.PIPE).stdout.split(b"\0") if f)
@@ -1222,7 +1224,7 @@ class PodSh(unittest.TestCase):
         self.assertEqual(self.markers(done.stdout)["hash"], "ok " + want)
         # and both equal the tree plain git writes for the same files (the executable file and the two symlinks are in it)
         (self.tree / ".git" / "info").mkdir(exist_ok=True)
-        (self.tree / ".git" / "info" / "attributes").write_text("* -text -eol -filter -ident\n")
+        (self.tree / ".git" / "info" / "attributes").write_text("* -text -eol -filter -ident -working-tree-encoding\n")
         git(self.tree, "-c", "core.autocrlf=false", "add", "-A")
         oracle = subprocess.run(["git", "-C", str(self.tree), "write-tree"], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
         self.assertEqual(want, oracle)
@@ -1456,6 +1458,20 @@ class Ag1Black(unittest.TestCase):
     def test_a_root_user_is_refused(self):
         self.profile(extra='user = "0:0"')
         self.refused("non-root")
+
+    def test_a_refused_ag1_profile_is_recorded_as_ag1_and_never_reaches_for_the_homelab(self):
+        for what, setup, args in (("secrets", lambda: self.profile(secrets='TOK = "op://developer/item/password"'), ()),
+                                  ("image", lambda: self.profile(image="ghcr.io/cartwmic/kgate@sha256:" + "ab" * 32), ()),
+                                  ("unpinned", lambda: self.profile(image="devaxonhub.azurecr.us/x:1"), ()),
+                                  ("root", lambda: self.profile(extra='user = "0:0"'), ()),
+                                  ("node", self.profile, ("--node", "n1"))):
+            with self.subTest(what):
+                setup()
+                done = self.kgate(*args, "--", "true", host="fake")   # a homelab host is set: it must not be used
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertEqual(self.records()[-1]["cluster"], "ag1")
+                self.assertEqual(self.calls(), [], "no ssh to the homelab")
+                self.assertFalse(any("manifest" in c for c in self.kcalls()))
 
     def test_node_pinning_is_refused(self):
         self.refused("does not take --node", "--node", "somewhere")

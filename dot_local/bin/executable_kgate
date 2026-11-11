@@ -88,7 +88,7 @@ AG1_REGISTRY = "devaxonhub.azurecr.us"
 AG1_DEADLINE_S = 7200
 AG1_USER = "65532:65532"  # the cursor-worker image's user
 AG1_SETUP = "run `kgate ag1-setup` once (it writes %s from the %s context of ~/.kube/config)" % (AG1_KUBECONFIG, AG1_CONTEXT)
-AG1_SYSTEM_DIRS = ("bin", "boot", "cache", "dev", "etc", "lib", "lib64", "out", "proc", "run", "sbin", "sys", "usr", "var")
+AG1_TREE_ROOTS = ("Users", "Volumes", "private")  # where a Mac worktree lives; only these get an emptyDir, so nothing in the image is hidden
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
 UNAVAILABLE = 69
 USAGE = 64
@@ -265,9 +265,9 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
 def ag1_roots(*paths):
     """The top-level directories (/Users for /Users/me/git/repo) that get an emptyDir, so the shipped tree unpacks at its own absolute path as a non-root user."""
     roots = sorted({"/" + p.lstrip("/").split("/")[0] for p in paths})
-    bad = [r for r in roots if r == "/" or r[1:] in AG1_SYSTEM_DIRS]
+    bad = [r for r in roots if r[1:] not in AG1_TREE_ROOTS]
     if bad:
-        raise Unavailable("the tree is under %s, a system directory in the pod; kgate on AG1 cannot unpack there" % ", ".join(bad))
+        raise Unavailable("the tree is under %s; kgate on AG1 unpacks only under /%s" % (", ".join(bad), ", /".join(AG1_TREE_ROOTS)))
     return roots
 
 
@@ -318,7 +318,7 @@ mkdir -p "$HOME" 2>/dev/null
 # the tree hash: a throwaway repo and index holding exactly the shipped files, hashed as bytes (no line-ending or filter conversion)
 tmp=$dir/hash
 rm -rf "$tmp"; mkdir -p "$tmp/git/info"
-printf '* -text -eol -filter -ident\n' > "$tmp/git/info/attributes"
+printf '* -text -eol -filter -ident -working-tree-encoding\n' > "$tmp/git/info/attributes"
 g() { GIT_INDEX_FILE=$tmp/index git -c core.autocrlf=false -c core.safecrlf=false -c safe.directory='*' --git-dir="$tmp/git" --work-tree="$ROOT" "$@"; }
 git init -q --bare "$tmp/git" >/dev/null 2>&1
 found=$(g update-index --add --info-only -z --stdin < "$dir/files.nul" 2>"$tmp/err" && g write-tree --missing-ok 2>>"$tmp/err")
@@ -553,7 +553,6 @@ def forget(*paths):
 class Cluster:
     """The homelab adapter: kubectl on the control plane over ssh. Nothing else on this machine touches the cluster."""
     name = "homelab"
-    launch_dir = "tmp"  # where the job's own files unpack in the pod
 
     def __init__(self, host, key):
         self.ssh = ["ssh", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=8",
@@ -591,7 +590,6 @@ class Ag1Cluster(Cluster):
     """The AG1 adapter: local kubectl with a kubeconfig that holds only AG1 dems2, always with that context and namespace. The Role there
     allows pods, pods/exec and pods/log only, so there are no Secrets and the sweep and cleanup touch pods only."""
     name = "ag1"
-    launch_dir = "cache"
 
     def __init__(self):
         pass
@@ -753,6 +751,10 @@ class Job:
             self.rec["profile"] = path
         elif o.profile:
             raise Unavailable("profile %s not found" % path)
+        if prof["cluster"] == "ag1":  # before any refusal, so the record says ag1 and cleanup never reaches for the homelab
+            self.cluster = Ag1Cluster()
+            self.rec["cluster"] = "ag1"
+            self.register()
         image = o.image or prof["image"]
         cpu = o.cpu if o.cpu is not None else (prof["cpu"] if prof["cpu"] is not None else 2)
         mem = o.mem or prof["memory"] or "4Gi"
@@ -770,7 +772,7 @@ class Job:
         return image, cpu, mem, mem_limit, prof
 
     def use_ag1(self, image, prof):
-        """The profile says cluster = "ag1": refuse what AG1 cannot take, switch to the AG1 adapter, and record it before anything is created."""
+        """The profile says cluster = "ag1": refuse what AG1 cannot take."""
         if prof["secrets"]:
             raise Unavailable("a profile for AG1 cannot have [secrets]: the Role there has no Secrets, and none are created")
         if not image.startswith(AG1_REGISTRY + "/"):
@@ -779,9 +781,6 @@ class Job:
             raise Unavailable("an AG1 pod runs as non-root; the profile user is %s" % prof["user"])
         if self.o.node:
             raise Unavailable("AG1 does not take --node; the cluster schedules the pod")
-        self.cluster = Ag1Cluster()
-        self.rec["cluster"] = "ag1"
-        self.register()
 
     def reachable(self):
         check_reachable(self.cluster)
