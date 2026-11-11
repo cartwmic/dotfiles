@@ -2,9 +2,11 @@
 #
 # heavy-gate
 #
-# Ask whether this Mac can take a heavy job (cargo, docker, a full test suite) right now,
+# Ask whether this machine can take a heavy job (cargo, docker, a full test suite) right now,
 # and optionally run the job only when it can. Workers call it instead of each one checking
-# memory by hand. macOS only: it reads sysctl and memory_pressure.
+# memory by hand. macOS and Linux: macOS reads sysctl and memory_pressure; Linux reads /proc/meminfo and /proc/loadavg
+# (HEAVY_GATE_PROC names another /proc, for tests). Same command line and exit codes on both. Linux has no kernel pressure
+# level, so the level rule below is a macOS rule; on Linux memory free >= 30% is the whole memory rule.
 #
 # Usage:
 #   heavy-gate                          check once; exit 0 if allowed, 1 if refused (the reasons on stderr)
@@ -140,11 +142,24 @@ number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
 
 
 # ---- the figures (each prints one value, or nothing if unreadable) ----
-pressure_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null; }
-mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
-
-load5() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}'; }   # "{ 1m 5m 15m }": the second figure is field 3
-ncores() { sysctl -n hw.ncpu 2>/dev/null; }
+case $(uname -s) in
+  Darwin)
+    LEVEL_RULE=1
+    pressure_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null; }
+    mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
+    load5() { sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}'; }   # "{ 1m 5m 15m }": the second figure is field 3
+    ncores() { sysctl -n hw.ncpu 2>/dev/null; }
+    ;;
+  Linux)
+    LEVEL_RULE=0   # no kernel pressure level on Linux; MemAvailable is the memory figure
+    PROC=${HEAVY_GATE_PROC:-/proc}
+    pressure_level() { :; }
+    mem_free_pct() { awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } END { if (t > 0 && a != "") printf "%d\n", a * 100 / t }' "$PROC/meminfo" 2>/dev/null; }
+    load5() { awk '{ print $2 }' "$PROC/loadavg" 2>/dev/null; }   # "1m 5m 15m running/total lastpid": the second figure
+    ncores() { getconf _NPROCESSORS_ONLN 2>/dev/null; }
+    ;;
+  *) LEVEL_RULE=0 ;;   # refused below, before any figure is read
+esac
 
 # $1 figure, $2 operator (lt, le or ge), $3 limit: true when the figure is a number that meets the rule
 meets() { number "$1" && awk -v v="$1" -v l="$3" -v op="$2" 'BEGIN { exit !(op == "lt" ? v + 0 < l + 0 : op == "le" ? v + 0 <= l + 0 : v + 0 >= l + 0) }'; }
@@ -190,7 +205,9 @@ VOLUMES
 # The memory rules. Prints one line per broken rule; returns 1 if any is broken.
 memory_rules() {
   broken=0
-  v=$(pressure_level); level_ok "$v"                      || { refuse "memory pressure level ${v:-unreadable} (needs 1 to $MAX_PRESSURE_LEVEL)"; broken=1; }
+  if [ "$LEVEL_RULE" = 1 ]; then
+    v=$(pressure_level); level_ok "$v"                    || { refuse "memory pressure level ${v:-unreadable} (needs 1 to $MAX_PRESSURE_LEVEL)"; broken=1; }
+  fi
   v=$(mem_free_pct);   meets "$v" ge "$MEM_FREE_MIN_PCT"  || { refuse "memory free ${v:-unreadable}% (needs >= $MEM_FREE_MIN_PCT%)"; broken=1; }
   return "$broken"
 }
@@ -557,9 +574,9 @@ resolve_slots
 resolve_max_load
 [ "$SLOTS_ENV_BAD" = 0 ] || { log ERROR "HEAVY_GATE_SLOTS must be a whole number, 1 or more"; exit 2; }
 case ${HEAVY_GATE_PRIORITY:-0} in '' | *[!0-9]* | ???????*) log ERROR "HEAVY_GATE_PRIORITY must be a whole number of at most 6 digits (lower is more important)"; exit 2 ;; esac
-[ "$(uname -s)" = Darwin ] || { log ERROR "macOS only"; exit 2; }
+case $(uname -s) in Darwin | Linux) ;; *) log ERROR "macOS and Linux only"; exit 2 ;; esac
 if [ $# -eq 0 ]; then
-  log INFO "check: a start is admitted on free disk space, memory pressure and the 5-minute load average: >= $MIN_FREE_GB GB free on the volume that holds \$HOME$(also_watched), level 1 to $MAX_PRESSURE_LEVEL, memory free >= $MEM_FREE_MIN_PCT% and a 5-minute load average of at most $MAX_LOAD on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts."
+  log INFO "check: a start is admitted on free disk space, memory pressure and the 5-minute load average: >= $MIN_FREE_GB GB free on the volume that holds \$HOME$(also_watched), $([ "$LEVEL_RULE" = 1 ] && printf 'level 1 to %s, ' "$MAX_PRESSURE_LEVEL")memory free >= $MEM_FREE_MIN_PCT% and a 5-minute load average of at most $MAX_LOAD on two readings ${CHECK_WINDOW}s apart, and a free slot. Not checked: free swap, Swapouts."
   if try_gate 0; then log INFO "allowed"; exit 0; fi
   [ "$DISK_REFUSED" = 0 ] || exit "$EXIT_DISK"
   exit 1

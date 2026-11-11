@@ -1,0 +1,14 @@
+# Memory watchdog for heavy-gate jobs (owner decision 2026-11-03; see the header of ~/.local/bin/heavy-gate-watchdog): it runs all the time,
+# reads free memory every 5 seconds while a heavy-gate job holds the gate, and stops the biggest job when it stays low. Linux twin of
+# Library/LaunchAgents/local.heavy-gate-watchdog.plist: always on (Restart=always, like KeepAlive), no Nice and no CPU limit, because it has
+# to run exactly when the machine is short of memory. Output goes to the journal: journalctl --user -u heavy-gate-watchdog.
+[Unit]
+Description=heavy-gate memory watchdog
+
+[Service]
+ExecStart=/bin/sh %h/.local/bin/heavy-gate-watchdog
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

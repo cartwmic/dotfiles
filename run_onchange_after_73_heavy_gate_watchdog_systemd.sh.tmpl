@@ -1,0 +1,27 @@
+#!/bin/sh
+# Load or reload the heavy-gate memory watchdog (heavy-gate-watchdog.service) when its unit or the daemon script changes. Linux only (.chezmoiignore).
+# The unit runs ~/.local/bin/heavy-gate-watchdog all the time (Restart=always); a changed script needs a restart to take effect, hence the hashes.
+# unit: {{ include "dot_config/systemd/user/heavy-gate-watchdog.service" | sha256sum }}
+# daemon: {{ include "dot_local/bin/executable_heavy-gate-watchdog" | sha256sum }}
+#
+# Linux twin of run_onchange_after_72_heavy_gate_watchdog_launchd.sh.tmpl. Fails (and so fails the apply) when systemd does not end up with
+# the unit active: chezmoi records a run_onchange script only when it succeeds, so the next apply tries again. A host with no systemd user
+# manager (a container, WSL without systemd) has nothing to load into: that is a notice and a clean exit, not a failure.
+set -eu
+log() { printf '[heavy_gate_watchdog_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+unit=heavy-gate-watchdog.service
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; $unit not loaded (heavy-gate then warns that jobs run unwatched)"
+  exit 0
+fi
+if [ ! -f "$HOME/.config/systemd/user/$unit" ]; then
+  log ERROR "$HOME/.config/systemd/user/$unit is not installed; apply it too, then apply again"
+  exit 1
+fi
+systemctl --user daemon-reload
+systemctl --user enable "$unit" >/dev/null 2>&1 || { log ERROR "could not enable $unit"; exit 1; }
+systemctl --user restart "$unit" || { log ERROR "could not start $unit; see: journalctl --user -u $unit"; exit 1; }
+systemctl --user is-active --quiet "$unit" || { log ERROR "$unit is not active after the restart; see: journalctl --user -u $unit"; exit 1; }
+log INFO "loaded $unit (it logs to the journal: journalctl --user -u $unit)"

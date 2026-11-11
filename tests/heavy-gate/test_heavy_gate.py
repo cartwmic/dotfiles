@@ -1598,11 +1598,12 @@ exit $rc
         self.assertEqual(self.gate("--wait", "soon", "--", "true").returncode, 2)
         self.assertEqual(self.gate("--nope").returncode, 2)
 
-    def test_refuses_off_macos(self):
-        (Path(self.tmp.name) / "bin/uname").write_text("#!/bin/sh\necho Linux\n")
+    def test_refuses_an_os_that_is_neither_macos_nor_linux(self):
+        # Linux is supported since the Linux port (tests/heavy-gate/test_linux.py); any other OS still exits 2
+        (Path(self.tmp.name) / "bin/uname").write_text("#!/bin/sh\necho FreeBSD\n")
         result = self.gate()
         self.assertEqual(result.returncode, 2)
-        self.assertIn("macOS only", result.stderr)
+        self.assertIn("macOS and Linux only", result.stderr)
 
 
 if __name__ == "__main__":
