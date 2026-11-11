@@ -105,7 +105,8 @@ def render(path, case, home=None):
     data = dict({"profile": profile, "instances": {"coordinator": {"repo": "/nonexistent/coordinator"}}}, **extra)
     if home is None:  # the T3 script reads active.json through the HOME the template sees
         home = HOME_DIR
-    text = chezmoi(source(os_name), data, "execute-template", stdin=(ROOT / path).read_text(), home=home)
+    # the pretend OS reaches the template's own .chezmoi.os too (the T3 script's worktrees directory depends on it), not only the hub gates
+    text = chezmoi(source(os_name), data, "execute-template", "--override-data", json.dumps({"chezmoi": {"os": os_name}}), stdin=(ROOT / path).read_text(), home=home)
     # These tests are about the hub and the names. The "Auto-compact after" value the T3 script also sets on claudeAgent and coordinator
     # is tests/t3-hub's; blank it here (an empty value adds nothing) so the fixture comparisons stay about the hub.
     return text.replace("AUTO_COMPACT_WINDOW='500000'", "AUTO_COMPACT_WINDOW=''") if path == T3 else text
