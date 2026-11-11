@@ -7,7 +7,7 @@ image  = "devaxonhub.azurecr.us/ecom/cursor-worker:20261019-4057e58-b62a51a@sha2
 # Requests are small so several jobs fit the shared namespace quota. Each job may burst to 8 CPU (cpu_limit, which also sets GOMAXPROCS and the build jobs).
 # Current quota (ops/k8s-deploy #542472, merged 2026-11-11): 16 pods; requests 24 CPU / 96Gi / 100Gi ephemeral; limits 96 CPU / 160Gi / 160Gi: 12 jobs fit,
 # bound by limits.cpu 96 / 8. (Before it: 6 pods, limits 16 CPU, 2 jobs.)
-# kgate waits for quota in the meantime. The full race gate's peak was 3.74 to 3.79 GB (cgroup, page cache included).
+# The full race gate's peak was 3.74 to 3.79 GB (cgroup, page cache included).
 cpu    = 2
 cpu_limit = 8
 memory = "6Gi"
