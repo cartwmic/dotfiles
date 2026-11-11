@@ -1074,7 +1074,12 @@ if a[:2] == ["create", "-f"]:
     n = int(open(creates).read()) + 1 if os.path.exists(creates) else 1
     open(creates, "w").write(str(n))
     quota = os.environ.get("FAKE_QUOTA", "")   # "N": refuse the first N creates; "always": refuse every create. The used CPU changes after the first.
-    if quota and quota != "impossible" and (quota == "always" or n <= int(quota)):
+    if quota.startswith("long:") and n <= int(quota[5:]):   # four resources exceeded, a message over 300 characters, every request under its limited value
+        names = ["limits.cpu", "limits.memory", "requests.cpu", "requests.ephemeral-storage"]
+        side = lambda vals: ",".join("%s=%s" % (k, v) for k, v in zip(names, vals))
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: xlab-offload-qq, requested: %s, used: %s, limited: %s\n'
+                         % (side(["8", "10Gi", "2", "8Gi"]), side(["96", "160Gi", "24", "100Gi"]), side(["96", "160Gi", "24", "100Gi"]))); sys.exit(1)
+    if quota and not quota.startswith("long:") and quota != "impossible" and (quota == "always" or n <= int(quota)):
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: xlab-offload, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
     if quota == "impossible":   # asks for more than the namespace's own limit: waiting cannot help
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: xlab-offload, requested: limits.cpu=16,requests.cpu=2, used: limits.cpu=0,requests.cpu=0, limited: limits.cpu=8,requests.cpu=8\n'); sys.exit(1)
@@ -1614,6 +1619,33 @@ class Ag1Black(unittest.TestCase):
         self.assertRegex(rec["reason"], r"^request exceeds the namespace quota: exceeded quota: xlab-offload, requested: limits.cpu=16,requests.cpu=2")
         self.assertEqual(int((self.fake / "creates").read_text()), 1)
         self.assertLess(rec["duration_s"], 30)
+
+    def test_a_long_real_format_quota_message_is_parsed_whole_and_waits(self):
+        text = ('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: xlab-offload-qq, requested: '
+                'limits.cpu=8,limits.memory=10Gi,requests.cpu=2,requests.ephemeral-storage=8Gi, used: limits.cpu=96,limits.memory=160Gi,requests.cpu=24,requests.ephemeral-storage=100Gi, '
+                'limited: limits.cpu=96,limits.memory=160Gi,requests.cpu=24,requests.ephemeral-storage=100Gi')
+        self.assertGreater(len(text[text.index("exceeded quota:"):]), 300, "the message is longer than what kgate prints")
+        full = " ".join(text[text.index("exceeded quota:"):].split())
+        self.assertFalse(K.quota_impossible(full))
+        self.assertTrue(K.quota_impossible(full[:300]), "cut at 300 characters, the last limited value reads 1 (of 100Gi): the bug this test guards")
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-after-the-long-wait", env={"FAKE_QUOTA": "long:2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-after-the-long-wait", done.stdout)
+        self.assertNotIn("request exceeds the namespace quota", done.stdout)
+        shown = next(l for l in done.stdout.splitlines() if l.startswith("kgate: waiting for quota: "))
+        self.assertEqual(len(shown), len("kgate: waiting for quota: ") + 300, "only what is printed is cut")
+        self.assertEqual(int((self.fake / "creates").read_text()), 3)
+
+    def test_a_forbidden_webhook_denial_that_says_exceeded_quota_is_not_a_wait(self):
+        for text in ('Error from server (Forbidden): admission webhook "quota.example.com" denied the request: exceeded quota: xlab-offload, requested: requests.cpu=1, used: requests.cpu=0, limited: requests.cpu=8',
+                     'Error from server (Forbidden): pods "x" is forbidden: policy says exceeded quota: please ask ops'):
+            with self.subTest(text[:60]):
+                done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_CREATE_ERROR": text})
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertTrue(self.records()[-1]["reason"].startswith("could not create the pod: "))
+                self.assertNotIn("waiting for quota", done.stdout)
+                self.assertLess(self.records()[-1]["duration_s"], 30)
+                (self.fake / "creates").unlink()
 
     def test_exceeded_quota_text_outside_a_forbidden_create_error_is_not_a_wait(self):
         done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_CREATE_ERROR": "error: the webhook said exceeded quota: please stop"})
