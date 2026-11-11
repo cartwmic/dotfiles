@@ -18,13 +18,15 @@ if [ "$PROFILE" != "personal" ]; then
   exit 0
 fi
 
+{{ if eq .chezmoi.os "linux" -}}
 # Linux without apt (Arch, Omarchy): mise bootstrap does not install RustDesk there (install-rustdesk uses the Debian package), so with no
 # rustdesk on PATH there is nothing to configure. Installed by hand, it is configured on the next change of this script's inputs.
-if [ "$(uname -s)" = Linux ] && ! command -v apt-get >/dev/null 2>&1 && ! command -v rustdesk >/dev/null 2>&1; then
+if ! command -v apt-get >/dev/null 2>&1 && ! command -v rustdesk >/dev/null 2>&1; then
   echo "${LOG_PREFIX} INFO: skipping RustDesk: no rustdesk on PATH and no apt-get to install it" >&2
   exit 0
 fi
 
+{{ end -}}
 if [ ! -x "$HELPER" ]; then
   echo "${LOG_PREFIX} ERROR: RustDesk configuration helper not found: $HELPER" >&2
   exit 1
