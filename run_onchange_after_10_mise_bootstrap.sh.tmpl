@@ -9,6 +9,9 @@
 {{- else if eq .profile "axon-work-computer" }}
 # Hash (work QMD pin): {{ include "dot_config/mise/conf.d/qmd.toml" | sha256sum }}
 {{- end }}
+{{- if and (eq .chezmoi.os "linux") (ne .profile "termux") }}
+# Hash (Linux-only mise settings): {{ include "dot_config/mise/conf.d/linux.toml" | sha256sum }}
+{{- end }}
 
 set -eu
 

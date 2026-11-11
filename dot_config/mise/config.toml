@@ -580,6 +580,14 @@ PI_BIN="$PI_AGENT_DIR/bin/pi"
 # The installer can create its PATH entry without editing a managed shell profile.
 export PATH="$PI_AGENT_DIR/bin:$HOME/.local/bin:$PATH"
 if [ ! -x "$PI_BIN" ] || [ ! -f "$PI_AGENT_DIR/install/current-version" ]; then
+  # Omarchy installs Pi as a mise tool; the installer refuses to replace that copy and exits 1. Remove it (and its shim) first.
+  # It stays gone because conf.d/linux.toml disables the tool. Nothing to do where mise has no Pi (macOS, WSL).
+  if [ "$(uname -s)" = Linux ] && command -v mise >/dev/null 2>&1 && [ -n "$(mise ls --installed pi 2>/dev/null)" ]; then
+    echo "[install-pi] removing the mise-installed Pi so the managed install can replace it"
+    mise uninstall --all --yes pi
+    mise reshim
+    hash -r 2>/dev/null || true
+  fi
   TEMP_DIR=$(mktemp -d)
   trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
   curl -fsSL https://pi.dev/install.sh -o "$TEMP_DIR/install.sh"

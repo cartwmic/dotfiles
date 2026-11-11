@@ -195,6 +195,17 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 75_instances_reconcile.sh
 {{- end }}
 
+{{- if ne .chezmoi.os "linux" }}
+# Linux-only mise settings (Omarchy's system pi must not shadow the managed install).
+.config/mise/conf.d/linux.toml
+{{- end }}
+
+{{- if ne .chezmoi.os "darwin" }}
+# Library/ holds only macOS files (LaunchAgents, Preferences). Off macOS the directories themselves would show as "to add".
+Library
+Library/**
+{{- end }}
+
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
 # QMD search (docs/qmd.md): personal and work, not Termux. The pin, the collections, the skill that tells agents how to call it, and the two scripts.
 .config/mise/conf.d/qmd.toml
