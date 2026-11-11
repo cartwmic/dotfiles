@@ -530,30 +530,6 @@ if ! command -v kickstart >/dev/null 2>&1; then
 fi
 '''
 
-[tasks."install-loop-engine-from-source"]
-description = "Build the Loop Engine CLI and providers from the pinned tag on Linux arm64 (the releases have no archive for it)"
-depends = ["install-rust", "setup-ubuntu-essentials"]
-run = '''
-set -eu
-# x64 Linux and macOS get the release archives from [tools]; those five entries skip Linux arm64 (os = [...]), so build them here.
-if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != aarch64 ]; then exit 0; fi
-# The tag is the pin in [tools] (one version for all five), so a Loop Engine bump PR moves this too.
-CONFIG="${MISE_GLOBAL_CONFIG_FILE:-$HOME/.config/mise/config.toml}"
-VERSION="$(sed -n 's/^bookends-check = { version = "\([^"]*\)".*/\1/p' "$CONFIG")"
-[ -n "$VERSION" ] || { echo "ERROR: no bookends-check pin in $CONFIG" >&2; exit 1; }
-STAMP="$HOME/.local/share/loop-engine-src/version"
-if [ "$(cat "$STAMP" 2>/dev/null)" = "$VERSION" ] && [ -x "$HOME/.local/bin/bookends-check" ]; then
-  echo "Loop Engine $VERSION already built"
-  exit 0
-fi
-[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-echo "Building Loop Engine v$VERSION from source (about two minutes)..."
-cargo install --locked --git https://github.com/cartwmic/loop-engine --tag "v$VERSION" --root "$HOME/.local" \
-  loop-cli bookends-check lean-change-provider policy-document-provider research-provider
-mkdir -p "$(dirname "$STAMP")"
-printf '%s\n' "$VERSION" > "$STAMP"
-'''
-
 [tasks."install-kubectl"]
 description = "Install kubectl CLI for the host OS and architecture"
 run = '''
@@ -959,7 +935,6 @@ depends = [
   "setup-ubuntu-essentials",
   "install-rust",
   "install-cargo-tools",
-  "install-loop-engine-from-source",
   "install-uv",
   "install-uv-tools",
   "install-nvim-python-host",
