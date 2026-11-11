@@ -119,6 +119,10 @@ jobs:
         run: python3 -m unittest discover -s tests/hub -v
       - name: pnpm store-dir on Workshop (personal macOS only; managed-set checks skip here)
         run: python3 -m unittest discover -s tests/pnpm-store -v
+      - name: Agent docker config (the dot_zshenv markers in real zsh; the config file; the macOS apply test skips here)
+        run: |
+          sudo apt-get install -y -qq zsh >/dev/null
+          python3 -m unittest discover -s tests/agent-docker -v
 
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.
@@ -166,3 +170,5 @@ jobs:
         run: python3 -m unittest discover -s tests/pnpm-store -v
       - name: Agent browser render on macOS (MCP entry and launcher present on both profiles)
         run: python3 -m unittest discover -s tests/agent-browser -v
+      - name: Agent docker config on macOS (real apply in a scratch HOME on both profiles, real chezmoi)
+        run: python3 -m unittest discover -s tests/agent-docker -v

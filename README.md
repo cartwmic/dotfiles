@@ -161,6 +161,8 @@ On `personal` profile hosts, `mise run bootstrap` installs Docker Desktop on mac
 
 On Ubuntu, provisioning refuses to remove conflicting distribution packages automatically. After those are removed explicitly, it installs Docker CE, containerd, Compose, and Buildx, then adds the current user to the `docker` group. Group membership takes effect after logout/login and grants root-equivalent access through the Docker daemon. Docker-published ports can bypass `ufw`; enforce host policy through Docker's `DOCKER-USER` chain where needed.
 
+On the personal Mac, agent shells (Claude Code, T3 Code, Codex, herdr panes and so on) get `DOCKER_CONFIG=~/.config/agent-docker`, a config with no credential helper, so their `docker` commands never run `docker-credential-desktop` (it makes macOS ask "access data from other apps" over and over). Michael's own terminals keep `~/.docker`. See [docs/agent-docker.md](./docs/agent-docker.md).
+
 ## RustDesk Provisioning
 
 On `personal` macOS and native Ubuntu/Debian hosts, `mise run bootstrap`

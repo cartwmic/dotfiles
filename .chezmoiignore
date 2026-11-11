@@ -225,6 +225,10 @@ Library/Preferences/pnpm/**
 # dot_zshenv sources (without it that line does nothing), the script that makes its directory, and the ~/tmp move script.
 .config/agent-scratch
 .config/agent-scratch/**
+# Agent docker config (docs/agent-docker.md): personal macOS only, where Docker Desktop and its credential helper are provisioned. The dot_zshenv block that
+# exports DOCKER_CONFIG does nothing without the directory.
+.config/agent-docker
+.config/agent-docker/**
 # heavy-gate also watches /Volumes/Workshop's free space; the work Mac has no such volume, so it gets no volumes file and watches nothing extra.
 .config/heavy-gate/volumes
 81_agent_scratch_workshop.sh
