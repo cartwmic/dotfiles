@@ -202,8 +202,15 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml --
 - Requests and limits for cpu, memory and ephemeral-storage, from the profile: `cpu` (request), `cpu_limit` (limit, what the pod may burst to; default `cpu`; must be at least `cpu`; AG1 only), `memory` (request), `memory_limit` (limit), `ephemeral_storage` (request and limit; default `10Gi`). `GOMAXPROCS`, `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` follow the CPU limit, not the request.
 - `activeDeadlineSeconds: 7200`. The container runs `sleep 86400` (the image has no `tini`), so the deadline ends a pod whose client died.
 - emptyDirs at the top directory of the shipped tree (`/Users` for `/Users/me/git/repo`, so the Mac's absolute paths unpack as the non-root user), at `/cache` and at `/out`. Only trees under `/Users`, `/Volumes` or `/private` are accepted (an allow-list, so no emptyDir hides anything in the image); any other top directory is refused.
+- `cache_pvc = "<claim>"` in the profile makes `/cache` that persistent claim instead of an emptyDir (see "The cache disk" below). The pod then also gets `fsGroup` (the profile's gid) with `fsGroupChangePolicy: OnRootMismatch`, so the non-root user can write a new disk.
 - Env: kgate's usual set, plus `HOME=/cache/home`, `GOCACHE=/cache/go-build`, `GOMODCACHE=/cache/gomod`.
 - No hostPath, affinity, tolerations, Secrets or imagePullSecrets (nodes pull with their own identity). `--node` is refused.
+
+**The cache disk.** With `cache_pvc`, `HOME`, `GOCACHE` and `GOMODCACHE` live on the claim (`xlab-offload-cache`: `managed-csi-premium`, 32Gi, ReadWriteOncePod, made by ops/k8s-deploy, not by kgate; the Role needs no PVC rights to mount a claim in its own namespace), so Go builds and module downloads are warm after the first job. `cache_pvc` on a homelab profile is refused (exit 69, `cache_pvc is for cluster = "ag1" only`).
+
+- **One job at a time.** ReadWriteOncePod lets one pod use the claim, so a second job's pod stays `Pending` (`Unschedulable`, "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode") until the first ends. kgate treats that as waiting, like a full cluster, up to `--wait`, then exits 69 with the scheduler's reason. The fake-kubectl test uses the scheduler message shape; it was not seen live.
+- **Cleanup.** The pod side removes `/cache/<job id>` (the job's own script, file list and error file) at the end of every job, pass or fail, and at its start removes any other `/cache/kgate-*` directory older than a day (a dead client's leftover). The caches stay.
+- **Missing claim.** If the claim does not exist, the pod stays `Pending` with `persistentvolumeclaim "<name>" not found`. kgate sees that at once and exits 69 with `the cache claim <name> does not exist in xlab-offload (cache_pvc in the profile)`; the pod is deleted.
 
 **Refused with exit 69, before anything is created:** a profile with `[secrets]` or `services`, an image that is not on `devaxonhub.azurecr.us` and pinned by digest, a root user.
 
@@ -225,7 +232,7 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml --
 | Pod side | `kgate.py --pod` (python3) | `kgate.sh` (POSIX sh, git) |
 | Tree location | the pod's filesystem | emptyDir at the tree's top directory |
 | Git history | `.git` and the shared git folder shipped | none shipped; one synthetic commit built in the pod (investigator-ai: about 25 MB shipped, not 164 MB) |
-| Caches | hostPath `/var/lib/kgate/cache` | emptyDir `/cache` (cold each job) |
+| Caches | hostPath `/var/lib/kgate/cache` | emptyDir `/cache` (cold each job), or the `cache_pvc` claim (warm, one job at a time) |
 | Deadline | 8 h | 2 h |
 | Scheduling | node affinity, G14 preferred | the cluster's |
 | Cleanup | pod and two Secrets | pod only |
@@ -259,6 +266,7 @@ memory = "4Gi"                                  # the request, what the schedule
 memory_limit = "8Gi"                             # optional: the limit, the OOM-kill line; default equal to memory
 user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root (AG1: default 65532:65532, never root)
 cluster = "homelab"                              # optional: "homelab" (default) or "ag1"
+cache_pvc = "xlab-offload-cache"                 # AG1 only: mount this claim at /cache instead of an emptyDir
 ephemeral_storage = "20Gi"                       # AG1 only: the pod's ephemeral-storage request and limit; default 10Gi
 cpu_limit = 8                                    # AG1 only: the CPU limit and build parallelism; default cpu
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
