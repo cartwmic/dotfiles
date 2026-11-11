@@ -569,7 +569,8 @@ class RepoFactsTest(unittest.TestCase):
         self.assertEqual(bend['files'], ['src/ledger/b.ts'])
         self.assertRegex(bend['last_commit'], r'^\d{4}-\d{2}-\d{2}T')
         self.assertNotIn('plan_commits_touching_scope', s)
-        self.assertEqual(s['recent_commits_touching_scope'], [])
+        self.assertNotIn('recent_commits_touching_scope', s)
+        self.assertEqual(s['plan_word_commits_touching_scope'], [])
         self.assertEqual(bend['remote_ref'], 'refs/remotes/origin/bend-ledger')
         self.assertEqual(bend['unmerged_patches'], 1)
         self.assertEqual(branches['refs/remotes/origin/lane/a10']['unmerged_patches'], 1)
@@ -582,9 +583,15 @@ class RepoFactsTest(unittest.TestCase):
         self.assertEqual(s['tests'], [])
         self.assertEqual(len(s['cycles']), 1)
         self.assertEqual(s['branches_touching_scope'], [])
-        plan = s['recent_commits_touching_scope']
+        plan = s['plan_word_commits_touching_scope']
         self.assertEqual([p['subject'] for p in plan], ['S2: split core helper'])
         self.assertEqual(plan[0]['files'], ['src/core/c.ts'])
+
+    def test_repeated_scope_flag_keeps_every_glob(self):
+        rep = run_json(self.repo, '--scope', 'src/ledger/a.ts', '--scope', 'src/core/c.ts')
+        files = sorted(f['file'] for f in rep['scope']['files'])
+        self.assertEqual(files, ['src/core/c.ts', 'src/ledger/a.ts'])
+        self.assertEqual(rep['scope']['globs_matched'], {'src/ledger/a.ts': 1, 'src/core/c.ts': 1})
 
     def test_scope_star_stays_in_one_segment(self):
         files = [f['file'] for f in self.scope_star['scope']['files']]
