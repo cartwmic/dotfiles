@@ -72,6 +72,13 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 .codex/prompts/opsx-explore.md
 .codex/prompts/opsx-propose.md
 
+# Renamed 2026-11-11: designing-from-a-repo is now designing-the-smallest-version
+# (two modes). Source deletion alone does not remove the deployed copy, and the
+# sync script only prunes orphans with --prune. chezmoi removes this on apply;
+# apply_harness_config.sh then prunes the agent-skill symlinks that pointed at it.
+# Prune this entry once every machine has applied.
+.local/share/agent-harness/canonical/skills/designing-from-a-repo
+
 # Retired 2026-08-04: Termux config is first-class via profile "termux"
 # (dot_termux / bin/*-jump / SSH modify). Remove the old ~/termux staging tree
 # that sync.sh previously pushed from.
