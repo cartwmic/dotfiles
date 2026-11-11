@@ -1070,6 +1070,14 @@ if a[0] == "delete":
 if a[:2] == ["get", "pods"]:
     print(json.dumps({"items": []})); sys.exit(0)
 if a[:2] == ["create", "-f"]:
+    creates = os.path.join(fake, "creates")
+    n = int(open(creates).read()) + 1 if os.path.exists(creates) else 1
+    open(creates, "w").write(str(n))
+    quota = os.environ.get("FAKE_QUOTA", "")   # "N": refuse the first N creates; "always": refuse every create. The used CPU changes after the first.
+    if quota and (quota == "always" or n <= int(quota)):
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: xlab-offload, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
+    if os.environ.get("FAKE_CREATE_ERROR"):
+        sys.stderr.write("Error from server (Forbidden): pods is forbidden: violates PodSecurity\n"); sys.exit(1)
     active = os.path.join(os.environ["XDG_STATE_HOME"], "kgate", "active")
     entries = [json.load(open(os.path.join(active, n))) for n in sorted(os.listdir(active))] if os.path.isdir(active) else []
     log({"manifest": json.load(sys.stdin), "registry": entries}); sys.exit(0)
@@ -1127,6 +1135,20 @@ class Ag1Profile(unittest.TestCase):
         self.assertEqual((p["cluster"], p["user"], p["ephemeral_storage"]), ("ag1", "65532:65532", "20Gi"))
         self.assertEqual(K.parse_profile('cluster = "ag1"\nuser = "1001:1001"')["user"], "1001:1001")
 
+    def test_cpu_limit_is_for_ag1_only_and_a_whole_number(self):
+        self.assertIsNone(K.parse_profile('cluster = "ag1"')["cpu_limit"])
+        self.assertEqual(K.parse_profile('cluster = "ag1"\ncpu_limit = 5')["cpu_limit"], 5)
+        for bad in ('cpu_limit = 5', 'cluster = "ag1"\ncpu_limit = 0', 'cluster = "ag1"\ncpu_limit = "5"', 'cluster = "ag1"\ncpu_limit = true'):
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
+    def test_quota_retry_backs_off_5_10_20_40_then_60(self):
+        d, seen = K.QUOTA_FIRST_DELAY, []
+        for _ in range(7):
+            seen.append(d)
+            d = min(d * 2, K.QUOTA_MAX_DELAY)
+        self.assertEqual(seen, [5, 10, 20, 40, 60, 60, 60])
+
     def test_bad_cluster_or_ephemeral_storage_is_refused(self):
         for bad in ('cluster = "us1"', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "ag1"\nephemeral_storage = "20G"', 'cluster = "ag1"\nephemeral_storage = 20'):
             with self.assertRaises(K.Unavailable, msg=bad):
@@ -1156,6 +1178,16 @@ class Ag1PodSpec(unittest.TestCase):
                                           "limits": {"cpu": "8", "memory": "24Gi", "ephemeral-storage": "20Gi"}})
         self.assertEqual(c["image"], AG1_IMAGE)
         self.assertEqual(c["command"], ["sleep", "86400"], "no tini in the image: a plain sleep longer than the deadline")
+
+    def test_cpu_limit_defaults_to_cpu_and_otherwise_splits_request_from_limit(self):
+        c = self.pod()["spec"]["containers"][0]
+        self.assertEqual((c["resources"]["requests"]["cpu"], c["resources"]["limits"]["cpu"]), ("8", "8"))
+        items = K.pod_manifests_ag1("kgate-1-2", AG1_IMAGE, 2, "6Gi", "10Gi", "8Gi", 65532, 65532, ["/Users"], 5)["items"]
+        c = items[0]["spec"]["containers"][0]
+        self.assertEqual(c["resources"], {"requests": {"cpu": "2", "memory": "6Gi", "ephemeral-storage": "8Gi"},
+                                          "limits": {"cpu": "5", "memory": "10Gi", "ephemeral-storage": "8Gi"}})
+        env = {e["name"]: e.get("value") for e in c["env"]}
+        self.assertEqual((env["GOMAXPROCS"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"]), ("5", "-j5", "5", "5"))
 
     def test_it_has_none_of_the_homelab_parts(self):
         text = json.dumps(self.pod())
@@ -1443,6 +1475,7 @@ class Ag1Black(unittest.TestCase):
                         "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
                         "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                         "loader.exec_module(K)\n"
+                        "K.QUOTA_FIRST_DELAY = 0.2\n"
                         "K.AG1_TREE_ROOTS = %s\n"
                         "sys.exit(K.main(sys.argv[2:]))\n" % ("(%r,)" % self.only_root if getattr(self, "only_root", None) else "K.AG1_TREE_ROOTS + (%r,)" % top))
         return [sys.executable, str(stub), str(SCRIPT)]
@@ -1498,6 +1531,55 @@ class Ag1Black(unittest.TestCase):
         manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
         mounts = [m["mountPath"] for m in manifest["items"][0]["spec"]["containers"][0]["volumeMounts"]]
         self.assertEqual(mounts, ["/" + linked.parts[1], "/cache", "/out"], "no emptyDir for the common dir's top directory")
+
+    def test_a_quota_refusal_is_waited_out_then_the_job_runs(self):
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-after-quota", env={"FAKE_QUOTA": "3"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-after-quota", done.stdout)
+        lines = [l for l in done.stdout.splitlines() if l.startswith("kgate: waiting for quota: ")]
+        self.assertEqual(len(lines), 2, "once, and once more when the message changed (used 8 to 6)")
+        self.assertIn("exceeded quota: xlab-offload, requested: requests.cpu=2, used: requests.cpu=8, limited: requests.cpu=8", lines[0])
+        self.assertIn("used: requests.cpu=6", lines[1])
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cleanup"]), (0, None, True))
+        self.assertGreater(rec["quota_wait_s"], 0.3)
+        self.assertEqual(int((self.fake / "creates").read_text()), 4)
+
+    def test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message(self):
+        done = self.run_kgate("--wait", "2", "--", "true", env={"FAKE_QUOTA": "always"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertRegex(rec["reason"], r"^quota not available within 2s: exceeded quota: xlab-offload, requested: requests.cpu=2, used: requests.cpu=\d+, limited: requests.cpu=8$")
+        self.assertGreaterEqual(rec["quota_wait_s"], 1.5)
+        self.assertTrue(rec["cleanup"])
+
+    def test_any_other_create_error_is_an_immediate_69(self):
+        done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_CREATE_ERROR": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertTrue(rec["reason"].startswith("could not create the pod: "), rec["reason"])
+        self.assertEqual(rec["quota_wait_s"], 0)
+        self.assertEqual(int((self.fake / "creates").read_text()), 1)
+        self.assertLess(rec["duration_s"], 30)
+
+    def test_without_a_refusal_the_record_has_no_wait(self):
+        self.run_kgate("--", "true")
+        self.assertEqual(self.records()[-1]["quota_wait_s"], 0)
+
+    def test_cpu_limit_sizes_the_burst_and_the_build_jobs_not_the_request(self):
+        self.profile(extra="cpu_limit = 5")
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        c = next(c["manifest"] for c in self.kcalls() if "manifest" in c)["items"][0]["spec"]["containers"][0]
+        self.assertEqual((c["resources"]["requests"]["cpu"], c["resources"]["limits"]["cpu"]), ("2", "5"))
+        env = {e["name"]: e.get("value") for e in c["env"]}
+        self.assertEqual((env["GOMAXPROCS"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"]), ("5", "-j5", "5", "5"))
+
+    def test_a_cpu_limit_below_the_request_is_refused(self):
+        self.profile(extra="cpu_limit = 1")
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("cpu_limit (1) must be at least cpu (2)", self.records()[-1]["reason"])
+        self.assertFalse(any("manifest" in c for c in self.kcalls()))
 
     def test_the_ag1_archive_has_no_git_entries_and_the_pod_builds_the_repo(self):
         done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; echo KGATE_HEAD=$KGATE_HEAD")

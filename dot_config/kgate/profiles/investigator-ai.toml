@@ -4,11 +4,14 @@
 cluster = "ag1"
 # The cursor-worker image: go, git, golangci-lint, GOPROXY set to Nexus. No python3, no tini.
 image  = "devaxonhub.azurecr.us/ecom/cursor-worker:20261019-4057e58-b62a51a@sha256:0c2639c2682478f1ba4da70371c7156eaf357fbcb4d2fa4842b5890a04e835ac"
-# Sized from the namespace quota (6 pods; requests 8 CPU / 32Gi; limits 16 CPU / 64Gi; ephemeral-storage 40Gi requested / 60Gi limit).
-cpu    = 8
-memory = "16Gi"
-memory_limit = "24Gi"
-ephemeral_storage = "20Gi"
+# Sized so three jobs fit the namespace quota (6 pods; requests 8 CPU / 32Gi; limits 16 CPU / 64Gi; ephemeral-storage 40Gi requested / 60Gi limit):
+# 3 x (2 CPU requested, 5 burst; 6Gi requested, 10Gi limit; 8Gi ephemeral). The full race gate peaked at 3.97 GB (cgroup, page cache included).
+# cpu_limit also sets GOMAXPROCS and the build jobs.
+cpu    = 2
+cpu_limit = 5
+memory = "6Gi"
+memory_limit = "10Gi"
+ephemeral_storage = "8Gi"
 
 [tools]
 go = { version = "1.25.12", cmd = "go version" }
