@@ -169,6 +169,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 |---|---|
 | `id` | kgate's job id, also the pod's name |
 | `cluster` | `homelab` or `kc2` |
+| `cpu_limit`, `quota_wait_s` | KC2 only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
 | `repo`, `cwd`, `head` | repo name, working directory, Mac HEAD |
@@ -198,7 +199,7 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/example-repo.toml -- go
 
 - Labels `app=kgate`, `kgate-job=<id>`, `example.org/owner=team`, `example.org/pillar=dems`, and the annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "true"` (Kyverno enforces these in cluster2).
 - Non-root: `runAsNonRoot`, `runAsUser` and `runAsGroup` from the profile's `user` (default `65532:65532`, the image's user; `0:0` is refused). seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false`, drop `ALL`, no service account token. The exec-as-root-then-drop path is not used.
-- Requests and limits for cpu, memory and ephemeral-storage, from the profile: `cpu` (request and limit), `memory` (request), `memory_limit` (limit), `ephemeral_storage` (request and limit; default `10Gi`). `GOMAXPROCS`, `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` follow `cpu`.
+- Requests and limits for cpu, memory and ephemeral-storage, from the profile: `cpu` (request), `cpu_limit` (limit, what the pod may burst to; default `cpu`; must be at least `cpu`; KC2 only), `memory` (request), `memory_limit` (limit), `ephemeral_storage` (request and limit; default `10Gi`). `GOMAXPROCS`, `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` follow the CPU limit, not the request.
 - `activeDeadlineSeconds: 7200`. The container runs `sleep 86400` (the image has no `tini`), so the deadline ends a pod whose client died.
 - emptyDirs at the top directory of the shipped tree (`/Users` for `/Users/me/git/repo`, so the Mac's absolute paths unpack as the non-root user), at `/cache` and at `/out`. Only trees under `/Users`, `/Volumes` or `/private` are accepted (an allow-list, so no emptyDir hides anything in the image); any other top directory is refused.
 - Env: kgate's usual set, plus `HOME=/cache/home`, `GOCACHE=/cache/go-build`, `GOMODCACHE=/cache/gomod`.
@@ -232,7 +233,20 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/example-repo.toml -- go
 
 On KC2 the history is a single synthetic commit, and the Mac's uncommitted and untracked shipped files are in it, so `git status` and `git diff` in the pod show a clean tree (use the Mac's `git status` to see what changed). `git log`, `git describe`, `git blame` and tags show nothing of the real history. A command that needs history must run locally or on the homelab (which still ships `.git`).
 
-Exit codes are the same (CMD's code, 64, 69). With the VPN off or the `az login` lapsed, the job exits 69 with the sign-in hint. kgate never falls back to the Mac. The namespace quota is 6 pods, 8 CPU and 32Gi requested. A job whose requests would exceed it is refused at once by the create call (`exceeded quota`), and kgate exits 69 with that message; it does not wait. The example-repo profile requests 8 CPUs, the whole quota, so its jobs run one at a time. Line-ending, filter, `ident` and `working-tree-encoding` conversions are switched off for the hash on the pod side (and the Mac side hashes bytes), so a repo with a converting `.gitattributes` still hashes the same.
+Exit codes are the same (CMD's code, 64, 69). With the VPN off or the `az login` lapsed, the job exits 69 with the sign-in hint. kgate never falls back to the Mac. The namespace quota is 16 pods; requests 24 CPU / 96Gi / 100Gi ephemeral-storage; limits 96 CPU / 160Gi / 160Gi (see "Sizing" below). The namespace is shared by every lead's jobs. A create call that the quota refuses (`exceeded quota`) is not fatal: kgate prints `kgate: waiting for quota: <the quota message>` (and a new line when the message changes), retries the create with backoff (5 s, doubling to 60 s) until the job's `--wait` deadline, and records the time spent as `quota_wait_s` (0 when it did not wait; KC2 records only). At the deadline it exits 69 with `quota not available within <N>s: <message>`. Only the API server's ResourceQuota refusal is waited for: `Error from server (Forbidden): ... pods "x" is forbidden: exceeded quota: <name>, requested: ..., used: ..., limited: ...`. Any other text that merely says `exceeded quota` (an admission-webhook denial, say) is an immediate 69. The whole message is parsed; only what is printed and recorded is cut to 300 characters. If a requested amount in that message is above the quota's own limit for it (`requested` greater than `limited`), waiting can never succeed, and kgate exits 69 at once with `request exceeds the namespace quota: <message>`. Any other create error is also an immediate 69. `kgate cancel` works while a job waits for quota.
+
+Sizing. The profile requests little and may burst to 8 CPUs, so many jobs fit the quota. The current quota is the one infra-repo #542472 set (merged 2026-11-11, 55c40e7): 16 pods; requests 24 CPU / 96Gi / 100Gi ephemeral-storage; limits 96 CPU / 160Gi / 160Gi ephemeral-storage. Before it the quota was 6 pods; requests 8 CPU / 32Gi / 40Gi; limits 16 CPU / 64Gi / 60Gi.
+
+| | cpu (request) | cpu_limit | memory | memory_limit | ephemeral | per job against the quota |
+|---|---|---|---|---|---|---|
+| example-repo | 2 | 8 | 6Gi | 10Gi | 8Gi | requests 2 CPU, 6Gi, 8Gi; limits 8 CPU, 10Gi |
+
+| quota | example-repo jobs that fit |
+|---|---|
+| current (#542472) | **12**, because three limits bind together at 12: `limits.cpu` 96 / 8, `requests.cpu` 24 / 2 and `requests.ephemeral-storage` 100Gi / 8Gi (the others allow more: `requests.memory` 96Gi / 6Gi = 16, `limits.memory` 160Gi / 10Gi = 16, `limits.ephemeral-storage` 160Gi / 8Gi = 20, pods 16) |
+| before #542472 | 2: `limits.cpu` 16 / 8 = 2 (requests alone allowed 4) |
+
+A job that does not fit waits for quota (see above). Measured on the full race gate: 129 s total at 8 CPU requested and limited; 137.6 s total (119 s in the pod) at the shipped 2 requested / 8 limit; 186 s total (167 s in the pod) at 2 / 5. Bursting to the limit gives back full speed. Peak memory (cgroup, page cache included) was 3.74 GB and 3.79 GB in two runs, so 6Gi / 10Gi leaves room. Line-ending, filter, `ident` and `working-tree-encoding` conversions are switched off for the hash on the pod side (and the Mac side hashes bytes), so a repo with a converting `.gitattributes` still hashes the same.
 
 ## Gate profile
 
@@ -246,6 +260,7 @@ memory_limit = "8Gi"                             # optional: the limit, the OOM-
 user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root (KC2: default 65532:65532, never root)
 cluster = "homelab"                              # optional: "homelab" (default) or "kc2"
 ephemeral_storage = "20Gi"                       # KC2 only: the pod's ephemeral-storage request and limit; default 10Gi
+cpu_limit = 8                                    # KC2 only: the CPU limit and build parallelism; default cpu
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
 
 [tools]                                          # exact versions; checked in the pod before CMD
@@ -288,7 +303,7 @@ The `kgate` binary lands on both desktop profiles. The homelab host file (`~/.co
 
 ## Tests
 
-`python3 -m unittest discover -s tests/kgate -v`: for KC2, the pod spec; the archive (no `.git` entry on KC2, unchanged on the homelab); the repo the pod side builds (one commit, tree equal to the Mac's hash, clean status, `KGATE_HEAD`); the sh pod side run against a real temp git tree (its hash equal to the Python `tree_hash` and to plain git, with an executable file, symlinks and CRLF files under a converting `.gitattributes`; mismatch, tool mismatch, exit code, peak); and the same journeys as the homelab, for KC2, against a fake `kubectl` (pass, CMD failure, `/out`, hash mismatch, tool version, refusals, missing kubeconfig, reachability failure, orphan cancel, the record's `cluster`, `kc2-setup`). For the homelab: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
+`python3 -m unittest discover -s tests/kgate -v`: for KC2, the pod spec; the archive (no `.git` entry on KC2, unchanged on the homelab); the repo the pod side builds (one commit, tree equal to the Mac's hash, clean status, `KGATE_HEAD`); the sh pod side run against a real temp git tree (its hash equal to the Python `tree_hash` and to plain git, with an executable file, symlinks and CRLF files under a converting `.gitattributes`; mismatch, tool mismatch, exit code, peak); and the same journeys as the homelab, for KC2, against a fake `kubectl` (including a quota refusal waited out, a quota that never frees, another create error failing at once, `cpu_limit`) (pass, CMD failure, `/out`, hash mismatch, tool version, refusals, missing kubeconfig, reachability failure, orphan cancel, the record's `cluster`, `kc2-setup`). For the homelab: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
 
 ## Gates in this repo
 
