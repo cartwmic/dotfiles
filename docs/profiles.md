@@ -35,10 +35,10 @@ How to read a row:
 | `.config/heavy-gate/volumes` | personal (macOS) | It names `/Volumes/Workshop`, which heavy-gate must find mounted with its free-space floor met before it admits a start. The work Mac has no such volume, so it gets no volumes file and heavy-gate watches only the volume that holds `$HOME` there. |
 | `.config/systemd/user/t3code.service.d`, `74_t3_service_linux.sh`, `76_git_credential_linux.sh` | personal (Linux) | The PATH drop-in for the T3 service, the script that installs T3 and `t3code.service` on a Linux host, and the one that sets the portable `gh auth git-credential` helper in the global git config. The coordinator stack on Linux is personal; the work profile has no Linux desktop. |
 | `.local/share/instances/systemd`, `.local/user_scripts/instances_reconcile_systemd.sh`, `75_instances_reconcile.sh` | personal (Linux) | The coordinator's systemd user unit, its reconcile script and the wrapper that runs it on apply: the Linux twin of the personal LaunchAgent. The wrapper runs on macOS for both profiles; on Linux only personal gets it, because the work coordinator (Matrix) is macOS only. |
-
-The `(Linux)` rows match every personal Linux host, personal WSL included, not only the Omarchy box: a WSL host also gets the T3 settings file, the T3 drop-in and the systemd reconcile wrapper. All of it is inert there: the instance flag is unset by default, `74_` and the T3 install skip on WSL, and the watchdog and credential scripts only write config.
 | `.pi/agent/extensions/anthropic-stall-retry` | axon-work-computer | Anthropic stalls are only seen on the work profile. |
 | `.pi/agent/extensions/axon-playbook` | axon-work-computer | It injects Axon's private playbook notes, which only the work profile clones. |
+
+The `(Linux)` rows match every personal Linux host, personal WSL included, not only the Omarchy box: a WSL host also gets the T3 settings file, the T3 drop-in and the systemd reconcile wrapper. Most of it is inert there: the instance flag is unset by default and `74_` and the T3 install skip on WSL. Two things are not: the watchdog script only writes config, and `76_git_credential_linux.sh` replaces any GitHub credential helper the host already has (for example Windows Git Credential Manager) with `!gh auth git-credential`, so git over HTTPS on that host then needs `gh auth login`.
 
 ## Local data keys
 
