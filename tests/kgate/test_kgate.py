@@ -1088,7 +1088,9 @@ if a[:2] == ["create", "-f"]:
         sys.stderr.write((text if text != "1" else "Error from server (Forbidden): pods is forbidden: violates PodSecurity") + "\n"); sys.exit(1)
     active = os.path.join(os.environ["XDG_STATE_HOME"], "kgate", "active")
     entries = [json.load(open(os.path.join(active, n))) for n in sorted(os.listdir(active))] if os.path.isdir(active) else []
-    log({"manifest": json.load(sys.stdin), "registry": entries}); sys.exit(0)
+    manifest = json.load(sys.stdin)
+    json.dump(manifest, open(os.path.join(fake, "last_manifest.json"), "w"))
+    log({"manifest": manifest, "registry": entries}); sys.exit(0)
 if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"]:
@@ -1096,10 +1098,15 @@ if a[:2] == ["get", "pod"]:
     n = int(open(polls).read()) + 1 if os.path.exists(polls) else 1
     open(polls, "w").write(str(n))
     pending = lambda msg: {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": msg}]}
-    if scenario == "ready" or (scenario == "queued" and n > 3):
+    last = json.load(open(os.path.join(fake, "last_manifest.json"))) if os.path.exists(os.path.join(fake, "last_manifest.json")) else {"items": [{"spec": {"volumes": []}}]}
+    has_claim = any("persistentVolumeClaim" in v for i in last["items"] for v in i["spec"]["volumes"])
+    rwop = "0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod."
+    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-gone" and n > 1):
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
-    elif scenario == "queued":   # the scheduler's message while another pod holds the ReadWriteOncePod claim
-        st = pending("0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.")
+    elif scenario in ("rwop", "rwop-gone"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
+        st = pending(rwop)
+    elif scenario == "queued":   # a full cluster: the scheduler's capacity message
+        st = pending("0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.")
     elif scenario == "noclaim":
         st = pending('0/3 nodes are available: persistentvolumeclaim "xlab-offload-cache" not found. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.')
     else:
@@ -1268,7 +1275,7 @@ class Ag1PodSpec(unittest.TestCase):
         self.assertNotIn("fsGroup", pod["spec"]["securityContext"])
 
     def test_with_cache_pvc_the_cache_is_the_claim_and_the_group_can_write_it(self):
-        items = K.pod_manifests_ag1("kgate-1-2", AG1_IMAGE, 8, "16Gi", "24Gi", "20Gi", 65532, 65533, ["/Users"], "xlab-offload-cache")["items"]
+        items = K.pod_manifests_ag1("kgate-1-2", AG1_IMAGE, 8, "16Gi", "24Gi", "20Gi", 65532, 65533, ["/Users"], cache_pvc="xlab-offload-cache")["items"]
         pod = items[0]
         self.assertEqual([v for v in pod["spec"]["volumes"] if v["name"] == "cache"], [{"name": "cache", "persistentVolumeClaim": {"claimName": "xlab-offload-cache"}}])
         self.assertEqual(pod["spec"]["securityContext"], {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65533, "fsGroup": 65533,
@@ -1586,6 +1593,7 @@ class Ag1Black(unittest.TestCase):
                         "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                         "loader.exec_module(K)\n"
                         "K.QUOTA_FIRST_DELAY = 0.2\n"
+                        "K.CACHE_BUSY_S = 0.6\n"
                         "K.AG1_TREE_ROOTS = %s\n"
                         "sys.exit(K.main(sys.argv[2:]))\n" % ("(%r,)" % self.only_root if getattr(self, "only_root", None) else "K.AG1_TREE_ROOTS + (%r,)" % top))
         return [sys.executable, str(stub), str(SCRIPT)]
@@ -1789,20 +1797,47 @@ class Ag1Black(unittest.TestCase):
         self.assertIn("cache_pvc is for cluster = \"ag1\" only", self.records()[-1]["reason"])
         self.assertFalse(any(c["kubectl"][0] == "create" for c in self.calls()))
 
-    def test_a_job_queued_behind_the_one_holding_the_claim_waits_and_then_runs(self):
+    def test_a_job_queued_on_capacity_keeps_waiting_with_the_cache_and_does_not_fall_back(self):
         self.profile(extra='cache_pvc = "xlab-offload-cache"')
         done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-after-the-wait", env={"FAKE_POD": "queued"})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("kgate: waiting for the pod: Unschedulable", done.stdout)
-        self.assertIn("ran-after-the-wait", done.stdout)
-        self.assertEqual(self.records()[-1]["reason"], None)
+        self.assertNotIn("cache in use", done.stdout)
+        self.assertEqual(int((self.fake / "creates").read_text()), 1, "the same pod throughout")
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
 
-    def test_a_queued_job_that_waits_too_long_is_69_with_the_scheduler_reason(self):
+    def test_a_job_whose_claim_is_held_by_another_runs_cold_without_it(self):
         self.profile(extra='cache_pvc = "xlab-offload-cache"')
-        done = self.run_kgate("--wait", "1", "--", "true", env={"FAKE_POD": "queued"})
-        self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within 1s: Unschedulable .*ReadWriteOncePod")
-        self.assertTrue(self.records()[-1]["cleanup"])
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-cold", env={"FAKE_POD": "rwop"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
+        self.assertIn("ran-cold", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["cache"], rec["exit"], rec["reason"], rec["cleanup"]), ("fallback", 0, None, True))
+        creates = [c["manifest"]["items"][0] for c in self.kcalls() if "manifest" in c]
+        self.assertEqual(len(creates), 2)
+        vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
+        self.assertEqual(vols(creates[0]), [{"name": "cache", "persistentVolumeClaim": {"claimName": "xlab-offload-cache"}}])
+        self.assertEqual(vols(creates[1]), [{"name": "cache", "emptyDir": {}}])
+        self.assertNotIn("fsGroup", creates[1]["spec"]["securityContext"])
+        self.assertEqual(creates[0]["metadata"]["name"], creates[1]["metadata"]["name"])
+        deletes = [a for a in self.kubectl_args() if a[0] == "delete" and a[1] == "pod/" + rec["id"]]
+        self.assertGreaterEqual(len(deletes), 2, "deleted before the cold pod, and again at the end")
+
+    def test_a_brief_hold_shorter_than_the_grace_keeps_the_cache(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-warm", env={"FAKE_POD": "rwop-gone"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("cache in use", done.stdout)
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
+        self.assertEqual(int((self.fake / "creates").read_text()), 1)
+
+    def test_the_record_says_cache_none_without_cache_pvc_and_pvc_with_it(self):
+        self.run_kgate("--", "true")
+        self.assertEqual(self.records()[-1]["cache"], "none")
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        self.run_kgate("--", "true")
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
 
     def test_a_missing_claim_is_69_at_once_with_a_clear_reason_and_the_pod_is_deleted(self):
         self.profile(extra='cache_pvc = "xlab-offload-cache"')
