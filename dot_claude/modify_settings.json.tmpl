@@ -6,6 +6,10 @@
 # promptCacheTtl (both desktop profiles): "1h" keeps the main conversation's prompt cache for an hour instead of five minutes (Claude Code
 # v2.1.242+; settings-reference#promptcachettl). The hub routes through an API key, so Claude Code would otherwise use the 5 minute default.
 # 1 hour cache writes cost more than 5 minute writes. Set on every apply. CLAUDE_CODE_PROMPT_CACHE_TTL in the environment still wins.
+# advisorModel (both desktop profiles): turns on Claude Code's experimental advisor tool (code.claude.com/docs/en/advisor) with Fable 5.2 as the
+# advisor. The id is the same form as model above (Anthropic ids, which CLIProxy also serves as claude-fable-5-2). Fable 5.2 is the only advisor
+# a Fable 5.2 main model accepts, and ranks above the Opus 5.5 default, so it is accepted for any main model here. Set on every apply.
+# The advisor needs the Anthropic API or Claude Platform on AWS: it is not available on Bedrock, Vertex or Foundry, where it is silently not attached.
 # cleanupPeriodDays: Claude deletes transcripts after this many days (default 30). qmd-export prunes a session's copy once its
 # source is gone, so a year here is what lets the claude-sessions QMD collection match the Pi window (docs/qmd.md).
 # SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
@@ -190,6 +194,7 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   | .cleanupPeriodDays = 365
   | .model = "claude-opus-5-5"
   | .promptCacheTtl = "1h"
+  | .advisorModel = "claude-fable-5-2"
   | .modelSettings["claude-opus-5-5"].effortLevel //= "medium"
   | ensure_hub  # before the hook defs: they delete and re-append .hooks, so anything added after it would reorder on the next apply
   | ensure_hook
