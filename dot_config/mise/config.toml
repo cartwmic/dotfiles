@@ -491,10 +491,11 @@ set -euo pipefail
 # rustup, not mise, manages Rust here. mise's rust backend exports
 # RUSTUP_TOOLCHAIN, which overrides any repo-level rust-toolchain.toml.
 # Linux (conf.d/linux.toml disables mise's rust): an earlier `mise use rust` leaves installs/rust full of symlinks into ~/.cargo/bin and shims for
-# cargo, rustc and rustup that shadow ~/.cargo/bin. Remove a symlink-only copy; leave a real one alone.
-MISE_RUST="${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs/rust"
+# cargo, rustc and rustup that shadow ~/.cargo/bin. Remove a symlink-only copy; leave a real one alone. mise writes its own metadata files
+# (.mise.backend.toml in every installs/<tool>/ dir) into it; those do not count as real files.
+MISE_RUST="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs/rust"
 if [ "$(uname -s)" = Linux ] && [ -d "$MISE_RUST" ]; then
-  if [ -z "$(find "$MISE_RUST" -type f -print -quit 2>/dev/null)" ]; then
+  if [ -z "$(find "$MISE_RUST" -type f ! -name '.mise*' -print -quit 2>/dev/null)" ]; then
     echo "Removing mise's symlink-only rust install ($MISE_RUST)"
     rm -rf "$MISE_RUST"
     command -v mise >/dev/null 2>&1 && mise reshim
