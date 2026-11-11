@@ -108,8 +108,9 @@ across every managed host. For service paths and password rotation, inspect
 `run_onchange_after_60_configure_rustdesk.sh.tmpl` before changing source.
 Do not run the helper through the RustDesk session being reconfigured.
 
-SSH: `private_dot_ssh/modify_authorized_keys` is append-safe and must stay
-non-destructive to foreign keys.
+SSH: `private_dot_ssh/modify_authorized_keys.tmpl` is append-safe and must stay
+non-destructive to foreign keys. It appends the dotfiles key on every OS,
+Linux included (Michael, ask 845).
 
 Agent harness: canonical skills and MCP live under
 `dot_local/share/agent-harness/`. Adapters project into Claude, Codex, and
