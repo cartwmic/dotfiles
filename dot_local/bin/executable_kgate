@@ -15,6 +15,7 @@ heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few o
 Contract
 - Ships the git worktree of $PWD (tracked and untracked, non-ignored files, its .git file and the shared git
   folder) to one pod, unpacked at the same absolute paths, and runs CMD in the same $PWD. Ignored files stay here.
+  (On AG1 no .git is shipped: the pod builds a one-commit repo from the files, and the Mac's HEAD is in $KGATE_HEAD.)
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
 - Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
@@ -301,7 +302,8 @@ def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid
 def job_sh(job):
     """The job as a POSIX sh file for pod_sh: variables, the tool checks as kg_tools, the command as the positional parameters."""
     q = shlex.quote
-    lines = ["ID=" + q(job["id"]), "ROOT=" + q(job["root"]), "CWD=" + q(job["cwd"]), "TREE=" + q(job["tree"]), "kg_tools() {"]
+    lines = ["ID=" + q(job["id"]), "ROOT=" + q(job["root"]), "CWD=" + q(job["cwd"]), "TREE=" + q(job["tree"]),
+             "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD", "kg_tools() {"]
     lines += ["  kg_check %s %s %s || return" % (q(name), q(version), q(cmd or name + " --version")) for name, (version, cmd) in job["tools"].items()]
     lines += ["  :", "}", "set -- " + " ".join(q(a) for a in job["argv"])]
     return "\n".join(lines) + "\n"
@@ -315,17 +317,24 @@ dir=$1
 say() { printf 'kgate[%s]: %s\n' "$ID" "$*"; }
 say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)"
 mkdir -p "$HOME" 2>/dev/null
-# the tree hash: a throwaway repo and index holding exactly the shipped files, hashed as bytes (no line-ending or filter conversion)
-tmp=$dir/hash
-rm -rf "$tmp"; mkdir -p "$tmp/git/info"
-printf '* -text -eol -filter -ident -working-tree-encoding\n' > "$tmp/git/info/attributes"
-g() { GIT_INDEX_FILE=$tmp/index git -c core.autocrlf=false -c core.safecrlf=false -c safe.directory='*' --git-dir="$tmp/git" --work-tree="$ROOT" "$@"; }
-git init -q --bare "$tmp/git" >/dev/null 2>&1
-found=$(g update-index --add --info-only -z --stdin < "$dir/files.nul" 2>"$tmp/err" && g write-tree --missing-ok 2>>"$tmp/err")
+# A fresh one-commit repo at the tree root (no history is shipped), so tools find a HEAD. Its index holds exactly the shipped files, hashed as
+# bytes (no line-ending, filter or encoding conversion), and `git write-tree` of it is the tree hash. The commit is made only when it matches.
+g() { git -c core.autocrlf=false -c core.safecrlf=false -c safe.directory='*' -C "$ROOT" "$@"; }
+git init -q "$ROOT" >/dev/null 2>&1 && git -C "$ROOT" symbolic-ref HEAD refs/heads/main
+mkdir -p "$ROOT/.git/info" && printf '* -text -eol -filter -ident -working-tree-encoding\n' > "$ROOT/.git/info/attributes"
+err=$dir/git.err
+found=$(g update-index --add -z --stdin < "$dir/files.nul" 2>"$err" && g write-tree 2>>"$err")
 if [ "$found" != "$TREE" ]; then
-  say "hash MISMATCH expected=$TREE found=${found:-git failed: $(head -c 200 "$tmp/err" | tr '\n' ' ')}"
+  say "hash MISMATCH expected=$TREE found=${found:-git failed: $(head -c 200 "$err" | tr '\n' ' ')}"
   exit 70
 fi
+export GIT_AUTHOR_NAME=kgate GIT_AUTHOR_EMAIL=kgate@localhost GIT_AUTHOR_DATE=2000-01-01T00:00:00Z
+export GIT_COMMITTER_NAME=kgate GIT_COMMITTER_EMAIL=kgate@localhost GIT_COMMITTER_DATE=2000-01-01T00:00:00Z
+commit=$(g commit-tree "$found" -m "kgate: the shipped tree (the real history stays on the Mac; its HEAD is in KGATE_HEAD)" 2>"$err") && g update-ref HEAD "$commit" 2>>"$err" || {
+  say "hash MISMATCH expected=$TREE found=$found (could not commit the tree: $(head -c 200 "$err" | tr '\n' ' '))"
+  exit 70
+}
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE
 say "hash ok $found"
 # the tools: the expected version must appear in the command's output as a whole version
 n=0
@@ -495,17 +504,18 @@ def worktree(cwd):
     return wt, common, files
 
 
-def archive(wt, common, files, extra):
-    """The tar stream (bytes) of the worktree files, its .git and the shared git folder, plus extra {name: bytes}."""
+def archive(wt, common, files, extra, history=True):
+    """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: AG1 rebuilds a one-commit repo in the pod), plus extra {name: bytes}."""
     buf = io.BytesIO()
     root = lambda tarinfo: (setattr(tarinfo, "uid", 0), setattr(tarinfo, "gid", 0),
                             setattr(tarinfo, "uname", ""), setattr(tarinfo, "gname", ""), tarinfo)[-1]
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
         for p in files:
             tar.add(os.path.join(wt, p), arcname=(wt + "/" + p).lstrip("/"), recursive=False, filter=root)
-        tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=root)
-        if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
-            tar.add(common, arcname=common.lstrip("/"), filter=root)
+        if history:
+            tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=root)
+            if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
+                tar.add(common, arcname=common.lstrip("/"), filter=root)
         for name, data in extra.items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
@@ -895,15 +905,15 @@ class Job:
         tree = self.rec["tree"] = tree_hash(wt, files)
         job = {"id": self.id, "root": wt, "cwd": os.getcwd(), "files": files, "tree": tree, "argv": o.command,
                "uid": int(prof["user"].split(":")[0]), "gid": int(prof["user"].split(":")[1]),
-               "own": [wt] + ([common] if not common.startswith(wt + "/") else []),
-               "tools": {k: list(v) for k, v in prof["tools"].items()}}
+               "own": [wt] + ([common] if not common.startswith(wt + "/") and self.cluster.name != "ag1" else []),
+               "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()}}
         if self.cluster.name == "ag1":
             shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"]}).encode(),
                        "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:
             shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
-        tar_bytes = archive(wt, common, files, shipped)
+        tar_bytes = archive(wt, common, files, shipped, history=self.cluster.name != "ag1")
         self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
         self.reachable()
         self.sweep()
