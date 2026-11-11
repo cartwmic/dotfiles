@@ -80,12 +80,16 @@ class ExternalTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")
 class ModelFitLinkTest(unittest.TestCase):
-    def target(self, data):
-        return render(MODEL_FIT, dict({"chezmoi": {}}, **data)).strip()
+    def target(self, data, chezmoi_os="darwin"):
+        # The default checkout depends on the OS (the Mac's Workshop disk, ~/git on Linux), so the OS is named, not the host's.
+        return render(MODEL_FIT, dict({"chezmoi": {"os": chezmoi_os, "homeDir": "/home/test"}}, **data)).strip()
 
     def test_points_at_the_coordinator_checkout_on_both_desktop_profiles(self):
         self.assertEqual(self.target({"profile": PERSONAL}), "/Volumes/Workshop/macbook/git/coordinator/skills/model-fit")
         self.assertTrue(self.target({"profile": WORK}).endswith("/coordinator-work/skills/model-fit"))
+
+    def test_personal_linux_points_at_the_checkout_in_home(self):
+        self.assertEqual(self.target({"profile": PERSONAL}, "linux"), "/home/test/git/coordinator/skills/model-fit")
 
     def test_the_instances_repo_value_wins_on_both_profiles(self):
         for profile in (PERSONAL, WORK):
