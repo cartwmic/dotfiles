@@ -40,6 +40,8 @@
 docs/
 # T8 proof driver/backend are source-only; no repository tests deploy into $HOME.
 ./tests/
+# CI scripts (scripts/ci-par.py, scripts/ci-linux.sh) are source-only; they run from the checkout.
+scripts/
 .playwright-mcp/
 .claude/*
 .codex/*

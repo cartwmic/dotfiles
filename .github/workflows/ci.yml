@@ -1,20 +1,29 @@
 name: CI
 
-# Fast, secret-free tests only: pi-mcp-lazy (incl. render), pi-idle-rss seam tests, mise tasks.
-# Also: Pi AGENTS.md render, release-tag skill import, session-recap store tests (fake backends only).
+# Linux tests (job `tests`) and macOS mise tests (job `mise-tests`).
+# `tests` runs scripts/ci-linux.sh, which installs nothing: CI installs chezmoi and the apt packages first.
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
+#
+# Every PR runs `tests` (the fast check). Main runs (push, and workflow_dispatch to start an untested main
+# by hand) run `tests` and `mise-tests`. `scripts/ci-main-status` reads the main runs.
 
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# PR runs cancel the superseded run of the same PR. Main runs (push and workflow_dispatch both use
+# refs/heads/main) share one group that never cancels: GitHub keeps one running and one pending, and a
+# newer pending run replaces the older pending one.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHONDONTWRITEBYTECODE: "1"
@@ -35,102 +44,15 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Agent-harness render and pi-mcp-lazy tests
-        run: python3 -m unittest discover -s tests/pi-mcp-lazy -v
-      - name: Pi idle-RSS seam tests
-        run: python3 -m unittest discover -s tests/pi-idle-rss -v
-      - name: Pi AGENTS.md render (personal vs work profile)
-        run: python3 -m unittest discover -s tests/pi-agents-render -v
-      - name: Instruction profile includes (all three harnesses)
-        run: python3 -m unittest discover -s tests/instructions-profile -v
-      - name: Pi patch version selector (floor per series and per full version, 1.5.1 payload wiring; temp dirs, no Pi install)
-        run: node --test tests/pi-patches/pi_select.test.mjs
-      - name: Pi patch apply with Pi absent (real apply script, throwaway HOME and PATH, fake npm; exit 0 and one notice per patch)
-        run: node --test tests/pi-patches/apply_no_pi.test.mjs
-      - name: Pi patch failure chain (a failed patch does not stop later scripts, is reported, and fails the apply at the end)
-        run: node --test tests/pi-patches/patch_failure_chain.test.mjs
-      - name: Pi extension refresh and dotfiles verify (fake pi and chezmoi; refresh before the patch loop, verify passes clean and fails broken)
-        run: node --test tests/pi-patches/refresh_and_verify.test.mjs
-      - name: Pi settings render (compaction)
-        run: python3 -m unittest discover -s tests/pi-settings-render -v
-      - name: Release-tag skill import tool
-        run: python3 -m unittest discover -s tests/release-skills -v
-      - name: Session-recap store tests
-        run: python3 -m unittest discover -s dot_local/share/session-recap -p 'test_*.py' -v
-      - name: Pi op shim tests (fake op, no token)
-        run: python3 -m unittest discover -s tests/pi-op-shim -v
-      - name: 1Password token guard in op_read_cached.sh (fake op; refuses with no token, never runs op)
-        run: python3 -m unittest discover -s tests/op-token -v
-      - name: zshenv 1Password token tests (real zsh, fake token)
-        run: |
-          sudo apt-get install -y -qq zsh >/dev/null
-          python3 -m unittest discover -s tests/zshenv-op-token -v
-      - name: Agent scratch on Workshop (env file in real zsh; the ~/tmp move script against throwaway dirs, real lsof, rsync and git worktrees)
-        run: |
-          sudo apt-get install -y -qq zsh lsof rsync >/dev/null
-          python3 -m unittest discover -s tests/agent-scratch -v
-      - name: heavy-gate tests (fake host figures, any OS)
-        run: python3 -m unittest discover -s tests/heavy-gate -v
-      - name: Phone ssh probe (rendered as macOS and Linux; real chezmoi, the Linux probe against a local socket)
-        run: python3 -m unittest discover -s tests/ssh-probe -v
-      - name: kgate tests (tree hash against real git; the client against a fake ssh cluster and fake op)
-        run: python3 -m unittest discover -s tests/kgate -v
-      - name: run-and-wake tests (fake herdr, real detach, real heavy-gate)
-        run: python3 -m unittest discover -s tests/run-and-wake -v
-      - name: git-worktree-reap tests (scratch repo with a local origin; merged, unmerged, dirty and busy worktrees)
-        run: python3 -m unittest discover -s tests/worktree-reap -v
-      - name: workstream-rank tests (golden fixture, real script)
-        run: python3 -m unittest discover -s tests/workstream-rank -v
-      - name: agent-events setting, plist, load script, shim and retired-file removal (real chezmoi, stub launchctl, fake agent-traces)
-        run: python3 -m unittest discover -s tests/agent-events -v
-      - name: Instances render, ignore and reconcile-script matrix (stub launchctl; the apply proof is macOS-only)
-        run: python3 -m unittest discover -s tests/instances -v
-      - name: QMD pin, collections, skill and profile matrix (no qmd binary)
-        run: python3 -m unittest discover -s tests/qmd -v
-      - name: LaunchAgent reload helper (wait for the bootout, retry the bootstrap; fake launchctl, real chezmoi)
-        run: python3 -m unittest discover -s tests/launchd-reload -v
-      - name: Profile coverage table matches chezmoi managed (macOS-only rows skipped here)
-        run: python3 -m unittest discover -s tests/profiles -v
-      - name: Pinned agent-kit install and the agent-traces wrapper's node handling (agentKit gate, exit 3, install WARN, AGENT_TRACES_NODE, 22.19 floor; real chezmoi, fake npm and node)
-        run: python3 -m unittest discover -s tests/agent-kit -v
-      - name: Canonical skill sync (real chezmoi, throwaway source and HOME)
-        run: python3 -m unittest discover -s tests/sync-harness-skills -v
-      - name: Codex config merge keeps the Codex app's entries (real script, throwaway HOME; vendored old merge as RED control)
-        run: python3 -m unittest discover -s tests/codex-merge -v
-      - name: RustDesk on Linux (service started before the password; the configure stage's hash follows rustdesk's presence; real chezmoi, scripted sudo/systemctl/pgrep)
-        run: python3 -m unittest discover -s tests/rustdesk -v
-      - name: Agent browser launcher and render (fake Chrome, real chezmoi)
-        run: python3 -m unittest discover -s tests/agent-browser -v
-      - name: dotfiles-update (non-interactive update with a conflict policy; real chezmoi and git, scratch repository and HOME)
-        run: python3 -m unittest discover -s tests/dotfiles-update -v
-      - name: Pattern-kill guard (classifier, Claude settings entry on both profiles, Codex rules deploy; real chezmoi and jq; codex check skips without the binary)
-        run: python3 -m unittest discover -s tests/agent-kill-guard -v
-      - name: Pi settings modify script (merge, seed, union; real chezmoi and jq)
-        run: python3 -m unittest discover -s tests/pi-settings-modify -v
-      - name: Managed chromium wrapper (real chezmoi render, fake npx and cache; old wrapper as RED control)
-        run: python3 -m unittest discover -s tests/chromium-wrapper -v
-      - name: viz core and boundary tests (render tests skip without chromium and mmdc)
-        run: python3 -m unittest discover -s tests/viz -v
-      - name: Axon playbook wiring (external render, skills linker, SessionStart hook merge, fragment gate; real chezmoi and jq)
-        run: python3 -m unittest discover -s tests/axon-playbook -v
-      - name: Spotlight-off script (fake mdutil; macOS only, skipped here)
-        run: python3 -m unittest discover -s tests/spotlight-workshop -v
-      - name: T3 hook in Claude settings (both profiles; real chezmoi and jq)
-        run: python3 -m unittest discover -s tests/t3-hook -v
-      - name: T3 hub provider instances (settings modify script, Codex block, Claude settings; real chezmoi and jq)
-        run: python3 -m unittest discover -s tests/t3-hub -v
-      - name: CLIProxy hub as the default of Claude, Codex and the T3 codex instance (real chezmoi and jq; apply tests skip here)
-        run: python3 -m unittest discover -s tests/hub -v
-      - name: pnpm store-dir on Workshop (personal macOS only; managed-set checks skip here)
-        run: python3 -m unittest discover -s tests/pnpm-store -v
-      - name: Agent docker config (the dot_zshenv markers in real zsh; the config file; the macOS apply test skips here)
-        run: |
-          sudo apt-get install -y -qq zsh >/dev/null
-          python3 -m unittest discover -s tests/agent-docker -v
+      - name: apt packages for the Linux suites (zsh, lsof, rsync)
+        run: sudo apt-get install -y -qq zsh lsof rsync >/dev/null
+      - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
+        run: scripts/ci-linux.sh
 
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.
   mise-tests:
+    if: github.event_name != 'pull_request'
     # Pinned: since 2026-11-04 ~15:00Z GitHub assigns no runner to macos-latest (macos-26-arm64) or macos-26;
     # jobs queue unassigned and are cancelled. macos-15 still gets runners (probe PR #170). Move back to
     # macos-latest once its jobs are placed again.

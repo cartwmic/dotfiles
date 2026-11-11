@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""ci-main-status: is main green, red, or untested? Read before every merge.
+
+usage: ci-main-status REPO        (dotfiles, loop-engine, agent-kit, coordinator, homelab)
+       ci-main-status --all
+
+Only conclusive full runs on main count: success or failure. Cancelled, skipped and still-running
+runs are not conclusive; a run that is still going is reported as "going".
+
+Exit codes:
+  0  green: the newest conclusive run passed (it may be followed by untested commits while a run is going)
+  1  red: the newest conclusive run failed. Also any state it cannot read (gh or git error, bad journal).
+  2  untested: main has commits no conclusive run tested and no run is going (start one), or there is no
+     conclusive run at all. The message says whether a run is going.
+--all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab has no main run: "n/a", never affects the code.
+
+GitHub repos: the newest conclusive run of the repo's full workflow on main (push and workflow_dispatch).
+coordinator: the newest conclusive line of ~/.local/state/coordinator-ci/main-journeys.jsonl (verdict pass or fail),
+and a run is going while the lock dir /tmp/coordinator-main-journeys.lock.d holds a live pid.
+First-parent commits come from the compare API, walking parents[0] from the head down to the base.
+"""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPOS = {
+    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml"},
+    "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml"},
+    "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml"},
+    "coordinator": {"github": "cartwmic/coordinator", "journal": True},
+    "homelab": None,
+}
+ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab"]
+JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
+               or Path.home() / ".local/state/coordinator-ci/main-journeys.jsonl")
+LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-journeys.lock.d")
+RUN_EVENTS = ("push", "workflow_dispatch")
+RUN_FIELDS = "databaseId,event,headSha,status,conclusion,createdAt,url"
+
+
+class Unreadable(Exception):
+    """The state cannot be read: exit 1, never 0."""
+
+
+class Record:
+    def __init__(self, tip, verdict, label):
+        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass" or "fail"
+
+
+def gh(args):
+    r = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if r.returncode:
+        raise Unreadable(f"gh {' '.join(args[:2])} failed: {r.stderr.strip() or r.stdout.strip()}")
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        raise Unreadable(f"gh {' '.join(args[:2])} returned non-JSON: {e}")
+
+
+def main_tip(repo):
+    return gh(["api", f"repos/{repo}/branches/main"])["commit"]["sha"]
+
+
+def first_parent_chain(repo, base, head):
+    """Commits on head's first-parent history down to base (base excluded), newest first, as git log --first-parent."""
+    if base == head:
+        return []
+    data = gh(["api", f"repos/{repo}/compare/{base}...{head}"])
+    by_sha = {c["sha"]: c for c in data.get("commits", [])}
+    chain, cur = [], head
+    while cur != base:
+        c = by_sha.get(cur)
+        if c is None or not c.get("parents"):
+            raise Unreadable(f"{base[:7]} is not on the first-parent history of {head[:7]} "
+                             f"(or the compare listed {len(by_sha)} of {data.get('total_commits')} commits)")
+        chain.append(c)
+        cur = c["parents"][0]["sha"]
+    return [(c["sha"], c["commit"]["message"].split("\n")[0]) for c in chain]
+
+
+def github_records(spec):
+    runs = gh(["run", "list", "-R", spec["github"], "--workflow", spec["workflow"], "--branch", "main",
+               "--limit", "100", "--json", RUN_FIELDS])
+    runs = [r for r in runs if r["event"] in RUN_EVENTS]
+    runs.sort(key=lambda r: r["createdAt"], reverse=True)
+    going = any(r["status"] != "completed" for r in runs)
+    records = []
+    for r in runs:
+        if r["status"] == "completed" and r["conclusion"] in ("success", "failure"):
+            verdict = "pass" if r["conclusion"] == "success" else "fail"
+            records.append(Record(r["headSha"], verdict, f"run {r['databaseId']}"))
+    return records, going
+
+
+def journal_records():
+    """Conclusive lines of the coordinator journal, newest first, and whether a live lock says a run is going."""
+    records = []
+    if JOURNAL.exists():
+        for n, line in enumerate(JOURNAL.read_text().splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise Unreadable(f"{JOURNAL} line {n} is not JSON: {e}")
+            if row.get("verdict") in ("pass", "fail"):
+                records.append(Record(row["tip"], row["verdict"], f"journal line {n}"))
+    records.reverse()
+    return records, lock_alive()
+
+
+def lock_alive():
+    try:
+        pid = int((LOCK / "pid").read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def assess(name, repo, records, going, noun="run"):
+    """One repo's state. Returns (exit code, output lines). Used by every repo kind."""
+    tip = main_tip(repo)
+    if not records:
+        where = f"no conclusive {noun} on main; main tip {tip[:7]}"
+        if going:
+            return 2, [f"{name}: UNTESTED  {where}. A run is going; wait for it."]
+        return 2, [f"{name}: UNTESTED  {where}, and no run is going. Start one."]
+
+    newest = records[0]
+    if newest.verdict == "fail":
+        lines = [f"{name}: RED  {newest.label} failed on {newest.tip[:7]}" + ("  (a newer run is going)" if going else "")]
+        green = next((r for r in records[1:] if r.verdict == "pass"), None)
+        if green is None:
+            lines.append("  no earlier green run; red range not computed")
+            return 1, lines
+        lines.append(f"  last green: {green.tip[:7]} ({green.label})")
+        try:
+            chain = first_parent_chain(repo, green.tip, newest.tip)
+        except Unreadable as e:
+            lines.append(f"  red range unreadable: {e}")
+            return 1, lines
+        lines.append("  first-parent commits last green..red tip:")
+        lines += [f"    {sha[:7]} {subject}" for sha, subject in chain]
+        return 1, lines
+
+    untested = first_parent_chain(repo, newest.tip, tip)
+    if not untested:
+        return 0, [f"{name}: GREEN  {newest.label} passed on {newest.tip[:7]}; main tip is tested"]
+    if going:
+        return 0, [f"{name}: GREEN  {newest.label} passed on {newest.tip[:7]}; "
+                   f"{len(untested)} main commit(s) not tested yet, a run is going"]
+    return 2, [f"{name}: UNTESTED  {len(untested)} main commit(s) after {newest.label} ({newest.tip[:7]}) "
+               f"and no run is going. Start one."]
+
+
+def check(name):
+    spec = REPOS[name]
+    if spec is None:
+        return 0, [f"{name}: n/a (gate is per-PR only)"]
+    if "journal" in spec:
+        records, going = journal_records()
+    else:
+        records, going = github_records(spec)
+    code, lines = assess(name, spec["github"], records, going, "journal line" if "journal" in spec else "run")
+    if "journal" in spec and not records:
+        lines.insert(0, f"  (no journal record at {JOURNAL})")
+    return code, lines
+
+
+def describe(name):
+    """Run one repo; an unreadable state exits 1 with the reason."""
+    try:
+        return check(name)
+    except Unreadable as e:
+        return 1, [f"{name}: ERROR  cannot read state: {e}"]
+
+
+def main(argv):
+    if argv == ["--all"]:
+        names = ORDER
+    elif len(argv) == 1 and argv[0] in REPOS:
+        names = argv
+    else:
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status REPO | --all", file=sys.stderr)
+        return 1
+    rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
+    worst = 0
+    for name in names:
+        code, lines = describe(name)
+        print("\n".join(lines))
+        if rank[code] > rank[worst]:
+            worst = code
+    return worst
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
