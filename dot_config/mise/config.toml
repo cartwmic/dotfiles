@@ -130,11 +130,23 @@ shellcheck = "latest"
 # =============================================================================
 
 [tasks."setup-ubuntu-essentials"]
-description = "Install Ubuntu base packages and set zsh as default shell"
+description = "Install Ubuntu base packages and set zsh as default shell (pacman hosts: check the tools, install nothing)"
 run = '''
 OS="$(uname -s)"
 case "$OS" in
   Linux)
+    # pacman hosts (Arch, Omarchy): host packages come from the machine's own setup, never from here, and the login shell is the
+    # owner's. This only says which of the tools the later tasks need are missing.
+    if ! command -v apt-get >/dev/null 2>&1; then
+      missing=""
+      for tool in cc make curl git zsh unzip zip perl; do command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"; done
+      if [ -n "$missing" ]; then
+        echo "WARN: no apt-get here and these tools are missing:$missing (Arch: sudo pacman -S --needed base-devel curl git zsh unzip zip perl)" >&2
+      else
+        echo "no apt-get here; host tools present, nothing to install"
+      fi
+      exit 0
+    fi
     # Check if build-essential is installed
     if ! dpkg -l | grep -q "^ii  build-essential"; then
       echo "Installing Ubuntu essential packages..."
@@ -224,7 +236,7 @@ case "$OS" in
     fi
     ;;
   Linux)
-    if [ ! -d "$HOME/.local/kitty.app" ]; then
+    if [ ! -d "$HOME/.local/kitty.app" ] && ! command -v kitty >/dev/null 2>&1; then
       curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin
     fi
     ;;
@@ -253,6 +265,10 @@ case "$OS" in
   Linux)
     if grep -qi microsoft /proc/version 2>/dev/null; then
       echo "Skipping RustDesk inside WSL"
+      exit 0
+    fi
+    if ! command -v apt-get >/dev/null 2>&1; then
+      echo "Skipping RustDesk: the installer uses the Debian package; install it with this host's package manager"
       exit 0
     fi
 
@@ -514,6 +530,30 @@ if ! command -v kickstart >/dev/null 2>&1; then
 fi
 '''
 
+[tasks."install-loop-engine-from-source"]
+description = "Build the Loop Engine CLI and providers from the pinned tag on Linux arm64 (the releases have no archive for it)"
+depends = ["install-rust", "setup-ubuntu-essentials"]
+run = '''
+set -eu
+# x64 Linux and macOS get the release archives from [tools]; those five entries skip Linux arm64 (os = [...]), so build them here.
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != aarch64 ]; then exit 0; fi
+# The tag is the pin in [tools] (one version for all five), so a Loop Engine bump PR moves this too.
+CONFIG="${MISE_GLOBAL_CONFIG_FILE:-$HOME/.config/mise/config.toml}"
+VERSION="$(sed -n 's/^bookends-check = { version = "\([^"]*\)".*/\1/p' "$CONFIG")"
+[ -n "$VERSION" ] || { echo "ERROR: no bookends-check pin in $CONFIG" >&2; exit 1; }
+STAMP="$HOME/.local/share/loop-engine-src/version"
+if [ "$(cat "$STAMP" 2>/dev/null)" = "$VERSION" ] && [ -x "$HOME/.local/bin/bookends-check" ]; then
+  echo "Loop Engine $VERSION already built"
+  exit 0
+fi
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+echo "Building Loop Engine v$VERSION from source (about two minutes)..."
+cargo install --locked --git https://github.com/cartwmic/loop-engine --tag "v$VERSION" --root "$HOME/.local" \
+  loop-cli bookends-check lean-change-provider policy-document-provider research-provider
+mkdir -p "$(dirname "$STAMP")"
+printf '%s\n' "$VERSION" > "$STAMP"
+'''
+
 [tasks."install-kubectl"]
 description = "Install kubectl CLI for the host OS and architecture"
 run = '''
@@ -641,6 +681,10 @@ OS="$(uname -s)"
 case "$OS" in
   Linux)
     if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+      if ! command -v apt-get >/dev/null 2>&1; then
+        echo "WARN: ImageMagick is missing and there is no apt-get here; install it with this host's package manager" >&2
+        exit 0
+      fi
       sudo apt-get update
       sudo apt-get install -y imagemagick
     fi
@@ -915,6 +959,7 @@ depends = [
   "setup-ubuntu-essentials",
   "install-rust",
   "install-cargo-tools",
+  "install-loop-engine-from-source",
   "install-uv",
   "install-uv-tools",
   "install-nvim-python-host",

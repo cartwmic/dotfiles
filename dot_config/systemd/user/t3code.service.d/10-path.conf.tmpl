@@ -1,0 +1,5 @@
+{{- $home := .chezmoi.homeDir | replace "%" "%%" -}}
+# Drop-in for t3code.service, which T3 writes itself (`t3 service install`, ExecStart pinned to the installed version) and dotfiles must not template.
+# A systemd user service starts with a minimal PATH; T3 and the agents it launches need node, claude, t3 and the mise-managed tools (herdr, gh, op, git).
+[Service]
+Environment=PATH={{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin
