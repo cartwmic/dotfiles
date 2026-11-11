@@ -9,7 +9,8 @@
 #
 # The safety rules, in force on every run (the same as the launchd script's, with systemctl --user for launchctl):
 #   * systemctl is called for exactly: show-environment and is-active (read-only), daemon-reload (after the unit file changed),
-#     enable --now (the instance is not running), restart (a requested reload of a changed unit) and disable --now (opt out).
+#     enable --now (the instance is not running), enable (once, when a running service is adopted: it must also start at boot; it
+#     does not touch the running process), restart (a requested reload of a changed unit) and disable --now (opt out).
 #     A running service is never restarted because a template re-rendered.
 #   * A unit file that differs from the one the service was started with is REPORTED (reload needed). It is restarted only when
 #     INSTANCES_RELOAD names the instance (or "all") on that run, and only if the unit really changed.
@@ -122,6 +123,8 @@ opt_in() {
     if [ "$ACTIVE" = yes ]; then _adopted=yes; _own=$_before   # running already: record the file it was started from, as it is right now
     else _own=$_want; fi                                        # about to be started by us
     if ! { printf '%s\n' "$_own" >"$M_SHA" && touch "$M_MANAGED" && [ -f "$M_MANAGED" ]; }; then finish "NOT READY: cannot record ownership in $STATE_ROOT"; return 0; fi
+    # An adopted hand-made unit may be running but not enabled: enable (no --now) makes it start at boot and leaves the process alone.
+    if [ "$_adopted" = yes ] && ! run_sc enable "$UNIT"; then say "$NAME: WARN: systemctl enable failed: $(first_line "$TMP/sc.out"); it runs now but may not start at boot"; fi
   fi
   if [ "$_before" != "$_want" ]; then
     if ! { cp "$SRC" "$DST.new" && chmod 644 "$DST.new" && mv "$DST.new" "$DST"; }; then finish "NOT READY: cannot write $DST"; return 0; fi
@@ -148,6 +151,7 @@ opt_in() {
   return 0
 }
 
+if [ "${INSTANCES_RETRO_ENABLED:-}" = true ]; then say "retro: not supported on Linux (macOS only); nothing done"; fi
 case $ENABLED in
   true) opt_in;;
   false|'') opt_out;;

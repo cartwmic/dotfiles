@@ -8,12 +8,15 @@
 #   2. runs `t3 service install` when ~/.config/systemd/user/t3code.service does not exist yet;
 #   3. daemon-reloads so systemd reads the drop-in, and restarts the service only when step 2 just created it (the PATH reaches a
 #      service only when it starts; an existing, running T3 is never restarted here: `systemctl --user restart t3code.service` is the owner's call).
-# A host with no systemd user manager gets a notice and a clean exit.
+# A host with no systemd user manager gets a notice and a clean exit. A failed install (T3 or `t3 service install`) fails the script, so the next
+# apply retries it (chezmoi records a run_onchange script only when it succeeds). A failed daemon-reload or restart is a warning with the command
+# to run by hand and exit 0: it must not stop the rest of the apply (the same rule as the instances reconcile script).
+# Test hooks: T3_WSL_MARKER (the WSL interop file), T3_INSTALL_URL.
 set -eu
 log() { printf '[t3_service_linux] %s: %s\n' "$1" "$2"; }
 
 [ "$(uname -s)" = Linux ] || exit 0
-if [ -f /proc/sys/fs/binfmt_misc/WSLInterop ]; then log INFO "WSL: T3 runs on the Windows side; nothing to set up"; exit 0; fi
+if [ -f "${T3_WSL_MARKER:-/proc/sys/fs/binfmt_misc/WSLInterop}" ]; then log INFO "WSL: T3 runs on the Windows side; nothing to set up"; exit 0; fi
 if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
   log INFO "no systemd user manager here; T3 service not set up"
   exit 0
@@ -22,7 +25,10 @@ export PATH="$HOME/.local/bin:$PATH"
 unit="$HOME/.config/systemd/user/t3code.service"
 if ! command -v t3 >/dev/null 2>&1; then
   log INFO "installing T3 (https://t3.codes/install.sh)"
-  curl -fsSL https://t3.codes/install.sh | sh || { log ERROR "T3 install failed"; exit 1; }
+  installer=$(mktemp "${TMPDIR:-/tmp}/t3-install.XXXXXX")
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL "${T3_INSTALL_URL:-https://t3.codes/install.sh}" -o "$installer" || { log ERROR "T3 install failed: could not download the installer"; exit 1; }
+  sh "$installer" || { log ERROR "T3 install failed"; exit 1; }
   command -v t3 >/dev/null 2>&1 || { log ERROR "t3 is still not on PATH after the install"; exit 1; }
 fi
 fresh=no
@@ -31,9 +37,12 @@ if [ ! -f "$unit" ]; then
   t3 service install || { log ERROR "t3 service install failed"; exit 1; }
   fresh=yes
 fi
-systemctl --user daemon-reload
+if ! systemctl --user daemon-reload; then
+  log WARN "systemctl --user daemon-reload failed; run it by hand (the PATH drop-in is read after it)"
+  exit 0
+fi
 if [ "$fresh" = yes ]; then
-  systemctl --user restart t3code.service || { log ERROR "could not restart t3code.service; see: journalctl --user -u t3code"; exit 1; }
+  systemctl --user restart t3code.service || { log WARN "could not restart t3code.service; run: systemctl --user restart t3code.service (journalctl --user -u t3code)"; exit 0; }
   log INFO "t3code.service installed and restarted with the PATH drop-in"
 else
   log INFO "t3code.service exists; systemd reloaded (a running T3 keeps its old PATH until: systemctl --user restart t3code.service)"
