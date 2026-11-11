@@ -190,6 +190,7 @@ class Scratch:
 SHOW, ACTIVE = "show-environment", "is-active --quiet coordinatord.service"
 RELOAD_DAEMON, START = "daemon-reload", "enable --now coordinatord.service"
 RESTART, STOP = "restart coordinatord.service", "disable --now coordinatord.service"
+ENABLE = "enable coordinatord.service"   # no --now: adoption must not touch the running process
 
 
 @unittest.skipUnless(HAVE_TIMEOUT, "needs coreutils timeout (Linux)")
@@ -226,7 +227,7 @@ class MatrixTests(unittest.TestCase):
         self.dst.write_text("[Service]\nExecStart=/helper/written\n")   # what the hand-made setup left
         self.s.run(enabled=True)
         self.ok()
-        self.assertCalls([SHOW, ACTIVE, RELOAD_DAEMON])   # the file is replaced and systemd told; nothing restarted
+        self.assertCalls([SHOW, ACTIVE, ENABLE, RELOAD_DAEMON])   # enabled for boot, the file replaced and systemd told; nothing restarted
         self.assertTrue(self.s.is_running())
         self.assertEqual(self.dst.read_text(), (self.s.units / "coordinatord.service").read_text())
         self.assertIn("the unit file changed and the daemon was NOT restarted", self.s.output())
@@ -240,8 +241,32 @@ class MatrixTests(unittest.TestCase):
         shutil.copy(self.s.units / "coordinatord.service", self.dst)
         self.s.run(enabled=True)
         self.ok()
-        self.assertCalls([SHOW, ACTIVE])
+        self.assertCalls([SHOW, ACTIVE, ENABLE])
         self.assertIn("READY (adopted: running, not touched)", self.s.output())
+
+    def test_a_failed_enable_on_adoption_warns_and_the_service_is_still_adopted(self):
+        self.s.running()
+        self.s.have_config()
+        self.s.flag("FAIL_ENABLE")
+        self.s.run(enabled=True)
+        self.ok()
+        self.assertIn("WARN: systemctl enable failed", self.s.output())
+        self.assertTrue(self.s.is_running())
+        self.assertTrue((self.s.state_root / "coordinator.managed").exists())
+
+    def test_adoption_enables_once_not_on_every_apply(self):
+        self.s.running()
+        self.s.have_config()
+        self.s.run(enabled=True)
+        self.s.reset_calls()
+        self.s.run(enabled=True)
+        self.assertCalls([SHOW, ACTIVE])
+
+    def test_retro_enabled_on_linux_says_so_and_does_nothing(self):
+        self.s.run(INSTANCES_RETRO_ENABLED="true")
+        self.ok()
+        self.assertIn("retro: not supported on Linux (macOS only)", self.s.output())
+        self.assertCalls([])
 
     def test_first_opt_in_installs_the_unit_and_starts_it_once(self):
         self.s.have_config()
