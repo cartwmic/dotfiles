@@ -317,7 +317,8 @@ def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid
            {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
            {"name": "CARGO_BUILD_JOBS", "value": str(cpu_limit)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu_limit)},
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu_limit},
-           {"name": "HOME", "value": "/cache/home"}, {"name": "GOCACHE", "value": "/cache/go-build"},
+           {"name": "HOME", "value": "/cache/%s/home" % job},  # per job, removed with /cache/<id> at the end: nothing a job writes to HOME outlives it
+           {"name": "npm_config_store_dir", "value": "/cache/pnpm-store"}, {"name": "GOCACHE", "value": "/cache/go-build"},
            {"name": "GOMODCACHE", "value": "/cache/gomod"}, {"name": "GOMAXPROCS", "value": str(cpu_limit)}]
     mounts = [("tree%d" % i, r) for i, r in enumerate(roots)] + [("cache", "/cache"), ("out", "/out")]
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",

@@ -1128,7 +1128,10 @@ if a[0] == "exec" and "-i" in a:
             f.write(b"x")
     out = os.path.join(fake, "out")
     os.makedirs(out, exist_ok=True)
-    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-ag1-node", HOME=os.path.join(fake, "pod-home"))
+    # the pod's own env: HOME comes from the pod spec (under /cache/<id>, which here lives under FAKE)
+    spec = json.load(open(os.path.join(fake, "last_manifest.json")))["items"][0]["spec"]["containers"][0]["env"]
+    home = next(e["value"] for e in spec if e["name"] == "HOME")
+    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-ag1-node", HOME=os.path.join(jobroot, home.lstrip("/")))
     d = "%s/cache/%s" % (jobroot, job)
     # A pod has no .git before the script runs. The test repo does, so it is set aside while the pod side runs and put back after.
     root = next(l.split("=", 1)[1] for l in open(d + "/job.sh").read().splitlines() if l.startswith("ROOT="))
@@ -1297,7 +1300,9 @@ class Ag1PodSpec(unittest.TestCase):
 
     def test_env_has_homes_and_go_caches_under_cache_and_gomaxprocs(self):
         env = {e["name"]: e.get("value") for e in self.pod(cpu=6)["spec"]["containers"][0]["env"]}
-        self.assertEqual((env["HOME"], env["GOCACHE"], env["GOMODCACHE"], env["GOMAXPROCS"]), ("/cache/home", "/cache/go-build", "/cache/gomod", "6"))
+        self.assertEqual((env["HOME"], env["GOCACHE"], env["GOMODCACHE"], env["GOMAXPROCS"]), ("/cache/kgate-1-2/home", "/cache/go-build", "/cache/gomod", "6"))
+        self.assertEqual(env["npm_config_store_dir"], "/cache/pnpm-store")
+        self.assertEqual(env["npm_config_cache"], "/cache/npm")
         self.assertEqual((env["KGATE_OUT"], env["CI"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"]), ("/out", "1", "-j6", "6"))
 
     def test_roots_are_the_top_directories_and_only_from_the_allow_list(self):
@@ -1524,6 +1529,15 @@ class PodSh(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertTrue(recent.exists())
         self.assertTrue(other.exists(), "only kgate-* directories are swept")
+
+    def test_home_inside_the_job_directory_is_gone_for_the_next_job(self):
+        home = self.job / "home"
+        done, _ = self.run_sh(argv=("sh", "-c", 'mkdir -p "$HOME/.config/go" && echo x > "$HOME/.gitconfig" && echo y > "$HOME/.config/go/env"'), env={"HOME": str(home)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(home.exists())
+        done, _ = self.run_sh(argv=("sh", "-c", 'test ! -e "$HOME/.gitconfig" && test ! -e "$HOME/.config/go/env" && echo clean-home'), env={"HOME": str(home)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("clean-home", done.stdout)
 
     def test_a_commit_that_fails_after_the_hashes_matched_is_its_own_marker_and_69_not_a_mismatch(self):
         done, _ = self.run_sh(argv=("sh", "-c", "echo SHOULD-NOT-RUN"), lock_main=True)
@@ -1781,6 +1795,19 @@ class Ag1Black(unittest.TestCase):
         podhead = subprocess.run(["git", "--git-dir", str(self.fake / "podgit"), "rev-parse", "HEAD^{tree}"], stdout=subprocess.PIPE, text=True).stdout.strip()
         self.assertEqual(podhead, rec["tree"])
         self.assertTrue((self.repo / ".git").is_dir(), "the Mac-side repo was only set aside by the fake pod")
+
+    def test_home_is_per_job_and_a_file_one_job_writes_there_is_gone_in_the_next(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        first = self.run_kgate("--", "sh", "-c", 'echo secret > "$HOME/.npmrc"; echo "HOME=$HOME"')
+        self.assertEqual(first.returncode, 0, first.stdout)
+        second = self.run_kgate("--", "sh", "-c", 'test ! -e "$HOME/.npmrc" && echo clean-home; echo "HOME=$HOME"')
+        self.assertEqual(second.returncode, 0, second.stdout)
+        self.assertIn("clean-home", second.stdout)
+        ids = [r["id"] for r in self.records()[-2:]]
+        homes = [next(e["value"] for e in m["manifest"]["items"][0]["spec"]["containers"][0]["env"] if e["name"] == "HOME") for m in self.kcalls() if "manifest" in m]
+        self.assertEqual(homes, ["/cache/%s/home" % i for i in ids])
+        env = {e["name"]: e["value"] for e in next(m for m in self.kcalls() if "manifest" in m)["manifest"]["items"][0]["spec"]["containers"][0]["env"] if "value" in e}
+        self.assertTrue(all(env[k].startswith("/cache/") and not env[k].startswith("/cache/kgate-") for k in ("GOCACHE", "GOMODCACHE", "npm_config_cache", "npm_config_store_dir")), "only the caches are on the disk")
 
     def test_a_profile_with_cache_pvc_sends_the_claim_and_fsgroup(self):
         self.profile(extra='cache_pvc = "xlab-offload-cache"')
