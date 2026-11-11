@@ -136,11 +136,19 @@ Library/LaunchAgents/local.agent-events.plist
 .local/user_scripts/agent_kit_bump.py
 {{- end }}
 
-{{- if ne .chezmoi.os "darwin" }}
-# Heavy-gate memory watchdog (local.heavy-gate-watchdog): a LaunchAgent, so macOS only, on every profile that has heavy-gate.
+{{- if and (ne .chezmoi.os "darwin") (ne .chezmoi.os "linux") }}
+# Heavy-gate memory watchdog daemon: macOS (LaunchAgent) and Linux (systemd user service), on every profile that has heavy-gate.
 .local/bin/heavy-gate-watchdog
+{{- end }}
+{{- if ne .chezmoi.os "darwin" }}
+# Its LaunchAgent (local.heavy-gate-watchdog) and the script that loads it: macOS only.
 Library/LaunchAgents/local.heavy-gate-watchdog.plist
 72_heavy_gate_watchdog_launchd.sh
+{{- end }}
+{{- if ne .chezmoi.os "linux" }}
+# Its systemd user unit (heavy-gate-watchdog.service) and the script that loads it: Linux only.
+.config/systemd/user/heavy-gate-watchdog.service
+73_heavy_gate_watchdog_systemd.sh
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}

@@ -2,8 +2,9 @@
 #
 # heavy-gate-watchdog
 #
-# Stops the biggest running heavy-gate job when free memory stays low. macOS only (memory_pressure). It runs all the time as a
-# LaunchAgent (local.heavy-gate-watchdog, KeepAlive), managed by chezmoi; heavy-gate itself only runs its job in the foreground.
+# Stops the biggest running heavy-gate job when free memory stays low. macOS (memory_pressure) and Linux (/proc/meminfo, as heavy-gate
+# reads it). It runs all the time, managed by chezmoi: on macOS as a LaunchAgent (local.heavy-gate-watchdog, KeepAlive), on Linux as a
+# systemd user service (heavy-gate-watchdog.service, Restart=always); heavy-gate itself only runs its job in the foreground.
 #
 # Why (owner decision 2026-11-03): heavy-gate checks memory only before a job starts. On 2026-11-02 a job it had admitted (an
 # uncapped Jest run: about 14 workers at 2 to 2.7 GB each, 26 to 32 GB of node on a 24 GB Mac) grew after that check and caused a
@@ -63,7 +64,13 @@ whole GRACE STOP_GRACE
 number() { awk -v v="$1" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/) }'; }
 # low FIGURE: true when the figure is a number under the floor (anything else is "not low")
 low() { number "$1" && awk -v v="$1" -v l="$FLOOR" 'BEGIN { exit !(v + 0 < l + 0) }'; }
-mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; }
+case $(uname -s) in
+  Linux)
+    PROC=${HEAVY_GATE_PROC:-/proc}
+    mem_free_pct() { awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } END { if (t > 0 && a != "") printf "%d\n", a * 100 / t }' "$PROC/meminfo" 2>/dev/null; }
+    ;;
+  *) mem_free_pct() { memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%", "", $NF); print $NF}'; } ;;
+esac
 
 # ---- the holders ----
 slot_path() { if [ "$1" = 1 ]; then printf '%s' "$LOCK"; else printf '%s.%s' "$LOCK" "$1"; fi; }
