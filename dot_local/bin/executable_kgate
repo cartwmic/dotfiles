@@ -87,6 +87,10 @@ AG1_CONTEXT = "ag1-main-va-dems2"
 AG1_NAMESPACE = "xlab-offload"
 AG1_REGISTRY = "devaxonhub.azurecr.us"
 AG1_DEADLINE_S = 7200
+# The API server's ResourceQuota admission: `Error from server (Forbidden): ... pods "x" is forbidden: exceeded quota: NAME, requested: ..., used: ..., limited: ...`.
+# A webhook denial or any other text that merely says "exceeded quota" does not match, and fails at once.
+QUOTA_REFUSAL = re.compile(r'^Error from server \(Forbidden\): (?:error when creating "[^"]*": )?pods "[^"]*" is forbidden: exceeded quota: [^\s,]+, requested: .+, used: .+, limited: .+$', re.M)
+QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
 AG1_USER = "65532:65532"  # the cursor-worker image's user
 AG1_SETUP = "run `kgate ag1-setup` once (it writes %s from the %s context of ~/.kube/config)" % (AG1_KUBECONFIG, AG1_CONTEXT)
 AG1_TREE_ROOTS = ("Users", "Volumes", "private")  # where a Mac worktree lives; only these get an emptyDir, so nothing in the image is hidden
@@ -155,7 +159,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -182,12 +186,15 @@ def parse_profile(text):
     ephemeral = raw.get("ephemeral_storage")
     if ephemeral is not None and (cluster != "ag1" or not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral)):
         raise Unavailable("profile ephemeral_storage is for cluster = \"ag1\" only and must look like 20Gi, got %r" % (ephemeral,))
+    cpu_limit = raw.get("cpu_limit")
+    if cpu_limit is not None and (cluster != "ag1" or not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
+        raise Unavailable("profile cpu_limit is for cluster = \"ag1\" only and must be a whole number of at least 1, got %r" % (cpu_limit,))
     user = raw.get("user", AG1_USER if cluster == "ag1" else "1000:1000")
     if not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
-            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral}
+            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit}
 
 
 
@@ -272,23 +279,49 @@ def ag1_roots(*paths):
     return roots
 
 
-def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots):
-    """The one Pod for an AG1 job, as a List. No Secrets, no pull Secret, no hostPath, no affinity: AG1 policy (Kyverno, quota, Role) decides."""
+QTY_SUFFIX = {"m": 1e-3, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
+              "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40, "Pi": 2**50, "Ei": 2**60}
+
+
+def parse_qty(text):
+    m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([A-Za-z]*)", text.strip())
+    if not m or (m.group(2) and m.group(2) not in QTY_SUFFIX):
+        return None
+    return float(m.group(1)) * (QTY_SUFFIX[m.group(2)] if m.group(2) else 1)
+
+
+def quota_impossible(msg):
+    """True when the quota error says a requested amount is above the namespace's own limit for it: waiting can never help.
+    msg: `exceeded quota: NAME, requested: a=2,b=1Gi, used: a=8,b=0, limited: a=8,b=32Gi`."""
+    m = re.search(r"requested: (.*?), used: (.*?), limited: (.*)$", msg)
+    if not m:
+        return False
+    sides = [dict(kv.strip().split("=", 1) for kv in part.split(",") if "=" in kv) for part in m.groups()]
+    for key, asked in sides[0].items():
+        asked, cap = parse_qty(asked), parse_qty(sides[2].get(key, ""))
+        if asked is not None and cap is not None and asked > cap:
+            return True
+    return False
+
+
+def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None):
+    """The one Pod for an AG1 job, as a List. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. No Secrets, no pull Secret, no hostPath, no affinity: AG1 policy (Kyverno, quota, Role) decides."""
+    cpu_limit = cpu_limit or cpu
     labels = {"app": "kgate", "kgate-job": job, "axon.com/owner": "xlab", "axon.com/pillar": "dems"}
     env = [{"name": "KGATE_OUT", "value": "/out"}, {"name": "CI", "value": "1"},
            {"name": "npm_config_cache", "value": "/cache/npm"},
            {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
-           {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
-           {"name": "MAKEFLAGS", "value": "-j%d" % cpu},
+           {"name": "CARGO_BUILD_JOBS", "value": str(cpu_limit)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu_limit)},
+           {"name": "MAKEFLAGS", "value": "-j%d" % cpu_limit},
            {"name": "HOME", "value": "/cache/home"}, {"name": "GOCACHE", "value": "/cache/go-build"},
-           {"name": "GOMODCACHE", "value": "/cache/gomod"}, {"name": "GOMAXPROCS", "value": str(cpu)}]
+           {"name": "GOMODCACHE", "value": "/cache/gomod"}, {"name": "GOMAXPROCS", "value": str(cpu_limit)}]
     mounts = [("tree%d" % i, r) for i, r in enumerate(roots)] + [("cache", "/cache"), ("out", "/out")]
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
                  "command": ["sleep", "86400"],  # no tini in the image; longer than the pod's deadline, so the deadline ends it
                  "env": env,
                  "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
                  "resources": {"requests": {"cpu": str(cpu), "memory": memory, "ephemeral-storage": ephemeral},
-                               "limits": {"cpu": str(cpu), "memory": memory_limit, "ephemeral-storage": ephemeral}},
+                               "limits": {"cpu": str(cpu_limit), "memory": memory_limit, "ephemeral-storage": ephemeral}},
                  "volumeMounts": [{"name": n, "mountPath": path} for n, path in mounts]}
     pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": AG1_DEADLINE_S,
            "automountServiceAccountToken": False,
@@ -771,7 +804,7 @@ class Job:
         mem_limit = o.mem_limit or prof["memory_limit"] or mem
         check_settings(image, cpu, mem, mem_limit)
         if prof["cluster"] == "ag1":
-            self.use_ag1(image, prof)
+            self.use_ag1(image, prof, cpu)
         if prof["services"]:
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node in NEVER_NODES:
@@ -781,7 +814,7 @@ class Job:
         self.rec.update(image=image, cpu=cpu, mem=mem, mem_limit=mem_limit)
         return image, cpu, mem, mem_limit, prof
 
-    def use_ag1(self, image, prof):
+    def use_ag1(self, image, prof, cpu):
         """The profile says cluster = "ag1": refuse what AG1 cannot take."""
         if prof["secrets"]:
             raise Unavailable("a profile for AG1 cannot have [secrets]: the Role there has no Secrets, and none are created")
@@ -789,6 +822,10 @@ class Job:
             raise Unavailable("an AG1 image must come from %s (nodes pull it with their own identity), got %s" % (AG1_REGISTRY, image.split("@")[0]))
         if int(prof["user"].split(":")[0]) == 0:
             raise Unavailable("an AG1 pod runs as non-root; the profile user is %s" % prof["user"])
+        if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
+            raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
+        self.rec["quota_wait_s"] = 0
+        self.rec["cpu_limit"] = prof["cpu_limit"] or cpu  # the effective limit, which the pod's build parallelism follows
         if self.o.node:
             raise Unavailable("AG1 does not take --node; the cluster schedules the pod")
 
@@ -814,10 +851,32 @@ class Job:
             self.cluster.run(["delete", "secret", *stale, "--ignore-not-found", "--wait=false"])
 
     def start_pod(self, manifests):
-        done = self.cluster.run(["create", "-f", "-"], stdin=json.dumps(manifests).encode())
-        if done.returncode != 0:
-            raise Unavailable("could not create the pod: " + done.stderr.decode(errors="replace").strip())
+        body = json.dumps(manifests).encode()
         deadline = self.t0 + self.o.wait
+        delay, waited_from, last_msg = QUOTA_FIRST_DELAY, None, None
+        while True:
+            done = self.cluster.run(["create", "-f", "-"], stdin=body)
+            if done.returncode == 0:
+                break
+            err = done.stderr.decode(errors="replace").strip()
+            if self.cluster.name != "ag1" or not QUOTA_REFUSAL.search(err):
+                raise Unavailable("could not create the pod: " + err)
+            # The shared namespace quota is full (other jobs hold it). Nothing was created, so create again until the --wait deadline.
+            full = " ".join(err[err.index("exceeded quota:"):].split())   # parsed whole; only what is printed and recorded is cut
+            msg = full[:300]
+            if quota_impossible(full):
+                raise Unavailable("request exceeds the namespace quota: " + msg)
+            waited_from = waited_from or time.time()
+            self.rec["quota_wait_s"] = round(time.time() - waited_from, 1)
+            if full != last_msg:
+                self.note("waiting for quota: " + msg)
+                last_msg = full
+            if time.time() >= deadline:
+                raise Unavailable("quota not available within %ds: %s" % (self.o.wait, msg))
+            time.sleep(max(0, min(delay, deadline - time.time())))
+            delay = min(delay * 2, QUOTA_MAX_DELAY)
+        if waited_from:
+            self.rec["quota_wait_s"] = round(time.time() - waited_from, 1)
         last = None
         while True:
             done = self.cluster.run(["get", "pod", self.id, "-o", "json"])
@@ -925,7 +984,7 @@ class Job:
         limit = "" if mem_limit == mem else ", %s limit" % mem_limit
         self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
         if self.cluster.name == "ag1":
-            manifests = pod_manifests_ag1(self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], ag1_roots(wt))
+            manifests = pod_manifests_ag1(self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], ag1_roots(wt), prof["cpu_limit"])
         else:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"])
         self.start_pod(manifests)
