@@ -409,8 +409,11 @@ class Black(unittest.TestCase):
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
              "KGATE_SSH": host, "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **self.op_env(), **(env or {})}
         # the module reads KGATE_SSH at import, so run the script as a process
-        return subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE,
+        return subprocess.run([*self.launcher(), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, timeout=120)
+
+    def launcher(self):
+        return [sys.executable, str(SCRIPT)]
 
     def records(self):
         path = self.state / "kgate" / "log.jsonl"
@@ -1029,6 +1032,542 @@ class Black(unittest.TestCase):
         other.terminate()
         other.stdout.read()
         other.wait(timeout=30)
+
+
+# ---------------------------------------------------------------- AG1
+
+AG1_IMAGE = "devaxonhub.azurecr.us/ecom/cursor-worker:20261019-4057e58-b62a51a@sha256:" + "cd" * 32
+AG1_ARGS = ["--kubeconfig", "%HOME%/.kube/ag1-offload", "--context", "ag1-main-va-dems2", "-n", "xlab-offload"]
+
+FAKE_KUBECTL = r'''#!/usr/bin/env python3
+import json, os, subprocess, sys
+fake = os.environ["FAKE"]
+argv = sys.argv[1:]
+def log(entry):
+    with open(os.path.join(fake, "kcalls.jsonl"), "a") as f:
+        f.write(json.dumps(entry) + "\n")
+log({"argv": argv})
+if argv[:2] == ["--kubeconfig", os.path.join(os.environ["HOME"], ".kube", "config")] and argv[2] == "config":
+    if os.environ.get("FAKE_NO_CONTEXT"):
+        sys.stderr.write("error: context was not found for specified context: ag1-main-va-dems2\n"); sys.exit(1)
+    print(json.dumps({"apiVersion": "v1", "kind": "Config", "current-context": "ag1-main-va-dems2",
+        "clusters": [{"name": "ag1-main-va-dems2", "cluster": {"server": "https://ag1.example"}}],
+        "contexts": [{"name": "ag1-main-va-dems2", "context": {"cluster": "ag1-main-va-dems2", "user": "u"}}],
+        "users": [{"name": "u", "user": {"exec": {"command": "kubelogin", "args": ["get-token", "--login", "devicecode", "--tenant-id", "t"]}}}]}))
+    sys.exit(0)
+assert argv[:6] == ["--kubeconfig", os.path.join(os.environ["HOME"], ".kube", "ag1-offload"), "--context", "ag1-main-va-dems2", "-n", "xlab-offload"], argv
+a = argv[6:]
+scenario = os.environ.get("FAKE_POD", "ready")
+if a[:3] == ["auth", "can-i", "create"]:
+    mode = os.environ.get("FAKE_CANI", "yes")
+    if mode == "yes":
+        print("yes"); sys.exit(0)
+    if mode == "no":
+        print("no"); sys.exit(1)
+    sys.stderr.write("error: You must be logged in to the server (Unauthorized)\n"); sys.exit(1)
+if a[0] == "delete":
+    sys.exit(0)
+if a[:2] == ["get", "pods"]:
+    print(json.dumps({"items": []})); sys.exit(0)
+if a[:2] == ["create", "-f"]:
+    active = os.path.join(os.environ["XDG_STATE_HOME"], "kgate", "active")
+    entries = [json.load(open(os.path.join(active, n))) for n in sorted(os.listdir(active))] if os.path.isdir(active) else []
+    log({"manifest": json.load(sys.stdin), "registry": entries}); sys.exit(0)
+if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
+    print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
+if a[:2] == ["get", "pod"]:
+    if scenario == "ready":
+        st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
+    else:
+        st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes fit"}]}
+    print(json.dumps({"spec": {"nodeName": "fake-ag1-node"}, "status": st})); sys.exit(0)
+if a[0] == "exec" and "-i" in a:
+    job, script = a[2], a[-1]
+    assert script == "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job, job), script
+    data = sys.stdin.buffer.read()
+    jobroot = os.path.join(fake, "jobroot")
+    os.makedirs(jobroot, exist_ok=True)   # /cache is the pod's emptyDir; here the job's own files go under FAKE
+    tar = subprocess.run(["tar", "-xf", "-", "--no-same-owner", "-C", "/", "--exclude", "cache/kgate-*"], input=data)
+    tar2 = subprocess.run(["tar", "-xf", "-", "--no-same-owner", "-C", jobroot, "cache/%s" % job], input=data)
+    if tar.returncode or tar2.returncode:
+        sys.exit(1)
+    if os.environ.get("FAKE_TAMPER"):
+        with open(os.environ["FAKE_TAMPER"], "ab") as f:
+            f.write(b"x")
+    out = os.path.join(fake, "out")
+    os.makedirs(out, exist_ok=True)
+    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-ag1-node", HOME=os.path.join(fake, "pod-home"))
+    d = "%s/cache/%s" % (jobroot, job)
+    sys.exit(subprocess.call(["sh", d + "/kgate.sh", d], env=env))
+if a[0] == "exec":
+    out = os.path.join(fake, "out")
+    os.makedirs(out, exist_ok=True)
+    sys.exit(subprocess.call(["tar", "-cf", "-", "-C", out, "."], env=dict(os.environ, COPYFILE_DISABLE="1")))
+sys.stderr.write("fake kubectl: unexpected " + repr(a) + "\n"); sys.exit(2)
+'''
+
+
+class Ag1Profile(unittest.TestCase):
+    def test_cluster_defaults_to_homelab_and_user_follows_it(self):
+        self.assertEqual(K.parse_profile("")["cluster"], "homelab")
+        self.assertEqual(K.parse_profile("")["user"], "1000:1000")
+        p = K.parse_profile('cluster = "ag1"\nephemeral_storage = "20Gi"')
+        self.assertEqual((p["cluster"], p["user"], p["ephemeral_storage"]), ("ag1", "65532:65532", "20Gi"))
+        self.assertEqual(K.parse_profile('cluster = "ag1"\nuser = "1001:1001"')["user"], "1001:1001")
+
+    def test_bad_cluster_or_ephemeral_storage_is_refused(self):
+        for bad in ('cluster = "us1"', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "ag1"\nephemeral_storage = "20G"', 'cluster = "ag1"\nephemeral_storage = 20'):
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
+
+class Ag1PodSpec(unittest.TestCase):
+    def pod(self, **kw):
+        args = dict(job="kgate-1-2", image=AG1_IMAGE, cpu=8, memory="16Gi", memory_limit="24Gi", ephemeral="20Gi", uid=65532, gid=65532, roots=["/Users"])
+        args.update(kw)
+        items = K.pod_manifests_ag1(args["job"], args["image"], args["cpu"], args["memory"], args["memory_limit"], args["ephemeral"],
+                                    args["uid"], args["gid"], args["roots"])["items"]
+        self.assertEqual(len(items), 1, "one Pod and no Secret")
+        return items[0]
+
+    def test_it_meets_ag1_policy(self):
+        pod = self.pod()
+        self.assertEqual(pod["metadata"]["labels"], {"app": "kgate", "kgate-job": "kgate-1-2", "axon.com/owner": "xlab", "axon.com/pillar": "dems"})
+        self.assertEqual(pod["metadata"]["annotations"], {"cluster-autoscaler.kubernetes.io/safe-to-evict": "true"})
+        spec = pod["spec"]
+        self.assertEqual(spec["activeDeadlineSeconds"], 7200)
+        self.assertIs(spec["automountServiceAccountToken"], False)
+        self.assertEqual(spec["securityContext"], {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65532, "seccompProfile": {"type": "RuntimeDefault"}})
+        c = spec["containers"][0]
+        self.assertEqual(c["securityContext"], {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}})
+        self.assertEqual(c["resources"], {"requests": {"cpu": "8", "memory": "16Gi", "ephemeral-storage": "20Gi"},
+                                          "limits": {"cpu": "8", "memory": "24Gi", "ephemeral-storage": "20Gi"}})
+        self.assertEqual(c["image"], AG1_IMAGE)
+        self.assertEqual(c["command"], ["sleep", "86400"], "no tini in the image: a plain sleep longer than the deadline")
+
+    def test_it_has_none_of_the_homelab_parts(self):
+        text = json.dumps(self.pod())
+        for word in ("hostPath", "affinity", "tolerations", "imagePullSecrets", "secretRef", "envFrom", "tini", "mac-mini-worker", "kgate-1-2-env", "kgate-1-2-pull"):
+            self.assertNotIn(word, text)
+
+    def test_the_tree_cache_and_out_are_emptydirs(self):
+        pod = self.pod(roots=["/Users", "/home"])
+        c = pod["spec"]["containers"][0]
+        self.assertEqual([(m["name"], m["mountPath"]) for m in c["volumeMounts"]],
+                         [("tree0", "/Users"), ("tree1", "/home"), ("cache", "/cache"), ("out", "/out")])
+        self.assertEqual(pod["spec"]["volumes"], [{"name": n, "emptyDir": {}} for n in ("tree0", "tree1", "cache", "out")])
+
+    def test_env_has_homes_and_go_caches_under_cache_and_gomaxprocs(self):
+        env = {e["name"]: e.get("value") for e in self.pod(cpu=6)["spec"]["containers"][0]["env"]}
+        self.assertEqual((env["HOME"], env["GOCACHE"], env["GOMODCACHE"], env["GOMAXPROCS"]), ("/cache/home", "/cache/go-build", "/cache/gomod", "6"))
+        self.assertEqual((env["KGATE_OUT"], env["CI"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"]), ("/out", "1", "-j6", "6"))
+
+    def test_roots_are_the_top_directories_and_only_from_the_allow_list(self):
+        self.assertEqual(K.ag1_roots("/Users/me/git/r", "/Users/me/git/r/.git", "/Volumes/x/r"), ["/Users", "/Volumes"])
+        self.assertEqual(K.ag1_roots("/Volumes/W/r", "/private/var/r"), ["/Volumes", "/private"])
+        for bad in ("/usr/src/r", "/cache/r", "/out/r", "/var/x", "/", "/home/x/r", "/tmp/r", "/etc/r", "/Users2/r"):
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.ag1_roots(bad)
+
+    def test_homelab_render_is_unchanged_by_the_ag1_adapter(self):
+        want = "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"  # the same pin as test_default_render_is_byte_identical
+        self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
+
+
+class PodSh(unittest.TestCase):
+    """The AG1 pod side (POSIX sh, no python3) run as a process against a real temp git tree."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ks-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tree = self.tmp / "tree"
+        self.tree.mkdir()
+        t = self.tree
+        git(t, "init", "-q")
+        (t / "a.b").write_text("one\n")
+        (t / "a").mkdir()
+        (t / "a" / "run.sh").write_text("#!/bin/sh\necho ran-it\n")
+        (t / "a" / "run.sh").chmod(0o755)
+        (t / "deep" / "er").mkdir(parents=True)
+        (t / "deep" / "er" / "f").write_bytes(b"\x00\x01binary\xff")
+        (t / "empty").write_text("")
+        (t / "with space.txt").write_text("space\n")
+        (t / "üñí.txt").write_text("unicode\n")
+        (t / "crlf.txt").write_bytes(b"line\r\nline\r\n")
+        (t / "utf16.txt").write_bytes("wide \u00fc\n".encode("utf-16"))
+        (t / ".gitattributes").write_text("* text=auto eol=lf\nutf16.txt working-tree-encoding=UTF-16\n")   # a repo that asks git to convert line endings: the hash must still be of the bytes
+        (t / "link").symlink_to("a/b")
+        (t / "dangling").symlink_to("nowhere")
+        self.files = sorted(os.fsdecode(f) for f in subprocess.run(["git", "-C", str(t), "ls-files", "-co", "-z"], check=True, stdout=subprocess.PIPE).stdout.split(b"\0") if f)
+        self.job = self.tmp / "job"
+        self.job.mkdir()
+        self.cg = self.tmp / "cg"
+        self.cg.mkdir()
+
+    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None):
+        job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files,
+               "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}}
+        (self.job / "job.sh").write_text(K.job_sh(job))
+        (self.job / "files.nul").write_bytes(b"".join(os.fsencode(f) + b"\0" for f in self.files))
+        (self.job / "kgate.sh").write_text(K.POD_SH)
+        done = subprocess.run(["sh", str(self.job / "kgate.sh"), str(self.job)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              env={**os.environ, "HOME": str(self.tmp / "home"), "KGATE_CGROUP": str(self.cg), "KGATE_NODE": "n1", **(env or {})}, timeout=60)
+        return done, K.Markers("kgate-1-2")
+
+    def markers(self, text):
+        m = K.Markers("kgate-1-2")
+        m.feed(text.encode())
+        m.close()
+        return m.seen
+
+    def test_the_hash_git_computes_in_the_pod_equals_the_python_tree_hash(self):
+        done, _ = self.run_sh()
+        want = K.tree_hash(str(self.tree), self.files)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.markers(done.stdout)["hash"], "ok " + want)
+        # and both equal the tree plain git writes for the same files (the executable file and the two symlinks are in it)
+        (self.tree / ".git" / "info").mkdir(exist_ok=True)
+        (self.tree / ".git" / "info" / "attributes").write_text("* -text -eol -filter -ident -working-tree-encoding\n")
+        git(self.tree, "-c", "core.autocrlf=false", "add", "-A")
+        oracle = subprocess.run(["git", "-C", str(self.tree), "write-tree"], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+        self.assertEqual(want, oracle)
+        staged = subprocess.run(["git", "-C", str(self.tree), "ls-files", "-s"], stdout=subprocess.PIPE, text=True).stdout
+        self.assertRegex(staged, r"100755 \w+ 0\ta/run.sh")
+        self.assertRegex(staged, r"120000 \w+ 0\tlink")
+        self.assertRegex(staged, r"120000 \w+ 0\tdangling")
+
+    def test_a_changed_byte_a_changed_mode_or_a_changed_link_is_a_mismatch_and_cmd_does_not_run(self):
+        base = K.tree_hash(str(self.tree), self.files)
+        for what, change in (("byte", lambda: (self.tree / "a.b").write_text("ONE\n")),
+                             ("mode", lambda: (self.tree / "a" / "run.sh").chmod(0o644)),
+                             ("link", lambda: ((self.tree / "link").unlink(), (self.tree / "link").symlink_to("a/other")))):
+            with self.subTest(what):
+                change()
+                done, _ = self.run_sh(argv=("sh", "-c", "echo SHOULD-NOT-RUN"), tree=base)
+                self.assertEqual(done.returncode, 70, done.stdout)
+                seen = self.markers(done.stdout)
+                self.assertTrue(seen["hash"].startswith("MISMATCH expected=%s found=" % base), done.stdout)
+                self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+                self.assertNotIn("running", seen)
+                self.setUp()
+
+    def test_a_missing_file_is_a_mismatch_not_a_pass(self):
+        base = K.tree_hash(str(self.tree), self.files)
+        (self.tree / "a.b").unlink()
+        done, _ = self.run_sh(tree=base)
+        self.assertEqual(done.returncode, 70, done.stdout)
+        self.assertIn("MISMATCH", done.stdout)
+
+    def test_tool_versions_match_as_whole_versions_like_the_python_check(self):
+        for text, want, ok in (("go version go1.25.12 linux/amd64", "1.25.12", True), ("v24.22.2", "24.22.2", True), ("rustc 11.98.0", "1.98.0", False),
+                               ("rustc 1.98.01", "1.98.0", False), ("rustc 1.98.0.1", "1.98.0", False), ("x 1.98.0", "1.98.0", True),
+                               ("1.98.0", "1.98.0", True), ("a.1.98.0", "1.98.0", True), ("x 1.2.3+meta", "1.2.3", True)):
+            with self.subTest(text=text, want=want):
+                self.assertEqual(K.version_found(text, want), ok)
+                done, _ = self.run_sh(tools={"t": (want, "echo %s" % __import__("shlex").quote(text))})
+                self.assertEqual(done.returncode, 0 if ok else 71, done.stdout)
+
+    def test_a_wrong_tool_version_is_71_with_tool_expected_and_found_and_cmd_does_not_run(self):
+        done, _ = self.run_sh(argv=("sh", "-c", "echo SHOULD-NOT-RUN"), tools={"go": ("1.25.12", "echo go version go1.24.1 linux/amd64")})
+        self.assertEqual(done.returncode, 71, done.stdout)
+        pre = self.markers(done.stdout)["preflight"]
+        self.assertEqual(pre, 'FAILED tool=go expected=1.25.12 found="go version go1.24.1 linux/amd64" (echo go version go1.24.1 linux/amd64 exit 0)')
+        self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+
+    def test_a_tool_that_fails_or_prints_nothing_is_71(self):
+        done, _ = self.run_sh(tools={"x": ("1.0.0", "exit 4")})
+        self.assertEqual(done.returncode, 71)
+        self.assertIn('found="no output" (exit 4 exit 4)', done.stdout)
+
+    def test_tool_checks_run_in_the_jobs_directory_and_pass(self):
+        (self.tree / "VERSION").write_text("tool 9.9.9\n")
+        git(self.tree, "add", "-A")
+        self.files = sorted(set(self.files) | {"VERSION"})
+        done, _ = self.run_sh(tools={"a": ("9.9.9", "cat VERSION"), "b": ("2.0.0", "echo 2.0.0")})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.markers(done.stdout)["preflight"], "ok 2 tools")
+
+    def test_cmd_runs_in_the_same_directory_with_its_arguments_and_its_exit_code_is_the_scripts(self):
+        for code in (0, 3, 255):
+            done, _ = self.run_sh(argv=("sh", "-c", 'pwd; echo "[$1]"; cat a.b; exit %d' % code, "x", "two words"))
+            self.assertEqual(done.returncode, code, done.stdout)
+            seen = self.markers(done.stdout)
+            self.assertIn(str(self.tree), done.stdout)
+            self.assertIn("[two words]", done.stdout)
+            self.assertIn("one", done.stdout)
+            self.assertTrue(seen["end"].endswith(" exit %d" % code), seen)
+            self.assertTrue(seen["running"])
+
+    def test_a_command_that_cannot_start_is_127_and_a_killed_one_is_128_plus_the_signal(self):
+        done, _ = self.run_sh(argv=("no-such-command-here",))
+        self.assertEqual(done.returncode, 127, done.stdout)
+        done, _ = self.run_sh(argv=("sh", "-c", "kill -9 $$"))
+        self.assertEqual(done.returncode, 137, done.stdout)
+        self.assertTrue(self.markers(done.stdout)["end"].endswith(" exit 137"))
+
+    def test_markers_are_the_ones_the_mac_side_reads_even_after_output_without_a_newline(self):
+        done, _ = self.run_sh(argv=("printf", "no newline"))
+        seen = self.markers(done.stdout)
+        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "end"})
+        self.assertRegex(seen["start"], r"^\d+ node=n1 cpus=\d+$")
+        self.assertRegex(seen["end"], r"^\d+ exit 0$")
+
+    def test_peak_memory_comes_from_memory_peak(self):
+        (self.cg / "memory.peak").write_text("123456\n")
+        done, _ = self.run_sh()
+        self.assertEqual(self.markers(done.stdout)["peak"], "123456 cgroup")
+
+    def test_no_memory_peak_is_reported_as_unknown_not_invented(self):
+        done, _ = self.run_sh()
+        self.assertEqual(self.markers(done.stdout)["peak"], "unknown")
+
+    def test_the_throwaway_index_leaves_the_trees_git_untouched(self):
+        before = subprocess.run(["git", "-C", str(self.tree), "status", "--porcelain"], stdout=subprocess.PIPE, text=True).stdout
+        self.run_sh()
+        self.assertEqual(subprocess.run(["git", "-C", str(self.tree), "status", "--porcelain"], stdout=subprocess.PIPE, text=True).stdout, before)
+        self.assertEqual(list((self.tree / ".git").glob("index.lock")), [])
+
+
+class Ag1Black(unittest.TestCase):
+    """The AG1 adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
+    for _name in ("kgate", "records", "calls", "op_token_checks", "op_env"):
+        locals()[_name] = getattr(Black, _name)
+
+    def launcher(self):
+        # The production allow-list of tree roots (/Users, /Volumes, /private) is kept. The temp dirs of these tests are under /tmp on Linux,
+        # so the script runs through a stub that adds that one top directory to the constant. test_roots_... asserts the real constant.
+        top = self.repo.parts[1]
+        stub = self.tmp / "ag1_launch.py"
+        stub.write_text("import importlib.machinery, importlib.util, sys\n"
+                        "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                        "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                        "loader.exec_module(K)\n"
+                        "K.AG1_TREE_ROOTS = K.AG1_TREE_ROOTS + (%r,)\n"
+                        "sys.exit(K.main(sys.argv[2:]))\n" % top)
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def setUp(self):
+        Black.setUp(self)
+        (self.bin / "kubectl").write_text(FAKE_KUBECTL)
+        (self.bin / "kubectl").chmod(0o755)
+        (self.home / ".kube").mkdir()
+        (self.home / ".kube" / "ag1-offload").write_text("apiVersion: v1\n")
+        self.cmd_env = {"KGATE_SSH": ""}
+
+    def profile(self, tools="", extra="", secrets="", memory="1Gi", image=AG1_IMAGE):
+        (self.repo / "kgate.toml").write_text('cluster = "ag1"\nimage = "%s"\ncpu = 2\nmemory = "%s"\nmemory_limit = "2Gi"\nephemeral_storage = "5Gi"\n%s\n[tools]\n%s\n[secrets]\n%s\n'
+                                              % (image, memory, extra, tools, secrets))
+
+    def run_kgate(self, *args, env=None):
+        return self.kgate(*args, host="", env={**self.cmd_env, **(env or {})})
+
+    def kcalls(self):
+        path = self.fake / "kcalls.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def kubectl_args(self):
+        return [c["argv"][6:] for c in self.kcalls() if "argv" in c and c["argv"][2:3] != ["config"]]
+
+    def test_passes_with_cmds_exit_code_and_returns_out(self):
+        done = self.run_kgate("--", "sh", "-c", 'echo ran-in-pod; cat tracked.txt untracked.txt; echo result > "$KGATE_OUT/result.txt"')
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-in-pod", done.stdout)
+        self.assertIn("tracked and changed", done.stdout)          # the uncommitted change shipped
+        self.assertIn("new", done.stdout)                           # the untracked file shipped
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"], rec["cleanup"], rec["cluster"]), (0, None, True, True, "ag1"))
+        self.assertEqual((rec["node"], rec["image"], rec["mem"], rec["mem_limit"]), ("fake-ag1-node", AG1_IMAGE, "1Gi", "2Gi"))
+        self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
+        self.assertEqual(rec["out_files"], 1)
+        self.assertEqual((self.state / "kgate" / (rec["id"] + ".out") / "result.txt").read_text(), "result\n")
+        files = (self.fake / "jobroot" / "cache" / rec["id"] / "files.nul").read_bytes().split(b"\0")[:-1]
+        self.assertEqual(sorted(files), [b".gitignore", b"kgate.toml", b"tracked.txt", b"untracked.txt"])  # not ignored.txt
+
+    def test_it_only_ever_talks_to_ag1_through_the_one_kubeconfig_and_never_to_homelab(self):
+        self.run_kgate("--", "true")
+        self.assertTrue(self.kcalls())
+        for c in (c for c in self.kcalls() if "argv" in c):
+            self.assertEqual(c["argv"][:6], ["--kubeconfig", str(self.home / ".kube" / "ag1-offload"), "--context", "ag1-main-va-dems2", "-n", "xlab-offload"])
+        self.assertEqual(self.calls(), [], "no ssh to the homelab")
+        self.assertEqual(self.op_token_checks(), [], "no 1Password read")
+        self.assertFalse(any("secret" in " ".join(a) for a in self.kubectl_args()), "the Role has no Secrets")
+
+    def test_the_pod_sent_is_the_ag1_pod_and_nothing_else(self):
+        self.run_kgate("--", "true")
+        manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
+        self.assertEqual([i["kind"] for i in manifest["items"]], ["Pod"])
+        pod = manifest["items"][0]
+        self.assertEqual(pod["metadata"]["labels"]["axon.com/owner"], "xlab")
+        self.assertEqual(pod["spec"]["activeDeadlineSeconds"], 7200)
+        c = pod["spec"]["containers"][0]
+        self.assertEqual(c["resources"]["requests"], {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "5Gi"})
+        self.assertEqual(c["resources"]["limits"], {"cpu": "2", "memory": "2Gi", "ephemeral-storage": "5Gi"})
+        top = "/" + str(self.repo).lstrip("/").split("/")[0]
+        self.assertIn({"name": "tree0", "mountPath": top}, c["volumeMounts"])
+        self.assertEqual(pod["spec"]["securityContext"]["runAsUser"], 65532)
+
+    def test_cmd_failure_is_cmds_exit_code_not_69(self):
+        done = self.run_kgate("--", "sh", "-c", "echo boom; exit 3")
+        self.assertEqual(done.returncode, 3, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"], rec["cleanup"]), (3, None, True, True))
+
+    def test_out_comes_back_even_when_cmd_fails(self):
+        done = self.run_kgate("--", "sh", "-c", 'echo trace > "$KGATE_OUT/trace.txt"; exit 1')
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual((self.state / "kgate" / (self.records()[-1]["id"] + ".out") / "trace.txt").read_text(), "trace\n")
+
+    def test_the_pod_is_deleted_and_only_the_pod(self):
+        self.run_kgate("--", "true")
+        rec = self.records()[-1]
+        self.assertIn(["delete", "pod/" + rec["id"], "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
+
+    def test_tree_hash_mismatch_is_69_and_cmd_does_not_run(self):
+        done = self.run_kgate("--", "sh", "-c", "echo SHOULD-NOT-RUN", env={"FAKE_TAMPER": str(self.repo / "tracked.txt")})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"], rec["cleanup"]), (69, False, True))
+        self.assertRegex(rec["reason"], r"^tree hash differs: expected=[0-9a-f]{40} found=[0-9a-f]{40} \(CMD not run\)$")
+
+    def test_wrong_tool_version_is_69_with_tool_expected_and_found(self):
+        self.profile(tools='go = { version = "9.9.9", cmd = "echo go version go1.25.12" }')
+        done = self.run_kgate("--", "sh", "-c", "echo SHOULD-NOT-RUN")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+        self.assertIn('tool version differs: tool=go expected=9.9.9 found="go version go1.25.12"', self.records()[-1]["reason"])
+
+    def test_right_tool_version_passes(self):
+        self.profile(tools='go = { version = "1.25.12", cmd = "echo go version go1.25.12" }')
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+
+    def test_the_peak_comes_back_in_the_record(self):
+        (self.fake / "cg").mkdir()
+        (self.fake / "cg" / "memory.peak").write_text("4242\n")
+        done = self.run_kgate("--", "true", env={"KGATE_CGROUP": str(self.fake / "cg")})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["peak_bytes"], rec["peak_source"]), (4242, "cgroup"))
+
+    # --- refusals: all exit 69 before anything is created
+
+    def refused(self, why, *args, env=None):
+        done = self.run_kgate(*args, "--", "true", env=env)
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn(why, self.records()[-1]["reason"])
+        self.assertFalse(any("manifest" in c for c in self.kcalls()), "nothing was created")
+        return done
+
+    def test_a_profile_with_secrets_is_refused(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        self.refused("cannot have [secrets]")
+        self.assertEqual(self.op_token_checks(), [])
+
+    def test_an_image_from_another_registry_is_refused(self):
+        self.profile(image="ghcr.io/cartwmic/kgate@sha256:" + "ab" * 32)
+        self.refused("must come from devaxonhub.azurecr.us")
+
+    def test_an_image_that_is_not_pinned_by_digest_is_refused(self):
+        self.profile(image="devaxonhub.azurecr.us/ecom/cursor-worker:20261019")
+        self.refused("pinned by digest")
+
+    def test_a_root_user_is_refused(self):
+        self.profile(extra='user = "0:0"')
+        self.refused("non-root")
+
+    def test_a_refused_ag1_profile_is_recorded_as_ag1_and_never_reaches_for_the_homelab(self):
+        for what, setup, args in (("secrets", lambda: self.profile(secrets='TOK = "op://developer/item/password"'), ()),
+                                  ("image", lambda: self.profile(image="ghcr.io/cartwmic/kgate@sha256:" + "ab" * 32), ()),
+                                  ("unpinned", lambda: self.profile(image="devaxonhub.azurecr.us/x:1"), ()),
+                                  ("root", lambda: self.profile(extra='user = "0:0"'), ()),
+                                  ("node", self.profile, ("--node", "n1"))):
+            with self.subTest(what):
+                setup()
+                done = self.kgate(*args, "--", "true", host="fake")   # a homelab host is set: it must not be used
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertEqual(self.records()[-1]["cluster"], "ag1")
+                self.assertEqual(self.calls(), [], "no ssh to the homelab")
+                self.assertFalse(any("manifest" in c for c in self.kcalls()))
+
+    def test_node_pinning_is_refused(self):
+        self.refused("does not take --node", "--node", "somewhere")
+
+    def test_a_missing_kubeconfig_is_69_and_names_the_one_time_setup(self):
+        (self.home / ".kube" / "ag1-offload").unlink()
+        done = self.refused("kgate ag1-setup")
+        self.assertIn("ag1-offload is missing", done.stdout)
+        self.assertEqual(self.kcalls(), [], "no kubectl ran")
+
+    def test_unreachable_or_signed_out_is_69_with_the_login_hint_and_kubectls_message(self):
+        for mode, msg in (("error", "error: You must be logged in to the server (Unauthorized)"), ("no", "no")):
+            with self.subTest(mode):
+                done = self.refused("als az login -e ag1", env={"FAKE_CANI": mode})
+                self.assertIn("on the AG1 VPN", self.records()[-1]["reason"])
+                self.assertIn(msg, self.records()[-1]["reason"])
+                self.assertIn("kubectl: " + msg, done.stdout)
+
+    def test_nothing_runs_here_when_ag1_is_unreachable(self):
+        done = self.run_kgate("--", "sh", "-c", "echo RAN-HERE > ran-here.txt", env={"FAKE_CANI": "error"})
+        self.assertEqual(done.returncode, 69)
+        self.assertFalse((self.repo / "ran-here.txt").exists())
+
+    def test_a_pod_that_never_gets_a_node_is_69_after_wait(self):
+        done = self.run_kgate("--wait", "1", "--", "true", env={"FAKE_POD": "pending"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within 1s: Unschedulable 0/3 nodes fit")
+        self.assertTrue(self.records()[-1]["cleanup"])
+
+    # --- records, cancel, setup
+
+    def test_the_record_says_which_cluster_ran_it(self):
+        self.run_kgate("--", "true")
+        self.assertEqual(self.records()[-1]["cluster"], "ag1")
+        (self.repo / "kgate.toml").write_text('image = "%s"\n' % DIGEST)
+        self.kgate("--", "true")
+        self.assertEqual(self.records()[-1]["cluster"], "homelab")
+
+    def test_cancel_of_a_dead_ag1_client_deletes_only_its_pod(self):
+        job_id = "kgate-1700000009-999"
+        corpse = subprocess.Popen(["sleep", "300"])
+        start, command = K.proc_identity(corpse.pid)
+        (self.state / "kgate" / "active").mkdir(parents=True)
+        (self.state / "kgate" / "active" / (job_id + ".json")).write_text(json.dumps({
+            "id": job_id, "job": "rw-1", "pid": corpse.pid, "start": start, "proc_cmd": command, "cwd": str(self.repo),
+            "argv": ["kgate", "--", "x"], "cmd": "x", "node": None, "cluster": "ag1"}))
+        corpse.kill()
+        corpse.wait()
+        done = self.run_kgate("cancel", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn(["delete", "pod/" + job_id, "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
+        self.assertEqual(self.calls(), [], "no ssh")
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["cluster"], rec["cleanup"], rec["cancelled"]), (143, "ag1", True, True))
+
+    def test_the_registry_entry_names_ag1_before_the_pod_exists(self):
+        self.run_kgate("--", "true")
+        entries = next(c["registry"] for c in self.kcalls() if "manifest" in c)
+        self.assertEqual([e["cluster"] for e in entries], ["ag1"])
+
+    def test_ag1_setup_writes_the_one_context_with_azurecli_and_mode_600(self):
+        (self.home / ".kube" / "ag1-offload").unlink()
+        (self.home / ".kube" / "config").write_text("x")
+        done = self.run_kgate("ag1-setup")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        path = self.home / ".kube" / "ag1-offload"
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        cfg = json.loads(path.read_text())
+        self.assertEqual([c["name"] for c in cfg["contexts"]], ["ag1-main-va-dems2"])
+        self.assertEqual(cfg["current-context"], "ag1-main-va-dems2")
+        args = cfg["users"][0]["user"]["exec"]["args"]
+        self.assertEqual(args[args.index("--login") + 1], "azurecli")
+        self.assertEqual(args.count("--login"), 1)
+
+    def test_ag1_setup_without_the_context_is_69_and_writes_nothing(self):
+        (self.home / ".kube" / "ag1-offload").unlink()
+        (self.home / ".kube" / "config").write_text("x")
+        done = self.run_kgate("ag1-setup", env={"FAKE_NO_CONTEXT": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertFalse((self.home / ".kube" / "ag1-offload").exists())
 
 
 if __name__ == "__main__":

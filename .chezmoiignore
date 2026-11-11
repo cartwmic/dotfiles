@@ -207,9 +207,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .pi/agent/extensions/pi-codex-fast.json
 # Session titles use the personal Codex login; the auto-session-name package is personal only.
 .pi/agent/extensions/auto-session-name.json
-# kgate runs jobs on the personal homelab Kubernetes cluster.
-.local/bin/kgate
-.config/kgate
+# The kgate binary lands on both desktop profiles. This host file points at the personal homelab Kubernetes cluster, which the work Mac has no business reaching.
+.config/kgate/host
 # /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.
 80_spotlight_off_workshop.sh
 {{- end }}
@@ -243,6 +242,9 @@ Library/Preferences/pnpm/**
 # The Axon playbook is Axon's private material (docs/profiles.md).
 .pi/agent/extensions/axon-playbook
 .pi/agent/extensions/axon-playbook/**
+# kgate profiles for the Axon AG1 cluster (cluster = "ag1"): the personal Mac has no AG1 profiles or kubeconfig, so kgate there can never reach AG1.
+.config/kgate/profiles
+.config/kgate/profiles/**
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}

@@ -1,0 +1,14 @@
+# kgate profile for investigator-ai (Go build, test and lint) on Axon AG1 dems2, namespace xlab-offload. Contract: docs/kgate.md, "AG1".
+# Run: run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml -- go test ./...
+# One-time setup: kgate ag1-setup. Sign in first with `als az login -e ag1` (or `az login`) on the AG1 VPN.
+cluster = "ag1"
+# The cursor-worker image: go, git, golangci-lint, GOPROXY set to Nexus. No python3, no tini.
+image  = "devaxonhub.azurecr.us/ecom/cursor-worker:20261019-4057e58-b62a51a@sha256:0c2639c2682478f1ba4da70371c7156eaf357fbcb4d2fa4842b5890a04e835ac"
+# Sized from the namespace quota (6 pods; requests 8 CPU / 32Gi; limits 16 CPU / 64Gi; ephemeral-storage 40Gi requested / 60Gi limit).
+cpu    = 8
+memory = "16Gi"
+memory_limit = "24Gi"
+ephemeral_storage = "20Gi"
+
+[tools]
+go = { version = "1.25.12", cmd = "go version" }
