@@ -51,6 +51,17 @@ if [ -n "${CLAUDECODE-}${T3CODE_THREAD_ID-}" ] && [ -d "$HOME/.local/share/agent
   esac
 fi
 
+# Agent shells only: docker without Docker Desktop's credential helper. `credsStore: desktop` in ~/.docker/config.json makes every docker
+# command run docker-credential-desktop, and from an agent's shell that helper makes macOS ask "access data from other apps" for the agent app,
+# over and over (2026-11-10: eight hung helpers, two hours). DOCKER_CONFIG points the docker CLI at ~/.config/agent-docker, a config with no
+# credential store that links to the real contexts, cli-plugins and buildx (docs/agent-docker.md). The markers are the op shim's list (the reasons
+# are in dot_pi/private_agent/bin/executable_op). A DOCKER_CONFIG that is already set, even empty, is kept, so `DOCKER_CONFIG= docker ...` gets
+# the normal config; ~/.zshenv.local can set one too. The directory exists on the personal Mac only (.chezmoiignore), so this does nothing elsewhere.
+if [ -z "${DOCKER_CONFIG+set}" ] && [ -d "$HOME/.config/agent-docker" ] \
+   && [ -n "${CLAUDECODE-}${CLAUDE_CODE_ENTRYPOINT-}${T3CODE_THREAD_ID-}${HERDR_ENV-}${CODEX_SANDBOX-}" ]; then
+  export DOCKER_CONFIG="$HOME/.config/agent-docker"
+fi
+
 # antidote and fzf are now sourced in .zshrc after mise activation
 # DO NOT source them here - they're installed by mise and need mise in PATH
 
