@@ -35,6 +35,9 @@
 {{- end -}}
 {{- $ssh := dict -}}
 {{- if $sshNeed -}}{{- $ssh = .sshHosts -}}{{- end -}}
+{{- /* Reachability probe for the phone Match blocks. macOS keeps its BSD nc (-G is that nc's connect timeout); Linux has no such flag, and Omarchy ships no nc, so it uses bash's /dev/tcp under coreutils timeout. */ -}}
+{{- $probe := `/usr/bin/nc -z -G 1 -w 1 %s 8022 >/dev/null 2>&1` -}}
+{{- if ne .chezmoi.os "darwin" -}}{{- $probe = `timeout 1 bash -c \"exec 3<>/dev/tcp/%s/8022\" >/dev/null 2>&1` -}}{{- end -}}
 set -eu
 
 PHONE_BEGIN='# >>> chezmoi-managed: phone ssh >>>'
@@ -107,10 +110,10 @@ $PHONE_BEGIN
 #                  the tunnel is up, home or remote, routed via the gateway.
 #   - lanAddress = its home Wi-Fi IP. Works only on LAN with WG off.
 # First-obtained HostName wins, so the WG probe is tried first.
-Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.dailyPhone.wgAddress }} 8022 >/dev/null 2>&1"
+Match host daily-phone exec "{{ printf $probe $ssh.dailyPhone.wgAddress }}"
     HostName {{ $ssh.dailyPhone.wgAddress }}
 
-Match host daily-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.dailyPhone.lanAddress }} 8022 >/dev/null 2>&1"
+Match host daily-phone exec "{{ printf $probe $ssh.dailyPhone.lanAddress }}"
     HostName {{ $ssh.dailyPhone.lanAddress }}
 
 Host daily-phone
@@ -122,10 +125,10 @@ Host daily-phone
 
 # ssh-phone (Moto Razr 2024). Prefer its WireGuard peer when up;
 # fall back to its OPNsense-reserved home Wi-Fi address when the tunnel is off.
-Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.sshPhone.wgAddress }} 8022 >/dev/null 2>&1"
+Match host ssh-phone exec "{{ printf $probe $ssh.sshPhone.wgAddress }}"
     HostName {{ $ssh.sshPhone.wgAddress }}
 
-Match host ssh-phone exec "/usr/bin/nc -z -G 1 -w 1 {{ $ssh.sshPhone.lanAddress }} 8022 >/dev/null 2>&1"
+Match host ssh-phone exec "{{ printf $probe $ssh.sshPhone.lanAddress }}"
     HostName {{ $ssh.sshPhone.lanAddress }}
 
 Host ssh-phone

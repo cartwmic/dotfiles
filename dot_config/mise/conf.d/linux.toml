@@ -1,0 +1,5 @@
+# Linux only (see .chezmoiignore). Omarchy ships Pi as a system mise tool (/etc/mise/conf.d/omarchy-tools.toml, lazy, auto_update 4h).
+# These dotfiles run Pi as the managed install in ~/.pi/agent/bin (mise task install-pi), which pi.dev/install.sh refuses to put next to a
+# mise-installed Pi. Disabling the tool keeps mise from reinstalling or updating Omarchy's copy; install-pi removes the copy that is there.
+[settings]
+disable_tools = ["pi"]
