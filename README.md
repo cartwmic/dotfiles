@@ -70,14 +70,15 @@ case "$profile" in
   personal|axon-work-computer) ;;
   *) printf 'Choose a supported desktop profile.\n' >&2; exit 1 ;;
 esac
-# Ubuntu/WSL needs zsh; modern macOS already provides it. Arch (Omarchy) gets zsh from pacman and keeps its login shell
-# (see "Linux on Arch (Omarchy)": the dotfiles do not need zsh as the login shell).
+# Ubuntu/WSL and Arch (Omarchy) need zsh as the login shell; modern macOS already provides it. The zsh files carry the `op` shim and the
+# 1Password token env the stack needs at login (see "Linux on Arch (Omarchy)").
 if [ "$(uname -s)" = Linux ]; then
   if command -v apt-get >/dev/null 2>&1; then
     sudo apt-get update && sudo apt-get install -y zsh
     sudo chsh "$USER" -s /usr/bin/zsh
   elif command -v pacman >/dev/null 2>&1; then
     sudo pacman -S --needed zsh
+    sudo chsh -s /usr/bin/zsh "$USER"
   fi
 fi
 mkdir -p "$(dirname "$config")"
@@ -574,7 +575,7 @@ Tests: `python3 -m unittest discover -s tests/instances -v` (renders against gol
 
 The personal profile also runs the coordinator stack on an Omarchy box (Arch Linux ARM on Asahi, systemd). It is the Linux twin of the personal Mac: the same opt-in flag, the same rules, systemd user units where macOS has LaunchAgents. Nothing here changes what macOS renders (`python3 tests/profiles/render_diff.py --base <main checkout>` compares both profiles as darwin).
 
-**What the dotfiles need from the machine.** `git`, `curl`, `zsh` installed (the `setup-ubuntu-essentials` task only checks for `cc make curl git zsh unzip zip perl` on a host without `apt-get` and prints the `pacman` line for what is missing; it installs nothing and never runs `chsh`). The dotfiles do **not** need zsh as the login shell, but two things only reach shells that read `~/.zshenv`: the 1Password service-account token and the `op` shim in `PATH` (`dot_zshenv`). A bash login shell (Omarchy's default) never reads that file, so anything started from bash (a T3 or Herdr pane, `claude`, `pi`) runs `op` without the token. Either log in with zsh (`chsh`, the owner's call) or put the same two lines where bash reads them; the dotfiles do neither.
+**What the dotfiles need from the machine.** `git`, `curl`, `zsh` installed (the `setup-ubuntu-essentials` task only checks for `cc make curl git zsh unzip zip perl` on a host without `apt-get` and prints the `pacman` line for what is missing; it installs nothing and never runs `chsh`; the login shell is set by the fresh-install block above, `sudo chsh -s /usr/bin/zsh "$USER"`). zsh is the login shell on Linux too, because two things only reach shells that read `~/.zshenv`: the 1Password service-account token and the `op` shim in `PATH` (`dot_zshenv`). A bash login shell (Omarchy's default) never reads that file, so anything started from bash (a T3 or Herdr pane, `claude`, `pi`) would run `op` without the token. On an existing Omarchy box that is already installed, run the `chsh` line once and log in again.
 
 **What lands where (all personal, Linux):**
 

@@ -135,8 +135,8 @@ run = '''
 OS="$(uname -s)"
 case "$OS" in
   Linux)
-    # pacman hosts (Arch, Omarchy): host packages come from the machine's own setup, never from here, and the login shell is the
-    # owner's. This only says which of the tools the later tasks need are missing.
+    # pacman hosts (Arch, Omarchy): host packages come from the machine's own setup, never from here, and the login shell is set by
+    # the README fresh-install block (chsh). This only says which of the tools the later tasks need are missing.
     if ! command -v apt-get >/dev/null 2>&1; then
       missing=""
       for tool in cc make curl git zsh unzip zip perl; do command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"; done
