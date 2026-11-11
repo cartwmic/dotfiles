@@ -2,7 +2,11 @@
 
 The real script (its two template hash comments dropped) runs in a private HOME with scripted systemctl, t3 and curl that record every call.
 """
+import hashlib
+import json
 import os
+import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -133,6 +137,34 @@ class T3Service(unittest.TestCase):
         r = self.run_script()
         self.assertEqual(r.returncode, 1)
         self.assertIn("t3 service install failed", r.stdout)
+
+
+DROPIN = ROOT / "dot_config/systemd/user/t3code.service.d/10-path.conf.tmpl"
+
+
+def chezmoi_render(path):
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Path(tmp) / "c.yaml"
+        cfg.write_text("{}\n")
+        return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "execute-template", "--override-data",
+                               json.dumps({"profile": "personal", "chezmoi": {"os": "linux", "homeDir": "/home/test", "sourceDir": str(ROOT)}})],
+                              input=path.read_text(), text=True, capture_output=True, timeout=60, check=True).stdout
+
+
+@unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is required")
+class DropInShell(unittest.TestCase):
+    """The agents' Bash tool runs $SHELL; the 1Password token and the op shim are in ~/.zshenv, which only zsh reads."""
+
+    def test_the_drop_in_sets_shell_to_zsh_and_keeps_the_path(self):
+        out = chezmoi_render(DROPIN)
+        self.assertEqual(re.findall(r"^Environment=SHELL=(.*)$", out, re.M), ["/usr/bin/zsh"])
+        self.assertIn("Environment=PATH=/home/test/.local/share/mise/shims:", out)
+        self.assertEqual(out.count("[Service]"), 1)
+
+    def test_changing_the_drop_in_changes_the_install_scripts_hash_so_chezmoi_reruns_it(self):
+        script = chezmoi_render(TEMPLATE)
+        recorded = re.search(r"^# drop-in: ([0-9a-f]{64})$", script, re.M).group(1)
+        self.assertEqual(recorded, hashlib.sha256(DROPIN.read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":
