@@ -173,7 +173,9 @@ coordinator runs `chezmoi apply` and the mise bootstrap there.
 | Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
 | Login unit (Linux) | `dot_config/systemd/user/agent-chrome.service` (owns Chrome via `agent-chrome --stop` and `--foreground`), loaded by `run_onchange_after_78_agent_chrome_systemd.sh.tmpl` | `~/.config/systemd/user/agent-chrome.service` |
 | MCP server launcher | `dot_local/share/browser-harness-mcp/server.py` | `~/.local/share/browser-harness-mcp/server.py` |
-| MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333` |
+| MCP server `browser-harness` (runs `browser-use`) | `canonical/mcp/servers.json.tmpl` | `uvx --from browser-use==1.0.2 python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333` |
+
+The server is `browser-use` 1.0.2 (`browser-use --cli-mcp`), which pins `browser-harness==0.1.13` itself, started through the launcher. The entry keeps the name `browser-harness`: the Claude adapter replaces a changed entry of the same name but never removes a name that left canonical, so renaming it to `browser-use` would leave the old entry in `~/.claude.json` pointing at a launcher that now refuses to start under the old pin. The tools therefore read `mcp__browser-harness__*`.
 
 The server entry is canonical, so Claude and Codex are given it too, as with every canonical server. The Claude adapter stores a server's `env` with `claude mcp add -e` (before this change it only set it for the registering process). When a canonical server entry changes, the Claude adapter compares it with the stored user-scope entry (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`) and replaces a changed one with `claude mcp remove` then `claude mcp add`; a missing one is added and an unchanged one is left alone, so a stored sign-in survives. Before this change `claude mcp add` failed on an existing name and the old entry stayed (found when `browser-harness` moved to `server.py`). Test: `tests/agent-browser/test_claude_registration.py`.
 
@@ -187,38 +189,54 @@ Use:
    `ExecStartPre` runs `agent-chrome --stop` (ends every Chrome on the agent profile, including one started by hand, and waits for port 9333 to go quiet), then `ExecStart` runs `agent-chrome --foreground` (Chrome as the unit's main process).
    So `systemctl --user restart agent-chrome` always ends in a new Chrome process, and `stop` closes it. Check: `systemctl --user status agent-chrome`, `curl -s http://127.0.0.1:9333/json/version`; output: `journalctl --user -u agent-chrome`.
    `Restart=on-failure` retries a Chrome that exits with a failure (no display yet, a crash), at most 20 starts in 300 seconds. macOS has no login start yet; run `agent-chrome` by hand. Test: `tests/agent-browser/test_login_unit.py` restarts the real unit file 13 times under the user systemd manager (scratch HOME and port, fake Chrome; `AGENT_CHROME_REAL=1` uses the real Chrome).
-2. Start or `/reload` Pi after an apply so it picks up the `browser-harness` server (`mcp__browser-harness__*` tools; check with `/mcp`).
+2. Start or `/reload` Pi after an apply so it picks up the `browser-harness` server (`mcp__browser-harness__*` tools; check with `/mcp`). Its tools are the four below.
 3. Sign in to each site once. The login stays in the profile across Chrome restarts. Either you sign in by hand, or the
    agent does it with Pi's OS-level UI tools (`find_roots`, `observe_ui`, `act_ui`), for example clicking the
-   1Password prompt in the Chrome window. Do not use the harness's own clicks (`browser_click`, CDP) for that: they
+   1Password prompt in the Chrome window. Do not use the harness's own clicks (`click_at_xy`, CDP) for that: they
    cannot reach the 1Password menu (an extension iframe). Typed text and navigation through the harness are fine.
 4. The 1Password extension has to be installed in that Chrome profile, by hand, on each machine.
 
 Nothing about a login (cookie, password, token) is in this repository; it lives only in the profile directory on the machine.
 
-**Own tab, and clicks that land (`server.py`).** The stock `browser-harness-mcp` has two faults that show up when several agents share this Chrome,
-both reproduced on a local click-logger page (2026-11-08):
+**Tools (browser-use 1.0.2).** The server has four tools: `browser_exec(code)`, `browser_screenshot`, `browser_login` and `browser_feedback`. `browser_exec` runs Python in one namespace that persists between calls, with the browser-harness helpers already imported; print what you want back. Before the move to browser-use the server had 23 named tools (browser-harness 0.1.13 `[mcp]`); each is now a helper call inside `browser_exec`:
 
-- *One shared tab.* Every MCP process used one daemon, `default`, with one current tab. A second agent's `browser_new_tab` or
-  `browser_switch_tab` moved every other agent's tab, so its click landed on the other agent's page; and when a tab went stale the daemon re-attached
-  to the first page in Chrome, which can be a signed-in tab of yours (the `default` daemon log showed 40 such re-attaches to one signed-in page).
-  The launcher gives each MCP process its own daemon (`BU_NAME=mcp-<pid>`) and its own dedicated tab, stops that daemon when the process exits, and
-  stops leftover `mcp-<pid>` daemons whose process is gone.
-- *Silent dropped clicks.* A tab opened by `browser_new_tab` is in the background (`visibilityState: hidden`). Chrome drops mouse and key input to a
-  hidden tab with no error, so `browser_click` answered success and the page saw nothing. The launcher turns on CDP focus emulation
-  (`Emulation.setFocusEmulationEnabled`) for the current tab before every tool call; no tab or window changes.
+| Old tool | In `browser_exec` |
+|---|---|
+| `browser_new_tab(url)` | `print(new_tab(url))` (returns the target id) |
+| `browser_goto(url)` | `goto_url(url)` |
+| `browser_click(x, y)` | `click_at_xy(x, y)` |
+| `browser_type(text)` | `type_text(text)` |
+| `browser_press(key)` | `press_key(key)` |
+| `browser_fill(selector, text)` | `fill_input(selector, text)` |
+| `browser_js(expression)` | `print(js(expression))` |
+| `browser_page_info` | `print(page_info())` |
+| `browser_screenshot` | still a tool (`browser_screenshot`), or `capture_screenshot()` in exec |
+| `browser_scroll(x, y, dy)` | `scroll(x, y, dy=-300)` |
+| `browser_wait(seconds)` | `wait(seconds)` |
+| `browser_wait_for_element(selector)` | `wait_for_element(selector, timeout=10)` |
+| `browser_wait_for_load` | `wait_for_load()` |
+| `browser_upload_file(selector, path)` | `upload_file(selector, path)` |
+| `browser_current_tab` | `print(current_tab())` |
+| `browser_list_tabs` | `print(list_tabs(include_chrome=False))` |
+| `browser_switch_tab(target)` | `switch_tab(target)` |
+| `browser_close_tab(target)` | `close_tab(target)` |
+| `browser_cdp(method, params)` | `cdp(method, **params)` |
+| `browser_http_get(url)` | `print(http_get(url))` |
+| `browser_start_recording` / `browser_stop_recording` | `start_recording()` / `stop_recording()` |
+| `browser_ensure_real_tab` | do not use: `ensure_real_tab()` attaches to the first real page in Chrome, which can be someone else's tab; use `current_tab()` |
 
-- *Silent success on nothing.* When the tab a session was using is closed (from outside, or by its own `browser_close_tab`), the stock daemon quietly
-  attaches to a fresh `about:blank` and the next `browser_click` answers `{"ok": true}` on nothing. The launcher remembers the tab it is on and, before it
-  talks to the browser for any tool, checks with `Target.getTargets` (a call that takes no session, so it cannot trigger that re-attach) that the tab still exists. When it
-  is gone every action tool (click, type, fill, press, scroll, goto, js, screenshot, page_info, waits, upload, recording, raw `browser_cdp` except `Target.*`) refuses with
-  "The tab this session was using (<id>) was closed, so nothing was done. Open a tab with browser_new_tab, or attach to an open one with browser_switch_tab", until the agent
-  opens or switches to a tab. Focus emulation is also switched on the moment a tab is created or switched to, so the first click after `browser_new_tab` is not dropped.
-  Test: `tests/agent-browser/test_closed_tab.py` (red control: the stock server answers ok on `about:blank`).
+A failed cell comes back as the tool's error with its traceback. `browser_login` and the cloud helpers belong to Browser Use Cloud and are not used here: this server drives the local agent Chrome.
 
-An MCP process picks the launcher up when it starts: sessions started before an apply keep the stock server (and the shared `default` daemon) until they restart.
-Do not call `browser_ensure_real_tab`: it attaches to the first real page in Chrome, which can be someone else's tab.
-Journey test (skips without the agent Chrome): `tests/agent-browser/test_click_journey.py`.
+**Own tab, and clicks that land (`server.py`).** Stock `browser-use --cli-mcp` 1.0.2 has three faults that show up when several agents share this Chrome. Each was reproduced failing through the real MCP on a local click-logger page (2026-11-12; the same three were found on browser-harness 0.1.13 on 2026-11-08), and `server.py` fixes each:
+
+- *One shared tab.* Every MCP process uses one daemon, `default`, with one current tab. A second agent's `new_tab` or `switch_tab` moves every other agent's tab, so its click lands on the other agent's page. The launcher gives each MCP process its own daemon (`BU_NAME=mcp-<pid>`) and its own dedicated tab, stops that daemon when the process exits, and stops leftover `mcp-<pid>` daemons whose process is gone. Test: `tests/agent-browser/test_own_tab.py` (red control: two stock servers share one tab).
+- *Silent dropped clicks.* A tab opened by `new_tab` is in the background (`visibilityState: hidden`). Chrome drops mouse and key input to a hidden tab with no error, so `click_at_xy` answers success and the page sees nothing. The launcher turns on CDP focus emulation (`Emulation.setFocusEmulationEnabled`) for the current tab before every `browser_exec` and `browser_screenshot`, and the moment `new_tab` or `switch_tab` returns, so the first click after `new_tab` is not dropped. No tab or window changes. Test: `tests/agent-browser/test_click_journey.py` (red control: the stock server's click on a background tab arrives 0 times).
+- *Silent success on nothing.* When the tab a session was using is closed (from outside, or by its own `close_tab`), the stock daemon quietly attaches to a fresh `about:blank` and the next `click_at_xy` answers ok on nothing. The launcher remembers the tab it is on and, before each `browser_exec` and `browser_screenshot`, checks with `Target.getTargets` (a call that takes no session, so it cannot trigger that re-attach) that the tab still exists; every CDP call the helpers make (except `Target.*`) is checked too. When the tab is gone every call that acts on it (click, type, js, page_info, screenshot, raw `cdp`) refuses with "The tab this session was using (<id>) was closed, so nothing was done. Open a tab with new_tab(url), or attach to an open one with switch_tab(id)", until the agent opens or switches to a tab. Test: `tests/agent-browser/test_closed_tab.py` (red control: the stock server answers ok on `about:blank`).
+
+The launcher patches private names of the two packages (`CLIMCPServer._attach`, `CLIMCPServer._ensure_namespace`, `helpers.cdp`, `new_tab`, `switch_tab`, `close_tab`, `current_tab`, `_send`, `_ipc.identify`). They hold only while `browser-use==1.0.2` and `browser-harness==0.1.13` stay pinned together. At start the launcher checks the installed versions against the pins and that each of those names exists; if anything is missing it exits 1 at once and names it (an MCP host shows the server as failed to start) instead of dropping clicks. Bumping the pin: change `PINS` in `server.py` and the `--from` pin in `servers.json.tmpl`, then run `tests/agent-browser`. Test: `tests/agent-browser/test_startup_check.py`.
+
+An MCP process picks the launcher up when it starts: sessions started before an apply keep the old server (and the shared `default` daemon) until they restart.
+The journey tests need a real, visible Chrome (on this machine's Wayland session; kgate cannot run them). Each starts its own scratch Chrome on a port Chrome picks, with a throw-away profile and its own harness runtime dir, and never touches the agent Chrome on 9333; they skip without Chrome, a display or uvx.
 
 Run `agent-chrome` before the agent's first browser call; the harness attaches to a running Chrome and does not start one.
 The server is not wrapped by `pi-mcp-lazy` (idle it holds about 120 MB RSS). Add it to `servers.list.tmpl` and ship a seed if that matters.
