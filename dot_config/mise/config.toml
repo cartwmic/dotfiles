@@ -244,16 +244,20 @@ esac
 '''
 
 [tasks."install-rustdesk"]
-description = "Install RustDesk remote desktop on personal macOS or native Ubuntu/Debian hosts"
+description = "Install RustDesk remote desktop on personal macOS, Ubuntu/Debian and Arch hosts, and as a client on the work Mac"
 depends = ["setup-ubuntu-essentials"]
 run = '''
 PROFILE="$(chezmoi data --format json 2>/dev/null | jq -r '.profile // empty' || true)"
-if [ "$PROFILE" != "personal" ]; then
-  echo "Skipping RustDesk for chezmoi profile ${PROFILE:-unknown}"
-  exit 0
-fi
-
 OS="$(uname -s)"
+case "$PROFILE:$OS" in
+  personal:*) ;;
+  axon-work-computer:Darwin) ;;   # client only: 61_configure_rustdesk_client.sh keeps the server side off
+  *)
+    echo "Skipping RustDesk for chezmoi profile ${PROFILE:-unknown} on $OS"
+    exit 0
+    ;;
+esac
+
 case "$OS" in
   Darwin)
     if [ -d "/Applications/RustDesk.app" ]; then
@@ -268,7 +272,21 @@ case "$OS" in
       exit 0
     fi
     if ! command -v apt-get >/dev/null 2>&1; then
-      echo "Skipping RustDesk: the installer uses the Debian package; install it with this host's package manager"
+      # Arch (Omarchy): rustdesk-bin from the AUR. Its root unit rustdesk.service is enabled and started by
+      # 60_configure_rustdesk.sh, which needs it running to set the password; nothing here restarts a running service.
+      if command -v pacman >/dev/null 2>&1; then
+        if pacman -Q rustdesk-bin >/dev/null 2>&1 || pacman -Q rustdesk >/dev/null 2>&1; then
+          echo "RustDesk already installed ($(pacman -Q rustdesk-bin 2>/dev/null || pacman -Q rustdesk))"
+          exit 0
+        fi
+        if command -v yay >/dev/null 2>&1; then
+          yay -S --noconfirm --needed rustdesk-bin
+          exit 0
+        fi
+        echo "ERROR: RustDesk on Arch needs yay (AUR rustdesk-bin); install yay or rustdesk-bin and rerun"
+        exit 1
+      fi
+      echo "Skipping RustDesk: no apt-get or pacman here; install it with this host's package manager"
       exit 0
     fi
 
