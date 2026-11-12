@@ -173,7 +173,7 @@ coordinator runs `chezmoi apply` and the mise bootstrap there.
 | Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
 | Login unit (Linux) | `dot_config/systemd/user/agent-chrome.service` (owns Chrome via `agent-chrome --stop` and `--foreground`), loaded by `run_onchange_after_78_agent_chrome_systemd.sh.tmpl` | `~/.config/systemd/user/agent-chrome.service` |
 | MCP server launcher | `dot_local/share/browser-harness-mcp/server.py` | `~/.local/share/browser-harness-mcp/server.py` |
-| MCP server `browser-harness` (runs `browser-use`) | `canonical/mcp/servers.json.tmpl` | `uvx --from browser-use==1.0.2 python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333` |
+| MCP server `browser-harness` (runs `browser-use`) | `canonical/mcp/servers.json.tmpl` | `uvx --from browser-use==1.0.2 python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333`, telemetry off: `ANONYMIZED_TELEMETRY=false` (browser-use) and `BH_TELEMETRY=0` (browser-harness) — Michael, 2026-11-12 |
 
 The server is `browser-use` 1.0.2 (`browser-use --cli-mcp`), which pins `browser-harness==0.1.13` itself, started through the launcher. The entry keeps the name `browser-harness`: the Claude adapter replaces a changed entry of the same name but never removes a name that left canonical, so renaming it to `browser-use` would leave the old entry in `~/.claude.json` pointing at a launcher that now refuses to start under the old pin. The tools therefore read `mcp__browser-harness__*`.
 
