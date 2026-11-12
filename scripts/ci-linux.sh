@@ -70,6 +70,7 @@ python3 scripts/ci-par.py \
   tests/spotlight-workshop \
   tests/t3-hook \
   tests/t3-hub \
+  tests/pi-lead \
   tests/hub \
   tests/pnpm-store \
   tests/agent-docker \
