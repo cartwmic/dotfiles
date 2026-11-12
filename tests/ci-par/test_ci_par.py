@@ -6,6 +6,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 RUNNER = Path(__file__).resolve().parents[2] / "scripts" / "ci-par.py"
@@ -109,6 +110,17 @@ class AvailableCpusTest(unittest.TestCase):
 
     def test_no_cgroup_files_falls_back_to_the_cpu_count(self):
         self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_ci_par_jobs_wins_over_the_computed_cap(self):
+        self.cpu_max("100000 100000\n")
+        with mock.patch.dict(os.environ, {"CI_PAR_JOBS": "7"}):
+            self.assertEqual(self.mod.available_cpus(self.cg), 7)
+
+    def test_a_bad_ci_par_jobs_is_ignored(self):
+        self.cpu_max("100000 100000\n")
+        for bad in ("0", "-2", "x", ""):
+            with mock.patch.dict(os.environ, {"CI_PAR_JOBS": bad}):
+                self.assertEqual(self.mod.available_cpus(self.cg), 1, bad)
 
     def test_the_pool_uses_it(self):
         self.assertEqual(self.mod.SUITE_PROCESSES, self.mod.available_cpus())
