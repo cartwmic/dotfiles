@@ -90,7 +90,7 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.path.join(os.environ["FAKE"], "systemd_run"), "a") as f:
     f.write(json.dumps(args) + "\n")
-rest = args[args.index("--") + 1:]
+rest = [a.replace("$$", "$") for a in args[args.index("--") + 1:]]  # systemd reads $$ as $ (and would expand $VAR)
 if rest == ["true"]:
     sys.exit(0)
 os.execvp(rest[0], rest)
@@ -532,11 +532,28 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual(probe, ["--user", "--scope", "--quiet", "--collect", "--", "true"], "it asks first, as an exec cannot fall back")
         self.assertEqual(scoped[:4], ["--user", "--scope", "--quiet", "--collect"])
         self.assertEqual(scoped[4], f"--unit=run-and-wake-{job}", "the scope is named after the job")
-        self.assertEqual(scoped[scoped.index("--") + 3 :], ["--scoped", job, "sh", "-c", "echo $PWD > seen; echo $T3CODE_THREAD_ID >> seen"])
+        self.assertEqual(scoped[scoped.index("--") + 3 :], ["--scoped", job, "sh", "-c", "echo $$PWD > seen; echo $$T3CODE_THREAD_ID >> seen"])  # $ doubled for systemd-run
         self.assertEqual(records[0]["scope"], f"run-and-wake-{job}.scope", "the start record names the scope")
         self.assertIn(f"scope run-and-wake-{job}.scope", result.stdout)
         self.assertEqual((self.root / "seen").read_text().split(), [str(self.root), THREAD], "cwd and environment carry into the scope")
         self.assertEqual(len(self.t3_sends()), 1, "one wake, as before")
+
+    def test_dollars_in_the_job_reach_it_as_typed(self):
+        # systemd-run expands $VAR and ${VAR} in the command's arguments and reads $$ as $: the launcher must double them
+        seen = self.root / "seen"
+        probe = f"import sys; open({str(seen)!r}, 'w').write(repr(sys.argv[1:]))"
+        args = ["$HOME", "${NOPE-dflt}", "$$", "a $x b", "100%"]
+        self.replay(self.job_id(self.launch("--", sys.executable, "-c", probe, *args, env=self.scope_env())))
+        self.assertEqual(seen.read_text(), repr(args))
+
+    @unittest.skipUnless(user_scopes_work(), "needs a systemd user manager (not a CI runner or the work Mac)")
+    def test_dollars_in_the_job_reach_it_as_typed_through_the_real_systemd_run(self):
+        seen = self.root / "seen"
+        probe = f"import sys; open({str(seen)!r}, 'w').write(repr(sys.argv[1:]))"
+        args = ["$HOME", "${NOPE-dflt}", "$$", "a $x b", "100%"]
+        env = {"PATH": f"{self.bin}:{self.path}"}  # the real systemd-run
+        self.replay(self.job_id(self.launch("--", sys.executable, "-c", probe, *args, env=env)))
+        self.assertEqual(seen.read_text(), repr(args))
 
     def test_a_scoped_launch_is_one_launch_with_one_job_id(self):
         job = self.job_id(self.launch("--", "true", env=self.scope_env()))
@@ -570,7 +587,6 @@ class RunAndWake(unittest.TestCase):
         # so the stop has something to kill, as T3's does.
         outer = f"raw-test-outer-{secrets.token_hex(3)}"
         cmd, release = self.held_job()
-        inner = ["python3", str(SCRIPT), "--", *cmd]
         env = {**self.env, "PATH": f"{self.bin}:{self.path}"}  # the real systemd-run
         holder = subprocess.Popen(["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={outer}", "--", "sh", "-c",
                                    'python3 "$0" "$@"; exec sleep 600', str(SCRIPT), "--", *cmd],

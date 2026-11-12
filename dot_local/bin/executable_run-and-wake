@@ -10,7 +10,7 @@ Contract (docs/run-and-wake.md):
   Its stdout and stderr go to the output file.
 - On Linux with a working `systemd-run --user`, the launcher first re-runs itself in its own transient scope
   (run-and-wake-<job>.scope), so the watcher and the job also outlive the systemd scope of the session that started them
-  (T3 stops a Claude session's scope 30 minutes after its last turn, and a setsid session stays in that scope's cgroup).
+  (T3 stops a Claude session's scope when it releases the session: 30 minutes without a turn, a restart, a force-stop; a setsid session stays in that scope's cgroup).
   Without systemd-run (macOS, the work Mac) or without a user manager, nothing changes: fork and setsid only.
 - The watcher forwards SIGTERM, SIGHUP and SIGINT to the job and keeps watching, so a stop that signals the whole group
   still ends in an `end` record (with the job's signal) and a wake.
@@ -246,6 +246,8 @@ def watch(job, cmd, output, pane, session, thread, report, scope):
             record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token, scope=scope)
             tell(report, f"pid {child.pid}")
             code = child.wait()
+            for signum in FORWARDED:  # nothing left to forward to: a signal now ends the wake wait as it always did
+                signal.signal(signum, signal.SIG_DFL)
             sig = signal.Signals(-code).name if code < 0 else None
             record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3))
             status = f"killed by {sig}" if sig else f"exit {code}"
@@ -269,6 +271,11 @@ def scope_runner():
     return run if done.returncode == 0 else None
 
 
+def systemd_arg(arg):
+    """systemd-run expands $VAR and ${VAR} in the command's arguments and reads $$ as $: double every $ so the job gets its argv as typed."""
+    return arg.replace("$", "$$")
+
+
 def main(argv):
     if argv[:1] == ["--"]:
         argv = argv[1:]
@@ -288,7 +295,7 @@ def main(argv):
         if run:  # become the launcher inside our own scope: same env, cwd and stdio, a cgroup the caller's scope does not own
             try:
                 os.execv(run, [run, *SCOPE_ARGS, f"--unit={NAME}-{job}", f"--description={NAME} job {job}", "--",
-                               sys.executable, os.path.abspath(__file__), SCOPED, job, *argv])
+                               *map(systemd_arg, [sys.executable, os.path.abspath(__file__), SCOPED, job, *argv])])
             except OSError:
                 pass  # no scope after all: run in the caller's cgroup, as before
     scope = f"{NAME}-{job}.scope" if scoped else None
