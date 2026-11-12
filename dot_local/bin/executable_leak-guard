@@ -48,9 +48,10 @@ SYSTEM = ("You review a diff for a public git repository. You answer with exactl
 class Block(Exception):
     """A reason to stop, naming the failing step."""
 
-    def __init__(self, step, reason, layer):
+    def __init__(self, step, reason, layer, log_reason=None):
         super().__init__("%s: %s" % (step, reason))
         self.step, self.reason, self.layer = step, reason, layer
+        self.log_reason = log_reason or reason     # what the log gets: never a term
 
 
 def home(*parts):
@@ -67,36 +68,51 @@ def state_dir():
 
 def log(entry):
     try:
-        os.makedirs(state_dir(), exist_ok=True)
-        with open(os.path.join(state_dir(), "log.jsonl"), "a") as f:
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        os.chmod(state_dir(), 0o700)
+        fd = os.open(os.path.join(state_dir(), "log.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError as e:
         print("leak-guard: could not write its log: %s" % e, file=sys.stderr)
 
 
 def git(*args, check=True):
-    done = subprocess.run(["git", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    done = subprocess.run(["git", "-c", "core.quotePath=false", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if check and done.returncode != 0:
         raise Block("git", "git %s failed: %s" % (args[0], done.stderr.decode(errors="replace").strip()[:200]), 0)
     return done.stdout.decode(errors="replace")
 
 
 def added_lines(diff):
-    """[(file, line, text)] for every added line of a -U0 unified diff, plus (file, 0, "(path) file") for each file with additions."""
-    out, path, line = [], None, 0
+    """[(file, line, text)] for every added line of a -U0 unified diff. A line is content once its first hunk header has been seen, so an added line that
+    starts with `++ ` is a line, not a file header."""
+    out, path, line, in_hunk = [], None, 0, False
     for raw in diff.splitlines():
-        if raw.startswith("+++ "):
+        if not in_hunk and raw.startswith("diff --git "):
+            path = None
+        elif not in_hunk and raw.startswith("+++ "):
             path = raw[4:]
             path = None if path == "/dev/null" else (path[2:] if path.startswith("b/") else path)
-            if path:
-                out.append((path, 0, "(path) " + path))
         elif raw.startswith("@@"):
+            in_hunk = True
             m = re.match(r"@@ -\S+ \+(\d+)", raw)
             line = int(m.group(1)) if m else 0
-        elif raw.startswith("+") and path is not None:
+        elif in_hunk and raw.startswith("diff --git "):
+            in_hunk, path = False, None
+        elif in_hunk and raw.startswith("+") and path is not None:
             out.append((path, line, raw[1:]))
             line += 1
     return out
+
+
+def diff_parts(*extra):
+    """(added lines plus names, binary file names) for `git diff --no-renames -U0 <extra>`. Names come from --name-only, so renames, empty files and
+    binary files are named too (and so checked by layer 1). A binary file's content cannot be scanned: the caller blocks on it after layer 1."""
+    base = ["diff", "--no-color", "--no-ext-diff", "--no-renames", "--diff-filter=ACMRT"]
+    names = [n for n in git(*base, "--name-only", "-z", *extra).split("\0") if n]
+    binary = [row.split("\t", 2)[2] for row in git(*base, "--numstat", *extra).splitlines() if row.startswith("-\t-\t")]
+    return added_lines(git(*base, "-U0", *extra)) + [(n, 0, "(path) " + n) for n in names], binary
 
 
 def read_list(path, what):
@@ -109,12 +125,12 @@ def read_list(path, what):
 
 def layer1(lines, terms_path):
     terms = []
-    for raw in read_list(terms_path, "terms file"):
+    for number, raw in enumerate(read_list(terms_path, "terms file"), 1):
         if raw.strip() and not raw.lstrip().startswith("#"):
             try:
                 terms.append((raw, re.compile(raw, re.I)))
             except re.error as e:
-                raise Block("layer 1", "terms file %s has an invalid regex %r (%s)" % (terms_path, raw, e), 1)
+                raise Block("layer 1", "terms file %s line %d is not a valid regex (%s)" % (terms_path, number, e.msg), 1)
     if not terms:
         raise Block("setup", "terms file %s has no terms" % terms_path, 1)
     return ["%s:%d: %s" % (f, n, term) for f, n, text in lines for term, rx in terms if rx.search(text)]
@@ -175,40 +191,56 @@ def layer2(prompt):
     if not isinstance(answer, dict) or not isinstance(answer.get("leak"), bool):
         raise Block("layer 2", "claude's answer was not the JSON object asked for; treated as a leak", 2)
     findings = answer.get("findings") if isinstance(answer.get("findings"), list) else []
+    if not answer["leak"] and findings:
+        raise Block("layer 2", "claude's answer contradicts itself (leak false, but %d finding(s)); treated as a leak" % len(findings), 2)
     return answer["leak"], findings, {"claude_s": took, "cost_usd": result.get("total_cost_usd")}
 
 
-def commit_ranges(stdin_lines, remote):
-    """[(base, tip)] for each pushed ref: the remote's current sha, or for a new branch the parent of its oldest commit that no remote has."""
-    ranges = []
+def remote_default(remote):
+    """The remote's default branch as a local tracking ref, if it is known: refs/remotes/<remote>/HEAD, else <remote>/main or <remote>/master."""
+    for ref in ("refs/remotes/%s/HEAD" % remote, "refs/remotes/%s/main" % remote, "refs/remotes/%s/master" % remote):
+        if subprocess.run(["git", "rev-parse", "--verify", "-q", ref], stdout=subprocess.DEVNULL).returncode == 0:
+            return ref
+    return None
+
+
+def pushed(stdin_lines, remote):
+    """[(ref, tip, base)] for each pushed ref (a deleted ref pushes nothing): base is the remote's current sha, or for a new ref the merge-base with the
+    remote's default branch. With no known default branch a new ref is a Block: scanning from the first commit would be wrong either way."""
+    out = []
     for raw in stdin_lines:
         parts = raw.split()
-        if len(parts) < 4 or parts[1] == ZERO:     # a deleted ref pushes nothing
+        if len(parts) < 4 or parts[1] == ZERO:
             continue
-        local_sha, remote_sha = parts[1], parts[3]
+        ref, tip, remote_sha = parts[0], parts[1], parts[3]
         if remote_sha != ZERO:
-            ranges.append((remote_sha, local_sha))
+            out.append((ref, tip, remote_sha))
             continue
-        new = git("rev-list", local_sha, "--not", "--remotes=" + remote, check=False).split()
-        if not new:
-            new = git("rev-list", local_sha, "--not", "--remotes", check=False).split()
-        if new:
-            oldest = new[-1]
-            has_parent = subprocess.run(["git", "rev-parse", "--verify", "-q", oldest + "^"], stdout=subprocess.DEVNULL).returncode == 0
-            ranges.append((oldest + "^" if has_parent else EMPTY_TREE, local_sha))
-    return ranges
+        default = remote_default(remote)
+        if not default:
+            raise Block("pre-push", "new ref %s has no known base: the remote %r has no default branch among the local tracking refs (fetch it, or set it with "
+                        "`git remote set-head %s -a`), so what is new cannot be told" % (ref, remote, remote), 1)
+        base = git("merge-base", default, tip, check=False).strip()
+        out.append((ref, tip, base or EMPTY_TREE))
+    return out
 
 
 def collect(mode, stdin_lines, remote):
     if mode == "pre-commit":
-        return added_lines(git("diff", "--cached", "--no-color", "--no-ext-diff", "-U0", "--diff-filter=ACMRT")), None
-    lines, messages = [], []
-    for base, tip in commit_ranges(stdin_lines, remote):
-        lines += added_lines(git("diff", "--no-color", "--no-ext-diff", "-U0", "--diff-filter=ACMRT", base, tip))
+        return diff_parts("--cached")
+    lines, binary = [], []
+    for ref, tip, base in pushed(stdin_lines, remote):
+        diff, bins = diff_parts(base, tip)
+        lines += diff + [(ref, 0, "(ref) " + ref)]
+        binary += bins
+        if git("cat-file", "-t", tip, check=False).strip() == "tag":     # an annotated tag: its message is pushed too
+            body = git("cat-file", "-p", tip, check=False).split("\n\n", 1)
+            for i, text in enumerate((body[1] if len(body) > 1 else "").splitlines(), 1):
+                lines.append(("TAG-MESSAGE", i, text))
         for sha in git("rev-list", "%s..%s" % (base, tip) if base != EMPTY_TREE else tip).split():
             for i, text in enumerate(git("log", "-1", "--format=%B", sha).splitlines(), 1):
-                messages.append(("COMMIT-MESSAGE", i, text))
-    return lines + messages, None
+                lines.append(("COMMIT-MESSAGE", i, text))
+    return lines, binary
 
 
 def run(mode, stdin_lines, remote):
@@ -225,8 +257,8 @@ def run(mode, stdin_lines, remote):
         return 0
     layer = 0
     try:
-        lines, _ = collect(mode, stdin_lines, remote)
-        if not lines:
+        lines, binary = collect(mode, stdin_lines, remote)
+        if not lines and not binary:
             log({**entry, "verdict": "pass", "layer": "none", "duration_s": round(time.time() - t0, 3), "findings": 0, "note": "nothing added"})
             return 0
         layer = 1
@@ -237,6 +269,9 @@ def run(mode, stdin_lines, remote):
                 print("  " + h, file=sys.stderr)
             log({**entry, "verdict": "block", "layer": 1, "duration_s": round(time.time() - t0, 3), "findings": len(hits)})
             return 1
+        if binary:
+            raise Block("binary file", "%s added or changed: its content cannot be read, so it cannot be checked (commit it after review with the override)"
+                        % ", ".join(binary[:5]), 1)
         layer = 2
         context = read_list(os.path.join(config_dir(), "context"), "context file")
         leak, findings, extra = layer2(prompt_for(context, lines))
@@ -251,7 +286,7 @@ def run(mode, stdin_lines, remote):
         return 0
     except Block as b:
         print("leak-guard: BLOCKED, %s: %s. Override once: %s" % (b.step, b.reason, OVERRIDE), file=sys.stderr)
-        log({**entry, "verdict": "block", "layer": b.layer or layer, "reason": b.step + ": " + b.reason[:200], "duration_s": round(time.time() - t0, 3), "findings": 0})
+        log({**entry, "verdict": "block", "layer": b.layer or layer, "reason": b.step + ": " + b.log_reason[:200], "duration_s": round(time.time() - t0, 3), "findings": 0})
         return 1
 
 

@@ -19,6 +19,10 @@ set -eu
 umask 077
 MARK="# leak-guard hook (managed by chezmoi; run_onchange_after_46_install-leak-guard-hooks)"
 src={{ .chezmoi.sourceDir | quote }}
+if hp="$(git -C "$src" config --get core.hooksPath 2>/dev/null)"; then
+  echo "leak-guard: WARNING: core.hooksPath is set ($hp); hooks there would guard every repository that shares it, not just this one, so nothing was installed. Unset it for the chezmoi source, or install the two hooks by hand." >&2
+  exit 0
+fi
 hooks="$(git -C "$src" rev-parse --git-path hooks 2>/dev/null || true)"
 case "$hooks" in /*) ;; "") hooks="" ;; *) hooks="$src/$hooks" ;; esac
 install_hook() {  # install_hook NAME

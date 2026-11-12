@@ -29,6 +29,8 @@ if mode == "clean":
     result('{"leak": false, "findings": []}')
 elif mode == "leak":
     result('{"leak": true, "findings": [{"file": "notes.txt", "line": 1, "text": "the pretend employer", "why": "names the employer"}]}')
+elif mode == "contradict":
+    result('{"leak": false, "findings": [{"file": "notes.txt", "line": 1, "text": "x", "why": "looks like the employer"}]}')
 elif mode == "wrapped":
     result('Sure. {"leak": false, "findings": []} Done.')
 elif mode == "garbage":
@@ -228,7 +230,7 @@ class PreCommit(Base):
         self.stage("notes.txt", "a quiet sentence\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("invalid regex", done.stderr)
+        self.assertIn("is not a valid regex", done.stderr)
 
     def test_nothing_staged_passes_without_claude(self):
         done = self.guard("pre-commit")
@@ -244,6 +246,86 @@ class PreCommit(Base):
         text = (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text()
         self.assertNotIn("SECRET-LOOKING-TEXT-123", text)
         self.assertNotIn("unmistakable", text)
+
+    # --- names, renames, empty and binary files
+
+    def test_a_plain_rename_to_a_term_name_blocks(self):
+        (self.repo / "plain.txt").write_text("harmless\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "plain", "--no-verify")
+        self.git("mv", "plain.txt", "fooco-renamed.txt")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("fooco-renamed.txt:0: fooco", done.stderr)
+
+    def test_an_empty_new_file_with_a_term_in_its_name_blocks(self):
+        (self.repo / "fooco-empty.txt").write_text("")
+        self.git("add", "fooco-empty.txt")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("fooco-empty.txt:0: fooco", done.stderr)
+
+    def test_a_binary_file_with_a_term_in_its_name_blocks_on_the_name(self):
+        (self.repo / "fooco-image.bin").write_bytes(b"\x00\x01\x02 binary")
+        self.git("add", "fooco-image.bin")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("fooco-image.bin:0: fooco", done.stderr)
+
+    def test_a_binary_file_with_a_clean_name_is_blocked_because_it_cannot_be_read(self):
+        (self.repo / "image.bin").write_bytes(b"\x00\x01\x02 fooco inside")
+        self.git("add", "image.bin")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("binary", done.stderr)
+        self.assertIn("image.bin", done.stderr)
+        self.assertEqual(self.calls(), 0)
+        override = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "reviewed the binary"})
+        self.assertEqual(override.returncode, 0, override.stderr)
+
+    def test_an_added_line_that_starts_with_two_pluses_is_a_line_not_a_file_header(self):
+        self.stage("notes.txt", "++ names fooco here\n+++ b/other.txt\nfine\n")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("notes.txt:1: fooco", done.stderr)
+        self.assertNotIn("other.txt", done.stderr)
+
+    def test_leak_false_with_findings_is_contradictory_and_blocks(self):
+        self.stage("notes.txt", "a quiet sentence\n")
+        done = self.guard("pre-commit", env={"FAKE_CLAUDE": "contradict"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("contradict", done.stderr)
+
+    def test_an_empty_terms_file_blocks(self):
+        for text in ("", "# only a comment\n\n"):
+            (self.home / ".config" / "leak-guard" / "terms").write_text(text)
+            self.stage("notes.txt", "a quiet sentence %r\n" % text)
+            done = self.guard("pre-commit")
+            self.assertEqual(done.returncode, 1, done.stderr)
+            self.assertIn("has no terms", done.stderr)
+
+    def test_a_bad_regex_is_reported_without_the_term_and_never_logged(self):
+        (self.home / ".config" / "leak-guard" / "terms").write_text("fooco\nSECRETTERM(unclosed\n")
+        self.stage("notes.txt", "a quiet sentence\n")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("line 2", done.stderr)
+        self.assertNotIn("SECRETTERM", done.stderr)
+        text = (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text()
+        self.assertNotIn("SECRETTERM", text)
+        self.assertNotIn("fooco", text)
+
+    def test_the_log_is_private(self):
+        self.stage("notes.txt", "a quiet sentence\n")
+        self.guard("pre-commit", env={"FAKE_CLAUDE": "clean"})
+        d = self.home / ".local" / "state" / "leak-guard"
+        self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((d / "log.jsonl").stat().st_mode), 0o600)
+
+    def test_the_log_never_names_a_term_even_when_a_term_blocks(self):
+        self.stage("notes.txt", "this names fooco\n")
+        self.guard("pre-commit")
+        self.assertNotIn("fooco", (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text())
 
     def test_usage_errors_are_64(self):
         self.assertEqual(self.guard().returncode, 64)
@@ -306,6 +388,63 @@ class PrePush(Base):
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, old))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("new.txt:1: fooco", done.stderr)
+
+    def test_a_committed_rename_to_a_term_name_blocks_at_pre_push(self):
+        self.git("checkout", "-q", "-b", "feature")
+        old = self.commit("plain.txt", "harmless\n")
+        self.git("push", "-q", "origin", "feature", "--no-verify")
+        self.git("mv", "plain.txt", "fooco-renamed.txt")
+        self.git("commit", "-q", "-m", "rename", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, old))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("fooco-renamed.txt:0: fooco", done.stderr)
+
+    def test_a_new_branch_with_no_known_remote_base_is_blocked_not_scanned_from_the_start(self):
+        lonely = self.tmp / "lonely"
+        lonely.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main", str(lonely)], check=True)
+        other = self.tmp / "other.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(other)], check=True)
+        self.git("remote", "add", "unfetched", str(other))
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("clean.txt", "a quiet sentence\n")
+        done = self.guard("pre-push", "unfetched", str(other), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("no known base", done.stderr)
+        self.assertIn("unfetched", done.stderr)
+        self.assertEqual(self.calls(), 0)
+
+    def test_a_new_branch_is_checked_from_the_merge_base_with_the_remotes_default_branch(self):
+        self.git("remote", "set-head", "origin", "main")
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("one.txt", "first\n")
+        tip = self.commit("two.txt", "second\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        sent = (self.fake / "stdin.txt").read_text()
+        self.assertIn("one.txt", sent)
+        self.assertIn("two.txt", sent)
+        self.assertNotIn("README", sent)
+
+    def test_branch_and_tag_names_are_checked(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("clean.txt", "a quiet sentence\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/fooco-branch"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("refs/heads/fooco-branch:0: fooco", done.stderr)
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/tags/v1-fooco"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("refs/tags/v1-fooco:0: fooco", done.stderr)
+
+    def test_an_annotated_tag_message_is_checked(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("clean.txt", "a quiet sentence\n")
+        self.git("tag", "-a", "v1", "-m", "release notes for fooco")
+        tag = self.git("rev-parse", "v1").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tag, ref="refs/tags/v1"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("TAG-MESSAGE:1: fooco", done.stderr)
 
     def test_a_leak_in_a_commit_message_blocks(self):
         self.git("checkout", "-q", "-b", "feature")

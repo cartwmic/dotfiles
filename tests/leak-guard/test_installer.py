@@ -87,6 +87,26 @@ class Installer(unittest.TestCase):
             self.assertEqual(self.run_script(done.stdout).returncode, 0)
             self.assertTrue((self.home / ".config" / "leak-guard" / "terms").read_text().startswith(terms))
 
+    def test_core_hooks_path_set_globally_or_in_the_repo_refuses_to_install_anything(self):
+        for where in ("global", "local"):
+            with self.subTest(where):
+                shutil.rmtree(self.home / ".config", True)
+                shutil.rmtree(self.hooks(), True)
+                (self.home / ".gitconfig").unlink(missing_ok=True)
+                subprocess.run(["git", "-C", str(self.src), "config", "--unset", "core.hooksPath"], capture_output=True)
+                if where == "global":
+                    (self.home / ".gitconfig").write_text("[core]\n\thooksPath = %s\n" % (self.tmp / "shared-hooks"))
+                else:
+                    subprocess.run(["git", "-C", str(self.src), "config", "core.hooksPath", str(self.tmp / "shared-hooks")], check=True)
+                done = self.render(DATA)
+                ran = self.run_script(done.stdout)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn("core.hooksPath is set", ran.stderr)
+                self.assertIn("every repository that shares it", ran.stderr)
+                self.assertFalse((self.hooks() / "pre-commit").exists())
+                self.assertFalse((self.tmp / "shared-hooks").exists())
+                self.assertFalse((self.home / ".config" / "leak-guard").exists())
+
     def test_a_worktree_style_git_file_still_finds_the_hooks_dir(self):
         shutil.rmtree(self.src / ".git")
         real = self.tmp / "real.git"
