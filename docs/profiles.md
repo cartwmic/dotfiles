@@ -15,6 +15,7 @@ How to read a row:
 |---|---|---|
 | `05_provision_ssh_keys.sh` | personal | The homelab SSH credential is personal infrastructure and must not land on a work machine. (Termux gets it too.) |
 | `Library/LaunchAgents/local.agent-events.plist`, `70_agent_events_launchd.sh` | personal (macOS) | Gated on the `agentEvents.enabled` setting, which defaults on only on personal, so the work Mac sends no metrics until that setting is turned on there. |
+| `.config/systemd/user/agent-events.service`, `.config/systemd/user/agent-events.timer`, `77_agent_events_systemd.sh` | personal (Linux) | The Linux twin of the LaunchAgent row above, with the same `agentEvents.enabled` gate (default on only on personal). The work Mac already exports through its own LaunchAgent and this timer is Linux-only, so the work profile has nothing to add. The load script skips WSL, so a second "personal" exporter cannot start there. |
 | `.local/share/instances/launchd/local.coordinatord.plist` | personal (macOS) | The work profile runs its own coordinator unit, `local.coordinatord.work.plist` (row below). |
 | `.local/share/instances/launchd/local.retrod.plist` | personal (macOS) | Work Retro is a later change (README, "Instances"). |
 | `.local/share/instances/launchd/local.coordinatord.work.plist` | axon-work-computer (macOS) | The work coordinator's unit (Matrix); personal runs `local.coordinatord.plist`. |

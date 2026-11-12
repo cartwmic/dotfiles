@@ -1,0 +1,44 @@
+#!/bin/sh
+# Load, reload or unload the agent-events timer (agent-events.timer) when its units or its setting change. Linux only, and only while chezmoi data
+# agentEvents.enabled is true (default: personal profile only) or the units are still installed (.chezmoiignore). Linux twin of
+# run_onchange_after_70_agent_events_launchd.sh.tmpl: the timer runs "agent-events run" every 2 minutes.
+# service: {{ includeTemplate "dot_config/systemd/user/agent-events.service.tmpl" . | sha256sum }}
+# timer: {{ include "dot_config/systemd/user/agent-events.timer" | sha256sum }}
+# setting: {{ includeTemplate "agent_events_config" . }}
+#
+# Fails (and so fails the apply) when systemd does not end up with the timer active: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into, and WSL
+# is left to its own machine: both are a notice and a clean exit. Test hook: AGENT_EVENTS_WSL_MARKER (the WSL interop file).
+set -eu
+log() { printf '[agent_events_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+if [ -f "${AGENT_EVENTS_WSL_MARKER:-/proc/sys/fs/binfmt_misc/WSLInterop}" ]; then log INFO "WSL: not exporting from here"; exit 0; fi
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; agent-events.timer not loaded"
+  exit 0
+fi
+dir="$HOME/.config/systemd/user"
+{{- if (includeTemplate "agent_events_config" . | fromJson).enabled }}
+if [ ! -f "$dir/agent-events.service" ] || [ ! -f "$dir/agent-events.timer" ]; then
+  log ERROR "$dir/agent-events.service or agent-events.timer is not installed; apply them too, then apply again"
+  exit 1
+fi
+mkdir -p "$HOME/.local/state/agent-events"
+systemctl --user daemon-reload
+systemctl --user enable agent-events.timer >/dev/null 2>&1 || { log ERROR "could not enable agent-events.timer"; exit 1; }
+systemctl --user restart agent-events.timer || { log ERROR "could not start agent-events.timer; see: journalctl --user -u agent-events.timer"; exit 1; }
+systemctl --user is-active --quiet agent-events.timer || { log ERROR "agent-events.timer is not active after the restart"; exit 1; }
+log INFO "loaded agent-events.timer (every 2 minutes; journalctl --user -u agent-events)"
+{{- else }}
+# agentEvents.enabled is false: .chezmoiignore leaves the units alone, so this script stops the timer, then removes both units.
+# A failed stop fails the apply and keeps the units, so the next apply runs this again.
+systemctl --user disable --now agent-events.timer >/dev/null 2>&1 || :
+if systemctl --user is-active --quiet agent-events.timer; then
+  log ERROR "could not stop agent-events.timer; try: systemctl --user disable --now agent-events.timer, then chezmoi apply again"
+  exit 1
+fi
+rm -f "$dir/agent-events.service" "$dir/agent-events.timer"
+systemctl --user daemon-reload
+log INFO "agentEvents.enabled is false: agent-events.timer is stopped and its units removed"
+{{- end }}
