@@ -1,10 +1,14 @@
 #!/bin/sh
 # Own two provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there.
 # Personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
+# Personal Linux owns a third, pi, and nothing else of the hub (see "pi" below).
 # Data switch t3Hub.enabled (default true): false makes WANT empty, so the next apply removes exactly the two owned ids.
 #   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub and an empty ANTHROPIC_API_KEY (an ambient key must not win over the helper's), key from ~/.config/t3-hub-claude-settings.json (apiKeyHelper)
 #   codex-hub   "Codex (hub)"   driver codex, not managed: CODEX_HOME stays ~/.codex, `-c model_provider=cliproxy` selects the
 #               [model_providers.cliproxy] block that dot_codex/modify_private_config.toml.tmpl writes
+# pi          Linux only, outside the hub switch: {"driver":"pi","enabled":true}, T3's Pi provider (the default `pi` instance is off, and a thread on
+#               it fails with 'Provider instance "pi" is disabled'). Retro and the steward run as T3 threads on it. Every config key has a default
+#               (binaryPath resolves `pi`). T3 reads a change to this file without a restart. The Mac does not own pi: it is left as it is there.
 # Default-provider switch hub.enabled (one switch with Claude and Codex; t3Hub.enabled stays separate and owns only the two ids above):
 #   codex       the T3 `codex` instance is managed (its own CODEX_HOME), so it ignores ~/.codex. While hub.enabled is on it becomes
 #               setupMode existing with T3's downloaded Codex binary (same active.json lookup as codex-hub), so it reads ~/.codex and
@@ -32,7 +36,7 @@
 #   claudeAgent and coordinator instances only (an absent instance is not created; no other field of theirs is touched, and the coordinator
 #   repo's `t3 setup` leaves a present instance alone). Applies on every apply, hub switch on or off. It reaches new or restarted sessions
 #   only: a running session keeps the window it started with. To change it, edit AUTO_COMPACT_WINDOW; to drop it, set it to '' (removes our key).
-# Each apply replaces exactly those two ids under providerInstances and sets worktreesDirectory; no other key or instance is touched. No file, or a file that is
+# Each apply replaces exactly the owned ids under providerInstances and sets worktreesDirectory; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
 set -eu
@@ -54,10 +58,19 @@ set -eu
 {{- $claude := dict "driver" "claudeAgent" "displayName" "Claude (hub)" "enabled" true
       "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false) (dict "name" "ANTHROPIC_API_KEY" "value" "" "sensitive" false))
       "config" (dict "launchArgs" (printf "--settings %s/.config/t3-hub-claude-settings.json" $home)) }}
+{{- $want := dict }}
+{{- $owned := list "claude-hub" "codex-hub" }}
+{{- if eq $hub "on" }}
+{{- $want = dict "claude-hub" $claude "codex-hub" $codex }}
+{{- end }}
+{{- if eq .chezmoi.os "linux" }}
+{{- $want = set $want "pi" (dict "driver" "pi" "enabled" true) }}
+{{- $owned = append $owned "pi" }}
+{{- end }}
 # WANT stays on one line so a test can swap it. The codex binary is T3's own download, found through ~/.t3/tools/codex/active.json
 # at apply time (T3 does not keep a version-free path); without that file binaryPath is left out.
-WANT={{ if eq $hub "on" }}{{ dict "claude-hub" $claude "codex-hub" $codex | toJson | squote }}{{ else }}'{}'{{ end }}
-OWNED='["claude-hub","codex-hub"]'
+WANT={{ $want | toJson | squote }}
+OWNED={{ $owned | toJson | squote }}
 # The codex instance. HUB_MODE is on, off or n/a; DEFAULT_BINARY is the Codex binary to write while on (empty without active.json); ORIGINAL is
 # what T3 creates by itself and what off restores; PREFIX tells our entry from one edited by hand.
 HUB_MODE='{{ $hubDefault }}'
