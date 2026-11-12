@@ -191,6 +191,9 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
 # The work coordinator's unit (Matrix; cartwmic/coordinator docs/work-instance.md): work macOS only, inert like the others.
 .local/share/instances/launchd/local.coordinatord.work.plist
+# Client-only RustDesk (control other machines, never reachable): work macOS only. Personal hosts run configure_rustdesk.sh instead.
+.local/user_scripts/configure_rustdesk_client.sh
+61_configure_rustdesk_client.sh
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}

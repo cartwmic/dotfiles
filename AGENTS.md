@@ -107,6 +107,12 @@ across every managed host. For service paths and password rotation, inspect
 `dot_local/user_scripts/executable_configure_rustdesk.sh.tmpl` and
 `run_onchange_after_60_configure_rustdesk.sh.tmpl` before changing source.
 Do not run the helper through the RustDesk session being reconfigured.
+The work Mac gets RustDesk as a client only
+(`dot_local/user_scripts/executable_configure_rustdesk_client.sh.tmpl`,
+`run_onchange_after_61_configure_rustdesk_client.sh.tmpl`): it must never
+install a service, set a password or read a secret. Any change to the
+personal helper or the 60 script reruns it on every personal host, which
+restarts `rustdesk.service`; say so before applying such a change.
 
 SSH: `private_dot_ssh/modify_authorized_keys.tmpl` is append-safe and must stay
 non-destructive to foreign keys. It appends the dotfiles key on every OS,

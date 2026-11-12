@@ -1,0 +1,133 @@
+#!/bin/sh
+# RustDesk as a client only (work profile, macOS; .chezmoiignore gives this file to no other profile).
+#
+# The work Mac uses RustDesk to control other machines and must never be reachable itself. This helper writes
+# RustDesk's own settings into the user's RustDesk2.toml and does nothing else: no sudo, no launchd job, no password.
+#   stop-service = Y              RustDesk's "Stop service": no registration with the ID server, so no peer can find this Mac,
+#                                 and the direct-IP listener stays closed (rendezvous_mediator.rs, RustDesk 1.5.3).
+#   direct-server = N             no direct-IP listener (TCP 21118), also if the service is turned back on.
+#   enable-lan-discovery = N      the LAN discovery socket answers no pings.
+#   approve-mode = click          an incoming request would need a click on this Mac: no password-only access.
+#   verification-method = use-temporary-password   a permanent password, if one were ever set, is not accepted.
+# When the local data key rustdesk.server is set, the client also points at that ID and relay server (with its key),
+# so it can reach the personal machines; unset, RustDesk's defaults stay.
+#
+# It stops with an error when RustDesk's launchd service is installed (the plists below): that is the server side.
+# Settings are written only while RustDesk is not running (RustDesk rewrites the file on exit). Other keys, the
+# device identity (RustDesk.toml) and local state (RustDesk_local.toml) are left alone.
+# Test hooks: RUSTDESK_OS, RUSTDESK_CONFIG_DIR, RUSTDESK_AGENT_PLIST, RUSTDESK_DAEMON_PLIST, PYTHON_BIN.
+
+set -eu
+
+LOG_PREFIX="[configure_rustdesk_client.sh]"
+SERVER={{ dig "server" "" .rustdesk | quote }}
+PORT={{ printf "%v" .rustdesk.port | quote }}
+PUBLIC_KEY={{ .rustdesk.publicKey | quote }}
+OS="${RUSTDESK_OS:-$(uname -s)}"
+
+log_info() { echo "${LOG_PREFIX} INFO: $*" >&2; }
+die() { echo "${LOG_PREFIX} ERROR: $*" >&2; exit 1; }
+
+[ "$OS" = Darwin ] || die "client-only RustDesk is set up on macOS only, not $OS"
+
+CONFIG_DIR="${RUSTDESK_CONFIG_DIR:-$HOME/Library/Preferences/com.carriez.RustDesk}"
+CONFIG_FILE="$CONFIG_DIR/RustDesk2.toml"
+AGENT_PLIST="${RUSTDESK_AGENT_PLIST:-/Library/LaunchAgents/com.carriez.RustDesk_server.plist}"
+DAEMON_PLIST="${RUSTDESK_DAEMON_PLIST:-/Library/LaunchDaemons/com.carriez.RustDesk_service.plist}"
+
+for plist in "$AGENT_PLIST" "$DAEMON_PLIST"; do
+  if [ -e "$plist" ]; then
+    die "RustDesk's launchd service is installed ($plist); this Mac is client only. Remove it: sudo launchctl bootout system/com.carriez.RustDesk_service; launchctl bootout gui/\$(id -u)/com.carriez.RustDesk_server; sudo rm -f $AGENT_PLIST $DAEMON_PLIST"
+  fi
+done
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! "$PYTHON_BIN" -c 'import tomllib' >/dev/null 2>&1 && command -v mise >/dev/null 2>&1; then
+  PYTHON_BIN="$(mise which python 2>/dev/null || echo "$PYTHON_BIN")"
+fi
+"$PYTHON_BIN" -c 'import tomllib' >/dev/null 2>&1 || die "Python 3.11 or newer is required"
+
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
+STAGED="$TEMP_DIR/RustDesk2.toml"
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+if [ -f "$CONFIG_FILE" ]; then cp "$CONFIG_FILE" "$STAGED"; else : > "$STAGED"; fi
+
+RUSTDESK_SERVER="$SERVER" RUSTDESK_PORT="$PORT" RUSTDESK_PUBLIC_KEY="$PUBLIC_KEY" "$PYTHON_BIN" - "$STAGED" <<'PY'
+import json, os, re, sys, tomllib
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+parsed = tomllib.loads(text)   # a malformed file stops the helper instead of being replaced
+lines = text.splitlines()
+
+options = {
+    "stop-service": "Y",
+    "direct-server": "N",
+    "enable-lan-discovery": "N",
+    "approve-mode": "click",
+    "verification-method": "use-temporary-password",
+}
+top = {}
+server = os.environ["RUSTDESK_SERVER"]
+if server:
+    top["rendezvous_server"] = f"{server}:{os.environ['RUSTDESK_PORT']}"
+    options.update({"custom-rendezvous-server": server, "relay-server": server, "key": os.environ["RUSTDESK_PUBLIC_KEY"]})
+
+
+def headers():
+    return [(i, m.group(1).strip()) for i, line in enumerate(lines) if (m := re.match(r"^\s*\[([^\]]+)\]\s*(?:#.*)?$", line))]
+
+
+def set_key(table, key, value):
+    current = parsed if table is None else parsed.get(table, {})
+    if current.get(key) == value:
+        return
+    entry = f"{key} = {json.dumps(value)}"
+    hs = headers()
+    if table is None:
+        start, end = 0, hs[0][0] if hs else len(lines)
+    else:
+        found = [n for n, (i, name) in enumerate(hs) if name == table]
+        if not found:
+            if any(re.match(rf"^\s*{table}\s*\.", line) for line in lines):
+                raise SystemExit(f"{table} is written as dotted keys; edit {path.name} by hand")
+            lines.extend(([""] if lines and lines[-1].strip() else []) + [f"[{table}]", entry])
+            return
+        n = found[0]
+        start, end = hs[n][0] + 1, hs[n + 1][0] if n + 1 < len(hs) else len(lines)
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    for i in range(start, end):
+        if pattern.match(lines[i]):
+            lines[i] = entry
+            return
+    at = end
+    while at > start and not lines[at - 1].strip():
+        at -= 1
+    lines.insert(at, entry)
+
+
+for key, value in top.items():
+    set_key(None, key, value)
+for key, value in options.items():
+    set_key("options", key, value)
+updated = "\n".join(lines).rstrip() + "\n"
+result = tomllib.loads(updated)
+assert all(result["options"].get(k) == v for k, v in options.items())
+path.write_text(updated)
+PY
+
+if [ -f "$CONFIG_FILE" ] && cmp -s "$CONFIG_FILE" "$STAGED"; then
+  log_info "client-only settings already current in $CONFIG_FILE"
+  exit 0
+fi
+if pgrep -x RustDesk >/dev/null 2>&1; then
+  die "client-only settings need writing but RustDesk is running (it rewrites $CONFIG_FILE on exit); quit RustDesk and run $0 again"
+fi
+if [ -f "$CONFIG_FILE" ] && [ ! -f "$CONFIG_FILE.chezmoi-backup" ]; then
+  cp -p "$CONFIG_FILE" "$CONFIG_FILE.chezmoi-backup"
+fi
+install -m 600 "$STAGED" "$CONFIG_FILE"
+log_info "wrote client-only settings to $CONFIG_FILE (stop-service, no direct or LAN listener, click to approve, temporary password only)"

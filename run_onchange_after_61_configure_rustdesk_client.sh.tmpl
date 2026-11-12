@@ -1,0 +1,14 @@
+#!/bin/sh
+# Client-only RustDesk on the work Mac (axon-work-computer, macOS; .chezmoiignore). Runs the helper when it changes, when RustDesk's
+# settings file changes (so a "Start service" flipped back on in the app is turned off again on the next apply), and when a RustDesk
+# launchd plist appears or goes (the helper stops with an error while one is installed).
+# Helper hash: {{ include "dot_local/user_scripts/executable_configure_rustdesk_client.sh.tmpl" | sha256sum }}
+{{- $cfg := joinPath .chezmoi.homeDir "Library/Preferences/com.carriez.RustDesk/RustDesk2.toml" }}
+# Settings hash: {{ if stat $cfg }}{{ include $cfg | sha256sum }}{{ else }}none{{ end }}
+# Agent plist: {{ if stat "/Library/LaunchAgents/com.carriez.RustDesk_server.plist" }}present{{ else }}absent{{ end }}
+# Daemon plist: {{ if stat "/Library/LaunchDaemons/com.carriez.RustDesk_service.plist" }}present{{ else }}absent{{ end }}
+set -eu
+if [ ! -d /Applications/RustDesk.app ]; then
+  echo "[61_configure_rustdesk_client.sh] INFO: RustDesk is not installed (mise run install-rustdesk); settings are written once it is" >&2
+fi
+exec "$HOME/.local/user_scripts/configure_rustdesk_client.sh"

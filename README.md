@@ -157,9 +157,10 @@ Then add these keys to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`: `s
 
 **Remote access:**
 
-- RustDesk client on macOS and native Ubuntu/Debian
+- RustDesk on personal macOS, native Ubuntu/Debian and Arch (Omarchy), with unattended access
 - Self-hosted rendezvous and relay configuration
 - Shared unattended-access password loaded from `op://developer/RustDesk/password`
+- RustDesk on the work Mac as a client only: it controls other machines and cannot be reached
 
 ## Docker Provisioning
 
@@ -171,8 +172,10 @@ On the personal Mac, agent shells (Claude Code, T3 Code, Codex, herdr panes and 
 
 ## RustDesk Provisioning
 
-On `personal` macOS and native Ubuntu/Debian hosts, `mise run bootstrap`
-installs RustDesk when missing. WSL and other profiles skip it. A chezmoi
+On `personal` macOS, native Ubuntu/Debian and Arch hosts, `mise run bootstrap`
+installs RustDesk when missing (Arch: `rustdesk-bin` from the AUR with `yay`).
+WSL skips it. The work Mac gets it as a client only (below); other profiles
+skip it. A chezmoi
 onchange helper applies rendezvous, relay, server key, password approval, and
 service settings when its tracked inputs change. Device identity and trust
 data stay machine-local.
@@ -202,6 +205,37 @@ reconfigured. For service file paths and source maintenance, see
 
 Shared passwords increase blast radius: compromise of one machine or this
 1Password item affects every managed RustDesk host.
+
+What stays outside this repo on the Omarchy box: the headless screen-share
+picker (`devbox-share-picker`, so RustDesk gets the screen with nobody at the
+box) is in the homelab repo, `scripts/omarchy-devbox/host-settings.sh`. On
+macOS, Accessibility and Screen Recording approvals are by hand (macOS allows
+no other way without device management).
+
+### Work Mac: client only
+
+On `axon-work-computer` (macOS), `mise run bootstrap` installs the RustDesk
+cask and `61_configure_rustdesk_client.sh` runs
+`~/.local/user_scripts/configure_rustdesk_client.sh`. It writes RustDesk's
+own settings to `~/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml`:
+`stop-service = Y` (no registration with the ID server, no direct listener),
+`direct-server = N`, `enable-lan-discovery = N`, `approve-mode = click` and
+`verification-method = use-temporary-password`. It installs no launchd job,
+sets no password, reads no secret and uses no sudo. It stops with an error if
+RustDesk's launchd service plists exist, and asks you to quit RustDesk if a
+setting needs writing while it runs. The apply reruns it whenever the settings
+file changes, so turning the service back on in the app is undone on the next
+apply. With the local data key `rustdesk.server` set, the client also uses
+that ID and relay server; without it, RustDesk's defaults. Check on the Mac:
+
+```bash
+lsof -nP -iTCP -sTCP:LISTEN | grep -i rustdesk   # expect nothing
+ls /Library/LaunchAgents/com.carriez.RustDesk_server.plist /Library/LaunchDaemons/com.carriez.RustDesk_service.plist   # expect: No such file
+grep -E 'stop-service|direct-server' ~/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml
+```
+
+RustDesk still opens a UDP socket on port 21119 for LAN discovery; with
+`enable-lan-discovery = N` it answers nothing.
 
 ## Harness Config Adapters
 
@@ -762,6 +796,7 @@ After `chezmoi apply`, complete the steps that apply to this host:
 - [gvm users] Follow [gvm's installation and platform prerequisites](https://github.com/moovweb/gvm#installing), then load it and install a Go version before selecting a default. See the sequence below.
 - [macOS] Add XQuartz as a login item.
 - [personal macOS] Launch Docker Desktop once to accept its license and finish setup. See [Docker Provisioning](#docker-provisioning).
+- [work macOS] Nothing for RustDesk: do not click "Start service" or "Install" in its window. See [Work Mac: client only](#work-mac-client-only).
 - [personal macOS] Log in and launch RustDesk once on a fresh machine; grant Accessibility, Screen Recording, and, if needed, Input Monitoring permissions. See [RustDesk Provisioning](#rustdesk-provisioning).
 - [macOS, personal Linux] Run `agent-chrome` to start the agent browser, then sign in to each site once. See [Agent browser](./dot_local/share/agent-harness/README.md#agent-browser).
 - [recap users] Set a host-local CLI command for standalone recaps/Herdr groups if wanted. See [Portable recaps](#portable-recaps).
