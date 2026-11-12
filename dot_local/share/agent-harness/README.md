@@ -171,6 +171,7 @@ coordinator runs `chezmoi apply` and the mise bootstrap there.
 |---|---|---|
 | Google Chrome | macOS: `install-google-chrome` task in `dot_config/mise/config.toml` (brew cask), part of `bootstrap`. Linux: not installed by the dotfiles; the homelab repo's `scripts/omarchy-devbox/setup.sh` installs google-chrome (aarch64) | macOS `/Applications/Google Chrome.app`; Linux `/usr/bin/google-chrome-stable` |
 | Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
+| Login unit (Linux) | `dot_config/systemd/user/agent-chrome.service` (owns Chrome via `agent-chrome --stop` and `--foreground`), loaded by `run_onchange_after_78_agent_chrome_systemd.sh.tmpl` | `~/.config/systemd/user/agent-chrome.service` |
 | MCP server launcher | `dot_local/share/browser-harness-mcp/server.py` | `~/.local/share/browser-harness-mcp/server.py` |
 | MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333` |
 
@@ -182,6 +183,10 @@ Use:
    `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Each run appends its outcome (UTC time, run id, elapsed) to
    `~/.local/state/agent-chrome/agent-chrome.log`; Chrome's own output goes to `chrome.log` in the same directory.
    On Linux it runs `google-chrome-stable --ozone-platform=wayland`, and when `WAYLAND_DISPLAY` is unset (agent shells under `t3code.service` have none) it uses the first `wayland-*` socket in `$XDG_RUNTIME_DIR`. Check by hand on the box: `agent-chrome`, then `curl -s http://127.0.0.1:9333/json/version`.
+   On Linux the unit `agent-chrome.service` starts the agent Chrome at login (after `graphical-session.target`), so nothing needs starting after a reboot. The unit owns Chrome:
+   `ExecStartPre` runs `agent-chrome --stop` (ends every Chrome on the agent profile, including one started by hand, and waits for port 9333 to go quiet), then `ExecStart` runs `agent-chrome --foreground` (Chrome as the unit's main process).
+   So `systemctl --user restart agent-chrome` always ends in a new Chrome process, and `stop` closes it. Check: `systemctl --user status agent-chrome`, `curl -s http://127.0.0.1:9333/json/version`; output: `journalctl --user -u agent-chrome`.
+   `Restart=on-failure` retries a Chrome that exits with a failure (no display yet, a crash), at most 20 starts in 300 seconds. macOS has no login start yet; run `agent-chrome` by hand. Test: `tests/agent-browser/test_login_unit.py` restarts the real unit file 13 times under the user systemd manager (scratch HOME and port, fake Chrome; `AGENT_CHROME_REAL=1` uses the real Chrome).
 2. Start or `/reload` Pi after an apply so it picks up the `browser-harness` server (`mcp__browser-harness__*` tools; check with `/mcp`).
 3. Sign in to each site once. The login stays in the profile across Chrome restarts. Either you sign in by hand, or the
    agent does it with Pi's OS-level UI tools (`find_roots`, `observe_ui`, `act_ui`), for example clicking the
