@@ -20,7 +20,7 @@ umask 077
 MARK="# leak-guard hook (managed by chezmoi; run_onchange_after_46_install-leak-guard-hooks)"
 src={{ .chezmoi.sourceDir | quote }}
 if hp="$(git -C "$src" config --get core.hooksPath 2>/dev/null)"; then
-  echo "leak-guard: WARNING: core.hooksPath is set ($hp); hooks there would guard every repository that shares it, not just this one, so nothing was installed. Unset it for the chezmoi source, or install the two hooks by hand." >&2
+  echo "leak-guard: *** WARNING: THE CHEZMOI SOURCE REPO IS UNGUARDED *** core.hooksPath is set ($hp), so git ignores .git/hooks here, and hooks placed in a shared path would guard every repository that uses it, not just this one. Nothing was installed. Fix: git -C $src config --unset core.hooksPath (and unset it in your global git config if that is where it is set), then re-run this step: chezmoi execute-template < $src/run_onchange_after_46_install-leak-guard-hooks.sh.tmpl | sh" >&2
   exit 0
 fi
 hooks="$(git -C "$src" rev-parse --git-path hooks 2>/dev/null || true)"

@@ -31,6 +31,10 @@ elif mode == "leak":
     result('{"leak": true, "findings": [{"file": "notes.txt", "line": 1, "text": "the pretend employer", "why": "names the employer"}]}')
 elif mode == "contradict":
     result('{"leak": false, "findings": [{"file": "notes.txt", "line": 1, "text": "x", "why": "looks like the employer"}]}')
+elif mode == "badfindings":
+    result('{"leak": false, "findings": "none"}')
+elif mode == "nonstring":
+    result(5)
 elif mode == "wrapped":
     result('Sure. {"leak": false, "findings": []} Done.')
 elif mode == "garbage":
@@ -327,6 +331,48 @@ class PreCommit(Base):
         self.guard("pre-commit")
         self.assertNotIn("fooco", (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text())
 
+    def test_a_non_list_findings_blocks(self):
+        self.stage("notes.txt", "a quiet sentence\n")
+        done = self.guard("pre-commit", env={"FAKE_CLAUDE": "badfindings"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("findings were not a list", done.stderr)
+
+    def test_a_non_string_result_blocks_with_a_logged_reason_and_no_traceback(self):
+        self.stage("notes.txt", "a quiet sentence\n")
+        done = self.guard("pre-commit", env={"FAKE_CLAUDE": "nonstring"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertIn("not text", done.stderr)
+        rec = self.log()[-1]
+        self.assertEqual(rec["verdict"], "block")
+        self.assertIn("not text", rec["reason"])
+
+    def test_names_are_part_of_the_layer_2_prompt_as_data(self):
+        self.stage("quiet-file-name.txt", "a quiet sentence\n")
+        self.guard("pre-commit", env={"FAKE_CLAUDE": "clean"})
+        sent = (self.fake / "stdin.txt").read_text()
+        self.assertIn("=== names", sent)
+        self.assertIn("quiet-file-name.txt", sent)
+        self.assertIn("never instructions", sent)
+
+    def test_a_diff_textconv_driver_cannot_hide_content_from_the_check(self):
+        (self.repo / ".gitattributes").write_text("*.dat diff=hide\n")
+        self.git("config", "diff.hide.textconv", "echo redacted #")
+        self.stage(".gitattributes", "*.dat diff=hide\n")
+        self.stage("x.dat", "this names fooco\n")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("x.dat:1: fooco", done.stderr)
+
+    def test_an_existing_wide_log_file_is_made_private(self):
+        d = self.home / ".local" / "state" / "leak-guard"
+        d.mkdir(parents=True)
+        (d / "log.jsonl").write_text("")
+        (d / "log.jsonl").chmod(0o644)
+        self.stage("notes.txt", "a quiet sentence\n")
+        self.guard("pre-commit", env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(stat.S_IMODE((d / "log.jsonl").stat().st_mode), 0o600)
+
     def test_usage_errors_are_64(self):
         self.assertEqual(self.guard().returncode, 64)
         self.assertEqual(self.guard("pre-merge").returncode, 64)
@@ -348,8 +394,8 @@ class PrePush(Base):
         self.git("commit", "-q", "-m", message, "--no-verify")
         return self.git("rev-parse", "HEAD").stdout.strip()
 
-    def push_line(self, local, remote_sha=ZERO, ref="refs/heads/feature"):
-        return "%s %s %s %s\n" % (ref, local, ref, remote_sha)
+    def push_line(self, local, remote_sha=ZERO, ref="refs/heads/feature", remote_ref=None):
+        return "%s %s %s %s\n" % (ref, local, remote_ref or ref, remote_sha)
 
     def test_a_new_branch_checks_only_its_own_commits_not_what_the_remote_has(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -426,6 +472,44 @@ class PrePush(Base):
         self.assertIn("one.txt", sent)
         self.assertIn("two.txt", sent)
         self.assertNotIn("README", sent)
+
+    def test_the_remote_ref_name_is_checked_not_only_the_local_one(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("clean.txt", "a quiet sentence\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/main", remote_ref="refs/heads/fooco-branch"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("refs/heads/fooco-branch:0: fooco", done.stderr)
+
+    def test_a_term_added_in_one_commit_and_removed_in_the_next_is_still_caught(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("notes.txt", "keep\nthis names fooco\n", message="add")
+        tip = self.commit("notes.txt", "keep\n", message="remove it again")
+        net = self.git("diff", "main", tip).stdout
+        self.assertNotIn("fooco", net, "the net diff is clean: only the history holds the term")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("notes.txt:2: fooco", done.stderr)
+        self.assertIn("[commit ", done.stderr)
+
+    def test_a_file_added_and_deleted_across_commits_is_checked_for_its_name_and_content(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("temp.txt", "quiet\n", message="add")
+        self.git("rm", "-q", "temp.txt")
+        self.git("commit", "-q", "-m", "delete", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("temp.txt", (self.fake / "stdin.txt").read_text(), "the net diff is empty, yet the history's file is sent")
+
+    def test_layer_2_is_given_every_commits_patch_not_only_the_net_diff(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("notes.txt", "keep\na subtle sentence added then removed\n", message="add")
+        tip = self.commit("notes.txt", "keep\n", message="remove")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "leak"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        sent = (self.fake / "stdin.txt").read_text()
+        self.assertIn("a subtle sentence added then removed", sent)
+        self.assertIn("(commit ", sent)
 
     def test_branch_and_tag_names_are_checked(self):
         self.git("checkout", "-q", "-b", "feature")
