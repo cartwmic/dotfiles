@@ -49,15 +49,15 @@ def render_list(profile="personal"):
 
 
 def render_canonical(profile="personal"):
-    t = TMPL.read_text()
+    """servers.json.tmpl as real chezmoi renders it, as on macOS (so every canonical gate in the template is evaluated, not re-implemented here)."""
     work = "axon-work-computer"
-    t = t.replace('{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}', "work" if profile == work else "cartwmic")
-    t = re.sub(r'\{\{ if eq \.chezmoi\.os "darwin" \}\},(.*?)\{\{ end \}\}', lambda m: "," + m.group(1), t, flags=re.S)  # rendered as on macOS
-    t = t.replace('{{ $_ := includeTemplate "require_work_data" . }}', "")  # fails the render on work when a key is missing; nothing in the output
-    # the optional work devportal server: present when the local data key workDevportalMcpUrlRef is set (assumed set on work)
-    t = re.sub(r'\{\{ if hasKey \. "workDevportalMcpUrlRef" \}\},(.*?)\{\{ end \}\}', (lambda m: "," + m.group(1)) if profile == work else "", t, flags=re.S)
-    t = re.sub(r'\{\{ if eq \.profile "axon-work-computer" \}\},(.*?)\{\{ end \}\}', (lambda m: "," + m.group(1)) if profile == work else "", t, flags=re.S)
-    return json.loads(t)
+    data = {"profile": profile, "chezmoi": {"os": "darwin", "homeDir": "/Users/test"}, **(WORK_DATA if profile == work else {})}
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Path(tmp) / "chezmoi.yaml"
+        cfg.write_text("{}\n")
+        rendered = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "execute-template", "--override-data", json.dumps(data)],
+                                  input=TMPL.read_text(), text=True, capture_output=True, timeout=120, check=True).stdout
+    return json.loads(rendered)
 
 
 class World:

@@ -84,6 +84,16 @@ class AgentBrowserRenderTest(unittest.TestCase):
         self.assertIn("browser-harness", self.servers_as("personal", "linux"))
         self.assertNotIn("browser-harness", self.servers_as("axon-work-computer", "linux"))   # the work profile has no Linux box
 
+    def test_servers_json_is_valid_json_for_all_four_os_and_profile_combinations(self):
+        # A comma left over by a gated entry broke the JSON for one combination once; render every one, and the work-only servers with it.
+        for profile in PROFILES:
+            for os_name in ("darwin", "linux"):
+                with self.subTest(profile=profile, os=os_name):
+                    servers = self.servers_as(profile, os_name)   # json.loads inside: raises on a stray or missing comma
+                    self.assertIn("hindsight", servers)
+                    self.assertEqual("jira" in servers, profile == "axon-work-computer")
+                    self.assertEqual("browser-harness" in servers, os_name == "darwin" or profile == "personal")
+
     def test_the_ignore_file_by_os_and_profile_whatever_the_host(self):
         def ignored(profile, os_name):
             data = json.dumps({"chezmoi": {"os": os_name}})
