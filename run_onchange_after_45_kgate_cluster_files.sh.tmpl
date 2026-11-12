@@ -1,0 +1,33 @@
+{{- /*
+  Writes kgate's per-machine cluster and profile files from the chezmoi data key `kgate`:
+    kgate:
+      clusters: {<name>: "<TOML text of ~/.config/kgate/clusters/<name>.toml>"}
+      profiles: {<name>: "<TOML text of ~/.config/kgate/profiles/<name>.toml>"}
+  The repo holds the mechanism only; the values stay in the machine's own chezmoi data (docs/kgate.md, "A second cluster"). With no `kgate` data (or
+  empty maps) this renders nothing, chezmoi runs no script, and no file is written. Any profile can have the data.
+*/ -}}
+{{- $kg := dig "kgate" (dict) . | default (dict) -}}
+{{- $clusters := dig "clusters" (dict) $kg | default (dict) -}}
+{{- $profiles := dig "profiles" (dict) $kg | default (dict) -}}
+{{- if or $clusters $profiles -}}
+#!/bin/sh
+# kgate cluster and profile files, written from the chezmoi data key `kgate`. Edit the data, not these files.
+set -eu
+umask 077
+dest="$HOME/.config/kgate"
+write() {  # write DIR NAME BASE64-OF-THE-TOML
+  mkdir -p "$dest/$1"
+  printf '%s' "$3" | base64 -d > "$dest/$1/$2.toml.tmp"
+  mv "$dest/$1/$2.toml.tmp" "$dest/$1/$2.toml"
+}
+{{ range $name, $text := $clusters -}}
+{{-   if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" $name) }}{{ fail (printf "kgate.clusters: %q is not a plain file name" $name) }}{{ end -}}
+{{-   if not (kindIs "string" $text) }}{{ fail (printf "kgate.clusters.%s must be TOML text" $name) }}{{ end -}}
+write clusters {{ $name | quote }} {{ $text | b64enc | quote }}
+{{ end -}}
+{{ range $name, $text := $profiles -}}
+{{-   if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" $name) }}{{ fail (printf "kgate.profiles: %q is not a plain file name" $name) }}{{ end -}}
+{{-   if not (kindIs "string" $text) }}{{ fail (printf "kgate.profiles.%s must be TOML text" $name) }}{{ end -}}
+write profiles {{ $name | quote }} {{ $text | b64enc | quote }}
+{{ end -}}
+{{- end -}}
