@@ -39,7 +39,9 @@
         "{{ .chezmoi.homeDir }}/.local/share/browser-harness-mcp/server.py"
       ],
       "env": {
-        "BU_CDP_URL": "http://127.0.0.1:9333"
+        "BU_CDP_URL": "http://127.0.0.1:9333",
+        "ANONYMIZED_TELEMETRY": "false",
+        "BH_TELEMETRY": "0"
       }
     }{{ end }}{{ if eq .profile "axon-work-computer" }},
     "jira": {
