@@ -77,6 +77,10 @@ class AvailableCpusTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.cg = self.tmp.name
+        env = mock.patch.dict(os.environ)  # hermetic: kgate's fallback command sets CI_PAR_JOBS
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CI_PAR_JOBS", None)
         self.mod = load_runner()
         self.base = min(self.mod.os.cpu_count() or 1, len(os.sched_getaffinity(0)))
 
