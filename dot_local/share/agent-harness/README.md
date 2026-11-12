@@ -163,13 +163,13 @@ Tests: `tests/agent-kill-guard` (classifier, Claude settings on both profiles, t
 
 ## Agent browser
 
-A logged-in Chrome that agents can drive. macOS only, on both desktop profiles (`personal` and `axon-work-computer`).
+A logged-in Chrome that agents can drive. macOS on both desktop profiles (`personal` and `axon-work-computer`), and personal Linux (Omarchy, Wayland).
 The work profile is on by Michael's decision (2026-10-29 11:33 PDT); the work Mac gets it only when Michael or the work
 coordinator runs `chezmoi apply` and the mise bootstrap there.
 
 | Piece | Source | Lands at |
 |---|---|---|
-| Google Chrome (brew cask) | `install-google-chrome` task in `dot_config/mise/config.toml`, part of `bootstrap` | `/Applications/Google Chrome.app` |
+| Google Chrome | macOS: `install-google-chrome` task in `dot_config/mise/config.toml` (brew cask), part of `bootstrap`. Linux: not installed by the dotfiles; the homelab repo's `scripts/omarchy-devbox/setup.sh` installs google-chrome (aarch64) | macOS `/Applications/Google Chrome.app`; Linux `/usr/bin/google-chrome-stable` |
 | Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
 | MCP server launcher | `dot_local/share/browser-harness-mcp/server.py` | `~/.local/share/browser-harness-mcp/server.py` |
 | MCP server `browser-harness` | `canonical/mcp/servers.json.tmpl` | `uvx --from "browser-harness[mcp]==0.1.13" python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333` |
@@ -181,6 +181,7 @@ Use:
 1. Start the browser: `agent-chrome`. It runs Chrome with `--remote-debugging-port=9333` and its own profile at
    `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Each run appends its outcome (UTC time, run id, elapsed) to
    `~/.local/state/agent-chrome/agent-chrome.log`; Chrome's own output goes to `chrome.log` in the same directory.
+   On Linux it runs `google-chrome-stable --ozone-platform=wayland`, and when `WAYLAND_DISPLAY` is unset (agent shells under `t3code.service` have none) it uses the first `wayland-*` socket in `$XDG_RUNTIME_DIR`. Check by hand on the box: `agent-chrome`, then `curl -s http://127.0.0.1:9333/json/version`.
 2. Start or `/reload` Pi after an apply so it picks up the `browser-harness` server (`mcp__browser-harness__*` tools; check with `/mcp`).
 3. Sign in to each site once. The login stays in the profile across Chrome restarts. Either you sign in by hand, or the
    agent does it with Pi's OS-level UI tools (`find_roots`, `observe_ui`, `act_ui`), for example clicking the

@@ -97,6 +97,8 @@ jobs:
         run: python3 -m unittest discover -s tests/sync-harness-skills -v
       - name: Codex config merge keeps the Codex app's entries (real script, throwaway HOME; vendored old merge as RED control)
         run: python3 -m unittest discover -s tests/codex-merge -v
+      - name: RustDesk on Linux (service started before the password; the configure stage's hash follows rustdesk's presence; real chezmoi, scripted sudo/systemctl/pgrep)
+        run: python3 -m unittest discover -s tests/rustdesk -v
       - name: Agent browser launcher and render (fake Chrome, real chezmoi)
         run: python3 -m unittest discover -s tests/agent-browser -v
       - name: dotfiles-update (non-interactive update with a conflict policy; real chezmoi and git, scratch repository and HOME)

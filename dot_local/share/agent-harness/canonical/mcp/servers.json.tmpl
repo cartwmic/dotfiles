@@ -28,7 +28,7 @@
     "hindsight": {
       "type": "http",
       "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/"
-    }{{ if eq .chezmoi.os "darwin" }},
+    }{{ if or (eq .chezmoi.os "darwin") (and (eq .chezmoi.os "linux") (eq .profile "personal")) }},
     "browser-harness": {
       "command": "uvx",
       "args": [
