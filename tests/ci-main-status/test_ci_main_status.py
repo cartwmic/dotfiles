@@ -359,6 +359,15 @@ class TipFlag(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("RED", out)
 
+    def test_tip_green_line_has_the_full_sha_and_the_default_does_not(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"; tip {self.c3}", out)
+        self.assertEqual(len(self.c3), 40)
+        rc, out = self.status("dotfiles")
+        self.assertNotIn(self.c3, out)
+
     def test_flag_may_follow_the_repo(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
         rc, out = self.status("dotfiles", "--tip")
