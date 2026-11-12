@@ -846,6 +846,10 @@ description = "Install/build Zellij plugins (room from release, harpoon from sou
 depends = ["install-rust"]
 run = '''
 set -euo pipefail
+# Works from any shell, as in install-cargo-tools: only ~/.zshenv puts ~/.cargo/bin on PATH, so on a fresh host
+# (chezmoi run from bash over ssh) the harpoon build below said "cargo: command not found".
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+PATH="$HOME/.cargo/bin:$PATH"; export PATH
 
 PLUGIN_DIR="$HOME/.config/zellij/plugins"
 mkdir -p "$PLUGIN_DIR"
