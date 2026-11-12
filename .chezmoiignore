@@ -175,6 +175,12 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 .local/share/browser-harness-mcp/**
 {{- end }}
 
+{{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
+# The agent Chrome login unit (agent-chrome.service) and the script that loads it: personal Linux only. macOS gets Chrome started by hand.
+.config/systemd/user/agent-chrome.service
+78_agent_chrome_systemd.sh
+{{- end }}
+
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
 # Coordinator and Retro LaunchAgent units (cartwmic/coordinator, cartwmic/retro): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.
