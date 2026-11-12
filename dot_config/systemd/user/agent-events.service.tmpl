@@ -11,4 +11,7 @@ Type=oneshot
 Nice=10
 Environment="AGENT_EVENTS_OTLP_ENDPOINT={{ $agentEvents.endpoint }}"
 Environment="AGENT_EVENTS_MACHINE={{ $agentEvents.machine }}"
+# The kit refuses a `run` on the production database unless it is the launchd job (XPC_SERVICE_NAME) or this override is exactly 1.
+# This unit is the scheduled job on Linux, so without it every tick exits 0 and builds and exports nothing.
+Environment="AGENT_TRACES_ALLOW_PRODUCTION_WRITE=1"
 ExecStart=/bin/sh %h/.local/bin/agent-events run

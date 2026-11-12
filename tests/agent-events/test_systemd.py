@@ -68,11 +68,13 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(p["Service"]["Type"], "oneshot")
         self.assertEqual(p["Service"]["ExecStart"], "/bin/sh %h/.local/bin/agent-events run")
         self.assertEqual(p["Service"]["Nice"], "10")
-        self.assertEqual(env_of(text), {"AGENT_EVENTS_OTLP_ENDPOINT": DEFAULT_ENDPOINT, "AGENT_EVENTS_MACHINE": "personal"})
+        self.assertEqual(env_of(text), {"AGENT_EVENTS_OTLP_ENDPOINT": DEFAULT_ENDPOINT, "AGENT_EVENTS_MACHINE": "personal",
+                                        "AGENT_TRACES_ALLOW_PRODUCTION_WRITE": "1"})   # the kit's guard: a tick without it builds and exports nothing
 
     def test_overrides_render(self):
         text = render(SERVICE, WORK, "agentEvents: {enabled: true, machine: work-laptop, endpoint: 'https://x.example/v1/metrics'}")[0].stdout
-        self.assertEqual(env_of(text), {"AGENT_EVENTS_OTLP_ENDPOINT": "https://x.example/v1/metrics", "AGENT_EVENTS_MACHINE": "work-laptop"})
+        self.assertEqual(env_of(text), {"AGENT_EVENTS_OTLP_ENDPOINT": "https://x.example/v1/metrics", "AGENT_EVENTS_MACHINE": "work-laptop",
+                                        "AGENT_TRACES_ALLOW_PRODUCTION_WRITE": "1"})
 
     def test_the_settings_match_the_launch_agent_for_the_same_data(self):
         # One source of the values: the unit never spells the endpoint or the label itself.
