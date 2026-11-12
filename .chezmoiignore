@@ -156,8 +156,8 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 .local/bin/chromium
 {{- end }}
 
-{{- if ne .chezmoi.os "darwin" }}
-# Agent browser (agent-harness README, "Agent browser"): macOS only, both desktop profiles. The Chrome launcher and the MCP server launcher; the MCP entry is gated the same way in servers.json.tmpl.
+{{- if not (or (eq .chezmoi.os "darwin") (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}
+# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher and the MCP server launcher; the MCP entry is gated the same way in servers.json.tmpl.
 .local/bin/agent-chrome
 .local/share/browser-harness-mcp
 .local/share/browser-harness-mcp/**
