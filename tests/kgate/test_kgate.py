@@ -284,7 +284,10 @@ host, remote = sys.argv[-2], sys.argv[-1]
 def log(entry):
     with open(os.path.join(fake, "calls.jsonl"), "a") as f:
         f.write(json.dumps(entry) + "\n")
-if host.endswith("unreachable"):
+if remote == "true":
+    log({"probe": host})
+    sys.exit(255 if host.endswith("down") else 0)
+if host.endswith("down") or host.endswith("unreachable"):
     sys.stderr.write("ssh: connect to host %s port 22: Operation timed out\n" % host)
     sys.exit(255)
 prefix = "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf -n kgate "
@@ -507,6 +510,38 @@ class Black(unittest.TestCase):
         rec = self.records()[-1]
         self.assertEqual((rec["exit"], rec["ran"]), (69, False))
         self.assertIn("unreachable", rec["reason"])
+
+    def test_host_list_parses_commas_lines_and_comments(self):
+        self.assertEqual(K.parse_hosts("a@1, b@2\n# c@3\n\nd@4\n"), ["a@1", "b@2", "d@4"])
+        self.assertEqual(K.parse_hosts("a@1"), ["a@1"])
+        self.assertEqual(K.parse_hosts(""), [])
+        self.assertEqual(K.parse_hosts(None), [])
+
+    def test_first_reachable_host_is_used_and_named(self):
+        done = self.kgate("--", "true", host="u@one-down,u@two,u@three")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("kgate: control plane u@two", done.stdout)
+        self.assertEqual([c["probe"] for c in self.calls() if "probe" in c], ["u@one-down", "u@two"])
+        self.assertTrue(any("kubectl" in c for c in self.calls()))
+
+    def test_host_file_list_is_used_when_kgate_ssh_is_unset(self):
+        (self.home / ".config" / "kgate").mkdir(parents=True)
+        (self.home / ".config" / "kgate" / "host").write_text("u@one-down\nu@two\n")
+        done = self.kgate("--", "true", host="", env={"HOME": str(self.home)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("kgate: control plane u@two", done.stdout)
+
+    def test_no_host_in_the_list_answers_is_69(self):
+        done = self.kgate("--", "true", host="u@a-down,u@b-down")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("no control plane answered", done.stdout)
+        self.assertFalse(any("kubectl" in c for c in self.calls()))
+
+    def test_one_host_is_not_probed_and_prints_no_host_line(self):
+        done = self.kgate("--", "true", host="u@only")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("control plane", done.stdout)
+        self.assertFalse(any("probe" in c for c in self.calls()))
 
     def test_no_host_is_69_names_the_key_and_makes_no_ssh_call(self):
         marker = self.tmp / "cmd-ran"
