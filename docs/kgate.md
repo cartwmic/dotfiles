@@ -196,6 +196,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `id` | kgate's job id, also the pod's name |
 | `cluster` | `homelab`, or the name of the cluster file |
 | `cache` | kubectl clusters only: `pvc`, `fallback` or `none` (see "The cache claim") |
+| `services`, `pod_start_s`, `service_ready_s`, `service_peak_bytes` | kubectl clusters with a sidecar only: the services, seconds until the pod ran, seconds until the sidecar's startup probe passed, and the sidecar's peak memory |
 | `cpu_limit`, `quota_wait_s` | kubectl clusters only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
@@ -253,7 +254,14 @@ A missing or invalid file is exit 69, and the reason names the file and the key 
 - Env: kgate's usual set, plus `HOME=/cache/<job id>/home` (per job, removed with the job's directory at the end, so nothing a job writes to HOME, such as `~/.gitconfig` or `~/.npmrc`, reaches a later job on a shared disk), `GOCACHE=/cache/go-build`, `GOMODCACHE=/cache/gomod`, `npm_config_cache=/cache/npm` and `npm_config_store_dir=/cache/pnpm-store`. Only those caches live on the claim.
 - No hostPath, affinity, tolerations, Secrets or imagePullSecrets (nodes pull with their own identity). `--node` is refused.
 
-**Refused with exit 69, before anything is created:** a profile with `[secrets]` or `services`, an image whose host is not in the cluster file's `registries` (or that is not pinned by digest), a root user, an invalid cluster file. The record names the profile's cluster even for these refusals, and no homelab connection is made.
+**Sidecar and mounts (all optional, kubectl clusters only).**
+
+- `services = ["mssql"]` with an `[mssql]` table adds a SQL Server container to the pod. It is a native sidecar (an init container with `restartPolicy: Always`) with a startup probe, so the job container starts only once the database accepts a login. kgate generates a throwaway SA password for each job (`Aa1_` and 32 hex characters), puts it in the pod spec of both containers (`MSSQL_SA_PASSWORD`, `SA_PASSWORD`) and tells CMD where the database is (`MSSQL_HOST=localhost`, `MSSQL_PORT=1433`). The password is never written to the log, the record, the console or an error message: anything that would print it prints `***`. `[mssql]` keys: `image` (required, by digest, host in the cluster file's `registries`), `cpu` (2), `cpu_limit`, `memory` (4Gi), `memory_limit`, `ephemeral_storage` (4Gi), `ready_s` (300, how long the startup probe may take). The sidecar's requests count toward the namespace quota. If it crashes or restarts, kgate exits 69 with the last 15 lines of its log (password masked) and CMD does not run.
+- `[[image_volumes]]` with `image` and `path` mounts an image read-only at `path` (a Kubernetes image volume). The image is pinned by digest and its host must be in `registries`, the same rule as the job image. `path` is an absolute directory; it may not be `/cache`, `/out`, a tree root, or a system directory.
+- `local_hostnames = ["db"]` makes those names resolve to `127.0.0.1` in the pod (`hostAliases`), for a repo whose own configuration names the database by host. Plain host names only; an address is refused.
+- With a sidecar the pod has two containers, so kgate sends its `exec` calls to the container named `job`. The record gains `services`, `pod_start_s`, `service_ready_s` (seconds from pod creation to the sidecar's first pass) and `service_peak_bytes` (the sidecar's own peak memory). The log says `SQL Server ready after Ns` and `peak mssql N cgroup`.
+
+**Refused with exit 69, before anything is created:** a profile with `[secrets]` or a service other than `mssql`, an image whose host is not in the cluster file's `registries` (or that is not pinned by digest), a root user, an invalid cluster file. The record names the profile's cluster even for these refusals, and no homelab connection is made.
 
 **The cache claim.** With a claim, `GOCACHE`, `GOMODCACHE` and the package-manager caches are warm after the first job. The claim is created by whoever runs the cluster, not by kgate, and mounting a claim in the pod's own namespace needs no PVC rights. A claim with access mode ReadWriteOncePod lets one pod use it:
 
@@ -309,6 +317,7 @@ cluster = "homelab"                              # optional: "homelab" (default)
 cache_pvc = "my-cache"                           # kubectl clusters only: mount this claim at /cache instead of an emptyDir
 ephemeral_storage = "20Gi"                       # kubectl clusters only: the pod's ephemeral-storage request and limit; default 10Gi
 cpu_limit = 8                                    # kubectl clusters only: the CPU limit and build parallelism; default cpu
+local_hostnames = ["db"]                         # kubectl clusters only: names that resolve to 127.0.0.1 in the pod
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
 
 [tools]                                          # exact versions; checked in the pod before CMD
@@ -324,7 +333,7 @@ services = ["docker"]                            # optional; see below
 - **Tools.** The pod runs the command and the expected version must appear in its output as a whole version (`1.98.0` does not match `11.98.0` or `1.98.01`). Any tool with a version command fits without changing kgate: `cargo`, `rustc`, `helm`, `kustomize`, `ansible-lint`, `python3`.
 - **Secrets.** Read with `op read` on this Mac at run time into a temporary pod Secret and passed as environment variables. Never in the image, a profile value or the log. `op` runs only with the 1Password service-account token (`OP_SERVICE_ACCOUNT_TOKEN`, else `~/.config/agent-harness/op-service-token`); with neither, the job exits 69 before `op` runs, so it never reaches the desktop app. If `op read` fails the job exits 69.
 - **User.** The pod's exec starts as root to unpack. kgate then gives the shipped tree, `/out`, a home and the caches (`/cache/u<uid>`: npm and Cargo, with `CARGO_HOME=/cache/u<uid>/cargo`, because the image's own `/usr/local/cargo` is root-owned) to `user` and runs the version checks and CMD as it, as on a developer's Mac. (As root, `chmod 000` tests pass that a user fails.)
-- **Services.** If the gate needs something the image cannot provide (Docker, a database), list it. kgate refuses the job with 69; that gate is not a kgate gate.
+- **Services.** If the gate needs something the image cannot provide (Docker, a database), list it. On the homelab kgate refuses the job with 69; that gate is not a kgate gate. A kubectl cluster offers `mssql` (see "Sidecar and mounts").
 - **Image pull.** The image registry `ghcr.io` is private; kgate reads the 1Password item `kgate-github-packages-read` for each job's temporary pull Secret (expires about 2026-12-02; see the homelab `docs/kgate.md`).
 - The image needs `tini` (the pod's first process) and `python3` (3.11 or later): the same script runs in the pod to verify the hash and check versions. The version commands run in the job's directory, so per-directory tools (rustup with a `rust-toolchain.toml`) report what CMD will use. `git` is needed when the gate itself uses it.
 
