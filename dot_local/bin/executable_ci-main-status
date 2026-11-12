@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """ci-main-status: is main green, red, or untested? Read before every merge.
 
-usage: ci-main-status REPO        (dotfiles, loop-engine, agent-kit, coordinator, homelab)
-       ci-main-status --all
+usage: ci-main-status [--tip] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab)
+       ci-main-status [--tip] --all
+
+--tip is for deploy. Without it, green means "not red": the newest conclusive commit passed, and untested commits
+may sit on top while a run is going. That is right for the merge freeze. With --tip, exit 0 needs main's tip itself
+to have a conclusive pass. A green commit below untested commits is 2 even while a run is going (the message says
+whether one is). Red is still 1. Everything else is unchanged. The coordinator journal matches by tip sha, so it
+follows the same rule.
 
 Verdicts belong to commits, not to times. The script walks main's first-parent line from the tip, newest first.
 A commit's verdict comes from its full-workflow runs on main (push and workflow_dispatch): the highest run id
@@ -12,11 +18,15 @@ A red run whose rerun (gh run rerun) is going holds its commit red until the rer
 times are never read.
 
 Exit codes:
-  0  green: the newest conclusive commit passed (it may be followed by untested commits while a run is going)
+  0  green: the newest conclusive commit passed (it may be followed by untested commits while a run is going).
+     With --tip: main's tip itself passed.
   1  red: the newest conclusive commit failed. Also any state it cannot read (gh or git error, bad journal, a run on
      a commit that is not on main's first-parent line).
   2  untested: main has commits no conclusive run tested and no run is going (start one), or there is no
-     conclusive run at all. The message says whether a run is going.
+     conclusive run at all. The message says whether a run is going. With --tip, also a green commit below
+     untested commits while a run is going: the tip is not tested yet, so wait.
+Under --tip the GREEN line ends with the full 40-char tip sha ("tip <sha>"). A deploy pulls that sha
+(git merge --ff-only <sha>), because main can move between the check and the pull.
 --all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab has no main run: "n/a", never affects the code.
 
 GitHub repos: the full workflow's runs on main, read from gh run list (the newest RUN_LIMIT runs).
@@ -185,8 +195,11 @@ def first_parent_walk(repo, tip, verdicts):
     return walked
 
 
-def assess(name, repo, verdicts, going, noun="run"):
-    """One repo's state. Returns (exit code, output lines). Used by every repo kind."""
+def assess(name, repo, verdicts, going, noun="run", tip_only=False):
+    """One repo's state. Returns (exit code, output lines). Used by every repo kind.
+
+    tip_only (--tip): green below untested commits is 2 even while a run is going.
+    """
     tip = main_tip(repo)
     walked = first_parent_walk(repo, tip, verdicts)
     hits = [i for i, (_, _, rec) in enumerate(walked) if rec]
@@ -214,7 +227,11 @@ def assess(name, repo, verdicts, going, noun="run"):
 
     untested = i
     if untested == 0:
-        return 0, [f"{name}: GREEN  {newest.label} passed on {sha[:7]}; main tip is tested"]
+        full = f"; tip {sha}" if tip_only else ""
+        return 0, [f"{name}: GREEN  {newest.label} passed on {sha[:7]}; main tip is tested{full}"]
+    if going and tip_only:
+        return 2, [f"{name}: UNTESTED  {untested} main commit(s) after {newest.label} ({sha[:7]}); "
+                   f"main tip {tip[:7]} is not tested yet. A run is going; wait for it."]
     if going:
         return 0, [f"{name}: GREEN  {newest.label} passed on {sha[:7]}; "
                    f"{untested} main commit(s) not tested yet, a run is going"]
@@ -222,7 +239,7 @@ def assess(name, repo, verdicts, going, noun="run"):
                f"and no run is going. Start one."]
 
 
-def check(name):
+def check(name, tip_only=False):
     spec = REPOS[name]
     if spec is None:
         return 0, [f"{name}: n/a (gate is per-PR only)"]
@@ -230,16 +247,16 @@ def check(name):
         verdicts, going = journal_verdicts()
     else:
         verdicts, going = github_verdicts(spec)
-    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run")
+    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only)
     if "journal" in spec and not verdicts:
         lines.insert(0, f"  (no journal record at {JOURNAL})")
     return code, lines
 
 
-def describe(name):
+def describe(name, tip_only=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     try:
-        return check(name)
+        return check(name, tip_only)
     except Unreadable as e:
         return 1, [f"{name}: ERROR  cannot read state: {e}"]
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
@@ -248,17 +265,19 @@ def describe(name):
 
 
 def main(argv):
+    tip_only = "--tip" in argv
+    argv = [a for a in argv if a != "--tip"]
     if argv == ["--all"]:
         names = ORDER
     elif len(argv) == 1 and argv[0] in REPOS:
         names = argv
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status REPO | --all", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip] REPO | [--tip] --all", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
     for name in names:
-        code, lines = describe(name)
+        code, lines = describe(name, tip_only)
         print("\n".join(lines))
         if rank[code] > rank[worst]:
             worst = code

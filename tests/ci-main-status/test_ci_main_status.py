@@ -329,6 +329,86 @@ class GithubStateTable(Fixture):
         self.assertIn("not on the first-parent history", out)
 
 
+class TipFlag(Fixture):
+    """--tip: exit 0 only when main's tip itself has a conclusive pass. The default is unchanged."""
+
+    def test_tip_tested_green_exits_0(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("main tip is tested", out)
+
+    def test_green_below_untested_commits_with_a_run_going_is_2_under_tip_and_0_without(self):
+        self.dotfiles_runs([run(2, self.c3, status="queued", age=5), run(1, self.c2, "success", age=1)])
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("UNTESTED", out)
+        self.assertIn("A run is going", out)
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+
+    def test_green_below_untested_commits_with_no_run_is_2_and_says_to_start_one(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("no run is going", out)
+
+    def test_red_is_1(self):
+        self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)])
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_tip_green_line_has_the_full_sha_and_the_default_does_not(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"; tip {self.c3}", out)
+        self.assertEqual(len(self.c3), 40)
+        rc, out = self.status("dotfiles")
+        self.assertNotIn(self.c3, out)
+
+    def test_flag_may_follow_the_repo(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("dotfiles", "--tip")
+        self.assertEqual(rc, 0, out)
+
+    def test_all_with_tip_is_2_when_one_repo_is_untested_at_the_tip(self):
+        runs = {f"cartwmic/{r}|{w}": [run(1, self.c3, "success")]
+                for r, w in (("dotfiles", "ci.yml"), ("loop-engine", "ci.yml"), ("agent-kit", "unit.yml"))}
+        runs["cartwmic/dotfiles|ci.yml"] = [run(2, self.c3, status="queued", age=5), run(1, self.c2, "success", age=1)]
+        self.runs = runs
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
+        rc, out = self.status("--all")
+        self.assertEqual(rc, 0, out)
+        rc, out = self.status("--all", "--tip")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("dotfiles: UNTESTED", out)
+        self.assertIn("loop-engine: GREEN", out)
+
+    def test_all_with_tip_red_beats_untested(self):
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c2, "success")],
+                     "cartwmic/loop-engine|ci.yml": [run(1, self.c3, "failure")],
+                     "cartwmic/agent-kit|unit.yml": [run(1, self.c3, "success")]}
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
+        rc, out = self.status("--all", "--tip")
+        self.assertEqual(rc, 1, out)
+
+    def test_journal_pass_behind_tip_with_live_lock_is_2_under_tip(self):
+        self.journal.write_text(json.dumps({"tip": self.c2, "verdict": "pass"}) + "\n")
+        self.lock.mkdir()
+        (self.lock / "pid").write_text(str(os.getpid()))
+        self.assertEqual(self.status("coordinator")[0], 0)
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("A run is going", out)
+
+    def test_journal_pass_at_tip_is_0_under_tip(self):
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 0, out)
+
+
 class AllAndHomelab(Fixture):
     def test_all_exit_code_red_beats_untested(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "failure")],
