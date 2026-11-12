@@ -1,0 +1,45 @@
+{{- /*
+  Work machine only: installs leak-guard's git hooks into this source dir and writes its terms and context files from local chezmoi data
+    leakGuard:
+      terms: [<regex>, ...]
+      context: "<what counts as a work detail, a few lines>"
+  Renders nothing (chezmoi runs no script) on any other profile, or without the leakGuard data. docs/leak-guard.md.
+*/ -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "leakGuard") -}}
+{{-   $lg := .leakGuard -}}
+{{-   if not (kindIs "map" $lg) }}{{ fail "leakGuard must be a map with terms (a list) and context (a string)" }}{{ end -}}
+{{-   $terms := dig "terms" (list) $lg -}}
+{{-   if or (not (kindIs "slice" $terms)) (not $terms) }}{{ fail "leakGuard.terms must be a non-empty list of regexes" }}{{ end -}}
+{{-   range $t := $terms }}{{ if not (kindIs "string" $t) }}{{ fail "leakGuard.terms must contain only strings" }}{{ end }}{{ end -}}
+{{-   $context := dig "context" "" $lg -}}
+{{-   if or (not (kindIs "string" $context)) (eq $context "") }}{{ fail "leakGuard.context must be a non-empty string" }}{{ end -}}
+#!/bin/sh
+# leak-guard hooks and files, installed from the chezmoi data key `leakGuard`. Edit the data, not these files.
+set -eu
+umask 077
+MARK="# leak-guard hook (managed by chezmoi; run_onchange_after_46_install-leak-guard-hooks)"
+src={{ .chezmoi.sourceDir | quote }}
+hooks="$(git -C "$src" rev-parse --git-path hooks 2>/dev/null || true)"
+case "$hooks" in /*) ;; "") hooks="" ;; *) hooks="$src/$hooks" ;; esac
+install_hook() {  # install_hook NAME
+  [ -n "$hooks" ] || { echo "leak-guard: $src is not a git repository; no hook installed" >&2; return 0; }
+  mkdir -p "$hooks"
+  if [ -e "$hooks/$1" ] && ! grep -qF "$MARK" "$hooks/$1"; then
+    echo "leak-guard: WARNING: $hooks/$1 already exists and is not leak-guard's; left alone, so $1 is NOT guarded" >&2
+    return 0
+  fi
+  printf '#!/bin/sh\n%s\nexec "$HOME/.local/bin/leak-guard" %s "$@"\n' "$MARK" "$1" > "$hooks/$1.tmp"
+  chmod 755 "$hooks/$1.tmp"
+  mv "$hooks/$1.tmp" "$hooks/$1"
+}
+install_hook pre-commit
+install_hook pre-push
+dest="$HOME/.config/leak-guard"
+mkdir -p "$dest"
+printf '%s' {{ (join "\n" $terms) | b64enc | quote }} | base64 -d > "$dest/terms.tmp"
+printf '\n' >> "$dest/terms.tmp"
+mv "$dest/terms.tmp" "$dest/terms"
+printf '%s' {{ $context | b64enc | quote }} | base64 -d > "$dest/context.tmp"
+printf '\n' >> "$dest/context.tmp"
+mv "$dest/context.tmp" "$dest/context"
+{{ end -}}

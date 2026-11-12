@@ -287,6 +287,8 @@ Library/Preferences/pnpm/**
 # Anthropic stalls are only seen on the work profile.
 .pi/agent/extensions/anthropic-stall-retry
 .pi/agent/extensions/anthropic-stall-retry/**
+# leak-guard (git hooks that ask whether a change leaks work details) is for the work machine only (docs/leak-guard.md).
+.local/bin/leak-guard
 # The Axon playbook is Axon's private material (docs/profiles.md).
 .pi/agent/extensions/axon-playbook
 .pi/agent/extensions/axon-playbook/**

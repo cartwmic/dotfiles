@@ -75,6 +75,12 @@ data:
   #       image = "registry.example/ci/runner:1@sha256:<64 hex>"
   #       cpu = 2
   #       memory = "4Gi"
+  # axon-work-computer only: the leak-guard git hooks (docs/leak-guard.md). Terms are regexes matched case-insensitively against the added lines of every commit and push;
+  # the context tells Claude what counts as a work detail. Omit the key and no hook or file is installed. The real terms stay in this file, never in the repo.
+  # leakGuard:
+  #   terms: ["fooco", "fooco-internal\\.example", "project-bar"]
+  #   context: |
+  #     Fooco is the employer. A work detail is anything that names it, its hosts, its repositories, its clusters or its registries.
 
 hooks:
   read-source-state:
