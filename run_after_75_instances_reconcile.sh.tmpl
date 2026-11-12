@@ -4,7 +4,7 @@
 # see dot_local/user_scripts/executable_instances_reconcile.sh and the "Instances" section of the README.
 # The script always exits 0, so a missing token or checkout cannot block the rest of the apply.
 {{- if eq .chezmoi.os "linux" }}
-# Linux (personal): the systemd twin of the reconcile script; it reads the same INSTANCES_COORDINATOR_* and INSTANCES_RETRO_* flags.
+# Linux (personal): the systemd twin of the reconcile script; it reads the same INSTANCES_COORDINATOR_* flags.
 SCRIPT="$HOME/.local/user_scripts/instances_reconcile_systemd.sh"
 {{- else }}
 SCRIPT="$HOME/.local/user_scripts/instances_reconcile.sh"
@@ -14,7 +14,7 @@ if [ ! -x "$SCRIPT" ]; then
   exit 0
 fi
 {{- if eq .profile "axon-work-computer" }}
-# The work profile runs the Matrix coordinator only (Retro for work is a later change). Its flag is the same instances.coordinator.enabled.
+# The work profile runs the Matrix coordinator only. Its flag is the same instances.coordinator.enabled.
 export INSTANCES_LIST='coordinator-work'
 export INSTANCES_COORDINATOR_WORK_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinator" "enabled" "" . | printf "%v") }}
 export INSTANCES_COORDINATOR_WORK_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "coordinator")) }}
@@ -22,9 +22,5 @@ export INSTANCES_COORDINATOR_WORK_EXTRA_PATH={{ includeTemplate "shquote" (dig "
 {{- else }}
 export INSTANCES_COORDINATOR_ENABLED={{ includeTemplate "shquote" (dig "instances" "coordinator" "enabled" "" . | printf "%v") }}
 export INSTANCES_COORDINATOR_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "coordinator")) }}
-export INSTANCES_RETRO_ENABLED={{ includeTemplate "shquote" (dig "instances" "retro" "enabled" "" . | printf "%v") }}
-export INSTANCES_RETRO_REPO={{ includeTemplate "shquote" (includeTemplate "instance_repo" (dict "root" . "name" "retro")) }}
-export INSTANCES_RETRO_CHANNEL_ID={{ includeTemplate "shquote" (dig "instances" "retro" "channelId" "" . | printf "%v") }}
-export INSTANCES_RETRO_OP_ITEM={{ includeTemplate "shquote" (dig "instances" "retro" "opItem" "" . | printf "%v") }}
 {{- end }}
 exec "$SCRIPT"

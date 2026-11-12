@@ -404,7 +404,7 @@ class DataTests(WorkMacTestCase):
     def test_other_layouts_get_the_keys_in_the_right_place(self):
         layouts = {
             "four-space indent": 'data:\n    jumpSshHost: "x"\nhooks: {}\n',
-            "instances without coordinator": 'data:\n  instances:\n    retro:\n      enabled: false\n  jumpSshHost: "x"\n',
+            "instances without coordinator": 'data:\n  instances:\n    other:\n      enabled: false\n  jumpSshHost: "x"\n',
             "coordinator without repo": 'data:\n  profile: "axon-work-computer"\n  instances:\n    coordinator:\n      enabled: false   # off\n',
             "no data at all": '# only a hook\nhooks:\n  read-source-state:\n    pre:\n      command: ".local/share/chezmoi/.install-password-manager.sh"\n',
         }

@@ -182,10 +182,9 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
-# Coordinator and Retro LaunchAgent units (cartwmic/coordinator, cartwmic/retro): personal macOS.
+# Coordinator LaunchAgent unit (cartwmic/coordinator): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.
 .local/share/instances/launchd/local.coordinatord.plist
-.local/share/instances/launchd/local.retrod.plist
 {{- end }}
 
 {{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
@@ -202,7 +201,7 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
-# The coordinator's and Retro's systemd user units and the script that installs them: personal Linux. Inert copy, like the plists above.
+# The coordinator's systemd user unit and the script that installs them: personal Linux. Inert copy, like the plists above.
 .local/share/instances/systemd
 .local/share/instances/systemd/**
 .local/user_scripts/instances_reconcile_systemd.sh

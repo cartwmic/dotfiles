@@ -28,7 +28,6 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 UNIT_DIR = ROOT / "dot_local" / "share" / "instances" / "launchd"
 COORD_UNIT = UNIT_DIR / "local.coordinatord.plist.tmpl"
-RETRO_UNIT = UNIT_DIR / "local.retrod.plist.tmpl"
 WORK_UNIT = UNIT_DIR / "local.coordinatord.work.plist.tmpl"
 WRAPPER = ROOT / "run_after_75_instances_reconcile.sh.tmpl"
 IGNORE = ROOT / ".chezmoiignore"
@@ -37,13 +36,11 @@ LAUNCHD_LIB = ROOT / "dot_local" / "share" / "launchd-reload" / "launchd_reload.
 # The helper's waits, shortened: the numbers (20 polls, 3 retries) stay as they ship.
 FAST = {"LAUNCHD_POLL_SLEEP": "0.01", "LAUNCHD_RETRY_SLEEP": "0"}
 GOLDEN_COORD = HERE / "golden" / "local.coordinatord.plist"
-GOLDEN_RETRO = HERE / "golden" / "local.retrod.plist"
 GOLDEN_WORK = HERE / "golden" / "local.coordinatord.work.plist"
 # docs/launchd/local.coordinatord.work.plist of cartwmic/coordinator (last changed in ef403d3, main 6576675): the template the work setup script renders with sed.
 COORDINATOR_WORK_TEMPLATE = HERE / "golden" / "coordinator-repo.local.coordinatord.work.plist"
 COORD_PATH = "/Volumes/Workshop/macbook/git/coordinator"
 WORK_COORD_PATH = "/Users/test/coordinator-work"
-RETRO_PATH = "/Volumes/Workshop/macbook/git/retro"
 HAVE_CHEZMOI = shutil.which("chezmoi") is not None
 DOMAIN = "gui/%d" % os.getuid()
 
@@ -67,25 +64,19 @@ class RenderTests(unittest.TestCase):
     def test_default_coordinator_render_is_byte_identical_to_the_deployed_unit(self):
         self.assertEqual(render(COORD_UNIT, {"profile": "personal"}), GOLDEN_COORD.read_text(encoding="utf-8"))
 
-    def test_default_retro_render_is_byte_identical_to_the_golden_unit(self):
-        self.assertEqual(render(RETRO_UNIT, {"profile": "personal"}), GOLDEN_RETRO.read_text(encoding="utf-8"))
-
     def test_empty_repo_value_falls_back_to_the_default_path(self):
-        data = {"profile": "personal", "instances": {"coordinator": {"repo": ""}, "retro": {"repo": ""}}}
+        data = {"profile": "personal", "instances": {"coordinator": {"repo": ""}}}
         self.assertEqual(render(COORD_UNIT, data), GOLDEN_COORD.read_text(encoding="utf-8"))
-        self.assertEqual(render(RETRO_UNIT, data), GOLDEN_RETRO.read_text(encoding="utf-8"))
 
     def test_local_data_changes_only_the_checkout_path(self):
-        data = {"profile": "personal", "instances": {"coordinator": {"repo": "/srv/co"}, "retro": {"repo": "/srv/re"}}}
+        data = {"profile": "personal", "instances": {"coordinator": {"repo": "/srv/co"}}}
         self.assertEqual(render(COORD_UNIT, data), GOLDEN_COORD.read_text(encoding="utf-8").replace(COORD_PATH, "/srv/co"))
-        self.assertEqual(render(RETRO_UNIT, data), GOLDEN_RETRO.read_text(encoding="utf-8").replace(RETRO_PATH, "/srv/re"))
         # The working directory is home, not the checkout: a launchd process cwd'd on /Volumes/Workshop hung on a macOS removable-volume prompt (2026-11-09).
         self.assertIn("<key>WorkingDirectory</key><string>/Users/test</string>", render(COORD_UNIT, data))
         self.assertIn("<string>/srv/co/src/coordinatord/main.ts</string>", render(COORD_UNIT, data))
 
     def test_work_profile_default_checkouts(self):
         data = {"profile": "axon-work-computer"}
-        self.assertIn("<string>/Users/test/git/retro/src/retrod/main.ts</string>", render(RETRO_UNIT, data))
         self.assertIn("<string>/Users/test/coordinator-work/src/coordinatord/main.ts</string>", render(COORD_UNIT, data))
         self.assertNotIn("/git/coordinator", render(COORD_UNIT, data))
 
@@ -126,7 +117,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn(".local/share/coordinator<", text)  # never the personal state directory
 
     def test_work_wrapper_runs_only_the_work_coordinator_with_the_same_flag(self):
-        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"enabled": True, "extraPath": "/opt/n/bin"}, "retro": {"enabled": True}}}
+        data = {"profile": "axon-work-computer", "instances": {"coordinator": {"enabled": True, "extraPath": "/opt/n/bin"}, "retro": {"enabled": True}}}  # a leftover retro block is ignored
         text = render(WRAPPER, data)
         self.assertIn("export INSTANCES_LIST='coordinator-work'", text)
         self.assertIn("export INSTANCES_COORDINATOR_WORK_ENABLED='true'", text)
@@ -140,12 +131,11 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("COORDINATOR_WORK", personal)
 
     def test_wrapper_hands_the_flags_and_the_same_default_repo_to_the_script(self):
+        # A leftover instances.retro block in the local chezmoi.yaml renders to nothing: no INSTANCES_RETRO_* export, no error.
         text = render(WRAPPER, {"profile": "personal", "instances": {"retro": {"enabled": True, "channelId": "123", "opItem": "op://V/I/bot_token"}}})
-        self.assertIn("export INSTANCES_RETRO_ENABLED='true'", text)
+        self.assertNotIn("RETRO", text)
         self.assertIn("export INSTANCES_COORDINATOR_ENABLED=''", text)
         self.assertIn("export INSTANCES_COORDINATOR_REPO='%s'" % COORD_PATH, text)
-        self.assertIn("export INSTANCES_RETRO_REPO='%s'" % RETRO_PATH, text)
-        self.assertIn("export INSTANCES_RETRO_CHANNEL_ID='123'", text)
         self.assertNotIn("launchctl", text)
 
 
@@ -210,19 +200,15 @@ class Scratch:
                    '[ "$3" = rev-parse ] && echo 0123456789abcdef0123456789abcdef01234567\nexit 0\n')
         self.co = self.base / "co"
         write_exec(self.co / "src" / "coordinatord" / "main.ts", "")
-        self.re = self.base / "re"
-        write_exec(self.re / "src" / "retrod" / "main.ts", "")
         self.units = self.base / "units"
         self.units.mkdir()
         self.set_unit("local.coordinatord", "coordinator-v1")
-        self.set_unit("local.retrod", "retro-v1")
         self.set_unit("local.coordinatord.work", "work-v1")
         (self.home / ".local" / "share" / "launchd-reload").mkdir(parents=True)
         shutil.copy(LAUNCHD_LIB, self.home / ".local" / "share" / "launchd-reload" / "launchd_reload.sh")
         self.agents = self.home / "Library" / "LaunchAgents"
         self.state_root = self.home / ".local" / "state" / "instances"
         self.coordinator_state = self.home / ".local" / "share" / "coordinator"
-        self.retro_state = self.home / ".local" / "share" / "retro"
         self.work_state = self.home / ".local" / "share" / "coordinator-work"
         self.last = None
 
@@ -262,14 +248,13 @@ class Scratch:
     def reset_calls(self):
         (self.stub / "calls").write_text("")
 
-    def run(self, coordinator=None, retro=None, reload=None, **extra):
+    def run(self, coordinator=None, reload=None, **extra):
         env = dict(os.environ)
         env.update(
             HOME=str(self.home), PATH=str(self.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(self.stub),
             INSTANCES_UNIT_DIR=str(self.units), INSTANCES_TOOL_PATH=str(self.tools), TMPDIR=str(self.base),
             INSTANCES_COORDINATOR_ENABLED="" if coordinator is None else str(coordinator).lower(), INSTANCES_COORDINATOR_REPO=str(self.co),
-            INSTANCES_RETRO_ENABLED="" if retro is None else str(retro).lower(), INSTANCES_RETRO_REPO=str(self.re),
-            INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="", **FAST,
+            **FAST,
         )
         env.pop("INSTANCES_RELOAD", None)
         if reload:
@@ -303,8 +288,10 @@ class Scratch:
 
 
 PRINT_CO = "print %s/local.coordinatord" % DOMAIN
-PRINT_RE = "print %s/local.retrod" % DOMAIN
 PRINT_WK = "print %s/local.coordinatord.work" % DOMAIN
+# The coordinator and the work coordinator in one run: the way a second instance is reconciled after the first (the wrapper never
+# runs both; the script's loop does not care).
+BOTH = {"INSTANCES_LIST": "coordinator coordinator-work", "INSTANCES_COORDINATOR_WORK_ENABLED": "true"}
 
 
 class MatrixTests(unittest.TestCase):
@@ -484,7 +471,7 @@ class MatrixTests(unittest.TestCase):
         self.s.run(coordinator=True)
         self.s.set_unit("local.coordinatord", "coordinator-v2")
         self.s.reset_calls()
-        self.s.run(coordinator=True, reload="retro")
+        self.s.run(coordinator=True, reload="other")
         self.assertCalls([PRINT_CO])
 
     def test_reload_all_reloads_a_changed_instance(self):
@@ -642,7 +629,7 @@ class MatrixTests(unittest.TestCase):
         for word in words:
             self.assertIn(word, status)
         self.assertCalls([])
-        self.assertFalse(self.dst("local.coordinatord" if name == "coordinator" else "local.retrod").exists())
+        self.assertFalse(self.dst("local.coordinatord").exists())
         self.assertFalse((self.s.state_root / (name + ".managed")).exists())
 
     def test_missing_checkout_is_not_ready_and_installs_nothing(self):
@@ -722,45 +709,17 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("must be true or false", self.s.output())
 
     def test_a_failure_in_one_instance_does_not_stop_the_other(self):
-        self.s.have_config(self.s.retro_state)
-        self.s.run(coordinator=True, retro=True)  # coordinator has no config and no script
+        self.s.have_config(self.s.work_state)
+        self.s.run(coordinator=True, INSTANCES_COORDINATOR_WORK_REPO=str(self.s.co), **BOTH)  # coordinator has no config and no script
         self.assertTrue(self.s.status("coordinator").startswith("NOT READY"))
-        self.assertEqual(self.s.status("retro"), "READY (started)")
-        self.assertEqual(self.s.loaded(), ["local.retrod"])
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
+        self.assertEqual(self.s.loaded(), ["local.coordinatord.work"])
 
-    # --- retro -------------------------------------------------------------------------------------------------------------------
-
-    def test_retro_off_by_default_even_with_a_loaded_service(self):
-        self.s.load("local.retrod")
-        self.s.run()
-        self.assertCalls([])
-
-    def test_retro_without_its_local_data_is_not_ready_and_names_the_keys(self):
-        self.s.run(retro=True)
-        self.assertNotReady("retro", "instances.retro.channelId", "instances.retro.opItem")
-
-    def test_retro_configures_itself_once_from_local_data_then_starts(self):
-        self.setup_script(self.s.re, "configure.sh",
-                          '#!/bin/sh\n: "${RETRO_CHANNEL_ID:?}" "${RETRO_OP_ITEM:?}"\nmkdir -p "$HOME/.local/share/retro"\n'
-                          'printf "%s %s\\n" "$RETRO_CHANNEL_ID" "$RETRO_OP_ITEM" > "$HOME/.local/share/retro/config.json"\n')
-        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C123", INSTANCES_RETRO_OP_ITEM="op://V/I/bot_token")
+    def test_a_leftover_retro_flag_is_ignored(self):
+        self.s.run(INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO="/nowhere")
         self.ok()
-        self.assertCalls([PRINT_RE, self.bootstrap("local.retrod"), PRINT_RE])
-        self.assertEqual((self.s.retro_state / "config.json").read_text().strip(), "C123 op://V/I/bot_token")
-        self.assertTrue((self.s.home / "Library" / "Logs" / "retro").is_dir())
-
-    def test_retro_that_already_has_a_config_never_runs_configure(self):
-        self.s.have_config(self.s.retro_state)
-        self.setup_script(self.s.re, "configure.sh", "#!/bin/sh\necho ran >> '%s'\n" % (self.s.base / "ran"))
-        self.s.run(retro=True)
-        self.assertEqual(self.s.status("retro"), "READY (started)")
-        self.assertFalse((self.s.base / "ran").exists())
-
-    def test_nothing_the_script_prints_or_stores_contains_the_op_reference(self):
-        self.s.have_config(self.s.retro_state)
-        self.s.run(retro=True, INSTANCES_RETRO_OP_ITEM="op://V/I/bot_token")
-        everything = self.s.output() + "".join(p.read_text() for p in self.s.state_root.rglob("*") if p.is_file())
-        self.assertNotIn("op://V/I/bot_token", everything)
+        self.assertCalls([])
+        self.assertNotIn("retro", self.s.output())
 
 
 class WorkMatrixTests(unittest.TestCase):
@@ -851,7 +810,7 @@ class WorkMatrixTests(unittest.TestCase):
         self.s.have_config(self.s.work_state)
         self.s.run_work(True)
         self.s.set_unit("local.coordinatord.work", "work-v2")
-        for asked in (None, "coordinator", "retro"):
+        for asked in (None, "coordinator", "other"):
             self.s.reset_calls()
             self.s.run_work(True, reload=asked)
             self.assertCalls([PRINT_WK])
@@ -1002,14 +961,14 @@ class WorkMatrixTests(unittest.TestCase):
     def test_the_extra_path_belongs_to_the_work_coordinator_only(self):
         # A directory given for the work instance must not make a tool "found" for another instance in the same run.
         self.s.have_config(self.s.work_state)
-        self.s.have_config(self.s.retro_state)
+        self.s.have_config(self.s.coordinator_state)
         extra = self.s.base / "nvm"
         write_exec(extra / "node", "#!/bin/sh\nexit 0\n")
         (self.s.tools / "node").unlink()
-        self.s.run_work(True, INSTANCES_LIST="coordinator-work retro", INSTANCES_COORDINATOR_WORK_EXTRA_PATH=str(extra),
-                        INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO=str(self.s.re))
+        self.s.run_work(True, INSTANCES_LIST="coordinator-work coordinator", INSTANCES_COORDINATOR_WORK_EXTRA_PATH=str(extra),
+                        INSTANCES_COORDINATOR_ENABLED="true", INSTANCES_COORDINATOR_REPO=str(self.s.co))
         self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
-        self.assertIn("node-on-PATH", self.s.status("retro"))
+        self.assertIn("node-on-PATH", self.s.status("coordinator"))
 
 
 class MarkerFailureTests(unittest.TestCase):
@@ -1021,33 +980,33 @@ class MarkerFailureTests(unittest.TestCase):
 
     def test_unwritable_ownership_marker_is_reported_and_the_other_instance_still_runs(self):
         self.s.have_config(self.s.coordinator_state)
-        self.s.have_config(self.s.retro_state)
+        self.s.have_config(self.s.work_state)
         self.s.load("local.coordinatord")
         (self.s.state_root / "coordinator.unit-sha").mkdir(parents=True)  # printf into a directory fails
-        self.s.run(coordinator=True, retro=True)
+        self.s.run(coordinator=True, INSTANCES_COORDINATOR_WORK_REPO=str(self.s.co), **BOTH)
         self.assertEqual(self.s.last.returncode, 0, self.s.output())
         self.assertIn("cannot record ownership", self.s.output())
         self.assertFalse((self.s.state_root / "coordinator.managed").exists())
         self.assertFalse(self.s.agents.joinpath("local.coordinatord.plist").exists())  # nothing replaced
-        self.assertEqual(self.s.status("retro"), "READY (started)")
+        self.assertEqual(self.s.status("coordinator-work"), "READY (started)")
         self.assertEqual(self.s.calls()[0], PRINT_CO)
         self.assertNotIn("bootstrap %s %s" % (DOMAIN, self.s.agents / "local.coordinatord.plist"), self.s.calls())
 
     @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
     def test_marker_that_cannot_be_created_after_the_sha_was_written_is_reported_not_fatal(self):
         self.s.have_config(self.s.coordinator_state)
-        self.s.have_config(self.s.retro_state)
+        self.s.have_config(self.s.work_state)
         self.s.load("local.coordinatord")
         self.s.state_root.mkdir(parents=True)
         (self.s.state_root / "coordinator.unit-sha").write_text("")  # writable file in a read-only directory: only creating .managed fails
         self.s.state_root.chmod(0o555)
         try:
-            self.s.run(coordinator=True, retro=True)
+            self.s.run(coordinator=True, INSTANCES_COORDINATOR_WORK_REPO=str(self.s.co), **BOTH)
         finally:
             self.s.state_root.chmod(0o755)
         self.assertEqual(self.s.last.returncode, 0, self.s.output())
         self.assertIn("cannot record ownership", self.s.output())
-        self.assertIn("retro: ", self.s.output())
+        self.assertIn("coordinator-work: ", self.s.output())
         self.assertFalse(self.s.agents.joinpath("local.coordinatord.plist").exists())
 
     @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
@@ -1055,12 +1014,12 @@ class MarkerFailureTests(unittest.TestCase):
         self.s.state_root.mkdir(parents=True)
         self.s.state_root.chmod(0o555)
         try:
-            self.s.run(coordinator=True, retro=True)
+            self.s.run(coordinator=True, INSTANCES_COORDINATOR_WORK_REPO=str(self.s.co), **BOTH)
         finally:
             self.s.state_root.chmod(0o755)
         self.assertEqual(self.s.last.returncode, 0, self.s.output())
         self.assertIn("cannot write", self.s.output())
-        self.assertIn("retro: ", self.s.output())  # it went on to the second instance
+        self.assertIn("coordinator-work: ", self.s.output())  # it went on to the second instance
         self.assertEqual(self.s.calls(), [])
 
     @unittest.skipIf(os.geteuid() == 0, "root can write anywhere")
@@ -1119,8 +1078,8 @@ class CancellationTests(unittest.TestCase):
         env = dict(os.environ, HOME=str(s.home), PATH=str(s.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(s.stub),
                    INSTANCES_UNIT_DIR=str(s.units), INSTANCES_TOOL_PATH=str(s.tools), TMPDIR=str(s.base),
                    INSTANCES_COORDINATOR_ENABLED="true", INSTANCES_COORDINATOR_REPO=str(s.co),
-                   INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO=str(s.re), INSTANCES_RETRO_CHANNEL_ID="", INSTANCES_RETRO_OP_ITEM="", **FAST)
-        s.have_config(s.retro_state)
+                   INSTANCES_LIST="coordinator coordinator-work", INSTANCES_COORDINATOR_WORK_ENABLED="true", INSTANCES_COORDINATOR_WORK_REPO=str(s.co), **FAST)
+        s.have_config(s.work_state)
         proc = subprocess.Popen(["sh", str(SCRIPT)], env=env, cwd=str(s.base), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             for _ in range(100):
@@ -1151,16 +1110,16 @@ class SetupScriptTests(unittest.TestCase):
 
     def test_a_setup_run_that_wrote_part_of_the_config_and_failed_is_run_again_not_trusted(self):
         counter = self.s.base / "runs"
-        body = ('#!/bin/sh\necho x >> "%s"\nmkdir -p "$HOME/.local/share/retro"\necho "{}" > "$HOME/.local/share/retro/config.json"\n%s' % (counter, "exit 1\n"))
-        self.script(self.s.re, "configure.sh", body)
-        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x")
-        self.assertTrue(self.s.status("retro").startswith("NOT READY"))
-        self.assertTrue((self.s.retro_state / "config.json").exists())  # half a config is on disk
-        self.script(self.s.re, "configure.sh", body.replace("exit 1", "exit 0"))
-        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x")
-        self.assertEqual(self.s.status("retro"), "READY (started)")
+        body = ('#!/bin/sh\necho x >> "%s"\nmkdir -p "$COORDINATOR_STATE_DIR"\necho "{}" > "$COORDINATOR_STATE_DIR/config.json"\n%s' % (counter, "exit 1\n"))
+        self.script(self.s.co, "instance-setup.sh", body)
+        self.s.run(coordinator=True)
+        self.assertTrue(self.s.status("coordinator").startswith("NOT READY"))
+        self.assertTrue((self.s.coordinator_state / "config.json").exists())  # half a config is on disk
+        self.script(self.s.co, "instance-setup.sh", body.replace("exit 1", "exit 0"))
+        self.s.run(coordinator=True)
+        self.assertEqual(self.s.status("coordinator"), "READY (started)")
         self.assertEqual(counter.read_text().split(), ["x", "x"])
-        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x")
+        self.s.run(coordinator=True)
         self.assertEqual(counter.read_text().split(), ["x", "x"])  # seeded now: never again
 
     def test_exit_3_after_writing_part_of_the_config_is_run_again_too(self):
@@ -1175,9 +1134,9 @@ class SetupScriptTests(unittest.TestCase):
 
     def test_setup_script_sees_the_daemons_tool_path_not_the_callers(self):
         # node exists only in the tools directory (the unit's PATH), never on the PATH this script is started with.
-        self.script(self.s.re, "configure.sh", '#!/bin/sh\ncommand -v node >/dev/null || { echo "node: not found"; exit 1; }\nmkdir -p "$HOME/.local/share/retro"; echo "{}" > "$HOME/.local/share/retro/config.json"\n')
-        self.s.run(retro=True, INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://x", PATH=str(self.s.bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
-        self.assertEqual(self.s.status("retro"), "READY (started)")
+        self.script(self.s.co, "instance-setup.sh", '#!/bin/sh\ncommand -v node >/dev/null || { echo "node: not found"; exit 1; }\nmkdir -p "$COORDINATOR_STATE_DIR"; echo "{}" > "$COORDINATOR_STATE_DIR/config.json"\n')
+        self.s.run(coordinator=True, PATH=str(self.s.bin) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+        self.assertEqual(self.s.status("coordinator"), "READY (started)")
 
     def test_a_setup_script_that_hangs_is_killed_with_its_children_and_reported(self):
         late = self.s.base / "late"
@@ -1199,25 +1158,22 @@ class QuotingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp).resolve() / "home"
             dump = home / ".local" / "user_scripts" / "instances_reconcile.sh"
-            write_exec(dump, '#!/bin/sh\nprintf "%s" "$INSTANCES_COORDINATOR_REPO" > "' + tmp + '/repo"\nprintf "%s" "$INSTANCES_RETRO_OP_ITEM" > "' + tmp + '/op"\n')
-            data = {"profile": "personal", "instances": {"coordinator": {"repo": self.NASTY}, "retro": {"opItem": "it's \\ ; rm -rf /"}}}
+            write_exec(dump, '#!/bin/sh\nprintf "%s" "$INSTANCES_COORDINATOR_REPO" > "' + tmp + '/repo"\n')
+            data = {"profile": "personal", "instances": {"coordinator": {"repo": self.NASTY}}}
             text = render(WRAPPER, data, home=str(home))
             wrapper = Path(tmp) / "wrapper.sh"
             write_exec(wrapper, text)
             result = subprocess.run(["sh", str(wrapper)], capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((Path(tmp) / "repo").read_text(), self.NASTY)
-            self.assertEqual((Path(tmp) / "op").read_text(), "it's \\ ; rm -rf /")
 
     def test_units_stay_valid_xml_and_keep_the_path_when_it_has_ampersands_and_apostrophes(self):
         import xml.etree.ElementTree as ET
-        for unit in (COORD_UNIT, RETRO_UNIT):
-            name = "coordinator" if unit is COORD_UNIT else "retro"
-            text = render(unit, {"profile": "personal", "instances": {name: {"repo": self.NASTY}}}, home="/Users/te&st")
-            root = ET.fromstring(text)
-            strings = [e.text for e in root.iter("string")]
-            self.assertTrue(any(t.startswith(self.NASTY + "/src/") for t in strings), strings)
-            self.assertIn("/Users/te&st/Library/Logs/%s/%s" % (name, "coordinatord.log" if name == "coordinator" else "retrod.log"), strings)
+        text = render(COORD_UNIT, {"profile": "personal", "instances": {"coordinator": {"repo": self.NASTY}}}, home="/Users/te&st")
+        root = ET.fromstring(text)
+        strings = [e.text for e in root.iter("string")]
+        self.assertTrue(any(t.startswith(self.NASTY + "/src/") for t in strings), strings)
+        self.assertIn("/Users/te&st/Library/Logs/coordinator/coordinatord.log", strings)
 
 
 @unittest.skipUnless(HAVE_CHEZMOI and sys.platform == "darwin", "needs chezmoi on macOS (launchd units and the reconcile script are darwin-only)")
@@ -1262,7 +1218,6 @@ class ApplyTests(unittest.TestCase):
         self.apply({"profile": "personal"})
         d = self.s.home / ".local/share/instances/launchd"
         self.assertEqual((d / "local.coordinatord.plist").read_text(), GOLDEN_COORD.read_text().replace("/Users/test", str(self.s.home)))
-        self.assertEqual((d / "local.retrod.plist").read_text(), GOLDEN_RETRO.read_text().replace("/Users/test", str(self.s.home)))
 
     def test_opt_in_in_chezmoi_yaml_starts_the_instance_and_a_second_apply_only_reads(self):
         co = self.s.co
@@ -1299,7 +1254,6 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual((d / "local.coordinatord.work.plist").read_text(), GOLDEN_WORK.read_text().replace("/Users/test", str(self.s.home)))
         self.assertFalse((self.s.home / "Library" / "LaunchAgents").exists())
         self.assertIn("coordinator-work: not opted in", out)
-        self.assertNotIn("[instances] retro:", out)
 
     def test_work_profile_flag_adopts_the_running_service_then_only_reads(self):
         # The checkout is where the owner cloned it; the hand-installed unit is what the rendered one is compared with.
@@ -1320,11 +1274,11 @@ class ApplyTests(unittest.TestCase):
         self.apply(data)
         self.assertEqual(self.s.calls(), [PRINT_WK])
 
-    def test_work_profile_ignores_a_retro_flag_and_never_manages_the_personal_units(self):
-        self.s.load("local.retrod")
-        out = self.apply({"profile": "axon-work-computer", "instances": {"retro": {"enabled": True, "repo": str(self.s.re)}}})
-        self.assertEqual(self.s.calls(), [])
-        self.assertNotIn("[instances] retro:", out)
+    def test_a_leftover_retro_block_is_ignored_on_both_profiles(self):
+        for profile in ("personal", "axon-work-computer"):
+            out = self.apply({"profile": profile, "instances": {"retro": {"enabled": True, "repo": "/nowhere"}}})
+            self.assertEqual(self.s.calls(), [])
+            self.assertNotIn("retro:", out)
 
 
 @unittest.skipUnless(HAVE_CHEZMOI, "chezmoi not installed")
@@ -1348,7 +1302,6 @@ class IgnoreTests(unittest.TestCase):
     def test_work_profile_manages_only_the_work_unit_on_macos_and_none_elsewhere(self):
         out = self.managed({"profile": "axon-work-computer"})
         self.assertNotIn("local.coordinatord.plist", out)
-        self.assertNotIn("local.retrod.plist", out)
         self.assertEqual(".local/share/instances/launchd/local.coordinatord.work.plist" in out, sys.platform == "darwin")
 
     def test_personal_and_termux_profiles_never_get_the_work_unit(self):
@@ -1356,10 +1309,9 @@ class IgnoreTests(unittest.TestCase):
             self.assertNotIn("local.coordinatord.work.plist", self.managed({"profile": profile}))
 
     @unittest.skipUnless(sys.platform == "darwin", "the units are managed on personal macOS only")
-    def test_personal_macos_manages_both_inert_units_and_the_script(self):
+    def test_personal_macos_manages_the_inert_unit_and_the_script(self):
         out = self.managed({"profile": "personal"})
         self.assertIn(".local/share/instances/launchd/local.coordinatord.plist", out)
-        self.assertIn(".local/share/instances/launchd/local.retrod.plist", out)
         self.assertIn(".local/user_scripts/instances_reconcile.sh", out)
 
     def test_chezmoi_never_places_a_unit_in_launch_agents(self):
