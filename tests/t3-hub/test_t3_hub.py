@@ -435,7 +435,7 @@ class ProfileGateTest(unittest.TestCase):
 
 
 class LinuxSettingsTest(unittest.TestCase):
-    """Personal Linux applies the settings script with the hub n/a: worktreesDirectory in the home directory, the window, no hub instance, and the pi instance.
+    """Personal Linux applies the settings script with the hub n/a: worktreesDirectory in the home directory, the window, no hub instance, and the pi and pi-lead instances.
 
     The chezmoi OS is overridden to linux, so this runs the same on the Mac's CI job.
     """
@@ -472,8 +472,52 @@ class LinuxSettingsTest(unittest.TestCase):
         before = json.loads(FIXTURE)["providerInstances"]
         out = json.loads(run_script(script, FIXTURE))["providerInstances"]
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
-        self.assertEqual(list(out), list(before) + ["pi"])
-        self.assertEqual({k: v for k, v in out.items() if k != "pi"}, with_window({"providerInstances": before})["providerInstances"])
+        self.assertEqual(list(out), list(before) + ["pi", "pi-lead"])
+        self.assertEqual({k: v for k, v in out.items() if k not in ("pi", "pi-lead")}, with_window({"providerInstances": before})["providerInstances"])
+
+    def test_pi_lead_is_written_with_the_wrapper_path(self):
+        """pi-lead is a pi-driver instance whose binaryPath is the wrapper under the (rendered) home directory; pi stays as it was."""
+        script, home = self.render()
+        out = json.loads(run_script(script, FIXTURE))["providerInstances"]
+        self.assertEqual(out["pi-lead"], {"driver": "pi", "displayName": "Pi (lead)", "enabled": True,
+                                          "config": {"binaryPath": home + "/.local/user_scripts/pi_lead.sh"}})
+        self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
+        self.assertTrue(out["pi-lead"]["config"]["binaryPath"].startswith("/"))
+
+    def test_pi_lead_replaces_a_stale_entry_and_is_owned(self):
+        """An edited pi-lead goes back to ours; dropping it from WANT removes it and keeps pi; dropping both removes both."""
+        script, _ = self.render()
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["pi-lead"] = {"driver": "pi", "enabled": False, "config": {"binaryPath": "/x", "launchArgs": "--x"}}
+        out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(out["pi-lead"]["config"], {"binaryPath": out["pi-lead"]["config"]["binaryPath"]})
+        self.assertNotEqual(out["pi-lead"]["config"]["binaryPath"], "/x")
+        self.assertTrue(out["pi-lead"]["enabled"])
+        only_pi = json.dumps({"pi": {"driver": "pi", "enabled": True}})
+        gone = json.loads(run_script(script, json.dumps({"providerInstances": out}), want=only_pi))["providerInstances"]
+        self.assertNotIn("pi-lead", gone)
+        self.assertEqual(gone["pi"], {"driver": "pi", "enabled": True})
+        none = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
+        self.assertEqual(list(none), list(json.loads(FIXTURE)["providerInstances"]))
+
+    def test_the_work_profile_has_no_t3_settings_file_and_no_wrapper(self):
+        """Work keeps neither the T3 settings file nor the wrapper: both are ignored on axon-work-computer, on either OS."""
+        for os_name in ("linux", "darwin"):
+            env = Env(profile="axon-work-computer", codex_active=False)
+            try:
+                managed = env.chezmoi("managed", "--override-data", json.dumps({"chezmoi": {"os": os_name}})).split()
+            finally:
+                env.close()
+            self.assertEqual([m for m in managed if m.startswith(".t3") or m.endswith("pi_lead.sh")], [], os_name)
+
+    def test_personal_linux_manages_the_wrapper_and_the_mac_does_not(self):
+        for os_name, expect in (("linux", True), ("darwin", False)):
+            env = Env(codex_active=False)
+            try:
+                managed = env.chezmoi("managed", "--override-data", json.dumps({"chezmoi": {"os": os_name}})).split()
+            finally:
+                env.close()
+            self.assertEqual(".local/user_scripts/pi_lead.sh" in managed, expect, os_name)
 
     def test_pi_replaces_a_stale_entry_and_is_owned(self):
         """An edited pi entry goes back to ours; dropping pi from WANT removes it (owned), leaving the rest."""
@@ -482,7 +526,7 @@ class LinuxSettingsTest(unittest.TestCase):
         data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False, "config": {"launchArgs": "--x"}}
         out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
-        self.assertEqual(list(out), list(data["providerInstances"]))
+        self.assertEqual(list(out), list(data["providerInstances"]) + ["pi-lead"])
         gone = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
         self.assertNotIn("pi", gone)
         self.assertEqual(list(gone), list(json.loads(FIXTURE)["providerInstances"]))
@@ -495,11 +539,13 @@ class LinuxSettingsTest(unittest.TestCase):
         """pi is personal Linux only: the Mac neither adds it nor removes one that is there."""
         script, _ = self.render("darwin")
         self.assertIn("OWNED='[\"claude-hub\",\"codex-hub\"]'", script)
+        self.assertNotIn("pi-lead", script.split("WANT=")[1].split("\n")[0])
         data = json.loads(FIXTURE)
         data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False}
         out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": False})
         self.assertNotIn("pi", json.loads(run_script(script, FIXTURE))["providerInstances"])
+        self.assertNotIn("pi-lead", json.loads(run_script(script, FIXTURE))["providerInstances"])
 
 
 if __name__ == "__main__":
