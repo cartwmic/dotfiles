@@ -13,6 +13,16 @@ set -eu
 cd "$(dirname "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1
 
+# systemd-analyze --user needs XDG_RUNTIME_DIR, or it exits 1 ("Failed to initialize manager") before it reads the unit, and the
+# unit tests that only look at its stderr pass without checking anything. A login session sets it (GitHub's runner has one); a kgate
+# pod has none. Leave an existing directory alone. Otherwise make a private one for this user.
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
+  XDG_RUNTIME_DIR="${TMPDIR:-/tmp}/xdg-runtime-$(id -u)"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 0700 "$XDG_RUNTIME_DIR"
+  export XDG_RUNTIME_DIR
+fi
+
 for tool in chezmoi zsh lsof rsync node python3; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "[ci-linux] ERROR: $tool is not on PATH" >&2
