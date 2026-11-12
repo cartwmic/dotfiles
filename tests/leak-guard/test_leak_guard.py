@@ -450,11 +450,14 @@ class PreCommit(Base):
         path.write_text(text)
         return str(path)
 
-    def test_commit_msg_blocks_a_term_in_the_message_and_ignores_git_comment_lines(self):
-        done = self.guard("commit-msg", self.message_file("subject\n\nbody names fooco\n# a comment line\n"))
+    def test_commit_msg_blocks_a_term_in_the_message_scans_hash_lines_and_stops_at_the_scissors(self):
+        done = self.guard("commit-msg", self.message_file("subject\n\nbody names fooco\n"))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("COMMIT-MESSAGE:3: fooco", done.stderr)
-        clean = self.guard("commit-msg", self.message_file("subject\n\nquiet body\n# fooco only in a comment git strips\n"))
+        commented = self.guard("commit-msg", self.message_file("subject\n\n# a real line that git keeps with -m, naming fooco\n"))
+        self.assertEqual(commented.returncode, 1, "a # line can be part of the message, so it is scanned; the override is the way out")
+        scissors = "subject\n\nquiet body\n# ------------------------ >8 ------------------------\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+names fooco in the verbose diff\n"
+        clean = self.guard("commit-msg", self.message_file(scissors))
         self.assertEqual(clean.returncode, 0, clean.stderr)
         self.assertEqual(self.calls(), 0, "layer 1 only: layer 2 reads the message at pre-push")
         self.assertEqual(self.log()[-1]["mode"], "commit-msg")
@@ -465,6 +468,53 @@ class PreCommit(Base):
         self.assertEqual(self.guard("commit-msg").returncode, 64)
         (self.home / ".config" / "leak-guard" / "terms").unlink()
         self.assertEqual(self.guard("commit-msg", self.message_file("quiet\n")).returncode, 1)
+
+    # --- the class: local git configuration must not change what the hook sees compared with what is pushed
+
+    def test_a_replace_ref_blocks_pre_commit(self):
+        self.stage("notes.txt", "a quiet sentence\n")
+        self.git("commit", "-q", "-m", "one", "--no-verify")
+        a = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("commit", "-q", "--allow-empty", "-m", "two", "--no-verify")
+        b = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("replace", b, a)
+        self.stage("more.txt", "quiet\n")
+        done = self.guard("pre-commit", env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("replace", done.stderr)
+        self.assertEqual(self.log()[-1]["reason"], "setup: replace refs exist")
+
+    def test_a_grafts_file_blocks_pre_commit(self):
+        (self.repo / ".git" / "info").mkdir(exist_ok=True)
+        (self.repo / ".git" / "info" / "grafts").write_text("")
+        self.stage("notes.txt", "a quiet sentence\n")
+        done = self.guard("pre-commit", env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("grafts", done.stderr)
+        self.assertEqual(self.log()[-1]["reason"], "setup: grafts file exists")
+
+    def test_diff_prefix_settings_in_global_and_repo_config_do_not_confuse_the_header_parse(self):
+        (self.home / ".gitconfig").write_text("[diff]\n\tnoprefix = true\n\tsrcPrefix = old/\n\tdstPrefix = new/\n")
+        self.git("config", "diff.mnemonicPrefix", "true")
+        self.stage("sub-dir-notes.txt", "names fooco here\n")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertRegex(done.stderr, r"(?m)^  sub-dir-notes\.txt:1: fooco$")
+
+    def test_a_textconv_driver_and_an_external_diff_in_global_config_cannot_hide_content(self):
+        (self.home / ".gitconfig").write_text('[diff "hide"]\n\ttextconv = echo redacted #\n[diff]\n\texternal = echo nothing-to-see #\n')
+        self.stage(".gitattributes", "*.dat diff=hide\n")
+        self.stage("x.dat", "this names fooco\n")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertRegex(done.stderr, r"(?m)^  x\.dat:1: fooco$")
+
+    def test_a_global_color_setting_and_diff_algorithm_do_not_change_the_result(self):
+        (self.home / ".gitconfig").write_text("[color]\n\tui = always\n[diff]\n\talgorithm = patience\n\tcolorMoved = zebra\n")
+        self.stage("notes.txt", "names fooco\n")
+        done = self.guard("pre-commit")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertRegex(done.stderr, r"(?m)^  notes\.txt:1: fooco$")
 
     def test_usage_errors_are_64(self):
         self.assertEqual(self.guard().returncode, 64)
@@ -743,6 +793,69 @@ class PrePush(Base):
         reasons = [r.get("reason") for r in self.log() if r.get("reason")]
         self.assertTrue(any("peels" in r for r in reasons), reasons)
         self.assertTrue(any("binary" in r for r in reasons), reasons)
+
+    def test_diff_prefix_settings_do_not_confuse_the_pre_push_header_parse(self):
+        (self.home / ".gitconfig").write_text("[diff]\n\tnoprefix = true\n")
+        self.git("config", "diff.mnemonicPrefix", "true")
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("sub-dir-notes.txt", "names fooco here\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertRegex(done.stderr, r"(?m)^  sub-dir-notes\.txt:1: fooco")
+        self.assertNotRegex(done.stderr, r"sub-dir-notes\.txt sub-dir-notes\.txt")
+
+    def test_a_replace_ref_that_hides_a_leaky_commit_blocks_the_push(self):
+        self.git("checkout", "-q", "-b", "feature")
+        clean = self.commit("notes.txt", "a quiet sentence\n", message="clean")
+        leaky = self.commit("notes.txt", "this names fooco\n", message="leaky")
+        self.git("replace", leaky, clean)
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(leaky), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("replace", done.stderr)
+
+    def test_a_grafts_file_blocks_the_push(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("notes.txt", "a quiet sentence\n")
+        (self.repo / ".git" / "info").mkdir(exist_ok=True)
+        (self.repo / ".git" / "info" / "grafts").write_text("")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("grafts", done.stderr)
+
+    def test_a_pushurl_that_differs_from_the_url_is_mapped_to_its_remote(self):
+        other = self.tmp / "pushto.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(other)], check=True)
+        self.git("remote", "set-url", "--push", "origin", str(other))
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("fresh.txt", "a brand new line\n")
+        done = self.guard("pre-push", str(other), str(other), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("a brand new line", self.sent())
+        self.assertNotIn("hello", self.sent(), "origin's tracking refs excluded the base commit")
+
+    def test_a_tag_pointing_at_a_tag_is_peeled_and_every_tag_object_is_checked(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("clean.txt", "a quiet sentence\n")
+        self.git("tag", "-a", "inner", "-m", "inner tag message naming fooco")
+        self.git("tag", "-a", "outer", "-m", "a quiet outer message", "inner")
+        outer = self.git("rev-parse", "outer").stdout.strip()
+        self.assertEqual(self.git("cat-file", "-t", outer).stdout.strip(), "tag")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(outer, ref="refs/tags/outer"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("TAG-OBJECT", done.stderr)
+        self.assertIn("fooco", done.stderr)
+
+    def test_a_remote_with_no_branches_says_so_and_points_to_the_override(self):
+        empty = self.tmp / "empty.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(empty)], check=True)
+        self.git("remote", "add", "fresh", str(empty))
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("fresh.txt", "a brand new line\n")
+        done = self.guard("pre-push", "fresh", str(empty), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("empty", done.stderr)
+        self.assertIn("LEAK_GUARD_SKIP", done.stderr)
+        self.assertIn("first push", done.stderr)
 
     def test_author_committer_and_tagger_identities_are_checked(self):
         self.git("checkout", "-q", "-b", "feature")

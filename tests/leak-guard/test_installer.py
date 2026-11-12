@@ -54,7 +54,7 @@ class Installer(unittest.TestCase):
         self.assertFalse((self.hooks() / "pre-commit").exists())
         self.assertFalse((self.home / ".config").exists())
 
-    def test_the_work_profile_with_data_installs_both_hooks_and_the_two_files_mode_600(self):
+    def test_the_work_profile_with_data_installs_the_three_hooks_and_the_two_files_mode_600(self):
         done = self.render(DATA)
         self.assertEqual(done.returncode, 0, done.stderr)
         ran = self.run_script(done.stdout)

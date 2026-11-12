@@ -6,7 +6,7 @@
     leak-guard pre-push REMOTE URL   reads git's pre-push lines on stdin and checks everything the remote's tracking refs lack: every such commit's
                                      raw header, message, paths and added lines (one rev-list into one diff-tree), the remote ref names, tag objects
 
-Git runs it as the repo's pre-commit and pre-push hooks (a chezmoi script installs those; `git commit --no-verify` and `git push --no-verify`
+Git runs it as the repo's pre-commit, commit-msg and pre-push hooks (a chezmoi script installs those; `git commit --no-verify` and `git push --no-verify`
 skip them, as git always allows). Two layers, cheapest first, on the ADDED lines only (and added file paths, and commit messages):
 
   1. Terms. Every line of ~/.config/leak-guard/terms is a regex (`#` lines are comments), matched case-insensitively. Any hit blocks and prints
@@ -82,11 +82,40 @@ def log(entry):
         print("leak-guard: could not write its log: %s" % e, file=sys.stderr)
 
 
+# Every git call goes through run_git, in a neutral environment: what the hook reads must be what `git push` sends, whatever local git configuration says.
+# Replace objects (GIT_NO_REPLACE_OBJECTS) would show a stand-in for a pushed commit; system and global config, attribute files and external diff or
+# option variables would change how a diff is drawn. The -c settings pin the repo-level options that change diff-tree, diff, cat-file or log output.
+NEUTRAL_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1"}
+DROP_ENV = ("GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_REPLACE_REF_BASE", "GIT_PAGER", "GIT_ATTR_SOURCE")
+NEUTRAL_C = ["core.quotePath=false", "color.ui=never", "color.diff=never", "diff.noprefix=false", "diff.mnemonicPrefix=false", "diff.srcPrefix=a/",
+             "diff.dstPrefix=b/", "diff.relative=false", "diff.renames=false", "diff.external=", "diff.algorithm=default", "diff.ignoreSubmodules=none",
+             "diff.submodule=short", "diff.context=0", "diff.interHunkContext=0", "diff.wsErrorHighlight=none", "diff.colorMoved=false", "diff.suppressBlankEmpty=false",
+             "log.showSignature=false", "log.mailmap=false", "log.decorate=no", "i18n.logOutputEncoding=UTF-8", "core.abbrev=40", "core.pager=cat"]
+
+
+def run_git(args, stdin=None):
+    env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
+    env.update(NEUTRAL_ENV)
+    cmd = ["git"]
+    for setting in NEUTRAL_C:
+        cmd += ["-c", setting]
+    return subprocess.run(cmd + list(args), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+
+
 def git(*args, check=True):
-    done = subprocess.run(["git", "-c", "core.quotePath=false", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    done = run_git(args)
     if check and done.returncode != 0:
         raise Block("git", "git %s failed: %s" % (args[0], done.stderr.decode(errors="replace").strip()[:200]), 0, "git %s failed" % args[0])
     return done.stdout.decode(errors="replace")
+
+
+def refuse_replaced_history():
+    """Grafts are not switched off by GIT_NO_REPLACE_OBJECTS, and a replace ref hides what is really pushed: either one blocks."""
+    if git("for-each-ref", "--format=%(refname)", "refs/replace/", check=False).split():
+        raise Block("setup", "replace refs exist (git replace): git would push the originals, not what this check can see; remove them with `git replace -d`, or override", 1, "replace refs exist")
+    grafts = git("rev-parse", "--git-path", "info/grafts", check=False).strip()
+    if grafts and os.path.exists(grafts):
+        raise Block("setup", "a grafts file exists (%s): history as git pushes it may differ from what this check can see; remove it, or override" % grafts, 1, "grafts file exists")
 
 
 def added_lines(diff):
@@ -278,7 +307,7 @@ def peel(ref, sha):
 
 
 def parse_raw(text):
-    """([(file, line, text, commit)], binary paths) from `git diff-tree --stdin -r -p --cc --root --no-renames -U0 --pretty=raw`. Every header line, every
+    """([(file, line, text, commit)], binary paths) from `git diff-tree --stdin -r -p --cc --root --always --no-renames -U0 --pretty=raw`. Every header line, every
     message line, every path and every added line is returned. In a merge only the lines new against EVERY parent count (the parent count is the prefix
     width). `+++` is a header only before a file's first hunk, so an added line starting with `++` is kept."""
     out, binary = [], []
@@ -342,21 +371,23 @@ def prepush(stdin_lines, remote, url):
         return [], [], []
     name = remote_name(remote, url)
     if not git("for-each-ref", "--format=%(refname)", "refs/remotes/%s/" % name, check=False).split():
-        raise Block("pre-push", "no tracking refs for %s: run `git fetch %s`, then push again" % (name, name), 1, "no tracking refs for the remote")
+        raise Block("pre-push", "no tracking refs for %s: run `git fetch %s`, then push again. If the remote is empty (it has no branches at all, so there is "
+                    "nothing to fetch), look the push over by hand and make this first push with the override (LEAK_GUARD_SKIP)" % (name, name), 1,
+                    "no tracking refs for the remote")
     lines, notes, tips, known = [], [], [], []
     for ref, remote_ref, tip, remote_sha in pushes:
         lines.append((remote_ref, 0, "(ref) " + remote_ref, None))      # only the remote name becomes public
         lines += peel(ref, tip)
         tips.append(tip)
         if remote_sha != ZERO:
-            if subprocess.run(["git", "cat-file", "-e", remote_sha + "^{commit}"], stderr=subprocess.DEVNULL).returncode == 0:
+            if run_git(["cat-file", "-e", remote_sha + "^{commit}"]).returncode == 0:
                 known.append(remote_sha)
             else:
                 notes.append(("remote_sha_unknown", "remote sha unknown for %s (the remote is ahead of what is fetched): run git fetch %s; checking everything the tracking refs lack" % (remote_ref, name)))
     revs = git("rev-list", *tips, "--not", "--remotes=" + name, *known)
     if revs.split():
-        done = subprocess.run(["git", "-c", "core.quotePath=false", "diff-tree", "--stdin", "-r", "-p", "--cc", "--root", "--always", "--no-renames", "--no-textconv",
-                               "--no-ext-diff", "--pretty=raw", "-U0"], input=revs.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        done = run_git(["diff-tree", "--stdin", "-r", "-p", "--cc", "--root", "--always", "--no-renames", "--no-textconv", "--no-ext-diff", "--pretty=raw", "-U0"],
+                       stdin=revs.encode())
         if done.returncode != 0:
             raise Block("git", "git diff-tree failed: %s" % done.stderr.decode(errors="replace").strip()[:200], 0, "git diff-tree failed")
         parsed, binary = parse_raw(done.stdout.decode(errors="replace"))
@@ -369,8 +400,12 @@ def collect(mode, stdin_lines, remote, url):
     if mode == "pre-commit":
         lines, binary = diff_parts("--cached")
         return [(f, n, t, None) for f, n, t in lines], binary, []
-    if mode == "commit-msg":     # `remote` is the message file git passes; git's own comment lines are not part of the message
-        body = [l.rstrip("\n") for l in read_list(remote, "commit message file") if not l.startswith("#")]
+    if mode == "commit-msg":     # `remote` is the message file git passes
+        body = []
+        for l in read_list(remote, "commit message file"):
+            if l.startswith("# ------------------------ >8 ------------------------"):    # git's scissors line: what follows (a `commit -v` diff) is not the message
+                break
+            body.append(l.rstrip("\n"))        # `#` lines can be real message lines (git -m keeps them), so they are scanned
         return [("COMMIT-MESSAGE", i, text, None) for i, text in enumerate(body, 1)], [], []
     return prepush(stdin_lines, remote, url)
 
@@ -389,6 +424,8 @@ def run(mode, stdin_lines, remote, url=""):
         return 0
     layer = 0
     try:
+        if mode in ("pre-commit", "pre-push"):
+            refuse_replaced_history()
         lines, binary, notes = collect(mode, stdin_lines, remote, url)
         for code, text in notes:
             print("leak-guard: note: " + text, file=sys.stderr)
