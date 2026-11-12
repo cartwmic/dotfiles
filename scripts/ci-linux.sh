@@ -64,6 +64,7 @@ python3 scripts/ci-par.py \
   tests/pnpm-store \
   tests/agent-docker \
   tests/ssh-probe \
+  tests/git-credential \
   tests/ci-par \
   tests/ci-main-status || status=1
 
