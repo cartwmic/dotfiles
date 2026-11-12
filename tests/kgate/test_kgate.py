@@ -312,8 +312,10 @@ if a[:2] == ["get", "pod"]:
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario == "pullfail":
         st = {"phase": "Pending", "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ErrImagePull", "message": "401 unauthorized"}}}]}
+    elif scenario == "pulling":   # scheduled to a node, image still being pulled: not Unschedulable
+        st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
     else:
-        st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/7 nodes fit"}]}
+        st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/7 nodes are available: 7 Insufficient cpu."}]}
     print(json.dumps({"spec": {"nodeName": "fake-node"}, "status": st})); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     job = a[2]
@@ -529,6 +531,46 @@ class Black(unittest.TestCase):
         done = self.kgate("--wait", "3", "--", "true", env={"FAKE_POD": "pending"})
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertIn("pod did not start within 3s: Unschedulable", done.stdout)
+
+    def pod_deletes(self):
+        return [c for c in self.calls() if c.get("kubectl", [""])[0] == "delete" and any(x.startswith("pod/") for x in c["kubectl"])]
+
+    def test_unschedulable_past_the_scheduling_deadline_is_75_and_the_pod_is_deleted(self):
+        done = self.kgate("--sched-wait", "2", "--node", "cartwmic-g14-wsl", "--", "true", env={"FAKE_POD": "pending"})
+        self.assertEqual(done.returncode, 75, done.stdout)
+        line = [l for l in done.stdout.splitlines() if l.startswith("kgate: pod not scheduled within")]
+        self.assertEqual(len(line), 1, done.stdout)
+        self.assertIn("pod not scheduled within 2s: 0/7 nodes are available: 7 Insufficient cpu. (pinned to node cartwmic-g14-wsl); exit 75", line[0])
+        self.assertTrue(self.pod_deletes())
+        rec = self.records()[-1]
+        self.assertEqual(rec["exit"], 75)
+        self.assertFalse(rec["ran"])
+        self.assertTrue(rec["cleanup"])
+
+    def test_no_pin_means_no_pin_in_the_75_line(self):
+        done = self.kgate("--sched-wait", "1", "--", "true", env={"FAKE_POD": "pending"})
+        self.assertEqual(done.returncode, 75, done.stdout)
+        self.assertNotIn("pinned", done.stdout)
+
+    def test_scheduling_deadline_from_env_and_the_flag_wins(self):
+        done = self.kgate("--", "true", env={"FAKE_POD": "pending", "KGATE_SCHED_WAIT": "1"})
+        self.assertEqual(done.returncode, 75, done.stdout)
+        self.assertIn("pod not scheduled within 1s", done.stdout)
+        done = self.kgate("--sched-wait", "2", "--wait", "3", "--", "true", env={"FAKE_POD": "pending", "KGATE_SCHED_WAIT": "1"})
+        self.assertEqual(done.returncode, 75, done.stdout)
+        self.assertIn("pod not scheduled within 2s", done.stdout)
+
+    def test_a_scheduled_pod_that_is_pulling_is_not_unschedulable(self):
+        # scheduled, image pulling: the scheduling deadline does not apply; only --wait ends it (69)
+        done = self.kgate("--sched-wait", "1", "--wait", "4", "--", "true", env={"FAKE_POD": "pulling"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("pod did not start within 4s: ContainerCreating", done.stdout)
+        self.assertNotIn("pod not scheduled", done.stdout)
+
+    def test_bad_scheduling_deadline_is_64(self):
+        for args, env in ((["--sched-wait", "0"], {}), (["--sched-wait", "x"], {}), ([], {"KGATE_SCHED_WAIT": "x"}), ([], {"KGATE_SCHED_WAIT": "-5"})):
+            done = self.kgate(*args, "--", "true", env=env)
+            self.assertEqual(done.returncode, 64, (args, env, done.stdout))
 
     def test_version_commands_run_in_the_jobs_directory(self):
         # rustup picks the toolchain by directory, so a preflight that ran elsewhere would check the wrong tool
@@ -1194,13 +1236,13 @@ class Kc2Profile(unittest.TestCase):
             os.environ["XDG_STATE_HOME"] = state
             K.time = clock
             try:
-                job = K.Job(argparse.Namespace(command=["true"], wait=3600))
+                job = K.Job(argparse.Namespace(command=["true"], wait=3600, sched_wait=600))
                 job.cluster, job.console = Cluster(), False
                 job.start_pod({"items": []})
                 self.assertEqual(clock.slept, [5, 10, 20, 40, 60, 60])
                 self.assertEqual(job.rec["quota_wait_s"], 195.0)
                 clock.slept.clear()
-                job2 = K.Job(argparse.Namespace(command=["true"], wait=30))     # a deadline 30 s away: the last sleep is cut to fit
+                job2 = K.Job(argparse.Namespace(command=["true"], wait=30, sched_wait=600))     # a deadline 30 s away: the last sleep is cut to fit
                 job2.cluster, job2.console = Cluster(), False
                 job2.cluster.creates = -10**6
                 with self.assertRaises(K.Unavailable) as ctx:
