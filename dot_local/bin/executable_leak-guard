@@ -2,6 +2,7 @@
 """leak-guard: block a commit or push whose change names work details. Work machine only; docs/leak-guard.md.
 
     leak-guard pre-commit            checks `git diff --cached`
+    leak-guard commit-msg MESSAGE-FILE   layer 1 on the message (a commit with no diff, such as --allow-empty, has nothing for pre-commit to read)
     leak-guard pre-push REMOTE URL   reads git's pre-push lines on stdin and checks everything the remote's tracking refs lack: every such commit's
                                      raw header, message, paths and added lines (one rev-list into one diff-tree), the remote ref names, tag objects
 
@@ -84,7 +85,7 @@ def log(entry):
 def git(*args, check=True):
     done = subprocess.run(["git", "-c", "core.quotePath=false", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if check and done.returncode != 0:
-        raise Block("git", "git %s failed: %s" % (args[0], done.stderr.decode(errors="replace").strip()[:200]), 0)
+        raise Block("git", "git %s failed: %s" % (args[0], done.stderr.decode(errors="replace").strip()[:200]), 0, "git %s failed" % args[0])
     return done.stdout.decode(errors="replace")
 
 
@@ -124,7 +125,7 @@ def read_list(path, what):
         with open(path) as f:
             return [l.rstrip("\n") for l in f]
     except OSError as e:
-        raise Block("setup", "%s %s cannot be read (%s)" % (what, path, e.strerror), 1)
+        raise Block("setup", "%s %s cannot be read (%s)" % (what, path, e.strerror), 1, "%s cannot be read" % what)
 
 
 def layer1(lines, terms_path):
@@ -215,7 +216,7 @@ def layer2(prompt):
     out, err = done.stdout.decode(errors="replace"), done.stderr.decode(errors="replace")
     if done.returncode != 0:
         why = (err.strip() or out.strip() or "no output").splitlines()[-1][:200]
-        raise Block("layer 2", "claude exited %d (not signed in, offline, or failing): %s" % (done.returncode, why), 2)
+        raise Block("layer 2", "claude exited %d (not signed in, offline, or failing): %s" % (done.returncode, why), 2, "claude exited %d" % done.returncode)
     try:
         events = json.loads(out)
         events = events if isinstance(events, list) else [events]
@@ -223,7 +224,7 @@ def layer2(prompt):
     except (ValueError, StopIteration):
         raise Block("layer 2", "claude's output was not the expected JSON", 2)
     if result.get("is_error"):
-        raise Block("layer 2", "claude reported an error: %s" % str(result.get("result"))[:200], 2)
+        raise Block("layer 2", "claude reported an error: %s" % str(result.get("result"))[:200], 2, "claude reported an error")
     text = result.get("result")
     if not isinstance(text, str):
         raise Block("layer 2", "claude's result was not text", 2)
@@ -256,7 +257,8 @@ def remote_name(arg, url):
         if value in wanted:
             return key[len("remote."):].rsplit(".", 1)[0]
     raise Block("pre-push", "the push target %s matches no configured remote (remote.<name>.url or pushurl), so what the remote already has cannot be told; "
-                "add it with `git remote add`, run `git fetch <name>`, and push by that name" % arg, 1)
+                "add it with `git remote add`, run `git fetch <name>`, and push by that name" % arg, 1,
+                "the push target matches no configured remote")
 
 
 def peel(ref, sha):
@@ -267,10 +269,11 @@ def peel(ref, sha):
         lines += [("TAG-OBJECT", i, text, None) for i, text in enumerate(raw.splitlines(), 1)]
         sha = next((l.split()[1] for l in raw.splitlines() if l.startswith("object ")), None)
         if not sha:
-            raise Block("pre-push", "tag object for %s has no object line" % ref, 1)
+            raise Block("pre-push", "tag object for %s has no object line" % ref, 1, "a tag object has no object line")
         kind = git("cat-file", "-t", sha).strip()
     if kind != "commit":
-        raise Block("pre-push", "%s peels to a %s, which this check does not read; push it by hand with the override after looking" % (ref, kind), 1)
+        raise Block("pre-push", "%s peels to a %s, which this check does not read; push it by hand with the override after looking" % (ref, kind), 1,
+                    "a pushed ref peels to a %s" % kind)
     return lines
 
 
@@ -282,9 +285,9 @@ def parse_raw(text):
     commit, path, state, width, line, hdr_n, msg_n, seen_blank = None, None, "none", 1, 0, 0, 0, False
     for raw in text.split("\n"):
         if raw.startswith("@@"):
-            m = re.match(r"^(@{2,}) .* \1$", raw)
+            m = re.match(r"^(@{2,}) (.*?) \1(?: |$)", raw)       # the leading run of @ gives the width; text after the closing run is function context
             width = len(m.group(1)) - 1 if m else 1
-            starts = re.findall(r"\+(\d+)", raw)
+            starts = re.findall(r"\+(\d+)", m.group(2) if m else raw)
             line = int(starts[-1]) if starts else 0
             state = "hunk"
             continue
@@ -339,7 +342,7 @@ def prepush(stdin_lines, remote, url):
         return [], [], []
     name = remote_name(remote, url)
     if not git("for-each-ref", "--format=%(refname)", "refs/remotes/%s/" % name, check=False).split():
-        raise Block("pre-push", "no tracking refs for %s: run `git fetch %s`, then push again" % (name, name), 1)
+        raise Block("pre-push", "no tracking refs for %s: run `git fetch %s`, then push again" % (name, name), 1, "no tracking refs for the remote")
     lines, notes, tips, known = [], [], [], []
     for ref, remote_ref, tip, remote_sha in pushes:
         lines.append((remote_ref, 0, "(ref) " + remote_ref, None))      # only the remote name becomes public
@@ -349,13 +352,13 @@ def prepush(stdin_lines, remote, url):
             if subprocess.run(["git", "cat-file", "-e", remote_sha + "^{commit}"], stderr=subprocess.DEVNULL).returncode == 0:
                 known.append(remote_sha)
             else:
-                notes.append("remote sha unknown for %s (the remote is ahead of what is fetched): run git fetch %s; checking everything the tracking refs lack" % (remote_ref, name))
+                notes.append(("remote_sha_unknown", "remote sha unknown for %s (the remote is ahead of what is fetched): run git fetch %s; checking everything the tracking refs lack" % (remote_ref, name)))
     revs = git("rev-list", *tips, "--not", "--remotes=" + name, *known)
     if revs.split():
-        done = subprocess.run(["git", "-c", "core.quotePath=false", "diff-tree", "--stdin", "-r", "-p", "--cc", "--root", "--no-renames", "--no-textconv",
+        done = subprocess.run(["git", "-c", "core.quotePath=false", "diff-tree", "--stdin", "-r", "-p", "--cc", "--root", "--always", "--no-renames", "--no-textconv",
                                "--no-ext-diff", "--pretty=raw", "-U0"], input=revs.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if done.returncode != 0:
-            raise Block("git", "git diff-tree failed: %s" % done.stderr.decode(errors="replace").strip()[:200], 0)
+            raise Block("git", "git diff-tree failed: %s" % done.stderr.decode(errors="replace").strip()[:200], 0, "git diff-tree failed")
         parsed, binary = parse_raw(done.stdout.decode(errors="replace"))
         return lines + parsed, binary, notes
     return lines, [], notes
@@ -366,6 +369,9 @@ def collect(mode, stdin_lines, remote, url):
     if mode == "pre-commit":
         lines, binary = diff_parts("--cached")
         return [(f, n, t, None) for f, n, t in lines], binary, []
+    if mode == "commit-msg":     # `remote` is the message file git passes; git's own comment lines are not part of the message
+        body = [l.rstrip("\n") for l in read_list(remote, "commit message file") if not l.startswith("#")]
+        return [("COMMIT-MESSAGE", i, text, None) for i, text in enumerate(body, 1)], [], []
     return prepush(stdin_lines, remote, url)
 
 
@@ -384,8 +390,10 @@ def run(mode, stdin_lines, remote, url=""):
     layer = 0
     try:
         lines, binary, notes = collect(mode, stdin_lines, remote, url)
-        for note in notes:
-            print("leak-guard: note: " + note, file=sys.stderr)
+        for code, text in notes:
+            print("leak-guard: note: " + text, file=sys.stderr)
+        if notes:
+            entry["notes"] = [code for code, text in notes]
         if not lines and not binary:
             log({**entry, "verdict": "pass", "layer": "none", "duration_s": round(time.time() - t0, 3), "findings": 0, "note": "nothing added"})
             return 0
@@ -397,9 +405,12 @@ def run(mode, stdin_lines, remote, url=""):
                 print("  " + h, file=sys.stderr)
             log({**entry, "verdict": "block", "layer": 1, "duration_s": round(time.time() - t0, 3), "findings": len(hits)})
             return 1
+        if mode == "commit-msg":     # layer 1 only: layer 2 reads every message at pre-push, where the whole push is judged
+            log({**entry, "verdict": "pass", "layer": 1, "duration_s": round(time.time() - t0, 3), "findings": 0})
+            return 0
         if binary:
             raise Block("binary file", "%s added or changed: its content cannot be read, so it cannot be checked (commit it after review with the override)"
-                        % ", ".join(binary[:5]), 1)
+                        % ", ".join(binary[:5]), 1, "binary file in the change (%d)" % len(binary))
         layer = 2
         context = read_list(os.path.join(config_dir(), "context"), "context file")
         prompts = chunk_prompts(context, corpus(lines, numbered=(mode == "pre-commit")), CHUNK_BYTES if mode == "pre-push" else None)
@@ -433,8 +444,8 @@ def main(argv):
         print(__doc__.strip())
         return 0 if argv else 64
     mode = argv[0]
-    if mode not in ("pre-commit", "pre-push"):
-        print("usage: leak-guard pre-commit | pre-push REMOTE URL", file=sys.stderr)
+    if mode not in ("pre-commit", "commit-msg", "pre-push") or (mode == "commit-msg" and len(argv) < 2):
+        print("usage: leak-guard pre-commit | commit-msg MESSAGE-FILE | pre-push REMOTE URL", file=sys.stderr)
         return 64
     stdin_lines = sys.stdin.read().splitlines() if mode == "pre-push" else []
     return run(mode, stdin_lines, argv[1] if len(argv) > 1 else "origin", argv[2] if len(argv) > 2 else "")

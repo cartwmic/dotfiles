@@ -37,6 +37,7 @@ install_hook() {  # install_hook NAME
   mv "$hooks/$1.tmp" "$hooks/$1"
 }
 install_hook pre-commit
+install_hook commit-msg
 install_hook pre-push
 dest="$HOME/.config/leak-guard"
 mkdir -p "$dest"

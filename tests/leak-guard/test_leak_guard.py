@@ -149,6 +149,14 @@ class ParseRaw(unittest.TestCase):
         added = [(n, t) for f, n, t in self.lines(text) if f == "f" and n > 0]
         self.assertEqual(added, [(2, "x octopus own line")])
 
+    def test_function_context_after_the_hunk_header_does_not_change_the_prefix_width(self):
+        text = ("commit %s\ntree x\nparent p1\nparent p2\n\n    merge\n\ndiff --cc f.py\nindex 1,2..3\n--- a/f.py\n+++ b/f.py\n"
+                "@@@ -1,2 -1,2 +1,3 @@@ def work(+9, -8) @@@ trailing\n  both\n++new in the merge\n+ from one parent\n" % self.SHA)
+        added = [(n, t) for f, n, t in self.lines(text) if f == "f.py" and n > 0]
+        self.assertEqual(added, [(2, "new in the merge")])
+        plain = ("commit %s\ntree x\n\n    s\n\ndiff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -0,0 +5 @@ def f(+99)\n+line\n" % self.SHA)
+        self.assertIn(("g", 5, "line"), self.lines(plain))
+
     def test_binary_files_are_reported_and_two_commits_are_told_apart(self):
         text = ("commit %s\ntree x\n\n    one\n\ndiff --git a/p.bin b/p.bin\nindex 1..2\nBinary files /dev/null and b/p.bin differ\n"
                 "commit %s\ntree y\n\n    two\n\ndiff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -0,0 +1 @@\n+line\n" % (self.SHA, "b" * 40))
@@ -435,6 +443,29 @@ class PreCommit(Base):
         self.guard("pre-commit", env={"FAKE_CLAUDE": "clean"})
         self.assertEqual(stat.S_IMODE((d / "log.jsonl").stat().st_mode), 0o600)
 
+    # --- commit-msg: the message of a commit with no diff (an empty commit) is not visible to pre-commit
+
+    def message_file(self, text):
+        path = self.tmp / "COMMIT_EDITMSG"
+        path.write_text(text)
+        return str(path)
+
+    def test_commit_msg_blocks_a_term_in_the_message_and_ignores_git_comment_lines(self):
+        done = self.guard("commit-msg", self.message_file("subject\n\nbody names fooco\n# a comment line\n"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("COMMIT-MESSAGE:3: fooco", done.stderr)
+        clean = self.guard("commit-msg", self.message_file("subject\n\nquiet body\n# fooco only in a comment git strips\n"))
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertEqual(self.calls(), 0, "layer 1 only: layer 2 reads the message at pre-push")
+        self.assertEqual(self.log()[-1]["mode"], "commit-msg")
+
+    def test_commit_msg_honours_the_override_and_fails_closed_without_the_file_or_terms(self):
+        self.assertEqual(self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "by hand"}).returncode, 0)
+        self.assertEqual(self.guard("commit-msg", str(self.tmp / "missing")).returncode, 1)
+        self.assertEqual(self.guard("commit-msg").returncode, 64)
+        (self.home / ".config" / "leak-guard" / "terms").unlink()
+        self.assertEqual(self.guard("commit-msg", self.message_file("quiet\n")).returncode, 1)
+
     def test_usage_errors_are_64(self):
         self.assertEqual(self.guard().returncode, 64)
         self.assertEqual(self.guard("pre-merge").returncode, 64)
@@ -522,7 +553,7 @@ class PrePush(Base):
         self.assertIn("no tracking refs for unfetched: run `git fetch unfetched`, then push again", done.stderr)
         self.assertEqual(self.calls(), 0)
 
-    def test_a_new_branch_is_checked_from_the_merge_base_with_the_remotes_default_branch(self):
+    def test_a_new_branch_is_checked_for_what_the_tracking_refs_lack_and_nothing_else(self):
         self.git("remote", "set-head", "origin", "main")
         self.git("checkout", "-q", "-b", "feature")
         self.commit("one.txt", "first\n")
@@ -662,6 +693,56 @@ class PrePush(Base):
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("COMMIT-HEADER", done.stderr)
         self.assertIn("fooco", done.stderr)
+
+    def test_an_empty_commit_with_a_term_in_its_message_is_blocked_at_pre_push(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.git("commit", "-q", "--allow-empty", "-m", "an empty commit that names fooco", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("COMMIT-MESSAGE:1: fooco", done.stderr)
+
+    def test_an_empty_commit_with_a_term_in_its_author_is_blocked_at_pre_push(self):
+        self.git("checkout", "-q", "-b", "feature")
+        env = {**os.environ, "HOME": str(self.home), "GIT_AUTHOR_NAME": "Someone", "GIT_AUTHOR_EMAIL": "someone@fooco.example", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "--allow-empty", "-m", "nothing to see", "--no-verify"], check=True, env=env, capture_output=True)
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("COMMIT-HEADER", done.stderr)
+
+    def test_a_clean_empty_commit_passes_and_its_message_is_sent_to_claude(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.git("commit", "-q", "--allow-empty", "-m", "a quiet empty commit message", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("a quiet empty commit message", self.sent())
+
+    def test_a_remote_sha_notice_is_logged_as_a_code_not_only_printed(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("new.txt", "a quiet line\n")
+        self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, "a" * 40), env={"FAKE_CLAUDE": "clean"})
+        rec = self.log()[-1]
+        self.assertEqual(rec["notes"], ["remote_sha_unknown"])
+        self.assertNotIn("a" * 40, json.dumps(rec))
+
+    def test_the_log_reason_never_holds_a_path_a_ref_or_claudes_words(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("clean.txt", "quiet\n")
+        tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tree, ref="refs/tags/secret-ref-name"))
+        (self.repo / "secret-picture-name.bin").write_bytes(b"\x00\x01 binary")
+        self.git("add", "secret-picture-name.bin")
+        self.guard("pre-commit")
+        self.stage("notes.txt", "a quiet sentence\n")
+        self.guard("pre-commit", env={"FAKE_CLAUDE": "error"})
+        text = (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text()
+        for word in ("secret-ref-name", "secret-picture-name", "Not logged in"):
+            self.assertNotIn(word, text)
+        reasons = [r.get("reason") for r in self.log() if r.get("reason")]
+        self.assertTrue(any("peels" in r for r in reasons), reasons)
+        self.assertTrue(any("binary" in r for r in reasons), reasons)
 
     def test_author_committer_and_tagger_identities_are_checked(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -867,7 +948,7 @@ class PrePush(Base):
         launcher.mkdir(parents=True)
         shutil.copy(SCRIPT, launcher / "leak-guard")   # chezmoi gives the deployed script its executable bit
         (launcher / "leak-guard").chmod(0o755)
-        for name in ("pre-commit", "pre-push"):
+        for name in ("pre-commit", "commit-msg", "pre-push"):
             (hooks / name).write_text('#!/bin/sh\nexec "$HOME/.local/bin/leak-guard" %s "$@"\n' % name)
             (hooks / name).chmod(0o755)
         self.git("checkout", "-q", "-b", "feature")
@@ -880,6 +961,11 @@ class PrePush(Base):
         blocked = run("commit", "-q", "-m", "leaky")
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn("BLOCKED by the terms list", blocked.stderr)
+        run("reset", "-q")                      # nothing staged: an empty commit, whose message only commit-msg can see
+        empty = run("commit", "-q", "--allow-empty", "-m", "an empty commit naming fooco")
+        self.assertNotEqual(empty.returncode, 0)
+        self.assertIn("COMMIT-MESSAGE:1: fooco", empty.stderr)
+        run("add", "leak.txt")
         bypass = run("commit", "-q", "-m", "leaky", "--no-verify")
         self.assertEqual(bypass.returncode, 0, bypass.stderr)
         push = run("push", "-q", "origin", "feature")

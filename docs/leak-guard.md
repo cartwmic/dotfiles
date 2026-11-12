@@ -2,15 +2,16 @@
 
 `cartwmic/dotfiles` is a public repository, and the work machine commits to it. `leak-guard` is a git hook, on the work machine only, that checks every commit and push for work details before the change leaves the machine. There is no personal counterpart (see [profiles.md](./profiles.md)).
 
-It is one script, `dot_local/bin/executable_leak-guard` (installed as `~/.local/bin/leak-guard`), run by two git hooks in the chezmoi source dir:
+It is one script, `dot_local/bin/executable_leak-guard` (installed as `~/.local/bin/leak-guard`), run by three git hooks in the chezmoi source dir:
 
-- `pre-commit` checks `git diff --cached`.
+- `pre-commit` checks `git diff --cached`. It cannot see the commit message, and a commit with no diff (`git commit --allow-empty`) has nothing for it to read, so:
+- `commit-msg` checks the message with layer 1 only (git's own `#` comment lines are ignored). It is a separate hook because only it is given the message; layer 2 reads every pushed message at pre-push. The author and committer of a commit are checked at pre-push, which sees them.
 - `pre-push` checks, in one pass, everything the push would make public that the remote's own tracking refs do not already have:
 
       git rev-list <pushed tips> --not --remotes=<remote> [<each remote sha present locally>] \
         | git diff-tree --stdin -r -p --cc --root --no-renames --no-textconv --no-ext-diff --pretty=raw
 
-  A commit that any branch of that remote has, as last fetched, is excluded and never rechecked; a commit shared by two pushed refs is checked once; the hook never fetches. Layer 1 scans every raw header line (author, committer, `mergetag`), every message line, every path and every added line; a merge shows only the lines it introduces itself (a `--cc` prefix as wide as the parent count, so an octopus merge works). Annotated tag objects are peeled and scanned whole (tagger included); a ref that peels to a tree or a blob blocks, since nothing here can read it. Only the **remote** ref name is checked, because the local name never becomes public. Deleted refs are skipped (a push of only deletes makes no Claude call). A push to a URL is mapped back to the configured remote whose `url` or `pushurl` it is; with no match, or with no tracking refs for that remote, it blocks with "run `git fetch <remote>`, then push again" rather than scanning the whole history. A remote sha that is not present locally gives a notice (run `git fetch`) and the check goes on over everything the tracking refs lack. Stale or divergent tracking refs only make the check examine more, never less; a `pushurl` that differs from `url`, or a custom fetch refspec, can make the exclusion wrong (this repository sets neither).
+  A commit that any branch of that remote has, as last fetched, is excluded and never rechecked; a commit shared by two pushed refs is checked once; the hook never fetches. Every commit is shown even when it has no diff (`--always`), so an empty commit's message and identities are checked too. Layer 1 scans every raw header line (author, committer, `mergetag`), every message line, every path and every added line; a merge shows only the lines it introduces itself (a `--cc` prefix as wide as the parent count, so an octopus merge works). Annotated tag objects are peeled and scanned whole (tagger included); a ref that peels to a tree or a blob blocks, since nothing here can read it. Only the **remote** ref name is checked, because the local name never becomes public. Deleted refs are skipped (a push of only deletes makes no Claude call). A push to a URL is mapped back to the configured remote whose `url` or `pushurl` it is; with no match, or with no tracking refs for that remote, it blocks with "run `git fetch <remote>`, then push again" rather than scanning the whole history. A remote sha that is not present locally gives a notice (run `git fetch`) and the check goes on over everything the tracking refs lack. Stale or divergent tracking refs only make the check examine more, never less; a `pushurl` that differs from `url`, or a custom fetch refspec, can make the exclusion wrong (this repository sets neither).
 
 Both look only at **added** lines and at the **names** of added, copied, modified and renamed files (a rename counts as a new name; an empty file has a name too). File, branch and tag names are also given to Claude as data. Every diff is taken with `--no-textconv` and `--no-ext-diff`, so no diff driver can hide content. Because each commit's own patch is read, a term added in one commit and removed in the next is still seen, and pre-push backstops commits made with `--no-verify`.
 
@@ -23,12 +24,12 @@ It **fails closed**. It blocks, with one line naming the failing step, when the 
 
 ## Override and bypass
 
-- `LEAK_GUARD_SKIP="<reason>" git commit ...` (or `git push ...`) skips both layers for that one command. The skip is logged with its reason.
+- `LEAK_GUARD_SKIP="<reason>" git commit ...` (or `git push ...`) skips both layers for that one command, so it has to be set on each command that needs it (a commit runs three hooks, and a push one; the variable reaches each of them). **Every skip is logged**, with its reason, in the log below.
 - `git commit --no-verify` and `git push --no-verify` skip the hooks, as git always allows. That leaves no log line.
 
 ## Log
 
-Every run appends one line to `~/.local/state/leak-guard/log.jsonl` (the file is mode 600 in a mode 700 directory): `{utc, mode, head, verdict (pass|block|skip), layer (1|2|override|none), duration_s, findings}`, plus `claude_s` and `cost_usd` when Claude was called and `reason` for a skip or a failing step. Neither the diff nor any term is ever logged.
+Every run appends one line to `~/.local/state/leak-guard/log.jsonl` (the file is mode 600 in a mode 700 directory): `{utc, mode, head, verdict (pass|block|skip), layer (1|2|override|none), duration_s, findings}`, plus `claude_s` and `cost_usd` when Claude was called and `reason` for a skip or a failing step. Neither the diff nor any term is ever logged, and a `reason` is a short fixed code or a count (never a path, a ref name or a word from Claude's answer); notices such as `remote_sha_unknown` are logged as codes in `notes`.
 
 ## What it guards
 

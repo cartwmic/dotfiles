@@ -59,7 +59,7 @@ class Installer(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         ran = self.run_script(done.stdout)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        for name in ("pre-commit", "pre-push"):
+        for name in ("pre-commit", "commit-msg", "pre-push"):
             hook = self.hooks() / name
             self.assertTrue(os.access(hook, os.X_OK))
             text = hook.read_text()
