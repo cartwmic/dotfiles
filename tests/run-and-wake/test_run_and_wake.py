@@ -7,6 +7,8 @@ prompts herdr received, and the job log, read back as the replay of each job.
 """
 import json
 import os
+import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -77,7 +79,43 @@ THREAD = "thread-7f3a"
 CHILD = "thread:delegated-task:6c1e0a"  # a delegated child's thread: its wake also asks it to message its lead
 CHILD_LINE = ("If this wake finishes your task or your next turn ends it, send your lead a short message (the thread id in your brief) "
               "before you end the turn: T3 does not notify a lead for runs woken this way (pingdotgg/t3code#33432; remove this line once that is fixed).")
+# systemd-run, scripted. Off: no user manager (a CI runner, a kgate pod), so every call fails. Recording: logs argv, answers the
+# probe, and does what `--scope` does (runs the command in place of itself).
+FAKE_SYSTEMD_OFF = """#!/bin/sh
+echo "systemd-run: Failed to connect to bus: No medium found" >&2
+exit 1
+"""
+FAKE_SYSTEMD_SCOPE = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.path.join(os.environ["FAKE"], "systemd_run"), "a") as f:
+    f.write(json.dumps(args) + "\n")
+assert "--expand-environment=no" in args, "without it systemd-run expands $VAR in the command (254-257, and always before 258 outside --scope)"
+rest = args[args.index("--") + 1:]
+if rest == ["true"]:
+    sys.exit(0)
+os.execvp(rest[0], rest)
+'''
+# systemctl, scripted for the slice check only: answers `show app-t3code-agents.slice --property=MemoryMax --value` from the file $FAKE/slice_memory_max.
+FAKE_SYSTEMCTL = """#!/bin/sh
+cat "$FAKE/slice_memory_max" 2>/dev/null || echo infinity
+"""
 FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
+
+
+def user_scopes_work():
+    """True where `systemd-run --user --scope` really starts a scope (the Linux desktop), as the script's own probe asks."""
+    run = shutil.which("systemd-run")
+    if not run or not sys.platform.startswith("linux"):
+        return False
+    try:
+        return subprocess.run([run, "--user", "--scope", "--quiet", "--collect", "--", "true"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def scope_active(unit):
+    return subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit]).returncode == 0
 
 
 class RunAndWake(unittest.TestCase):
@@ -94,12 +132,17 @@ class RunAndWake(unittest.TestCase):
         (self.bin / "herdr").chmod(0o755)
         (self.bin / "t3").write_text(FAKE_T3)
         (self.bin / "t3").chmod(0o755)
+        self.systemd_off = root / "systemd-off"  # first on PATH by default: a host with no user manager, whatever the real one is
+        self.systemd_off.mkdir()
+        (self.systemd_off / "systemd-run").write_text(FAKE_SYSTEMD_OFF)
+        (self.systemd_off / "systemd-run").chmod(0o755)
         self.state = root / "state"
         self.log = self.state / "run-and-wake/log.jsonl"
         env = {k: v for k, v in os.environ.items() if k not in ("HERDR_PANE_ID", "PI_SESSION_FILE", "PI_SESSION_ID", "T3CODE_THREAD_ID", "T3CODE_CLI_PATH", "OP_SERVICE_ACCOUNT_TOKEN") and not k.startswith("HEAVY_GATE_")}
         self.op_home = root / "op-home"  # HOME with no token file, so the real ~/.config is never read
         self.op_home.mkdir()
-        self.env = {**env, "PATH": f"{self.bin}:{env['PATH']}", "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
+        self.path = env["PATH"]
+        self.env = {**env, "PATH": f"{self.systemd_off}:{self.bin}:{self.path}", "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
                     "HERDR_PANE_ID": PANE, "PI_SESSION_FILE": SESSION, "HOME": str(self.op_home)}
         self.show(PANE, SESSION)
 
@@ -474,6 +517,190 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([p["text"] for p in self.prompts()],
                          [f"[run-and-wake k:{job}] job finished: exit 0 after 0s: true. Output: {records[0]['output']}"])
         self.assertEqual(self.t3_sends(), [], "the thread is not messaged")
+
+    # --- a job outlives the systemd scope of the session that started it (T3 stops a Claude session's scope, killing its cgroup) ---
+    def scope_env(self):
+        (self.root / "systemd-scope").mkdir()
+        (self.root / "systemd-scope/systemd-run").write_text(FAKE_SYSTEMD_SCOPE)
+        (self.root / "systemd-scope/systemd-run").chmod(0o755)
+        (self.root / "systemd-scope/systemctl").write_text(FAKE_SYSTEMCTL)
+        (self.root / "systemd-scope/systemctl").chmod(0o755)
+        (self.fake / "slice_memory_max").write_text("29139927040\n")  # T3 has set its agents slice's limit (the default for these tests)
+        return {"PATH": f"{self.root / 'systemd-scope'}:{self.bin}:{self.path}"}
+
+    def systemd_calls(self):
+        path = self.fake / "systemd_run"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_with_a_user_manager_the_job_runs_in_its_own_scope(self):
+        result = self.launch("--", "sh", "-c", "echo $PWD > seen; echo $T3CODE_THREAD_ID >> seen", env={**self.scope_env(), **self.t3_env()})
+        job = self.job_id(result)
+        records = self.replay(job)
+        probe, scoped = self.systemd_calls()
+        head = ["--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--property=OOMPolicy=continue", "--slice=app-t3code-agents.slice"]
+        self.assertEqual(probe, [*head, "--", "true"], "it asks first, as an exec cannot fall back, with the same placement")
+        self.assertEqual(scoped[:7], head, "T3's agents slice: its memory limit and CPU weight apply to the job")
+        self.assertEqual(scoped[7], f"--unit=run-and-wake-{job}", "the scope is named after the job")
+        self.assertEqual(scoped[scoped.index("--") + 3 :], ["--scoped", job, "sh", "-c", "echo $PWD > seen; echo $T3CODE_THREAD_ID >> seen"])  # as typed: systemd-run is told not to expand
+        self.assertEqual(records[0]["scope"], f"run-and-wake-{job}.scope", "the start record names the scope")
+        self.assertIn("slice", records[0], "and the slice the kernel put it in (read from /proc; the fake systemd-run puts nothing anywhere)")
+        self.assertIn(f"scope run-and-wake-{job}.scope in ", result.stdout)
+        self.assertEqual((self.root / "seen").read_text().split(), [str(self.root), THREAD], "cwd and environment carry into the scope")
+        self.assertEqual(len(self.t3_sends()), 1, "one wake, as before")
+
+    def memory_limit_args(self, args):
+        return sorted(a for a in args if a.startswith(("--property=Memory", "--slice")))
+
+    def test_the_scope_goes_in_the_agents_slice_only_when_that_slice_has_a_memory_limit(self):
+        env = self.scope_env()
+        (self.fake / "slice_memory_max").write_text("infinity\n")  # T3 has not run since boot: the slice is absent or unlimited
+        self.replay(self.job_id(self.launch("--", "true", env=env)))
+        probe, scoped = self.systemd_calls()
+        for call in (probe, scoped):
+            limits = self.memory_limit_args(call)
+            self.assertEqual([a.rsplit("=", 1)[0] for a in limits], ["--property=MemoryHigh", "--property=MemoryMax"], "no agents slice: the limits go on the scope")
+            high, top = (int(a.rsplit("=", 1)[1]) for a in limits)
+            self.assertTrue(0 < high <= top < 1 << 50)
+        self.assertEqual(self.memory_limit_args(probe), self.memory_limit_args(scoped), "the probe asks for what the exec will use")
+
+    def test_no_systemctl_means_the_scope_carries_the_limits(self):
+        env = self.scope_env()
+        (self.root / "systemd-scope/systemctl").unlink()
+        bare = self.root / "systemd-scope"
+        for name in ("python3", "sh", "sleep", "true"):
+            (bare / name).symlink_to(shutil.which(name))
+        for name in ("herdr", "t3"):
+            (bare / name).symlink_to(self.bin / name)
+        self.replay(self.job_id(self.launch("--", "true", env={"PATH": str(bare)})))
+        self.assertEqual([a.rsplit("=", 1)[0] for a in self.memory_limit_args(self.systemd_calls()[1])], ["--property=MemoryHigh", "--property=MemoryMax"])
+
+    def test_dollars_in_the_job_reach_it_as_typed(self):
+        # systemd-run expands $VAR and ${VAR} in the command's arguments (in --scope mode before 258): the launcher turns that off
+        seen = self.root / "seen"
+        probe = f"import sys; open({str(seen)!r}, 'w').write(repr(sys.argv[1:]))"
+        args = ["$HOME", "${NOPE-dflt}", "$$", "a $x b", "100%"]
+        self.replay(self.job_id(self.launch("--", sys.executable, "-c", probe, *args, env=self.scope_env())))
+        self.assertEqual(seen.read_text(), repr(args))
+
+    @unittest.skipUnless(user_scopes_work(), "needs a systemd user manager (not a CI runner or the work Mac)")
+    def test_dollars_in_the_job_reach_it_as_typed_through_the_real_systemd_run(self):
+        seen = self.root / "seen"
+        probe = f"import sys; open({str(seen)!r}, 'w').write(repr(sys.argv[1:]))"
+        args = ["$HOME", "${NOPE-dflt}", "$$", "a $x b", "100%"]
+        env = {"PATH": f"{self.bin}:{self.path}"}  # the real systemd-run
+        self.replay(self.job_id(self.launch("--", sys.executable, "-c", probe, *args, env=env)))
+        self.assertEqual(seen.read_text(), repr(args))
+
+    def test_a_scoped_launch_is_one_launch_with_one_job_id(self):
+        job = self.job_id(self.launch("--", "true", env=self.scope_env()))
+        self.replay(job)
+        self.assertEqual(len([line for line in self.log.read_text().splitlines() if '"start"' in line]), 1)
+
+    def test_without_a_user_manager_the_job_runs_as_before(self):
+        # systemd-run exists but cannot start a scope (a CI runner, a kgate pod): the probe fails and nothing is exec'd
+        job = self.job_id(self.launch("--", "true"))
+        records = self.replay(job)
+        self.assertIsNone(records[0]["scope"])
+        self.assertEqual([r["event"] for r in records], ["start", "end", "wake"])
+
+    def test_without_systemd_run_the_job_runs_as_before(self):
+        # the work Mac: no systemd-run on PATH at all
+        bare = self.root / "bare"
+        bare.mkdir()
+        for name in ("python3", "sh", "sleep", "true"):
+            (bare / name).symlink_to(shutil.which(name))
+        for name in ("herdr", "t3"):
+            (bare / name).symlink_to(self.bin / name)
+        result = self.launch("--", "true", env={"PATH": str(bare)})
+        records = self.replay(self.job_id(result))
+        self.assertIsNone(records[0]["scope"])
+        self.assertNotIn("scope run-and-wake", result.stdout)
+        self.assertEqual([r["event"] for r in records], ["start", "end", "wake"])
+
+    @unittest.skipUnless(user_scopes_work(), "needs a systemd user manager (not a CI runner or the work Mac); the live proof covers it")
+    def test_the_job_finishes_and_wakes_after_the_session_scope_is_stopped(self):
+        # The real thing, with a scope of our own standing in for T3's t3code-claude-<id>.scope. A holder keeps it populated
+        # so the stop has something to kill, as T3's does.
+        outer = f"raw-test-outer-{secrets.token_hex(3)}"
+        cmd, release = self.held_job()
+        env = {**self.env, "PATH": f"{self.bin}:{self.path}"}  # the real systemd-run
+        holder = subprocess.Popen(["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={outer}", "--", "sh", "-c",
+                                   'python3 "$0" "$@"; exec sleep 600', str(SCRIPT), "--", *cmd],
+                                  env=env, cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        self.addCleanup(lambda: subprocess.run(["systemctl", "--user", "stop", f"{outer}.scope"], capture_output=True))
+        self.addCleanup(holder.wait)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (self.log.exists() and self.log.read_text()):
+            time.sleep(0.05)
+        self.assertTrue(self.log.exists(), "the job started")
+        job = json.loads(self.log.read_text().splitlines()[0])["job"]
+        self.addCleanup(lambda: (release.write_text(""), subprocess.run(["systemctl", "--user", "stop", f"run-and-wake-{job}.scope"], capture_output=True)))
+        self.assertTrue(scope_active(f"{outer}.scope"))
+        subprocess.run(["systemctl", "--user", "stop", f"{outer}.scope"], check=True)  # what T3 does when it releases the session
+        self.assertFalse(scope_active(f"{outer}.scope"), "the session's scope is gone")
+        release.write_text("")
+        records = self.replay(job, timeout=8)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual(records[1]["exit"], 0, "the job ran to its end after the session's scope was stopped")
+        self.assertEqual(len(self.prompts()), 1)
+        self.assertTrue(records[0]["slice"].endswith(".slice"), "the start record shows the slice the scope landed in")
+
+    # --- a stop that signals the watcher as well as the job ---
+    def watcher_of(self, result):
+        pid = int(result.stdout.split(", pid ")[1].split(",")[0])
+        with open(f"/proc/{pid}/stat") as stat:
+            return pid, int(stat.read().rsplit(")", 1)[1].split()[1])  # the job's parent is the watcher
+
+    @unittest.skipUnless(os.path.isdir("/proc"), "reads the watcher's pid from /proc")
+    def test_a_signal_to_the_whole_group_still_ends_in_an_end_record_and_a_wake(self):
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd)
+        job = self.job_id(result)
+        _, watcher = self.watcher_of(result)
+        os.killpg(watcher, signal.SIGTERM)  # the watcher is its session's leader: this is the job and the watcher together
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGTERM"])
+        self.assertIn("job finished: killed by SIGTERM", self.prompts()[0]["text"])
+
+    @unittest.skipUnless(os.path.isdir("/proc"), "reads the watcher's pid from /proc")
+    def test_a_signal_to_the_watcher_alone_is_passed_to_the_job(self):
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd)
+        job = self.job_id(result)
+        _, watcher = self.watcher_of(result)
+        os.kill(watcher, signal.SIGHUP)
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGHUP"])
+
+    def test_the_job_does_not_inherit_the_watchers_signal_handling(self):
+        # the watcher must not ignore TERM/HUP/INT for its job (SIG_IGN would survive exec)
+        seen = self.root / "seen"
+        probe = ("import signal; print([signal.getsignal(s) is signal.SIG_IGN for s in "
+                 f"(signal.SIGTERM, signal.SIGHUP, signal.SIGINT)], file=open({str(seen)!r}, 'w'))")
+        job = self.job_id(self.launch("--", sys.executable, "-c", probe))
+        self.replay(job)
+        self.assertEqual(seen.read_text().strip(), "[False, False, False]")
+
+    def test_a_signal_ignored_at_launch_stays_ignored_for_the_job(self):
+        # `nohup run-and-wake …`: SIGHUP ignored on the way in is ignored by the job, as before the watcher forwarded signals
+        seen = self.root / "seen"
+        probe = f"import signal; print(signal.getsignal(signal.SIGHUP) is signal.SIG_IGN, file=open({str(seen)!r}, 'w'))"
+        result = subprocess.run([sys.executable, str(SCRIPT), "--", sys.executable, "-c", probe], env=self.env, cwd=self.root, text=True,
+                                capture_output=True, timeout=20, preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN))
+        self.replay(self.job_id(result))
+        self.assertEqual(seen.read_text().strip(), "True")
+
+    def test_a_job_killed_with_sigkill_gets_an_end_record_with_the_signal(self):
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd)
+        job = self.job_id(result)
+        os.kill(int(result.stdout.split(", pid ")[1].split(",")[0]), signal.SIGKILL)
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGKILL"])
+        self.assertIn("job finished: killed by SIGKILL", self.prompts()[0]["text"])
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):

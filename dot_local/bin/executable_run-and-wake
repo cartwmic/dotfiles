@@ -8,6 +8,14 @@ Contract (docs/run-and-wake.md):
 - Returns at once. Prints the job id, the job's pid and its output file.
 - CMD runs in its own session, so it outlives the tool call or shell that started it.
   Its stdout and stderr go to the output file.
+- On Linux with a working `systemd-run --user`, the launcher first re-runs itself in its own transient scope
+  (run-and-wake-<job>.scope), so the watcher and the job also outlive the systemd scope of the session that started them
+  (T3 stops a Claude session's scope when it releases the session: 30 minutes without a turn, a restart, a force-stop; a setsid session stays in that scope's cgroup).
+  Without systemd-run (macOS, the work Mac) or without a user manager, nothing changes: fork and setsid only.
+  The scope joins T3's agents slice (app-t3code-agents.slice) when that slice has a memory limit, so a job shares the memory budget
+  and CPU weight of the agents instead of escaping them; otherwise it gets T3's own limit formula on the scope itself.
+- The watcher forwards SIGTERM, SIGHUP and SIGINT to the job and keeps watching, so a stop that signals the whole group
+  still ends in an `end` record (with the job's signal) and a wake.
 - When CMD exits (any status), at most one wake is attempted: one tagged
   `herdr agent prompt` to the pane in $HERDR_PANE_ID, sent only if, at check time, that
   pane shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
@@ -26,8 +34,9 @@ Contract (docs/run-and-wake.md):
   service account and never the desktop app (playbook 78819cbd). No token file and no variable: the job runs without one.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
-    start  {cmd, cwd, pane, session, thread, pid, output, op_token}  (op_token: env, file, or null: where the job's
-           1Password token came from; the value is never logged)
+    start  {cmd, cwd, pane, session, thread, pid, output, op_token, scope, slice}  (op_token: env, file, or null: where the job's
+           1Password token came from; the value is never logged. scope: the systemd scope the job runs in, or null;
+           slice: the slice that scope is in, read back from /proc, or null)
     end    {exit, signal, duration_s}
     blocked {}                      (pane showed a dialog; waiting)
     wake   {target: herdr|t3, result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
@@ -38,6 +47,7 @@ import json
 import os
 import secrets
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -49,6 +59,13 @@ NAME = "run-and-wake"
 STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), NAME)
 LOG = os.path.join(STATE, "log.jsonl")
 TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
+SCOPED = "--scoped"  # internal first argument: the launcher re-ran itself inside its own systemd scope; the job id follows
+# --expand-environment=no: systemd-run expands $VAR in the command's arguments, and since 258 not in --scope mode, so ask for the same on every version (254+; older ones fail the probe and keep the plain path).
+# OOMPolicy=continue: an OOM kill takes the job, not the watcher that must record it.
+SCOPE_ARGS = ["--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--property=OOMPolicy=continue"]
+AGENT_SLICE = "app-t3code-agents.slice"  # T3's agents slice: T3 sets its MemoryHigh and MemoryMax at server start, its parent carries the low CPU weight
+GiB = 1024**3
+FORWARDED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 def say(level, message):
@@ -205,23 +222,41 @@ def job_env(job):
     return env, "file"
 
 
-def watch(job, cmd, output, pane, session, thread, report):
+def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
     """Runs in the detached process: start the job, wait for it, then wake."""
     started = time.monotonic()
     env, op_token = job_env(job)
+    jobs = []
+
+    def forward(signum, _frame):
+        # A stop that signals the whole group reaches the watcher too: keep watching so the job's end is recorded and woken.
+        # (A Python handler, not SIG_IGN: an ignored signal would be inherited by the job.)
+        for running in jobs:
+            try:
+                running.send_signal(signum)
+            except OSError:
+                pass
+
+    # A signal this process was started ignoring (nohup's SIGHUP) stays ignored, for the watcher and for the job that inherits it, as before.
+    handled = [signum for signum in FORWARDED if signal.getsignal(signum) is not signal.SIG_IGN]
+    for signum in handled:
+        signal.signal(signum, forward)
     with open(output, "ab", buffering=0) as out:
         try:
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env)
         except OSError as error:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token, scope=scope, slice=slice_)
             tell(report, f"failed {error}")
             out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
             record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
             status = f"could not start ({error})"
         else:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token)
+            jobs.append(child)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token, scope=scope, slice=slice_)
             tell(report, f"pid {child.pid}")
             code = child.wait()
+            for signum in handled:  # nothing left to forward to: a signal now ends the wake wait as it always did
+                signal.signal(signum, signal.SIG_DFL)
             sig = signal.Signals(-code).name if code < 0 else None
             record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3))
             status = f"killed by {sig}" if sig else f"exit {code}"
@@ -232,17 +267,81 @@ def watch(job, cmd, output, pane, session, thread, report):
         wake(job, pane, session, text)
 
 
+def agent_slice_limited(systemctl):
+    """True when T3's agents slice exists with a finite MemoryMax. T3 sets it at server start, so it is absent when T3 has not run since boot."""
+    if not systemctl:
+        return False
+    try:
+        done = subprocess.run([systemctl, "--user", "show", AGENT_SLICE, "--property=MemoryMax", "--value"],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0 and done.stdout.strip().isdigit()  # "infinity" when unset
+
+
+def own_memory_limits():
+    """T3's agent-slice formula (agentSliceMemoryLimits): leave 6 GiB before throttling and 4 GiB before a kill, at least half and three quarters of RAM."""
+    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    return max(total - 6 * GiB, total // 2), max(total - 4 * GiB, total * 3 // 4)
+
+
+def scope_runner():
+    """The systemd-run argv prefix when this host can start a user scope (Linux with a user manager), else None. The probe is
+    the launch itself with `true` for the command: an exec cannot fall back, so check first. macOS and hosts without a user manager keep the plain path.
+    Placement: in T3's agents slice when that slice carries a memory limit, so a job shares the agents' memory budget and CPU weight
+    (a job in app.slice would escape both: a heavy job could take the box down); when it does not (T3 has not started since boot),
+    the same limits go on the scope itself."""
+    run = shutil.which("systemd-run") if sys.platform.startswith("linux") else None
+    if not run:
+        return None
+    if agent_slice_limited(shutil.which("systemctl")):
+        place = [f"--slice={AGENT_SLICE}"]
+    else:
+        high, top = own_memory_limits()
+        place = [f"--property=MemoryHigh={high}", f"--property=MemoryMax={top}"]
+    argv = [run, *SCOPE_ARGS, *place]
+    try:
+        done = subprocess.run([*argv, "--", "true"], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return argv if done.returncode == 0 else None
+
+
+def own_slice():
+    """The slice this process's cgroup sits in, read back from /proc (what the kernel put us in, not what we asked for), or None."""
+    try:
+        with open("/proc/self/cgroup") as cgroup:
+            path = cgroup.read().strip().rsplit("::", 1)[1]
+    except (OSError, IndexError):
+        return None
+    parts = path.rstrip("/").split("/")
+    return parts[-2] if len(parts) > 1 and parts[-2].endswith(".slice") else None
+
+
 def main(argv):
     if argv[:1] == ["--"]:
         argv = argv[1:]
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
         return 0
+    scoped = argv[:1] == [SCOPED] and len(argv) > 2
+    if scoped:
+        job, argv = argv[1], argv[2:]
     if not argv or argv[0].startswith("-"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     os.makedirs(os.path.join(STATE, "jobs"), exist_ok=True)
-    job = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
+    if not scoped:
+        job = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
+        run = scope_runner()
+        if run:  # become the launcher inside our own scope: same env, cwd and stdio, a cgroup the caller's scope does not own
+            try:
+                os.execv(run[0], [*run, f"--unit={NAME}-{job}", f"--description={NAME} job {job}", "--",
+                               sys.executable, os.path.abspath(__file__), SCOPED, job, *argv])
+            except OSError:
+                pass  # no scope after all: run in the caller's cgroup, as before
+    scope = f"{NAME}-{job}.scope" if scoped else None
+    slice_ = own_slice() if scoped else None
     output = os.path.join(STATE, "jobs", job + ".log")
     pane = os.environ.get("HERDR_PANE_ID") or None
     session = os.environ.get("PI_SESSION_FILE") or None
@@ -258,7 +357,7 @@ def main(argv):
         os.dup2(logfd, 1)
         os.dup2(logfd, 2)
         try:
-            watch(job, argv, output, pane, session, thread, report)
+            watch(job, argv, output, pane, session, thread, report, scope, slice_)
         except BaseException:
             traceback.print_exc()  # into the job's output file
         finally:
@@ -278,6 +377,8 @@ def main(argv):
         say("WARN", "no PI_SESSION_FILE: nothing will wake you when it ends")
     else:
         say("INFO", f"when it ends, pane {pane} gets one prompt tagged [{NAME} k:{job}]; you can end your turn")
+    if scope:
+        say("INFO", f"scope {scope} in {slice_ or 'no slice'}: the job outlives the scope of the session that started it")
     say("INFO", f"log {LOG}")
     return 0
 
