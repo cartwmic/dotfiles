@@ -1,0 +1,32 @@
+#!/bin/sh
+# Load or reload the agent Chrome login unit (agent-chrome.service) when its unit or the launcher changes. Personal Linux only (.chezmoiignore).
+# The unit runs ~/.local/bin/agent-chrome once per login; a changed unit or launcher needs a restart to take effect, hence the hashes.
+# unit: {{ include "dot_config/systemd/user/agent-chrome.service" | sha256sum }}
+# launcher: {{ include "dot_local/bin/executable_agent-chrome" | sha256sum }}
+#
+# Modeled on run_onchange_after_73_heavy_gate_watchdog_systemd.sh.tmpl. Fails (and so fails the apply) when systemd does not end up with the
+# unit active: chezmoi records a run_onchange script only when it succeeds, so the next apply tries again. Two cases are a notice and a clean exit:
+# a host with no systemd user manager (a container, WSL without systemd), and a session with no graphical-session.target yet (an ssh login, a
+# boot before the desktop). There the unit is only enabled; it starts at the next login.
+set -eu
+log() { printf '[agent_chrome_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+unit=agent-chrome.service
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; $unit not loaded"
+  exit 0
+fi
+if [ ! -f "$HOME/.config/systemd/user/$unit" ]; then
+  log ERROR "$HOME/.config/systemd/user/$unit is not installed; apply it too, then apply again"
+  exit 1
+fi
+systemctl --user daemon-reload
+systemctl --user enable "$unit" >/dev/null 2>&1 || { log ERROR "could not enable $unit"; exit 1; }
+if ! systemctl --user is-active --quiet graphical-session.target; then
+  log INFO "no graphical session yet; $unit enabled, it starts at the next login"
+  exit 0
+fi
+systemctl --user restart "$unit" || { log ERROR "could not start $unit; see: journalctl --user -u $unit"; exit 1; }
+systemctl --user is-active --quiet "$unit" || { log ERROR "$unit is not active after the restart; see: journalctl --user -u $unit"; exit 1; }
+log INFO "loaded $unit (journalctl --user -u $unit; check: curl -s http://127.0.0.1:9333/json/version)"
