@@ -1,10 +1,10 @@
 # kgate
 
-`kgate` runs a heavy gate (a repo's slow test or lint command) on a Kubernetes cluster instead of on this Mac: the personal homelab cluster by default, or the Axon KC2 cluster2 cluster for a profile with `cluster = "kc2"` (see "KC2" below). One Python file, `dot_local/bin/executable_kgate`, installed as `~/.local/bin/kgate`. It takes heavy-gate's command line and meets `run-and-wake` and `heavy-gate` only on the command line:
+`kgate` runs a heavy gate (a repo's slow test or lint command) on a Kubernetes cluster instead of on this Mac: the personal homelab cluster by default, or a second cluster reached through kubectl for a profile with `cluster = "<name>"` (see "A second cluster, reached through kubectl" below). One Python file, `dot_local/bin/executable_kgate`, installed as `~/.local/bin/kgate`. It takes heavy-gate's command line and meets `run-and-wake` and `heavy-gate` only on the command line:
 
 The cluster host is not in this repo. `KGATE_SSH` (`user@address`) wins; otherwise `kgate` reads `~/.config/kgate/host`, which chezmoi renders from the local data key `sshHosts.kgate` (`address`, `user`) plus the optional list `sshHosts.kgateFallback` (same fields per entry; see [profiles.md](profiles.md), "Local data keys"). With neither set, `kgate` exits 69 and the message names the key.
 
-Control-plane failover. `KGATE_SSH` and the host file each take one `user@address` (the old form, unchanged) or an ordered list, separated by commas or lines (`#` lines are skipped). With a list, `kgate` tries each host in order with a bare `ssh ... true` (ConnectTimeout 8 s) at job start, uses the first that answers, and prints `kgate: control plane user@address` in the job output. If none answers it exits 69. A single host is not probed first, so its behaviour is as before. Failover happens only at job start: a job whose host dies mid-run still fails (69, unknown), and a rerun picks the next host. This is the homelab path only; the KC2 adapter is unchanged.
+Control-plane failover. `KGATE_SSH` and the host file each take one `user@address` (the old form, unchanged) or an ordered list, separated by commas or lines (`#` lines are skipped). With a list, `kgate` tries each host in order with a bare `ssh ... true` (ConnectTimeout 8 s) at job start, uses the first that answers, and prints `kgate: control plane user@address` in the job output. If none answers it exits 69. A single host is not probed first, so its behaviour is as before. Failover happens only at job start: a job whose host dies mid-run still fails (69, unknown), and a rerun picks the next host. This is the homelab path only; a kubectl cluster is unchanged.
 
 ```sh
 run-and-wake -- kgate -- sh -c 'npm ci && npm run typecheck && npm test'
@@ -27,7 +27,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 
 ## What it does
 
-1. Ships the git worktree of the current directory to one pod: tracked and untracked non-ignored files, the `.git` file and the shared git folder (on KC2 no `.git`: see "KC2"), all at the same absolute path. Ignored files (`node_modules`, `target`) stay here. A submodule is refused.
+1. Ships the git worktree of the current directory to one pod: tracked and untracked non-ignored files, the `.git` file and the shared git folder (on a kubectl cluster no `.git`: see "A second cluster"), all at the same absolute path. Ignored files (`node_modules`, `target`) stay here. A submodule is refused.
 2. **Tree hash.** Before sending, it computes the git tree hash of the shipped files (what `git write-tree` gives for an index of exactly those files). The pod recomputes it after unpacking. If they differ, the job fails and CMD never runs.
 3. **Version preflight.** The pod checks each tool in the profile. A mismatch fails the job and prints the tool, expected and found.
 4. Runs CMD with the output streaming back live. CMD's exit code is kgate's.
@@ -98,7 +98,7 @@ For such a PR, wait for GitHub's run, or run that one test on the host desktop m
 When no node has room for the pod's CPU or memory request, the pod stays `Pending`. kgate waits for room and then gives up: exit 75 after `--sched-wait` (default 600 s), or exit 69 if `--wait` runs out first. It never runs the job on the Mac.
 
 - A full cluster leaves the pod `Pending`, with `PodScheduled` `False` and reason `Unschedulable`. The client waits by itself. It prints `kgate: waiting for the pod: Unschedulable` to the job log when that state first appears.
-- **Scheduling deadline (homelab).** `--sched-wait SECONDS` (default 600; env `KGATE_SCHED_WAIT`; the flag wins; whole seconds, at least 1) counts from the moment the pod is created. If the pod is still `PodScheduled=False` with reason `Unschedulable` when it passes, kgate deletes the pod, prints one line and exits **75**: `kgate: pod not scheduled within <N>s: <scheduler message> (pinned to node <NODE>); exit 75, CMD was not run on this Mac` (the pin part only when `--node` was given). The record's `reason` is `pod not scheduled within <N>s: <scheduler message>[ (pinned to node <NODE>)]`. There is no retry. 75 is `EX_TEMPFAIL`; kgate uses it for nothing else, though a CMD that itself exits 75 looks the same by code (as with 69, `reason` tells them apart). A pod that is already scheduled and is pulling its image or running an init container is not unschedulable: the deadline does not apply to it, and only `--wait` ends it. KC2 is not covered (its autoscaler can take longer to add a node); there only `--wait` applies.
+- **Scheduling deadline (homelab).** `--sched-wait SECONDS` (default 600; env `KGATE_SCHED_WAIT`; the flag wins; whole seconds, at least 1) counts from the moment the pod is created. If the pod is still `PodScheduled=False` with reason `Unschedulable` when it passes, kgate deletes the pod, prints one line and exits **75**: `kgate: pod not scheduled within <N>s: <scheduler message> (pinned to node <NODE>); exit 75, CMD was not run on this Mac` (the pin part only when `--node` was given). The record's `reason` is `pod not scheduled within <N>s: <scheduler message>[ (pinned to node <NODE>)]`. There is no retry. 75 is `EX_TEMPFAIL`; kgate uses it for nothing else, though a CMD that itself exits 75 looks the same by code (as with 69, `reason` tells them apart). A pod that is already scheduled and is pulling its image or running an init container is not unschedulable: the deadline does not apply to it, and only `--wait` ends it. A kubectl cluster is not covered (its autoscaler can take longer to add a node); there only `--wait` applies.
 - Otherwise it keeps waiting until `--wait` seconds (default 3600) after the job started.
 - If the wait runs out, it exits 69. The record's `reason` is `pod did not start within <N>s: Unschedulable <scheduler message>`. kgate copies the scheduler message unchanged, up to 300 characters. Kubernetes scheduler messages look like `0/N nodes are available: ... Insufficient memory`.
 
@@ -107,7 +107,7 @@ The reason tells a full cluster apart from the other ways a job fails to start. 
 | `reason` starts with | Cause | Capacity? |
 |---|---|---|
 | `pod not scheduled within <N>s:` (exit 75) | No node had room for the `--sched-wait` deadline. | Yes |
-| `pod did not start within <N>s: Unschedulable` | No node had room for the whole `--wait` (KC2, or `--sched-wait` set above `--wait`). | Yes |
+| `pod did not start within <N>s: Unschedulable` | No node had room for the whole `--wait` (a kubectl cluster, or `--sched-wait` set above `--wait`). | Yes |
 | `pod did not start: ` (for example `ErrImagePull`, `ImagePullBackOff`, `CreateContainerConfigError`, or a pod phase of `Failed`) | The pod failed before CMD ran. | No |
 | `cluster unreachable (` | The cluster or its ssh route is down. | No |
 | `could not create the pod: ` | The cluster refused to create the pod. | No |
@@ -194,9 +194,9 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | Field | Meaning |
 |---|---|
 | `id` | kgate's job id, also the pod's name |
-| `cluster` | `homelab` or `kc2` |
-| `cache` | KC2 only: `pvc`, `fallback` or `none` (see "The cache disk") |
-| `cpu_limit`, `quota_wait_s` | KC2 only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
+| `cluster` | `homelab`, or the name of the cluster file |
+| `cache` | kubectl clusters only: `pvc`, `fallback` or `none` (see "The cache claim") |
+| `cpu_limit`, `quota_wait_s` | kubectl clusters only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
 | `repo`, `cwd`, `head` | repo name, working directory, Mac HEAD |
@@ -208,96 +208,106 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `out_files`, `cleanup`, `output`, `cmd` | files copied back; pod and Secrets confirmed deleted; log file; the command |
 | `cancelled` | only on a job stopped by `kgate cancel`: `true` |
 
-## KC2
+## A second cluster, reached through kubectl
 
-A profile with `cluster = "kc2"` runs the same contract (ship the worktree, verify the tree hash, stream output, copy `/out` back, delete the pod, one record, `kgate cancel`) on the Axon KC2 cluster2 cluster, namespace `jobs`. Only the cluster adapter and the pod side differ. The homelab path is untouched and stays the default. It is for Axon repos on the work Mac. Their profiles live in dotfiles, not in the Axon repo: `~/.config/kgate/profiles/example-repo.toml` (source `dot_config/kgate/profiles/example-repo.toml`).
+A profile with `cluster = "<name>"` runs the same contract (ship the worktree, verify the tree hash, stream output, copy `/out` back, delete the pod, one record, `kgate cancel`) on a second Kubernetes cluster that this machine reaches through local `kubectl`. Only the cluster adapter and the pod side differ. The homelab path is untouched and stays the default: a profile with no `cluster` key, or `cluster = "homelab"`, is a homelab job.
 
-```sh
-run-and-wake -- kgate --profile ~/.config/kgate/profiles/example-repo.toml -- go test ./...
+Everything about the second cluster is in a file on the machine, not in this repo: `~/.config/kgate/clusters/<name>.toml`. A machine without that file cannot reach the cluster. The profiles for it live next to the repo they gate, or in `~/.config/kgate/profiles/` (`--profile FILE`).
+
+```toml
+# ~/.config/kgate/clusters/example.toml   (invented values)
+kind = "kubectl"                      # the only kind besides the built-in homelab one
+kubeconfig = "~/.kube/kgate-example"  # a kubeconfig that holds only the one context below
+context = "example-ctx"
+namespace = "jobs"
+registries = ["registry.example"]     # image hosts a profile may use here (still pinned by digest)
+tree_roots = ["Users", "Volumes", "private"]   # top-level directories the shipped tree may live under
+user = "65532:65532"                  # uid:gid the pod runs as (never root); a profile's own `user` overrides it
+deadline_s = 7200                     # activeDeadlineSeconds
+cache_claim_default = "my-cache"      # optional: a persistent cache claim used unless the profile names its own cache_pvc
+
+[pod_labels]                          # optional: what the cluster's admission policy requires on every pod
+"example.org/owner" = "team-a"
+[pod_annotations]                     # optional
+"example.org/evict-ok" = "true"
 ```
 
-**Setup, once.** `kgate kc2-setup` writes `~/.kube/kgate-cluster` (mode 600) from the `example-ctx` context of `~/.kube/config` and nothing else, and switches kubelogin's `--login` to `azurecli`, so the token comes from `az login` and there is no browser sign-in per job. Sign in with `als az login -e kc2` (or `az login`) on the KC2 VPN. Without the file a job exits 69 and says to run `kgate kc2-setup`.
+A missing or invalid file is exit 69, and the reason names the file and the key (`cluster file <path> is missing the key 'namespace'`). Unknown keys are refused.
 
-**Constants** (in the script, not configuration): `kubectl --kubeconfig ~/.kube/kgate-cluster --context example-ctx -n jobs`. The file holds that one context, so us1 and us2 are not reachable through kgate. kgate never reads `~/.kube/config` (except in `kc2-setup`) or the current context. The reachability check is `kubectl auth can-i create pods` answering `yes`. Anything else is exit 69, with the sign-in hint and kubectl's message.
+**Setup, once.** `kgate cluster-setup <name> --from-context <ctx> [--namespace NS] [--from-kubeconfig FILE] [--kubeconfig-out FILE]` writes a kubeconfig that holds only that context (mode 600). It writes to the `kubeconfig` the cluster file names when that file exists (`--kubeconfig-out` must then match it, and so must `--from-context` and `--namespace` match the file's `context` and `namespace`, or the command refuses and leaves the working kubeconfig alone); otherwise to `--kubeconfig-out`, default `~/.kube/kgate-<name>`. It marks the file as kgate's, never replaces a file it did not write (or one with more than one context), and never writes `~/.kube/config` or the file it reads from. It switches an exec login of `kubelogin` to `--login azurecli` (only when the source context uses it, so the token comes from the cli login and there is no browser sign-in per job). If no cluster file exists yet it also writes a skeleton (mode 600, values escaped) with `registries = []`, which kgate refuses until you fill it in; it never overwrites an existing cluster file.
 
-**What kgate does there.** The Role allows pods (get, list, watch, create, delete), `pods/exec`, `pods/log` and events, and nothing else. kgate creates a bare pod, execs into it and deletes it. No Secrets, ConfigMaps or Jobs. The sweep at each start deletes finished `app=kgate` pods only; the Role is bound to one person, so only that person's kgate pods can exist in the namespace.
+**Where the files come from on a machine.** `run_onchange_after_45_kgate_cluster_files.sh.tmpl` writes the cluster and profile files from the machine's own chezmoi data, on any profile that has it: `kgate.clusters.<name>` and `kgate.profiles.<name>` hold the TOML text, and the file names are the keys. With no `kgate` data nothing is written. **Removing a key from the data does not remove the file the step already wrote**; delete `~/.config/kgate/clusters/<name>.toml` or `~/.config/kgate/profiles/<name>.toml` by hand (a cluster file that is gone makes kgate refuse that cluster with exit 69; a stale one keeps working). See `example.chezmoi.yaml` and [profiles.md](./profiles.md).
+
+**Constants.** `kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace>`, always all three, from the cluster file. kgate never reads the current context. The reachability check is `kubectl auth can-i create pods` answering `yes`; anything else is exit 69 with a hint to sign in and kubectl's message. A missing kubeconfig is exit 69 naming `kgate cluster-setup`.
+
+**What kgate does there.** It needs only pods (get, list, watch, create, delete), `pods/exec`, `pods/log` and events. kgate creates a bare pod, execs into it and deletes it. No Secrets, ConfigMaps or Jobs. The sweep at each start deletes finished `app=kgate` pods only.
 
 **Pod spec.**
 
-- Labels `app=kgate`, `kgate-job=<id>`, `example.org/owner=team`, `example.org/pillar=dems`, and the annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "true"` (Kyverno enforces these in cluster2).
-- Non-root: `runAsNonRoot`, `runAsUser` and `runAsGroup` from the profile's `user` (default `65532:65532`, the image's user; `0:0` is refused). seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false`, drop `ALL`, no service account token. The exec-as-root-then-drop path is not used.
-- Requests and limits for cpu, memory and ephemeral-storage, from the profile: `cpu` (request), `cpu_limit` (limit, what the pod may burst to; default `cpu`; must be at least `cpu`; KC2 only), `memory` (request), `memory_limit` (limit), `ephemeral_storage` (request and limit; default `10Gi`). `GOMAXPROCS`, `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` follow the CPU limit, not the request.
-- `activeDeadlineSeconds: 7200`. The container runs `sleep 86400` (the image has no `tini`), so the deadline ends a pod whose client died.
-- emptyDirs at the top directory of the shipped tree (`/Users` for `/Users/me/git/repo`, so the Mac's absolute paths unpack as the non-root user), at `/cache` and at `/out`. Only trees under `/Users`, `/Volumes` or `/private` are accepted (an allow-list, so no emptyDir hides anything in the image); any other top directory is refused.
-- `cache_pvc = "<claim>"` in the profile makes `/cache` that persistent claim instead of an emptyDir (see "The cache disk" below). The pod then also gets `fsGroup` (the profile's gid) with `fsGroupChangePolicy: OnRootMismatch`, so the non-root user can write a new disk.
+- Labels `app=kgate`, `kgate-job=<id>`, plus the cluster file's `pod_labels` (which may not set kgate's own `app` or `kgate-job`), and its `pod_annotations`.
+- Non-root: `runAsNonRoot`, `runAsUser` and `runAsGroup` from the profile's `user`, else the cluster file's (`0:0` is refused). seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false`, drop `ALL`, no service account token. The exec-as-root-then-drop path is not used.
+- Requests and limits for cpu, memory and ephemeral-storage, from the profile: `cpu` (request), `cpu_limit` (limit, what the pod may burst to; default `cpu`; must be at least `cpu`), `memory` (request), `memory_limit` (limit), `ephemeral_storage` (request and limit; default `10Gi`). `GOMAXPROCS`, `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` follow the CPU limit, not the request.
+- `activeDeadlineSeconds` from the cluster file. The container runs `sleep 86400` (no `tini` needed), so the deadline ends a pod whose client died.
+- emptyDirs at the top directory of the shipped tree (`/Users` for `/Users/me/git/repo`, so the Mac's absolute paths unpack as the non-root user), at `/cache` and at `/out`. Only trees under the cluster file's `tree_roots` are accepted (an allow-list, so no emptyDir hides anything in the image); any other top directory is refused.
+- `cache_pvc = "<claim>"` in the profile (or `cache_claim_default` in the cluster file) makes `/cache` that persistent claim instead of an emptyDir (see "The cache claim"). The pod then also gets `fsGroup` (the gid) with `fsGroupChangePolicy: OnRootMismatch`, so the non-root user can write a new disk.
 - Env: kgate's usual set, plus `HOME=/cache/<job id>/home` (per job, removed with the job's directory at the end, so nothing a job writes to HOME, such as `~/.gitconfig` or `~/.npmrc`, reaches a later job on a shared disk), `GOCACHE=/cache/go-build`, `GOMODCACHE=/cache/gomod`, `npm_config_cache=/cache/npm` and `npm_config_store_dir=/cache/pnpm-store`. Only those caches live on the claim.
 - No hostPath, affinity, tolerations, Secrets or imagePullSecrets (nodes pull with their own identity). `--node` is refused.
 
-**The cache disk.** With `cache_pvc`, `HOME`, `GOCACHE` and `GOMODCACHE` live on the claim (`jobs-cache`: `managed-csi-premium`, 32Gi, ReadWriteOncePod, made by infra-repo, not by kgate; the Role needs no PVC rights to mount a claim in its own namespace), so Go builds and module downloads are warm after the first job. `cache_pvc` on a homelab profile is refused (exit 69, `cache_pvc is for cluster = "kc2" only`).
+**Refused with exit 69, before anything is created:** a profile with `[secrets]` or `services`, an image whose host is not in the cluster file's `registries` (or that is not pinned by digest), a root user, an invalid cluster file. The record names the profile's cluster even for these refusals, and no homelab connection is made.
 
-- **One job holds the cache; a second runs cold.** ReadWriteOncePod lets one pod use the claim. A second job's pod stays `Pending` (`Unschedulable`, "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode"). If it is still Pending on that reason after about 10 s (`CACHE_BUSY_S`), kgate deletes the pod, creates the same pod again with an emptyDir `/cache` (no claim, no `fsGroup`), prints `kgate: cache in use by another job; running without it`, and the job runs cold. The record's `cache` field says which: `pvc` (the claim), `fallback` (the claim was busy), `none` (the profile has no `cache_pvc`; KC2 records only). Any other Pending reason (quota, capacity) keeps the existing waits, with the cache. The message shape was seen live, with two jobs started together.
-- **Zone.** The disk lives in one availability zone, so a pod that mounts the claim is scheduled in that zone; a pod that falls back to the emptyDir can go anywhere.
-- **A dead client's pod.** If a client dies, its pod keeps running until the 2 h `activeDeadlineSeconds` and can hold the disk that long; other jobs then run cold (the fallback). `kgate cancel` deletes it sooner.
+**The cache claim.** With a claim, `GOCACHE`, `GOMODCACHE` and the package-manager caches are warm after the first job. The claim is created by whoever runs the cluster, not by kgate, and mounting a claim in the pod's own namespace needs no PVC rights. A claim with access mode ReadWriteOncePod lets one pod use it:
+
+- **One job holds the cache; a second runs cold.** A second job's pod stays `Pending` (`Unschedulable`, "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode"). If it is still Pending on that reason after about 10 s (`CACHE_BUSY_S`), kgate deletes the pod, creates the same pod again with an emptyDir `/cache` (no claim, no `fsGroup`), prints `kgate: cache in use by another job; running without it`, and the job runs cold. The record's `cache` field says which: `pvc`, `fallback`, or `none` (no claim; kubectl-cluster records only). Any other Pending reason (quota, capacity) keeps the existing waits, with the cache.
+- **Zone.** A disk lives in one availability zone, so a pod that mounts the claim is scheduled in that zone; a pod that falls back to the emptyDir can go anywhere.
+- **A dead client's pod.** If a client dies, its pod keeps running until the deadline and can hold the disk that long; other jobs then run cold. `kgate cancel` deletes it sooner.
 - **Cleanup.** The pod side removes `/cache/<job id>` (the job's own script, file list, error file and HOME) at the end of every job, pass or fail, and at its start removes any other `/cache/kgate-*` directory older than a day (a dead client's leftover). The caches stay.
-- **Missing claim.** If the claim does not exist, the pod stays `Pending` with `persistentvolumeclaim "<name>" not found`. kgate sees that at once and exits 69 with `the cache claim <name> does not exist in jobs (cache_pvc in the profile)`; the pod is deleted.
+- **Missing claim.** The pod would stay `Pending` with `persistentvolumeclaim "<name>" not found`. kgate sees that at once and exits 69 with `the cache claim <name> does not exist in <namespace> (cache_pvc in the profile)`; the pod is deleted.
 
-**Refused with exit 69, before anything is created:** a profile with `[secrets]` or `services`, an image that is not on `registry.example` and pinned by digest, a root user.
+**Quota.** A shared namespace can have a ResourceQuota. A create call that the quota refuses is not fatal: kgate prints `kgate: waiting for quota: <the quota message>` (and a new line when the message changes), retries the create with backoff (5 s, doubling to 60 s) until the job's `--wait` deadline, and records the time spent as `quota_wait_s` (0 when it did not wait; kubectl-cluster records only). At the deadline it exits 69 with `quota not available within <N>s: <message>`. Only the API server's ResourceQuota refusal is waited for: `Error from server (Forbidden): ... pods "x" is forbidden: exceeded quota: <name>, requested: ..., used: ..., limited: ...`. Any other text that merely says `exceeded quota` (an admission-webhook denial, say) is an immediate 69. The whole message is parsed; only what is printed and recorded is cut to 300 characters. If a requested amount in that message is above the quota's own limit for it (`requested` greater than `limited`), waiting can never succeed, and kgate exits 69 at once with `request exceeds the namespace quota: <message>`. Any other create error is also an immediate 69. `kgate cancel` works while a job waits for quota. Requests small and limits large (`cpu` small, `cpu_limit` large) let more jobs fit a quota; size a profile from its measured working set (cgroup anon, not the cgroup peak, which includes page cache).
 
-**Pod side, no Python.** The image has no `python3`, so the pod runs `sh /cache/<id>/kgate.sh` (the `POD_SH` constant in the script) instead of `kgate.py --pod`. It prints the same `kgate[<id>]: start|hash|preflight|running|peak|end` markers, so the Mac side reads them unchanged.
+**Pod side, no Python.** The image need not have `python3`, so the pod runs `sh /cache/<id>/kgate.sh` (the `POD_SH` constant in the script) instead of `kgate.py --pod`. It prints the same `kgate[<id>]: start|hash|preflight|running|peak|end` markers, so the Mac side reads them unchanged.
 
-- Repo and hash: no `.git` is shipped. The script makes a fresh repo at the tree root, adds exactly the shipped file list (`files.nul`) to its index hashed as bytes (`core.autocrlf=false`, `safe.directory=*`, and an `info/attributes` that turns text, eol, filter, ident and working-tree-encoding conversion off), and compares `git write-tree` with the Mac's hash. Only on a match it makes one commit (if git cannot commit, the pod prints `commit FAILED git commit failed: ...` and exits 69, and kgate fails the job with that reason, CMD not run) (author and committer `kgate`, date 2000-01-01, so the same tree gives the same commit) on `main`. Tools then find a working `HEAD` (`git rev-parse`, `go build`'s VCS stamping). The Mac's real HEAD is in `KGATE_HEAD` in CMD's env and in the record's `head`.
-- Tools: as the Python side. The expected version must appear in the command's output as a whole version. A Go gate needs `cmd = "go version"`, because `go --version` is not a flag.
+- Repo and hash: no `.git` is shipped. The script makes a fresh repo at the tree root, adds exactly the shipped file list (`files.nul`) to its index hashed as bytes (`core.autocrlf=false`, `safe.directory=*`, and an `info/attributes` that turns text, eol, filter, ident and working-tree-encoding conversion off), and compares `git write-tree` with the Mac's hash. Only on a match it makes one commit (author and committer `kgate`, date 2000-01-01, so the same tree gives the same commit) on `main`. Tools then find a working `HEAD` (`git rev-parse`, VCS stamping in builds). The Mac's real HEAD is in `KGATE_HEAD` in CMD's env and in the record's `head`. If git cannot commit, the pod prints `commit FAILED git commit failed: ...` and exits 69, and kgate fails the job with that reason, CMD not run.
+- If the image lacks `git` or `tar`, the pod side stops first with `image FAILED image lacks <tool>; kgate's pod side needs git, tar and sh`; kgate exits 69 with `image lacks <tool>; ... (CMD not run)`, not a hash mismatch.
+- Tools: as the Python side. The expected version must appear in the command's output as a whole version. A tool whose version flag differs needs `cmd` (for example `go version`, since `go --version` is not a flag).
 - CMD runs in the same directory. Peak memory is read from `memory.peak` (`unknown` when the kernel has none). The end line carries CMD's exit code.
-- Exit codes inside the pod: CMD's, 70 for a hash mismatch, 71 for a tool mismatch. The Mac side checks that kubectl's exit code equals the reported one.
-- The image's userland is busybox (`sh`, `grep`, `tar`) plus git; the script uses only POSIX features.
+- Exit codes inside the pod: CMD's, 70 for a hash mismatch, 71 for a tool mismatch, 69 for a missing tool or a failed commit. The Mac side checks that kubectl's exit code equals the reported one.
+- Only POSIX features are used, so a busybox userland works.
 
 **What differs from the homelab.**
 
-| | homelab | KC2 |
+| | homelab | second cluster |
 |---|---|---|
-| Reach | `ssh` + `kubectl` on the control plane | local `kubectl` + `~/.kube/kgate-cluster` |
+| Reach | `ssh` + `kubectl` on a control plane | local `kubectl` + the cluster file's kubeconfig, context and namespace |
 | Secrets, pull credential | `[secrets]` as a pod Secret; ghcr pull Secret | none; `[secrets]` refused |
 | Pod user | root to unpack, then `user` | non-root `user` throughout |
 | Pod side | `kgate.py --pod` (python3) | `kgate.sh` (POSIX sh, git) |
 | Tree location | the pod's filesystem | emptyDir at the tree's top directory |
-| Git history | `.git` and the shared git folder shipped | none shipped; one synthetic commit built in the pod (example-repo: about 25 MB shipped, not 164 MB) |
-| Caches | hostPath `/var/lib/kgate/cache` | emptyDir `/cache` (cold each job), or the `cache_pvc` claim (warm; one job holds it, a second runs cold) |
-| Deadline | 8 h | 2 h |
-| Scheduling | node affinity, G14 preferred | the cluster's |
+| Git history | `.git` and the shared git folder shipped | none shipped; one synthetic commit built in the pod |
+| Caches | hostPath | emptyDir `/cache` (cold each job), or a claim (warm; one job holds it, a second runs cold) |
+| Deadline | 8 h | the cluster file's `deadline_s` |
+| Scheduling | node affinity | the cluster's |
 | Cleanup | pod and two Secrets | pod only |
 | Image needs | `tini`, `python3` 3.11+ | `sh`, `tar`, `git` |
 
-On KC2 the history is a single synthetic commit, and the Mac's uncommitted and untracked shipped files are in it, so `git status` and `git diff` in the pod show a clean tree (use the Mac's `git status` to see what changed). `git log`, `git describe`, `git blame` and tags show nothing of the real history. A command that needs history must run locally or on the homelab (which still ships `.git`).
+On a kubectl cluster the history is a single synthetic commit, and the Mac's uncommitted and untracked shipped files are in it, so `git status` and `git diff` in the pod show a clean tree (use the Mac's `git status` to see what changed). `git log`, `git describe`, `git blame` and tags show nothing of the real history. A command that needs history must run locally or on the homelab (which still ships `.git`). Exit codes are the same (CMD's code, 64, 69). When the cluster is unreachable or the sign-in has lapsed, the job exits 69 with the sign-in hint; kgate never falls back to the Mac.
 
-Exit codes are the same (CMD's code, 64, 69). With the VPN off or the `az login` lapsed, the job exits 69 with the sign-in hint. kgate never falls back to the Mac. The namespace quota is 16 pods; requests 24 CPU / 96Gi / 100Gi ephemeral-storage; limits 96 CPU / 160Gi / 160Gi (see "Sizing" below). The namespace is shared by every lead's jobs. A create call that the quota refuses (`exceeded quota`) is not fatal: kgate prints `kgate: waiting for quota: <the quota message>` (and a new line when the message changes), retries the create with backoff (5 s, doubling to 60 s) until the job's `--wait` deadline, and records the time spent as `quota_wait_s` (0 when it did not wait; KC2 records only). At the deadline it exits 69 with `quota not available within <N>s: <message>`. Only the API server's ResourceQuota refusal is waited for: `Error from server (Forbidden): ... pods "x" is forbidden: exceeded quota: <name>, requested: ..., used: ..., limited: ...`. Any other text that merely says `exceeded quota` (an admission-webhook denial, say) is an immediate 69. The whole message is parsed; only what is printed and recorded is cut to 300 characters. If a requested amount in that message is above the quota's own limit for it (`requested` greater than `limited`), waiting can never succeed, and kgate exits 69 at once with `request exceeds the namespace quota: <message>`. Any other create error is also an immediate 69. `kgate cancel` works while a job waits for quota.
-
-Sizing. The profile requests little and may burst to 8 CPUs, so many jobs fit the quota. The current quota is the one infra-repo #542472 set (merged 2026-11-11, 55c40e7): 16 pods; requests 24 CPU / 96Gi / 100Gi ephemeral-storage; limits 96 CPU / 160Gi / 160Gi ephemeral-storage. Before it the quota was 6 pods; requests 8 CPU / 32Gi / 40Gi; limits 16 CPU / 64Gi / 60Gi.
-
-| | cpu (request) | cpu_limit | memory | memory_limit | ephemeral | per job against the quota |
-|---|---|---|---|---|---|---|
-| example-repo | 2 | 8 | 6Gi | 10Gi | 8Gi | requests 2 CPU, 6Gi, 8Gi; limits 8 CPU, 10Gi |
-
-| quota | example-repo jobs that fit |
-|---|---|
-| current (#542472) | **12**, because three limits bind together at 12: `limits.cpu` 96 / 8, `requests.cpu` 24 / 2 and `requests.ephemeral-storage` 100Gi / 8Gi (the others allow more: `requests.memory` 96Gi / 6Gi = 16, `limits.memory` 160Gi / 10Gi = 16, `limits.ephemeral-storage` 160Gi / 8Gi = 20, pods 16) |
-| before #542472 | 2: `limits.cpu` 16 / 8 = 2 (requests alone allowed 4) |
-
-A job that does not fit waits for quota (see above). Measured on the full race gate: 129 s total at 8 CPU requested and limited; 137.6 s total (119 s in the pod) at the shipped 2 requested / 8 limit; 186 s total (167 s in the pod) at 2 / 5. Bursting to the limit gives back full speed. Peak memory (cgroup, page cache included) was 3.74 GB and 3.79 GB in two runs, so 6Gi / 10Gi leaves room. Line-ending, filter, `ident` and `working-tree-encoding` conversions are switched off for the hash on the pod side (and the Mac side hashes bytes), so a repo with a converting `.gitattributes` still hashes the same.
+**Costs on the Mac.** kgate ships every tracked file on every job and builds that tar in memory, so a very large repo costs the client memory (about the size of the tar) and a minute or more to the pod-side start. A warm pod with diff sync, or shipping only what a package needs, is the next improvement.
 
 ## Gate profile
 
-A TOML file in the gate's repo (an KC2 profile lives in dotfiles, see above). Keep it small.
+A TOML file in the gate's repo (a profile for a second cluster can live in `~/.config/kgate/profiles/`, see above). Keep it small.
 
 ```toml
 image  = "ghcr.io/cartwmic/kgate@sha256:..."   # required, pinned by digest
 cpu    = 2                                      # whole CPUs; default 2
 memory = "4Gi"                                  # the request, what the scheduler reserves; default 4Gi
 memory_limit = "8Gi"                             # optional: the limit, the OOM-kill line; default equal to memory
-user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root (KC2: default 65532:65532, never root)
-cluster = "homelab"                              # optional: "homelab" (default) or "kc2"
-cache_pvc = "jobs-cache"                 # KC2 only: mount this claim at /cache instead of an emptyDir
-ephemeral_storage = "20Gi"                       # KC2 only: the pod's ephemeral-storage request and limit; default 10Gi
-cpu_limit = 8                                    # KC2 only: the CPU limit and build parallelism; default cpu
+user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root (a kubectl cluster: default from its cluster file, never root)
+cluster = "homelab"                              # optional: "homelab" (default), or the name of ~/.config/kgate/clusters/<name>.toml
+cache_pvc = "my-cache"                           # kubectl clusters only: mount this claim at /cache instead of an emptyDir
+ephemeral_storage = "20Gi"                       # kubectl clusters only: the pod's ephemeral-storage request and limit; default 10Gi
+cpu_limit = 8                                    # kubectl clusters only: the CPU limit and build parallelism; default cpu
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
 
 [tools]                                          # exact versions; checked in the pod before CMD
@@ -336,11 +346,11 @@ A gate moves to kgate one at a time, each with its profile in its own repo:
 
 ## Profiles
 
-The `kgate` binary lands on both desktop profiles. The homelab host file (`~/.config/kgate/host`) is personal only, so the work Mac has no homelab address. The KC2 profiles folder (`~/.config/kgate/profiles`) is work only (`axon-work-computer`): the personal Mac has no KC2 profile and no `~/.kube/kgate-cluster`, so kgate there cannot reach KC2. Rows in [profiles.md](./profiles.md).
+The `kgate` binary lands on both desktop profiles. The homelab host file (`~/.config/kgate/host`) is personal only, so a work machine has no homelab address. The second-cluster files (`~/.config/kgate/clusters/`, `~/.config/kgate/profiles/`) come from a machine's own chezmoi data on any profile that has it, so a machine without that data cannot reach a second cluster. Rows in [profiles.md](./profiles.md).
 
 ## Tests
 
-`python3 -m unittest discover -s tests/kgate -v`: for KC2, the pod spec; the archive (no `.git` entry on KC2, unchanged on the homelab); the repo the pod side builds (one commit, tree equal to the Mac's hash, clean status, `KGATE_HEAD`); the cache claim (pod spec with and without it, refusal on the homelab, per-job cleanup and the old-directory sweep, a job queued on capacity keeping the cache, a claim held by another job falling back to a cold pod, a brief hold not falling back, a missing claim); the sh pod side run against a real temp git tree (its hash equal to the Python `tree_hash` and to plain git, with an executable file, symlinks and CRLF files under a converting `.gitattributes`; mismatch, tool mismatch, exit code, peak); and the same journeys as the homelab, for KC2, against a fake `kubectl` (including a quota refusal waited out, a quota that never frees, another create error failing at once, `cpu_limit`) (pass, CMD failure, `/out`, hash mismatch, tool version, refusals, missing kubeconfig, reachability failure, orphan cancel, the record's `cluster`, `kc2-setup`). For the homelab: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
+`python3 -m unittest discover -s tests/kgate -v`: for a kubectl cluster, the cluster file (a missing file or key, invalid values, labels, annotations, deadline and user from it, a registry not on its list, the default cache claim) and `cluster-setup`; the pod spec; the archive (no `.git` entry on a kubectl cluster, unchanged on the homelab); the repo the pod side builds (one commit, tree equal to the Mac's hash, clean status, `KGATE_HEAD`); the cache claim (pod spec with and without it, refusal on the homelab, per-job cleanup and the old-directory sweep, a job queued on capacity keeping the cache, a claim held by another job falling back to a cold pod, a brief hold not falling back, a missing claim); the sh pod side run against a real temp git tree (its hash equal to the Python `tree_hash` and to plain git, with an executable file, symlinks and CRLF files under a converting `.gitattributes`; mismatch, tool mismatch, exit code, peak); and the same journeys as the homelab, for a kubectl cluster, against a fake `kubectl` (including a quota refusal waited out, a quota that never frees, another create error failing at once, `cpu_limit`) (pass, CMD failure, `/out`, hash mismatch, tool version, refusals, missing kubeconfig, reachability failure, orphan cancel, the record's `cluster`); the chezmoi step that writes the cluster and profile files from local data (`tests/kgate/test_cluster_files.py`: nothing written without data, exact text, mode 600, bad names refused). For the homelab: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
 
 ## Gates in this repo
 

@@ -1111,10 +1111,12 @@ class Black(unittest.TestCase):
         other.wait(timeout=30)
 
 
-# ---------------------------------------------------------------- KC2
+# ---------------------------------------------------------------- a second cluster, reached through kubectl
 
-KC2_IMAGE = "registry.example/example/worker:20261019-4057e58-b62a51a@sha256:" + "cd" * 32
-KC2_ARGS = ["--kubeconfig", "%HOME%/.kube/kgate-cluster", "--context", "example-ctx", "-n", "jobs"]
+KCL_IMAGE = "registry.example/ci/runner:1@sha256:" + "cd" * 32
+KCFG = {"name": "example", "path": "/nowhere/example.toml", "kubeconfig": "/nowhere/kubeconfig", "context": "example-ctx", "namespace": "jobs",
+        "registries": ["registry.example", "other.example"], "tree_roots": ["Users", "Volumes", "private"], "user": "65532:65532", "deadline_s": 7200,
+        "pod_labels": {"example.org/owner": "team-a", "example.org/tier": "build"}, "pod_annotations": {"example.org/evict-ok": "true"}, "cache_claim_default": None}
 
 FAKE_KUBECTL = r'''#!/usr/bin/env python3
 import json, os, shlex, shutil, subprocess, sys
@@ -1127,12 +1129,13 @@ log({"argv": argv})
 if argv[:2] == ["--kubeconfig", os.path.join(os.environ["HOME"], ".kube", "config")] and argv[2] == "config":
     if os.environ.get("FAKE_NO_CONTEXT"):
         sys.stderr.write("error: context was not found for specified context: example-ctx\n"); sys.exit(1)
+    user = {"token": "fake"} if os.environ.get("FAKE_CONFIG_TOKEN") else {"exec": {"command": "kubelogin", "args": ["get-token", "--login", "devicecode", "--tenant-id", "t"]}}
     print(json.dumps({"apiVersion": "v1", "kind": "Config", "current-context": "example-ctx",
-        "clusters": [{"name": "example-ctx", "cluster": {"server": "https://kc2.example"}}],
+        "clusters": [{"name": "example-ctx", "cluster": {"server": "https://cluster.example"}}],
         "contexts": [{"name": "example-ctx", "context": {"cluster": "example-ctx", "user": "u"}}],
-        "users": [{"name": "u", "user": {"exec": {"command": "kubelogin", "args": ["get-token", "--login", "devicecode", "--tenant-id", "t"]}}}]}))
+        "users": [{"name": "u", "user": user}]}))
     sys.exit(0)
-assert argv[:6] == ["--kubeconfig", os.path.join(os.environ["HOME"], ".kube", "kc2-offload"), "--context", "example-ctx", "-n", "jobs"], argv
+assert argv[:6] == ["--kubeconfig", os.path.join(os.environ["HOME"], ".kube", "example"), "--context", "example-ctx", "-n", "jobs"], argv
 a = argv[6:]
 scenario = os.environ.get("FAKE_POD", "ready")
 if a[:3] == ["auth", "can-i", "create"]:
@@ -1154,7 +1157,7 @@ if a[:2] == ["create", "-f"]:
     if quota.startswith("long:") and n <= int(quota[5:]):   # four resources exceeded, a message over 300 characters, every request under its limited value
         names = ["limits.cpu", "limits.memory", "requests.cpu", "requests.ephemeral-storage"]
         side = lambda vals: ",".join("%s=%s" % (k, v) for k, v in zip(names, vals))
-        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: jobs-qq, requested: %s, used: %s, limited: %s\n'
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: jobs-quota-qqqq, requested: %s, used: %s, limited: %s\n'
                          % (side(["8", "10Gi", "2", "8Gi"]), side(["96", "160Gi", "24", "100Gi"]), side(["96", "160Gi", "24", "100Gi"]))); sys.exit(1)
     if quota and not quota.startswith("long:") and quota != "impossible" and (quota == "always" or n <= int(quota)):
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
@@ -1185,10 +1188,10 @@ if a[:2] == ["get", "pod"]:
     elif scenario == "queued":   # a full cluster: the scheduler's capacity message
         st = pending("0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.")
     elif scenario == "noclaim":
-        st = pending('0/3 nodes are available: persistentvolumeclaim "jobs-cache" not found. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.')
+        st = pending('0/3 nodes are available: persistentvolumeclaim "example-cache" not found. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.')
     else:
         st = pending("0/3 nodes fit")
-    print(json.dumps({"spec": {"nodeName": "fake-kc2-node"}, "status": st})); sys.exit(0)
+    print(json.dumps({"spec": {"nodeName": "fake-kcl-node"}, "status": st})); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     job, script = a[2], a[-1]
     assert script == "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job, job), script
@@ -1208,7 +1211,7 @@ if a[0] == "exec" and "-i" in a:
     # the pod's own env: HOME comes from the pod spec (under /cache/<id>, which here lives under FAKE)
     spec = json.load(open(os.path.join(fake, "last_manifest.json")))["items"][0]["spec"]["containers"][0]["env"]
     home = next(e["value"] for e in spec if e["name"] == "HOME")
-    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-kc2-node", HOME=os.path.join(jobroot, home.lstrip("/")))
+    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-kcl-node", HOME=os.path.join(jobroot, home.lstrip("/")))
     d = "%s/cache/%s" % (jobroot, job)
     # A pod has no .git before the script runs. The test repo does, so it is set aside while the pod side runs and put back after.
     root = next(l.split("=", 1)[1] for l in open(d + "/job.sh").read().splitlines() if l.startswith("ROOT="))
@@ -1230,18 +1233,18 @@ sys.stderr.write("fake kubectl: unexpected " + repr(a) + "\n"); sys.exit(2)
 '''
 
 
-class Kc2Profile(unittest.TestCase):
+class KubectlProfile(unittest.TestCase):
     def test_cluster_defaults_to_homelab_and_user_follows_it(self):
         self.assertEqual(K.parse_profile("")["cluster"], "homelab")
         self.assertEqual(K.parse_profile("")["user"], "1000:1000")
-        p = K.parse_profile('cluster = "kc2"\nephemeral_storage = "20Gi"')
-        self.assertEqual((p["cluster"], p["user"], p["ephemeral_storage"]), ("kc2", "65532:65532", "20Gi"))
-        self.assertEqual(K.parse_profile('cluster = "kc2"\nuser = "1001:1001"')["user"], "1001:1001")
+        p = K.parse_profile('cluster = "example"\nephemeral_storage = "20Gi"')
+        self.assertEqual((p["cluster"], p["user"], p["ephemeral_storage"]), ("example", None, "20Gi"))
+        self.assertEqual(K.parse_profile('cluster = "example"\nuser = "1001:1001"')["user"], "1001:1001")
 
-    def test_cpu_limit_is_for_kc2_only_and_a_whole_number(self):
-        self.assertIsNone(K.parse_profile('cluster = "kc2"')["cpu_limit"])
-        self.assertEqual(K.parse_profile('cluster = "kc2"\ncpu_limit = 5')["cpu_limit"], 5)
-        for bad in ('cpu_limit = 5', 'cluster = "kc2"\ncpu_limit = 0', 'cluster = "kc2"\ncpu_limit = "5"', 'cluster = "kc2"\ncpu_limit = true'):
+    def test_cpu_limit_is_for_a_kubectl_cluster_only_and_a_whole_number(self):
+        self.assertIsNone(K.parse_profile('cluster = "example"')["cpu_limit"])
+        self.assertEqual(K.parse_profile('cluster = "example"\ncpu_limit = 5')["cpu_limit"], 5)
+        for bad in ('cpu_limit = 5', 'cluster = "example"\ncpu_limit = 0', 'cluster = "example"\ncpu_limit = "5"', 'cluster = "example"\ncpu_limit = true'):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
@@ -1256,7 +1259,7 @@ class Kc2Profile(unittest.TestCase):
                 self.slept.append(secs)
                 self.now += secs
         class Cluster:
-            name, creates = "kc2", 0
+            name, kind, creates = "example", "kubectl", 0
             def run(self, kargs, stdin=b""):
                 if kargs[0] == "create":
                     self.creates += 1
@@ -1303,32 +1306,32 @@ class Kc2Profile(unittest.TestCase):
         self.assertTrue(K.quota_impossible(base % ("requests.cpu=1500m", "requests.cpu=0", "requests.cpu=1")))
         self.assertFalse(K.quota_impossible("exceeded quota: unparsable"))
 
-    def test_cache_pvc_is_for_kc2_only_and_must_be_a_claim_name(self):
-        self.assertIsNone(K.parse_profile('cluster = "kc2"')["cache_pvc"])
-        self.assertEqual(K.parse_profile('cluster = "kc2"\ncache_pvc = "jobs-cache"')["cache_pvc"], "jobs-cache")
-        for bad in ('cache_pvc = "x"', 'cluster = "homelab"\ncache_pvc = "x"', 'cluster = "kc2"\ncache_pvc = "Bad_Name"', 'cluster = "kc2"\ncache_pvc = 1', 'cluster = "kc2"\ncache_pvc = ""'):
+    def test_cache_pvc_is_for_a_kubectl_cluster_only_and_must_be_a_claim_name(self):
+        self.assertIsNone(K.parse_profile('cluster = "example"')["cache_pvc"])
+        self.assertEqual(K.parse_profile('cluster = "example"\ncache_pvc = "example-cache"')["cache_pvc"], "example-cache")
+        for bad in ('cache_pvc = "x"', 'cluster = "homelab"\ncache_pvc = "x"', 'cluster = "example"\ncache_pvc = "Bad_Name"', 'cluster = "example"\ncache_pvc = 1', 'cluster = "example"\ncache_pvc = ""'):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
     def test_bad_cluster_or_ephemeral_storage_is_refused(self):
-        for bad in ('cluster = "us1"', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "kc2"\nephemeral_storage = "20G"', 'cluster = "kc2"\nephemeral_storage = 20'):
+        for bad in ('cluster = "a/b"', 'cluster = ""', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "example"\nephemeral_storage = "20G"', 'cluster = "example"\nephemeral_storage = 20'):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
 
-class Kc2PodSpec(unittest.TestCase):
+class KubectlPodSpec(unittest.TestCase):
     def pod(self, **kw):
-        args = dict(job="kgate-1-2", image=KC2_IMAGE, cpu=8, memory="16Gi", memory_limit="24Gi", ephemeral="20Gi", uid=65532, gid=65532, roots=["/Users"])
+        args = dict(job="kgate-1-2", image=KCL_IMAGE, cpu=8, memory="16Gi", memory_limit="24Gi", ephemeral="20Gi", uid=65532, gid=65532, roots=["/Users"])
         args.update(kw)
-        items = K.pod_manifests_kc2(args["job"], args["image"], args["cpu"], args["memory"], args["memory_limit"], args["ephemeral"],
+        items = K.pod_manifests_kubectl(KCFG, args["job"], args["image"], args["cpu"], args["memory"], args["memory_limit"], args["ephemeral"],
                                     args["uid"], args["gid"], args["roots"])["items"]
         self.assertEqual(len(items), 1, "one Pod and no Secret")
         return items[0]
 
-    def test_it_meets_kc2_policy(self):
+    def test_it_meets_the_cluster_policy_from_its_cluster_file(self):
         pod = self.pod()
-        self.assertEqual(pod["metadata"]["labels"], {"app": "kgate", "kgate-job": "kgate-1-2", "example.org/owner": "team", "example.org/pillar": "dems"})
-        self.assertEqual(pod["metadata"]["annotations"], {"cluster-autoscaler.kubernetes.io/safe-to-evict": "true"})
+        self.assertEqual(pod["metadata"]["labels"], {"app": "kgate", "kgate-job": "kgate-1-2", "example.org/owner": "team-a", "example.org/tier": "build"})
+        self.assertEqual(pod["metadata"]["annotations"], {"example.org/evict-ok": "true"})
         spec = pod["spec"]
         self.assertEqual(spec["activeDeadlineSeconds"], 7200)
         self.assertIs(spec["automountServiceAccountToken"], False)
@@ -1337,13 +1340,13 @@ class Kc2PodSpec(unittest.TestCase):
         self.assertEqual(c["securityContext"], {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}})
         self.assertEqual(c["resources"], {"requests": {"cpu": "8", "memory": "16Gi", "ephemeral-storage": "20Gi"},
                                           "limits": {"cpu": "8", "memory": "24Gi", "ephemeral-storage": "20Gi"}})
-        self.assertEqual(c["image"], KC2_IMAGE)
+        self.assertEqual(c["image"], KCL_IMAGE)
         self.assertEqual(c["command"], ["sleep", "86400"], "no tini in the image: a plain sleep longer than the deadline")
 
     def test_cpu_limit_defaults_to_cpu_and_otherwise_splits_request_from_limit(self):
         c = self.pod()["spec"]["containers"][0]
         self.assertEqual((c["resources"]["requests"]["cpu"], c["resources"]["limits"]["cpu"]), ("8", "8"))
-        items = K.pod_manifests_kc2("kgate-1-2", KC2_IMAGE, 2, "6Gi", "10Gi", "8Gi", 65532, 65532, ["/Users"], 5)["items"]
+        items = K.pod_manifests_kubectl(KCFG, "kgate-1-2", KCL_IMAGE, 2, "6Gi", "10Gi", "8Gi", 65532, 65532, ["/Users"], 5)["items"]
         c = items[0]["spec"]["containers"][0]
         self.assertEqual(c["resources"], {"requests": {"cpu": "2", "memory": "6Gi", "ephemeral-storage": "8Gi"},
                                           "limits": {"cpu": "5", "memory": "10Gi", "ephemeral-storage": "8Gi"}})
@@ -1355,9 +1358,9 @@ class Kc2PodSpec(unittest.TestCase):
         self.assertNotIn("fsGroup", pod["spec"]["securityContext"])
 
     def test_with_cache_pvc_the_cache_is_the_claim_and_the_group_can_write_it(self):
-        items = K.pod_manifests_kc2("kgate-1-2", KC2_IMAGE, 8, "16Gi", "24Gi", "20Gi", 65532, 65533, ["/Users"], cache_pvc="jobs-cache")["items"]
+        items = K.pod_manifests_kubectl(KCFG, "kgate-1-2", KCL_IMAGE, 8, "16Gi", "24Gi", "20Gi", 65532, 65533, ["/Users"], cache_pvc="example-cache")["items"]
         pod = items[0]
-        self.assertEqual([v for v in pod["spec"]["volumes"] if v["name"] == "cache"], [{"name": "cache", "persistentVolumeClaim": {"claimName": "jobs-cache"}}])
+        self.assertEqual([v for v in pod["spec"]["volumes"] if v["name"] == "cache"], [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
         self.assertEqual(pod["spec"]["securityContext"], {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65533, "fsGroup": 65533,
                                                           "fsGroupChangePolicy": "OnRootMismatch", "seccompProfile": {"type": "RuntimeDefault"}})
         self.assertEqual([m["mountPath"] for m in pod["spec"]["containers"][0]["volumeMounts"]], ["/Users", "/cache", "/out"])
@@ -1383,19 +1386,19 @@ class Kc2PodSpec(unittest.TestCase):
         self.assertEqual((env["KGATE_OUT"], env["CI"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"]), ("/out", "1", "-j6", "6"))
 
     def test_roots_are_the_top_directories_and_only_from_the_allow_list(self):
-        self.assertEqual(K.kc2_roots("/Users/me/git/r", "/Users/me/git/r/.git", "/Volumes/x/r"), ["/Users", "/Volumes"])
-        self.assertEqual(K.kc2_roots("/Volumes/W/r", "/private/var/r"), ["/Volumes", "/private"])
+        self.assertEqual(K.tree_roots_for(KCFG, "/Users/me/git/r", "/Users/me/git/r/.git", "/Volumes/x/r"), ["/Users", "/Volumes"])
+        self.assertEqual(K.tree_roots_for(KCFG, "/Volumes/W/r", "/private/var/r"), ["/Volumes", "/private"])
         for bad in ("/usr/src/r", "/cache/r", "/out/r", "/var/x", "/", "/home/x/r", "/tmp/r", "/etc/r", "/Users2/r"):
             with self.assertRaises(K.Unavailable, msg=bad):
-                K.kc2_roots(bad)
+                K.tree_roots_for(KCFG, bad)
 
-    def test_homelab_render_is_unchanged_by_the_kc2_adapter(self):
+    def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
         want = "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
 class PodSh(unittest.TestCase):
-    """The KC2 pod side (POSIX sh, no python3) run as a process against a real temp git tree."""
+    """The pod side on a kubectl cluster (POSIX sh, no python3) run as a process against a real temp git tree."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="ks-")).resolve()
@@ -1631,7 +1634,7 @@ class PodSh(unittest.TestCase):
 
 
 class Archive(unittest.TestCase):
-    """What is shipped: the homelab keeps .git and the shared git folder; KC2 ships the files and the extras only."""
+    """What is shipped: the homelab keeps .git and the shared git folder; a kubectl cluster ships the files and the extras only."""
 
     def repo_and_linked(self):
         tmp = Path(tempfile.mkdtemp(prefix="ka-")).resolve()
@@ -1669,24 +1672,21 @@ class Archive(unittest.TestCase):
             self.assertIn("cache/x/job.sh", names)
 
 
-class Kc2Black(unittest.TestCase):
-    """The KC2 adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
+class KubectlBlack(unittest.TestCase):
+    """The kubectl adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
     for _name in ("kgate", "records", "calls", "op_token_checks", "op_env"):
         locals()[_name] = getattr(Black, _name)
 
     def launcher(self):
-        # The production allow-list of tree roots (/Users, /Volumes, /private) is kept. The temp dirs of these tests are under /tmp on Linux,
-        # so the script runs through a stub that adds that one top directory to the constant. test_roots_... asserts the real constant.
-        top = self.repo.parts[1]
-        stub = self.tmp / "kc2_launch.py"
+        # The script runs through a stub that shortens two waits (quota retry, cache grace) so the tests do not sleep.
+        stub = self.tmp / "kcl_launch.py"
         stub.write_text("import importlib.machinery, importlib.util, sys\n"
                         "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
                         "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                         "loader.exec_module(K)\n"
                         "K.QUOTA_FIRST_DELAY = 0.2\n"
                         "K.CACHE_BUSY_S = 0.6\n"
-                        "K.KC2_TREE_ROOTS = %s\n"
-                        "sys.exit(K.main(sys.argv[2:]))\n" % ("(%r,)" % self.only_root if getattr(self, "only_root", None) else "K.KC2_TREE_ROOTS + (%r,)" % top))
+                        "sys.exit(K.main(sys.argv[2:]))\n")
         return [sys.executable, str(stub), str(SCRIPT)]
 
     def setUp(self):
@@ -1694,11 +1694,25 @@ class Kc2Black(unittest.TestCase):
         (self.bin / "kubectl").write_text(FAKE_KUBECTL)
         (self.bin / "kubectl").chmod(0o755)
         (self.home / ".kube").mkdir()
-        (self.home / ".kube" / "kc2-offload").write_text("apiVersion: v1\n")
+        (self.home / ".kube" / "example").write_text("apiVersion: v1\n")
         self.cmd_env = {"KGATE_SSH": ""}
+        self.write_cluster()
 
-    def profile(self, tools="", extra="", secrets="", memory="1Gi", image=KC2_IMAGE):
-        (self.repo / "kgate.toml").write_text('cluster = "kc2"\nimage = "%s"\ncpu = 2\nmemory = "%s"\nmemory_limit = "2Gi"\nephemeral_storage = "5Gi"\n%s\n[tools]\n%s\n[secrets]\n%s\n'
+    def write_cluster(self, name="example", roots=None, drop=(), extra=""):
+        """~/.config/kgate/clusters/<name>.toml in the test HOME. The temp dirs of these tests are under /tmp on Linux, so that top directory is a tree root here."""
+        roots = roots or sorted({"Users", "Volumes", "private", self.repo.parts[1]})
+        lines = {"kind": 'kind = "kubectl"', "kubeconfig": 'kubeconfig = "~/.kube/example"', "context": 'context = "example-ctx"', "namespace": 'namespace = "jobs"',
+                 "registries": 'registries = ["registry.example", "other.example"]', "tree_roots": "tree_roots = [%s]" % ", ".join('"%s"' % r for r in roots),
+                 "user": 'user = "65532:65532"', "deadline_s": "deadline_s = 7200"}
+        text = "\n".join(v for k, v in lines.items() if k not in drop) + "\n[pod_labels]\n\"example.org/owner\" = \"team-a\"\n\"example.org/tier\" = \"build\"\n" \
+               "[pod_annotations]\n\"example.org/evict-ok\" = \"true\"\n" + extra
+        path = self.home / ".config" / "kgate" / "clusters" / (name + ".toml")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def profile(self, tools="", extra="", secrets="", memory="1Gi", image=KCL_IMAGE):
+        (self.repo / "kgate.toml").write_text('cluster = "example"\nimage = "%s"\ncpu = 2\nmemory = "%s"\nmemory_limit = "2Gi"\nephemeral_storage = "5Gi"\n%s\n[tools]\n%s\n[secrets]\n%s\n'
                                               % (image, memory, extra, tools, secrets))
 
     def run_kgate(self, *args, env=None):
@@ -1718,8 +1732,8 @@ class Kc2Black(unittest.TestCase):
         self.assertIn("tracked and changed", done.stdout)          # the uncommitted change shipped
         self.assertIn("new", done.stdout)                           # the untracked file shipped
         rec = self.records()[-1]
-        self.assertEqual((rec["exit"], rec["reason"], rec["ran"], rec["cleanup"], rec["cluster"]), (0, None, True, True, "kc2"))
-        self.assertEqual((rec["node"], rec["image"], rec["mem"], rec["mem_limit"]), ("fake-kc2-node", KC2_IMAGE, "1Gi", "2Gi"))
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"], rec["cleanup"], rec["cluster"]), (0, None, True, True, "example"))
+        self.assertEqual((rec["node"], rec["image"], rec["mem"], rec["mem_limit"]), ("fake-kcl-node", KCL_IMAGE, "1Gi", "2Gi"))
         self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
         self.assertEqual(rec["out_files"], 1)
         self.assertEqual((self.state / "kgate" / (rec["id"] + ".out") / "result.txt").read_text(), "result\n")
@@ -1730,13 +1744,13 @@ class Kc2Black(unittest.TestCase):
         self.assertEqual(sorted(files), [b".gitignore", b"kgate.toml", b"tracked.txt", b"untracked.txt"])  # not ignored.txt
 
     def test_a_linked_worktree_whose_common_dir_is_outside_the_allow_list_is_accepted(self):
-        """The common dir is not shipped on KC2, so only the worktree's own top directory needs an emptyDir and a place on the allow-list."""
+        """The common dir is not shipped on a kubectl cluster, so only the worktree's own top directory needs an emptyDir and a place on the allow-list."""
         linked = Path(tempfile.mkdtemp(prefix="kl-", dir=os.path.expanduser("~"))).resolve() / "wt"
         self.addCleanup(shutil.rmtree, linked.parent, True)
         git(self.repo, "worktree", "add", "-q", "-b", "other", str(linked))
         if linked.parts[1] == self.repo.parts[1]:
             self.skipTest("the main repo and the worktree share a top directory here")
-        self.only_root = linked.parts[1]
+        self.write_cluster(roots=[linked.parts[1]])   # the main repo's top directory is not a tree root
         self.repo = linked
         done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; test ! -e .git/commondir && echo own-repo")
         self.assertEqual(done.returncode, 0, done.stdout)
@@ -1774,7 +1788,7 @@ class Kc2Black(unittest.TestCase):
         self.assertLess(rec["duration_s"], 30)
 
     def test_a_long_real_format_quota_message_is_parsed_whole_and_waits(self):
-        text = ('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: jobs-qq, requested: '
+        text = ('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: jobs-quota-qqqq, requested: '
                 'limits.cpu=8,limits.memory=10Gi,requests.cpu=2,requests.ephemeral-storage=8Gi, used: limits.cpu=96,limits.memory=160Gi,requests.cpu=24,requests.ephemeral-storage=100Gi, '
                 'limited: limits.cpu=96,limits.memory=160Gi,requests.cpu=24,requests.ephemeral-storage=100Gi')
         self.assertGreater(len(text[text.index("exceeded quota:"):]), 300, "the message is longer than what kgate prints")
@@ -1821,7 +1835,7 @@ class Kc2Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual(proc.wait(timeout=30), 143)
         rec = [r for r in self.records() if r["id"] == job_id][0]
-        self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"], rec["cluster"]), (143, "cancelled by kgate cancel", True, True, "kc2"))
+        self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"], rec["cluster"]), (143, "cancelled by kgate cancel", True, True, "example"))
         self.assertIn(["delete", "pod/" + job_id, "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
         self.assertEqual(list((self.state / "kgate" / "active").glob("*.json")), [])
 
@@ -1858,7 +1872,7 @@ class Kc2Black(unittest.TestCase):
         self.assertIn("cpu_limit (1) must be at least cpu (2)", self.records()[-1]["reason"])
         self.assertFalse(any("manifest" in c for c in self.kcalls()))
 
-    def test_the_kc2_archive_has_no_git_entries_and_the_pod_builds_the_repo(self):
+    def test_the_archive_has_no_git_entries_and_the_pod_builds_the_repo(self):
         done = self.run_kgate("--", "sh", "-c", "git rev-parse HEAD; echo KGATE_HEAD=$KGATE_HEAD")
         self.assertEqual(done.returncode, 0, done.stdout)
         import tarfile
@@ -1874,7 +1888,7 @@ class Kc2Black(unittest.TestCase):
         self.assertTrue((self.repo / ".git").is_dir(), "the Mac-side repo was only set aside by the fake pod")
 
     def test_home_is_per_job_and_a_file_one_job_writes_there_is_gone_in_the_next(self):
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         first = self.run_kgate("--", "sh", "-c", 'echo secret > "$HOME/.npmrc"; echo "HOME=$HOME"')
         self.assertEqual(first.returncode, 0, first.stdout)
         second = self.run_kgate("--", "sh", "-c", 'test ! -e "$HOME/.npmrc" && echo clean-home; echo "HOME=$HOME"')
@@ -1887,22 +1901,22 @@ class Kc2Black(unittest.TestCase):
         self.assertTrue(all(env[k].startswith("/cache/") and not env[k].startswith("/cache/kgate-") for k in ("GOCACHE", "GOMODCACHE", "npm_config_cache", "npm_config_store_dir")), "only the caches are on the disk")
 
     def test_a_profile_with_cache_pvc_sends_the_claim_and_fsgroup(self):
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         done = self.run_kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
         pod = next(c["manifest"] for c in self.kcalls() if "manifest" in c)["items"][0]
-        self.assertIn({"name": "cache", "persistentVolumeClaim": {"claimName": "jobs-cache"}}, pod["spec"]["volumes"])
+        self.assertIn({"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}, pod["spec"]["volumes"])
         self.assertEqual((pod["spec"]["securityContext"]["fsGroup"], pod["spec"]["securityContext"]["fsGroupChangePolicy"]), (65532, "OnRootMismatch"))
 
     def test_cache_pvc_on_a_homelab_profile_is_refused_before_anything_is_created(self):
-        (self.repo / "kgate.toml").write_text('image = "%s"\ncache_pvc = "jobs-cache"\n' % DIGEST)
+        (self.repo / "kgate.toml").write_text('image = "%s"\ncache_pvc = "example-cache"\n' % DIGEST)
         done = self.kgate("--", "true", host="fake")
         self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertIn("cache_pvc is for cluster = \"kc2\" only", self.records()[-1]["reason"])
+        self.assertIn("cache_pvc is for a profile with cluster", self.records()[-1]["reason"])
         self.assertFalse(any(c["kubectl"][0] == "create" for c in self.calls()))
 
     def test_a_job_queued_on_capacity_keeps_waiting_with_the_cache_and_does_not_fall_back(self):
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-after-the-wait", env={"FAKE_POD": "queued"})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("kgate: waiting for the pod: Unschedulable", done.stdout)
@@ -1911,7 +1925,7 @@ class Kc2Black(unittest.TestCase):
         self.assertEqual(self.records()[-1]["cache"], "pvc")
 
     def test_a_job_whose_claim_is_held_by_another_runs_cold_without_it(self):
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-cold", env={"FAKE_POD": "rwop"})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
@@ -1921,7 +1935,7 @@ class Kc2Black(unittest.TestCase):
         creates = [c["manifest"]["items"][0] for c in self.kcalls() if "manifest" in c]
         self.assertEqual(len(creates), 2)
         vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
-        self.assertEqual(vols(creates[0]), [{"name": "cache", "persistentVolumeClaim": {"claimName": "jobs-cache"}}])
+        self.assertEqual(vols(creates[0]), [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
         self.assertEqual(vols(creates[1]), [{"name": "cache", "emptyDir": {}}])
         self.assertNotIn("fsGroup", creates[1]["spec"]["securityContext"])
         self.assertEqual(creates[0]["metadata"]["name"], creates[1]["metadata"]["name"])
@@ -1929,7 +1943,7 @@ class Kc2Black(unittest.TestCase):
         self.assertGreaterEqual(len(deletes), 2, "deleted before the cold pod, and again at the end")
 
     def test_a_brief_hold_shorter_than_the_grace_keeps_the_cache(self):
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-warm", env={"FAKE_POD": "rwop-gone"})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertNotIn("cache in use", done.stdout)
@@ -1939,34 +1953,34 @@ class Kc2Black(unittest.TestCase):
     def test_the_record_says_cache_none_without_cache_pvc_and_pvc_with_it(self):
         self.run_kgate("--", "true")
         self.assertEqual(self.records()[-1]["cache"], "none")
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         self.run_kgate("--", "true")
         self.assertEqual(self.records()[-1]["cache"], "pvc")
 
     def test_a_missing_claim_is_69_at_once_with_a_clear_reason_and_the_pod_is_deleted(self):
-        self.profile(extra='cache_pvc = "jobs-cache"')
+        self.profile(extra='cache_pvc = "example-cache"')
         done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_POD": "noclaim"})
         self.assertEqual(done.returncode, 69, done.stdout)
         rec = self.records()[-1]
-        self.assertRegex(rec["reason"], r'^the cache claim jobs-cache does not exist in jobs \(cache_pvc in the profile\)')
+        self.assertRegex(rec["reason"], r'^the cache claim example-cache does not exist in jobs \(cache_pvc in the profile\)')
         self.assertTrue(rec["cleanup"])
         self.assertLess(rec["duration_s"], 30)
 
-    def test_it_only_ever_talks_to_kc2_through_the_one_kubeconfig_and_never_to_homelab(self):
+    def test_it_only_ever_talks_to_the_cluster_through_the_one_kubeconfig_and_never_to_homelab(self):
         self.run_kgate("--", "true")
         self.assertTrue(self.kcalls())
         for c in (c for c in self.kcalls() if "argv" in c):
-            self.assertEqual(c["argv"][:6], ["--kubeconfig", str(self.home / ".kube" / "kc2-offload"), "--context", "example-ctx", "-n", "jobs"])
+            self.assertEqual(c["argv"][:6], ["--kubeconfig", str(self.home / ".kube" / "example"), "--context", "example-ctx", "-n", "jobs"])
         self.assertEqual(self.calls(), [], "no ssh to the homelab")
         self.assertEqual(self.op_token_checks(), [], "no 1Password read")
         self.assertFalse(any("secret" in " ".join(a) for a in self.kubectl_args()), "the Role has no Secrets")
 
-    def test_the_pod_sent_is_the_kc2_pod_and_nothing_else(self):
+    def test_the_pod_sent_is_the_cluster_pod_and_nothing_else(self):
         self.run_kgate("--", "true")
         manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
         self.assertEqual([i["kind"] for i in manifest["items"]], ["Pod"])
         pod = manifest["items"][0]
-        self.assertEqual(pod["metadata"]["labels"]["example.org/owner"], "team")
+        self.assertEqual(pod["metadata"]["labels"]["example.org/owner"], "team-a")
         self.assertEqual(pod["spec"]["activeDeadlineSeconds"], 7200)
         c = pod["spec"]["containers"][0]
         self.assertEqual(c["resources"]["requests"], {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "5Gi"})
@@ -2037,14 +2051,14 @@ class Kc2Black(unittest.TestCase):
         self.refused("must come from registry.example")
 
     def test_an_image_that_is_not_pinned_by_digest_is_refused(self):
-        self.profile(image="registry.example/example/worker:20261019")
+        self.profile(image="registry.example/ci/runner:20261019")
         self.refused("pinned by digest")
 
     def test_a_root_user_is_refused(self):
         self.profile(extra='user = "0:0"')
         self.refused("non-root")
 
-    def test_a_refused_kc2_profile_is_recorded_as_kc2_and_never_reaches_for_the_homelab(self):
+    def test_a_refused_profile_is_recorded_under_its_cluster_and_never_reaches_for_the_homelab(self):
         for what, setup, args in (("secrets", lambda: self.profile(secrets='TOK = "op://developer/item/password"'), ()),
                                   ("image", lambda: self.profile(image="ghcr.io/cartwmic/kgate@sha256:" + "ab" * 32), ()),
                                   ("unpinned", lambda: self.profile(image="registry.example/x:1"), ()),
@@ -2054,7 +2068,7 @@ class Kc2Black(unittest.TestCase):
                 setup()
                 done = self.kgate(*args, "--", "true", host="fake")   # a homelab host is set: it must not be used
                 self.assertEqual(done.returncode, 69, done.stdout)
-                self.assertEqual(self.records()[-1]["cluster"], "kc2")
+                self.assertEqual(self.records()[-1]["cluster"], "example")
                 self.assertEqual(self.calls(), [], "no ssh to the homelab")
                 self.assertFalse(any("manifest" in c for c in self.kcalls()))
 
@@ -2062,20 +2076,20 @@ class Kc2Black(unittest.TestCase):
         self.refused("does not take --node", "--node", "somewhere")
 
     def test_a_missing_kubeconfig_is_69_and_names_the_one_time_setup(self):
-        (self.home / ".kube" / "kc2-offload").unlink()
-        done = self.refused("kgate kc2-setup")
-        self.assertIn("kc2-offload is missing", done.stdout)
+        (self.home / ".kube" / "example").unlink()
+        done = self.refused("kgate cluster-setup example --from-context example-ctx")
+        self.assertIn("for cluster example is missing", done.stdout)
         self.assertEqual(self.kcalls(), [], "no kubectl ran")
 
     def test_unreachable_or_signed_out_is_69_with_the_login_hint_and_kubectls_message(self):
         for mode, msg in (("error", "error: You must be logged in to the server (Unauthorized)"), ("no", "no")):
             with self.subTest(mode):
-                done = self.refused("als az login -e kc2", env={"FAKE_CANI": mode})
-                self.assertIn("on the KC2 VPN", self.records()[-1]["reason"])
+                done = self.refused("sign in to it", env={"FAKE_CANI": mode})
+                self.assertIn("context example-ctx", self.records()[-1]["reason"])
                 self.assertIn(msg, self.records()[-1]["reason"])
                 self.assertIn("kubectl: " + msg, done.stdout)
 
-    def test_nothing_runs_here_when_kc2_is_unreachable(self):
+    def test_nothing_runs_here_when_the_cluster_is_unreachable(self):
         done = self.run_kgate("--", "sh", "-c", "echo RAN-HERE > ran-here.txt", env={"FAKE_CANI": "error"})
         self.assertEqual(done.returncode, 69)
         self.assertFalse((self.repo / "ran-here.txt").exists())
@@ -2090,19 +2104,19 @@ class Kc2Black(unittest.TestCase):
 
     def test_the_record_says_which_cluster_ran_it(self):
         self.run_kgate("--", "true")
-        self.assertEqual(self.records()[-1]["cluster"], "kc2")
+        self.assertEqual(self.records()[-1]["cluster"], "example")
         (self.repo / "kgate.toml").write_text('image = "%s"\n' % DIGEST)
         self.kgate("--", "true")
         self.assertEqual(self.records()[-1]["cluster"], "homelab")
 
-    def test_cancel_of_a_dead_kc2_client_deletes_only_its_pod(self):
+    def test_cancel_of_a_dead_kubectl_cluster_client_deletes_only_its_pod(self):
         job_id = "kgate-1700000009-999"
         corpse = subprocess.Popen(["sleep", "300"])
         start, command = K.proc_identity(corpse.pid)
         (self.state / "kgate" / "active").mkdir(parents=True)
         (self.state / "kgate" / "active" / (job_id + ".json")).write_text(json.dumps({
             "id": job_id, "job": "rw-1", "pid": corpse.pid, "start": start, "proc_cmd": command, "cwd": str(self.repo),
-            "argv": ["kgate", "--", "x"], "cmd": "x", "node": None, "cluster": "kc2"}))
+            "argv": ["kgate", "--", "x"], "cmd": "x", "node": None, "cluster": "example"}))
         corpse.kill()
         corpse.wait()
         done = self.run_kgate("cancel", job_id)
@@ -2110,19 +2124,111 @@ class Kc2Black(unittest.TestCase):
         self.assertIn(["delete", "pod/" + job_id, "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
         self.assertEqual(self.calls(), [], "no ssh")
         rec = self.records()[-1]
-        self.assertEqual((rec["exit"], rec["cluster"], rec["cleanup"], rec["cancelled"]), (143, "kc2", True, True))
+        self.assertEqual((rec["exit"], rec["cluster"], rec["cleanup"], rec["cancelled"]), (143, "example", True, True))
 
-    def test_the_registry_entry_names_kc2_before_the_pod_exists(self):
+    def test_the_registry_entry_names_the_cluster_before_the_pod_exists(self):
         self.run_kgate("--", "true")
         entries = next(c["registry"] for c in self.kcalls() if "manifest" in c)
-        self.assertEqual([e["cluster"] for e in entries], ["kc2"])
+        self.assertEqual([e["cluster"] for e in entries], ["example"])
 
-    def test_kc2_setup_writes_the_one_context_with_azurecli_and_mode_600(self):
-        (self.home / ".kube" / "kc2-offload").unlink()
-        (self.home / ".kube" / "config").write_text("x")
-        done = self.run_kgate("kc2-setup")
+    # --- the cluster file
+
+    def test_a_missing_cluster_file_is_69_naming_the_file_and_how_to_make_one(self):
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        reason = self.records()[-1]["reason"]
+        self.assertIn(str(self.home / ".config" / "kgate" / "clusters" / "example.toml"), reason)
+        self.assertIn("kgate cluster-setup example --from-context", reason)
+        self.assertEqual(self.records()[-1]["cluster"], "example")
+        self.assertEqual(self.calls(), [], "no homelab connection")
+        self.assertFalse(any("manifest" in c for c in self.kcalls()))
+
+    def test_a_missing_key_is_69_naming_the_file_and_the_key(self):
+        for key in ("kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s"):
+            with self.subTest(key):
+                path = self.write_cluster(drop=(key,))
+                done = self.run_kgate("--", "true")
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertIn("cluster file %s is missing the key %r" % (path, key), self.records()[-1]["reason"])
+                self.assertFalse(any("manifest" in c for c in self.kcalls()))
+
+    def test_an_invalid_cluster_file_is_69_with_the_key_and_the_value(self):
+        for extra, bad_key in (('registries = []', "registries"), ('deadline_s = 5', "deadline_s"), ('user = "0:0"', "user"), ('kind = "ssh"', "kind"), ('tree_roots = ["/Users"]', "tree_roots")):
+            with self.subTest(bad_key):
+                text = self.write_cluster().read_text()
+                lines = [l for l in text.splitlines() if not l.startswith(bad_key + " ")]
+                (self.home / ".config" / "kgate" / "clusters" / "example.toml").write_text("\n".join([extra] + lines) + "\n")
+                done = self.run_kgate("--", "true")
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertIn(bad_key, self.records()[-1]["reason"])
+                self.assertIn("example.toml", self.records()[-1]["reason"])
+
+    def test_an_unknown_key_in_the_cluster_file_is_refused(self):
+        self.write_cluster()
+        text = (self.home / ".config" / "kgate" / "clusters" / "example.toml").read_text()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").write_text('flavour = "x"\n' + text)
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("unknown keys: flavour", self.records()[-1]["reason"])
+
+    def test_the_pod_labels_annotations_deadline_and_user_come_from_the_cluster_file(self):
+        self.write_cluster(extra="")
+        text = (self.home / ".config" / "kgate" / "clusters" / "example.toml").read_text()
+        text = text.replace('deadline_s = 7200', 'deadline_s = 1800').replace('"example.org/tier\" = \"build"', '"example.org/tier" = "build"').replace("team-a", "team-b")
+        text = text.replace('user = "65532:65532"', 'user = "1234:5678"')
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").write_text(text)
+        done = self.run_kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        path = self.home / ".kube" / "kc2-offload"
+        pod = next(c["manifest"] for c in self.kcalls() if "manifest" in c)["items"][0]
+        self.assertEqual(pod["metadata"]["labels"], {"app": "kgate", "kgate-job": self.records()[-1]["id"], "example.org/owner": "team-b", "example.org/tier": "build"})
+        self.assertEqual(pod["metadata"]["annotations"], {"example.org/evict-ok": "true"})
+        self.assertEqual(pod["spec"]["activeDeadlineSeconds"], 1800)
+        self.assertEqual((pod["spec"]["securityContext"]["runAsUser"], pod["spec"]["securityContext"]["runAsGroup"]), (1234, 5678))
+
+    def test_a_profile_user_overrides_the_cluster_users_default_but_not_root(self):
+        self.profile(extra='user = "4321:8765"')
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        pod = next(c["manifest"] for c in self.kcalls() if "manifest" in c)["items"][0]
+        self.assertEqual(pod["spec"]["securityContext"]["runAsUser"], 4321)
+
+    def test_the_cluster_files_default_cache_claim_is_used_unless_the_profile_names_one(self):
+        self.write_cluster(extra="")
+        path = self.home / ".config" / "kgate" / "clusters" / "example.toml"
+        path.write_text('cache_claim_default = "default-cache"\n' + path.read_text())
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
+        pod = next(c["manifest"] for c in self.kcalls() if "manifest" in c)["items"][0]
+        self.assertIn({"name": "cache", "persistentVolumeClaim": {"claimName": "default-cache"}}, pod["spec"]["volumes"])
+        self.profile(extra='cache_pvc = "own-cache"')
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        pod = [c["manifest"] for c in self.kcalls() if "manifest" in c][-1]["items"][0]
+        self.assertIn({"name": "cache", "persistentVolumeClaim": {"claimName": "own-cache"}}, pod["spec"]["volumes"])
+
+    def test_two_clusters_can_coexist_each_with_its_own_file_and_record(self):
+        self.write_cluster(name="second")
+        (self.repo / "kgate.toml").write_text(((self.repo / "kgate.toml").read_text()).replace('cluster = "example"', 'cluster = "second"'))
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        self.assertEqual(self.records()[-1]["cluster"], "second")
+
+    def test_a_cluster_name_that_is_a_path_is_refused(self):
+        for name in ("../etc/x", "a/b", ".hidden"):
+            with self.assertRaises(K.Unavailable, msg=name):
+                K.parse_profile('cluster = "%s"' % name)
+
+    # --- cluster-setup
+
+    def setup_env(self):
+        (self.home / ".kube" / "config").write_text("x")
+        return {}
+
+    def test_cluster_setup_writes_the_one_context_a_kubelogin_context_gets_azurecli_and_mode_600(self):
+        self.setup_env()
+        (self.home / ".kube" / "example").unlink()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--namespace", "jobs")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        path = self.home / ".kube" / "kgate-example"
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         cfg = json.loads(path.read_text())
         self.assertEqual([c["name"] for c in cfg["contexts"]], ["example-ctx"])
@@ -2131,12 +2237,172 @@ class Kc2Black(unittest.TestCase):
         self.assertEqual(args[args.index("--login") + 1], "azurecli")
         self.assertEqual(args.count("--login"), 1)
 
-    def test_kc2_setup_without_the_context_is_69_and_writes_nothing(self):
-        (self.home / ".kube" / "kc2-offload").unlink()
-        (self.home / ".kube" / "config").write_text("x")
-        done = self.run_kgate("kc2-setup", env={"FAKE_NO_CONTEXT": "1"})
+    def test_cluster_setup_leaves_a_context_that_does_not_use_that_login_tool_alone(self):
+        self.setup_env()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()   # no cluster file yet: --kubeconfig-out picks the path
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", str(self.home / "out-kubeconfig"), env={"FAKE_CONFIG_TOKEN": "1"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        cfg = json.loads((self.home / "out-kubeconfig").read_text())
+        self.assertEqual(cfg["users"][0]["user"], {"token": "fake"})
+        self.assertEqual(stat.S_IMODE((self.home / "out-kubeconfig").stat().st_mode), 0o600)
+
+    def test_cluster_setup_writes_a_skeleton_that_kgate_refuses_until_it_is_filled_in(self):
+        self.setup_env()
+        file = self.home / ".config" / "kgate" / "clusters" / "fresh.toml"
+        done = self.run_kgate("cluster-setup", "fresh", "--from-context", "example-ctx", "--namespace", "ns-1")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        text = file.read_text()
+        self.assertIn('context = "example-ctx"', text)
+        self.assertIn('namespace = "ns-1"', text)
+        self.assertIn('kubeconfig = "~/.kube/kgate-fresh"', text)
+        self.assertIn("registries = []", text)
+        (self.repo / "kgate.toml").write_text((self.repo / "kgate.toml").read_text().replace('cluster = "example"', 'cluster = "fresh"'))
+        done = self.run_kgate("--", "true")
         self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertFalse((self.home / ".kube" / "kc2-offload").exists())
+        self.assertIn("registries", self.records()[-1]["reason"])
+
+    def test_cluster_setup_never_overwrites_an_existing_cluster_file(self):
+        self.setup_env()
+        file = self.home / ".config" / "kgate" / "clusters" / "example.toml"
+        before = file.read_text()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(file.read_text(), before)
+        self.assertIn("already exists", done.stdout)
+
+    def test_cluster_setup_without_the_context_is_69_and_writes_nothing(self):
+        self.setup_env()
+        (self.home / ".kube" / "example").unlink()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "nope", "--kubeconfig-out", str(self.home / "out-kubeconfig"), env={"FAKE_NO_CONTEXT": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertFalse((self.home / "out-kubeconfig").exists())
+
+    def test_cluster_setup_writes_the_kubeconfig_the_cluster_file_names_and_the_job_then_passes_the_reachability_check(self):
+        self.setup_env()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        hint = self.records()[-1]["reason"]
+        self.assertIn("kgate cluster-setup example --from-context example-ctx", hint)
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")   # the hint, as typed
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue((self.home / ".kube" / "example").exists(), "written where the cluster file says")
+        self.assertFalse((self.home / ".kube" / "kgate-example").exists())
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_a_kubeconfig_out_that_differs_from_the_cluster_file_is_refused(self):
+        self.setup_env()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", str(self.home / ".kube" / "elsewhere"))
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("names kubeconfig", done.stdout)
+        self.assertEqual(list((self.home / ".kube").glob("*")), [self.home / ".kube" / "config"])
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", "~/.kube/example")   # the same path is fine
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_cluster_setup_does_not_replace_a_kubeconfig_kgate_did_not_write(self):
+        self.setup_env()
+        target = self.home / ".kube" / "example"
+        target.write_text('{"contexts": [{"name": "mine"}, {"name": "other"}], "users": []}')
+        before = target.read_text()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("was not written by kgate", done.stdout)
+        self.assertEqual(target.read_text(), before)
+
+    def test_cluster_setup_replaces_its_own_marked_one_context_file_and_not_a_marked_file_for_another_cluster(self):
+        self.setup_env()
+        target = self.home / ".kube" / "example"
+        target.unlink()
+        self.assertEqual(self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx").returncode, 0)
+        cfg = json.loads(target.read_text())
+        self.assertEqual(cfg["preferences"]["extensions"], [{"name": "kgate", "extension": {"cluster": "example"}}])
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        again = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")   # a re-run refreshes it
+        self.assertEqual(again.returncode, 0, again.stdout)
+        self.write_cluster(name="second")
+        done = self.run_kgate("cluster-setup", "second", "--from-context", "example-ctx")   # same kubeconfig, marked for "example"
+        self.assertEqual(done.returncode, 64, done.stdout)
+
+    def test_cluster_setup_never_writes_the_users_own_kubeconfig(self):
+        self.setup_env()
+        own = self.home / ".kube" / "config"
+        before = own.read_text()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        for target in (str(own), "~/.kube/config", str(self.home / ".kube" / ".." / ".kube" / "config")):
+            done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", target)
+            self.assertEqual(done.returncode, 64, (target, done.stdout))
+            self.assertIn("your own kubeconfig", done.stdout)
+        self.assertEqual(own.read_text(), before)
+        link = self.home / ".kube" / "link"
+        link.symlink_to(own)
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", str(link))
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertEqual(own.read_text(), before)
+
+    def test_the_skeleton_is_mode_600_and_escapes_quotes_in_the_values(self):
+        self.setup_env()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("cluster-setup", "fresh", "--from-context", "example-ctx", "--namespace", 'we"ird\\ns')
+        self.assertEqual(done.returncode, 0, done.stdout)
+        file = self.home / ".config" / "kgate" / "clusters" / "fresh.toml"
+        self.assertEqual(stat.S_IMODE(file.stat().st_mode), 0o600)
+        import tomllib
+        self.assertEqual(tomllib.loads(file.read_text())["namespace"], 'we"ird\\ns')
+
+    def test_pod_labels_may_not_set_kgates_own_labels(self):
+        for label in ("app", "kgate-job"):
+            with self.subTest(label):
+                path = self.write_cluster()
+                path.write_text(path.read_text().replace("[pod_labels]", '[pod_labels]\n"%s" = "x"' % label))
+                done = self.run_kgate("--", "true")
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertIn("pod_labels may not set kgate's own labels: %s" % label, self.records()[-1]["reason"])
+                self.assertFalse(any("manifest" in c for c in self.kcalls()))
+
+    def test_a_different_context_or_namespace_than_the_cluster_files_is_refused_and_the_working_kubeconfig_is_left_alone(self):
+        self.setup_env()
+        target = self.home / ".kube" / "example"
+        target.unlink()
+        self.assertEqual(self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx").returncode, 0)
+        working = target.read_text()
+        for args, key, given in ((("--from-context", "other-ctx"), "context", "other-ctx"), (("--from-context", "example-ctx", "--namespace", "elsewhere"), "namespace", "elsewhere")):
+            done = self.run_kgate("cluster-setup", "example", *args)
+            self.assertEqual(done.returncode, 64, done.stdout)
+            self.assertIn("example.toml sets %s = " % key, done.stdout)
+            self.assertIn(repr(given), done.stdout)
+            self.assertEqual(target.read_text(), working, "the working kubeconfig is untouched")
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--namespace", "jobs")   # the same values are fine
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+
+    def test_a_cluster_file_without_context_or_namespace_is_not_a_base_for_cluster_setup(self):
+        self.setup_env()
+        for key in ("context", "namespace"):
+            self.write_cluster(drop=(key,))
+            done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")
+            self.assertEqual(done.returncode, 64, done.stdout)
+            self.assertIn("has no `%s` key" % key, done.stdout)
+
+    def test_pod_labels_of_the_wrong_type_is_the_file_and_key_error_not_a_crash(self):
+        path = self.write_cluster()
+        text = path.read_text().replace("[pod_labels]", "[pod_labels_gone]")
+        path.write_text("pod_labels = 5\n" + text.replace("[pod_labels_gone]\n\"example.org/owner\" = \"team-a\"\n\"example.org/tier\" = \"build\"\n", ""))
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        reason = self.records()[-1]["reason"]
+        self.assertIn("pod_labels must be a table of strings", reason)
+        self.assertIn("example.toml", reason)
+        self.assertNotIn("TypeError", done.stdout)
+
+    def test_cluster_setup_needs_a_name_and_a_context_and_refuses_homelab(self):
+        for args in ((), ("example",), ("homelab", "--from-context", "x"), ("../x", "--from-context", "x")):
+            done = self.run_kgate("cluster-setup", *args)
+            self.assertEqual(done.returncode, 64, (args, done.stdout))
 
 
 if __name__ == "__main__":

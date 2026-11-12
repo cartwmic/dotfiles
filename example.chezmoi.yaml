@@ -54,6 +54,27 @@ data:
   #     - {address: "192.0.2.13", user: "<user>"}
   #   dailyPhone: {wgAddress: "198.51.100.6", lanAddress: "192.0.2.22", user: "<user>"}
   #   sshPhone: {wgAddress: "198.51.100.8", lanAddress: "192.0.2.23", user: "<user>"}
+  # kgate on a second Kubernetes cluster reached through kubectl (any profile; docs/kgate.md, "A second cluster"). The values are TOML text, written to
+  # ~/.config/kgate/clusters/<name>.toml and ~/.config/kgate/profiles/<name>.toml by run_onchange_after_45_kgate_cluster_files.sh.tmpl. Omit the key and nothing is written (files written earlier stay; delete them by hand).
+  # kgate:
+  #   clusters:
+  #     example: |
+  #       kind = "kubectl"
+  #       kubeconfig = "~/.kube/kgate-example"
+  #       context = "example-ctx"
+  #       namespace = "jobs"
+  #       registries = ["registry.example"]
+  #       tree_roots = ["Users", "Volumes", "private"]
+  #       user = "65532:65532"
+  #       deadline_s = 7200
+  #       [pod_labels]
+  #       "example.org/owner" = "team-a"
+  #   profiles:
+  #     example-job: |
+  #       cluster = "example"
+  #       image = "registry.example/ci/runner:1@sha256:<64 hex>"
+  #       cpu = 2
+  #       memory = "4Gi"
 
 hooks:
   read-source-state:

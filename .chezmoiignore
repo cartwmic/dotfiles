@@ -290,9 +290,6 @@ Library/Preferences/pnpm/**
 # The Axon playbook is Axon's private material (docs/profiles.md).
 .pi/agent/extensions/axon-playbook
 .pi/agent/extensions/axon-playbook/**
-# kgate profiles for the Axon KC2 cluster (cluster = "kc2"): the personal Mac has no KC2 profiles or kubeconfig, so kgate there can never reach KC2.
-.config/kgate/profiles
-.config/kgate/profiles/**
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
