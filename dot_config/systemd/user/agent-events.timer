@@ -1,0 +1,11 @@
+# Starts agent-events.service 5 seconds after the timer starts (load or boot), then every 2 minutes after each start, like the LaunchAgent's
+# RunAtLoad + StartInterval 120. A tick still running is never started twice. The stale-exporter alert (PiAgentEventsExportStopped) allows 10 minutes.
+[Unit]
+Description=agent-events exporter, every 2 minutes
+
+[Timer]
+OnActiveSec=5s
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
