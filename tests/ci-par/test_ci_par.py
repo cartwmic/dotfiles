@@ -69,6 +69,12 @@ class CiParTest(unittest.TestCase):
         self.assertIn("  skippy: 4 ran, 2 skipped", out)  # 2 ids run alone, then the whole suite: 2 + 2 ran, 1 + 1 skipped
         self.assertIn("  good: 1 ran, 0 skipped", out)
 
+    def test_counts_use_the_last_summary_not_an_echoed_child_run(self):
+        mod = load_runner()
+        echoed = "Ran 19 tests in 1s\nOK (skipped=3)\n.\n----\nRan 2 tests in 0.1s\n\nOK (skipped=1)\n"
+        self.assertEqual(mod.counts(echoed), (2, 1))
+        self.assertEqual(mod.counts("no summary"), (0, 0))
+
     def test_empty_per_test_dir_fails_closed(self):
         rc, out = self.run_runner("--per-test", "empty")
         self.assertEqual(rc, 1, out)

@@ -79,10 +79,14 @@ def run(cmd, cwd):
 
 
 def counts(output):
-    """(tests run, tests skipped) read from unittest's own summary lines in one process's output."""
-    ran = sum(int(n) for n in re.findall(r"^Ran (\d+) tests?", output, re.M))
-    skipped = sum(int(n) for n in re.findall(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", output, re.M))
-    return ran, skipped
+    """(tests run, tests skipped) from the LAST `Ran N tests` line and the result line after it: unittest's own summary of
+    this process. Earlier lines can be a test's echo of a child run, which must not count."""
+    ran = re.findall(r"^Ran (\d+) tests?", output, re.M)
+    if not ran:
+        return 0, 0
+    tail = output[output.rindex("\nRan " if "\nRan " in output else "Ran "):]
+    skipped = re.search(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", tail, re.M)
+    return int(ran[-1]), int(skipped.group(1)) if skipped else 0
 
 
 def main():
