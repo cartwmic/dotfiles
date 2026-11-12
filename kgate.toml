@@ -1,6 +1,6 @@
 # kgate profile for the dotfiles heavy suites (tests/heavy-gate, about 9 minutes, and tests/workstream-rank). Contract: docs/kgate.md.
 # Run: run-and-wake -- kgate -- sh -c 'export PYTHONDONTWRITEBYTECODE=1; python3 -m unittest discover -s tests/heavy-gate && python3 -m unittest discover -s tests/workstream-rank'
-image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
+image  = "ghcr.io/cartwmic/kgate@sha256:37c05c3427900dd1fc3852e614421da8ea7610cd48ec4781e49f84ce6ebb06a1"
 # CPU 1 (was 2): job average 0.09 core, p95 0.19, max 0.23; the suites mostly wait and there is no CPU limit.
 cpu    = 1
 memory = "512Mi"
