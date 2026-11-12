@@ -59,6 +59,16 @@ class CiParTest(unittest.TestCase):
         self.assertIn("FAIL many", out)
         self.assertIn("marker-from-fail", out)
 
+    def test_it_prints_ran_and_skipped_counts_per_suite_and_per_test_dir(self):
+        (self.root / "skippy").mkdir()
+        (self.root / "skippy" / "test_s.py").write_text(
+            "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
+            "    @unittest.skip('why')\n    def test_b(self):\n        pass\n")
+        rc, out = self.run_runner("--per-test", "skippy", "skippy", "good")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("  skippy: 4 ran, 2 skipped", out)  # 2 ids run alone, then the whole suite: 2 + 2 ran, 1 + 1 skipped
+        self.assertIn("  good: 1 ran, 0 skipped", out)
+
     def test_empty_per_test_dir_fails_closed(self):
         rc, out = self.run_runner("--per-test", "empty")
         self.assertEqual(rc, 1, out)

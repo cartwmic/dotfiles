@@ -14,11 +14,17 @@ Exits 1 if anything fails, including a per-test directory whose tests cannot be 
 import argparse
 import concurrent.futures as cf
 import os
+import re
 import subprocess
 import sys
 import time
 
 TEST_PROCESSES = 16
+
+
+def read(path):
+    with open(path) as f:
+        return f.read()
 
 
 def available_cpus(cgroup="/sys/fs/cgroup"):
@@ -31,11 +37,11 @@ def available_cpus(cgroup="/sys/fs/cgroup"):
     if hasattr(os, "sched_getaffinity"):
         n = min(n, len(os.sched_getaffinity(0)) or n)
     try:  # cgroup v2: "max 100000" or "<quota> <period>"
-        quota, period = open(os.path.join(cgroup, "cpu.max")).read().split()[:2]
+        quota, period = read(os.path.join(cgroup, "cpu.max")).split()[:2]
     except (OSError, ValueError):
         try:  # cgroup v1: -1 means no quota
-            quota = open(os.path.join(cgroup, "cpu/cpu.cfs_quota_us")).read().strip()
-            period = open(os.path.join(cgroup, "cpu/cpu.cfs_period_us")).read().strip()
+            quota = read(os.path.join(cgroup, "cpu/cpu.cfs_quota_us")).strip()
+            period = read(os.path.join(cgroup, "cpu/cpu.cfs_period_us")).strip()
         except OSError:
             return n
     if quota in ("max", "-1") or not quota.isdigit() or not period.isdigit() or int(period) == 0:
@@ -72,6 +78,13 @@ def run(cmd, cwd):
     return r.returncode, r.stdout, time.monotonic() - start
 
 
+def counts(output):
+    """(tests run, tests skipped) read from unittest's own summary lines in one process's output."""
+    ran = sum(int(n) for n in re.findall(r"^Ran (\d+) tests?", output, re.M))
+    skipped = sum(int(n) for n in re.findall(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", output, re.M))
+    return ran, skipped
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--per-test", action="append", default=[], metavar="DIR")
@@ -89,37 +102,48 @@ def main():
             failures.append((d, 0.0, str(e)))
             continue
         test_count += len(ids)
-        jobs += [(tid, [sys.executable, "-m", "unittest", tid], d, "test") for tid in ids]
+        jobs += [(tid, [sys.executable, "-m", "unittest", tid], d, "test", d) for tid in ids]
     for spec in args.suites:
         suite, _, pattern = spec.partition(":")
         cmd = [sys.executable, "-m", "unittest", "discover", "-s", suite, "-v"]
         if pattern:
             cmd += ["-p", pattern]
-        jobs.append((spec, cmd, None, "suite"))
+        jobs.append((spec, cmd, None, "suite", spec))
 
     start = time.monotonic()
     results = []   # (name, rc, output, secs)
     with cf.ThreadPoolExecutor(TEST_PROCESSES) as tests_pool, cf.ThreadPoolExecutor(SUITE_PROCESSES) as suite_pool:
         pending = {}
-        for name, cmd, cwd, kind in jobs:
+        for name, cmd, cwd, kind, group in jobs:
             pool = tests_pool if kind == "test" else suite_pool
-            pending[pool.submit(run, cmd, cwd or os.getcwd())] = name
+            pending[pool.submit(run, cmd, cwd or os.getcwd())] = (name, group)
         for fut in cf.as_completed(pending):
             rc, out, secs = fut.result()
-            results.append((pending[fut], rc, out, secs))
+            results.append((pending[fut][0], rc, out, secs, pending[fut][1]))
     wall = time.monotonic() - start
 
     for name, secs, output in failures:
         print(f"FAIL {name} ({secs:.1f}s)\n{output}")
-    for name, rc, output, secs in results:
+    for name, rc, output, secs, _ in results:
         if rc:
             print(f"FAIL {name} (exit {rc}, {secs:.1f}s)\n{output}")
-    failed = len(failures) + sum(1 for _, rc, _, _ in results if rc)
-    serial = sum(secs for _, _, _, secs in results)
+    # Per-suite counts, so a run on another machine can be compared with this one: a pass that skips tests is not the same check.
+    # Per-test ids are summed under their suite directory.
+    totals = {}
+    for _, _, output, _, group in results:
+        r, k = counts(output)
+        t = totals.setdefault(group, [0, 0])
+        t[0] += r
+        t[1] += k
+    print("suite counts (ran, skipped):")
+    for key in sorted(totals):
+        print(f"  {key}: {totals[key][0]} ran, {totals[key][1]} skipped")
+    failed = len(failures) + sum(1 for _, rc, _, _, _ in results if rc)
+    serial = sum(r[3] for r in results)
     slowest = sorted(results, key=lambda r: r[3], reverse=True)[:3]
     print(f"ci-par: {len(args.suites)} suites ({SUITE_PROCESSES} at a time), {test_count} per-test ids ({TEST_PROCESSES} at a time), "
           f"wall {wall:.1f}s, serial sum {serial:.0f}s, {failed} failed")
-    print("slowest: " + ", ".join(f"{name} {secs:.0f}s" for name, _, _, secs in slowest))
+    print("slowest: " + ", ".join(f"{name} {secs:.0f}s" for name, _, _, secs, _ in slowest))
     sys.stdout.flush()
     return 1 if failed else 0
 
