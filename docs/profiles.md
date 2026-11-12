@@ -71,7 +71,7 @@ Machine-specific values (hosts, addresses, vault items, work names) are not in t
 | `axonPlaybook.repo` | Clones the Axon playbook (work profile; see `example.chezmoi.yaml`). | Nothing is cloned. |
 | `workGitHost`, `workAwsProfile` on the personal profile | The host appears in the gitlinker map, the playbook text and the skill; the AWS default is used in `~/.zshrc`. | Left out; the AWS default is `default`. |
 | `sshHosts.kgateFallback` (list of `{address, user}`, personal profile) | More control-plane hosts, written after `sshHosts.kgate` in `~/.config/kgate/host`; `kgate` uses the first that answers ssh at job start. | One host, as before. |
-| `kgate.clusters`, `kgate.profiles` (maps of name to TOML text, any profile) | `run_onchange_after_45_kgate_cluster_files.sh.tmpl` writes `~/.config/kgate/clusters/<name>.toml` and `~/.config/kgate/profiles/<name>.toml` (mode 600): the settings and profiles for a second Kubernetes cluster that kgate reaches through kubectl (`docs/kgate.md`, "A second cluster"). The repo holds the mechanism and invented examples only. | Nothing is written. |
+| `kgate.clusters`, `kgate.profiles` (maps of name to TOML text, any profile) | `run_onchange_after_45_kgate_cluster_files.sh.tmpl` writes `~/.config/kgate/clusters/<name>.toml` and `~/.config/kgate/profiles/<name>.toml` (mode 600): the settings and profiles for a second Kubernetes cluster that kgate reaches through kubectl (`docs/kgate.md`, "A second cluster"). The repo holds the mechanism and invented examples only. | Nothing is written. Files written earlier stay when a key is removed: delete them by hand (`~/.config/kgate/clusters/<name>.toml`, `~/.config/kgate/profiles/<name>.toml`). |
 
 ### 1Password service-account token
 

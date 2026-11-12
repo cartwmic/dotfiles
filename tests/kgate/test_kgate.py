@@ -2239,6 +2239,7 @@ class KubectlBlack(unittest.TestCase):
 
     def test_cluster_setup_leaves_a_context_that_does_not_use_that_login_tool_alone(self):
         self.setup_env()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()   # no cluster file yet: --kubeconfig-out picks the path
         done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", str(self.home / "out-kubeconfig"), env={"FAKE_CONFIG_TOKEN": "1"})
         self.assertEqual(done.returncode, 0, done.stdout)
         cfg = json.loads((self.home / "out-kubeconfig").read_text())
@@ -2264,6 +2265,7 @@ class KubectlBlack(unittest.TestCase):
         self.setup_env()
         file = self.home / ".config" / "kgate" / "clusters" / "example.toml"
         before = file.read_text()
+        (self.home / ".kube" / "example").unlink()
         done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual(file.read_text(), before)
@@ -2272,9 +2274,95 @@ class KubectlBlack(unittest.TestCase):
     def test_cluster_setup_without_the_context_is_69_and_writes_nothing(self):
         self.setup_env()
         (self.home / ".kube" / "example").unlink()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
         done = self.run_kgate("cluster-setup", "example", "--from-context", "nope", "--kubeconfig-out", str(self.home / "out-kubeconfig"), env={"FAKE_NO_CONTEXT": "1"})
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertFalse((self.home / "out-kubeconfig").exists())
+
+    def test_cluster_setup_writes_the_kubeconfig_the_cluster_file_names_and_the_job_then_passes_the_reachability_check(self):
+        self.setup_env()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        hint = self.records()[-1]["reason"]
+        self.assertIn("kgate cluster-setup example --from-context example-ctx", hint)
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")   # the hint, as typed
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue((self.home / ".kube" / "example").exists(), "written where the cluster file says")
+        self.assertFalse((self.home / ".kube" / "kgate-example").exists())
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_a_kubeconfig_out_that_differs_from_the_cluster_file_is_refused(self):
+        self.setup_env()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", str(self.home / ".kube" / "elsewhere"))
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("names kubeconfig", done.stdout)
+        self.assertEqual(list((self.home / ".kube").glob("*")), [self.home / ".kube" / "config"])
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", "~/.kube/example")   # the same path is fine
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_cluster_setup_does_not_replace_a_kubeconfig_kgate_did_not_write(self):
+        self.setup_env()
+        target = self.home / ".kube" / "example"
+        target.write_text('{"contexts": [{"name": "mine"}, {"name": "other"}], "users": []}')
+        before = target.read_text()
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("was not written by kgate", done.stdout)
+        self.assertEqual(target.read_text(), before)
+
+    def test_cluster_setup_replaces_its_own_marked_one_context_file_and_not_a_marked_file_for_another_cluster(self):
+        self.setup_env()
+        target = self.home / ".kube" / "example"
+        target.unlink()
+        self.assertEqual(self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx").returncode, 0)
+        cfg = json.loads(target.read_text())
+        self.assertEqual(cfg["preferences"]["extensions"], [{"name": "kgate", "extension": {"cluster": "example"}}])
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        again = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")   # a re-run refreshes it
+        self.assertEqual(again.returncode, 0, again.stdout)
+        self.write_cluster(name="second")
+        done = self.run_kgate("cluster-setup", "second", "--from-context", "example-ctx")   # same kubeconfig, marked for "example"
+        self.assertEqual(done.returncode, 64, done.stdout)
+
+    def test_cluster_setup_never_writes_the_users_own_kubeconfig(self):
+        self.setup_env()
+        own = self.home / ".kube" / "config"
+        before = own.read_text()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        for target in (str(own), "~/.kube/config", str(self.home / ".kube" / ".." / ".kube" / "config")):
+            done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", target)
+            self.assertEqual(done.returncode, 64, (target, done.stdout))
+            self.assertIn("your own kubeconfig", done.stdout)
+        self.assertEqual(own.read_text(), before)
+        link = self.home / ".kube" / "link"
+        link.symlink_to(own)
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--kubeconfig-out", str(link))
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertEqual(own.read_text(), before)
+
+    def test_the_skeleton_is_mode_600_and_escapes_quotes_in_the_values(self):
+        self.setup_env()
+        (self.home / ".config" / "kgate" / "clusters" / "example.toml").unlink()
+        (self.home / ".kube" / "example").unlink()
+        done = self.run_kgate("cluster-setup", "fresh", "--from-context", "example-ctx", "--namespace", 'we"ird\\ns')
+        self.assertEqual(done.returncode, 0, done.stdout)
+        file = self.home / ".config" / "kgate" / "clusters" / "fresh.toml"
+        self.assertEqual(stat.S_IMODE(file.stat().st_mode), 0o600)
+        import tomllib
+        self.assertEqual(tomllib.loads(file.read_text())["namespace"], 'we"ird\\ns')
+
+    def test_pod_labels_may_not_set_kgates_own_labels(self):
+        for label in ("app", "kgate-job"):
+            with self.subTest(label):
+                path = self.write_cluster()
+                path.write_text(path.read_text().replace("[pod_labels]", '[pod_labels]\n"%s" = "x"' % label))
+                done = self.run_kgate("--", "true")
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertIn("pod_labels may not set kgate's own labels: %s" % label, self.records()[-1]["reason"])
+                self.assertFalse(any("manifest" in c for c in self.kcalls()))
 
     def test_cluster_setup_needs_a_name_and_a_context_and_refuses_homelab(self):
         for args in ((), ("example",), ("homelab", "--from-context", "x"), ("../x", "--from-context", "x")):

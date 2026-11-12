@@ -4,7 +4,7 @@
       clusters: {<name>: "<TOML text of ~/.config/kgate/clusters/<name>.toml>"}
       profiles: {<name>: "<TOML text of ~/.config/kgate/profiles/<name>.toml>"}
   The repo holds the mechanism only; the values stay in the machine's own chezmoi data (docs/kgate.md, "A second cluster"). With no `kgate` data (or
-  empty maps) this renders nothing, chezmoi runs no script, and no file is written. Any profile can have the data.
+  empty maps) this renders nothing, chezmoi runs no script, and no file is written. Any profile can have the data. Removing a key later does not delete the file this step wrote; delete it by hand.
 */ -}}
 {{- $kg := dig "kgate" (dict) . | default (dict) -}}
 {{- $clusters := dig "clusters" (dict) $kg | default (dict) -}}
