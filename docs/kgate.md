@@ -13,11 +13,12 @@ The pane that started the job is woken when it ends, with the exit code and the 
 ## CLI
 
 ```
-kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
+kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] [--sched-wait SECONDS] -- CMD [ARGS...]
 ```
 
 - `--profile FILE`: the gate's profile. Default `kgate.toml` at the worktree root. A repo with several gates keeps one profile per gate next to its script and passes `--profile`.
 - `--wait`: how long to wait for the pod to start (default 3600).
+- `--sched-wait`: how long the pod may stay unschedulable before kgate gives up with exit 75 (default 600; env `KGATE_SCHED_WAIT`, the flag wins). Homelab only. See "When the cluster is full".
 - `--cpu`, `--mem`, `--mem-limit`, `--image`: override the profile. `--mem` sets the memory request, `--mem-limit` the limit (see "Memory: request and limit"). `--node`: pin one node (never an excluded one).
 - CMD runs in the same directory, at the same absolute path, inside the pod.
 - `kgate cancel [--wait SECONDS] JOB_ID` and `kgate cancel --list` stop one job and list the running ones; see "Cancelling a job".
@@ -84,6 +85,7 @@ For such a PR, wait for GitHub's run, or run that one test on the host desktop m
 | CMD's code | CMD ran to its end. |
 | 64 | Bad command line. |
 | 69 | The job could not start or finish on the cluster. The reason is printed and in the record. |
+| 75 | The pod was still unschedulable when `--sched-wait` ran out. The pod is deleted, CMD never ran. |
 
 69 covers: cluster unreachable, no or bad profile, image not pinned by digest, a secret or the pull token unreadable, a service the gate needs that the pod cannot provide, pod never started (wait ran out, image pull failed), tree hash differs, tool version differs, and a lost connection to a pod after CMD started.
 
@@ -91,17 +93,19 @@ For such a PR, wait for GitHub's run, or run that one test on the host desktop m
 
 ## When the cluster is full
 
-When no node has room for the pod's CPU or memory request, the pod stays `Pending`. kgate waits for room and then gives up with exit 69. It never runs the job on the Mac.
+When no node has room for the pod's CPU or memory request, the pod stays `Pending`. kgate waits for room and then gives up: exit 75 after `--sched-wait` (default 600 s), or exit 69 if `--wait` runs out first. It never runs the job on the Mac.
 
 - A full cluster leaves the pod `Pending`, with `PodScheduled` `False` and reason `Unschedulable`. The client waits by itself. It prints `kgate: waiting for the pod: Unschedulable` to the job log when that state first appears.
-- It keeps waiting until `--wait` seconds (default 3600) after the job started.
+- **Scheduling deadline (homelab).** `--sched-wait SECONDS` (default 600; env `KGATE_SCHED_WAIT`; the flag wins; whole seconds, at least 1) counts from the moment the pod is created. If the pod is still `PodScheduled=False` with reason `Unschedulable` when it passes, kgate deletes the pod, prints one line and exits **75**: `kgate: pod not scheduled within <N>s: <scheduler message> (pinned to node <NODE>); exit 75, CMD was not run on this Mac` (the pin part only when `--node` was given). The record's `reason` is `pod not scheduled within <N>s: <scheduler message>[ (pinned to node <NODE>)]`. There is no retry. 75 is `EX_TEMPFAIL`; kgate uses it for nothing else, though a CMD that itself exits 75 looks the same by code (as with 69, `reason` tells them apart). A pod that is already scheduled and is pulling its image or running an init container is not unschedulable: the deadline does not apply to it, and only `--wait` ends it. AG1 is not covered (its autoscaler can take longer to add a node); there only `--wait` applies.
+- Otherwise it keeps waiting until `--wait` seconds (default 3600) after the job started.
 - If the wait runs out, it exits 69. The record's `reason` is `pod did not start within <N>s: Unschedulable <scheduler message>`. kgate copies the scheduler message unchanged, up to 300 characters. Kubernetes scheduler messages look like `0/N nodes are available: ... Insufficient memory`.
 
 The reason tells a full cluster apart from the other ways a job fails to start. These are the prefixes kgate writes:
 
 | `reason` starts with | Cause | Capacity? |
 |---|---|---|
-| `pod did not start within <N>s: Unschedulable` | No node had room for the whole wait. | Yes |
+| `pod not scheduled within <N>s:` (exit 75) | No node had room for the `--sched-wait` deadline. | Yes |
+| `pod did not start within <N>s: Unschedulable` | No node had room for the whole `--wait` (AG1, or `--sched-wait` set above `--wait`). | Yes |
 | `pod did not start: ` (for example `ErrImagePull`, `ImagePullBackOff`, `CreateContainerConfigError`, or a pod phase of `Failed`) | The pod failed before CMD ran. | No |
 | `cluster unreachable (` | The cluster or its ssh route is down. | No |
 | `could not create the pod: ` | The cluster refused to create the pod. | No |
@@ -111,7 +115,7 @@ Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch,
 **What callers do.**
 
 - Wait. Pass `--wait 1200` for short gates.
-- On exit 69 whose `reason` starts `pod did not start within` and contains `Unschedulable`, the caller may run heavy-gate once, but only when the profile fits some kgate node (see the node table in "How many jobs at once"). Every committed profile does. Then it must report "(2) no kgate capacity" and quote the reason.
+- On exit 75, or exit 69 whose `reason` starts `pod did not start within` and contains `Unschedulable`, the caller may run heavy-gate once, but only when the profile fits some kgate node (see the node table in "How many jobs at once"). Every committed profile does. Then it must report "(2) no kgate capacity" and quote the reason.
 - A profile bigger than every node is a profile bug. Report it as one, with the reason quoted. Never run heavy-gate for it as (2).
 - Every other exit 69 is not a capacity problem. Report it as it is. Never report it as a Mac run in disguise.
 - The client never falls back to the Mac. A fallback inside the client would make a result's origin ambiguous.
