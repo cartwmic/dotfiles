@@ -35,6 +35,11 @@ elif mode == "badfindings":
     result('{"leak": false, "findings": "none"}')
 elif mode == "nonstring":
     result(5)
+elif mode == "marker":
+    if "CHUNK2-MARKER" in open(os.path.join(fake, "stdin.txt")).read():
+        result('{"leak": true, "findings": [{"file": "big.txt", "line": 1, "text": "marker", "why": "in this chunk"}]}')
+    else:
+        result('{"leak": false, "findings": []}')
 elif mode == "wrapped":
     result('Sure. {"leak": false, "findings": []} Done.')
 elif mode == "garbage":
@@ -94,6 +99,63 @@ class Base(unittest.TestCase):
 
     def calls(self):
         return len((self.fake / "calls").read_text()) if (self.fake / "calls").exists() else 0
+
+
+def load_guard():
+    import importlib.machinery, importlib.util
+    sys.dont_write_bytecode = True
+    loader = importlib.machinery.SourceFileLoader("leak_guard_under_test", str(SCRIPT))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("leak_guard_under_test", loader))
+    loader.exec_module(mod)
+    return mod
+
+
+class ParseRaw(unittest.TestCase):
+    """parse_raw on synthetic `git diff-tree --pretty=raw --cc` output."""
+
+    G = load_guard()
+    SHA = "a" * 40
+
+    def lines(self, text):
+        return [(f, n, t) for f, n, t, c in self.G.parse_raw(text)[0]]
+
+    def test_a_plain_commit_gives_headers_message_path_and_added_lines(self):
+        text = ("commit %s\ntree x\nauthor A <a@a> 1 +0000\ncommitter C <c@c> 1 +0000\n\n    subject\n    body\n\n"
+                "diff --git a/dir/f.txt b/dir/f.txt\nindex 1..2 100644\n--- a/dir/f.txt\n+++ b/dir/f.txt\n@@ -1,2 +1,3 @@\n keep\n-old\n+new one\n+new two\n" % self.SHA)
+        got = self.lines(text)
+        self.assertIn(("COMMIT-HEADER", 2, "author A <a@a> 1 +0000"), got)
+        self.assertIn(("COMMIT-MESSAGE", 1, "subject"), got)
+        self.assertIn(("COMMIT-MESSAGE", 2, "body"), got)
+        self.assertIn(("dir/f.txt", 0, "(path) dir/f.txt"), got)
+        self.assertIn(("dir/f.txt", 2, "new one"), got)
+        self.assertIn(("dir/f.txt", 3, "new two"), got)
+        self.assertNotIn(("dir/f.txt", 1, "keep"), got)
+
+    def test_an_added_line_starting_with_two_pluses_is_kept_and_a_header_is_not_content(self):
+        text = ("commit %s\ntree x\n\n    s\n\ndiff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -0,0 +1,2 @@\n+++ looks like a header\n++ and this\n" % self.SHA)
+        got = self.lines(text)
+        self.assertIn(("f", 1, "++ looks like a header"), got)
+        self.assertEqual([t for f, n, t in got if f == "f" and n > 0], ["++ looks like a header", "+ and this"])
+
+    def test_a_two_parent_merge_keeps_only_lines_new_against_both_parents(self):
+        text = ("commit %s\ntree x\nparent p1\nparent p2\n\n    merge\n\ndiff --cc f\nindex 1,2..3\n--- a/f\n+++ b/f\n@@@ -1,2 -1,2 +1,3 @@@\n"
+                "  both\n+ from the second parent\n +from the first parent\n++new in the merge\n- gone\n" % self.SHA)
+        added = [(n, t) for f, n, t in self.lines(text) if f == "f" and n > 0]
+        self.assertEqual(added, [(4, "new in the merge")])
+
+    def test_an_octopus_merge_has_a_prefix_three_wide_and_its_own_lines_are_kept(self):
+        text = ("commit %s\ntree x\nparent a\nparent b\nparent c\n\n    octopus\n\ndiff --cc f\nindex 1,2,3..4\n--- a/f\n+++ b/f\n"
+                "@@@@ -1,1 -1,1 -1,1 +1,2 @@@@\n   keep\n+++x octopus own line\n++ +from two parents only\n" % self.SHA)
+        added = [(n, t) for f, n, t in self.lines(text) if f == "f" and n > 0]
+        self.assertEqual(added, [(2, "x octopus own line")])
+
+    def test_binary_files_are_reported_and_two_commits_are_told_apart(self):
+        text = ("commit %s\ntree x\n\n    one\n\ndiff --git a/p.bin b/p.bin\nindex 1..2\nBinary files /dev/null and b/p.bin differ\n"
+                "commit %s\ntree y\n\n    two\n\ndiff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -0,0 +1 @@\n+line\n" % (self.SHA, "b" * 40))
+        lines, binary = self.G.parse_raw(text)
+        self.assertEqual(binary, ["p.bin"])
+        self.assertIn(("g", 1, "line", "b" * 40), lines)
+        self.assertEqual({c for f, n, t, c in lines if f == "COMMIT-MESSAGE"}, {self.SHA, "b" * 40})
 
 
 class PreCommit(Base):
@@ -457,8 +519,7 @@ class PrePush(Base):
         tip = self.commit("clean.txt", "a quiet sentence\n")
         done = self.guard("pre-push", "unfetched", str(other), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("no known base", done.stderr)
-        self.assertIn("unfetched", done.stderr)
+        self.assertIn("no tracking refs for unfetched: run `git fetch unfetched`, then push again", done.stderr)
         self.assertEqual(self.calls(), 0)
 
     def test_a_new_branch_is_checked_from_the_merge_base_with_the_remotes_default_branch(self):
@@ -509,7 +570,241 @@ class PrePush(Base):
         self.assertEqual(done.returncode, 1, done.stderr)
         sent = (self.fake / "stdin.txt").read_text()
         self.assertIn("a subtle sentence added then removed", sent)
-        self.assertIn("(commit ", sent)
+
+    # --- the selection design: one rev-list, one diff-tree
+
+    def sent(self):
+        return (self.fake / "stdin.txt").read_text()
+
+    def test_content_already_on_another_remote_branch_is_not_sent(self):
+        self.git("checkout", "-q", "-b", "other")
+        self.commit("already-public.txt", "a line another branch already published\n")
+        self.git("push", "-q", "origin", "other", "--no-verify")
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("fresh.txt", "a brand new line\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("a brand new line", self.sent())
+        self.assertNotIn("already published", self.sent())
+        self.assertEqual(self.calls(), 1)
+
+    def merge_fixture(self):
+        """main and two branches that conflict on one file; both parents are already on the remote."""
+        for name, text in (("left", "left side\n"), ("right", "right side\n")):
+            self.git("checkout", "-q", "-b", name, "main")
+            self.commit("shared.txt", text, message=name)
+            self.git("push", "-q", "origin", name, "--no-verify")
+        self.git("checkout", "-q", "left")
+        self.git("merge", "-q", "right", check=False)            # conflicts on shared.txt
+
+    def finish_merge(self, resolution, extra_file=None):
+        (self.repo / "shared.txt").write_text(resolution)
+        self.git("add", "shared.txt")
+        if extra_file:
+            (self.repo / extra_file[0]).write_text(extra_file[1])
+            self.git("add", extra_file[0])
+        self.git("commit", "-q", "-m", "merge", "--no-verify")
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def test_a_merges_own_resolution_is_caught_and_its_parents_content_is_not_sent(self):
+        self.merge_fixture()
+        tip = self.finish_merge("resolved with fooco in it\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/left"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("shared.txt:1: fooco", done.stderr)
+
+    def test_a_clean_merge_resolution_passes_and_only_its_own_line_is_sent(self):
+        self.merge_fixture()
+        tip = self.finish_merge("a clean resolved line\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/left"), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("a clean resolved line", self.sent())
+        self.assertNotIn("left side", self.sent())
+        self.assertNotIn("right side", self.sent())
+
+    def test_a_path_only_the_merge_adds_is_caught(self):
+        self.merge_fixture()
+        tip = self.finish_merge("resolved\n", extra_file=("fooco-added-in-merge.txt", "quiet\n"))
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/left"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("fooco-added-in-merge.txt", done.stderr)
+
+    def test_an_octopus_merges_own_added_line_is_kept_and_checked(self):
+        for name in ("one", "two", "three"):
+            self.git("checkout", "-q", "-b", name, "main")
+            self.commit("%s.txt" % name, "%s\n" % name, message=name)
+            self.git("push", "-q", "origin", name, "--no-verify")
+        self.git("checkout", "-q", "one")
+        self.git("merge", "-q", "--no-commit", "two", "three")
+        (self.repo / "extra.txt").write_text("an octopus extra line naming fooco\n")
+        self.git("add", "extra.txt")
+        self.git("commit", "-q", "-m", "octopus", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(len(self.git("rev-list", "--parents", "-n", "1", tip).stdout.split()) - 1, 3)
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/one"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("extra.txt:1: fooco", done.stderr)
+
+    def test_a_merged_signed_tags_mergetag_header_is_checked(self):
+        """git records a `mergetag` header (the merged tag's name, tagger and message) when a SIGNED tag is merged; this builds such a merge commit by hand."""
+        self.git("checkout", "-q", "-b", "side", "main")
+        side = self.commit("side.txt", "side\n", message="side")
+        self.git("checkout", "-q", "-b", "feature", "main")
+        feature = self.commit("feature.txt", "feature\n", message="feature")
+        tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        raw = ("tree %s\nparent %s\nparent %s\nauthor t <t@t> 1700000000 +0000\ncommitter t <t@t> 1700000000 +0000\n"
+               "mergetag object %s\n type commit\n tag v-side\n tagger T <t@t> 1700000000 +0000\n \n tag text that names fooco\n\nmerge the tag\n"
+               % (tree, feature, side, side))
+        made = subprocess.run(["git", "-C", str(self.repo), "hash-object", "-t", "commit", "-w", "--stdin"], input=raw, capture_output=True, text=True, check=True)
+        tip = made.stdout.strip()
+        self.assertIn("mergetag", self.git("cat-file", "-p", tip).stdout)
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("COMMIT-HEADER", done.stderr)
+        self.assertIn("fooco", done.stderr)
+
+    def test_author_committer_and_tagger_identities_are_checked(self):
+        self.git("checkout", "-q", "-b", "feature")
+        (self.repo / "clean.txt").write_text("quiet\n")
+        self.git("add", "clean.txt")
+        env = {**os.environ, "HOME": str(self.home), "GIT_AUTHOR_NAME": "Someone", "GIT_AUTHOR_EMAIL": "someone@fooco.example", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "clean", "--no-verify"], check=True, env=env, capture_output=True)
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("COMMIT-HEADER", done.stderr)
+        # a tagger
+        self.git("reset", "-q", "--hard", "main")
+        self.commit("clean2.txt", "quiet\n")
+        env2 = {**os.environ, "HOME": str(self.home), "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "tagger@fooco.example"}
+        subprocess.run(["git", "-C", str(self.repo), "tag", "-a", "vt", "-m", "release"], check=True, env=env2, capture_output=True)
+        tag = self.git("rev-parse", "vt").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tag, ref="refs/tags/vt"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("TAG-OBJECT", done.stderr)
+
+    def test_a_hundred_rewrites_of_one_file_are_one_call_with_a_small_corpus(self):
+        self.git("checkout", "-q", "-b", "feature")
+        for i in range(100):
+            tip = self.commit("churn.txt", "line a\nline b\n" if i % 2 else "line b\nline a\n", message="rewrite %d" % i)
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.calls(), 1)
+        self.assertEqual(self.sent().count("line a"), 1)
+        self.assertEqual(self.sent().count("line b"), 1)
+        self.assertEqual(self.log()[-1]["chunks"], 1)
+
+    def big_branch(self, files=4, lines=4500):
+        """Unique content past one chunk (180 KB), with a marker that lands in the second chunk."""
+        self.git("checkout", "-q", "-b", "feature")
+        for f in range(files):
+            body = "".join("unique line %d of file %d, long enough to take up room in the chunk\n" % (i, f) for i in range(lines))
+            if f == files - 1:
+                body += "CHUNK2-MARKER\n"
+            tip = self.commit("big%d.txt" % f, body, message="big %d" % f)
+        return tip
+
+    def test_a_corpus_over_the_chunk_size_is_split_and_a_leak_in_chunk_two_blocks(self):
+        tip = self.big_branch()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "marker"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertGreaterEqual(self.calls(), 2)
+        self.assertIn("in this chunk", done.stderr)
+        self.assertGreaterEqual(self.log()[-1]["chunks"], 2)
+
+    def test_every_chunk_must_pass_and_each_chunk_stays_under_the_cap(self):
+        tip = self.big_branch()
+        sizes = []
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertGreaterEqual(self.calls(), 2)
+        self.assertLess(len((self.fake / "stdin.txt").read_bytes()), 200_000)
+        self.assertGreaterEqual(self.log()[-1]["chunks"], 2)
+
+    def test_a_chunk_that_fails_closed_blocks_the_whole_push(self):
+        tip = self.big_branch()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "exit1"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("layer 2", done.stderr)
+
+    def test_a_single_line_bigger_than_a_chunk_blocks(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("huge.txt", "x" * 200_000 + "\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("one line", done.stderr)
+        self.assertEqual(self.calls(), 0)
+
+    def test_a_tag_or_ref_that_peels_to_a_tree_or_blob_blocks(self):
+        self.git("checkout", "-q", "-b", "feature")
+        self.commit("clean.txt", "quiet\n")
+        tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        blob = self.git("rev-parse", "HEAD:clean.txt").stdout.strip()
+        for sha, what in ((tree, "tree"), (blob, "blob")):
+            done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(sha, ref="refs/tags/odd"))
+            self.assertEqual(done.returncode, 1, (what, done.stderr))
+            self.assertIn("peels to a %s" % what, done.stderr)
+        self.git("tag", "-a", "annotated-tree", "-m", "tag of a tree", tree)
+        tag = self.git("rev-parse", "annotated-tree").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tag, ref="refs/tags/annotated-tree"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("peels to a tree", done.stderr)
+
+    def test_a_binary_file_in_a_pushed_commit_blocks_and_names_the_path(self):
+        self.git("checkout", "-q", "-b", "feature")
+        (self.repo / "picture.bin").write_bytes(b"\x00\x01\x02 binary")
+        self.git("add", "picture.bin")
+        self.git("commit", "-q", "-m", "binary", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("binary", done.stderr)
+        self.assertIn("picture.bin", done.stderr)
+
+    def test_a_remote_sha_missing_locally_gives_a_notice_and_the_push_is_still_checked(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("new.txt", "this names fooco\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, "a" * 40))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("remote sha unknown", done.stderr)
+        self.assertIn("run git fetch", done.stderr)
+        self.assertIn("new.txt:1: fooco", done.stderr)
+
+    def test_a_push_to_a_url_is_mapped_to_its_remote_and_uses_that_remotes_tracking_refs(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("fresh.txt", "a brand new line\n")
+        done = self.guard("pre-push", str(self.remote), str(self.remote), stdin=self.push_line(tip), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("a brand new line", self.sent())
+        self.assertNotIn("README", self.sent())
+        self.assertNotIn("hello", self.sent())
+
+    def test_a_push_to_a_url_that_matches_no_remote_is_blocked_with_the_fetch_hint(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("fresh.txt", "a brand new line\n")
+        done = self.guard("pre-push", "/nowhere/else.git", "/nowhere/else.git", stdin=self.push_line(tip))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("matches no configured remote", done.stderr)
+        self.assertEqual(self.calls(), 0)
+
+    def test_the_local_ref_name_is_not_checked_because_it_never_becomes_public(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("clean.txt", "a quiet sentence\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/fooco-local", remote_ref="refs/heads/clean-name"), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_lightweight_tag_on_a_commit_enumerates_its_commits(self):
+        self.git("checkout", "-q", "-b", "feature")
+        tip = self.commit("clean.txt", "a tagged quiet sentence\n")
+        self.git("tag", "light")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/tags/light"), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("a tagged quiet sentence", self.sent())
+
+    def test_a_delete_only_push_makes_no_call_and_a_mixed_push_checks_the_rest(self):
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(ZERO, "a" * 40, ref="refs/heads/gone"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.calls(), 0)
 
     def test_branch_and_tag_names_are_checked(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -528,7 +823,8 @@ class PrePush(Base):
         tag = self.git("rev-parse", "v1").stdout.strip()
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tag, ref="refs/tags/v1"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("TAG-MESSAGE:1: fooco", done.stderr)
+        self.assertIn("TAG-OBJECT:", done.stderr)
+        self.assertIn("fooco", done.stderr)
 
     def test_a_leak_in_a_commit_message_blocks(self):
         self.git("checkout", "-q", "-b", "feature")
