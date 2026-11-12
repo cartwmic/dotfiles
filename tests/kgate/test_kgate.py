@@ -1790,11 +1790,11 @@ class KubectlBlack(unittest.TestCase):
         self.cmd_env = {"KGATE_SSH": ""}
         self.write_cluster()
 
-    def write_cluster(self, name="example", roots=None, drop=(), extra=""):
+    def write_cluster(self, name="example", roots=None, drop=(), extra="", registries='["registry.example", "other.example"]'):
         """~/.config/kgate/clusters/<name>.toml in the test HOME. The temp dirs of these tests are under /tmp on Linux, so that top directory is a tree root here."""
         roots = roots or sorted({"Users", "Volumes", "private", self.repo.parts[1]})
         lines = {"kind": 'kind = "kubectl"', "kubeconfig": 'kubeconfig = "~/.kube/example"', "context": 'context = "example-ctx"', "namespace": 'namespace = "jobs"',
-                 "registries": 'registries = ["registry.example", "other.example"]', "tree_roots": "tree_roots = [%s]" % ", ".join('"%s"' % r for r in roots),
+                 "registries": "registries = " + registries, "tree_roots": "tree_roots = [%s]" % ", ".join('"%s"' % r for r in roots),
                  "user": 'user = "65532:65532"', "deadline_s": "deadline_s = 7200"}
         text = "\n".join(v for k, v in lines.items() if k not in drop) + "\n[pod_labels]\n\"example.org/owner\" = \"team-a\"\n\"example.org/tier\" = \"build\"\n" \
                "[pod_annotations]\n\"example.org/evict-ok\" = \"true\"\n" + extra
@@ -1850,8 +1850,8 @@ class KubectlBlack(unittest.TestCase):
         mounts = [m["mountPath"] for m in manifest["items"][0]["spec"]["containers"][0]["volumeMounts"]]
         self.assertEqual(mounts, ["/" + linked.parts[1], "/cache", "/out"], "no emptyDir for the common dir's top directory")
 
-    def mssql_profile(self, extra="", sql_image="registry.example/db/sql@sha256:" + "ee" * 32, hostnames='["db"]'):
-        self.profile(extra='services = ["mssql"]\nlocal_hostnames = %s\n%s\n[mssql]\nimage = "%s"\nready_s = 60\n[[image_volumes]]\nimage = "registry.example/tools/flyway@sha256:%s"\npath = "/mnt/flyway"\n'
+    def mssql_profile(self, extra="", sql_image="registry.example/db/sql@sha256:" + "ee" * 32, hostnames='["db"]', image=KCL_IMAGE):
+        self.profile(image=image, extra='services = ["mssql"]\nlocal_hostnames = %s\n%s\n[mssql]\nimage = "%s"\nready_s = 60\n[[image_volumes]]\nimage = "registry.example/tools/flyway@sha256:%s"\npath = "/mnt/flyway"\n'
                      % (hostnames, extra, sql_image, "ff" * 32))
 
     def test_mssql_runs_cmd_in_the_job_container_and_the_password_stays_out_of_every_record(self):
@@ -1948,8 +1948,25 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 69)
         self.assertIn("image_volumes image", done.stdout)
 
+    def test_a_registries_entry_may_be_a_host_or_a_host_and_path_prefix(self):
+        self.write_cluster(registries='["registry.example/team/db"]')
+        sql = lambda repo: "registry.example/%s@sha256:%s" % (repo, "ee" * 32)
+        job = sql("team/db/job")
+        self.mssql_profile(sql_image=sql("team/db"), image=job)              # the repository equals the entry
+        self.assertEqual(self.run_kgate("--", "true").returncode, 69)   # the volume image is under tools/, not admitted
+        text = (self.repo / "kgate.toml").read_text().replace("registry.example/tools/flyway", "registry.example/team/db/flyway")
+        (self.repo / "kgate.toml").write_text(text)
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)         # entry + "/" prefix admits the volume, equality admits the sidecar
+        self.mssql_profile(sql_image=sql("team/other"), image=job)           # a sibling repo on the same host
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("[mssql] image", done.stdout)
+        self.assertEqual(K.registry_admits(["h.example/a/b"], "h.example/a/bc@sha256:" + "0" * 64), False)
+        self.assertEqual(K.registry_admits(["h.example"], "h.example/x/y:1"), True)
+
     def test_an_image_volume_may_not_cover_the_cache_out_a_tree_root_or_a_system_directory(self):
-        for path in ("/cache", "/out", "/cache/x", "/Users", "/Users/me/tool", "/", "/usr", "/usr/local/bin", "/etc/x", "/bin", "/sbin", "/lib", "/lib64/x", "/proc", "/sys/x", "/dev/shm"):
+        for path in ("/cache", "/out", "/cache/x", "/Users", "/Users/me/tool", "/", "/usr", "/usr/local/bin", "/etc/x", "/bin", "/sbin", "/lib", "/lib64/x", "/proc", "/sys/x", "/dev/shm", "/./usr", "/.", "/a/../usr", "/usr/", "/a//b", "/opt/./x"):
             with self.subTest(path):
                 self.mssql_profile()
                 text = (self.repo / "kgate.toml").read_text().replace("/mnt/flyway", path)

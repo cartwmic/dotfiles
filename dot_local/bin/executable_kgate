@@ -49,6 +49,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 import re
 import secrets
 import shlex
@@ -100,6 +101,13 @@ MSSQL_PORT = 1433
 MSSQL_UID = 10001            # the SQL Server image's own user
 SERVICE_READY_S = 300        # how long a sidecar has to pass its startup probe
 CLUSTER_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+def registry_admits(regs, ref):
+    """A registries entry is a host or a host plus a path prefix. An image matches when it starts with
+    entry + "/" or when its repository (before @sha256:) equals the entry."""
+    repo = ref.split("@")[0]
+    return any(ref.startswith(r + "/") or repo == r for r in regs)
+
+
 CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default"}
 CLUSTER_REQUIRED = ("kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s")
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
@@ -225,8 +233,8 @@ def parse_profile(text):
     for v in volumes:
         if not re.fullmatch(IMAGE_DIGEST, v["image"]):
             raise Unavailable("profile image_volumes image must be pinned by digest (name@sha256:<64 hex>), got %r" % (v["image"],))
-        if not re.fullmatch(r"/[A-Za-z0-9._][A-Za-z0-9._/-]*", v["path"]) or ".." in v["path"].split("/") or v["path"].endswith("/"):
-            raise Unavailable("profile image_volumes path must be an absolute directory like /opt/tool, got %r" % (v["path"],))
+        if not re.fullmatch(r"/[A-Za-z0-9._][A-Za-z0-9._/-]*", v["path"]) or posixpath.normpath(v["path"]) != v["path"]:
+            raise Unavailable("profile image_volumes path must be an absolute, normalized directory like /opt/tool (no ., .., // or trailing /), got %r" % (v["path"],))
     if len({v["path"] for v in volumes}) != len(volumes):
         raise Unavailable("profile image_volumes paths must be different from each other")
     hostnames = raw.get("local_hostnames", [])
@@ -377,8 +385,8 @@ def load_cluster(name):
     for key in ("kubeconfig", "context", "namespace"):
         if not isinstance(raw[key], str) or not raw[key]:
             raise bad(key, "must be a non-empty string")
-    if not isinstance(raw["registries"], list) or not raw["registries"] or not all(isinstance(r, str) and r and "/" not in r for r in raw["registries"]):
-        raise bad("registries", "must be a non-empty list of image host names (no path)")
+    if not isinstance(raw["registries"], list) or not raw["registries"] or not all(isinstance(r, str) and re.fullmatch(r"[^/@:\s]+(:[0-9]+)?(/[A-Za-z0-9._-]+)*", r) for r in raw["registries"]):
+        raise bad("registries", "must be a non-empty list of image hosts, each optionally followed by a path prefix (registry.example or registry.example/team/db)")
     if not isinstance(raw["tree_roots"], list) or not raw["tree_roots"] or not all(isinstance(r, str) and r and "/" not in r for r in raw["tree_roots"]):
         raise bad("tree_roots", "must be a non-empty list of top-level directory names (no slash)")
     if not isinstance(raw["user"], str) or not re.fullmatch(r"[0-9]+:[0-9]+", raw["user"]) or raw["user"].startswith("0:"):
@@ -1148,11 +1156,11 @@ class Job:
         name, regs = self.kcfg["name"], self.kcfg["registries"]
         if prof["secrets"]:
             raise Unavailable("a profile for cluster %s cannot have [secrets]: no Secrets are created there" % name)
-        if not image.startswith(tuple(r + "/" for r in regs)):
+        if not registry_admits(regs, image):
             raise Unavailable("an image for cluster %s must come from %s (registries in %s), got %s" % (name, " or ".join(regs), self.kcfg["path"], image.split("@")[0]))
         extra = ([("[mssql] image", prof["mssql"]["image"])] if prof["mssql"] else []) + [("image_volumes image", v["image"]) for v in prof["image_volumes"]]
         for what, ref in extra:
-            if not ref.startswith(tuple(r + "/" for r in regs)):
+            if not registry_admits(regs, ref):
                 raise Unavailable("the %s for cluster %s must come from %s (registries in %s), got %s" % (what, name, " or ".join(regs), self.kcfg["path"], ref.split("@")[0]))
         for v in prof["image_volumes"]:
             top = "/" + v["path"].lstrip("/").split("/")[0]
