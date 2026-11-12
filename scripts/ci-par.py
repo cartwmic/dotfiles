@@ -22,8 +22,11 @@ TEST_PROCESSES = 16
 
 
 def available_cpus(cgroup="/sys/fs/cgroup"):
-    """CPUs this process may use: the smallest of the cgroup CPU quota (rounded up), the affinity mask and os.cpu_count().
-    In a pod os.cpu_count() is the node's CPUs, not the pod's limit. No quota or no cgroup file: no cap from that source."""
+    """CI_PAR_JOBS (a positive integer) wins. Otherwise the CPUs this process may use: the smallest of the cgroup CPU quota (rounded up), the affinity mask and os.cpu_count().
+    In a pod os.cpu_count() is the node's CPUs, not the pod's limit, and a kgate pod has a CPU request but no limit, so set CI_PAR_JOBS there. No quota or no cgroup file: no cap from that source."""
+    forced = os.environ.get("CI_PAR_JOBS", "")
+    if forced.isdigit() and int(forced) > 0:
+        return int(forced)
     n = os.cpu_count() or 1
     if hasattr(os, "sched_getaffinity"):
         n = min(n, len(os.sched_getaffinity(0)) or n)

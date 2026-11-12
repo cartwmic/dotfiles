@@ -57,6 +57,16 @@ How it works:
 | 64 | Bad command line, or the id matched no running job or more than one. Nothing was signalled. |
 | 69 | The job was signalled and did not end in `--wait` seconds, or the orphan cleanup could not reach the cluster. |
 
+## The CI `tests` check on kgate (the fallback)
+
+When GitHub's runners fail twice the same infrastructure way, the same check runs on kgate at the same commit; if that run is green, the PR merges with `--admin` (ask #849=A). The check is `scripts/ci-linux.sh`, the command the CI `tests` job runs. The kgate image carries what it needs (chezmoi, zsh, rsync, sqlite3, jq, lsof; `images/kgate` in the homelab repo), and `kgate.toml` pins it. From the PR's worktree:
+
+```sh
+run-and-wake -- kgate --cpu 4 --mem 4Gi --mem-limit 6Gi --wait 1800 -- env CI_PAR_JOBS=4 scripts/ci-linux.sh
+```
+
+`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. Compare the per-suite skipped counts with the GitHub run: a pass that skips tests GitHub runs is not the same check.
+
 ## No fallback; exit codes
 
 | Exit | Meaning |
