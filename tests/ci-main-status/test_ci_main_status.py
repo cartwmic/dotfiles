@@ -55,7 +55,7 @@ GH_FAKE = textwrap.dedent('''\
             sha = path.split("/commits/")[1]
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
             subject = git(src, "log", "-1", "--format=%s", sha).strip()
-            print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject}}))
+            print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}}}))
         elif "/actions/runs/" in path:
             run_id, n = path.split("/actions/runs/")[1].split("/attempts/")
             attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
@@ -305,6 +305,22 @@ class GithubStateTable(Fixture):
         self.assertEqual(self.walked_commits(), [self.c3, self.m, self.c2],
                          "the walk reads the tip, M and c2, then stops at the green; c1 is never read")
 
+    def test_among_one_commits_runs_the_highest_run_id_wins(self):
+        # Review note dotfiles#323 round 3 n1(a). Listed oldest first so the script must order them itself: run 2 passed,
+        # a later dispatch run 5 failed on the same commit, so the commit is red.
+        self.dotfiles_runs([run(2, self.c3, "success", age=1), run(5, self.c3, "failure", age=5, event="workflow_dispatch")])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 5 failed on " + self.c3[:7], out)
+
+    def test_the_walk_stops_at_the_first_pass_even_when_older_commits_have_verdicts(self):
+        # Review note dotfiles#323 round 3 n1(b). c1 holds a verdict too, so the walk is not stopped by running out of
+        # pending verdicts at the first pass. Only the early stop keeps c2 and c1 unread.
+        self.dotfiles_runs([run(1, self.c1, "failure", age=1), run(2, self.m, "success", age=2)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(self.walked_commits(), [self.c3, self.m], "the walk stops at the pass on M; c2 and c1 are never read")
+
     def test_no_run_on_main_means_no_commit_walk(self):
         self.dotfiles_runs([])
         rc, out = self.status("dotfiles")
@@ -531,6 +547,120 @@ class CoordinatorJournal(Fixture):
         rc, out = self.status("coordinator")
         self.assertEqual(rc, 0, out)
         self.assertIn("GREEN", out)
+
+
+class JournalTreeAndFlake(Fixture):
+    """Journal lines with "tree", and the flake verdict. c4 and c5 share a tree; c6 has another."""
+
+    def setUp(self):
+        super().setUp()
+        (self.src / "f").write_text("one")
+        git(self.src, "add", "f")
+        self.c4 = commit(self.src, "c4 adds f")
+        self.c5 = commit(self.src, "c5 same tree as c4")
+        (self.src / "g").write_text("two")
+        git(self.src, "add", "g")
+        self.c6 = commit(self.src, "c6 adds g")
+        self.tree4 = git(self.src, "rev-parse", self.c4 + "^{tree}")
+        self.tree6 = git(self.src, "rev-parse", self.c6 + "^{tree}")
+        self.assertEqual(self.tree4, git(self.src, "rev-parse", self.c5 + "^{tree}"))
+        self.assertNotEqual(self.tree4, self.tree6)
+
+    def rows(self, *rows):
+        self.journal.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    def test_a_pass_on_the_tip_matches_by_tip(self):
+        self.rows({"tip": self.c6, "tree": self.tree6, "verdict": "pass"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  journal line 1 passed on " + self.c6[:7] + "; main tip is tested", out)
+        self.assertNotIn("same tree", out)
+
+    def test_a_pass_with_the_same_tree_as_the_tip_tests_the_tip_and_names_the_line_and_tip(self):
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"})
+        self.git_move_main_to(self.c5)
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"GREEN  journal line 1 (tip {self.c4[:7]}, same tree) passed on {self.c5[:7]}; main tip is tested", out)
+
+    def test_tip_flag_on_a_tree_match_ends_with_the_full_main_tip(self):
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"})
+        self.git_move_main_to(self.c5)
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out.strip().endswith("; tip " + self.c5), out)
+
+    def test_the_walk_back_takes_a_tree_match_on_an_earlier_commit(self):
+        # The tip c6 has no pass. Walking back, c5 has the tree of the passed c4, so the walk stops there.
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("1 main commit(s) after journal line 1 (tip " + self.c4[:7] + ", same tree) (" + self.c5[:7] + ")", out)
+        self.assertEqual(self.walked_commits(), [self.c6, self.c5])
+
+    def test_a_different_tree_is_not_tested(self):
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"})
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("GREEN", out)
+
+    def test_an_old_line_without_a_tree_matches_by_tip_only(self):
+        self.rows({"tip": self.c4, "verdict": "pass"})
+        self.git_move_main_to(self.c5)
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("GREEN", out)
+        self.rows({"tip": self.c5, "verdict": "pass"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  journal line 1 passed on " + self.c5[:7], out)
+
+    def test_a_flake_with_nothing_after_it_is_untested_in_plain_mode_and_names_the_issue(self):
+        self.rows({"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999", "ruled": "t"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("RED", out)
+        self.assertNotIn("GREEN", out)
+        self.assertIn("cartwmic/dotfiles#999", out)
+        self.assertIn("Start a run", out)
+
+    def test_a_flake_followed_by_a_pass_on_the_tip_is_green(self):
+        self.rows({"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999"},
+                  {"tip": self.c6, "tree": self.tree6, "verdict": "pass"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  journal line 2 passed on " + self.c6[:7], out)
+
+    def test_a_flake_never_makes_the_tip_green_under_tip(self):
+        self.rows({"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999"})
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("GREEN", out)
+
+    def test_a_flake_above_an_older_pass_is_still_untested(self):
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"},
+                  {"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("cartwmic/dotfiles#999", out)
+
+    def test_a_flake_does_not_hide_a_red_below_it(self):
+        self.rows({"tip": self.c5, "tree": self.tree4, "verdict": "fail"},
+                  {"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_a_flake_with_a_run_going_says_wait(self):
+        self.rows({"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999"})
+        self.lock.mkdir()
+        (self.lock / "pid").write_text(str(os.getpid()))
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("A run is going; wait for it.", out)
+
+    def git_move_main_to(self, sha):
+        git(self.src, "reset", "-q", "--hard", sha)
 
 
 if __name__ == "__main__":

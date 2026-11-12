@@ -30,9 +30,13 @@ Under --tip the GREEN line ends with the full 40-char tip sha ("tip <sha>"). A d
 --all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab has no main run: "n/a", never affects the code.
 
 GitHub repos: the full workflow's runs on main, read from gh run list (the newest RUN_LIMIT runs).
-coordinator: the coordinator journal, the last conclusive line for each tip (verdict pass or fail) in
+coordinator: the coordinator journal, the last conclusive line for each tip (verdict pass, fail or flake) in
 ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/main-journeys.jsonl, and a run is going while the lock dir
-/tmp/coordinator-main-journeys.lock.d holds a live pid.
+/tmp/coordinator-main-journeys.lock.d holds a live pid. A line may carry "tree" (the tip's tree sha). A commit is
+tested when a pass line has its tip, or a tree equal to the commit's tree (the walk uses this too); the GREEN line then
+names the line and the tip that had the tree. Lines without "tree" match by tip only. A "flake" line (a red tip ruled
+a flake, with "issue") is not red and not tested: plain mode and --tip both exit 2 for a flake with no later pass
+(start a run), because a deploy needs a pass on the tip.
 The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green,
 or once every commit with a verdict has been reached. WALK_CAP is a backstop.
 """
@@ -65,9 +69,14 @@ class Unreadable(Exception):
 
 
 class Record:
-    def __init__(self, tip, verdict, label, rerun_going=False):
-        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass" or "fail"
+    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None):
+        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass", "fail" or (journal) "flake"
         self.rerun_going = rerun_going   # the verdict is an earlier attempt, and a rerun of its run is going
+        self.tree, self.line, self.issue = tree, line, issue   # journal only: the tip's tree, its line number, a flake's issue
+
+    def by_tree(self, sha):
+        """This pass, read as the verdict of another commit `sha` with the same tree."""
+        return Record(sha, "pass", f"{self.label} (tip {self.tip[:7]}, same tree)", tree=self.tree, line=self.line)
 
 
 def gh(args):
@@ -143,7 +152,12 @@ def github_verdicts(spec):
 
 
 def journal_verdicts():
-    """The last conclusive journal line for each tip, as {tip: Record}, and whether a live lock says a run is going."""
+    """The last conclusive journal line for each tip, as {tip: Record}, and whether a live lock says a run is going.
+
+    Conclusive means pass, fail or flake. A line may carry "tree" (the tip's tree sha); a tip whose last line is a
+    pass also tests every commit with that tree. A flake line ({"tip","tree","verdict":"flake","issue","ruled"}) is a
+    red tip ruled a flake: not red, and not tested.
+    """
     verdicts = {}
     if JOURNAL.exists():
         for n, line in enumerate(JOURNAL.read_text().splitlines(), 1):
@@ -155,11 +169,33 @@ def journal_verdicts():
                 raise Unreadable(f"{JOURNAL} line {n} is not JSON: {e}")
             if not isinstance(row, dict):
                 raise Unreadable(f"{JOURNAL} line {n} is not a JSON object")
-            if row.get("verdict") in ("pass", "fail"):
+            if row.get("verdict") in ("pass", "fail", "flake"):
                 if not row.get("tip"):
                     raise Unreadable(f"{JOURNAL} line {n} has a {row['verdict']} verdict and no tip")
-                verdicts[row["tip"]] = Record(row["tip"], row["verdict"], f"journal line {n}")   # the last line wins
+                tree = row.get("tree")
+                if tree is not None and not isinstance(tree, str):
+                    raise Unreadable(f"{JOURNAL} line {n} has a tree that is not a string")
+                verdicts[row["tip"]] = Record(row["tip"], row["verdict"], f"journal line {n}", tree=tree or None,
+                                              line=n, issue=row.get("issue"))   # the last line wins
     return verdicts, lock_alive()
+
+
+def passing_trees(verdicts):
+    """{tree: Record} for the tips whose last line is a pass with a tree. The newest line wins."""
+    trees = {}
+    for rec in sorted(verdicts.values(), key=lambda r: r.line):
+        if rec.verdict == "pass" and rec.tree:
+            trees[rec.tree] = rec
+    return trees
+
+
+def verdict_of(sha, tree, verdicts, trees):
+    """A commit's verdict: its own pass or fail line, else a pass for the same tree, else its flake line, else None."""
+    own = verdicts.get(sha)
+    if own and own.verdict in ("pass", "fail"):
+        return own
+    same_tree = trees.get(tree)
+    return same_tree.by_tree(sha) if same_tree else own
 
 
 def lock_alive():
@@ -171,17 +207,19 @@ def lock_alive():
     return True
 
 
-def first_parent_walk(repo, tip, verdicts):
+def first_parent_walk(repo, tip, verdicts, trees=None):
     """Main's first-parent commits from the tip, newest first, as (sha, subject, Record or None).
 
     The walk stops at the first pass, or once every commit with a verdict has been reached. If it runs out first
     (the root, or WALK_CAP) with a verdict's commit still unreached, that commit is not on main's first-parent
-    history as far as the walk can see, and the state is unreadable.
+    history as far as the walk can see, and the state is unreadable. trees ({tree: pass Record}, journal only) lets a
+    commit take the pass of another tip with the same tree.
     """
+    trees = trees or {}
     walked, pending, cur = [], set(verdicts), tip
     while pending and cur and len(walked) < WALK_CAP:
         c = gh(["api", f"repos/{repo}/commits/{cur}"])
-        rec = verdicts.get(cur)
+        rec = verdict_of(cur, c["commit"].get("tree", {}).get("sha"), verdicts, trees)
         walked.append((cur, c["commit"]["message"].split("\n")[0], rec))
         pending.discard(cur)
         if rec and rec.verdict == "pass":
@@ -195,14 +233,22 @@ def first_parent_walk(repo, tip, verdicts):
     return walked
 
 
-def assess(name, repo, verdicts, going, noun="run", tip_only=False):
+def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None):
     """One repo's state. Returns (exit code, output lines). Used by every repo kind.
 
     tip_only (--tip): green below untested commits is 2 even while a run is going.
     """
     tip = main_tip(repo)
-    walked = first_parent_walk(repo, tip, verdicts)
-    hits = [i for i, (_, _, rec) in enumerate(walked) if rec]
+    walked = first_parent_walk(repo, tip, verdicts, trees)
+    hits = [i for i, (_, _, rec) in enumerate(walked) if rec and rec.verdict != "flake"]
+    flakes = [w for w in walked[:hits[0] if hits else len(walked)] if w[2] and w[2].verdict == "flake"]
+    if flakes and not (hits and walked[hits[0]][2].verdict == "fail"):
+        # A flake ruling is not red and not tested (ask #854: a deploy needs a pass on the tip).
+        sha, _, flake = flakes[0]
+        issue = f" (issue {flake.issue})" if flake.issue else ""
+        lines = [f"{name}: UNTESTED  {flake.label} ruled {sha[:7]} a flake{issue}; a flake is not a pass."]
+        lines.append("  A run is going; wait for it." if going else "  No run is going. Start a run.")
+        return 2, lines
     if not hits:
         where = f"no conclusive {noun} on main; main tip {tip[:7]}"
         if going:
@@ -247,7 +293,8 @@ def check(name, tip_only=False):
         verdicts, going = journal_verdicts()
     else:
         verdicts, going = github_verdicts(spec)
-    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only)
+    trees = passing_trees(verdicts) if "journal" in spec else None
+    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only, trees)
     if "journal" in spec and not verdicts:
         lines.insert(0, f"  (no journal record at {JOURNAL})")
     return code, lines
