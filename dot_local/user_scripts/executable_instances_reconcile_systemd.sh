@@ -1,9 +1,9 @@
 #!/bin/sh
-# instances_reconcile_systemd.sh: Linux twin of instances_reconcile.sh. Makes the coordinator instance match its opt-in flag with a
+# instances_reconcile_systemd.sh: Linux twin of instances_reconcile.sh. Makes each instance (coordinator, retro) match its opt-in flag with a
 # systemd user unit where macOS uses a LaunchAgent. Run by chezmoi on every apply (run_after_75_instances_reconcile.sh.tmpl on Linux); it
-# can also be run by hand with the same environment. Personal profile, coordinator only (Retro and the work coordinator are macOS).
+# can also be run by hand with the same environment. Personal profile only (the work coordinator is macOS, and work Retro is a later change).
 #
-# Desired state comes from the local chezmoi.yaml (data.instances.coordinator.enabled), passed in as INSTANCES_COORDINATOR_ENABLED.
+# Desired state comes from the local chezmoi.yaml (data.instances.<name>.enabled), passed in as INSTANCES_COORDINATOR_ENABLED and INSTANCES_RETRO_ENABLED.
 #   true            opt in: dirs, config (once), the unit file, and start (enable --now). Everything is idempotent.
 #   false or unset  opt out, but only for an instance this script started or adopted (marker). A machine that never opted in is left alone.
 #
@@ -18,8 +18,8 @@
 #   * Every outcome is one status line and exit 0, so a missing checkout or user manager cannot block other chezmoi work. The next run starts over.
 #   * Nothing secret is read, printed or stored here. The repo's own setup script owns tokens.
 #
-# Markers: $INSTANCES_STATE_ROOT (default ~/.local/state/instances)/coordinator.{managed,unit-sha,configuring,status}, as on macOS.
-# Logs: the journal (journalctl --user -u coordinatord), where the macOS unit writes ~/Library/Logs/coordinator/coordinatord.log.
+# Markers: $INSTANCES_STATE_ROOT (default ~/.local/state/instances)/<name>.{managed,unit-sha,configuring,status}, as on macOS.
+# Logs: the journal (journalctl --user -u coordinatord, -u retrod), where the macOS units write ~/Library/Logs/<name>/*.log.
 # Test hooks: INSTANCES_STATE_ROOT, INSTANCES_UNIT_DIR (the unit source), INSTANCES_SYSTEMD_DIR (where the unit is installed), INSTANCES_TOOL_PATH, INSTANCES_TIMEOUT.
 set -u
 
@@ -30,21 +30,27 @@ HOME_DIR=${HOME:-}
 STATE_ROOT=${INSTANCES_STATE_ROOT:-$HOME_DIR/.local/state/instances}
 UNIT_DIR=${INSTANCES_UNIT_DIR:-$HOME_DIR/.local/share/instances/systemd}
 SYSTEMD_DIR=${INSTANCES_SYSTEMD_DIR:-$HOME_DIR/.config/systemd/user}
-# The PATH the unit gives the daemon; the tools it needs must be found on it, not on whatever PATH this script has.
-ITP=${INSTANCES_TOOL_PATH:-$HOME_DIR/.local/share/mise/shims:$HOME_DIR/.local/bin:$HOME_DIR/.t3/bin:/usr/local/bin:/usr/bin:/bin}
+# The PATH the unit gives the daemon (ITP, set per instance); the tools it needs must be found on it, not on whatever PATH this script has.
+COORDINATOR_ITP=${INSTANCES_TOOL_PATH:-$HOME_DIR/.local/share/mise/shims:$HOME_DIR/.local/bin:$HOME_DIR/.t3/bin:/usr/local/bin:/usr/bin:/bin}
+# Retro's unit starts with the Pi copy of op (~/.pi/agent/bin), as its plist does.
+RETRO_ITP=${INSTANCES_TOOL_PATH:-$HOME_DIR/.pi/agent/bin:$HOME_DIR/.local/share/mise/shims:$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin}
 TIMEOUT=${INSTANCES_TIMEOUT:-30}
 CFG_TO=${INSTANCES_CONFIG_TIMEOUT:-120}
 
-NAME=coordinator
-UNIT=coordinatord.service
-STATE=$HOME_DIR/.local/share/coordinator
-MAIN=src/coordinatord/main.ts
-SETUP=scripts/instance-setup.sh
-ENABLED=${INSTANCES_COORDINATOR_ENABLED:-}
-REPO=${INSTANCES_COORDINATOR_REPO:-}
-SRC=$UNIT_DIR/$UNIT
-DST=$SYSTEMD_DIR/$UNIT
-M_MANAGED=$STATE_ROOT/$NAME.managed; M_SHA=$STATE_ROOT/$NAME.unit-sha; M_CONFIGURING=$STATE_ROOT/$NAME.configuring; M_STATUS=$STATE_ROOT/$NAME.status
+select_instance() { # select_instance coordinator|retro: sets the per-instance variables the functions below read
+  NAME=$1
+  case $1 in
+    coordinator)
+      UNIT=coordinatord.service; STATE=$HOME_DIR/.local/share/coordinator; MAIN=src/coordinatord/main.ts; SETUP=scripts/instance-setup.sh
+      ENABLED=${INSTANCES_COORDINATOR_ENABLED:-}; REPO=${INSTANCES_COORDINATOR_REPO:-}; ITP=$COORDINATOR_ITP;;
+    retro)
+      UNIT=retrod.service; STATE=$HOME_DIR/.local/share/retro; MAIN=src/retrod/main.ts; SETUP=scripts/configure.sh
+      ENABLED=${INSTANCES_RETRO_ENABLED:-}; REPO=${INSTANCES_RETRO_REPO:-}; ITP=$RETRO_ITP;;
+  esac
+  SRC=$UNIT_DIR/$UNIT
+  DST=$SYSTEMD_DIR/$UNIT
+  M_MANAGED=$STATE_ROOT/$NAME.managed; M_SHA=$STATE_ROOT/$NAME.unit-sha; M_CONFIGURING=$STATE_ROOT/$NAME.configuring; M_STATUS=$STATE_ROOT/$NAME.status
+}
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/instances.XXXXXX") || exit 0
 trap 'rm -rf "$TMP"' EXIT
@@ -86,7 +92,13 @@ opt_out() {
 
 configure() { # create the instance's config when it has none; returns 0 when config exists afterwards
   [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
-  timeout "$CFG_TO" env PATH="$ITP:$PATH" COORDINATOR_STATE_DIR="$STATE" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?
+  case $NAME in
+    retro)
+      _m=''; [ -n "${INSTANCES_RETRO_CHANNEL_ID:-}" ] || _m="$_m instances.retro.channelId"; [ -n "${INSTANCES_RETRO_OP_ITEM:-}" ] || _m="$_m instances.retro.opItem"
+      [ -z "$_m" ] || { finish "NOT READY: missing$_m (first-time config)"; return 1; }
+      timeout "$CFG_TO" env PATH="$ITP:$PATH" RETRO_STATE_DIR="$STATE" RETRO_CHANNEL_ID="$INSTANCES_RETRO_CHANNEL_ID" RETRO_OP_ITEM="$INSTANCES_RETRO_OP_ITEM" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
+    *) timeout "$CFG_TO" env PATH="$ITP:$PATH" COORDINATOR_STATE_DIR="$STATE" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
+  esac
   case $_rc in
     0) ;;
     3) _why=$(grep -m1 '^NOT-READY:' "$TMP/cfg.out" | cut -c11-210); finish "NOT READY:${_why:- the setup script says it is not ready}"; return 1;;
@@ -99,7 +111,7 @@ configure() { # create the instance's config when it has none; returns 0 when co
 
 opt_in() {
   _miss=''
-  [ -n "$REPO" ] || _miss="$_miss instances.coordinator.repo"
+  [ -n "$REPO" ] || _miss="$_miss instances.$NAME.repo"
   if [ -n "$REPO" ] && [ ! -f "$REPO/$MAIN" ]; then _miss="$_miss checkout($REPO/$MAIN)"; fi
   for _t in node herdr op git; do have "$_t" || _miss="$_miss $_t-on-PATH"; done
   [ -f "$SRC" ] || _miss="$_miss unit($SRC; run chezmoi apply)"
@@ -151,10 +163,12 @@ opt_in() {
   return 0
 }
 
-if [ "${INSTANCES_RETRO_ENABLED:-}" = true ]; then say "retro: not supported on Linux (macOS only); nothing done"; fi
-case $ENABLED in
-  true) opt_in;;
-  false|'') opt_out;;
-  *) say "$NAME: NOT READY: instances.coordinator.enabled must be true or false (found '$ENABLED'); nothing done";;
-esac
+for _n in coordinator retro; do
+  select_instance "$_n"
+  case $ENABLED in
+    true) opt_in;;
+    false|'') opt_out;;
+    *) say "$NAME: NOT READY: instances.$NAME.enabled must be true or false (found '$ENABLED'); nothing done";;
+  esac
+done
 exit 0
