@@ -5,6 +5,10 @@
 .local/user_scripts/update_claude_settings.sh
 .local/user_scripts/reset_claude_settings.sh
 
+# Retired 2026-11-12: retrod's systemd unit (Retro now runs as a durable lead; #351 deleted the template). Personal only: the work Mac
+# never had the unit. Prune once the personal machines have applied.
+.local/share/instances/systemd/retrod.service
+
 {{ end -}}
 # Retired 2026-10-29: the Pi recap extension (/recap and automatic periodic,
 # final-response and before-compaction recaps). Its automatic recaps flooded the
