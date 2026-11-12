@@ -176,6 +176,12 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
+# 1Password windows in screen shares on the Omarchy box (Hyprland): personal Linux only. The work profile has no Linux desktop.
+.config/hypr
+.config/hypr/**
+{{- end }}
+
+{{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
 # The agent Chrome login unit (agent-chrome.service) and the script that loads it: personal Linux only. macOS gets Chrome started by hand.
 .config/systemd/user/agent-chrome.service
 78_agent_chrome_systemd.sh
