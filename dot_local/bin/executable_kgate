@@ -1051,11 +1051,18 @@ class Job:
         self.kcfg = None
         self.t_pod = time.time()
         self.mssql = None       # the SQL Server sidecar's settings, when the profile asks for one
-        self.secret = None      # its generated password: kept out of the log, the record and every message
+        self.secret = None      # its generated password: kept out of the log, the record and every message (see mask())
+        self.carry = b""        # the end of the last chunk, held back in case it is the start of the password
 
-    def emit(self, data):
-        if self.secret:
-            data = data.replace(self.secret.encode(), b"***")
+    def mask(self, data):
+        """The one place the generated password is removed. Everything that is stored or printed goes through here: the job log, the console and the record's reason."""
+        if not self.secret:
+            return data
+        if isinstance(data, str):
+            return data.replace(self.secret, "***")
+        return data.replace(self.secret.encode(), b"***")
+
+    def _put(self, data):
         self.log.write(data)
         if self.console:
             try:
@@ -1064,8 +1071,26 @@ class Job:
             except BrokenPipeError:
                 self.console = False
 
+    def emit(self, data):
+        """Write a chunk of a stream. A password split across two reads is still masked: the end of a chunk that could start it is held back until the next chunk (or flush())."""
+        data = self.carry + data
+        self.carry = b""
+        if self.secret:
+            data = self.mask(data)
+            key = self.secret.encode()
+            for k in range(min(len(key) - 1, len(data)), 0, -1):
+                if data.endswith(key[:k]):
+                    data, self.carry = data[:-k], data[-k:]
+                    break
+        self._put(data)
+
+    def flush(self):
+        carry, self.carry = self.carry, b""
+        self._put(carry)
+
     def note(self, text):
-        self.emit(("kgate: " + text + "\n").encode())
+        self.flush()
+        self._put(self.mask(("kgate: " + text + "\n").encode()))
 
     def register(self):
         """Write (or rewrite) this job's entry in the running-jobs registry. Removed by unregister()."""
@@ -1131,7 +1156,7 @@ class Job:
                 raise Unavailable("the %s for cluster %s must come from %s (registries in %s), got %s" % (what, name, " or ".join(regs), self.kcfg["path"], ref.split("@")[0]))
         for v in prof["image_volumes"]:
             top = "/" + v["path"].lstrip("/").split("/")[0]
-            if v["path"] in ("/", "/cache", "/out") or top in ("/cache", "/out", "/proc", "/sys", "/dev") or top[1:] in self.kcfg["tree_roots"]:
+            if v["path"] in ("/", "/cache", "/out") or top in ("/cache", "/out", "/proc", "/sys", "/dev", "/usr", "/etc", "/bin", "/sbin") or top.startswith("/lib") or top[1:] in self.kcfg["tree_roots"]:
                 raise Unavailable("image_volumes path %s is where the pod keeps the cache, /out, the shipped tree or the system; use another directory" % v["path"])
         if int(prof["user"].split(":")[0]) == 0:
             raise Unavailable("a pod on cluster %s runs as non-root; the profile user is %s" % (name, prof["user"]))
@@ -1289,6 +1314,7 @@ class Job:
                 for chunk in iter(lambda: stream.read(65536), b""):
                     self.emit(chunk)
                     markers.feed(chunk)
+            self.flush()
             markers.close()
             feeder.join()
             self.exec_tail = markers.tail
@@ -1405,6 +1431,7 @@ class Job:
 
     def finish(self, code, reason):
         end = time.time()
+        reason = self.mask(reason) if reason else reason
         self.rec.update({"end": utc(end), "duration_s": round(end - self.t0, 3), "exit": code, "reason": reason})
         with open(os.path.join(self.state, "log.jsonl"), "a") as f:
             f.write(json.dumps(self.rec) + "\n")

@@ -1163,6 +1163,10 @@ if a[:2] == ["create", "-f"]:
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
     if quota == "impossible":   # asks for more than the namespace's own limit: waiting cannot help
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: limits.cpu=16,requests.cpu=2, used: limits.cpu=0,requests.cpu=0, limited: limits.cpu=8,requests.cpu=8\n'); sys.exit(1)
+    if os.environ.get("FAKE_CREATE_ECHO_PW"):   # a refusal that echoes the pod spec's SA password back, as an API error might
+        pw = next(e["value"] for i in json.load(sys.stdin)["items"] for c in i["spec"].get("initContainers", []) for e in c["env"] if e["name"] == "MSSQL_SA_PASSWORD")
+        open(os.path.join(fake, "echoed_pw"), "w").write(pw)
+        sys.stderr.write("Error from server (Invalid): pod spec rejected: env MSSQL_SA_PASSWORD=%s\n" % pw); sys.exit(1)
     if os.environ.get("FAKE_CREATE_ERROR"):
         text = os.environ["FAKE_CREATE_ERROR"]
         sys.stderr.write((text if text != "1" else "Error from server (Forbidden): pods is forbidden: violates PodSecurity") + "\n"); sys.exit(1)
@@ -1888,6 +1892,47 @@ class KubectlBlack(unittest.TestCase):
         pw = manifest["items"][0]["spec"]["initContainers"][0]["env"][1]["value"]
         self.assertNotIn(pw, done.stdout + (done.stderr or ""))
         self.assertTrue(self.records()[-1]["cleanup"])
+        self.assert_password_nowhere(pw, done)
+        self.assertIn("password ***", self.records()[-1]["reason"])
+        cancel = self.kgate("cancel", self.records()[-1]["id"], host="", env=self.cmd_env)   # reads the record back and prints it
+        self.assertNotIn(pw, cancel.stdout + (cancel.stderr or ""))
+
+    def assert_password_nowhere(self, pw, done):
+        """The real generated password is in no state file (log.jsonl, the job log, the registry), nor in stdout or stderr."""
+        files = {str(p.relative_to(self.state)): p.read_text(errors="replace") for p in self.state.rglob("*") if p.is_file()}
+        self.assertIn("kgate/log.jsonl", files)
+        for name, text in files.items():
+            self.assertNotIn(pw, text, name)
+        self.assertNotIn(pw, done.stdout + (done.stderr or ""))
+
+    def test_a_pod_create_refusal_that_echoes_the_password_is_masked_in_the_record_and_output(self):
+        self.mssql_profile()
+        done = self.run_kgate("--", "true", env={"FAKE_CREATE_ECHO_PW": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("could not create the pod", done.stdout)
+        self.assertIn("MSSQL_SA_PASSWORD=***", done.stdout)
+        self.assertIn("MSSQL_SA_PASSWORD=***", self.records()[-1]["reason"])
+        pw = (self.fake / "echoed_pw").read_text()
+        self.assertRegex(pw, r"^Aa1_[0-9a-f]{32}$")
+        self.assert_password_nowhere(pw, done)
+        cancel = self.kgate("cancel", self.records()[-1]["id"], host="", env=self.cmd_env)
+        self.assertNotIn(pw, cancel.stdout + (cancel.stderr or ""))
+
+    def test_a_password_split_across_two_pipe_reads_is_masked(self):
+        pw = "Aa1_" + "0123456789abcdef" * 2
+        for cut in range(1, len(pw)):
+            with self.subTest(cut=cut):
+                job = object.__new__(K.Job)
+                job.secret, job.carry, job.console = pw, b"", False
+                job.log = tempfile.TemporaryFile()
+                self.addCleanup(job.log.close)
+                for chunk in (b"before " + pw[:cut].encode(), pw[cut:].encode() + b" after, " + pw.encode() + b" again " + pw[:5].encode()):
+                    job.emit(chunk)
+                job.flush()
+                job.log.seek(0)
+                out = job.log.read()
+                self.assertNotIn(pw.encode(), out)
+                self.assertEqual(out, b"before *** after, *** again " + pw[:5].encode())
 
     def test_the_sidecar_image_and_the_volume_images_must_come_from_the_cluster_registries(self):
         self.mssql_profile(sql_image="mcr.example/db/sql@sha256:" + "ee" * 32)
@@ -1903,8 +1948,8 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 69)
         self.assertIn("image_volumes image", done.stdout)
 
-    def test_an_image_volume_may_not_cover_the_cache_out_or_a_tree_root(self):
-        for path in ("/cache", "/out", "/cache/x", "/Users", "/Users/me/tool"):
+    def test_an_image_volume_may_not_cover_the_cache_out_a_tree_root_or_a_system_directory(self):
+        for path in ("/cache", "/out", "/cache/x", "/Users", "/Users/me/tool", "/", "/usr", "/usr/local/bin", "/etc/x", "/bin", "/sbin", "/lib", "/lib64/x", "/proc", "/sys/x", "/dev/shm"):
             with self.subTest(path):
                 self.mssql_profile()
                 text = (self.repo / "kgate.toml").read_text().replace("/mnt/flyway", path)
