@@ -644,6 +644,38 @@ class JournalTreeAndFlake(Fixture):
         self.assertEqual(rc, 2, out)
         self.assertIn("cartwmic/dotfiles#999", out)
 
+    def test_a_flake_ruling_cannot_make_the_tip_tested_through_an_older_same_tree_pass(self):
+        # Review dotfiles#342 b1: c4 pass, c5 (same tree) fail, c5 flake. Main at c5. Without the flake line this is RED.
+        self.git_move_main_to(self.c5)
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"},
+                  {"tip": self.c5, "tree": self.tree4, "verdict": "fail"})
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 1, out)
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"},
+                  {"tip": self.c5, "tree": self.tree4, "verdict": "fail"},
+                  {"tip": self.c5, "tree": self.tree4, "verdict": "flake", "issue": "cartwmic/dotfiles#999"})
+        rc, out = self.status("--tip", "coordinator")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("GREEN", out)
+        self.assertIn("cartwmic/dotfiles#999", out)
+
+    def test_a_same_tree_pass_after_a_flake_or_fail_tests_the_commit(self):
+        self.git_move_main_to(self.c5)
+        for own in ("fail", "flake"):
+            self.rows({"tip": self.c5, "tree": self.tree4, "verdict": own, "issue": "cartwmic/dotfiles#999"},
+                      {"tip": self.c4, "tree": self.tree4, "verdict": "pass"})
+            rc, out = self.status("--tip", "coordinator")
+            self.assertEqual(rc, 0, own + out)
+
+    def test_a_commits_own_fail_beats_an_earlier_same_tree_pass(self):
+        # Review dotfiles#342 n1.
+        self.git_move_main_to(self.c5)
+        self.rows({"tip": self.c4, "tree": self.tree4, "verdict": "pass"},
+                  {"tip": self.c5, "tree": self.tree4, "verdict": "fail"})
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  journal line 2 failed on " + self.c5[:7], out)
+
     def test_a_flake_does_not_hide_a_red_below_it(self):
         self.rows({"tip": self.c5, "tree": self.tree4, "verdict": "fail"},
                   {"tip": self.c6, "tree": self.tree6, "verdict": "flake", "issue": "cartwmic/dotfiles#999"})

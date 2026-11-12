@@ -7,7 +7,7 @@ usage: ci-main-status [--tip] REPO     (dotfiles, loop-engine, agent-kit, coordi
 --tip is for deploy. Without it, green means "not red": the newest conclusive commit passed, and untested commits
 may sit on top while a run is going. That is right for the merge freeze. With --tip, exit 0 needs main's tip itself
 to have a conclusive pass. A green commit below untested commits is 2 even while a run is going (the message says
-whether one is). Red is still 1. Everything else is unchanged. The coordinator journal matches by tip sha, so it
+whether one is). Red is still 1. Everything else is unchanged. The coordinator journal matches by tip sha or by tree (see below), so it
 follows the same rule.
 
 Verdicts belong to commits, not to times. The script walks main's first-parent line from the tip, newest first.
@@ -190,12 +190,18 @@ def passing_trees(verdicts):
 
 
 def verdict_of(sha, tree, verdicts, trees):
-    """A commit's verdict: its own pass or fail line, else a pass for the same tree, else its flake line, else None."""
+    """A commit's verdict: its own pass; else a same-tree pass that comes after its own line (or any, if it has none);
+    else its own fail or flake line; else None.
+
+    An older same-tree pass never overrides the commit's own newer fail or flake, so a ruling cannot make the tip tested.
+    """
     own = verdicts.get(sha)
-    if own and own.verdict in ("pass", "fail"):
+    if own and own.verdict == "pass":
         return own
     same_tree = trees.get(tree)
-    return same_tree.by_tree(sha) if same_tree else own
+    if same_tree and (own is None or same_tree.line > own.line):
+        return same_tree.by_tree(sha)
+    return own
 
 
 def lock_alive():
