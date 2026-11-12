@@ -50,6 +50,12 @@ GH_FAKE = textwrap.dedent('''\
                 subject = git(src, "log", "-1", "--format=%s", sha).strip()
                 commits.append({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject}})
             print(json.dumps({"status": "ahead", "total_commits": len(commits), "commits": commits}))
+        elif "/actions/runs/" in path:
+            run_id, n = path.split("/actions/runs/")[1].split("/attempts/")
+            attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
+            if attempt is None:
+                fail(f"HTTP 404: no fixture for run {run_id} attempt {n}")
+            print(json.dumps(attempt))
         else:
             fail("fake gh: unhandled " + path)
     else:
@@ -69,11 +75,14 @@ def commit(path, msg):
     return git(path, "rev-parse", "HEAD")
 
 
-def run(run_id, sha, conclusion=None, status="completed", event="push", age=0):
-    """One gh run list row. Newer runs have a larger age."""
+def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None):
+    """One gh run list row. Newer runs have a larger age. A rerun keeps its created time; its started time
+    (started_age, default age) is when the latest attempt started."""
+    started = age if started_age is None else started_age
     return {"databaseId": run_id, "event": event, "headSha": sha, "status": status,
-            "conclusion": conclusion if status == "completed" else "",
-            "createdAt": f"2026-11-11T10:{age:02d}:00Z", "url": ""}
+            "conclusion": conclusion if status == "completed" else "", "attempt": attempt,
+            "createdAt": f"2026-11-11T10:{age:02d}:00Z", "startedAt": f"2026-11-11T10:{started:02d}:00Z",
+            "url": ""}
 
 
 class Fixture(unittest.TestCase):
@@ -92,7 +101,8 @@ class Fixture(unittest.TestCase):
         self.m = git(self.src, "rev-parse", "HEAD")
         self.c3 = commit(self.src, "c3 squash")
         self.runs = {}
-        self.fail = []
+        self.failing = []
+        self.attempts = {}                           # run id -> {attempt number -> attempts API row}
         self.journal = t / "journal.jsonl"           # absent unless a test writes it
         self.lock = t / "lock.d"
         self.log = t / "gh.log"
@@ -110,7 +120,7 @@ class Fixture(unittest.TestCase):
     def write_fixture(self):
         repos = {r: str(self.src) for r in ("cartwmic/dotfiles", "cartwmic/loop-engine", "cartwmic/agent-kit", "cartwmic/coordinator")}
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
-            {"repos": repos, "runs": self.runs, "fail": self.fail}))
+            {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -140,11 +150,56 @@ class GithubStateTable(Fixture):
         self.assertIn("2 main commit(s)", out, "M and c3; the side commit s1 is not on main's first-parent line")
         self.assertIn("Start one", out)
 
-    def test_untested_commits_with_a_run_going_exit_0(self):
+    def test_first_attempt_run_going_over_untested_commits_exit_0(self):
+        # A new run on c3 with no red before it: the green on c2 stands, and the run is going.
         self.dotfiles_runs([run(2, self.c3, status="queued", age=5), run(1, self.c2, "success", age=1)])
         rc, out = self.status("dotfiles")
         self.assertEqual(rc, 0, out)
         self.assertIn("2 main commit(s) not tested yet, a run is going", out)
+
+    def test_rerun_of_a_red_run_going_over_untested_commits_exit_1(self):
+        # Same run id, attempt 2 in progress, after attempt 1 failed. It must not read as the older green.
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(2, self.c3, status="in_progress", age=5, attempt=2), run(1, self.c2, "success", age=1)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 2 attempt 1 failed on " + self.c3[:7] + "  (a rerun is going)", out)
+        self.assertIn("last green: " + self.c2[:7], out)
+        expected = git(self.src, "log", "--first-parent", "--oneline", f"{self.c2}..{self.c3}").splitlines()
+        self.assertEqual(self.range_lines(out), expected)
+
+    def test_rerun_of_a_red_run_with_no_earlier_green_exit_1(self):
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(2, self.c3, status="in_progress", age=5, attempt=2)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 2 attempt 1 failed on " + self.c3[:7], out)
+        self.assertIn("no earlier green run", out)
+
+    def test_rerun_of_a_green_run_is_green_and_names_the_rerun(self):
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "success"}}}
+        self.dotfiles_runs([run(2, self.c3, status="in_progress", age=5, attempt=2), run(1, self.c2, "success", age=1)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 2 attempt 1 passed on " + self.c3[:7] + "; main tip is tested", out)
+
+    def test_a_red_rerun_is_not_hidden_by_a_newer_run_at_the_same_tip(self):
+        # Run 3 failed at c3, a dispatch (run 4) then passed at c3, and run 3 was rerun. The rerun started last.
+        self.attempts = {"3": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(4, self.c3, "success", age=4, event="workflow_dispatch"),
+                            run(3, self.c3, status="in_progress", age=3, attempt=2, started_age=6),
+                            run(1, self.c2, "success", age=1)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 3 attempt 1 failed on " + self.c3[:7] + "  (a rerun is going)", out)
+
+    def test_rerun_reads_the_last_conclusive_attempt_past_a_cancelled_one(self):
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "failure"},
+                               "2": {"status": "completed", "conclusion": "cancelled"}}}
+        self.dotfiles_runs([run(2, self.c3, status="in_progress", age=5, attempt=3)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 2 attempt 1 failed on " + self.c3[:7], out)
 
     def test_red_exits_1_with_first_parent_range_and_ignores_cancelled_and_running(self):
         self.dotfiles_runs([
@@ -179,7 +234,7 @@ class GithubStateTable(Fixture):
         self.assertIn("A run is going; wait for it", out)
 
     def test_unreadable_state_exits_1_never_0(self):
-        self.fail = ["cartwmic/dotfiles"]
+        self.failing = ["cartwmic/dotfiles"]
         rc, out = self.status("dotfiles")
         self.assertEqual(rc, 1, out)
         self.assertIn("cannot read state", out)
@@ -219,6 +274,17 @@ class AllAndHomelab(Fixture):
         self.assertIn("homelab: n/a", out)
         calls = self.log.read_text() if self.log.exists() else ""
         self.assertEqual(calls, "", "homelab must not call gh")
+
+    def test_missing_gh_is_one_error_line_per_repo_and_all_keeps_going(self):
+        empty = Path(self.tmp.name) / "empty"
+        empty.mkdir()
+        self.env["PATH"] = str(empty)
+        rc, out = self.status("--all")
+        self.assertEqual(rc, 1, out)
+        for name in ("dotfiles", "loop-engine", "agent-kit", "coordinator"):
+            self.assertIn(f"{name}: ERROR  cannot read state: gh could not start", out)
+        self.assertIn("homelab: n/a", out)
+        self.assertNotIn("Traceback", out)
 
 
 class CoordinatorJournal(Fixture):
@@ -278,6 +344,24 @@ class CoordinatorJournal(Fixture):
         self.journal.write_text("{not json\n")
         rc, out = self.status("coordinator")
         self.assertEqual(rc, 1, out)
+
+    def test_journal_row_with_a_verdict_and_no_tip_exits_1_in_one_line(self):
+        self.journal.write_text(json.dumps({"verdict": "pass"}) + "\n")
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("has a pass verdict and no tip", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_journal_path_follows_xdg_state_home_without_an_override(self):
+        state = Path(self.tmp.name) / "xdg"
+        (state / "coordinator-ci").mkdir(parents=True)
+        (state / "coordinator-ci" / "main-journeys.jsonl").write_text(
+            json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
+        del self.env["CI_MAIN_STATUS_JOURNAL"]
+        self.env["XDG_STATE_HOME"] = str(state)
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN", out)
 
 
 if __name__ == "__main__":

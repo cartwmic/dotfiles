@@ -6,7 +6,8 @@ name: CI
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 #
 # Every PR runs `tests` (the fast check). Main runs (push, and workflow_dispatch to start an untested main
-# by hand) run `tests` and `mise-tests`. `scripts/ci-main-status` reads the main runs.
+# by hand) run `tests` and `mise-tests`. `~/.local/bin/ci-main-status` (source: dot_local/bin/executable_ci-main-status)
+# reads the main runs.
 
 on:
   pull_request:
