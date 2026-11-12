@@ -2,9 +2,14 @@
 # Start the dedicated Chrome that the browser-harness MCP server attaches to (docs: agent-harness README, "Agent browser").
 # Own profile directory, remote debugging on 127.0.0.1:9333. Does nothing if that port already answers.
 # Every run appends its outcome to ${XDG_STATE_HOME:-~/.local/state}/agent-chrome/agent-chrome.log; Chrome's own output goes to chrome.log.
+#   agent-chrome              start Chrome in the background and wait for the port (hand use).
+#   agent-chrome --stop       end every Chrome that uses the agent profile and wait until the port stops answering.
+#   agent-chrome --foreground exec Chrome as this process (agent-chrome.service runs it so: systemd then owns Chrome, stop ends it).
 set -eu
 
 SCRIPT_NAME="agent-chrome"
+MODE="${1:-}"
+case "$MODE" in ""|--stop|--foreground) ;; *) echo "usage: agent-chrome [--stop|--foreground]" >&2; exit 2 ;; esac
 OS="${AGENT_CHROME_OS:-$(uname -s)}"   # test hook; macOS and Linux (Omarchy, Wayland) are the two targets
 if [ "$OS" = Linux ]; then
   DEFAULT_APP=/usr/bin/google-chrome-stable
@@ -33,7 +38,29 @@ log() {
 
 up() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; }
 
+# --stop: SIGTERM every process whose command line carries the agent profile (Chrome moves its browser process out of any unit's cgroup,
+# so the profile is the only reliable handle), wait for them and for the port to go quiet, then SIGKILL what is left.
+if [ "$MODE" = --stop ]; then
+  pattern="--user-data-dir=$PROFILE"
+  gone() { ! pgrep -f -- "$pattern" >/dev/null 2>&1 && ! up; }
+  pkill -f -- "$pattern" >/dev/null 2>&1 || true
+  i=0
+  while ! gone && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+  if ! gone; then
+    pkill -9 -f -- "$pattern" >/dev/null 2>&1 || true
+    i=0
+    while ! gone && [ "$i" -lt 50 ]; do i=$((i + 1)); sleep 0.1; done
+  fi
+  gone || { log ERROR "Chrome on profile $PROFILE or port $PORT is still there after SIGKILL"; exit 1; }
+  log INFO "no Chrome on profile $PROFILE, port $PORT is quiet"
+  exit 0
+fi
+
 if up; then
+  if [ "$MODE" = --foreground ]; then
+    log ERROR "port $PORT already answers; run agent-chrome --stop first"
+    exit 1
+  fi
   log INFO "Chrome already answers on port $PORT"
   exit 0
 fi
@@ -58,6 +85,17 @@ if [ "$OS" = Linux ]; then
 fi
 
 mkdir -p "$PROFILE"
+if [ "$MODE" = --foreground ]; then
+  log INFO "running Chrome in the foreground on port $PORT, profile $PROFILE"
+  exec "$APP" \
+    --remote-debugging-port="$PORT" \
+    --user-data-dir="$PROFILE" \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-search-engine-choice-screen \
+    "$@" \
+    about:blank >"$STATE/chrome.log" 2>&1
+fi
 log INFO "starting Chrome on port $PORT, profile $PROFILE"
 nohup "$APP" \
   --remote-debugging-port="$PORT" \

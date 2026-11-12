@@ -1,19 +1,20 @@
 # Starts the agent Chrome at login (see ~/.local/bin/agent-chrome and the agent-harness README, "Agent browser"): the browser-harness MCP server attaches to it on
-# port 9333, and nothing else starts it after a reboot. Oneshot with RemainAfterExit: agent-chrome starts Chrome with nohup and exits, Chrome stays in this
-# unit's cgroup, so "systemctl --user restart agent-chrome" restarts Chrome and "stop" closes it. It needs the Wayland socket, so it follows
-# graphical-session.target (active under uwsm). Restart=on-failure retries a start that failed (no display yet); the start limit stops the retries.
-# Check: systemctl --user status agent-chrome, curl -s http://127.0.0.1:9333/json/version. Output: journalctl --user -u agent-chrome.
+# port 9333, and nothing else starts it after a reboot. The unit owns Chrome: ExecStartPre ends any Chrome on the agent profile (one started by hand, or one still
+# dying from the last stop; Chrome moves its browser process out of any unit's cgroup, so the profile is the handle) and waits until port 9333 is quiet, then
+# ExecStart runs Chrome as the unit's main process. So "systemctl --user restart agent-chrome" always ends in a new Chrome, and "stop" closes it.
+# It needs the Wayland socket, so it follows graphical-session.target (active under uwsm). Restart=on-failure retries a Chrome that failed (no display
+# yet, a crash); the start limit (20 in 300s, room for hand restarts) stops the retries. Check: systemctl --user status agent-chrome, curl -s http://127.0.0.1:9333/json/version. Output: journalctl --user -u agent-chrome.
 [Unit]
 Description=agent Chrome (remote debugging on port 9333)
 PartOf=graphical-session.target
 After=graphical-session.target
 StartLimitIntervalSec=300
-StartLimitBurst=5
+StartLimitBurst=20
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=%h/.local/bin/agent-chrome
+Type=simple
+ExecStartPre=%h/.local/bin/agent-chrome --stop
+ExecStart=%h/.local/bin/agent-chrome --foreground
 Restart=on-failure
 RestartSec=10
 
