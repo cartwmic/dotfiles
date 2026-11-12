@@ -10,6 +10,9 @@ and `agent-events status` is `agent-traces pi status`.
   load script are `Library/LaunchAgents/local.agent-events.plist.tmpl` and
   `run_onchange_after_70_agent_events_launchd.sh.tmpl`; the settings are chezmoi data `agentEvents`
   (`.chezmoitemplates/agent_events_config`).
+- On Linux (personal) `agent-events.timer` starts `agent-events.service` every 2 minutes with the same settings: units
+  `dot_config/systemd/user/agent-events.{service.tmpl,timer}`, load script `run_onchange_after_77_agent_events_systemd.sh.tmpl`.
+  Logs: `journalctl --user -u agent-events`. The load script skips WSL.
 - The database is `~/.local/share/agent-traces/pi/events.sqlite`. The state directory is
   `~/.local/state/agent-events` (`export_state.json`, `status.json`, `agent.log`, the lock).
 - The pinned agent-kit install is `65_agent_kit_install.sh` (chezmoi data `agentKit`).

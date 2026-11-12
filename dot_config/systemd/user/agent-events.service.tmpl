@@ -1,0 +1,14 @@
+{{- $agentEvents := includeTemplate "agent_events_config" . | fromJson -}}
+# agent-events exporter tick on Linux (personal; .chezmoiignore): one incremental build, then an aggregate-metrics push to the homelab OTel collector.
+# Linux twin of Library/LaunchAgents/local.agent-events.plist.tmpl: same command, same settings (chezmoi data agentEvents,
+# .chezmoitemplates/agent_events_config). agent-events.timer starts it every 2 minutes. Output goes to the journal: journalctl --user -u agent-events.
+# Nice=10 like the LaunchAgent: a tick takes a few seconds and must not compete with real work.
+[Unit]
+Description=agent-events exporter (Pi session metrics to the homelab OTel collector)
+
+[Service]
+Type=oneshot
+Nice=10
+Environment="AGENT_EVENTS_OTLP_ENDPOINT={{ $agentEvents.endpoint }}"
+Environment="AGENT_EVENTS_MACHINE={{ $agentEvents.machine }}"
+ExecStart=/bin/sh %h/.local/bin/agent-events run
