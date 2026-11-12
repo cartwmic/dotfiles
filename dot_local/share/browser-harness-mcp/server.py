@@ -2,7 +2,7 @@
 
 Run it as:  uvx --from browser-use==1.0.2 python -I server.py   (servers.json.tmpl does).
 
-It starts `browser-use --cli-mcp` (tools: browser_exec, browser_screenshot, browser_login, browser_feedback) and changes three things,
+It starts `browser-use --cli-mcp` (tools: browser_exec, browser_screenshot, browser_login, browser_feedback) and changes four things,
 each found failing when several agents shared one Chrome:
 
 1. Own tab. The stock server uses one daemon, named "default", for every MCP process on the machine, and the daemon keeps ONE current
@@ -18,9 +18,13 @@ each found failing when several agents shared one Chrome:
    browser_exec and browser_screenshot, and again inside every CDP call the helpers make: a tab that closes in the middle of one long
    call (wait_for_load, wait_for_element) can still make that one call answer on the replacement page; the next call is refused.
    A dead daemon that is restarted is not detected (it attaches to a fresh about:blank).
+4. ensure_real_tab() no longer switches tabs. The server's own startup instructions tell agents "if the current tab is stale or internal, call
+   ensure_real_tab()", and the stock helper attaches to the first real page in Chrome: another agent's tab, or one a person has open. It also
+   goes through switch_tab, which would lift the closed-tab refusal. Here it reports the current tab, and refuses like every other call when
+   that tab is closed.
 
 The patches reach into private names of browser-use (CLIMCPServer._attach, _ensure_namespace) and browser-harness (helpers.cdp, new_tab,
-switch_tab, close_tab, current_tab, _send). They hold only while the two packages stay pinned together as below. At start the launcher
+switch_tab, close_tab, current_tab, ensure_real_tab, _send). They hold only while the two packages stay pinned together as below. At start the launcher
 checks that the installed versions equal the pins and that every one of those names exists (browser_harness._ipc.identify too); if not it exits 1 at once and names what is
 missing, so a bump fails when the MCP server starts and not as a silently dropped click. After a bump, change PINS and re-run
 tests/agent-browser.
@@ -35,7 +39,8 @@ import threading
 PINS = {"browser-use": "1.0.2", "browser-harness": "0.1.13"}  # servers.json.tmpl pins browser-use; it pins browser-harness itself
 PATCHED = (("browser_use.mcp.cli_mcp", "CLIMCPServer._attach"), ("browser_use.mcp.cli_mcp", "CLIMCPServer._ensure_namespace"),
            ("browser_harness.helpers", "cdp"), ("browser_harness.helpers", "new_tab"), ("browser_harness.helpers", "switch_tab"),
-           ("browser_harness.helpers", "close_tab"), ("browser_harness.helpers", "current_tab"), ("browser_harness.helpers", "_send"), ("browser_harness._ipc", "identify"))
+           ("browser_harness.helpers", "close_tab"), ("browser_harness.helpers", "current_tab"), ("browser_harness.helpers", "ensure_real_tab"),
+           ("browser_harness.helpers", "_send"), ("browser_harness._ipc", "identify"))
 
 NAME = os.environ.setdefault("BU_NAME", "mcp-%d" % os.getpid())  # before browser_harness is imported: it reads BU_NAME at import
 OWN = NAME == "mcp-%d" % os.getpid()
@@ -86,9 +91,13 @@ class Tab:
 _raw_cdp = helpers.cdp
 
 
+CDP_TIMEOUT = 20.0  # what browser-use's own cdp wrapper waits (browser_use.repl.capture.CDP_TIMEOUT_S); harness's raw call gives up after 5 s
+
+
 def _exists(target_id):
     # Target.getTargets takes no session, so asking cannot make the daemon re-attach to another page (a session command would).
-    return any(t["targetId"] == target_id and t["type"] == "page" for t in _raw_cdp("Target.getTargets")["targetInfos"])
+    return any(t["targetId"] == target_id and t["type"] == "page"
+               for t in _raw_cdp("Target.getTargets", _response_timeout=CDP_TIMEOUT)["targetInfos"])
 
 
 def _refuse():
@@ -108,7 +117,14 @@ def cdp(method, *args, **kwargs):
 def _emulate():
     # With a native dialog open the page's thread is frozen, so leave the tab alone until the agent handles the dialog.
     if not helpers._send({"meta": "pending_dialog"}).get("dialog"):
-        _raw_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+        _raw_cdp("Emulation.setFocusEmulationEnabled", enabled=True, _response_timeout=CDP_TIMEOUT)
+
+
+def ensure_real_tab():
+    """Report the tab this agent is on. The stock helper switches to the first real page in Chrome when the current tab looks internal
+    (about:blank counts), and that page can belong to another agent or a person. current_tab() asks the daemon, not CDP, so refuse here."""
+    _refuse()
+    return helpers.current_tab()
 
 
 def _remember(name, closes=False):
@@ -192,6 +208,7 @@ def stop_own_daemon():
 
 # Installed before the first browser_exec: cli_mcp builds the exec namespace then, and star-imports helpers (cdp, new_tab, ...) into it.
 helpers.cdp = cdp
+helpers.ensure_real_tab = ensure_real_tab
 for _name in ("new_tab", "switch_tab"):
     _remember(_name)
 _remember("close_tab", closes=True)

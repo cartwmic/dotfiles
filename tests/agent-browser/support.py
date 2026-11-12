@@ -226,6 +226,9 @@ class JourneyCase(unittest.TestCase):
         self.base = "http://127.0.0.1:%d/" % self.http.server_address[1]
         self.sessions = []
         self.opened = []
+        for t in tabs(self.cdp):   # an earlier test's leftover page would change which tab "the first real page" is
+            if not t["url"].startswith(("about:", "chrome")):
+                close_from_outside(self.cdp, t["id"])
 
     def tearDown(self):
         for s in self.sessions:
