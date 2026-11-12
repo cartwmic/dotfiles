@@ -4,6 +4,7 @@ The stock server gives every process the daemon "default" with one current tab: 
 landed on B's page. Here A's tab stays A's through everything B does, B can still attach to A's tab on purpose without moving A, and
 each process's daemon is gone when the process exits.
 """
+import time
 import unittest
 from pathlib import Path
 
@@ -38,6 +39,32 @@ class OwnTab(JourneyCase):
         self.open_page(b, "B")
         self.assertNotEqual(a.current_tab(), tab_a)   # B's new_tab moved A's tab
         self.assertEqual(self.where(a), "?page=B")
+
+    def test_red_control_the_stock_ensure_real_tab_moves_a_fresh_session_onto_another_processes_tab(self):
+        owner = self.mcp()
+        user_tab = self.open_page(owner, "USER")
+        stock = StockMcp(self.chrome, name="repro-red")
+        self.sessions.append(stock)
+        stock.run("ensure_real_tab()")   # the server's instructions: "if the current tab is stale or internal, call ensure_real_tab()"
+        self.assertEqual(stock.current_tab(), user_tab)
+        stock.click()
+        self.wait_until(lambda: self.clicks("USER"), "the stray click")
+
+    def test_ensure_real_tab_reports_the_sessions_own_tab_and_never_switches(self):
+        owner = self.mcp()
+        user_tab = self.open_page(owner, "USER")
+        fresh = self.mcp()   # on its dedicated blank tab, which counts as "internal" to the stock helper
+        reported = fresh.run("print('TID=' + ensure_real_tab()['targetId'])").split("TID=")[1].split()[0]
+        self.assertNotEqual(reported, user_tab)
+        self.assertEqual(fresh.current_tab(), reported)   # it reported where it already was
+        fresh.click()
+        own = self.open_page(fresh, "OWN")
+        fresh.run("ensure_real_tab()")
+        self.assertEqual(fresh.current_tab(), own)   # on a real page of its own, still there
+        fresh.click()
+        self.wait_until(lambda: self.clicks("OWN"), "the click on its own page")
+        time.sleep(0.5)
+        self.assertEqual(self.clicks("USER"), [], self.events)
 
     def test_each_process_runs_its_own_daemon_and_stops_it_at_exit(self):
         a, b = self.mcp(), self.mcp()

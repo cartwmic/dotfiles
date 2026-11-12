@@ -31,7 +31,8 @@ runpy.run_path(%r, run_name="__main__")
 
 NAMES = ("browser_use.mcp.cli_mcp:CLIMCPServer._attach", "browser_use.mcp.cli_mcp:CLIMCPServer._ensure_namespace",
          "browser_harness.helpers:cdp", "browser_harness.helpers:new_tab", "browser_harness.helpers:switch_tab",
-         "browser_harness.helpers:close_tab", "browser_harness.helpers:current_tab", "browser_harness.helpers:_send",
+         "browser_harness.helpers:close_tab", "browser_harness.helpers:current_tab", "browser_harness.helpers:ensure_real_tab",
+         "browser_harness.helpers:_send",
          "browser_harness._ipc:identify")
 
 
