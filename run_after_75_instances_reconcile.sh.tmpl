@@ -4,7 +4,7 @@
 # see dot_local/user_scripts/executable_instances_reconcile.sh and the "Instances" section of the README.
 # The script always exits 0, so a missing token or checkout cannot block the rest of the apply.
 {{- if eq .chezmoi.os "linux" }}
-# Linux (personal): the systemd twin of the reconcile script; it reads the same INSTANCES_COORDINATOR_* flags.
+# Linux (personal): the systemd twin of the reconcile script; it reads the same INSTANCES_COORDINATOR_* and INSTANCES_RETRO_* flags.
 SCRIPT="$HOME/.local/user_scripts/instances_reconcile_systemd.sh"
 {{- else }}
 SCRIPT="$HOME/.local/user_scripts/instances_reconcile.sh"
