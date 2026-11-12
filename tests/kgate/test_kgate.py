@@ -2364,6 +2364,41 @@ class KubectlBlack(unittest.TestCase):
                 self.assertIn("pod_labels may not set kgate's own labels: %s" % label, self.records()[-1]["reason"])
                 self.assertFalse(any("manifest" in c for c in self.kcalls()))
 
+    def test_a_different_context_or_namespace_than_the_cluster_files_is_refused_and_the_working_kubeconfig_is_left_alone(self):
+        self.setup_env()
+        target = self.home / ".kube" / "example"
+        target.unlink()
+        self.assertEqual(self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx").returncode, 0)
+        working = target.read_text()
+        for args, key, given in ((("--from-context", "other-ctx"), "context", "other-ctx"), (("--from-context", "example-ctx", "--namespace", "elsewhere"), "namespace", "elsewhere")):
+            done = self.run_kgate("cluster-setup", "example", *args)
+            self.assertEqual(done.returncode, 64, done.stdout)
+            self.assertIn("example.toml sets %s = " % key, done.stdout)
+            self.assertIn(repr(given), done.stdout)
+            self.assertEqual(target.read_text(), working, "the working kubeconfig is untouched")
+        done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx", "--namespace", "jobs")   # the same values are fine
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+
+    def test_a_cluster_file_without_context_or_namespace_is_not_a_base_for_cluster_setup(self):
+        self.setup_env()
+        for key in ("context", "namespace"):
+            self.write_cluster(drop=(key,))
+            done = self.run_kgate("cluster-setup", "example", "--from-context", "example-ctx")
+            self.assertEqual(done.returncode, 64, done.stdout)
+            self.assertIn("has no `%s` key" % key, done.stdout)
+
+    def test_pod_labels_of_the_wrong_type_is_the_file_and_key_error_not_a_crash(self):
+        path = self.write_cluster()
+        text = path.read_text().replace("[pod_labels]", "[pod_labels_gone]")
+        path.write_text("pod_labels = 5\n" + text.replace("[pod_labels_gone]\n\"example.org/owner\" = \"team-a\"\n\"example.org/tier\" = \"build\"\n", ""))
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        reason = self.records()[-1]["reason"]
+        self.assertIn("pod_labels must be a table of strings", reason)
+        self.assertIn("example.toml", reason)
+        self.assertNotIn("TypeError", done.stdout)
+
     def test_cluster_setup_needs_a_name_and_a_context_and_refuses_homelab(self):
         for args in ((), ("example",), ("homelab", "--from-context", "x"), ("../x", "--from-context", "x")):
             done = self.run_kgate("cluster-setup", *args)

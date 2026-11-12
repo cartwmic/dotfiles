@@ -318,13 +318,13 @@ def load_cluster(name):
         raise bad("user", "must look like 65532:65532 and not be root")
     if not isinstance(raw["deadline_s"], int) or isinstance(raw["deadline_s"], bool) or raw["deadline_s"] < 60:
         raise bad("deadline_s", "must be a whole number of seconds, at least 60")
-    clash = sorted({"app", "kgate-job"} & set(raw.get("pod_labels") or {}))
-    if clash:
-        raise Unavailable("cluster file %s: pod_labels may not set kgate's own labels: %s" % (path, ", ".join(clash)))
     for key in ("pod_labels", "pod_annotations"):
         table = raw.get(key, {})
         if not isinstance(table, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in table.items()):
             raise Unavailable("cluster file %s: %s must be a table of strings" % (path, key))
+    clash = sorted({"app", "kgate-job"} & set(raw.get("pod_labels", {})))
+    if clash:
+        raise Unavailable("cluster file %s: pod_labels may not set kgate's own labels: %s" % (path, ", ".join(clash)))
     claim = raw.get("cache_claim_default")
     if claim is not None and (not isinstance(claim, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", claim)):
         raise Unavailable("cluster file %s: cache_claim_default must be a claim name, got %r" % (path, claim))
@@ -864,16 +864,23 @@ def cluster_setup(argv):
         return USAGE
     path = cluster_file(o.name)
     named = None
-    if os.path.exists(path):   # kgate reads the kubeconfig this file names, so that is the one to write
+    if os.path.exists(path):   # kgate reads the kubeconfig, context and namespace this file names, so those are the ones to write for
         try:
             with open(path) as f:
-                named = tomllib.loads(f.read()).get("kubeconfig")
+                have = tomllib.loads(f.read())
         except (OSError, tomllib.TOMLDecodeError) as e:
             print("kgate cluster-setup: cannot read %s: %s" % (path, e), file=sys.stderr)
             return USAGE
-        if not isinstance(named, str) or not named:
-            print("kgate cluster-setup: %s has no `kubeconfig` key; fix it first" % path, file=sys.stderr)
-            return USAGE
+        for key in ("kubeconfig", "context", "namespace"):
+            if not isinstance(have.get(key), str) or not have[key]:
+                print("kgate cluster-setup: %s has no `%s` key; fix it first" % (path, key), file=sys.stderr)
+                return USAGE
+        named = have["kubeconfig"]
+        for key, given in (("context", o.from_context), ("namespace", o.namespace)):
+            if given is not None and given != have[key]:
+                print("kgate cluster-setup: %s sets %s = %r, but you gave %r; kgate uses the cluster file's. Edit the cluster file, or drop the option."
+                      % (path, key, have[key], given), file=sys.stderr)
+                return USAGE
     out_arg = o.kubeconfig_out
     if named and out_arg and os.path.realpath(os.path.expanduser(out_arg)) != os.path.realpath(os.path.expanduser(named)):
         print("kgate cluster-setup: %s names kubeconfig %s, but --kubeconfig-out is %s; kgate reads the first. Edit the cluster file, or drop --kubeconfig-out."
