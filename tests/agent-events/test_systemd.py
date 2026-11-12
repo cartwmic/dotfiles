@@ -143,6 +143,8 @@ class GateTest(unittest.TestCase):
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
 class LoaderTest(unittest.TestCase):
     def run_loader(self, data="", profile="personal", installed=True, wsl=False, user_manager=True, active=True, active_after_stop=False):
+        if os.uname().sysname != "Linux":   # the loader's first gate is uname -s = Linux; elsewhere it exits 0 before it calls systemctl
+            self.skipTest("the loader runs only on Linux (uname -s gate)")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home, fake, bin_ = root / "home", root / "fake", root / "bin"
