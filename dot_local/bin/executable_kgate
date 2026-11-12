@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """kgate: run a heavy gate on the homelab Kubernetes cluster instead of this Mac. Full doc: docs/kgate.md.
 
-    kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]
+    kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] [--sched-wait SECONDS] -- CMD [ARGS...]
 
 heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few overrides. Run it under
 `run-and-wake -- kgate -- CMD` and the pane is woken when the job ends.
@@ -24,7 +24,8 @@ Contract
   fails the job with the tool, expected and found.
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line. 69 when the job could not
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
-  differs, tool version differs, the connection to a started pod was lost. kgate NEVER runs CMD on this Mac and never
+  differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
+  after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. kgate NEVER runs CMD on this Mac and never
   reruns a job that started. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
 - 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
@@ -98,6 +99,8 @@ AG1_TREE_ROOTS = ("Users", "Volumes", "private")  # where a Mac worktree lives; 
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
 UNAVAILABLE = 69
 USAGE = 64
+NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the whole scheduling deadline. Nothing else in kgate uses 75.
+SCHED_WAIT_S = 600  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
 CANCELLED = "cancelled by kgate cancel"
 JOB_ID = r"kgate-[0-9]+-[0-9]+"
 TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
@@ -107,6 +110,12 @@ FATAL_WAITING = ("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "Create
 
 class Unavailable(Exception):
     """The job cannot start or finish on the cluster. Exit 69, with this text as the reason."""
+    code = UNAVAILABLE
+
+
+class NotScheduled(Unavailable):
+    """The pod was still Unschedulable when the scheduling deadline passed. Exit 75, with this text as the reason."""
+    code = NOT_SCHEDULED
 
 
 # ---------------------------------------------------------------- pure: tree hash (runs here and in the pod)
@@ -894,6 +903,7 @@ class Job:
         (ReadWriteOncePod: the pod stays Pending for CACHE_BUSY_S), the pod is deleted and `cold` is created in its place."""
         deadline = self.t0 + self.o.wait
         self.create_pod(manifests, deadline)
+        sched_deadline = time.time() + self.o.sched_wait   # homelab only: AG1's autoscaler can take longer to add a node
         busy_since = None
         last = None
         while True:
@@ -912,6 +922,10 @@ class Job:
             detail = waiting.get("message") or (sched and sched.get("message")) or status.get("message") or ""
             if status.get("phase") in ("Failed", "Succeeded") or waiting.get("reason") in FATAL_WAITING:
                 raise Unavailable("pod did not start: %s %s" % (what, detail[:300]))
+            if sched and sched.get("reason") == "Unschedulable" and self.cluster.name != "ag1" and time.time() >= sched_deadline:
+                # Only PodScheduled=False/Unschedulable counts. A scheduled pod that is pulling its image or running an init container does not.
+                pin = " (pinned to node %s)" % self.o.node if self.o.node else ""
+                raise NotScheduled("pod not scheduled within %ds: %s%s" % (self.o.sched_wait, " ".join(detail.split())[:300], pin))
             claim = re.search(r'persistentvolumeclaim "([^"]+)" not found', detail)
             if claim:  # it will not appear by waiting: the claim is created by ops, not by kgate
                 raise Unavailable("the cache claim %s does not exist in %s (cache_pvc in the profile): %s" % (claim.group(1), AG1_NAMESPACE, detail[:300]))
@@ -1069,9 +1083,14 @@ def parse_args(argv):
     p.add_argument("--mem-limit")
     p.add_argument("--image")
     p.add_argument("--node")
+    p.add_argument("--sched-wait", type=int)
     try:
         opts = p.parse_args(argv[:cut])
-    except SystemExit:
+        if opts.sched_wait is None:   # the flag wins over the environment
+            opts.sched_wait = int(os.environ.get("KGATE_SCHED_WAIT") or SCHED_WAIT_S)
+        if opts.sched_wait < 1:
+            raise ValueError
+    except (SystemExit, ValueError):
         raise SystemExit(USAGE_TEXT)
     opts.command = argv[cut + 1:]
     if not opts.command:
@@ -1079,11 +1098,11 @@ def parse_args(argv):
     return opts
 
 
-USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] -- CMD [ARGS...]\n" \
+USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE] [--image REF] [--node NODE] [--sched-wait SECONDS] -- CMD [ARGS...]\n" \
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate ag1-setup                          write ~/.kube/ag1-offload once (for profiles with cluster = \"ag1\")\n" \
-             "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac). See docs/kgate.md."
+             "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 600 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
 
 # ---------------------------------------------------------------- kgate cancel
@@ -1270,7 +1289,8 @@ def main(argv):
             started = True
         except Unavailable as e:
             reason = str(e)
-            job.note("%s; exit 69, CMD was not run on this Mac" % reason)
+            code = e.code
+            job.note("%s; exit %d, CMD was not run on this Mac" % (reason, code))
         except KeyboardInterrupt as e:
             by = e.args[0] if e.args else "SIGINT"
             if by == "SIGTERM" and os.path.exists(job.cancel_marker):
