@@ -65,7 +65,17 @@ When GitHub's runners fail twice the same infrastructure way, the same check run
 run-and-wake -- kgate --cpu 4 --mem 4Gi --mem-limit 6Gi --wait 1800 -- env CI_PAR_JOBS=4 scripts/ci-linux.sh
 ```
 
-`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. Compare the per-suite skipped counts with the GitHub run: a pass that skips tests GitHub runs is not the same check.
+`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ.
+
+**The one exception (Michael, #849=A).** kgate runs the same `tests` check except `RestartJourneyTest` in `tests/agent-browser/test_login_unit.py`. It starts the real `agent-chrome.service` unit under the user systemd manager and restarts it ten times, and a pod has no user manager (and no `ss`). It skips there: one extra skipped test in `tests/agent-browser`.
+
+**The guard.** The fallback does not apply to a PR that changes any of the code that test runs:
+
+- `dot_config/systemd/user/agent-chrome.service`
+- `dot_local/bin/executable_agent-chrome`
+- `tests/agent-browser/test_login_unit.py`
+
+For such a PR, wait for GitHub's run, or run that one test on the host desktop machine (`python3 -m unittest discover -s tests/agent-browser -p test_login_unit.py`, where a user systemd manager runs), and say which in the PR.
 
 ## No fallback; exit codes
 
