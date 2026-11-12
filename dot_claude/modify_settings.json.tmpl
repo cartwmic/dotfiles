@@ -91,7 +91,8 @@ HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_
 T3_MODE=off
 T3_JSON=null
 if [ "$T3_WANT" = true ]; then
-  if printf '%s' "$T3_PRINTED" | jq -e '.schema == 1 and (.entries | type == "array")' >/dev/null 2>&1; then
+  # Empty output is not a valid print: jq 1.6 exits 0 on empty input, jq 1.7+ exits 4, so the guard is explicit.
+  if [ -n "$T3_PRINTED" ] && printf '%s' "$T3_PRINTED" | jq -e '.schema == 1 and (.entries | type == "array")' >/dev/null 2>&1; then
     T3_MODE=set
     T3_JSON=$T3_PRINTED
   else
