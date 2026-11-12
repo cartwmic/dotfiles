@@ -1,5 +1,5 @@
 #!/bin/sh
-# instances_reconcile.sh: make each instance (coordinator, retro) match its opt-in flag. Run by chezmoi on every apply
+# instances_reconcile.sh: make each instance (coordinator) match its opt-in flag. Run by chezmoi on every apply
 # (run_after_75_instances_reconcile.sh.tmpl); it can also be run by hand with the same environment.
 #
 # Desired state comes from the local chezmoi.yaml (data.instances.<name>.enabled), passed in as INSTANCES_<NAME>_ENABLED.
@@ -15,7 +15,7 @@
 #   * Every outcome is one status line and exit 0, so a missing token or room cannot block other chezmoi work. The next run starts over.
 #   * Nothing secret is read, printed or stored here. The repos' own scripts own tokens.
 #
-# Instances: coordinator and retro (personal profile), coordinator-work (axon-work-computer profile: the Matrix coordinator; its flag is still
+# Instances: coordinator (personal profile), coordinator-work (axon-work-computer profile: the Matrix coordinator; its flag is still
 # data.instances.coordinator.enabled, the profile picks the variant; the wrapper only exports the variants of its own profile).
 # Markers: $INSTANCES_STATE_ROOT (default ~/.local/state/instances)/<name>.{managed,unit-sha,configuring,status}.
 # Test hooks: INSTANCES_STATE_ROOT, INSTANCES_UNIT_DIR, INSTANCES_AGENTS_DIR, INSTANCES_TOOL_PATH, INSTANCES_LIST, INSTANCES_TIMEOUT.
@@ -92,10 +92,6 @@ load_instance() { # load_instance NAME: sets the per-instance variables
       LABEL=local.coordinatord.work; LOGDIR=$HOME_DIR/Library/Logs/coordinator-work; STATE=$HOME_DIR/.local/share/coordinator-work
       MAIN=src/coordinatord/main.ts; SETUP=scripts/work-instance-setup.sh; CFGNAME=coordinator; CFG_TO=${INSTANCES_CONFIG_TIMEOUT:-900}
       ENABLED=${INSTANCES_COORDINATOR_WORK_ENABLED:-}; REPO=${INSTANCES_COORDINATOR_WORK_REPO:-}; EXTRA_PATH=${INSTANCES_COORDINATOR_WORK_EXTRA_PATH:-};;
-    retro)
-      LABEL=local.retrod; LOGDIR=$HOME_DIR/Library/Logs/retro; STATE=$HOME_DIR/.local/share/retro
-      MAIN=src/retrod/main.ts; SETUP=scripts/configure.sh; CFGNAME=retro; EXTRA_PATH=''; CFG_TO=${INSTANCES_CONFIG_TIMEOUT:-120}
-      ENABLED=${INSTANCES_RETRO_ENABLED:-}; REPO=${INSTANCES_RETRO_REPO:-};;
     *) say "unknown instance $1"; return 1;;
   esac
   ITP=$TOOL_PATH; [ -z "$EXTRA_PATH" ] || ITP=$EXTRA_PATH:$TOOL_PATH
@@ -130,13 +126,6 @@ opt_out() {
 
 configure() { # create the instance's config when it has none; returns 0 when config exists afterwards
   case $NAME in
-    retro)
-      _miss=''
-      [ -n "${INSTANCES_RETRO_CHANNEL_ID:-}" ] || _miss="$_miss instances.retro.channelId"
-      [ -n "${INSTANCES_RETRO_OP_ITEM:-}" ] || _miss="$_miss instances.retro.opItem"
-      if [ -n "$_miss" ]; then finish "NOT READY: no config in $STATE and missing local data:$_miss"; return 1; fi
-      [ -f "$REPO/$SETUP" ] || { finish "NOT READY: no config in $STATE and no $REPO/$SETUP to create it"; return 1; }
-      with_timeout "$CFG_TO" env PATH="$ITP:$PATH" RETRO_CHANNEL_ID="$INSTANCES_RETRO_CHANNEL_ID" RETRO_OP_ITEM="$INSTANCES_RETRO_OP_ITEM" sh "$REPO/$SETUP" >"$TMP/cfg.out" 2>&1 </dev/null; _rc=$?;;
     coordinator-work)
       # The coordinator repo's setup script. Dotfiles owns the unit and the start, so it is asked for the config half only (--config-only;
       # until the coordinator repo has that flag the script rejects it and the instance stays NOT READY with that reason). The checkout the
@@ -226,5 +215,5 @@ reconcile() {
   return 0
 }
 
-for _n in ${INSTANCES_LIST:-coordinator retro}; do reconcile "$_n"; done
+for _n in ${INSTANCES_LIST:-coordinator}; do reconcile "$_n"; done
 exit 0

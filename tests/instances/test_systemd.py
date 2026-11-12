@@ -23,9 +23,7 @@ HERE = Path(__file__).resolve().parent
 UNIT_TEMPLATE = ROOT / "dot_local" / "share" / "instances" / "systemd" / "coordinatord.service.tmpl"
 WRAPPER = ROOT / "run_after_75_instances_reconcile.sh.tmpl"
 SCRIPT = Path(os.environ.get("INSTANCES_SYSTEMD_SCRIPT_UNDER_TEST") or ROOT / "dot_local" / "user_scripts" / "executable_instances_reconcile_systemd.sh")
-RETRO_UNIT_TEMPLATE = ROOT / "dot_local" / "share" / "instances" / "systemd" / "retrod.service.tmpl"
 GOLDEN = HERE / "golden" / "coordinatord.service"
-RETRO_GOLDEN = HERE / "golden" / "retrod.service"
 HAVE_CHEZMOI = shutil.which("chezmoi") is not None
 HAVE_TIMEOUT = shutil.which("timeout") is not None
 
@@ -65,21 +63,6 @@ class RenderTests(unittest.TestCase):
         text = render(UNIT_TEMPLATE, {"profile": "personal", "instances": {"coordinator": {"repo": "/srv/50%/co"}}})
         self.assertIn("/srv/50%%/co/src/coordinatord/main.ts", text)
 
-    def test_retro_default_render_is_the_golden_unit(self):
-        self.assertEqual(render(RETRO_UNIT_TEMPLATE, {"profile": "personal"}), RETRO_GOLDEN.read_text(encoding="utf-8"))
-
-    def test_the_retro_unit_says_what_the_plist_says(self):
-        text = render(RETRO_UNIT_TEMPLATE, {"profile": "personal"})
-        self.assertIn("ExecStart=/usr/bin/env node --experimental-strip-types --disable-warning=ExperimentalWarning /home/test/git/retro/src/retrod/main.ts\n", text)
-        self.assertIn("WorkingDirectory=/home/test/git/retro\n", text)
-        self.assertIn("Environment=PATH=/home/test/.pi/agent/bin:", text)
-        self.assertIn("Restart=on-failure\n", text)
-        self.assertIn("RestartSec=10\n", text)
-
-    def test_retro_local_data_changes_only_the_checkout_path(self):
-        data = {"profile": "personal", "instances": {"retro": {"repo": "/srv/rt"}}}
-        self.assertEqual(render(RETRO_UNIT_TEMPLATE, data), RETRO_GOLDEN.read_text(encoding="utf-8").replace("/home/test/git/retro", "/srv/rt"))
-
     def test_wrapper_runs_the_systemd_script_on_linux_and_the_launchd_one_elsewhere(self):
         data = {"profile": "personal", "instances": {"coordinator": {"enabled": True}}}
         linux = render(WRAPPER, data)
@@ -87,7 +70,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn('instances_reconcile.sh"', linux)
         self.assertIn("export INSTANCES_COORDINATOR_ENABLED='true'", linux)
         self.assertIn("export INSTANCES_COORDINATOR_REPO='/home/test/git/coordinator'", linux)
-        self.assertIn("export INSTANCES_RETRO_REPO='/home/test/git/retro'", linux)
+        self.assertNotIn("RETRO", linux)
         mac = render(WRAPPER, data, home="/Users/test", chezmoi_os="darwin")
         self.assertIn('SCRIPT="$HOME/.local/user_scripts/instances_reconcile.sh"', mac)
         self.assertNotIn("systemd", mac)
@@ -142,15 +125,12 @@ class Scratch:
             write_exec(self.tools / tool, "#!/bin/sh\nexit 0\n")
         self.co = self.base / "co"
         write_exec(self.co / "src" / "coordinatord" / "main.ts", "")
-        self.rt = self.base / "rt"
-        write_exec(self.rt / "src" / "retrod" / "main.ts", "")
         self.units = self.base / "units"
         self.units.mkdir()
         self.set_unit("v1")
         self.systemd = self.home / ".config" / "systemd" / "user"
         self.state_root = self.home / ".local" / "state" / "instances"
         self.state = self.home / ".local" / "share" / "coordinator"
-        self.retro_state = self.home / ".local" / "share" / "retro"
         self.last = None
 
     def cleanup(self):
@@ -158,7 +138,6 @@ class Scratch:
 
     def set_unit(self, version):
         (self.units / "coordinatord.service").write_text("[Service]\nExecStart=/bin/true\n# %s\n" % version)
-        (self.units / "retrod.service").write_text("[Service]\nExecStart=/bin/true\n# retro %s\n" % version)
 
     def have_config(self):
         self.state.mkdir(parents=True, exist_ok=True)
@@ -193,7 +172,6 @@ class Scratch:
             HOME=str(self.home), PATH=str(self.bin) + os.pathsep + os.environ["PATH"], STUB_DIR=str(self.stub),
             INSTANCES_UNIT_DIR=str(self.units), INSTANCES_TOOL_PATH=str(self.tools), TMPDIR=str(self.base),
             INSTANCES_COORDINATOR_ENABLED="" if enabled is None else str(enabled).lower(), INSTANCES_COORDINATOR_REPO=str(self.co),
-            INSTANCES_RETRO_ENABLED="", INSTANCES_RETRO_REPO=str(self.rt),
         )
         env.pop("INSTANCES_RELOAD", None)
         if reload:
@@ -285,43 +263,12 @@ class MatrixTests(unittest.TestCase):
         self.s.run(enabled=True)
         self.assertCalls([SHOW, ACTIVE])
 
-    def test_retro_not_opted_in_makes_no_call(self):
-        self.s.run()
+    def test_a_leftover_retro_flag_is_ignored(self):
+        # A host whose chezmoi.yaml still has instances.retro: the wrapper no longer exports it, and a stray env is not read.
+        self.s.run(INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_REPO="/nowhere")
         self.ok()
         self.assertCalls([])
-        self.assertIn("retro: not opted in", self.s.output())
-
-    def test_retro_first_opt_in_installs_its_own_unit_and_starts_it(self):
-        self.s.retro_state.mkdir(parents=True)
-        (self.s.retro_state / "config.json").write_text("{}\n")     # restored state: the setup script is not run
-        self.s.run(INSTANCES_RETRO_ENABLED="true")
-        self.ok()
-        self.assertEqual(self.s.calls(), [SHOW, "is-active --quiet retrod.service", RELOAD_DAEMON, "enable --now retrod.service", SHOW, "is-active --quiet retrod.service"])
-        self.assertEqual((self.s.systemd / "retrod.service").read_text(), (self.s.units / "retrod.service").read_text())
-        self.assertTrue((self.s.state_root / "retro.managed").exists())
-        self.assertFalse((self.s.systemd / "coordinatord.service").exists())    # the coordinator is not touched
-        self.assertEqual((self.s.state_root / "retro.status").read_text().strip(), "READY (started)")
-
-    def test_retro_first_time_config_needs_channel_and_op_item_then_runs_the_repo_script(self):
-        write_exec(self.s.rt / "scripts" / "configure.sh", '#!/bin/sh\nmkdir -p "$RETRO_STATE_DIR" && echo "$RETRO_CHANNEL_ID $RETRO_OP_ITEM" > "$RETRO_STATE_DIR/config.json"\n')
-        self.s.run(INSTANCES_RETRO_ENABLED="true")
-        self.assertIn("NOT READY: missing instances.retro.channelId instances.retro.opItem", self.s.output())
-        self.assertCalls([])
-        self.s.run(INSTANCES_RETRO_ENABLED="true", INSTANCES_RETRO_CHANNEL_ID="C1", INSTANCES_RETRO_OP_ITEM="op://V/I/bot_token")
-        self.ok()
-        self.assertEqual((self.s.retro_state / "config.json").read_text().strip(), "C1 op://V/I/bot_token")
-        self.assertTrue(self.s.is_running())
-
-    def test_retro_opt_out_stops_only_retro_and_keeps_its_state(self):
-        self.s.retro_state.mkdir(parents=True)
-        (self.s.retro_state / "config.json").write_text("{}\n")
-        self.s.run(INSTANCES_RETRO_ENABLED="true")
-        self.s.reset_calls()
-        self.s.run(INSTANCES_RETRO_ENABLED="false")
-        self.ok()
-        self.assertCalls([SHOW, "is-active --quiet retrod.service", "disable --now retrod.service", RELOAD_DAEMON])
-        self.assertFalse((self.s.systemd / "retrod.service").exists())
-        self.assertTrue((self.s.retro_state / "config.json").exists())
+        self.assertNotIn("retro", self.s.output())
 
     def test_first_opt_in_installs_the_unit_and_starts_it_once(self):
         self.s.have_config()
@@ -385,7 +332,7 @@ class MatrixTests(unittest.TestCase):
         self.s.run(enabled=True)
         self.s.set_unit("v2")
         self.s.reset_calls()
-        self.s.run(enabled=True, reload="retro")
+        self.s.run(enabled=True, reload="other")
         self.assertNotIn(RESTART, self.s.calls())
 
     def test_a_failed_restart_says_so_and_the_next_apply_reports_the_unit_again(self):
