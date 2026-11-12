@@ -83,7 +83,7 @@ class RequestCLI(unittest.TestCase):
     def test_timeout_and_one_retry(self):
         calls = self.root / 'calls'
         self.backend.write_text('import pathlib,time\np=pathlib.Path(' + repr(str(calls)) + ')\np.open("a").write("call\\n")\ntime.sleep(5)\n')
-        process, _ = self.start(timeout_seconds=.15)
+        process, _ = self.start(timeout_seconds=1)
         terminal = self.finish(process)
         self.assertEqual(terminal['status'], 'failed')
         self.assertEqual(terminal['failure']['reason'], 'timed_out')
@@ -141,7 +141,7 @@ class RequestCLI(unittest.TestCase):
         marker = self.root / 'descendant-finished'
         started = self.root / 'descendant-started'
         child = ('import pathlib,time; pathlib.Path(' + repr(str(started)) + ').touch(); '
-                 'time.sleep(.6); pathlib.Path(' + repr(str(marker)) + ').touch()')
+                 'time.sleep(2); pathlib.Path(' + repr(str(marker)) + ').touch()')
         self.backend.write_text('import subprocess,sys,time\nsubprocess.Popen([sys.executable,"-c",' + repr(child) + '])\ntime.sleep(30)\n')
         process, _ = self.start()
         end = time.monotonic() + 3
@@ -150,7 +150,7 @@ class RequestCLI(unittest.TestCase):
         self.assertTrue(started.exists())
         self.cli('cancel', '--key', 'arbitrary/key', '--json')
         self.assertEqual(self.finish(process)['status'], 'canceled')
-        time.sleep(.8)
+        time.sleep(2.5)
         self.assertFalse(marker.exists())
 
     def test_host_exit_detached_completion(self):
