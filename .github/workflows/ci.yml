@@ -30,6 +30,8 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
+  # New Linux suites go in scripts/ci-linux.sh (the ci-par.py list, or its timing-bound tail), not as new steps
+  # here. Main's old inline steps are gone; the list in scripts/ci-linux.sh is the one source.
   tests:
     runs-on: ubuntu-latest
     steps:

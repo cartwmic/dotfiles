@@ -49,6 +49,7 @@ python3 scripts/ci-par.py \
   tests/agent-kit \
   tests/sync-harness-skills \
   tests/codex-merge \
+  tests/rustdesk \
   tests/agent-browser \
   tests/dotfiles-update \
   tests/agent-kill-guard \
@@ -69,9 +70,10 @@ python3 scripts/ci-par.py \
 # tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
 # timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,
 # test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy) fail under pool load.
-# Each one's output is kept in a log and printed in full, in order, once both have finished.
-logs=$(mktemp -d)
-trap 'rm -rf "$logs"' EXIT
+# Each suite streams into its own log file. The files stay on disk, so a hang or a cancel still leaves what
+# each one printed. Both logs print in full, kgate's first, once both have finished.
+logs=$(mktemp -d "${TMPDIR:-/tmp}/ci-linux-logs.XXXXXX")
+echo "[ci-linux] per-suite logs: $logs"
 python3 -m unittest discover -s tests/kgate -v >"$logs/kgate.log" 2>&1 &
 kgate_pid=$!
 python3 -m unittest discover -s tests/pi-mcp-lazy -v >"$logs/pi-mcp-lazy.log" 2>&1 &
