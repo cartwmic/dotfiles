@@ -5,7 +5,7 @@ usage: ci-par.py [--per-test DIR]... [SUITE[:PATTERN]]...
 
 --per-test DIR   every test id that `unittest discover -s DIR` finds runs in its own process,
                  16 at a time, with DIR as the working directory.
-SUITE[:PATTERN]  one `python3 -m unittest discover -s SUITE [-p PATTERN] -v` process, 8 at a time,
+SUITE[:PATTERN]  one `python3 -m unittest discover -s SUITE [-p PATTERN] -v` process, one per CPU at a time
                  run from the current directory (the repo root in CI).
 
 Both pools run at once. Prints the wall time and, for each failure, its name and its full output.
@@ -19,7 +19,8 @@ import sys
 import time
 
 TEST_PROCESSES = 16
-SUITE_PROCESSES = 8
+# Suites are CPU-bound, so one per CPU (4 on the GitHub runner). Per-test heavy-gate stays at 16: those tests sleep.
+SUITE_PROCESSES = os.cpu_count() or 1
 LIST_TESTS = """
 import sys, unittest
 def ids(suite):
@@ -92,8 +93,8 @@ def main():
     failed = len(failures) + sum(1 for _, rc, _, _ in results if rc)
     serial = sum(secs for _, _, _, secs in results)
     slowest = sorted(results, key=lambda r: r[3], reverse=True)[:3]
-    print(f"ci-par: {len(args.suites)} suites, {test_count} per-test ids, wall {wall:.1f}s, "
-          f"serial sum {serial:.0f}s, {failed} failed")
+    print(f"ci-par: {len(args.suites)} suites ({SUITE_PROCESSES} at a time), {test_count} per-test ids ({TEST_PROCESSES} at a time), "
+          f"wall {wall:.1f}s, serial sum {serial:.0f}s, {failed} failed")
     print("slowest: " + ", ".join(f"{name} {secs:.0f}s" for name, _, _, secs in slowest))
     sys.stdout.flush()
     return 1 if failed else 0
