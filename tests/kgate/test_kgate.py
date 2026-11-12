@@ -1194,7 +1194,13 @@ if a[:2] == ["get", "pod"]:
     print(json.dumps({"spec": {"nodeName": "fake-kcl-node"}, "status": st})); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     job, script = a[2], a[-1]
-    assert script == "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job, job), script
+    pre, _, rest = script.partition("tar -xf - ")
+    assert "tar -xf - " + rest == "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job, job), script
+    if os.environ.get("FAKE_NO_SH"):   # an image without a shell: the runtime cannot start `sh`, and kubectl says so
+        sys.stderr.write('OCI runtime exec failed: exec failed: unable to start container process: exec: "sh": executable file not found in $PATH: unknown\n'); sys.exit(126)
+    checked = subprocess.run(["sh", "-c", pre + "true"], env=dict(os.environ, PATH=os.environ.get("FAKE_POD_PATH") or os.environ["PATH"]), stdout=subprocess.PIPE)   # the image's own tools
+    if checked.returncode != 0:
+        sys.stdout.buffer.write(checked.stdout); sys.stdout.flush(); sys.exit(checked.returncode)
     data = sys.stdin.buffer.read()
     open(os.path.join(fake, "shipped.tar"), "wb").write(data)
     jobroot = os.path.join(fake, "jobroot")
@@ -2093,6 +2099,39 @@ class KubectlBlack(unittest.TestCase):
         done = self.run_kgate("--", "sh", "-c", "echo RAN-HERE > ran-here.txt", env={"FAKE_CANI": "error"})
         self.assertEqual(done.returncode, 69)
         self.assertFalse((self.repo / "ran-here.txt").exists())
+
+    def path_without(self, *missing):
+        """A PATH directory with the tools the pod's own shell needs, minus `missing`: an image that lacks them."""
+        d = self.tmp / ("bin-without-" + "-".join(missing))
+        d.mkdir(exist_ok=True)
+        for name in ("sh", "command", "printf", "tar", "git", "true"):
+            found = shutil.which(name)
+            if found and name not in missing and not (d / name).exists():
+                (d / name).symlink_to(found)
+        return str(d)
+
+    def test_an_image_without_git_or_tar_is_69_with_a_clear_reason_not_a_mismatch(self):
+        for tool in ("git", "tar"):
+            with self.subTest(tool):
+                done = self.run_kgate("--", "sh", "-c", "echo SHOULD-NOT-RUN", env={"FAKE_POD_PATH": self.path_without(tool)})
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertNotIn("SHOULD-NOT-RUN", done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["reason"], "image lacks %s; kgate's pod side needs git, tar and sh (CMD not run)" % tool)
+                self.assertNotIn("MISMATCH", done.stdout)
+                self.assertFalse(rec["ran"])
+                self.assertTrue(rec["cleanup"])
+
+    def test_an_image_without_a_shell_is_69_naming_sh(self):
+        done = self.run_kgate("--", "true", env={"FAKE_NO_SH": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertEqual(self.records()[-1]["reason"], "image lacks sh; kgate's pod side needs git, tar and sh (CMD not run)")
+        self.assertTrue(self.records()[-1]["cleanup"])
+
+    def test_the_tool_check_runs_before_the_unpack_so_a_missing_tool_never_reaches_the_hash(self):
+        script = K.KubectlCluster(dict(KCFG)).exec_script("kgate-1-2")
+        self.assertLess(script.index("command -v"), script.index("tar -xf -"))
+        self.assertIn("exit 69", script)
 
     def test_a_pod_that_never_gets_a_node_is_69_after_wait(self):
         done = self.run_kgate("--wait", "1", "--", "true", env={"FAKE_POD": "pending"})
