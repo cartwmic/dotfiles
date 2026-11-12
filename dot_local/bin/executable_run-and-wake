@@ -8,6 +8,12 @@ Contract (docs/run-and-wake.md):
 - Returns at once. Prints the job id, the job's pid and its output file.
 - CMD runs in its own session, so it outlives the tool call or shell that started it.
   Its stdout and stderr go to the output file.
+- On Linux with a working `systemd-run --user`, the launcher first re-runs itself in its own transient scope
+  (run-and-wake-<job>.scope), so the watcher and the job also outlive the systemd scope of the session that started them
+  (T3 stops a Claude session's scope 30 minutes after its last turn, and a setsid session stays in that scope's cgroup).
+  Without systemd-run (macOS, the work Mac) or without a user manager, nothing changes: fork and setsid only.
+- The watcher forwards SIGTERM, SIGHUP and SIGINT to the job and keeps watching, so a stop that signals the whole group
+  still ends in an `end` record (with the job's signal) and a wake.
 - When CMD exits (any status), at most one wake is attempted: one tagged
   `herdr agent prompt` to the pane in $HERDR_PANE_ID, sent only if, at check time, that
   pane shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
@@ -26,8 +32,8 @@ Contract (docs/run-and-wake.md):
   service account and never the desktop app (playbook 78819cbd). No token file and no variable: the job runs without one.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
-    start  {cmd, cwd, pane, session, thread, pid, output, op_token}  (op_token: env, file, or null: where the job's
-           1Password token came from; the value is never logged)
+    start  {cmd, cwd, pane, session, thread, pid, output, op_token, scope}  (op_token: env, file, or null: where the job's
+           1Password token came from; the value is never logged. scope: the systemd scope the job runs in, or null)
     end    {exit, signal, duration_s}
     blocked {}                      (pane showed a dialog; waiting)
     wake   {target: herdr|t3, result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
@@ -38,6 +44,7 @@ import json
 import os
 import secrets
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -49,6 +56,9 @@ NAME = "run-and-wake"
 STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), NAME)
 LOG = os.path.join(STATE, "log.jsonl")
 TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
+SCOPED = "--scoped"  # internal first argument: the launcher re-ran itself inside its own systemd scope; the job id follows
+SCOPE_ARGS = ["--user", "--scope", "--quiet", "--collect"]
+FORWARDED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 def say(level, message):
@@ -205,21 +215,35 @@ def job_env(job):
     return env, "file"
 
 
-def watch(job, cmd, output, pane, session, thread, report):
+def watch(job, cmd, output, pane, session, thread, report, scope):
     """Runs in the detached process: start the job, wait for it, then wake."""
     started = time.monotonic()
     env, op_token = job_env(job)
+    jobs = []
+
+    def forward(signum, _frame):
+        # A stop that signals the whole group reaches the watcher too: keep watching so the job's end is recorded and woken.
+        # (A Python handler, not SIG_IGN: an ignored signal would be inherited by the job.)
+        for running in jobs:
+            try:
+                running.send_signal(signum)
+            except OSError:
+                pass
+
+    for signum in FORWARDED:
+        signal.signal(signum, forward)
     with open(output, "ab", buffering=0) as out:
         try:
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env)
         except OSError as error:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token, scope=scope)
             tell(report, f"failed {error}")
             out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
             record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
             status = f"could not start ({error})"
         else:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token)
+            jobs.append(child)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token, scope=scope)
             tell(report, f"pid {child.pid}")
             code = child.wait()
             sig = signal.Signals(-code).name if code < 0 else None
@@ -232,17 +256,42 @@ def watch(job, cmd, output, pane, session, thread, report):
         wake(job, pane, session, text)
 
 
+def scope_runner():
+    """The systemd-run path when this host can start a user scope (Linux with a user manager), else None. The probe is
+    T3's own: an exec cannot fall back, so check first. macOS and hosts without a user manager keep the plain path."""
+    run = shutil.which("systemd-run") if sys.platform.startswith("linux") else None
+    if not run:
+        return None
+    try:
+        done = subprocess.run([run, *SCOPE_ARGS, "--", "true"], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return run if done.returncode == 0 else None
+
+
 def main(argv):
     if argv[:1] == ["--"]:
         argv = argv[1:]
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
         return 0
+    scoped = argv[:1] == [SCOPED] and len(argv) > 2
+    if scoped:
+        job, argv = argv[1], argv[2:]
     if not argv or argv[0].startswith("-"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     os.makedirs(os.path.join(STATE, "jobs"), exist_ok=True)
-    job = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
+    if not scoped:
+        job = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
+        run = scope_runner()
+        if run:  # become the launcher inside our own scope: same env, cwd and stdio, a cgroup the caller's scope does not own
+            try:
+                os.execv(run, [run, *SCOPE_ARGS, f"--unit={NAME}-{job}", f"--description={NAME} job {job}", "--",
+                               sys.executable, os.path.abspath(__file__), SCOPED, job, *argv])
+            except OSError:
+                pass  # no scope after all: run in the caller's cgroup, as before
+    scope = f"{NAME}-{job}.scope" if scoped else None
     output = os.path.join(STATE, "jobs", job + ".log")
     pane = os.environ.get("HERDR_PANE_ID") or None
     session = os.environ.get("PI_SESSION_FILE") or None
@@ -258,7 +307,7 @@ def main(argv):
         os.dup2(logfd, 1)
         os.dup2(logfd, 2)
         try:
-            watch(job, argv, output, pane, session, thread, report)
+            watch(job, argv, output, pane, session, thread, report, scope)
         except BaseException:
             traceback.print_exc()  # into the job's output file
         finally:
@@ -278,6 +327,8 @@ def main(argv):
         say("WARN", "no PI_SESSION_FILE: nothing will wake you when it ends")
     else:
         say("INFO", f"when it ends, pane {pane} gets one prompt tagged [{NAME} k:{job}]; you can end your turn")
+    if scope:
+        say("INFO", f"scope {scope}: the job outlives the scope of the session that started it")
     say("INFO", f"log {LOG}")
     return 0
 
