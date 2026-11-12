@@ -1137,13 +1137,13 @@ if a[0] == "exec" and "-i" in a:
     root = next(l.split("=", 1)[1] for l in open(d + "/job.sh").read().splitlines() if l.startswith("ROOT="))
     root = shlex.split(root)[0]
     aside = os.path.join(fake, "gitaside")
-    os.rename(os.path.join(root, ".git"), aside)
+    shutil.move(os.path.join(root, ".git"), aside)
     try:
         code = subprocess.call(["sh", d + "/kgate.sh", d], env=env)
     finally:
         if os.path.exists(os.path.join(root, ".git")):
             shutil.move(os.path.join(root, ".git"), os.path.join(fake, "podgit"))
-        os.rename(aside, os.path.join(root, ".git"))
+        shutil.move(aside, os.path.join(root, ".git"))
     sys.exit(code)
 if a[0] == "exec":
     out = os.path.join(fake, "out")

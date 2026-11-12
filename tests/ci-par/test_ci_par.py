@@ -1,10 +1,12 @@
 """scripts/ci-par.py: passing suites exit 0; a failing suite or per-test id exits 1 and prints its output; empty dirs fail."""
+import importlib.util
 import os
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 RUNNER = Path(__file__).resolve().parents[2] / "scripts" / "ci-par.py"
@@ -57,11 +59,91 @@ class CiParTest(unittest.TestCase):
         self.assertIn("FAIL many", out)
         self.assertIn("marker-from-fail", out)
 
+    def test_it_prints_ran_and_skipped_counts_per_suite_and_per_test_dir(self):
+        (self.root / "skippy").mkdir()
+        (self.root / "skippy" / "test_s.py").write_text(
+            "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
+            "    @unittest.skip('why')\n    def test_b(self):\n        pass\n")
+        rc, out = self.run_runner("--per-test", "skippy", "skippy", "good")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("  skippy: 4 ran, 2 skipped", out)  # 2 ids run alone, then the whole suite: 2 + 2 ran, 1 + 1 skipped
+        self.assertIn("  good: 1 ran, 0 skipped", out)
+
+    def test_counts_use_the_last_summary_not_an_echoed_child_run(self):
+        mod = load_runner()
+        echoed = "Ran 19 tests in 1s\nOK (skipped=3)\n.\n----\nRan 2 tests in 0.1s\n\nOK (skipped=1)\n"
+        self.assertEqual(mod.counts(echoed), (2, 1))
+        self.assertEqual(mod.counts("no summary"), (0, 0))
+
     def test_empty_per_test_dir_fails_closed(self):
         rc, out = self.run_runner("--per-test", "empty")
         self.assertEqual(rc, 1, out)
         self.assertIn("could not list tests in empty", out)
 
+
+
+def load_runner():
+    spec = importlib.util.spec_from_file_location("ci_par", RUNNER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class AvailableCpusTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cg = self.tmp.name
+        env = mock.patch.dict(os.environ)  # hermetic: kgate's fallback command sets CI_PAR_JOBS
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CI_PAR_JOBS", None)
+        self.mod = load_runner()
+        self.base = min(self.mod.os.cpu_count() or 1, len(os.sched_getaffinity(0)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def cpu_max(self, text):
+        Path(self.cg, "cpu.max").write_text(text)
+
+    def test_a_cgroup_v2_quota_below_the_cpu_count_caps_the_pool(self):
+        self.cpu_max("100000 100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), 1)
+
+    def test_a_fractional_quota_rounds_up(self):
+        self.cpu_max("150000 100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), min(2, self.base))
+
+    def test_a_quota_above_the_cpu_count_does_not_raise_it(self):
+        self.cpu_max("%d 100000\n" % (self.base * 100000 * 4))
+        self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_max_means_no_cap(self):
+        self.cpu_max("max 100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_cgroup_v1_quota(self):
+        (Path(self.cg) / "cpu").mkdir()
+        (Path(self.cg) / "cpu/cpu.cfs_quota_us").write_text("100000\n")
+        (Path(self.cg) / "cpu/cpu.cfs_period_us").write_text("100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), 1)
+
+    def test_no_cgroup_files_falls_back_to_the_cpu_count(self):
+        self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_ci_par_jobs_wins_over_the_computed_cap(self):
+        self.cpu_max("100000 100000\n")
+        with mock.patch.dict(os.environ, {"CI_PAR_JOBS": "7"}):
+            self.assertEqual(self.mod.available_cpus(self.cg), 7)
+
+    def test_a_bad_ci_par_jobs_is_ignored(self):
+        self.cpu_max("100000 100000\n")
+        for bad in ("0", "-2", "x", ""):
+            with mock.patch.dict(os.environ, {"CI_PAR_JOBS": bad}):
+                self.assertEqual(self.mod.available_cpus(self.cg), 1, bad)
+
+    def test_the_pool_uses_it(self):
+        self.assertEqual(self.mod.SUITE_PROCESSES, self.mod.available_cpus())
 
 if __name__ == "__main__":
     unittest.main()
