@@ -17,7 +17,7 @@ LAUNCHER = ".local/bin/agent-chrome"
 ENTRY = {
     "command": "uvx",
     "args": ["--from", "browser-use==1.0.2", "python", "-I", "<server.py>"],
-    "env": {"BU_CDP_URL": "http://127.0.0.1:9333"},
+    "env": {"BU_CDP_URL": "http://127.0.0.1:9333", "ANONYMIZED_TELEMETRY": "false", "BH_TELEMETRY": "0"},
 }
 
 
