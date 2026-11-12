@@ -1,5 +1,5 @@
 """The agent-browser pieces as chezmoi renders them for both desktop profiles (real chezmoi, scratch config and HOME):
-the browser-harness MCP entry, and the agent-chrome launcher. macOS has both on personal and axon-work-computer; Linux has both on personal only."""
+the browser-harness MCP entry (it runs browser-use; the name stays so the stored Claude entry is replaced, not left beside a new one), and the agent-chrome launcher. macOS has both on personal and axon-work-computer; Linux has both on personal only."""
 import json
 import os
 import subprocess
@@ -16,7 +16,7 @@ LINUX = sys.platform.startswith("linux")
 LAUNCHER = ".local/bin/agent-chrome"
 ENTRY = {
     "command": "uvx",
-    "args": ["--from", "browser-harness[mcp]==0.1.13", "python", "-I", "<server.py>"],
+    "args": ["--from", "browser-use==1.0.2", "python", "-I", "<server.py>"],
     "env": {"BU_CDP_URL": "http://127.0.0.1:9333"},
 }
 
