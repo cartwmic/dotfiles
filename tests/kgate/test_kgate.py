@@ -1163,6 +1163,10 @@ if a[:2] == ["create", "-f"]:
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
     if quota == "impossible":   # asks for more than the namespace's own limit: waiting cannot help
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: limits.cpu=16,requests.cpu=2, used: limits.cpu=0,requests.cpu=0, limited: limits.cpu=8,requests.cpu=8\n'); sys.exit(1)
+    if os.environ.get("FAKE_CREATE_ECHO_PW"):   # a refusal that echoes the pod spec's SA password back, as an API error might
+        pw = next(e["value"] for i in json.load(sys.stdin)["items"] for c in i["spec"].get("initContainers", []) for e in c["env"] if e["name"] == "MSSQL_SA_PASSWORD")
+        open(os.path.join(fake, "echoed_pw"), "w").write(pw)
+        sys.stderr.write("Error from server (Invalid): pod spec rejected: env MSSQL_SA_PASSWORD=%s\n" % pw); sys.exit(1)
     if os.environ.get("FAKE_CREATE_ERROR"):
         text = os.environ["FAKE_CREATE_ERROR"]
         sys.stderr.write((text if text != "1" else "Error from server (Forbidden): pods is forbidden: violates PodSecurity") + "\n"); sys.exit(1)
@@ -1191,7 +1195,19 @@ if a[:2] == ["get", "pod"]:
         st = pending('0/3 nodes are available: persistentvolumeclaim "example-cache" not found. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.')
     else:
         st = pending("0/3 nodes fit")
+    if last["items"][0]["spec"].get("initContainers"):   # the SQL Server sidecar: a native sidecar reports under initContainerStatuses
+        if scenario == "mssql-crash":
+            st = {"phase": "Pending", "initContainerStatuses": [{"name": "mssql", "started": False, "restartCount": 1, "state": {"terminated": {"exitCode": 1}}}]}
+        else:
+            st["initContainerStatuses"] = [{"name": "mssql", "started": True, "restartCount": 0, "state": {"running": {}}}]
     print(json.dumps({"spec": {"nodeName": "fake-kcl-node"}, "status": st})); sys.exit(0)
+def sidecar_password():
+    spec = json.load(open(os.path.join(fake, "last_manifest.json")))["items"][0]["spec"]["initContainers"][0]
+    return next(e["value"] for e in spec["env"] if e["name"] == "MSSQL_SA_PASSWORD")
+if a[0] == "logs":
+    print("Error 18456: Login failed for user sa, password %s" % sidecar_password()); print("SQL Server is starting"); sys.exit(0)
+if a[0] == "exec" and "-c" in a and a[a.index("-c") + 1] == "mssql":
+    print("734003200"); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     job, script = a[2], a[-1]
     pre, _, rest = script.partition("tar -xf - ")
@@ -1217,7 +1233,8 @@ if a[0] == "exec" and "-i" in a:
     # the pod's own env: HOME comes from the pod spec (under /cache/<id>, which here lives under FAKE)
     spec = json.load(open(os.path.join(fake, "last_manifest.json")))["items"][0]["spec"]["containers"][0]["env"]
     home = next(e["value"] for e in spec if e["name"] == "HOME")
-    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-kcl-node", HOME=os.path.join(jobroot, home.lstrip("/")))
+    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-kcl-node", HOME=os.path.join(jobroot, home.lstrip("/")),
+               **{e["name"]: e["value"] for e in spec if e["name"].startswith(("MSSQL_", "SA_"))})
     d = "%s/cache/%s" % (jobroot, job)
     # A pod has no .git before the script runs. The test repo does, so it is set aside while the pod side runs and put back after.
     root = next(l.split("=", 1)[1] for l in open(d + "/job.sh").read().splitlines() if l.startswith("ROOT="))
@@ -1246,6 +1263,47 @@ class KubectlProfile(unittest.TestCase):
         p = K.parse_profile('cluster = "example"\nephemeral_storage = "20Gi"')
         self.assertEqual((p["cluster"], p["user"], p["ephemeral_storage"]), ("example", None, "20Gi"))
         self.assertEqual(K.parse_profile('cluster = "example"\nuser = "1001:1001"')["user"], "1001:1001")
+
+    MSSQL_IMG = "registry.example/db/sql@sha256:" + "ee" * 32
+    VOL_IMG = "registry.example/tools/flyway@sha256:" + "ff" * 32
+
+    def mssql_profile(self, extra=""):
+        return 'cluster = "example"\nservices = ["mssql"]\n%s\n[mssql]\nimage = "%s"\n' % (extra, self.MSSQL_IMG)
+
+    def test_mssql_is_a_service_with_its_own_sizes_and_a_digest_pinned_image(self):
+        m = K.parse_profile(self.mssql_profile())["mssql"]
+        self.assertEqual((m["image"], m["cpu"], m["cpu_limit"], m["memory"], m["memory_limit"], m["ready_s"]), (self.MSSQL_IMG, 2, 2, "4Gi", "4Gi", 300))
+        bad = {"no table": 'cluster = "example"\nservices = ["mssql"]',
+               "table without the service": 'cluster = "example"\n[mssql]\nimage = "%s"' % self.MSSQL_IMG,
+               "unpinned": 'cluster = "example"\nservices = ["mssql"]\n[mssql]\nimage = "registry.example/db/sql:2019"',
+               "homelab": 'services = ["mssql"]\n[mssql]\nimage = "%s"' % self.MSSQL_IMG,
+               "unknown key": self.mssql_profile() + 'port = 1',
+               "other service": 'cluster = "example"\nservices = ["oracle"]'}
+        for what, text in bad.items():
+            with self.subTest(what), self.assertRaises(K.Unavailable):
+                K.parse_profile(text)
+
+    def test_image_volumes_are_digest_pinned_absolute_unique_and_for_a_kubectl_cluster_only(self):
+        ok = K.parse_profile('cluster = "example"\n[[image_volumes]]\nimage = "%s"\npath = "/opt/flyway"' % self.VOL_IMG)
+        self.assertEqual(ok["image_volumes"], [{"image": self.VOL_IMG, "path": "/opt/flyway"}])
+        one = '[[image_volumes]]\nimage = "%s"\npath = "%s"\n'
+        bad = {"unpinned": 'cluster = "example"\n' + one % ("registry.example/t:1", "/opt/f"),
+               "relative": 'cluster = "example"\n' + one % (self.VOL_IMG, "opt/f"),
+               "dotdot": 'cluster = "example"\n' + one % (self.VOL_IMG, "/opt/../etc"),
+               "trailing slash": 'cluster = "example"\n' + one % (self.VOL_IMG, "/opt/f/"),
+               "duplicate": 'cluster = "example"\n' + one % (self.VOL_IMG, "/opt/f") + one % (self.VOL_IMG, "/opt/f"),
+               "homelab": one % (self.VOL_IMG, "/opt/f")}
+        for what, text in bad.items():
+            with self.subTest(what), self.assertRaises(K.Unavailable):
+                K.parse_profile(text)
+
+    def test_local_hostnames_are_plain_names_never_addresses(self):
+        self.assertEqual(K.parse_profile('cluster = "example"\nlocal_hostnames = ["db", "sql.internal"]')["local_hostnames"], ["db", "sql.internal"])
+        for bad in ('["10.0.0.5"]', '["127.0.0.1"]', '["db:1433"]', '["a b"]', '"db"'):
+            with self.subTest(bad), self.assertRaises(K.Unavailable):
+                K.parse_profile('cluster = "example"\nlocal_hostnames = ' + bad)
+        with self.assertRaises(K.Unavailable):
+            K.parse_profile('local_hostnames = ["db"]')
 
     def test_cpu_limit_is_for_a_kubectl_cluster_only_and_a_whole_number(self):
         self.assertIsNone(K.parse_profile('cluster = "example"')["cpu_limit"])
@@ -1348,6 +1406,34 @@ class KubectlPodSpec(unittest.TestCase):
                                           "limits": {"cpu": "8", "memory": "24Gi", "ephemeral-storage": "20Gi"}})
         self.assertEqual(c["image"], KCL_IMAGE)
         self.assertEqual(c["command"], ["sleep", "86400"], "no tini in the image: a plain sleep longer than the deadline")
+
+    def test_mssql_is_a_native_sidecar_the_job_waits_for_and_both_get_the_password(self):
+        sql = {"image": "registry.example/db/sql@sha256:" + "ee" * 32, "cpu": 2, "cpu_limit": 3, "memory": "4Gi", "memory_limit": "5Gi", "ephemeral_storage": "6Gi", "ready_s": 120}
+        vols = [{"image": "registry.example/tools/flyway@sha256:" + "ff" * 32, "path": "/mnt/flyway"}]
+        items = K.pod_manifests_kubectl(KCFG, "kgate-1-2", KCL_IMAGE, 8, "16Gi", "24Gi", "20Gi", 65532, 65532, ["/Users"],
+                                        mssql=sql, image_volumes=vols, local_hostnames=["db"], password="Aa1_secret")["items"]
+        self.assertEqual(len(items), 1, "still one Pod and no Secret: the password is set on the pod itself")
+        spec = items[0]["spec"]
+        (side,) = spec["initContainers"]
+        self.assertEqual((side["name"], side["image"], side["restartPolicy"]), ("mssql", sql["image"], "Always"))
+        self.assertEqual(side["securityContext"], {"runAsUser": 10001, "runAsGroup": 0, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"], "add": ["NET_BIND_SERVICE"]}})
+        self.assertEqual(side["resources"], {"requests": {"cpu": "2", "memory": "4Gi", "ephemeral-storage": "6Gi"},
+                                             "limits": {"cpu": "3", "memory": "5Gi", "ephemeral-storage": "6Gi"}})
+        self.assertEqual(side["startupProbe"]["failureThreshold"], 24)
+        self.assertIn("sqlcmd", side["startupProbe"]["exec"]["command"][-1])
+        env = {e["name"]: e["value"] for e in side["env"]}
+        self.assertEqual((env["ACCEPT_EULA"], env["MSSQL_SA_PASSWORD"]), ("Y", "Aa1_secret"))
+        job = {e["name"]: e.get("value") for e in spec["containers"][0]["env"]}
+        self.assertEqual((job["MSSQL_HOST"], job["MSSQL_PORT"], job["MSSQL_SA_PASSWORD"]), ("localhost", "1433", "Aa1_secret"))
+        self.assertEqual(spec["hostAliases"], [{"ip": "127.0.0.1", "hostnames": ["db"]}])
+        self.assertIn({"name": "imgvol0", "mountPath": "/mnt/flyway", "readOnly": True}, spec["containers"][0]["volumeMounts"])
+        self.assertIn({"name": "imgvol0", "image": {"reference": vols[0]["image"], "pullPolicy": "IfNotPresent"}}, spec["volumes"])
+
+    def test_a_pod_without_services_has_no_sidecar_aliases_or_password(self):
+        spec = self.pod()["spec"]
+        self.assertNotIn("initContainers", spec)
+        self.assertNotIn("hostAliases", spec)
+        self.assertFalse([e for e in spec["containers"][0]["env"] if "MSSQL" in e["name"] or e["name"] == "SA_PASSWORD"])
 
     def test_cpu_limit_defaults_to_cpu_and_otherwise_splits_request_from_limit(self):
         c = self.pod()["spec"]["containers"][0]
@@ -1704,11 +1790,11 @@ class KubectlBlack(unittest.TestCase):
         self.cmd_env = {"KGATE_SSH": ""}
         self.write_cluster()
 
-    def write_cluster(self, name="example", roots=None, drop=(), extra=""):
+    def write_cluster(self, name="example", roots=None, drop=(), extra="", registries='["registry.example", "other.example"]'):
         """~/.config/kgate/clusters/<name>.toml in the test HOME. The temp dirs of these tests are under /tmp on Linux, so that top directory is a tree root here."""
         roots = roots or sorted({"Users", "Volumes", "private", self.repo.parts[1]})
         lines = {"kind": 'kind = "kubectl"', "kubeconfig": 'kubeconfig = "~/.kube/example"', "context": 'context = "example-ctx"', "namespace": 'namespace = "jobs"',
-                 "registries": 'registries = ["registry.example", "other.example"]', "tree_roots": "tree_roots = [%s]" % ", ".join('"%s"' % r for r in roots),
+                 "registries": "registries = " + registries, "tree_roots": "tree_roots = [%s]" % ", ".join('"%s"' % r for r in roots),
                  "user": 'user = "65532:65532"', "deadline_s": "deadline_s = 7200"}
         text = "\n".join(v for k, v in lines.items() if k not in drop) + "\n[pod_labels]\n\"example.org/owner\" = \"team-a\"\n\"example.org/tier\" = \"build\"\n" \
                "[pod_annotations]\n\"example.org/evict-ok\" = \"true\"\n" + extra
@@ -1763,6 +1849,131 @@ class KubectlBlack(unittest.TestCase):
         manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
         mounts = [m["mountPath"] for m in manifest["items"][0]["spec"]["containers"][0]["volumeMounts"]]
         self.assertEqual(mounts, ["/" + linked.parts[1], "/cache", "/out"], "no emptyDir for the common dir's top directory")
+
+    def mssql_profile(self, extra="", sql_image="registry.example/db/sql@sha256:" + "ee" * 32, hostnames='["db"]', image=KCL_IMAGE):
+        self.profile(image=image, extra='services = ["mssql"]\nlocal_hostnames = %s\n%s\n[mssql]\nimage = "%s"\nready_s = 60\n[[image_volumes]]\nimage = "registry.example/tools/flyway@sha256:%s"\npath = "/mnt/flyway"\n'
+                     % (hostnames, extra, sql_image, "ff" * 32))
+
+    def test_mssql_runs_cmd_in_the_job_container_and_the_password_stays_out_of_every_record(self):
+        self.mssql_profile()
+        done = self.run_kgate("--", "sh", "-c", 'echo "host=$MSSQL_HOST pw=$MSSQL_SA_PASSWORD"')
+        self.assertEqual(done.returncode, 0, done.stdout)
+        manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
+        pw = {e["name"]: e["value"] for e in manifest["items"][0]["spec"]["initContainers"][0]["env"]}["MSSQL_SA_PASSWORD"]
+        self.assertIn("host=localhost pw=***", done.stdout)
+        self.assertIn("SQL Server ready after", done.stdout)
+        self.assertIn("peak mssql 734003200 cgroup", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["services"], rec["service_peak_bytes"]), (0, ["mssql"], 734003200))
+        self.assertIn("service_ready_s", rec)
+        self.assertIn("pod_start_s", rec)
+        everything = done.stdout + (done.stderr or "") + "".join(p.read_text(errors="replace") for p in self.state.rglob("*") if p.is_file())
+        self.assertNotIn(pw, everything, "the generated SA password is in the pod spec only")
+        execs = [a for a in self.kubectl_args() if a[0] == "exec" and "-i" in a]
+        self.assertEqual(execs[0][3:5], ["-c", "job"], "a pod with two containers: CMD goes to the job container")
+
+    def test_each_job_gets_its_own_password(self):
+        self.mssql_profile()
+        pws = []
+        for _ in range(2):
+            self.run_kgate("--", "true")
+            manifest = [c["manifest"] for c in self.kcalls() if "manifest" in c][-1]
+            pws.append(manifest["items"][0]["spec"]["initContainers"][0]["env"][1]["value"])
+        self.assertNotEqual(pws[0], pws[1])
+
+    def test_a_sidecar_that_never_becomes_ready_is_69_with_its_masked_log_tail_and_cmd_not_run(self):
+        self.mssql_profile()
+        done = self.run_kgate("--", "sh", "-c", "echo should-not-run", env={"FAKE_POD": "mssql-crash"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("SQL Server sidecar did not become ready", done.stdout)
+        self.assertIn("Login failed for user sa, password ***", done.stdout)
+        self.assertNotIn("should-not-run", done.stdout)
+        manifest = next(c["manifest"] for c in self.kcalls() if "manifest" in c)
+        pw = manifest["items"][0]["spec"]["initContainers"][0]["env"][1]["value"]
+        self.assertNotIn(pw, done.stdout + (done.stderr or ""))
+        self.assertTrue(self.records()[-1]["cleanup"])
+        self.assert_password_nowhere(pw, done)
+        self.assertIn("password ***", self.records()[-1]["reason"])
+        cancel = self.kgate("cancel", self.records()[-1]["id"], host="", env=self.cmd_env)   # reads the record back and prints it
+        self.assertNotIn(pw, cancel.stdout + (cancel.stderr or ""))
+
+    def assert_password_nowhere(self, pw, done):
+        """The real generated password is in no state file (log.jsonl, the job log, the registry), nor in stdout or stderr."""
+        files = {str(p.relative_to(self.state)): p.read_text(errors="replace") for p in self.state.rglob("*") if p.is_file()}
+        self.assertIn("kgate/log.jsonl", files)
+        for name, text in files.items():
+            self.assertNotIn(pw, text, name)
+        self.assertNotIn(pw, done.stdout + (done.stderr or ""))
+
+    def test_a_pod_create_refusal_that_echoes_the_password_is_masked_in_the_record_and_output(self):
+        self.mssql_profile()
+        done = self.run_kgate("--", "true", env={"FAKE_CREATE_ECHO_PW": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("could not create the pod", done.stdout)
+        self.assertIn("MSSQL_SA_PASSWORD=***", done.stdout)
+        self.assertIn("MSSQL_SA_PASSWORD=***", self.records()[-1]["reason"])
+        pw = (self.fake / "echoed_pw").read_text()
+        self.assertRegex(pw, r"^Aa1_[0-9a-f]{32}$")
+        self.assert_password_nowhere(pw, done)
+        cancel = self.kgate("cancel", self.records()[-1]["id"], host="", env=self.cmd_env)
+        self.assertNotIn(pw, cancel.stdout + (cancel.stderr or ""))
+
+    def test_a_password_split_across_two_pipe_reads_is_masked(self):
+        pw = "Aa1_" + "0123456789abcdef" * 2
+        for cut in range(1, len(pw)):
+            with self.subTest(cut=cut):
+                job = object.__new__(K.Job)
+                job.secret, job.carry, job.console = pw, b"", False
+                job.log = tempfile.TemporaryFile()
+                self.addCleanup(job.log.close)
+                for chunk in (b"before " + pw[:cut].encode(), pw[cut:].encode() + b" after, " + pw.encode() + b" again " + pw[:5].encode()):
+                    job.emit(chunk)
+                job.flush()
+                job.log.seek(0)
+                out = job.log.read()
+                self.assertNotIn(pw.encode(), out)
+                self.assertEqual(out, b"before *** after, *** again " + pw[:5].encode())
+
+    def test_the_sidecar_image_and_the_volume_images_must_come_from_the_cluster_registries(self):
+        self.mssql_profile(sql_image="mcr.example/db/sql@sha256:" + "ee" * 32)
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("[mssql] image", done.stdout)
+        self.assertIn("must come from registry.example", done.stdout)
+        self.assertFalse(any("manifest" in c for c in self.kcalls()))
+        self.mssql_profile()
+        text = (self.repo / "kgate.toml").read_text().replace("registry.example/tools/flyway", "elsewhere.example/tools/flyway")
+        (self.repo / "kgate.toml").write_text(text)
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("image_volumes image", done.stdout)
+
+    def test_a_registries_entry_may_be_a_host_or_a_host_and_path_prefix(self):
+        self.write_cluster(registries='["registry.example/team/db"]')
+        sql = lambda repo: "registry.example/%s@sha256:%s" % (repo, "ee" * 32)
+        job = sql("team/db/job")
+        self.mssql_profile(sql_image=sql("team/db"), image=job)              # the repository equals the entry
+        self.assertEqual(self.run_kgate("--", "true").returncode, 69)   # the volume image is under tools/, not admitted
+        text = (self.repo / "kgate.toml").read_text().replace("registry.example/tools/flyway", "registry.example/team/db/flyway")
+        (self.repo / "kgate.toml").write_text(text)
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)         # entry + "/" prefix admits the volume, equality admits the sidecar
+        self.mssql_profile(sql_image=sql("team/other"), image=job)           # a sibling repo on the same host
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("[mssql] image", done.stdout)
+        self.assertEqual(K.registry_admits(["h.example/a/b"], "h.example/a/bc@sha256:" + "0" * 64), False)
+        self.assertEqual(K.registry_admits(["h.example"], "h.example/x/y:1"), True)
+
+    def test_an_image_volume_may_not_cover_the_cache_out_a_tree_root_or_a_system_directory(self):
+        for path in ("/cache", "/out", "/cache/x", "/Users", "/Users/me/tool", "/", "/usr", "/usr/local/bin", "/etc/x", "/bin", "/sbin", "/lib", "/lib64/x", "/proc", "/sys/x", "/dev/shm", "/./usr", "/.", "/a/../usr", "/usr/", "/a//b", "/opt/./x"):
+            with self.subTest(path):
+                self.mssql_profile()
+                text = (self.repo / "kgate.toml").read_text().replace("/mnt/flyway", path)
+                (self.repo / "kgate.toml").write_text(text)
+                done = self.run_kgate("--", "true")
+                self.assertEqual(done.returncode, 69, done.stdout)
+                self.assertIn("image_volumes path", done.stdout)
 
     def test_a_quota_refusal_is_waited_out_then_the_job_runs(self):
         done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-after-quota", env={"FAKE_QUOTA": "3"})

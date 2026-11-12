@@ -49,7 +49,9 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 import re
+import secrets
 import shlex
 import signal
 import stat
@@ -94,7 +96,18 @@ PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/passw
 QUOTA_REFUSAL = re.compile(r'^Error from server \(Forbidden\): (?:error when creating "[^"]*": )?pods "[^"]*" is forbidden: exceeded quota: [^\s,]+, requested: .+, used: .+, limited: .+$', re.M)
 CACHE_BUSY_S = 10  # a cache_pvc pod Pending this long on the ReadWriteOncePod conflict runs without the cache
 QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
+SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
+MSSQL_PORT = 1433
+MSSQL_UID = 10001            # the SQL Server image's own user
+SERVICE_READY_S = 300        # how long a sidecar has to pass its startup probe
 CLUSTER_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+def registry_admits(regs, ref):
+    """A registries entry is a host or a host plus a path prefix. An image matches when it starts with
+    entry + "/" or when its repository (before @sha256:) equals the entry."""
+    repo = ref.split("@")[0]
+    return any(ref.startswith(r + "/") or repo == r for r in regs)
+
+
 CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default"}
 CLUSTER_REQUIRED = ("kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s")
 MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
@@ -170,7 +183,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit", "cache_pvc"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit", "cache_pvc", "mssql", "image_volumes", "local_hostnames"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -188,6 +201,9 @@ def parse_profile(text):
     services = raw.get("services") or []
     if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
         raise Unavailable("profile services must be a list of names")
+    cluster_name = raw.get("cluster", "homelab")
+    if cluster_name != "homelab" and set(services) - set(SERVICES):
+        raise Unavailable("profile services %s are not offered: a kubectl cluster takes %s" % (", ".join(sorted(set(services) - set(SERVICES))), ", ".join(SERVICES)))
     prefer = raw.get("prefer_nodes", True)
     if not isinstance(prefer, bool):
         raise Unavailable("profile prefer_nodes must be true or false, got %r" % (prefer,))
@@ -204,14 +220,73 @@ def parse_profile(text):
     cache_pvc = raw.get("cache_pvc")
     if cache_pvc is not None and (cluster == "homelab" or not isinstance(cache_pvc, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", cache_pvc)):
         raise Unavailable("profile cache_pvc" + away + " and must be a claim name like my-cache, got %r" % (cache_pvc,))
+    mssql = raw.get("mssql")
+    if mssql is not None and cluster == "homelab":
+        raise Unavailable("profile [mssql]" + away)
+    if cluster != "homelab" and (mssql is not None or "mssql" in services):
+        mssql = parse_mssql(mssql, services, cluster, away)
+    volumes = raw.get("image_volumes", [])
+    if volumes != [] and cluster == "homelab":
+        raise Unavailable("profile image_volumes" + away)
+    if not isinstance(volumes, list) or not all(isinstance(v, dict) and set(v) == {"image", "path"} and isinstance(v["image"], str) and isinstance(v["path"], str) for v in volumes):
+        raise Unavailable("profile image_volumes must be a list of {image, path} tables")
+    for v in volumes:
+        if not re.fullmatch(IMAGE_DIGEST, v["image"]):
+            raise Unavailable("profile image_volumes image must be pinned by digest (name@sha256:<64 hex>), got %r" % (v["image"],))
+        if not re.fullmatch(r"/[A-Za-z0-9._][A-Za-z0-9._/-]*", v["path"]) or posixpath.normpath(v["path"]) != v["path"]:
+            raise Unavailable("profile image_volumes path must be an absolute, normalized directory like /opt/tool (no ., .., // or trailing /), got %r" % (v["path"],))
+    if len({v["path"] for v in volumes}) != len(volumes):
+        raise Unavailable("profile image_volumes paths must be different from each other")
+    hostnames = raw.get("local_hostnames", [])
+    if hostnames != [] and cluster == "homelab":
+        raise Unavailable("profile local_hostnames" + away)
+    if not isinstance(hostnames, list) or not all(isinstance(h, str) and re.fullmatch(r"[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*", h) for h in hostnames):
+        raise Unavailable("profile local_hostnames must be a list of plain host names (they resolve to 127.0.0.1 only; an address is refused), got %r" % (hostnames,))
     user = raw.get("user", "1000:1000" if cluster == "homelab" else None)   # a kubectl cluster's default user is in its cluster file
     if user is not None and (not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user)):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
-            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc}
+            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc,
+            "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
 
+
+
+IMAGE_DIGEST = r"[^@\s]+@sha256:[0-9a-f]{64}"
+
+
+def parse_mssql(table, services, cluster, away):
+    """The [mssql] table of a profile: the SQL Server sidecar's image (pinned by digest) and its own sizes, which count toward the quota."""
+    if cluster == "homelab":
+        raise Unavailable("profile [mssql]" + away)
+    if "mssql" not in services or not isinstance(table, dict):
+        raise Unavailable("profile [mssql] needs services = [\"mssql\"], and services = [\"mssql\"] needs an [mssql] table with an image")
+    known = {"image", "cpu", "cpu_limit", "memory", "memory_limit", "ephemeral_storage", "ready_s"}
+    if set(table) - known:
+        raise Unavailable("profile [mssql] has unknown keys: " + ", ".join(sorted(set(table) - known)))
+    image = table.get("image")
+    if not isinstance(image, str) or not re.fullmatch(IMAGE_DIGEST, image):
+        raise Unavailable("profile [mssql] image must be pinned by digest (name@sha256:<64 hex>), got %r" % (image,))
+    cpu = table.get("cpu", 2)
+    cpu_limit = table.get("cpu_limit", cpu)
+    for key, value in (("cpu", cpu), ("cpu_limit", cpu_limit)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise Unavailable("profile [mssql] %s must be a whole number of at least 1, got %r" % (key, value))
+    if cpu_limit < cpu:
+        raise Unavailable("profile [mssql] cpu_limit must be at least cpu")
+    memory = table.get("memory", "4Gi")
+    memory_limit = table.get("memory_limit", memory)
+    ephemeral = table.get("ephemeral_storage", "4Gi")
+    for key, value in (("memory", memory), ("memory_limit", memory_limit), ("ephemeral_storage", ephemeral)):
+        if not isinstance(value, str) or not re.fullmatch(MEM_SIZE, value):
+            raise Unavailable("profile [mssql] %s must look like 4Gi, got %r" % (key, value))
+    if mem_bytes(memory_limit) < mem_bytes(memory):
+        raise Unavailable("profile [mssql] memory_limit must be at least memory")
+    ready = table.get("ready_s", SERVICE_READY_S)
+    if not isinstance(ready, int) or isinstance(ready, bool) or ready < 30:
+        raise Unavailable("profile [mssql] ready_s must be a whole number of seconds, at least 30")
+    return {"image": image, "cpu": cpu, "cpu_limit": cpu_limit, "memory": memory, "memory_limit": memory_limit, "ephemeral_storage": ephemeral, "ready_s": ready}
 
 
 def mem_bytes(size):
@@ -310,8 +385,8 @@ def load_cluster(name):
     for key in ("kubeconfig", "context", "namespace"):
         if not isinstance(raw[key], str) or not raw[key]:
             raise bad(key, "must be a non-empty string")
-    if not isinstance(raw["registries"], list) or not raw["registries"] or not all(isinstance(r, str) and r and "/" not in r for r in raw["registries"]):
-        raise bad("registries", "must be a non-empty list of image host names (no path)")
+    if not isinstance(raw["registries"], list) or not raw["registries"] or not all(isinstance(r, str) and re.fullmatch(r"[^/@:\s]+(:[0-9]+)?(/[A-Za-z0-9._-]+)*", r) for r in raw["registries"]):
+        raise bad("registries", "must be a non-empty list of image hosts, each optionally followed by a path prefix (registry.example or registry.example/team/db)")
     if not isinstance(raw["tree_roots"], list) or not raw["tree_roots"] or not all(isinstance(r, str) and r and "/" not in r for r in raw["tree_roots"]):
         raise bad("tree_roots", "must be a non-empty list of top-level directory names (no slash)")
     if not isinstance(raw["user"], str) or not re.fullmatch(r"[0-9]+:[0-9]+", raw["user"]) or raw["user"].startswith("0:"):
@@ -368,7 +443,25 @@ def quota_impossible(msg):
     return False
 
 
-def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None, cache_pvc=None):
+def new_password():
+    """A throwaway SA password that meets SQL Server's complexity rule (upper, lower, digit, symbol)."""
+    return "Aa1_" + secrets.token_hex(16)
+
+
+def mssql_container(svc, password):
+    """The SQL Server sidecar, a native sidecar (an init container that keeps running): the job container starts only once its startup probe passes."""
+    env = [{"name": "ACCEPT_EULA", "value": "Y"}, {"name": "MSSQL_SA_PASSWORD", "value": password}, {"name": "SA_PASSWORD", "value": password}]
+    probe = 'exec /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -Q "select 1" -b'
+    return {"name": "mssql", "image": svc["image"], "imagePullPolicy": "IfNotPresent", "restartPolicy": "Always", "env": env,
+            "ports": [{"containerPort": MSSQL_PORT}],
+            "securityContext": {"runAsUser": MSSQL_UID, "runAsGroup": 0, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"], "add": ["NET_BIND_SERVICE"]}},
+            "startupProbe": {"exec": {"command": ["sh", "-c", probe]}, "periodSeconds": 5, "timeoutSeconds": 5, "failureThreshold": max(1, svc["ready_s"] // 5)},
+            "resources": {"requests": {"cpu": str(svc["cpu"]), "memory": svc["memory"], "ephemeral-storage": svc["ephemeral_storage"]},
+                          "limits": {"cpu": str(svc["cpu_limit"]), "memory": svc["memory_limit"], "ephemeral-storage": svc["ephemeral_storage"]}}}
+
+
+def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None, cache_pvc=None,
+                          mssql=None, image_volumes=(), local_hostnames=(), password=None):
     """The one Pod for a job on a kubectl cluster, as a List. The labels and annotations the cluster's policy needs come from its cluster file. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. /cache is an emptyDir, or the profile's claim (cache_pvc: persists between jobs, ReadWriteOncePod, so one job at a time). No Secrets, no pull Secret, no hostPath, no affinity: the cluster's own policy decides."""
     cpu_limit = cpu_limit or cpu
     labels = {"app": "kgate", "kgate-job": job, **cfg["pod_labels"]}
@@ -380,6 +473,9 @@ def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral,
            {"name": "HOME", "value": "/cache/%s/home" % job},  # per job, removed with /cache/<id> at the end: nothing a job writes to HOME outlives it
            {"name": "npm_config_store_dir", "value": "/cache/pnpm-store"}, {"name": "GOCACHE", "value": "/cache/go-build"},
            {"name": "GOMODCACHE", "value": "/cache/gomod"}, {"name": "GOMAXPROCS", "value": str(cpu_limit)}]
+    if mssql:       # what CMD uses to reach the sidecar (same pod, so localhost)
+        env += [{"name": "MSSQL_HOST", "value": "localhost"}, {"name": "MSSQL_PORT", "value": str(MSSQL_PORT)},
+                {"name": "MSSQL_SA_PASSWORD", "value": password}, {"name": "SA_PASSWORD", "value": password}]
     mounts = [("tree%d" % i, r) for i, r in enumerate(roots)] + [("cache", "/cache"), ("out", "/out")]
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
                  "command": ["sleep", "86400"],  # no tini in the image; longer than the pod's deadline, so the deadline ends it
@@ -387,12 +483,18 @@ def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral,
                  "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
                  "resources": {"requests": {"cpu": str(cpu), "memory": memory, "ephemeral-storage": ephemeral},
                                "limits": {"cpu": str(cpu_limit), "memory": memory_limit, "ephemeral-storage": ephemeral}},
-                 "volumeMounts": [{"name": n, "mountPath": path} for n, path in mounts]}
+                 "volumeMounts": [{"name": n, "mountPath": path} for n, path in mounts]
+                 + [{"name": "imgvol%d" % i, "mountPath": v["path"], "readOnly": True} for i, v in enumerate(image_volumes)]}
     pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": cfg["deadline_s"],
            "automountServiceAccountToken": False,
            "securityContext": {"runAsNonRoot": True, "runAsUser": uid, "runAsGroup": gid, "seccompProfile": {"type": "RuntimeDefault"}},
            "volumes": [{"name": n, "persistentVolumeClaim": {"claimName": cache_pvc}} if n == "cache" and cache_pvc else {"name": n, "emptyDir": {}} for n, _ in mounts],
            "containers": [container]}
+    pod["volumes"] += [{"name": "imgvol%d" % i, "image": {"reference": v["image"], "pullPolicy": "IfNotPresent"}} for i, v in enumerate(image_volumes)]
+    if mssql:
+        pod["initContainers"] = [mssql_container(mssql, password)]
+    if local_hostnames:    # names that resolve to this pod itself and nothing else (the sidecar's address in a repo's own configuration)
+        pod["hostAliases"] = [{"ip": "127.0.0.1", "hostnames": list(local_hostnames)}]
     if cache_pvc:  # a new disk's root belongs to root: the group makes it writable for the non-root user
         pod["securityContext"].update({"fsGroup": gid, "fsGroupChangePolicy": "OnRootMismatch"})
     meta = {"name": job, "labels": labels}
@@ -955,8 +1057,20 @@ class Job:
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
+        self.t_pod = time.time()
+        self.mssql = None       # the SQL Server sidecar's settings, when the profile asks for one
+        self.secret = None      # its generated password: kept out of the log, the record and every message (see mask())
+        self.carry = b""        # the end of the last chunk, held back in case it is the start of the password
 
-    def emit(self, data):
+    def mask(self, data):
+        """The one place the generated password is removed. Everything that is stored or printed goes through here: the job log, the console and the record's reason."""
+        if not self.secret:
+            return data
+        if isinstance(data, str):
+            return data.replace(self.secret, "***")
+        return data.replace(self.secret.encode(), b"***")
+
+    def _put(self, data):
         self.log.write(data)
         if self.console:
             try:
@@ -965,8 +1079,26 @@ class Job:
             except BrokenPipeError:
                 self.console = False
 
+    def emit(self, data):
+        """Write a chunk of a stream. A password split across two reads is still masked: the end of a chunk that could start it is held back until the next chunk (or flush())."""
+        data = self.carry + data
+        self.carry = b""
+        if self.secret:
+            data = self.mask(data)
+            key = self.secret.encode()
+            for k in range(min(len(key) - 1, len(data)), 0, -1):
+                if data.endswith(key[:k]):
+                    data, self.carry = data[:-k], data[-k:]
+                    break
+        self._put(data)
+
+    def flush(self):
+        carry, self.carry = self.carry, b""
+        self._put(carry)
+
     def note(self, text):
-        self.emit(("kgate: " + text + "\n").encode())
+        self.flush()
+        self._put(self.mask(("kgate: " + text + "\n").encode()))
 
     def register(self):
         """Write (or rewrite) this job's entry in the running-jobs registry. Removed by unregister()."""
@@ -987,7 +1119,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "ephemeral_storage": None}
+                "services": [], "cluster": "homelab", "ephemeral_storage": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -1010,7 +1142,7 @@ class Job:
         check_settings(image, cpu, mem, mem_limit)
         if self.kcfg:
             self.use_kubectl(image, prof, cpu)
-        if prof["services"]:
+        if prof["services"] and not self.kcfg:     # a kubectl cluster offers SERVICES (checked when the profile is read); the homelab offers none
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node in NEVER_NODES:
             raise Unavailable("node %s is excluded from kgate" % o.node)
@@ -1024,8 +1156,16 @@ class Job:
         name, regs = self.kcfg["name"], self.kcfg["registries"]
         if prof["secrets"]:
             raise Unavailable("a profile for cluster %s cannot have [secrets]: no Secrets are created there" % name)
-        if not image.startswith(tuple(r + "/" for r in regs)):
+        if not registry_admits(regs, image):
             raise Unavailable("an image for cluster %s must come from %s (registries in %s), got %s" % (name, " or ".join(regs), self.kcfg["path"], image.split("@")[0]))
+        extra = ([("[mssql] image", prof["mssql"]["image"])] if prof["mssql"] else []) + [("image_volumes image", v["image"]) for v in prof["image_volumes"]]
+        for what, ref in extra:
+            if not registry_admits(regs, ref):
+                raise Unavailable("the %s for cluster %s must come from %s (registries in %s), got %s" % (what, name, " or ".join(regs), self.kcfg["path"], ref.split("@")[0]))
+        for v in prof["image_volumes"]:
+            top = "/" + v["path"].lstrip("/").split("/")[0]
+            if v["path"] in ("/", "/cache", "/out") or top in ("/cache", "/out", "/proc", "/sys", "/dev", "/usr", "/etc", "/bin", "/sbin") or top.startswith("/lib") or top[1:] in self.kcfg["tree_roots"]:
+                raise Unavailable("image_volumes path %s is where the pod keeps the cache, /out, the shipped tree or the system; use another directory" % v["path"])
         if int(prof["user"].split(":")[0]) == 0:
             raise Unavailable("a pod on cluster %s runs as non-root; the profile user is %s" % (name, prof["user"]))
         if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
@@ -1101,6 +1241,8 @@ class Job:
                 raise Unavailable("lost the pod while waiting for it: " + done.stderr.decode(errors="replace").strip())
             status = json.loads(done.stdout).get("status", {})
             cs = (status.get("containerStatuses") or [{}])[0]
+            if self.mssql:
+                self.check_sidecar(status)
             waiting = (cs.get("state") or {}).get("waiting") or {}
             ready = status.get("phase") == "Running" and cs.get("ready")
             if ready:
@@ -1138,11 +1280,39 @@ class Job:
                 raise Unavailable("pod did not start within %ds: %s %s" % (self.o.wait, what, detail[:300]))
             time.sleep(2)
 
+    def job_container(self):
+        return ["-c", "job"] if self.mssql else []     # a pod with a sidecar has two containers: say which one runs CMD
+
+    def check_sidecar(self, status):
+        """Note when the SQL Server sidecar passes its startup probe; fail fast, with its last log lines, when it crashes or restarts."""
+        sc = next((c for c in status.get("initContainerStatuses") or [] if c.get("name") == "mssql"), None)
+        if not sc:
+            return
+        if sc.get("started") and "service_ready_s" not in self.rec:
+            self.rec["service_ready_s"] = round(time.time() - self.t_pod, 1)
+            self.note("SQL Server ready after %.1fs" % self.rec["service_ready_s"])
+        state = sc.get("state") or {}
+        crashed = (state.get("terminated") or {}) or (sc.get("lastState") or {}).get("terminated") or {}
+        if crashed or sc.get("restartCount"):
+            logs = self.cluster.run(["logs", self.id, "-c", "mssql", "--tail=15"])
+            tail = (logs.stdout + logs.stderr).decode(errors="replace").strip()
+            raise Unavailable("the SQL Server sidecar did not become ready (exit %s, %d restarts); its last log lines:\n%s (CMD not run)"
+                              % (crashed.get("exitCode", "?"), sc.get("restartCount") or 0, tail))
+
+    def sidecar_peak(self):
+        """Peak memory of the sidecar's own cgroup, read after CMD ends. Best effort: the record says unknown when it cannot be read."""
+        read = self.cluster.run(["exec", self.id, "-c", "mssql", "--", "sh", "-c",
+                                 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current 2>/dev/null'])
+        value = read.stdout.decode(errors="replace").strip()
+        if read.returncode == 0 and value.isdigit():
+            self.rec["service_peak_bytes"] = int(value)
+            self.note("peak mssql %s cgroup" % value)
+
     def execute(self, tar_bytes):
         """One exec: unpack, verify, run. Returns (markers, transport exit)."""
         script = self.cluster.exec_script(self.id)
         read, write = os.pipe()
-        proc = self.cluster.popen(["exec", "-i", self.id, "--", "sh", "-c", script], stdin=subprocess.PIPE, stdout=write)
+        proc = self.cluster.popen(["exec", "-i", self.id] + self.job_container() + ["--", "sh", "-c", script], stdin=subprocess.PIPE, stdout=write)
         os.close(write)
         feeder = threading.Thread(target=lambda: self._send(proc, tar_bytes), daemon=True)
         feeder.start()
@@ -1152,6 +1322,7 @@ class Job:
                 for chunk in iter(lambda: stream.read(65536), b""):
                     self.emit(chunk)
                     markers.feed(chunk)
+            self.flush()
             markers.close()
             feeder.join()
             self.exec_tail = markers.tail
@@ -1169,7 +1340,7 @@ class Job:
             pass
 
     def fetch_out(self):
-        done = self.cluster.run(["exec", self.id, "--", "sh", "-c", "tar -cf - -C /out ."])
+        done = self.cluster.run(["exec", self.id] + self.job_container() + ["--", "sh", "-c", "tar -cf - -C /out ."])
         if done.returncode != 0:
             self.note("could not copy /out back: " + done.stderr.decode(errors="replace").strip()[:200])
             return
@@ -1224,16 +1395,26 @@ class Job:
         cold = None
         if self.cluster.kind == "kubectl":
             args = (self.kcfg, self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], tree_roots_for(self.kcfg, wt), prof["cpu_limit"])
-            manifests = pod_manifests_kubectl(*args, cache_pvc=prof["cache_pvc"])
-            cold = pod_manifests_kubectl(*args) if prof["cache_pvc"] else None
+            extra = {"mssql": prof["mssql"], "image_volumes": prof["image_volumes"], "local_hostnames": prof["local_hostnames"]}
+            if prof["mssql"]:
+                self.mssql = prof["mssql"]
+                self.secret = new_password()        # throwaway, for this pod only: set in the pod spec of both containers, never logged or recorded
+                extra["password"] = self.secret
+                self.rec["services"] = ["mssql"]
+            manifests = pod_manifests_kubectl(*args, cache_pvc=prof["cache_pvc"], **extra)
+            cold = pod_manifests_kubectl(*args, **extra) if prof["cache_pvc"] else None
             self.rec["cache"] = "pvc" if prof["cache_pvc"] else "none"
         else:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"])
+        self.t_pod = time.time()
         self.start_pod(manifests, cold)
+        self.rec["pod_start_s"] = round(time.time() - self.t_pod, 1)
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         self.register()  # again, now that the node is known (kgate cancel --list shows it)
         seen, transport = self.execute(tar_bytes)
+        if self.mssql:
+            self.sidecar_peak()
         self.rec["ran"] = "running" in seen
         peak = seen.get("peak", "").split()
         if peak and peak[0].isdigit():
@@ -1258,6 +1439,7 @@ class Job:
 
     def finish(self, code, reason):
         end = time.time()
+        reason = self.mask(reason) if reason else reason
         self.rec.update({"end": utc(end), "duration_s": round(end - self.t0, 3), "exit": code, "reason": reason})
         with open(os.path.join(self.state, "log.jsonl"), "a") as f:
             f.write(json.dumps(self.rec) + "\n")
