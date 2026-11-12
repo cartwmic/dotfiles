@@ -467,7 +467,7 @@ exit "$code"
 """
 
 
-MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|commit|preflight)\b(.*)"
+MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|commit|image|preflight)\b(.*)"
 
 
 class Markers:
@@ -477,8 +477,10 @@ class Markers:
         self.pattern = re.compile(MARKER % re.escape(job))
         self.buf = ""
         self.seen = {}
+        self.tail = ""      # the last of everything the exec printed: kubectl's own message when the container could not even start the shell
 
     def feed(self, chunk):
+        self.tail = (self.tail + chunk.decode("utf-8", "replace"))[-2000:]
         self.buf += chunk.decode("utf-8", "replace")
         *lines, self.buf = self.buf.split("\n")
         for line in lines:
@@ -758,7 +760,10 @@ class KubectlCluster(Cluster):
         return ["pod/" + job_id]
 
     def exec_script(self, job_id):
-        return "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job_id, job_id)
+        # The image must have tar and git (and sh, which runs this). Check before unpacking, so a missing tool is a clear reason and not a mismatch or a lost pod.
+        need = ('for t in tar git; do command -v "$t" >/dev/null 2>&1 || { printf "kgate[%s]: image FAILED image lacks %%s; kgate\'s pod side needs git, tar and sh\\n" "$t"; exit 69; }; done; '
+                % job_id)
+        return need + "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job_id, job_id)
 
 
 def op_token():
@@ -1149,6 +1154,7 @@ class Job:
                     markers.feed(chunk)
             markers.close()
             feeder.join()
+            self.exec_tail = markers.tail
             return markers.seen, proc.wait()
         finally:
             if proc.poll() is None:
@@ -1234,6 +1240,10 @@ class Job:
             self.rec["peak_bytes"], self.rec["peak_source"] = int(peak[0]), (peak[1] if len(peak) > 1 else None)
         if "hash" in seen and seen["hash"].startswith("MISMATCH"):
             raise Unavailable("tree hash differs: " + seen["hash"].replace("MISMATCH", "").strip() + " (CMD not run)")
+        if seen.get("image", "").startswith("FAILED"):
+            raise Unavailable(seen["image"][len("FAILED"):].strip() + " (CMD not run)")
+        if not seen and re.search(r'exec: "sh": executable file not found', getattr(self, "exec_tail", "")):
+            raise Unavailable("image lacks sh; kgate's pod side needs git, tar and sh (CMD not run)")
         if seen.get("commit", "").startswith("FAILED"):
             raise Unavailable(seen["commit"][len("FAILED"):].strip() + " (CMD not run)")
         if seen.get("preflight", "").startswith("FAILED"):
