@@ -65,9 +65,9 @@ When GitHub's runners fail twice the same infrastructure way, the same check run
 run-and-wake -- kgate --cpu 4 --mem 4Gi --mem-limit 6Gi --wait 1800 -- env CI_PAR_JOBS=4 scripts/ci-linux.sh
 ```
 
-`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ.
+`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ. When you merge on kgate's green run, say so in the PR: the two failed GitHub runs, the kgate job id and log path, the head it ran, and the counts comparison; then merge with `--admin`.
 
-**The one exception (Michael, #849=A).** kgate runs the same `tests` check except `RestartJourneyTest` in `tests/agent-browser/test_login_unit.py`. It starts the real `agent-chrome.service` unit under the user systemd manager and restarts it ten times, and a pod has no user manager (and no `ss`). It skips there: one extra skipped test in `tests/agent-browser`.
+**The one exception (CI-plan lead's decision under #849=A).** kgate runs the same `tests` check except `RestartJourneyTest` in `tests/agent-browser/test_login_unit.py`. It starts the real `agent-chrome.service` unit under the user systemd manager and restarts it ten times, and a pod has no user manager (and no `ss`). It skips there: one extra skipped test in `tests/agent-browser`.
 
 **The guard.** The fallback does not apply to a PR that changes any of the code that test runs:
 
