@@ -5,7 +5,15 @@
 set -eu
 
 SCRIPT_NAME="agent-chrome"
-APP="${AGENT_CHROME_APP:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+OS="${AGENT_CHROME_OS:-$(uname -s)}"   # test hook; macOS and Linux (Omarchy, Wayland) are the two targets
+if [ "$OS" = Linux ]; then
+  DEFAULT_APP=/usr/bin/google-chrome-stable
+  INSTALL_HINT="on the Omarchy box it comes from homelab scripts/omarchy-devbox/setup.sh (google-chrome, aarch64)"
+else
+  DEFAULT_APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  INSTALL_HINT="install it: brew install --cask google-chrome"
+fi
+APP="${AGENT_CHROME_APP:-$DEFAULT_APP}"
 PORT="${AGENT_CHROME_PORT:-9333}"
 PROFILE="$HOME/.local/share/agent-chrome-profile"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-chrome"
@@ -31,8 +39,22 @@ if up; then
 fi
 
 if [ ! -x "$APP" ]; then
-  log ERROR "Chrome not found at $APP (install it: brew install --cask google-chrome)"
+  log ERROR "Chrome not found at $APP ($INSTALL_HINT)"
   exit 1
+fi
+
+# Linux: Chrome runs on Wayland. An agent shell under t3code.service has no WAYLAND_DISPLAY, so take the first wayland-* socket in XDG_RUNTIME_DIR.
+set --
+if [ "$OS" = Linux ]; then
+  set -- --ozone-platform=wayland
+  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    for sock in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
+      [ -S "$sock" ] || continue
+      WAYLAND_DISPLAY=$(basename "$sock")
+      export WAYLAND_DISPLAY
+      break
+    done
+  fi
 fi
 
 mkdir -p "$PROFILE"
@@ -43,6 +65,7 @@ nohup "$APP" \
   --no-first-run \
   --no-default-browser-check \
   --disable-search-engine-choice-screen \
+  "$@" \
   about:blank >"$STATE/chrome.log" 2>&1 &
 pid=$!
 

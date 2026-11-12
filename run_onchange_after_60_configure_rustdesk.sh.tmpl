@@ -1,6 +1,9 @@
 #!/bin/sh
 # Configure RustDesk after mise bootstrap has installed the application.
 # Helper hash: {{ include "dot_local/user_scripts/executable_configure_rustdesk.sh.tmpl" | sha256sum }}
+{{- if eq .chezmoi.os "linux" }}
+# RustDesk installed: {{ if lookPath "rustdesk" }}yes{{ else }}no{{ end }}
+{{- end }}
 {{- $server := "" }}{{ if eq .profile "personal" }}{{ $_ := includeTemplate "require_data" (dict "data" . "path" "rustdesk.server") }}{{ $server = .rustdesk.server }}{{ end }}
 # Server: {{ $server }}:{{ .rustdesk.port }}
 # Public key hash: {{ .rustdesk.publicKey | sha256sum }}
@@ -19,8 +22,9 @@ if [ "$PROFILE" != "personal" ]; then
 fi
 
 {{ if eq .chezmoi.os "linux" -}}
-# Linux without apt (Arch, Omarchy): mise bootstrap does not install RustDesk there (install-rustdesk uses the Debian package), so with no
-# rustdesk on PATH there is nothing to configure. Installed by hand, it is configured on the next change of this script's inputs.
+# Linux without apt (Arch, Omarchy): mise bootstrap does not install RustDesk there (install-rustdesk uses the Debian package); the homelab repo's
+# scripts/omarchy-devbox/setup.sh does (rustdesk-bin, rustdesk.service). With no rustdesk on PATH there is nothing to configure; once it is installed,
+# the next apply configures it, because whether rustdesk is installed is one of this script's hash inputs (the "RustDesk installed" line above).
 if ! command -v apt-get >/dev/null 2>&1 && ! command -v rustdesk >/dev/null 2>&1; then
   echo "${LOG_PREFIX} INFO: skipping RustDesk: no rustdesk on PATH and no apt-get to install it" >&2
   exit 0

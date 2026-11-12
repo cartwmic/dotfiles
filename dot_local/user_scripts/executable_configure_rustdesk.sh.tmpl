@@ -578,6 +578,24 @@ apply_password() {
   log_info "applied permanent password from $PASSWORD_REFERENCE"
 }
 
+{{ if eq .chezmoi.os "linux" -}}
+# Linux: `rustdesk --password` talks to the running `rustdesk --server` (the child of rustdesk.service); with no service running (a fresh install)
+# it never prints "Done!". Start and enable the service first, then wait for that child by looking for the process, with a bound (no fixed sleep).
+start_linux_service() {
+  [ "$OS" = "Linux" ] && [ "$LINUX_SERVICE_AVAILABLE" -eq 1 ] || return 0
+  sudo systemctl enable --now rustdesk.service
+  LINUX_SERVICE_STOPPED=0
+  attempts=0
+  until pgrep -f 'rustdesk --server' >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt "${RUSTDESK_SERVER_WAIT:-60}" ] || die "rustdesk --server did not start within ${RUSTDESK_SERVER_WAIT:-60} checks after enabling rustdesk.service (journalctl -u rustdesk)"
+    sleep 0.5
+  done
+  log_info "RustDesk service running (rustdesk --server is up)"
+}
+
+start_linux_service
+{{ end -}}
 apply_password
 
 if [ "$OS" = "Linux" ]; then

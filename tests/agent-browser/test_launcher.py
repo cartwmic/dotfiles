@@ -15,6 +15,7 @@ SCRIPT = ROOT / "dot_local/bin/executable_agent-chrome"
 FAKE_CHROME = """#!%s
 import http.server, json, os, socketserver, sys
 open(os.environ["FAKE_ARGV"], "a").write(json.dumps(sys.argv[1:]) + "\\n")
+open(os.environ["FAKE_ARGV"] + ".env", "a").write(json.dumps({"WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY")}) + "\\n")
 port = int([a for a in sys.argv if a.startswith("--remote-debugging-port=")][0].split("=")[1])
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -25,6 +26,7 @@ socketserver.TCPServer(("127.0.0.1", port), H).serve_forever()
 """ % sys.executable
 
 SILENT_CHROME = "#!/bin/sh\necho \"$@\" >> \"$FAKE_ARGV\"\nsleep 30\n"
+BASE_ARGS = ["--no-first-run", "--no-default-browser-check", "--disable-search-engine-choice-screen"]
 
 
 def free_port():
@@ -56,7 +58,7 @@ class LauncherTest(unittest.TestCase):
         return app
 
     def run_script(self, app, wait="10", **extra):
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "AGENT_CHROME_APP": str(app),
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "AGENT_CHROME_APP": str(app), "AGENT_CHROME_OS": "Darwin",
                "AGENT_CHROME_PORT": str(self.port), "AGENT_CHROME_WAIT": wait, "FAKE_ARGV": str(self.argv)}
         env.update(extra)
         return subprocess.run(["sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
@@ -69,7 +71,7 @@ class LauncherTest(unittest.TestCase):
         path = self.home / ".local/state/agent-chrome/agent-chrome.log"
         return path.read_text().splitlines() if path.exists() else []
 
-    def test_starts_chrome_with_the_dedicated_profile_and_debug_port(self):
+    def test_starts_chrome_with_the_dedicated_profile_and_debug_port(self):   # macOS
         r = self.run_script(self.fake())
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(len(self.calls()), 1)
@@ -98,6 +100,10 @@ class LauncherTest(unittest.TestCase):
         r = self.run_script(self.root / "nope")
         self.assertEqual(r.returncode, 1)
         self.assertIn("brew install --cask google-chrome", r.stderr)
+        r = self.run_script(self.root / "nope", AGENT_CHROME_OS="Linux")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("brew", r.stderr)
+        self.assertIn("scripts/omarchy-devbox/setup.sh", r.stderr)
         self.assertEqual(self.calls(), [])
         self.assertIn("ERROR: Chrome not found", self.record()[-1])
 
@@ -112,6 +118,55 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("ERROR: Chrome (pid", log[-1])
         self.assertIn("did not answer on port %d within 2s" % self.port, log[-1])
         self.assertLess(time.time() - started, 20)
+
+
+    # Linux (Omarchy, Wayland)
+    def env_seen(self):
+        return [json.loads(l) for l in (Path(str(self.argv) + ".env")).read_text().splitlines()]
+
+    def test_linux_passes_the_wayland_flag_and_the_macos_flags_unchanged(self):
+        r = self.run_script(self.fake(), AGENT_CHROME_OS="Linux", WAYLAND_DISPLAY="wayland-7")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        profile = self.home / ".local/share/agent-chrome-profile"
+        self.assertEqual(self.calls()[0], ["--remote-debugging-port=%d" % self.port, "--user-data-dir=%s" % profile, *BASE_ARGS,
+                                           "--ozone-platform=wayland", "about:blank"])
+        self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": "wayland-7"}])   # a set WAYLAND_DISPLAY is left alone
+
+    def test_linux_without_wayland_display_uses_the_first_wayland_socket_in_xdg_runtime_dir(self):
+        import socket
+        runtime = self.root / "run"
+        runtime.mkdir()
+        socks = []
+        for name in ("wayland-1", "wayland-2"):
+            sock = socket.socket(socket.AF_UNIX)
+            sock.bind(str(runtime / name))
+            socks.append(sock)
+        (runtime / "wayland-1.lock").write_text("")   # the compositor's lock file is not a socket
+        try:
+            r = self.run_script(self.fake(), AGENT_CHROME_OS="Linux", XDG_RUNTIME_DIR=str(runtime))
+        finally:
+            for sock in socks:
+                sock.close()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": "wayland-1"}])
+
+    def test_linux_without_any_socket_still_starts_chrome_and_leaves_wayland_display_unset(self):
+        runtime = self.root / "run"
+        runtime.mkdir()
+        r = self.run_script(self.fake(), AGENT_CHROME_OS="Linux", XDG_RUNTIME_DIR=str(runtime))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": None}])
+
+    def test_macos_gets_no_wayland_flag_and_no_wayland_display(self):
+        r = self.run_script(self.fake(), XDG_RUNTIME_DIR=str(self.root))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("--ozone-platform=wayland", self.calls()[0])
+        self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": None}])
+
+    def test_the_default_app_is_per_os(self):
+        text = SCRIPT.read_text()
+        self.assertIn("DEFAULT_APP=/usr/bin/google-chrome-stable", text)
+        self.assertIn('DEFAULT_APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"', text)
 
 
 if __name__ == "__main__":
