@@ -1,7 +1,7 @@
 #!/bin/sh
 # Linux checks for this repo, the same command the CI `tests` job runs: the four node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
-# discover process per suite), then tests/kgate and tests/pi-mcp-lazy alone, one after the other.
+# discover process per suite), then tests/kgate and tests/pi-mcp-lazy alone, as two processes at once.
 #
 # Installs nothing. It assumes these are on PATH: chezmoi (the render tests), zsh, lsof and rsync (the
 # agent-scratch, zshenv and agent-docker tests), node, and python3 (3.14). CI installs chezmoi and the
@@ -66,7 +66,17 @@ python3 scripts/ci-par.py \
   tests/ci-par \
   tests/ci-main-status || status=1
 
-# tests/kgate and tests/pi-mcp-lazy run alone after the pool, one after the other: test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message (kgate) and test_second_stop_still_reaches_a_helper_reparented_by_the_first (pi-mcp-lazy) are timing-bound and fail under pool load.
-python3 -m unittest discover -s tests/kgate -v || status=1
-python3 -m unittest discover -s tests/pi-mcp-lazy -v || status=1
+# tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
+# timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,
+# test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy) fail under pool load.
+# Each one's output is kept in a log and printed in full, in order, once both have finished.
+logs=$(mktemp -d)
+trap 'rm -rf "$logs"' EXIT
+python3 -m unittest discover -s tests/kgate -v >"$logs/kgate.log" 2>&1 &
+kgate_pid=$!
+python3 -m unittest discover -s tests/pi-mcp-lazy -v >"$logs/pi-mcp-lazy.log" 2>&1 &
+lazy_pid=$!
+wait "$kgate_pid" || status=1
+wait "$lazy_pid" || status=1
+cat "$logs/kgate.log" "$logs/pi-mcp-lazy.log"
 exit "$status"

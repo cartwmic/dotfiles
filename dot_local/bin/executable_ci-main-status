@@ -5,7 +5,8 @@ usage: ci-main-status REPO        (dotfiles, loop-engine, agent-kit, coordinator
        ci-main-status --all
 
 Only conclusive full runs on main count: success or failure. Cancelled, skipped and still-running
-runs are not conclusive; a run that is still going is reported as "going".
+runs are not conclusive; a run that is still going is reported as "going". A rerun (gh run rerun) keeps
+the run id, so a run counts as its newest conclusive attempt: while a rerun goes, that is the attempt before it.
 
 Exit codes:
   0  green: the newest conclusive run passed (it may be followed by untested commits while a run is going)
@@ -15,7 +16,7 @@ Exit codes:
 --all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab has no main run: "n/a", never affects the code.
 
 GitHub repos: the newest conclusive run of the repo's full workflow on main (push and workflow_dispatch).
-coordinator: the newest conclusive line of ~/.local/state/coordinator-ci/main-journeys.jsonl (verdict pass or fail),
+coordinator: the newest conclusive line of ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/main-journeys.jsonl (verdict pass or fail),
 and a run is going while the lock dir /tmp/coordinator-main-journeys.lock.d holds a live pid.
 First-parent commits come from the compare API, walking parents[0] from the head down to the base.
 """
@@ -34,10 +35,10 @@ REPOS = {
 }
 ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab"]
 JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
-               or Path.home() / ".local/state/coordinator-ci/main-journeys.jsonl")
+               or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/main-journeys.jsonl")
 LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-journeys.lock.d")
 RUN_EVENTS = ("push", "workflow_dispatch")
-RUN_FIELDS = "databaseId,event,headSha,status,conclusion,createdAt,url"
+RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,createdAt,startedAt,url"
 
 
 class Unreadable(Exception):
@@ -45,12 +46,16 @@ class Unreadable(Exception):
 
 
 class Record:
-    def __init__(self, tip, verdict, label):
+    def __init__(self, tip, verdict, label, rerun_going=False):
         self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass" or "fail"
+        self.rerun_going = rerun_going   # the verdict is an earlier attempt, and a rerun of its run is going
 
 
 def gh(args):
-    r = subprocess.run(["gh", *args], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["gh", *args], capture_output=True, text=True)
+    except OSError as e:
+        raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
     if r.returncode:
         raise Unreadable(f"gh {' '.join(args[:2])} failed: {r.stderr.strip() or r.stdout.strip()}")
     try:
@@ -80,17 +85,37 @@ def first_parent_chain(repo, base, head):
     return [(c["sha"], c["commit"]["message"].split("\n")[0]) for c in chain]
 
 
+def run_verdict(repo, r):
+    """A run's verdict as (conclusion, attempt), or None if no attempt of it has concluded.
+
+    A rerun (gh run rerun) keeps the run id, so its newest attempt can be running or cancelled. Then the verdict
+    is the newest earlier attempt that concluded, read from the attempts API.
+    """
+    if r["status"] == "completed" and r["conclusion"] in ("success", "failure"):
+        return r["conclusion"], r["attempt"]
+    for n in range(r["attempt"] - 1, 0, -1):
+        conclusion = gh(["api", f"repos/{repo}/actions/runs/{r['databaseId']}/attempts/{n}"]).get("conclusion")
+        if conclusion in ("success", "failure"):
+            return conclusion, n
+    return None
+
+
 def github_records(spec):
     runs = gh(["run", "list", "-R", spec["github"], "--workflow", spec["workflow"], "--branch", "main",
                "--limit", "100", "--json", RUN_FIELDS])
     runs = [r for r in runs if r["event"] in RUN_EVENTS]
-    runs.sort(key=lambda r: r["createdAt"], reverse=True)
+    # Newest by when the latest attempt started. A rerun keeps its created time, so created time would sort it too low.
+    runs.sort(key=lambda r: r.get("startedAt") or r["createdAt"], reverse=True)
     going = any(r["status"] != "completed" for r in runs)
     records = []
     for r in runs:
-        if r["status"] == "completed" and r["conclusion"] in ("success", "failure"):
-            verdict = "pass" if r["conclusion"] == "success" else "fail"
-            records.append(Record(r["headSha"], verdict, f"run {r['databaseId']}"))
+        found = run_verdict(spec["github"], r)
+        if found is None:
+            continue
+        conclusion, attempt = found
+        verdict = "pass" if conclusion == "success" else "fail"
+        label = f"run {r['databaseId']}" + ("" if attempt == r["attempt"] else f" attempt {attempt}")
+        records.append(Record(r["headSha"], verdict, label, rerun_going=r["status"] != "completed"))
     return records, going
 
 
@@ -105,7 +130,11 @@ def journal_records():
                 row = json.loads(line)
             except json.JSONDecodeError as e:
                 raise Unreadable(f"{JOURNAL} line {n} is not JSON: {e}")
+            if not isinstance(row, dict):
+                raise Unreadable(f"{JOURNAL} line {n} is not a JSON object")
             if row.get("verdict") in ("pass", "fail"):
+                if not row.get("tip"):
+                    raise Unreadable(f"{JOURNAL} line {n} has a {row['verdict']} verdict and no tip")
                 records.append(Record(row["tip"], row["verdict"], f"journal line {n}"))
     records.reverse()
     return records, lock_alive()
@@ -131,7 +160,8 @@ def assess(name, repo, records, going, noun="run"):
 
     newest = records[0]
     if newest.verdict == "fail":
-        lines = [f"{name}: RED  {newest.label} failed on {newest.tip[:7]}" + ("  (a newer run is going)" if going else "")]
+        note = "  (a rerun is going)" if newest.rerun_going else ("  (a newer run is going)" if going else "")
+        lines = [f"{name}: RED  {newest.label} failed on {newest.tip[:7]}{note}"]
         green = next((r for r in records[1:] if r.verdict == "pass"), None)
         if green is None:
             lines.append("  no earlier green run; red range not computed")
@@ -171,11 +201,13 @@ def check(name):
 
 
 def describe(name):
-    """Run one repo; an unreadable state exits 1 with the reason."""
+    """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     try:
         return check(name)
     except Unreadable as e:
         return 1, [f"{name}: ERROR  cannot read state: {e}"]
+    except Exception as e:   # a shape gh did not promise: still one line, never a traceback
+        return 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
 
 
 def main(argv):
