@@ -71,6 +71,7 @@ Machine-specific values (hosts, addresses, vault items, work names) are not in t
 | `privatePiProviderRef` | The `work-anthropic` Pi provider, read from 1Password through the service account (work profile; see the next section). | No `work-anthropic` provider. |
 | `axonPlaybook.repo` | Clones the Axon playbook (work profile; see `example.chezmoi.yaml`). | Nothing is cloned. |
 | `workGitHost`, `workAwsProfile` on the personal profile | The host appears in the gitlinker map, the playbook text and the skill; the AWS default is used in `~/.zshrc`. | Left out; the AWS default is `default`. |
+| `sshHosts.kgateFallback` (list of `{address, user}`, personal profile) | More control-plane hosts, written after `sshHosts.kgate` in `~/.config/kgate/host`; `kgate` uses the first that answers ssh at job start. | One host, as before. |
 
 ### 1Password service-account token
 

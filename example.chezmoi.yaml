@@ -50,6 +50,8 @@ data:
   #   server: {address: "192.0.2.10", user: "<user>"}
   #   laptop: {address: "192.0.2.11", user: "<user>"}
   #   kgate: {address: "192.0.2.12", user: "<user>"}
+  #   kgateFallback:   # optional: more control planes, tried in order after kgate
+  #     - {address: "192.0.2.13", user: "<user>"}
   #   dailyPhone: {wgAddress: "198.51.100.6", lanAddress: "192.0.2.22", user: "<user>"}
   #   sshPhone: {wgAddress: "198.51.100.8", lanAddress: "192.0.2.23", user: "<user>"}
 

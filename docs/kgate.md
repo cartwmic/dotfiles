@@ -2,7 +2,9 @@
 
 `kgate` runs a heavy gate (a repo's slow test or lint command) on a Kubernetes cluster instead of on this Mac: the personal homelab cluster by default, or the Axon AG1 dems2 cluster for a profile with `cluster = "ag1"` (see "AG1" below). One Python file, `dot_local/bin/executable_kgate`, installed as `~/.local/bin/kgate`. It takes heavy-gate's command line and meets `run-and-wake` and `heavy-gate` only on the command line:
 
-The cluster host is not in this repo. `KGATE_SSH` (`user@address`) wins; otherwise `kgate` reads the one line in `~/.config/kgate/host`, which chezmoi renders from the local data key `sshHosts.kgate` (`address`, `user`; see [profiles.md](profiles.md), "Local data keys"). With neither set, `kgate` exits 69 and the message names the key.
+The cluster host is not in this repo. `KGATE_SSH` (`user@address`) wins; otherwise `kgate` reads `~/.config/kgate/host`, which chezmoi renders from the local data key `sshHosts.kgate` (`address`, `user`) plus the optional list `sshHosts.kgateFallback` (same fields per entry; see [profiles.md](profiles.md), "Local data keys"). With neither set, `kgate` exits 69 and the message names the key.
+
+Control-plane failover. `KGATE_SSH` and the host file each take one `user@address` (the old form, unchanged) or an ordered list, separated by commas or lines (`#` lines are skipped). With a list, `kgate` tries each host in order with a bare `ssh ... true` (ConnectTimeout 8 s) at job start, uses the first that answers, and prints `kgate: control plane user@address` in the job output. If none answers it exits 69. A single host is not probed first, so its behaviour is as before. Failover happens only at job start: a job whose host dies mid-run still fails (69, unknown), and a rerun picks the next host. This is the homelab path only; the AG1 adapter is unchanged.
 
 ```sh
 run-and-wake -- kgate -- sh -c 'npm ci && npm run typecheck && npm test'

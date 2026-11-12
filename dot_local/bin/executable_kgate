@@ -37,7 +37,8 @@ AG1 (cluster = "ag1" in the profile): the same contract on the Axon AG1 dems2 cl
 kubectl and ~/.kube/ag1-offload (`kgate ag1-setup` writes that file once). No Secrets, no python3 in the pod: the pod side is a
 POSIX sh script that prints the same markers. See "AG1" in docs/kgate.md.
 
-Env: KGATE_SSH (default: the one line in ~/.config/kgate/host, rendered from the chezmoi data key sshHosts.kgate), KGATE_SSH_KEY (default ~/.ssh/homelab).
+Env: KGATE_SSH (default: ~/.config/kgate/host, rendered from the chezmoi data keys sshHosts.kgate and the optional sshHosts.kgateFallback), KGATE_SSH_KEY (default ~/.ssh/homelab).
+Either one is a single user@address or an ordered list (commas or lines). At job start kgate uses the first host that answers ssh and says which.
 The same file runs in the pod as `kgate.py --pod JOB.json`: it verifies the tree hash, checks the tool versions,
 runs CMD and reports peak memory. Needs python3 3.11+ in the image.
 """
@@ -60,15 +61,21 @@ import time
 import tomllib
 
 NAMESPACE = "kgate"
+def parse_hosts(text):
+    """An ordered host list from comma- or line-separated text; blank entries and #-comment lines are dropped."""
+    lines = (line for line in (text or "").splitlines() if not line.lstrip().startswith("#"))
+    return [h for h in re.split(r"[,\s]+", "\n".join(lines)) if h]
+
+
 def _default_host():
     try:
         with open(os.path.expanduser("~/.config/kgate/host")) as f:
-            return f.read().strip()
+            return f.read()
     except OSError:
         return ""
 
 
-HOST = os.environ.get("KGATE_SSH") or _default_host()
+HOSTS = parse_hosts(os.environ.get("KGATE_SSH")) or parse_hosts(_default_host())
 KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
 # cartwmic-g14-wsl is schedulable again (2026-11-06). Its clock steps were fixed by homelab#101 (9f6ef66, 2026-11-05). It now follows the Windows clock, which slews up to 8% for ~15 s about every 9 h, and it reads up to ~2 s ahead of other nodes.
 # ubuntu-server-k8s-agent-4 is the GPU node (frigate and the GPU services run there) and a gate bursts to 8 to 16 cores,
@@ -616,9 +623,27 @@ class Cluster:
     """The homelab adapter: kubectl on the control plane over ssh. Nothing else on this machine touches the cluster."""
     name = "homelab"
 
-    def __init__(self, host, key):
+    def __init__(self, hosts, key):
+        self.hosts, self.key = list(hosts), key
+        self.use(self.hosts[0] if self.hosts else "")
+
+    def use(self, host):
+        self.host = host
         self.ssh = ["ssh", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=8",
-                    "-o", "ServerAliveInterval=30", "-i", key, host]
+                    "-o", "ServerAliveInterval=30", "-i", self.key, host]
+
+    def pick(self):
+        """With several hosts, use the first that answers a bare ssh. A job whose host dies later still fails; a rerun picks again."""
+        if len(self.hosts) < 2:
+            return
+        for host in self.hosts:
+            self.use(host)
+            try:
+                if subprocess.run(self.ssh + ["true"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30).returncode == 0:
+                    return
+            except subprocess.TimeoutExpired:
+                pass
+        raise Unavailable("cluster unreachable: no control plane answered ssh (%s)" % ", ".join(self.hosts))
 
     def argv(self, kargs):
         return self.ssh + ["sudo kubectl --kubeconfig /etc/kubernetes/admin.conf -n %s %s" % (NAMESPACE, shlex.join(kargs))]
@@ -630,16 +655,17 @@ class Cluster:
         return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
 
     def configured(self):
-        return bool(HOST)
+        return bool(self.hosts)
 
     def check(self):
-        if not HOST:
+        if not self.hosts:
             raise Unavailable("no cluster host: set KGATE_SSH, or set sshHosts.kgate (address, user) in ~/.config/chezmoi/chezmoi.yaml "
                               "so chezmoi renders ~/.config/kgate/host (docs/profiles.md, \"Local data keys\")")
+        self.pick()
         done = self.run(["get", "namespace", NAMESPACE, "-o", "name"])
         if done.returncode != 0:
             why = (done.stderr.decode(errors="replace").strip().splitlines() or ["no message"])[-1]
-            raise Unavailable("cluster unreachable (%s): %s" % (HOST, why))
+            raise Unavailable("cluster unreachable (%s): %s" % (self.host, why))
 
     def object_names(self, job_id):
         return ["pod/" + job_id, "secret/" + job_id + "-env", "secret/" + job_id + "-pull"]
@@ -773,7 +799,7 @@ class Job:
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
                     "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
-        self.cluster = Cluster(HOST, KEY)
+        self.cluster = Cluster(HOSTS, KEY)
 
     def emit(self, data):
         self.log.write(data)
@@ -850,6 +876,8 @@ class Job:
 
     def reachable(self):
         check_reachable(self.cluster)
+        if len(getattr(self.cluster, "hosts", ())) > 1:
+            self.note("control plane %s" % self.cluster.host)
 
     def sweep(self):
         """Remove what an earlier client that died left behind: finished pods, and Secrets whose pod is gone."""
@@ -1172,7 +1200,7 @@ def report_end(rec):
 
 def cancel_orphan(state, e):
     """The client is gone and wrote no end line: delete exactly this job's pod and Secrets, and write the end line."""
-    cluster = Ag1Cluster() if e.get("cluster") == "ag1" else Cluster(HOST, KEY)
+    cluster = Ag1Cluster() if e.get("cluster") == "ag1" else Cluster(HOSTS, KEY)
     try:
         check_reachable(cluster)
     except Unavailable as err:
