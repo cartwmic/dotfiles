@@ -1,6 +1,6 @@
 #!/bin/sh
 # Load or reload the agent Chrome login unit (agent-chrome.service) when its unit or the launcher changes. Personal Linux only (.chezmoiignore).
-# The unit runs ~/.local/bin/agent-chrome once per login; a changed unit or launcher needs a restart to take effect, hence the hashes.
+# The unit runs ~/.local/bin/agent-chrome --foreground as Chrome's own parent; a changed unit or launcher needs a restart to take effect, hence the hashes.
 # unit: {{ include "dot_config/systemd/user/agent-chrome.service" | sha256sum }}
 # launcher: {{ include "dot_local/bin/executable_agent-chrome" | sha256sum }}
 #
@@ -27,6 +27,13 @@ if ! systemctl --user is-active --quiet graphical-session.target; then
   log INFO "no graphical session yet; $unit enabled, it starts at the next login"
   exit 0
 fi
+log INFO "restarting $unit: the agent Chrome is replaced, so tabs agents have open there close"
 systemctl --user restart "$unit" || { log ERROR "could not start $unit; see: journalctl --user -u $unit"; exit 1; }
 systemctl --user is-active --quiet "$unit" || { log ERROR "$unit is not active after the restart; see: journalctl --user -u $unit"; exit 1; }
-log INFO "loaded $unit (journalctl --user -u $unit; check: curl -s http://127.0.0.1:9333/json/version)"
+i=0
+until curl -fsS --max-time 2 "http://127.0.0.1:9333/json/version" >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -ge 30 ]; then log ERROR "no Chrome answers on port 9333 30s after the restart; see: journalctl --user -u $unit, ~/.local/state/agent-chrome/chrome.log"; exit 1; fi
+  sleep 1
+done
+log INFO "loaded $unit, Chrome answers on port 9333 (journalctl --user -u $unit; check: curl -s http://127.0.0.1:9333/json/version)"
