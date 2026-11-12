@@ -1,4 +1,5 @@
 """scripts/ci-par.py: passing suites exit 0; a failing suite or per-test id exits 1 and prints its output; empty dirs fail."""
+import importlib.util
 import os
 import subprocess
 import sys
@@ -62,6 +63,55 @@ class CiParTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("could not list tests in empty", out)
 
+
+
+def load_runner():
+    spec = importlib.util.spec_from_file_location("ci_par", RUNNER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class AvailableCpusTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cg = self.tmp.name
+        self.mod = load_runner()
+        self.base = min(self.mod.os.cpu_count() or 1, len(os.sched_getaffinity(0)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def cpu_max(self, text):
+        Path(self.cg, "cpu.max").write_text(text)
+
+    def test_a_cgroup_v2_quota_below_the_cpu_count_caps_the_pool(self):
+        self.cpu_max("100000 100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), 1)
+
+    def test_a_fractional_quota_rounds_up(self):
+        self.cpu_max("150000 100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), min(2, self.base))
+
+    def test_a_quota_above_the_cpu_count_does_not_raise_it(self):
+        self.cpu_max("%d 100000\n" % (self.base * 100000 * 4))
+        self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_max_means_no_cap(self):
+        self.cpu_max("max 100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_cgroup_v1_quota(self):
+        (Path(self.cg) / "cpu").mkdir()
+        (Path(self.cg) / "cpu/cpu.cfs_quota_us").write_text("100000\n")
+        (Path(self.cg) / "cpu/cpu.cfs_period_us").write_text("100000\n")
+        self.assertEqual(self.mod.available_cpus(self.cg), 1)
+
+    def test_no_cgroup_files_falls_back_to_the_cpu_count(self):
+        self.assertEqual(self.mod.available_cpus(self.cg), self.base)
+
+    def test_the_pool_uses_it(self):
+        self.assertEqual(self.mod.SUITE_PROCESSES, self.mod.available_cpus())
 
 if __name__ == "__main__":
     unittest.main()

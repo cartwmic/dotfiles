@@ -19,8 +19,29 @@ import sys
 import time
 
 TEST_PROCESSES = 16
-# Suites are CPU-bound, so one per CPU (4 on the GitHub runner). Per-test heavy-gate stays at 16: those tests sleep.
-SUITE_PROCESSES = os.cpu_count() or 1
+
+
+def available_cpus(cgroup="/sys/fs/cgroup"):
+    """CPUs this process may use: the smallest of the cgroup CPU quota (rounded up), the affinity mask and os.cpu_count().
+    In a pod os.cpu_count() is the node's CPUs, not the pod's limit. No quota or no cgroup file: no cap from that source."""
+    n = os.cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):
+        n = min(n, len(os.sched_getaffinity(0)) or n)
+    try:  # cgroup v2: "max 100000" or "<quota> <period>"
+        quota, period = open(os.path.join(cgroup, "cpu.max")).read().split()[:2]
+    except (OSError, ValueError):
+        try:  # cgroup v1: -1 means no quota
+            quota = open(os.path.join(cgroup, "cpu/cpu.cfs_quota_us")).read().strip()
+            period = open(os.path.join(cgroup, "cpu/cpu.cfs_period_us")).read().strip()
+        except OSError:
+            return n
+    if quota in ("max", "-1") or not quota.isdigit() or not period.isdigit() or int(period) == 0:
+        return n
+    return max(1, min(n, -(-int(quota) // int(period))))
+
+
+# Suites are CPU-bound, so one per available CPU (4 on the GitHub runner, the pod's limit on kgate). Per-test heavy-gate stays at 16: those tests sleep.
+SUITE_PROCESSES = available_cpus()
 LIST_TESTS = """
 import sys, unittest
 def ids(suite):
