@@ -40,6 +40,8 @@ How to read a row:
 
 The `(Linux)` rows match every personal Linux host, personal WSL included, not only the Omarchy box: a WSL host also gets the T3 settings file, the T3 drop-in and the systemd reconcile wrapper. Most of it is inert there: the instance flag is unset by default and `74_` and the T3 install skip on WSL. Two things are not: the watchdog script only writes config, and `76_git_credential_linux.sh` replaces any GitHub credential helper the host already has (for example Windows Git Credential Manager) with `!gh auth git-credential`, so git over HTTPS on that host then needs `gh auth login`.
 
+Pi on Linux: `install-pi` links `~/.local/bin/pi` to `~/.pi/agent/bin/pi` (Linux only, both profiles run the task, only a Linux host acts). Reproduce by hand: `ln -s ~/.pi/agent/bin/pi ~/.local/bin/pi`, or `mise run install-pi`. The row is in README, "Linux on Arch (Omarchy)" table (Pi).
+
 ## Local data keys
 
 Machine-specific values (hosts, addresses, vault items, work names) are not in this public repo. They live in the `data:` block of `~/.config/chezmoi/chezmoi.yaml` on each machine, next to `profile`. A key a profile needs fails the render with a message naming the key (`.chezmoitemplates/require_data`, and `require_work_data` for the work keys), so a machine never renders with a feature silently missing. Add the keys before you apply a change that needs them. `example.chezmoi.yaml` shows the shape with placeholder values.

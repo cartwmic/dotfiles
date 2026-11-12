@@ -1,6 +1,7 @@
 """Run the real install-pi mise task on Linux where Omarchy's system mise has already installed Pi.
 
 The official installer refuses to replace a mise-installed Pi (exit 1). The task must remove that copy first, then install the managed one.
+It must also leave `pi` on the login PATH: the installer puts its entry in ~/.pi/agent/bin, which no shell profile has, so the task links ~/.local/bin/pi.
 mise, curl and the installer are scripted; HOME is private."""
 import json
 import os
@@ -49,7 +50,9 @@ cp "$T/installer.sh" "$out"
 
 @unittest.skipUnless(MISE and sys.platform.startswith("linux"), "Linux and mise are required")
 class InstallPiMiseCopyTests(unittest.TestCase):
-    def run_task(self, *, omarchy_pi, runs=1, deploy_linux_conf=True):
+    def run_task(self, *, omarchy_pi, runs=1, deploy_linux_conf=True, existing_install=False, local_bin_pi=None, os_name=None):
+        """Also sets self.login: what `pi --version` prints under a login PATH (~/.local/bin, /usr/bin, /bin; never ~/.pi/agent/bin),
+        and self.link: the ~/.local/bin/pi entry (None, a symlink target, or "file")."""
         with tempfile.TemporaryDirectory(prefix="install-pi-test-") as temporary:
             t = Path(temporary)
             home, project, mock = t / "home", t / "project", t / "bin"
@@ -62,6 +65,19 @@ class InstallPiMiseCopyTests(unittest.TestCase):
             if deploy_linux_conf:
                 (t / "config/mise/conf.d").mkdir(parents=True)
                 shutil.copy2(ROOT / "dot_config/mise/conf.d/linux.toml", t / "config/mise/conf.d/linux.toml")
+            if os_name:
+                (mock / "uname").write_text(f"#!/bin/sh\necho {os_name}\n")
+                (mock / "uname").chmod(0o700)
+            if existing_install:
+                (home / ".pi/agent/bin").mkdir(parents=True)
+                (home / ".pi/agent/install").mkdir(parents=True)
+                (home / ".pi/agent/bin/pi").write_text("#!/bin/sh\necho 1.0.0\n")
+                (home / ".pi/agent/bin/pi").chmod(0o755)
+                (home / ".pi/agent/install/current-version").write_text("1.0.0\n")
+            if local_bin_pi:
+                (home / ".local/bin").mkdir(parents=True)
+                (home / ".local/bin/pi").write_text(local_bin_pi)
+                (home / ".local/bin/pi").chmod(0o755)
             for name, text in (("mise", MISE_STUB), ("curl", CURL)):
                 (mock / name).write_text(text)
                 (mock / name).chmod(0o700)
@@ -81,6 +97,11 @@ class InstallPiMiseCopyTests(unittest.TestCase):
                 done = subprocess.run([MISE, "run", "install-pi"], cwd=project, env=env, text=True, capture_output=True, timeout=60)
                 outputs.append(done)
             calls = (t / "calls").read_text().splitlines() if (t / "calls").exists() else []
+            login = subprocess.run(["sh", "-c", "pi --version"], env={"HOME": str(home), "PATH": f"{home}/.local/bin:/usr/bin:/bin"},
+                                   text=True, capture_output=True)
+            self.login = (login.stdout + login.stderr).strip()
+            entry = home / ".local/bin/pi"
+            self.link = os.readlink(entry).replace(str(home), "~") if entry.is_symlink() else ("file" if entry.exists() else None)
             return outputs, calls, (home / ".pi/agent/bin/pi").exists()
 
     def test_omarchy_copy_is_removed_then_the_managed_install_succeeds(self):
@@ -95,6 +116,28 @@ class InstallPiMiseCopyTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(managed)
         self.assertFalse([c for c in calls if c.startswith("mise uninstall")], calls)
+
+    def test_pi_resolves_on_the_login_path_after_a_fresh_install(self):
+        # RED before the fix: the installer's entry lands in ~/.pi/agent/bin, so `pi` was "not found" for bash, zsh and Herdr's `pi --session`.
+        (done,), _, _ = self.run_task(omarchy_pi=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((self.login, self.link), ("1.2.0", "~/.pi/agent/bin/pi"))
+
+    def test_an_existing_install_gets_the_link_too(self):
+        (done,), calls, _ = self.run_task(omarchy_pi=False, existing_install=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("installed", calls)   # the installer did not run again
+        self.assertEqual((self.login, self.link), ("1.0.0", "~/.pi/agent/bin/pi"))
+
+    def test_a_pi_already_in_local_bin_is_left_alone(self):
+        (done,), _, _ = self.run_task(omarchy_pi=False, existing_install=True, local_bin_pi="#!/bin/sh\necho other\n")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((self.login, self.link), ("other", "file"))
+
+    def test_macos_makes_no_link(self):
+        (done,), _, _ = self.run_task(omarchy_pi=False, existing_install=True, os_name="Darwin")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIsNone(self.link)
 
     def pi_seen_by_a_task(self, deploy_linux_conf):
         """Real mise only: Omarchy's Pi is installed under the data dir; what does `command -v pi` see inside `mise run`?"""
