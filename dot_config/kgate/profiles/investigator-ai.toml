@@ -13,6 +13,9 @@ cpu_limit = 8
 memory = "6Gi"
 memory_limit = "10Gi"
 ephemeral_storage = "8Gi"
+# The persistent cache disk (ops/k8s-deploy claim, ReadWriteOncePod): Go build and module caches survive between jobs. One job holds it at a time;
+# a second job at once runs without it (cold) after about 10 s.
+cache_pvc = "xlab-offload-cache"
 
 [tools]
 go = { version = "1.25.12", cmd = "go version" }

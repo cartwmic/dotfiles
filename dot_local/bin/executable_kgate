@@ -90,6 +90,7 @@ AG1_DEADLINE_S = 7200
 # The API server's ResourceQuota admission: `Error from server (Forbidden): ... pods "x" is forbidden: exceeded quota: NAME, requested: ..., used: ..., limited: ...`.
 # A webhook denial or any other text that merely says "exceeded quota" does not match, and fails at once.
 QUOTA_REFUSAL = re.compile(r'^Error from server \(Forbidden\): (?:error when creating "[^"]*": )?pods "[^"]*" is forbidden: exceeded quota: [^\s,]+, requested: .+, used: .+, limited: .+$', re.M)
+CACHE_BUSY_S = 10  # a cache_pvc pod Pending this long on the ReadWriteOncePod conflict runs without the cache
 QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
 AG1_USER = "65532:65532"  # the cursor-worker image's user
 AG1_SETUP = "run `kgate ag1-setup` once (it writes %s from the %s context of ~/.kube/config)" % (AG1_KUBECONFIG, AG1_CONTEXT)
@@ -159,7 +160,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit", "cache_pvc"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -189,12 +190,15 @@ def parse_profile(text):
     cpu_limit = raw.get("cpu_limit")
     if cpu_limit is not None and (cluster != "ag1" or not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
         raise Unavailable("profile cpu_limit is for cluster = \"ag1\" only and must be a whole number of at least 1, got %r" % (cpu_limit,))
+    cache_pvc = raw.get("cache_pvc")
+    if cache_pvc is not None and (cluster != "ag1" or not isinstance(cache_pvc, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", cache_pvc)):
+        raise Unavailable("profile cache_pvc is for cluster = \"ag1\" only and must be a claim name like xlab-offload-cache, got %r" % (cache_pvc,))
     user = raw.get("user", AG1_USER if cluster == "ag1" else "1000:1000")
     if not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
-            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit}
+            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc}
 
 
 
@@ -304,8 +308,8 @@ def quota_impossible(msg):
     return False
 
 
-def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None):
-    """The one Pod for an AG1 job, as a List. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. No Secrets, no pull Secret, no hostPath, no affinity: AG1 policy (Kyverno, quota, Role) decides."""
+def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None, cache_pvc=None):
+    """The one Pod for an AG1 job, as a List. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. /cache is an emptyDir, or the profile's claim (cache_pvc: persists between jobs, ReadWriteOncePod, so one job at a time). No Secrets, no pull Secret, no hostPath, no affinity: AG1 policy (Kyverno, quota, Role) decides."""
     cpu_limit = cpu_limit or cpu
     labels = {"app": "kgate", "kgate-job": job, "axon.com/owner": "xlab", "axon.com/pillar": "dems"}
     env = [{"name": "KGATE_OUT", "value": "/out"}, {"name": "CI", "value": "1"},
@@ -313,7 +317,8 @@ def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid
            {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
            {"name": "CARGO_BUILD_JOBS", "value": str(cpu_limit)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu_limit)},
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu_limit},
-           {"name": "HOME", "value": "/cache/home"}, {"name": "GOCACHE", "value": "/cache/go-build"},
+           {"name": "HOME", "value": "/cache/%s/home" % job},  # per job, removed with /cache/<id> at the end: nothing a job writes to HOME outlives it
+           {"name": "npm_config_store_dir", "value": "/cache/pnpm-store"}, {"name": "GOCACHE", "value": "/cache/go-build"},
            {"name": "GOMODCACHE", "value": "/cache/gomod"}, {"name": "GOMAXPROCS", "value": str(cpu_limit)}]
     mounts = [("tree%d" % i, r) for i, r in enumerate(roots)] + [("cache", "/cache"), ("out", "/out")]
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
@@ -326,8 +331,10 @@ def pod_manifests_ag1(job, image, cpu, memory, memory_limit, ephemeral, uid, gid
     pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": AG1_DEADLINE_S,
            "automountServiceAccountToken": False,
            "securityContext": {"runAsNonRoot": True, "runAsUser": uid, "runAsGroup": gid, "seccompProfile": {"type": "RuntimeDefault"}},
-           "volumes": [{"name": n, "emptyDir": {}} for n, _ in mounts],
+           "volumes": [{"name": n, "persistentVolumeClaim": {"claimName": cache_pvc}} if n == "cache" and cache_pvc else {"name": n, "emptyDir": {}} for n, _ in mounts],
            "containers": [container]}
+    if cache_pvc:  # a new disk's root belongs to root: the group makes it writable for the non-root user
+        pod["securityContext"].update({"fsGroup": gid, "fsGroupChangePolicy": "OnRootMismatch"})
     meta = {"name": job, "labels": labels, "annotations": {"cluster-autoscaler.kubernetes.io/safe-to-evict": "true"}}
     return {"apiVersion": "v1", "kind": "List", "items": [{"apiVersion": "v1", "kind": "Pod", "metadata": meta, "spec": pod}]}
 
@@ -347,6 +354,9 @@ def job_sh(job):
 POD_SH = r"""#!/bin/sh
 dir=$1
 . "$dir/job.sh"
+# /cache can be a persistent disk: remove this job's files at the end, pass or fail, and any older job's that a dead client left (over a day old)
+trap 'rm -rf "$dir"' EXIT
+find "$(dirname "$dir")" -maxdepth 1 -name 'kgate-*' -mmin +1440 -exec rm -rf {} + 2>/dev/null
 say() { printf 'kgate[%s]: %s\n' "$ID" "$*"; }
 say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)"
 mkdir -p "$HOME" 2>/dev/null
@@ -850,10 +860,11 @@ class Job:
         if stale:
             self.cluster.run(["delete", "secret", *stale, "--ignore-not-found", "--wait=false"])
 
-    def start_pod(self, manifests):
+    def create_pod(self, manifests, deadline):
+        """Create the pod. On AG1 a ResourceQuota refusal is waited out (backoff) until the deadline; any other refusal is fatal."""
         body = json.dumps(manifests).encode()
-        deadline = self.t0 + self.o.wait
         delay, waited_from, last_msg = QUOTA_FIRST_DELAY, None, None
+        base = self.rec.get("quota_wait_s") or 0
         while True:
             done = self.cluster.run(["create", "-f", "-"], stdin=body)
             if done.returncode == 0:
@@ -867,7 +878,7 @@ class Job:
             if quota_impossible(full):
                 raise Unavailable("request exceeds the namespace quota: " + msg)
             waited_from = waited_from or time.time()
-            self.rec["quota_wait_s"] = round(time.time() - waited_from, 1)
+            self.rec["quota_wait_s"] = round(base + time.time() - waited_from, 1)
             if full != last_msg:
                 self.note("waiting for quota: " + msg)
                 last_msg = full
@@ -876,7 +887,14 @@ class Job:
             time.sleep(max(0, min(delay, deadline - time.time())))
             delay = min(delay * 2, QUOTA_MAX_DELAY)
         if waited_from:
-            self.rec["quota_wait_s"] = round(time.time() - waited_from, 1)
+            self.rec["quota_wait_s"] = round(base + time.time() - waited_from, 1)
+
+    def start_pod(self, manifests, cold=None):
+        """Create the pod and wait until it runs. `cold`: the same pod without the cache claim. If the claim is held by another job
+        (ReadWriteOncePod: the pod stays Pending for CACHE_BUSY_S), the pod is deleted and `cold` is created in its place."""
+        deadline = self.t0 + self.o.wait
+        self.create_pod(manifests, deadline)
+        busy_since = None
         last = None
         while True:
             done = self.cluster.run(["get", "pod", self.id, "-o", "json"])
@@ -894,6 +912,22 @@ class Job:
             detail = waiting.get("message") or (sched and sched.get("message")) or status.get("message") or ""
             if status.get("phase") in ("Failed", "Succeeded") or waiting.get("reason") in FATAL_WAITING:
                 raise Unavailable("pod did not start: %s %s" % (what, detail[:300]))
+            claim = re.search(r'persistentvolumeclaim "([^"]+)" not found', detail)
+            if claim:  # it will not appear by waiting: the claim is created by ops, not by kgate
+                raise Unavailable("the cache claim %s does not exist in %s (cache_pvc in the profile): %s" % (claim.group(1), AG1_NAMESPACE, detail[:300]))
+            if cold and "ReadWriteOncePod" in detail:   # the claim is in use by another job's pod
+                busy_since = busy_since or time.time()
+                if time.time() - busy_since >= CACHE_BUSY_S:
+                    self.note("cache in use by another job; running without it")
+                    self.rec["cache"] = "fallback"
+                    gone = self.cluster.run(["delete", "pod/" + self.id, "--ignore-not-found", "--grace-period=0", "--wait=true"])
+                    if gone.returncode != 0:
+                        raise Unavailable("could not delete the pod to run without the cache: " + gone.stderr.decode(errors="replace").strip())
+                    self.create_pod(cold, deadline)
+                    cold, busy_since, last = None, None, None
+                    continue
+            else:
+                busy_since = None
             if what != last:
                 self.note("waiting for the pod: %s" % what)
                 last = what
@@ -983,11 +1017,15 @@ class Job:
             pull = (host, PULL[host][0], op_read(PULL[host][1]))
         limit = "" if mem_limit == mem else ", %s limit" % mem_limit
         self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
+        cold = None
         if self.cluster.name == "ag1":
-            manifests = pod_manifests_ag1(self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], ag1_roots(wt), prof["cpu_limit"])
+            args = (self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], ag1_roots(wt), prof["cpu_limit"])
+            manifests = pod_manifests_ag1(*args, cache_pvc=prof["cache_pvc"])
+            cold = pod_manifests_ag1(*args) if prof["cache_pvc"] else None
+            self.rec["cache"] = "pvc" if prof["cache_pvc"] else "none"
         else:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"])
-        self.start_pod(manifests)
+        self.start_pod(manifests, cold)
         del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         self.register()  # again, now that the node is known (kgate cancel --list shows it)

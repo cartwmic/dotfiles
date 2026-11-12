@@ -169,6 +169,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 |---|---|
 | `id` | kgate's job id, also the pod's name |
 | `cluster` | `homelab` or `ag1` |
+| `cache` | AG1 only: `pvc`, `fallback` or `none` (see "The cache disk") |
 | `cpu_limit`, `quota_wait_s` | AG1 only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
@@ -202,8 +203,17 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml --
 - Requests and limits for cpu, memory and ephemeral-storage, from the profile: `cpu` (request), `cpu_limit` (limit, what the pod may burst to; default `cpu`; must be at least `cpu`; AG1 only), `memory` (request), `memory_limit` (limit), `ephemeral_storage` (request and limit; default `10Gi`). `GOMAXPROCS`, `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` follow the CPU limit, not the request.
 - `activeDeadlineSeconds: 7200`. The container runs `sleep 86400` (the image has no `tini`), so the deadline ends a pod whose client died.
 - emptyDirs at the top directory of the shipped tree (`/Users` for `/Users/me/git/repo`, so the Mac's absolute paths unpack as the non-root user), at `/cache` and at `/out`. Only trees under `/Users`, `/Volumes` or `/private` are accepted (an allow-list, so no emptyDir hides anything in the image); any other top directory is refused.
-- Env: kgate's usual set, plus `HOME=/cache/home`, `GOCACHE=/cache/go-build`, `GOMODCACHE=/cache/gomod`.
+- `cache_pvc = "<claim>"` in the profile makes `/cache` that persistent claim instead of an emptyDir (see "The cache disk" below). The pod then also gets `fsGroup` (the profile's gid) with `fsGroupChangePolicy: OnRootMismatch`, so the non-root user can write a new disk.
+- Env: kgate's usual set, plus `HOME=/cache/<job id>/home` (per job, removed with the job's directory at the end, so nothing a job writes to HOME, such as `~/.gitconfig` or `~/.npmrc`, reaches a later job on a shared disk), `GOCACHE=/cache/go-build`, `GOMODCACHE=/cache/gomod`, `npm_config_cache=/cache/npm` and `npm_config_store_dir=/cache/pnpm-store`. Only those caches live on the claim.
 - No hostPath, affinity, tolerations, Secrets or imagePullSecrets (nodes pull with their own identity). `--node` is refused.
+
+**The cache disk.** With `cache_pvc`, `HOME`, `GOCACHE` and `GOMODCACHE` live on the claim (`xlab-offload-cache`: `managed-csi-premium`, 32Gi, ReadWriteOncePod, made by ops/k8s-deploy, not by kgate; the Role needs no PVC rights to mount a claim in its own namespace), so Go builds and module downloads are warm after the first job. `cache_pvc` on a homelab profile is refused (exit 69, `cache_pvc is for cluster = "ag1" only`).
+
+- **One job holds the cache; a second runs cold.** ReadWriteOncePod lets one pod use the claim. A second job's pod stays `Pending` (`Unschedulable`, "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode"). If it is still Pending on that reason after about 10 s (`CACHE_BUSY_S`), kgate deletes the pod, creates the same pod again with an emptyDir `/cache` (no claim, no `fsGroup`), prints `kgate: cache in use by another job; running without it`, and the job runs cold. The record's `cache` field says which: `pvc` (the claim), `fallback` (the claim was busy), `none` (the profile has no `cache_pvc`; AG1 records only). Any other Pending reason (quota, capacity) keeps the existing waits, with the cache. The message shape was seen live, with two jobs started together.
+- **Zone.** The disk lives in one availability zone, so a pod that mounts the claim is scheduled in that zone; a pod that falls back to the emptyDir can go anywhere.
+- **A dead client's pod.** If a client dies, its pod keeps running until the 2 h `activeDeadlineSeconds` and can hold the disk that long; other jobs then run cold (the fallback). `kgate cancel` deletes it sooner.
+- **Cleanup.** The pod side removes `/cache/<job id>` (the job's own script, file list, error file and HOME) at the end of every job, pass or fail, and at its start removes any other `/cache/kgate-*` directory older than a day (a dead client's leftover). The caches stay.
+- **Missing claim.** If the claim does not exist, the pod stays `Pending` with `persistentvolumeclaim "<name>" not found`. kgate sees that at once and exits 69 with `the cache claim <name> does not exist in xlab-offload (cache_pvc in the profile)`; the pod is deleted.
 
 **Refused with exit 69, before anything is created:** a profile with `[secrets]` or `services`, an image that is not on `devaxonhub.azurecr.us` and pinned by digest, a root user.
 
@@ -225,7 +235,7 @@ run-and-wake -- kgate --profile ~/.config/kgate/profiles/investigator-ai.toml --
 | Pod side | `kgate.py --pod` (python3) | `kgate.sh` (POSIX sh, git) |
 | Tree location | the pod's filesystem | emptyDir at the tree's top directory |
 | Git history | `.git` and the shared git folder shipped | none shipped; one synthetic commit built in the pod (investigator-ai: about 25 MB shipped, not 164 MB) |
-| Caches | hostPath `/var/lib/kgate/cache` | emptyDir `/cache` (cold each job) |
+| Caches | hostPath `/var/lib/kgate/cache` | emptyDir `/cache` (cold each job), or the `cache_pvc` claim (warm; one job holds it, a second runs cold) |
 | Deadline | 8 h | 2 h |
 | Scheduling | node affinity, G14 preferred | the cluster's |
 | Cleanup | pod and two Secrets | pod only |
@@ -259,6 +269,7 @@ memory = "4Gi"                                  # the request, what the schedule
 memory_limit = "8Gi"                             # optional: the limit, the OOM-kill line; default equal to memory
 user   = "1000:1000"                            # uid:gid CMD runs as; default 1000:1000; "0:0" for root (AG1: default 65532:65532, never root)
 cluster = "homelab"                              # optional: "homelab" (default) or "ag1"
+cache_pvc = "xlab-offload-cache"                 # AG1 only: mount this claim at /cache instead of an emptyDir
 ephemeral_storage = "20Gi"                       # AG1 only: the pod's ephemeral-storage request and limit; default 10Gi
 cpu_limit = 8                                    # AG1 only: the CPU limit and build parallelism; default cpu
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
@@ -303,7 +314,7 @@ The `kgate` binary lands on both desktop profiles. The homelab host file (`~/.co
 
 ## Tests
 
-`python3 -m unittest discover -s tests/kgate -v`: for AG1, the pod spec; the archive (no `.git` entry on AG1, unchanged on the homelab); the repo the pod side builds (one commit, tree equal to the Mac's hash, clean status, `KGATE_HEAD`); the sh pod side run against a real temp git tree (its hash equal to the Python `tree_hash` and to plain git, with an executable file, symlinks and CRLF files under a converting `.gitattributes`; mismatch, tool mismatch, exit code, peak); and the same journeys as the homelab, for AG1, against a fake `kubectl` (including a quota refusal waited out, a quota that never frees, another create error failing at once, `cpu_limit`) (pass, CMD failure, `/out`, hash mismatch, tool version, refusals, missing kubeconfig, reachability failure, orphan cancel, the record's `cluster`, `ag1-setup`). For the homelab: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
+`python3 -m unittest discover -s tests/kgate -v`: for AG1, the pod spec; the archive (no `.git` entry on AG1, unchanged on the homelab); the repo the pod side builds (one commit, tree equal to the Mac's hash, clean status, `KGATE_HEAD`); the cache claim (pod spec with and without it, refusal on the homelab, per-job cleanup and the old-directory sweep, a job queued on capacity keeping the cache, a claim held by another job falling back to a cold pod, a brief hold not falling back, a missing claim); the sh pod side run against a real temp git tree (its hash equal to the Python `tree_hash` and to plain git, with an executable file, symlinks and CRLF files under a converting `.gitattributes`; mismatch, tool mismatch, exit code, peak); and the same journeys as the homelab, for AG1, against a fake `kubectl` (including a quota refusal waited out, a quota that never frees, another create error failing at once, `cpu_limit`) (pass, CMD failure, `/out`, hash mismatch, tool version, refusals, missing kubeconfig, reachability failure, orphan cancel, the record's `cluster`, `ag1-setup`). For the homelab: the tree hash against real `git write-tree`, the profile, the version match and the pod spec directly (the memory request and limit, and a byte-identical default render); and `kgate cancel` (by kgate id and by run-and-wake id, exactly one pid signalled and a second live client untouched, a bystander in the same process group untouched, prefixes and double matches refused, a dead or recycled pid not signalled, the orphan path's three delete names, `--list`, the registry entry gone after normal and failed finishes, and a real client cancelled end to end against the fake cluster); and the real script as a process against a fake `ssh` (a scripted cluster whose "pod" runs on this machine) and a fake `op`: pass, CMD failure, `/out`, hash mismatch, wrong version, unreachable cluster with nothing run locally, image pull failure, pod never scheduled, unreadable secret, secrets kept out of the pod spec and the logs.
 
 ## Gates in this repo
 

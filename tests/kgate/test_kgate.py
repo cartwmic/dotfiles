@@ -1088,14 +1088,29 @@ if a[:2] == ["create", "-f"]:
         sys.stderr.write((text if text != "1" else "Error from server (Forbidden): pods is forbidden: violates PodSecurity") + "\n"); sys.exit(1)
     active = os.path.join(os.environ["XDG_STATE_HOME"], "kgate", "active")
     entries = [json.load(open(os.path.join(active, n))) for n in sorted(os.listdir(active))] if os.path.isdir(active) else []
-    log({"manifest": json.load(sys.stdin), "registry": entries}); sys.exit(0)
+    manifest = json.load(sys.stdin)
+    json.dump(manifest, open(os.path.join(fake, "last_manifest.json"), "w"))
+    log({"manifest": manifest, "registry": entries}); sys.exit(0)
 if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"]:
-    if scenario == "ready":
+    polls = os.path.join(fake, "polls")
+    n = int(open(polls).read()) + 1 if os.path.exists(polls) else 1
+    open(polls, "w").write(str(n))
+    pending = lambda msg: {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": msg}]}
+    last = json.load(open(os.path.join(fake, "last_manifest.json"))) if os.path.exists(os.path.join(fake, "last_manifest.json")) else {"items": [{"spec": {"volumes": []}}]}
+    has_claim = any("persistentVolumeClaim" in v for i in last["items"] for v in i["spec"]["volumes"])
+    rwop = "0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod."
+    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-gone" and n > 1):
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
+    elif scenario in ("rwop", "rwop-gone"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
+        st = pending(rwop)
+    elif scenario == "queued":   # a full cluster: the scheduler's capacity message
+        st = pending("0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.")
+    elif scenario == "noclaim":
+        st = pending('0/3 nodes are available: persistentvolumeclaim "xlab-offload-cache" not found. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.')
     else:
-        st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/3 nodes fit"}]}
+        st = pending("0/3 nodes fit")
     print(json.dumps({"spec": {"nodeName": "fake-ag1-node"}, "status": st})); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     job, script = a[2], a[-1]
@@ -1113,7 +1128,10 @@ if a[0] == "exec" and "-i" in a:
             f.write(b"x")
     out = os.path.join(fake, "out")
     os.makedirs(out, exist_ok=True)
-    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-ag1-node", HOME=os.path.join(fake, "pod-home"))
+    # the pod's own env: HOME comes from the pod spec (under /cache/<id>, which here lives under FAKE)
+    spec = json.load(open(os.path.join(fake, "last_manifest.json")))["items"][0]["spec"]["containers"][0]["env"]
+    home = next(e["value"] for e in spec if e["name"] == "HOME")
+    env = dict(os.environ, KGATE_OUT=out, KGATE_NODE="fake-ag1-node", HOME=os.path.join(jobroot, home.lstrip("/")))
     d = "%s/cache/%s" % (jobroot, job)
     # A pod has no .git before the script runs. The test repo does, so it is set aside while the pod side runs and put back after.
     root = next(l.split("=", 1)[1] for l in open(d + "/job.sh").read().splitlines() if l.startswith("ROOT="))
@@ -1208,6 +1226,13 @@ class Ag1Profile(unittest.TestCase):
         self.assertTrue(K.quota_impossible(base % ("requests.cpu=1500m", "requests.cpu=0", "requests.cpu=1")))
         self.assertFalse(K.quota_impossible("exceeded quota: unparsable"))
 
+    def test_cache_pvc_is_for_ag1_only_and_must_be_a_claim_name(self):
+        self.assertIsNone(K.parse_profile('cluster = "ag1"')["cache_pvc"])
+        self.assertEqual(K.parse_profile('cluster = "ag1"\ncache_pvc = "xlab-offload-cache"')["cache_pvc"], "xlab-offload-cache")
+        for bad in ('cache_pvc = "x"', 'cluster = "homelab"\ncache_pvc = "x"', 'cluster = "ag1"\ncache_pvc = "Bad_Name"', 'cluster = "ag1"\ncache_pvc = 1', 'cluster = "ag1"\ncache_pvc = ""'):
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
     def test_bad_cluster_or_ephemeral_storage_is_refused(self):
         for bad in ('cluster = "us1"', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "ag1"\nephemeral_storage = "20G"', 'cluster = "ag1"\nephemeral_storage = 20'):
             with self.assertRaises(K.Unavailable, msg=bad):
@@ -1247,6 +1272,19 @@ class Ag1PodSpec(unittest.TestCase):
                                           "limits": {"cpu": "5", "memory": "10Gi", "ephemeral-storage": "8Gi"}})
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["GOMAXPROCS"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"]), ("5", "-j5", "5", "5"))
+    def test_without_cache_pvc_the_cache_is_an_emptydir_and_there_is_no_fsgroup(self):
+        pod = self.pod()
+        self.assertEqual([v for v in pod["spec"]["volumes"] if v["name"] == "cache"], [{"name": "cache", "emptyDir": {}}])
+        self.assertNotIn("fsGroup", pod["spec"]["securityContext"])
+
+    def test_with_cache_pvc_the_cache_is_the_claim_and_the_group_can_write_it(self):
+        items = K.pod_manifests_ag1("kgate-1-2", AG1_IMAGE, 8, "16Gi", "24Gi", "20Gi", 65532, 65533, ["/Users"], cache_pvc="xlab-offload-cache")["items"]
+        pod = items[0]
+        self.assertEqual([v for v in pod["spec"]["volumes"] if v["name"] == "cache"], [{"name": "cache", "persistentVolumeClaim": {"claimName": "xlab-offload-cache"}}])
+        self.assertEqual(pod["spec"]["securityContext"], {"runAsNonRoot": True, "runAsUser": 65532, "runAsGroup": 65533, "fsGroup": 65533,
+                                                          "fsGroupChangePolicy": "OnRootMismatch", "seccompProfile": {"type": "RuntimeDefault"}})
+        self.assertEqual([m["mountPath"] for m in pod["spec"]["containers"][0]["volumeMounts"]], ["/Users", "/cache", "/out"])
+        self.assertEqual(len(items), 1, "no PVC is created: the claim belongs to ops")
 
     def test_it_has_none_of_the_homelab_parts(self):
         text = json.dumps(self.pod())
@@ -1262,7 +1300,9 @@ class Ag1PodSpec(unittest.TestCase):
 
     def test_env_has_homes_and_go_caches_under_cache_and_gomaxprocs(self):
         env = {e["name"]: e.get("value") for e in self.pod(cpu=6)["spec"]["containers"][0]["env"]}
-        self.assertEqual((env["HOME"], env["GOCACHE"], env["GOMODCACHE"], env["GOMAXPROCS"]), ("/cache/home", "/cache/go-build", "/cache/gomod", "6"))
+        self.assertEqual((env["HOME"], env["GOCACHE"], env["GOMODCACHE"], env["GOMAXPROCS"]), ("/cache/kgate-1-2/home", "/cache/go-build", "/cache/gomod", "6"))
+        self.assertEqual(env["npm_config_store_dir"], "/cache/pnpm-store")
+        self.assertEqual(env["npm_config_cache"], "/cache/npm")
         self.assertEqual((env["KGATE_OUT"], env["CI"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"]), ("/out", "1", "-j6", "6"))
 
     def test_roots_are_the_top_directories_and_only_from_the_allow_list(self):
@@ -1310,6 +1350,7 @@ class PodSh(unittest.TestCase):
     def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False):
         job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files, "head": head,
                "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}}
+        self.job.mkdir(exist_ok=True)   # the script removes it at the end
         (self.job / "job.sh").write_text(K.job_sh(job))
         (self.job / "files.nul").write_bytes(b"".join(os.fsencode(f) + b"\0" for f in self.files))
         (self.job / "kgate.sh").write_text(K.POD_SH)
@@ -1467,6 +1508,37 @@ class PodSh(unittest.TestCase):
         self.assertEqual(done.returncode, 70)
         self.assertNotEqual(self.podgit_run("rev-parse", "--verify", "-q", "HEAD").returncode, 0)
 
+    def test_the_jobs_own_directory_is_removed_at_the_end_pass_or_fail(self):
+        for what, kw, code in (("pass", {}, 0), ("cmd fails", {"argv": ("sh", "-c", "exit 3")}, 3), ("hash mismatch", {"tree": "0" * 40}, 70),
+                               ("tool mismatch", {"tools": {"x": ("1.0.0", "echo 2.0.0")}}, 71)):
+            with self.subTest(what):
+                done, _ = self.run_sh(**kw)
+                self.assertEqual(done.returncode, code, done.stdout)
+                self.assertFalse(self.job.exists(), "the job's files are gone")
+
+    def test_a_dead_clients_old_job_directory_is_swept_and_a_recent_or_other_one_is_not(self):
+        old, recent, other = self.tmp / "kgate-1-1", self.tmp / "kgate-2-2", self.tmp / "go-build"
+        for d in (old, recent, other):
+            (d / "f").parent.mkdir()
+            (d / "f").write_text("x")
+        two_days = __import__("time").time() - 2 * 86400
+        for d in (old, other):
+            os.utime(d, (two_days, two_days))
+        done, _ = self.run_sh()
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(old.exists())
+        self.assertTrue(recent.exists())
+        self.assertTrue(other.exists(), "only kgate-* directories are swept")
+
+    def test_home_inside_the_job_directory_is_gone_for_the_next_job(self):
+        home = self.job / "home"
+        done, _ = self.run_sh(argv=("sh", "-c", 'mkdir -p "$HOME/.config/go" && echo x > "$HOME/.gitconfig" && echo y > "$HOME/.config/go/env"'), env={"HOME": str(home)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(home.exists())
+        done, _ = self.run_sh(argv=("sh", "-c", 'test ! -e "$HOME/.gitconfig" && test ! -e "$HOME/.config/go/env" && echo clean-home'), env={"HOME": str(home)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("clean-home", done.stdout)
+
     def test_a_commit_that_fails_after_the_hashes_matched_is_its_own_marker_and_69_not_a_mismatch(self):
         done, _ = self.run_sh(argv=("sh", "-c", "echo SHOULD-NOT-RUN"), lock_main=True)
         self.assertEqual(done.returncode, 69, done.stdout)
@@ -1535,6 +1607,7 @@ class Ag1Black(unittest.TestCase):
                         "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                         "loader.exec_module(K)\n"
                         "K.QUOTA_FIRST_DELAY = 0.2\n"
+                        "K.CACHE_BUSY_S = 0.6\n"
                         "K.AG1_TREE_ROOTS = %s\n"
                         "sys.exit(K.main(sys.argv[2:]))\n" % ("(%r,)" % self.only_root if getattr(self, "only_root", None) else "K.AG1_TREE_ROOTS + (%r,)" % top))
         return [sys.executable, str(stub), str(SCRIPT)]
@@ -1573,7 +1646,10 @@ class Ag1Black(unittest.TestCase):
         self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
         self.assertEqual(rec["out_files"], 1)
         self.assertEqual((self.state / "kgate" / (rec["id"] + ".out") / "result.txt").read_text(), "result\n")
-        files = (self.fake / "jobroot" / "cache" / rec["id"] / "files.nul").read_bytes().split(b"\0")[:-1]
+        import tarfile
+        with tarfile.open(self.fake / "shipped.tar") as tar:   # the pod removed its copy at the end
+            files = tar.extractfile("cache/%s/files.nul" % rec["id"]).read().split(b"\0")[:-1]
+        self.assertFalse((self.fake / "jobroot" / "cache" / rec["id"]).exists(), "the job's own directory is gone from /cache")
         self.assertEqual(sorted(files), [b".gitignore", b"kgate.toml", b"tracked.txt", b"untracked.txt"])  # not ignored.txt
 
     def test_a_linked_worktree_whose_common_dir_is_outside_the_allow_list_is_accepted(self):
@@ -1719,6 +1795,85 @@ class Ag1Black(unittest.TestCase):
         podhead = subprocess.run(["git", "--git-dir", str(self.fake / "podgit"), "rev-parse", "HEAD^{tree}"], stdout=subprocess.PIPE, text=True).stdout.strip()
         self.assertEqual(podhead, rec["tree"])
         self.assertTrue((self.repo / ".git").is_dir(), "the Mac-side repo was only set aside by the fake pod")
+
+    def test_home_is_per_job_and_a_file_one_job_writes_there_is_gone_in_the_next(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        first = self.run_kgate("--", "sh", "-c", 'echo secret > "$HOME/.npmrc"; echo "HOME=$HOME"')
+        self.assertEqual(first.returncode, 0, first.stdout)
+        second = self.run_kgate("--", "sh", "-c", 'test ! -e "$HOME/.npmrc" && echo clean-home; echo "HOME=$HOME"')
+        self.assertEqual(second.returncode, 0, second.stdout)
+        self.assertIn("clean-home", second.stdout)
+        ids = [r["id"] for r in self.records()[-2:]]
+        homes = [next(e["value"] for e in m["manifest"]["items"][0]["spec"]["containers"][0]["env"] if e["name"] == "HOME") for m in self.kcalls() if "manifest" in m]
+        self.assertEqual(homes, ["/cache/%s/home" % i for i in ids])
+        env = {e["name"]: e["value"] for e in next(m for m in self.kcalls() if "manifest" in m)["manifest"]["items"][0]["spec"]["containers"][0]["env"] if "value" in e}
+        self.assertTrue(all(env[k].startswith("/cache/") and not env[k].startswith("/cache/kgate-") for k in ("GOCACHE", "GOMODCACHE", "npm_config_cache", "npm_config_store_dir")), "only the caches are on the disk")
+
+    def test_a_profile_with_cache_pvc_sends_the_claim_and_fsgroup(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        pod = next(c["manifest"] for c in self.kcalls() if "manifest" in c)["items"][0]
+        self.assertIn({"name": "cache", "persistentVolumeClaim": {"claimName": "xlab-offload-cache"}}, pod["spec"]["volumes"])
+        self.assertEqual((pod["spec"]["securityContext"]["fsGroup"], pod["spec"]["securityContext"]["fsGroupChangePolicy"]), (65532, "OnRootMismatch"))
+
+    def test_cache_pvc_on_a_homelab_profile_is_refused_before_anything_is_created(self):
+        (self.repo / "kgate.toml").write_text('image = "%s"\ncache_pvc = "xlab-offload-cache"\n' % DIGEST)
+        done = self.kgate("--", "true", host="fake")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("cache_pvc is for cluster = \"ag1\" only", self.records()[-1]["reason"])
+        self.assertFalse(any(c["kubectl"][0] == "create" for c in self.calls()))
+
+    def test_a_job_queued_on_capacity_keeps_waiting_with_the_cache_and_does_not_fall_back(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-after-the-wait", env={"FAKE_POD": "queued"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("kgate: waiting for the pod: Unschedulable", done.stdout)
+        self.assertNotIn("cache in use", done.stdout)
+        self.assertEqual(int((self.fake / "creates").read_text()), 1, "the same pod throughout")
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
+
+    def test_a_job_whose_claim_is_held_by_another_runs_cold_without_it(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-cold", env={"FAKE_POD": "rwop"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
+        self.assertIn("ran-cold", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["cache"], rec["exit"], rec["reason"], rec["cleanup"]), ("fallback", 0, None, True))
+        creates = [c["manifest"]["items"][0] for c in self.kcalls() if "manifest" in c]
+        self.assertEqual(len(creates), 2)
+        vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
+        self.assertEqual(vols(creates[0]), [{"name": "cache", "persistentVolumeClaim": {"claimName": "xlab-offload-cache"}}])
+        self.assertEqual(vols(creates[1]), [{"name": "cache", "emptyDir": {}}])
+        self.assertNotIn("fsGroup", creates[1]["spec"]["securityContext"])
+        self.assertEqual(creates[0]["metadata"]["name"], creates[1]["metadata"]["name"])
+        deletes = [a for a in self.kubectl_args() if a[0] == "delete" and a[1] == "pod/" + rec["id"]]
+        self.assertGreaterEqual(len(deletes), 2, "deleted before the cold pod, and again at the end")
+
+    def test_a_brief_hold_shorter_than_the_grace_keeps_the_cache(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        done = self.run_kgate("--wait", "60", "--", "sh", "-c", "echo ran-warm", env={"FAKE_POD": "rwop-gone"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("cache in use", done.stdout)
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
+        self.assertEqual(int((self.fake / "creates").read_text()), 1)
+
+    def test_the_record_says_cache_none_without_cache_pvc_and_pvc_with_it(self):
+        self.run_kgate("--", "true")
+        self.assertEqual(self.records()[-1]["cache"], "none")
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        self.run_kgate("--", "true")
+        self.assertEqual(self.records()[-1]["cache"], "pvc")
+
+    def test_a_missing_claim_is_69_at_once_with_a_clear_reason_and_the_pod_is_deleted(self):
+        self.profile(extra='cache_pvc = "xlab-offload-cache"')
+        done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_POD": "noclaim"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertRegex(rec["reason"], r'^the cache claim xlab-offload-cache does not exist in xlab-offload \(cache_pvc in the profile\)')
+        self.assertTrue(rec["cleanup"])
+        self.assertLess(rec["duration_s"], 30)
 
     def test_it_only_ever_talks_to_ag1_through_the_one_kubeconfig_and_never_to_homelab(self):
         self.run_kgate("--", "true")
