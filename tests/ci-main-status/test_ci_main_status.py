@@ -1,8 +1,9 @@
 """ci-main-status against a fake `gh` and real git.
 
 The fake gh answers `gh run list` from a fixture and `gh api` from a real git repo: branches/main is the real
-head, and compare is `git rev-list --parents base..head`, the same commits and parents the compare API lists.
-Each test states one row of the exit-code table in the script's docstring.
+head, commits/SHA is `git rev-list --parents -n 1`, the commit and its parents the commits API returns, and compare
+is kept for the older script the mutation checks run against. Each test states one row of the exit-code table in
+the script's docstring.
 """
 import json
 import os
@@ -50,6 +51,11 @@ GH_FAKE = textwrap.dedent('''\
                 subject = git(src, "log", "-1", "--format=%s", sha).strip()
                 commits.append({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject}})
             print(json.dumps({"status": "ahead", "total_commits": len(commits), "commits": commits}))
+        elif "/commits/" in path:
+            sha = path.split("/commits/")[1]
+            parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+            subject = git(src, "log", "-1", "--format=%s", sha).strip()
+            print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject}}))
         elif "/actions/runs/" in path:
             run_id, n = path.split("/actions/runs/")[1].split("/attempts/")
             attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
@@ -127,9 +133,18 @@ class Fixture(unittest.TestCase):
         self.write_fixture()
 
     def status(self, *args):
+        rc, out, err = self.streams(*args)
+        return rc, out + err
+
+    def streams(self, *args):
         self.write_fixture()
         r = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=self.env, timeout=120)
-        return r.returncode, r.stdout + r.stderr
+        return r.returncode, r.stdout, r.stderr
+
+    def walked_commits(self):
+        """The commits API calls the script made, as SHAs."""
+        calls = self.log.read_text().splitlines() if self.log.exists() else []
+        return [c.split("/commits/")[1] for c in calls if "/commits/" in c]
 
     def range_lines(self, out):
         return [line.strip() for line in out.splitlines() if re.match(r"^    [0-9a-f]{7} ", line)]
@@ -239,6 +254,74 @@ class GithubStateTable(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("cannot read state", out)
 
+    def test_reviewer_sequence_a_rerun_passes_and_the_newer_commit_fails_is_red(self):
+        # Run 1 on c2 failed, run 2 on c3 waited. Run 1 was rerun and passed (its rerun started last), then run 2
+        # failed. Commit order decides: c3 is the newest conclusive commit. Its created time is the older one.
+        self.dotfiles_runs([run(2, self.c3, "failure", age=1, started_age=1),
+                            run(1, self.c2, "success", attempt=2, age=5, started_age=9)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 2 failed on " + self.c3[:7], out)
+        self.assertIn("last green: " + self.c2[:7] + " (run 1)", out)
+        expected = git(self.src, "log", "--first-parent", "--oneline", f"{self.c2}..{self.c3}").splitlines()
+        self.assertEqual(self.range_lines(out), expected)
+
+    def test_reviewer_sequence_with_a_dispatch_in_progress_at_the_newer_commit_is_still_red(self):
+        self.dotfiles_runs([run(3, self.c3, status="in_progress", event="workflow_dispatch", age=8),
+                            run(2, self.c3, "failure", age=2),
+                            run(1, self.c2, "success", attempt=2, age=1, started_age=9)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 2 failed on " + self.c3[:7] + "  (a newer run is going)", out)
+
+    def test_a_rerun_of_an_older_commit_under_a_green_tip_is_green(self):
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(1, self.c2, status="in_progress", attempt=2, age=1, started_age=9),
+                            run(2, self.c3, "success", age=2)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 2 passed on " + self.c3[:7] + "; main tip is tested", out)
+
+    def test_a_rerun_that_passed_under_a_green_tip_is_green_with_no_extra_run(self):
+        self.dotfiles_runs([run(1, self.c2, "success", attempt=2, age=1, started_age=9),
+                            run(2, self.c3, "success", age=2)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 2 passed on " + self.c3[:7] + "; main tip is tested", out)
+
+    def test_a_rerun_going_on_red_holds_the_freeze_while_a_newer_commit_waits(self):
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(2, self.c3, status="queued", age=2),
+                            run(1, self.c2, status="in_progress", attempt=2, age=1, started_age=9)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1 attempt 1 failed on " + self.c2[:7] + "  (a rerun is going)", out)
+        self.assertIn("no earlier green run", out)
+
+    def test_the_walk_stops_at_the_newest_conclusive_commit(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(self.walked_commits(), [self.c3, self.m, self.c2],
+                         "the walk reads the tip, M and c2, then stops at the green; c1 is never read")
+
+    def test_no_run_on_main_means_no_commit_walk(self):
+        self.dotfiles_runs([])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(self.walked_commits(), [], "no run to place, so no commit is read")
+
+    def test_an_unexpected_error_is_one_stdout_line_and_the_traceback_on_stderr(self):
+        run_without_attempt = run(1, self.c3, "success")
+        del run_without_attempt["attempt"]          # a row gh did not promise: a KeyError in the script
+        self.dotfiles_runs([run_without_attempt])
+        rc, out, err = self.streams("dotfiles")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("dotfiles: ERROR  cannot read state: unexpected KeyError", out)
+        self.assertEqual(len([line for line in out.splitlines() if "ERROR" in line]), 1, out)
+        self.assertIn("Traceback (most recent call last)", err)
+        self.assertNotIn("Traceback", out)
+
     def test_green_base_off_first_parent_history_exits_1(self):
         self.dotfiles_runs([run(1, self.s1, "success")])
         rc, out = self.status("dotfiles")
@@ -333,6 +416,12 @@ class CoordinatorJournal(Fixture):
         self.assertIn("RED", out)
         expected = git(self.src, "log", "--first-parent", "--oneline", f"{self.c2}..{self.c3}").splitlines()
         self.assertEqual(self.range_lines(out), expected)
+
+    def test_the_last_journal_line_for_a_tip_is_its_verdict(self):
+        self.write_journal((self.c3, "fail"), (self.c3, "pass"))
+        rc, out = self.status("coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  journal line 2 passed on " + self.c3[:7], out)
 
     def test_no_journal_is_untested(self):
         rc, out = self.status("coordinator")
