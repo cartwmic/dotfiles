@@ -90,11 +90,16 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.path.join(os.environ["FAKE"], "systemd_run"), "a") as f:
     f.write(json.dumps(args) + "\n")
-rest = [a.replace("$$", "$") for a in args[args.index("--") + 1:]]  # systemd reads $$ as $ (and would expand $VAR)
+assert "--expand-environment=no" in args, "without it systemd-run expands $VAR in the command (254-257, and always before 258 outside --scope)"
+rest = args[args.index("--") + 1:]
 if rest == ["true"]:
     sys.exit(0)
 os.execvp(rest[0], rest)
 '''
+# systemctl, scripted for the slice check only: answers `show app-t3code-agents.slice --property=MemoryMax --value` from the file $FAKE/slice_memory_max.
+FAKE_SYSTEMCTL = """#!/bin/sh
+cat "$FAKE/slice_memory_max" 2>/dev/null || echo infinity
+"""
 FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
 
 
@@ -518,6 +523,9 @@ class RunAndWake(unittest.TestCase):
         (self.root / "systemd-scope").mkdir()
         (self.root / "systemd-scope/systemd-run").write_text(FAKE_SYSTEMD_SCOPE)
         (self.root / "systemd-scope/systemd-run").chmod(0o755)
+        (self.root / "systemd-scope/systemctl").write_text(FAKE_SYSTEMCTL)
+        (self.root / "systemd-scope/systemctl").chmod(0o755)
+        (self.fake / "slice_memory_max").write_text("29139927040\n")  # T3 has set its agents slice's limit (the default for these tests)
         return {"PATH": f"{self.root / 'systemd-scope'}:{self.bin}:{self.path}"}
 
     def systemd_calls(self):
@@ -529,17 +537,45 @@ class RunAndWake(unittest.TestCase):
         job = self.job_id(result)
         records = self.replay(job)
         probe, scoped = self.systemd_calls()
-        self.assertEqual(probe, ["--user", "--scope", "--quiet", "--collect", "--", "true"], "it asks first, as an exec cannot fall back")
-        self.assertEqual(scoped[:4], ["--user", "--scope", "--quiet", "--collect"])
-        self.assertEqual(scoped[4], f"--unit=run-and-wake-{job}", "the scope is named after the job")
-        self.assertEqual(scoped[scoped.index("--") + 3 :], ["--scoped", job, "sh", "-c", "echo $$PWD > seen; echo $$T3CODE_THREAD_ID >> seen"])  # $ doubled for systemd-run
+        head = ["--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--property=OOMPolicy=continue", "--slice=app-t3code-agents.slice"]
+        self.assertEqual(probe, [*head, "--", "true"], "it asks first, as an exec cannot fall back, with the same placement")
+        self.assertEqual(scoped[:7], head, "T3's agents slice: its memory limit and CPU weight apply to the job")
+        self.assertEqual(scoped[7], f"--unit=run-and-wake-{job}", "the scope is named after the job")
+        self.assertEqual(scoped[scoped.index("--") + 3 :], ["--scoped", job, "sh", "-c", "echo $PWD > seen; echo $T3CODE_THREAD_ID >> seen"])  # as typed: systemd-run is told not to expand
         self.assertEqual(records[0]["scope"], f"run-and-wake-{job}.scope", "the start record names the scope")
-        self.assertIn(f"scope run-and-wake-{job}.scope", result.stdout)
+        self.assertIn("slice", records[0], "and the slice the kernel put it in (read from /proc; the fake systemd-run puts nothing anywhere)")
+        self.assertIn(f"scope run-and-wake-{job}.scope in ", result.stdout)
         self.assertEqual((self.root / "seen").read_text().split(), [str(self.root), THREAD], "cwd and environment carry into the scope")
         self.assertEqual(len(self.t3_sends()), 1, "one wake, as before")
 
+    def memory_limit_args(self, args):
+        return sorted(a for a in args if a.startswith(("--property=Memory", "--slice")))
+
+    def test_the_scope_goes_in_the_agents_slice_only_when_that_slice_has_a_memory_limit(self):
+        env = self.scope_env()
+        (self.fake / "slice_memory_max").write_text("infinity\n")  # T3 has not run since boot: the slice is absent or unlimited
+        self.replay(self.job_id(self.launch("--", "true", env=env)))
+        probe, scoped = self.systemd_calls()
+        for call in (probe, scoped):
+            limits = self.memory_limit_args(call)
+            self.assertEqual([a.rsplit("=", 1)[0] for a in limits], ["--property=MemoryHigh", "--property=MemoryMax"], "no agents slice: the limits go on the scope")
+            high, top = (int(a.rsplit("=", 1)[1]) for a in limits)
+            self.assertTrue(0 < high <= top < 1 << 50)
+        self.assertEqual(self.memory_limit_args(probe), self.memory_limit_args(scoped), "the probe asks for what the exec will use")
+
+    def test_no_systemctl_means_the_scope_carries_the_limits(self):
+        env = self.scope_env()
+        (self.root / "systemd-scope/systemctl").unlink()
+        bare = self.root / "systemd-scope"
+        for name in ("python3", "sh", "sleep", "true"):
+            (bare / name).symlink_to(shutil.which(name))
+        for name in ("herdr", "t3"):
+            (bare / name).symlink_to(self.bin / name)
+        self.replay(self.job_id(self.launch("--", "true", env={"PATH": str(bare)})))
+        self.assertEqual([a.rsplit("=", 1)[0] for a in self.memory_limit_args(self.systemd_calls()[1])], ["--property=MemoryHigh", "--property=MemoryMax"])
+
     def test_dollars_in_the_job_reach_it_as_typed(self):
-        # systemd-run expands $VAR and ${VAR} in the command's arguments and reads $$ as $: the launcher must double them
+        # systemd-run expands $VAR and ${VAR} in the command's arguments (in --scope mode before 258): the launcher turns that off
         seen = self.root / "seen"
         probe = f"import sys; open({str(seen)!r}, 'w').write(repr(sys.argv[1:]))"
         args = ["$HOME", "${NOPE-dflt}", "$$", "a $x b", "100%"]
@@ -607,6 +643,7 @@ class RunAndWake(unittest.TestCase):
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual(records[1]["exit"], 0, "the job ran to its end after the session's scope was stopped")
         self.assertEqual(len(self.prompts()), 1)
+        self.assertTrue(records[0]["slice"].endswith(".slice"), "the start record shows the slice the scope landed in")
 
     # --- a stop that signals the watcher as well as the job ---
     def watcher_of(self, result):
@@ -645,6 +682,15 @@ class RunAndWake(unittest.TestCase):
         job = self.job_id(self.launch("--", sys.executable, "-c", probe))
         self.replay(job)
         self.assertEqual(seen.read_text().strip(), "[False, False, False]")
+
+    def test_a_signal_ignored_at_launch_stays_ignored_for_the_job(self):
+        # `nohup run-and-wake …`: SIGHUP ignored on the way in is ignored by the job, as before the watcher forwarded signals
+        seen = self.root / "seen"
+        probe = f"import signal; print(signal.getsignal(signal.SIGHUP) is signal.SIG_IGN, file=open({str(seen)!r}, 'w'))"
+        result = subprocess.run([sys.executable, str(SCRIPT), "--", sys.executable, "-c", probe], env=self.env, cwd=self.root, text=True,
+                                capture_output=True, timeout=20, preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN))
+        self.replay(self.job_id(result))
+        self.assertEqual(seen.read_text().strip(), "True")
 
     def test_a_job_killed_with_sigkill_gets_an_end_record_with_the_signal(self):
         cmd, _ = self.held_job()
