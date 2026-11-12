@@ -618,6 +618,14 @@ if [ ! -x "$PI_BIN" ] || [ ! -f "$PI_AGENT_DIR/install/current-version" ]; then
   # Patch only what this task installed; chezmoi's after_30 script patches existing installs.
   mise run apply-pi-patches
 fi
+# The installer puts its entry in the first of ~/.pi/agent/bin, ~/.local/bin on the PATH set above, and ~/.pi/agent/bin is in no shell profile.
+# Linux logins (bash, zsh, Herdr's session restore) find ~/.local/bin, so link pi there; this runs on an existing install too.
+# Never replaces a pi that is already in ~/.local/bin. macOS is untouched: its install and PATH stay as they are.
+if [ "$(uname -s)" = Linux ] && [ ! -e "$HOME/.local/bin/pi" ] && [ ! -L "$HOME/.local/bin/pi" ]; then
+  mkdir -p "$HOME/.local/bin"
+  ln -s "$PI_BIN" "$HOME/.local/bin/pi"
+  echo "[install-pi] linked ~/.local/bin/pi to the managed launcher so pi is on the login PATH"
+fi
 '''
 
 [tasks."update-pi"]
