@@ -103,12 +103,16 @@ SERVICE_READY_S = 300        # how long a sidecar has to pass its startup probe
 CLUSTER_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 def registry_admits(regs, ref):
     """A registries entry is a host or a host plus a path prefix. An image matches when it starts with
-    entry + "/" or when its repository equals the entry. The repository is the ref without @digest and
-    without :tag; a tag is a ":" in the last path segment, so a host:port stays."""
+    entry + "/", or, for a path-scoped entry (one with a "/"), when its repository equals the entry. The
+    repository is the ref without @digest and without :tag; a tag is a ":" in the last path segment, so a
+    host:port stays. A ref whose repository has no "/" is refused: a runtime reads it as a Docker Hub
+    library image (registry.example@sha256:... is docker.io/library/registry.example), whatever the entry."""
     repo = ref.split("@")[0]
     head, _, last = repo.rpartition("/")
-    repo = head + "/" + last.split(":")[0] if head else repo
-    return any(ref.startswith(r + "/") or repo == r for r in regs)
+    if not head:
+        return False
+    repo = head + "/" + last.split(":")[0]
+    return any(ref.startswith(r + "/") or ("/" in r and repo == r) for r in regs)
 
 
 CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default"}
