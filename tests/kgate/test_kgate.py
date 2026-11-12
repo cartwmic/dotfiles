@@ -1965,6 +1965,22 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(K.registry_admits(["h.example/a/b"], "h.example/a/bc@sha256:" + "0" * 64), False)
         self.assertEqual(K.registry_admits(["h.example"], "h.example/x/y:1"), True)
 
+    def test_a_tagged_ref_is_admitted_by_its_repository_without_the_tag(self):
+        d = "@sha256:" + "ab" * 32
+        self.assertTrue(K.registry_admits(["registry.example/team/db"], "registry.example/team/db:1.2" + d))
+        self.assertFalse(K.registry_admits(["registry.example/team/db"], "registry.example/team/dbx:1" + d))
+        self.assertTrue(K.registry_admits(["registry.example:5000/team/db"], "registry.example:5000/team/db:1" + d))
+        self.assertTrue(K.registry_admits(["registry.example:5000"], "registry.example:5000/team/db:1" + d))
+        self.assertTrue(K.registry_admits(["registry.example/team/db"], "registry.example/team/db" + d))
+
+    def test_a_ref_without_a_slash_is_a_docker_hub_image_and_is_never_admitted(self):
+        d = "@sha256:" + "ab" * 32
+        for entry in ("registry.example", "registry.example:5000", "db", "db:1"):
+            for ref in ("registry.example" + d, "registry.example:5000" + d, "db:1" + d, "db" + d):
+                with self.subTest(entry=entry, ref=ref):
+                    self.assertFalse(K.registry_admits([entry], ref))
+        self.assertTrue(K.registry_admits(["registry.example"], "registry.example/db" + d))   # host entry, ref under it
+
     def test_an_image_volume_may_not_cover_the_cache_out_a_tree_root_or_a_system_directory(self):
         for path in ("/cache", "/out", "/cache/x", "/Users", "/Users/me/tool", "/", "/usr", "/usr/local/bin", "/etc/x", "/bin", "/sbin", "/lib", "/lib64/x", "/proc", "/sys/x", "/dev/shm", "/./usr", "/.", "/a/../usr", "/usr/", "/a//b", "/opt/./x"):
             with self.subTest(path):
