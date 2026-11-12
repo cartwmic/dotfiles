@@ -435,7 +435,7 @@ class ProfileGateTest(unittest.TestCase):
 
 
 class LinuxSettingsTest(unittest.TestCase):
-    """Personal Linux applies the settings script with the hub n/a: worktreesDirectory in the home directory, the window, no hub instance.
+    """Personal Linux applies the settings script with the hub n/a: worktreesDirectory in the home directory, the window, no hub instance, and the pi instance.
 
     The chezmoi OS is overridden to linux, so this runs the same on the Mac's CI job.
     """
@@ -466,9 +466,40 @@ class LinuxSettingsTest(unittest.TestCase):
         once = run_script(script, FIXTURE)
         self.assertEqual(run_script(script, once), once)
 
+    def test_pi_is_enabled_and_every_other_instance_is_unchanged(self):
+        """T3's Pi provider is on after the apply (Retro and the steward run on it); codex, claudeAgent and coordinator are as they were."""
+        script, _ = self.render()
+        before = json.loads(FIXTURE)["providerInstances"]
+        out = json.loads(run_script(script, FIXTURE))["providerInstances"]
+        self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
+        self.assertEqual(list(out), list(before) + ["pi"])
+        self.assertEqual({k: v for k, v in out.items() if k != "pi"}, with_window({"providerInstances": before})["providerInstances"])
+
+    def test_pi_replaces_a_stale_entry_and_is_owned(self):
+        """An edited pi entry goes back to ours; dropping pi from WANT removes it (owned), leaving the rest."""
+        script, _ = self.render()
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False, "config": {"launchArgs": "--x"}}
+        out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
+        self.assertEqual(list(out), list(data["providerInstances"]))
+        gone = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
+        self.assertNotIn("pi", gone)
+        self.assertEqual(list(gone), list(json.loads(FIXTURE)["providerInstances"]))
+
     def test_the_mac_still_gets_workshop(self):
         script, _ = self.render("darwin")
         self.assertIn("WORKTREES_DIR='%s'" % WORKTREES, script)
+
+    def test_the_mac_does_not_own_pi(self):
+        """pi is personal Linux only: the Mac neither adds it nor removes one that is there."""
+        script, _ = self.render("darwin")
+        self.assertIn("OWNED='[\"claude-hub\",\"codex-hub\"]'", script)
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False}
+        out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(out["pi"], {"driver": "pi", "enabled": False})
+        self.assertNotIn("pi", json.loads(run_script(script, FIXTURE))["providerInstances"])
 
 
 if __name__ == "__main__":
