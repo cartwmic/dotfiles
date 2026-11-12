@@ -18,6 +18,7 @@ How to read a row:
 | `.config/systemd/user/agent-events.service`, `.config/systemd/user/agent-events.timer`, `77_agent_events_systemd.sh` | personal (Linux) | The Linux twin of the LaunchAgent row above, with the same `agentEvents.enabled` gate (default on only on personal). The work Mac already exports through its own LaunchAgent and this timer is Linux-only, so the work profile has nothing to add. The load script skips WSL, so a second "personal" exporter cannot start there. |
 | `.local/share/instances/launchd/local.coordinatord.plist` | personal (macOS) | The work profile runs its own coordinator unit, `local.coordinatord.work.plist` (row below). |
 | `.local/share/instances/launchd/local.retrod.plist` | personal (macOS) | Work Retro is a later change (README, "Instances"). |
+| `.local/share/instances/systemd/retrod.service` | personal (Linux) | The Linux twin of the row above. Work Retro is a later change. |
 | `.local/share/instances/launchd/local.coordinatord.work.plist` | axon-work-computer (macOS) | The work coordinator's unit (Matrix); personal runs `local.coordinatord.plist`. |
 | `.pi/agent/extensions/pi-codex-fast.json` | personal | Codex Fast is configured only in personal Pi settings. |
 | `.pi/agent/extensions/auto-session-name.json` | personal | Session titles use the personal Codex login. |

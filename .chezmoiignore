@@ -202,7 +202,7 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
-# The coordinator's systemd user unit and the script that installs it (cartwmic/coordinator): personal Linux. Inert copy, like the plists above.
+# The coordinator's and Retro's systemd user units and the script that installs them: personal Linux. Inert copy, like the plists above.
 .local/share/instances/systemd
 .local/share/instances/systemd/**
 .local/user_scripts/instances_reconcile_systemd.sh
