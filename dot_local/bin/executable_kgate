@@ -446,7 +446,7 @@ def mssql_container(svc, password):
     probe = 'exec /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -Q "select 1" -b'
     return {"name": "mssql", "image": svc["image"], "imagePullPolicy": "IfNotPresent", "restartPolicy": "Always", "env": env,
             "ports": [{"containerPort": MSSQL_PORT}],
-            "securityContext": {"runAsUser": MSSQL_UID, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+            "securityContext": {"runAsUser": MSSQL_UID, "runAsGroup": 0, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"], "add": ["NET_BIND_SERVICE"]}},
             "startupProbe": {"exec": {"command": ["sh", "-c", probe]}, "periodSeconds": 5, "timeoutSeconds": 5, "failureThreshold": max(1, svc["ready_s"] // 5)},
             "resources": {"requests": {"cpu": str(svc["cpu"]), "memory": svc["memory"], "ephemeral-storage": svc["ephemeral_storage"]},
                           "limits": {"cpu": str(svc["cpu_limit"]), "memory": svc["memory_limit"], "ephemeral-storage": svc["ephemeral_storage"]}}}

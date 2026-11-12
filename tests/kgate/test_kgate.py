@@ -1412,7 +1412,7 @@ class KubectlPodSpec(unittest.TestCase):
         spec = items[0]["spec"]
         (side,) = spec["initContainers"]
         self.assertEqual((side["name"], side["image"], side["restartPolicy"]), ("mssql", sql["image"], "Always"))
-        self.assertEqual(side["securityContext"], {"runAsUser": 10001, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}})
+        self.assertEqual(side["securityContext"], {"runAsUser": 10001, "runAsGroup": 0, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"], "add": ["NET_BIND_SERVICE"]}})
         self.assertEqual(side["resources"], {"requests": {"cpu": "2", "memory": "4Gi", "ephemeral-storage": "6Gi"},
                                              "limits": {"cpu": "3", "memory": "5Gi", "ephemeral-storage": "6Gi"}})
         self.assertEqual(side["startupProbe"]["failureThreshold"], 24)
