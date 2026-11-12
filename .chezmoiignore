@@ -304,4 +304,6 @@ Library/Preferences/pnpm/**
 74_t3_service_linux.sh
 # The portable GitHub credential helper for git (personal Linux). macOS keeps its own setup; the work profile has no Linux machine.
 76_git_credential_linux.sh
+# The git author identity (personal Linux). macOS keeps its own setup; the work profile has no Linux machine and its identity is not in this source.
+77_git_identity_linux.sh
 {{- end }}
