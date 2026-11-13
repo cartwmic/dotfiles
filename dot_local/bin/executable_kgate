@@ -27,8 +27,8 @@ Contract
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
   after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. kgate NEVER runs CMD on this Mac and never
   reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
-- 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
-  ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
+- 1Password reads (profile secrets and the pull token) call `op` by name. When `op` is the op shim and a Connect token is set, the shim sends them to the homelab Connect server; otherwise they use the service-account token: OP_SERVICE_ACCOUNT_TOKEN, else
+  ~/.config/agent-harness/op-service-token. Without a service-account token the job exits 69 before `op` runs, whatever the Connect token; `op` never reaches the desktop app.
   Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when

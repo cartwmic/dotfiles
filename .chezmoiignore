@@ -259,6 +259,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 {{- end }}
 
 {{- if ne .profile "personal" }}
+# The homelab Connect token seed (agents' op reads through the homelab 1Password Connect server): personal only (docs/profiles.md).
+.local/user_scripts/seed_op_connect_token.sh
 .local/user_scripts/configure_rustdesk.sh
 # The Loop Engine bump applies on this machine without asking; an agent applies on the work Mac only with Michael's confirmation for that action (docs/profiles.md).
 .local/user_scripts/loop_engine_bump.py

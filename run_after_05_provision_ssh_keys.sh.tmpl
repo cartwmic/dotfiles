@@ -327,6 +327,14 @@ fingerprint_of() {
   ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
 }
 
+# The Connect token that agents' op reads use (dot_pi/private_agent/bin/executable_op). It runs before the fingerprint exit
+# below, so a machine that already has the key still gets the token. The script exits 0 at once when the token file has a
+# value, so only the first apply on a machine reads 1Password. Non-fatal: a failure never blocks this key.
+SEED_CONNECT="$HOME/.local/user_scripts/seed_op_connect_token.sh"
+if [ -x "$SEED_CONNECT" ]; then
+  "$SEED_CONNECT" || warn "Connect token not seeded; agents' op reads stay on the service account"
+fi
+
 # Already correct? Nothing to do. This is what makes the script safe to run on
 # every apply, and what lets it self-heal a deleted or rotated key.
 if [ -r "$HOMELAB_PATH" ] && [ "$(fingerprint_of "$HOMELAB_PATH")" = "$HOMELAB_FP" ]; then
