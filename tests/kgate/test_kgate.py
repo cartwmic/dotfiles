@@ -16,8 +16,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(os.environ.get("KGATE_SCRIPT") or ROOT / "dot_local/bin/executable_kgate")
@@ -1119,7 +1121,7 @@ KCFG = {"name": "example", "path": "/nowhere/example.toml", "kubeconfig": "/nowh
         "pod_labels": {"example.org/owner": "team-a", "example.org/tier": "build"}, "pod_annotations": {"example.org/evict-ok": "true"}, "cache_claim_default": None}
 
 FAKE_KUBECTL = r'''#!/usr/bin/env python3
-import json, os, shlex, shutil, subprocess, sys
+import json, os, re, shlex, shutil, subprocess, sys, time
 fake = os.environ["FAKE"]
 argv = sys.argv[1:]
 def log(entry):
@@ -1149,10 +1151,40 @@ if a[0] == "delete":
     sys.exit(0)
 if a[:2] == ["get", "pods"]:
     print(json.dumps({"items": []})); sys.exit(0)
+# Pods the fake cluster took away (FAKE_LOST): what is left of each one says why. "event": the pod is gone and the namespace events say Evicted (the autoscaler's
+# consolidation); "taint": gone, TaintManagerEviction; "status": the pod is left as Failed/Evicted; "disruption": the pod has a DisruptionTarget condition;
+# "other": gone, and the only event is an unrelated one; "none": gone, no event; "deadline": left as Failed/DeadlineExceeded.
+lostfile = os.path.join(fake, "lost-pods")
+lost = dict(l.split() for l in open(lostfile).read().splitlines()) if os.path.exists(lostfile) else {}
+if a[:2] == ["get", "pod"] and a[2] in lost:
+    kind = lost[a[2]]
+    if kind == "status":
+        print(json.dumps({"status": {"phase": "Failed", "reason": "Evicted", "message": "The node was low on resource: memory."}})); sys.exit(0)
+    if kind == "disruption":
+        print(json.dumps({"status": {"phase": "Running", "conditions": [{"type": "DisruptionTarget", "status": "True", "reason": "DeletionByTaintManager", "message": "Taint manager: deleting due to NoExecute taint"}]}})); sys.exit(0)
+    if kind in ("running-cancel", "running-evicted"):   # the pod is still there and Running, with only a stray event about it
+        print(json.dumps({"status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}})); sys.exit(0)
+    if kind == "deadline":
+        print(json.dumps({"status": {"phase": "Failed", "reason": "DeadlineExceeded", "message": "Pod was active on the node longer than the specified deadline"}})); sys.exit(0)
+    sys.stderr.write('Error from server (NotFound): pods "%s" not found\n' % a[2]); sys.exit(1)
+if a[:2] == ["get", "events"]:
+    name = a[a.index("--field-selector") + 1].split("involvedObject.name=")[1]
+    event = {"event": ("Evicted", "Evicted pod: Underutilized"), "taint": ("TaintManagerEviction", "Marking for deletion Pod jobs/x"),
+             "cancel": ("TaintManagerEviction", "Cancelling deletion of Pod jobs/x"), "running-cancel": ("TaintManagerEviction", "Cancelling deletion of Pod jobs/x"),
+             "running-evicted": ("Evicted", "Evicted pod: Underutilized"),
+             "other": ("Killing", "Stopping container job")}.get(lost.get(name))
+    if event is None and lost.get(name, "").startswith("reason="):   # "reason=X": gone, and the only event has reason X
+        event = (lost[name][7:], "Marking for deletion Pod jobs/x" if lost[name][7:] == "TaintManagerEviction" else "a message")
+    if os.environ.get("FAKE_EVENTS_FAIL"):   # the events read is refused
+        sys.stderr.write('Error from server (Forbidden): events is forbidden: User "x" cannot list resource "events"\n'); sys.exit(1)
+    print(json.dumps({"items": [{"reason": event[0], "message": event[1]}] if event else []})); sys.exit(0)
 if a[:2] == ["create", "-f"]:
     creates = os.path.join(fake, "creates")
     n = int(open(creates).read()) + 1 if os.path.exists(creates) else 1
     open(creates, "w").write(str(n))
+    if os.environ.get("FAKE_QUOTA_ON_CREATE") == str(n) and not os.path.exists(os.path.join(fake, "quota-once")):   # refuse that one create, once
+        open(os.path.join(fake, "quota-once"), "w").write("x")
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=8, limited: requests.cpu=8\n'); sys.exit(1)
     quota = os.environ.get("FAKE_QUOTA", "")   # "N": refuse the first N creates; "always": refuse every create. The used CPU changes after the first.
     if quota.startswith("long:") and n <= int(quota[5:]):   # four resources exceeded, a message over 300 characters, every request under its limited value
         names = ["limits.cpu", "limits.memory", "requests.cpu", "requests.ephemeral-storage"]
@@ -1185,9 +1217,10 @@ if a[:2] == ["get", "pod"]:
     last = json.load(open(os.path.join(fake, "last_manifest.json"))) if os.path.exists(os.path.join(fake, "last_manifest.json")) else {"items": [{"spec": {"volumes": []}}]}
     has_claim = any("persistentVolumeClaim" in v for i in last["items"] for v in i["spec"]["volumes"])
     rwop = "0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod."
-    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-gone" and n > 1):
+    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-r2" and not (has_claim and last["items"][0]["metadata"]["name"].endswith("-r2"))) \
+            or (scenario == "rwop-r1" and not (has_claim and not last["items"][0]["metadata"]["name"].endswith("-r2"))) or (scenario == "rwop-gone" and n > 1):
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
-    elif scenario in ("rwop", "rwop-gone"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
+    elif scenario in ("rwop", "rwop-gone", "rwop-r2", "rwop-r1"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
         st = pending(rwop)
     elif scenario == "queued":   # a full cluster: the scheduler's capacity message
         st = pending("0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.")
@@ -1209,7 +1242,8 @@ if a[0] == "logs":
 if a[0] == "exec" and "-c" in a and a[a.index("-c") + 1] == "mssql":
     print("734003200"); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
-    job, script = a[2], a[-1]
+    pod, script = a[2], a[-1]
+    job = re.sub(r"-r\d+$", "", pod)   # the pod side keeps the job id; the rerun after an eviction has the pod name "<id>-r2"
     pre, _, rest = script.partition("tar -xf - ")
     assert "tar -xf - " + rest == "tar -xf - --no-same-owner -C / && exec sh /cache/%s/kgate.sh /cache/%s" % (job, job), script
     if os.environ.get("FAKE_NO_SH"):   # an image without a shell: the runtime cannot start `sh`, and kubectl says so
@@ -1218,6 +1252,19 @@ if a[0] == "exec" and "-i" in a:
     if checked.returncode != 0:
         sys.stdout.buffer.write(checked.stdout); sys.stdout.flush(); sys.exit(checked.returncode)
     data = sys.stdin.buffer.read()
+    losing = os.environ.get("FAKE_LOST", "")   # "N:kind": the first N execs lose the pod once CMD has started (kubectl exits 0, no end line)
+    if losing:
+        execs = os.path.join(fake, "execs")
+        n = int(open(execs).read()) + 1 if os.path.exists(execs) else 1
+        open(execs, "w").write(str(n))
+        count, _, kinds = losing.partition(":")   # one kind per lost exec, comma separated; the last is used for any more
+        kind = (kinds.split(",") or ["event"])[min(n, len(kinds.split(","))) - 1]
+        if n <= int(count):
+            for line in ("start 1 node=fake-kcl-node cpus=1", "hash ok x", "preflight ok 0 tools", "running sh"):
+                print("kgate[%s]: %s" % (job, line), flush=True)
+            time.sleep(float(os.environ.get("FAKE_LOST_DELAY", "0")))
+            open(lostfile, "a").write("%s %s\n" % (pod, kind))
+            sys.exit(0)
     open(os.path.join(fake, "shipped.tar"), "wb").write(data)
     jobroot = os.path.join(fake, "jobroot")
     os.makedirs(jobroot, exist_ok=True)   # /cache is the pod's emptyDir; here the job's own files go under FAKE
@@ -1930,12 +1977,12 @@ class KubectlBlack(unittest.TestCase):
         self.cmd_env = {"KGATE_SSH": ""}
         self.write_cluster()
 
-    def write_cluster(self, name="example", roots=None, drop=(), extra="", registries='["registry.example", "other.example"]'):
+    def write_cluster(self, name="example", roots=None, drop=(), extra="", registries='["registry.example", "other.example"]', deadline=7200):
         """~/.config/kgate/clusters/<name>.toml in the test HOME. The temp dirs of these tests are under /tmp on Linux, so that top directory is a tree root here."""
         roots = roots or sorted({"Users", "Volumes", "private", self.repo.parts[1]})
         lines = {"kind": 'kind = "kubectl"', "kubeconfig": 'kubeconfig = "~/.kube/example"', "context": 'context = "example-ctx"', "namespace": 'namespace = "jobs"',
                  "registries": "registries = " + registries, "tree_roots": "tree_roots = [%s]" % ", ".join('"%s"' % r for r in roots),
-                 "user": 'user = "65532:65532"', "deadline_s": "deadline_s = 7200"}
+                 "user": 'user = "65532:65532"', "deadline_s": "deadline_s = %d" % deadline}
         text = "\n".join(v for k, v in lines.items() if k not in drop) + "\n[pod_labels]\n\"example.org/owner\" = \"team-a\"\n\"example.org/tier\" = \"build\"\n" \
                "[pod_annotations]\n\"example.org/evict-ok\" = \"true\"\n" + extra
         path = self.home / ".config" / "kgate" / "clusters" / (name + ".toml")
@@ -2854,6 +2901,236 @@ class KubectlBlack(unittest.TestCase):
         for args in ((), ("example",), ("homelab", "--from-context", "x"), ("../x", "--from-context", "x")):
             done = self.run_kgate("cluster-setup", *args)
             self.assertEqual(done.returncode, 64, (args, done.stdout))
+
+    # -- the cluster takes the pod away (an eviction): rerun once, and only on evidence
+
+    def pods_created(self):
+        return [c["manifest"]["items"][0] for c in self.kcalls() if "manifest" in c]
+
+    def steps(self):
+        """The pod creates and pod deletes the client sent, in order."""
+        out = []
+        for c in self.kcalls():
+            if "manifest" in c:
+                out.append(("create", c["manifest"]["items"][0]["metadata"]["name"]))
+            elif "argv" in c and c["argv"][6:7] == ["delete"] and c["argv"][7].startswith("pod/"):
+                out.append(("delete", c["argv"][7][4:]))
+        return out
+
+    def lose(self, spec, *args, env=None, cmd=('echo ran-attempt; echo result > "$KGATE_OUT/result.txt"',)):
+        (self.fake / "execs").unlink(missing_ok=True)
+        return self.run_kgate(*args, "--", "sh", "-c", *cmd, env={"FAKE_LOST": spec, **(env or {})})
+
+    def check_rerun(self, kind, why):
+        done = self.lose("1:" + kind)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        pods = [p for p in self.pods_created() if p["metadata"]["labels"]["kgate-job"] == rec["id"]]
+        self.assertEqual([p["metadata"]["name"] for p in pods], [rec["id"], rec["id"] + "-r2"], "a new pod name in the same job")
+        self.assertEqual(self.steps()[-4:], [("create", rec["id"]), ("delete", rec["id"]), ("create", rec["id"] + "-r2"), ("delete", rec["id"] + "-r2")],
+                         "the old pod is deleted before the new one is created, and the new one is deleted at the end")
+        same = json.loads(json.dumps(pods[1]))
+        same["metadata"]["name"], same["spec"]["activeDeadlineSeconds"] = pods[0]["metadata"]["name"], pods[0]["spec"]["activeDeadlineSeconds"]
+        self.assertEqual(same, pods[0], "the same tree, profile and CMD: only the name and what is left of the deadline differ")
+        self.assertIn("kgate: pod %s was evicted by the cluster (%s); rerunning once\n" % (rec["id"], why), done.stdout)
+        self.assertEqual(done.stdout.count("rerunning once"), 1)
+        self.assertEqual(done.stdout.splitlines().count("ran-attempt"), 1, "CMD ran in the second pod only")
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"], rec["cleanup"], rec["attempts"]), (0, None, True, True, 2))
+        self.assertEqual(rec["evicted"], [{"attempt": 1, "pod": rec["id"], "reason": why}], "the retry is in the record")
+        self.assertEqual((self.state / "kgate" / (rec["id"] + ".out") / "result.txt").read_text(), "result\n")
+        self.assertEqual(rec["out_files"], 1)
+
+    def test_a_pod_the_autoscaler_evicted_is_rerun_once_and_the_job_passes(self):
+        self.check_rerun("event", "Evicted pod: Underutilized")
+
+    def test_a_pod_the_taint_manager_evicted_is_rerun(self):
+        self.check_rerun("taint", "TaintManagerEviction: Marking for deletion Pod jobs/x")
+
+    def test_a_pod_left_behind_as_failed_evicted_is_rerun(self):
+        self.check_rerun("status", "Evicted: The node was low on resource: memory.")
+
+    def test_a_pod_with_a_disruption_target_condition_is_rerun(self):
+        self.check_rerun("disruption", "DeletionByTaintManager: Taint manager: deleting due to NoExecute taint")
+
+    def test_two_evictions_are_69_with_both_reasons_and_no_third_pod(self):
+        done = self.lose("2:event,taint")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["reason"], "lost the pod twice: pod %s was evicted by the cluster (Evicted pod: Underutilized), the job was rerun once as pod %s-r2, "
+                                        "which was evicted too (TaintManagerEviction: Marking for deletion Pod jobs/x); not rerun again" % (rec["id"], rec["id"]))
+        self.assertEqual([e["pod"] for e in rec["evicted"]], [rec["id"], rec["id"] + "-r2"])
+        self.assertEqual((rec["attempts"], rec["cleanup"], rec["ran"]), (2, True, True))
+        self.assertEqual([s for s in self.steps() if s[0] == "create"], [("create", rec["id"]), ("create", rec["id"] + "-r2")])
+        self.assertEqual(self.steps()[-1], ("delete", rec["id"] + "-r2"), "nothing is left behind")
+        self.assertEqual(done.stdout.count("rerunning once"), 1)
+
+    def test_a_lost_pod_with_no_sign_of_an_eviction_is_69_and_not_rerun(self):
+        for kind in ("none", "other", "deadline"):   # no event / an unrelated event / the pod's own deadline ended it
+            with self.subTest(kind):
+                done = self.lose("1:" + kind)
+                self.assertEqual(done.returncode, 69, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun", "today's text")
+                self.assertNotIn("rerunning", done.stdout)
+                self.assertEqual([p["metadata"]["name"] for p in self.pods_created() if p["metadata"]["labels"]["kgate-job"] == rec["id"]], [rec["id"]])
+                self.assertNotIn("evicted", rec)
+                self.assertEqual((rec["attempts"], rec["ran"], rec["cleanup"]), (1, True, True))
+
+    def test_a_taint_manager_cancel_event_is_not_an_eviction(self):
+        # Upstream uses reason TaintManagerEviction for "Cancelling deletion of Pod ..." too: the taint cleared and the pod was not deleted.
+        for kind in ("cancel", "running-cancel", "running-evicted"):   # pod gone / pod still Running / a Running pod with a stray Evicted event
+            with self.subTest(kind):
+                done = self.lose("1:" + kind)
+                self.assertEqual(done.returncode, 69, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+                self.assertNotIn("rerunning", done.stdout)
+                self.assertNotIn("evicted", rec)
+                self.assertEqual((rec["attempts"], rec["ran"]), (1, True))
+                self.assertEqual(self.steps()[-2:], [("create", rec["id"]), ("delete", rec["id"])], "one pod; the only delete is the final cleanup, not a rerun's")
+                self.assertEqual(len([p for p in self.pods_created() if p["metadata"]["labels"]["kgate-job"] == rec["id"]]), 1, "CMD was not started again")
+                if kind != "cancel":   # a pod that is Running is trusted over the events: they are not even read
+                    self.assertNotIn(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + rec["id"], "-o", "json"], self.kubectl_args())
+
+    def test_a_job_that_is_not_evicted_has_one_attempt_and_asks_nothing_about_evictions(self):
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["attempts"], 1)
+        self.assertNotIn("evicted", rec)
+        self.assertFalse([a for a in self.kubectl_args() if a[:2] == ["get", "events"]])
+
+    def test_only_an_explicit_list_of_reasons_is_an_eviction(self):
+        for reason in ("DisruptionBlocked", "FailedScheduling", "Nominated", "DisruptionTerminating", "Killing"):   # the node autoscaler says a disruption did NOT happen, or no pod went
+            with self.subTest(reason):
+                done = self.lose("1:reason=" + reason)
+                self.assertEqual(done.returncode, 69, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+                self.assertNotIn("rerunning", done.stdout)
+                self.assertNotIn("evicted", rec)
+                self.assertEqual([s for s in self.steps() if s[0] == "create"][-1:], [("create", rec["id"])])
+        self.assertEqual(K.EVICTION_REASONS, {"Evicted", "TaintManagerEviction", "Preempted", "Disrupted"})
+
+    def test_each_allowed_reason_is_rerun(self):
+        for reason in sorted(K.EVICTION_REASONS):
+            with self.subTest(reason):
+                shutil.rmtree(self.fake / "podgit", ignore_errors=True)   # the fake pod's tree from the last job
+                done = self.lose("1:reason=" + reason)
+                self.assertEqual(done.returncode, 0, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["attempts"], 2)
+                self.assertEqual(rec["evicted"], [{"attempt": 1, "pod": rec["id"], "reason": reason + (": Marking for deletion Pod jobs/x" if reason == "TaintManagerEviction" else ": a message")}])
+
+    def test_a_failed_events_read_means_no_rerun(self):
+        done = self.lose("1:event", env={"FAKE_EVENTS_FAIL": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+        self.assertIn(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + rec["id"], "-o", "json"], self.kubectl_args())
+        self.assertNotIn("evicted", rec)
+        self.assertEqual([s for s in self.steps() if s[0] == "create"], [("create", rec["id"])])
+
+    def test_the_rerun_pod_waits_for_quota_like_any_pod(self):
+        done = self.lose("1:event", "--wait", "60", env={"FAKE_QUOTA_ON_CREATE": "2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("exceeded quota", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["attempts"], 2)
+        self.assertEqual(int((self.fake / "creates").read_text()), 3, "the first pod, the refused create of the second, its retry")
+
+    def test_the_rerun_pod_falls_back_to_no_cache_and_the_record_names_that_pod_cache(self):
+        self.profile(extra='cache_pvc = "example-cache"')
+        done = self.lose("1:event", "--wait", "60", env={"FAKE_POD": "rwop-r2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["attempts"], rec["cache"]), (2, "fallback"))
+        vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
+        first, second, third = self.pods_created()
+        self.assertEqual(vols(first), [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
+        self.assertEqual(vols(second), [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
+        self.assertEqual(vols(third), [{"name": "cache", "emptyDir": {}}])
+        self.assertEqual([p["metadata"]["name"] for p in (second, third)], [rec["id"] + "-r2"] * 2)
+
+    def test_the_record_says_pvc_when_the_first_pod_fell_back_and_the_rerun_pod_got_the_claim(self):
+        self.profile(extra='cache_pvc = "example-cache"')
+        done = self.lose("1:event", "--wait", "60", env={"FAKE_POD": "rwop-r1"})   # the claim is busy for the first pod only
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["attempts"], rec["cache"]), (2, "pvc"))
+        vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
+        self.assertEqual([vols(p) for p in self.pods_created()][-1], [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
+
+    def test_the_wait_deadline_covers_the_retry_and_is_not_reset(self):
+        done = self.lose("1:event", "--wait", "1", env={"FAKE_LOST_DELAY": "2"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["reason"], "pod %s was evicted by the cluster (Evicted pod: Underutilized); not rerun: the job's --wait of 1s has passed" % rec["id"])
+        self.assertEqual(rec["evicted"], [{"attempt": 1, "pod": rec["id"], "reason": "Evicted pod: Underutilized"}])
+        self.assertEqual((rec["attempts"], rec["cleanup"]), (1, True))
+        self.assertEqual([s for s in self.steps() if s[0] == "create"], [("create", rec["id"])])
+
+    def test_the_pod_deadline_of_the_rerun_is_what_is_left_of_the_jobs(self):
+        self.write_cluster(deadline=120)
+        done = self.lose("1:event", env={"FAKE_LOST_DELAY": "1"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        first, second = self.pods_created()
+        self.assertEqual(first["spec"]["activeDeadlineSeconds"], 120)
+        self.assertTrue(100 <= second["spec"]["activeDeadlineSeconds"] <= 119, second["spec"]["activeDeadlineSeconds"])
+
+    def test_no_pod_deadline_left_means_no_rerun(self):
+        import argparse
+        with tempfile.TemporaryDirectory() as state, mock.patch.dict(os.environ, {"XDG_STATE_HOME": state}):
+            job = K.Job(argparse.Namespace(command=["true"], wait=3600, sched_wait=600))
+            self.addCleanup(job.log.close)
+            sent = []
+            job.cluster = type("C", (), {"kind": "kubectl", "run": lambda self, kargs, stdin=b"": sent.append(kargs)})()
+            job.kcfg, job.rec["attempts"], job.pod_t0 = {"deadline_s": 60}, 1, time.time() - 61
+            with self.assertRaises(K.Unavailable) as caught:
+                job.rerun("Evicted pod: Underutilized", None)
+            self.assertEqual(str(caught.exception), "pod %s was evicted by the cluster (Evicted pod: Underutilized); not rerun: the pod deadline of 60s has passed" % job.id)
+            self.assertEqual(sent, [], "nothing was deleted or created")
+            self.assertEqual(job.pod, job.id)
+
+    def test_the_sql_password_is_masked_on_the_rerun_and_is_the_same_for_both_pods(self):
+        self.mssql_profile()
+        done = self.lose("1:event", cmd=('echo "host=$MSSQL_HOST pw=$MSSQL_SA_PASSWORD"',))
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("rerunning once", done.stdout)
+        self.assertIn("host=localhost pw=***", done.stdout)
+        first, second = self.pods_created()
+        pws = [{e["name"]: e["value"] for e in p["spec"]["initContainers"][0]["env"]}["MSSQL_SA_PASSWORD"] for p in (first, second)]
+        self.assertEqual(pws[0], pws[1])
+        self.assertRegex(pws[0], r"^Aa1_[0-9a-f]{32}$")
+        self.assert_password_nowhere(pws[0], done)
+        self.assertEqual(self.records()[-1]["services"], ["mssql"])
+        execs = [a for a in self.kubectl_args() if a[0] == "exec" and "-i" in a]
+        self.assertEqual([a[1:5] for a in execs], [["-i", self.records()[-1]["id"], "-c", "job"], ["-i", self.records()[-1]["id"] + "-r2", "-c", "job"]])
+
+    def test_the_sql_password_is_masked_in_the_double_eviction_reason_too(self):
+        self.mssql_profile()
+        done = self.lose("2:event", cmd=("true",))
+        self.assertEqual(done.returncode, 69, done.stdout)
+        pw = self.pods_created()[0]["spec"]["initContainers"][0]["env"][1]["value"]
+        self.assert_password_nowhere(pw, done)
+
+    def test_cancel_of_a_dead_client_deletes_the_pod_it_was_on_not_the_first_one(self):
+        corpse = subprocess.Popen(["sleep", "300"])
+        job_id = "kgate-1700000003-333"
+        start, command = K.proc_identity(corpse.pid)
+        active = self.state / "kgate" / "active"
+        active.mkdir(parents=True, exist_ok=True)
+        (active / (job_id + ".json")).write_text(json.dumps({"id": job_id, "job": None, "pid": corpse.pid, "start": start, "proc_cmd": command, "cwd": str(self.repo),
+                                                              "argv": ["kgate", "--", "sleep"], "cmd": "sleep 300", "node": "n", "cluster": "example", "pod": job_id + "-r2"}))
+        corpse.kill()
+        corpse.wait()
+        done = self.run_kgate("cancel", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn(["delete", "pod/" + job_id + "-r2", "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
+        self.assertIn(["get", "pod", job_id + "-r2", "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"], self.kubectl_args())
+        self.assertEqual((self.records()[-1]["id"], self.records()[-1]["exit"], self.records()[-1]["cleanup"]), (job_id, 143, True))
 
 
 if __name__ == "__main__":

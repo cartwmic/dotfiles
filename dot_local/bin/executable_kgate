@@ -26,7 +26,7 @@ Contract
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
   after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. kgate NEVER runs CMD on this Mac and never
-  reruns a job that started. A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
+  reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
 - 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
@@ -96,6 +96,18 @@ PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/passw
 QUOTA_REFUSAL = re.compile(r'^Error from server \(Forbidden\): (?:error when creating "[^"]*": )?pods "[^"]*" is forbidden: exceeded quota: [^\s,]+, requested: .+, used: .+, limited: .+$', re.M)
 CACHE_BUSY_S = 10  # a cache_pvc pod Pending this long on the ReadWriteOncePod conflict runs without the cache
 QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
+# What the cluster records when it takes a pod away on purpose (the node autoscaler's consolidation, the taint manager, the scheduler's preemption).
+# Only these events, or the pod's own status saying the same, make kgate rerun a lost pod. An explicit list: the node autoscaler's DisruptionBlocked and the
+# other Disruption* reasons are about nodes and say a disruption did NOT happen or is only planned, and FailedScheduling or Nominated are not evictions either.
+# Sources: kubelet "Evicted", the taint manager's "TaintManagerEviction" and the scheduler's "Preempted" (Kubernetes); the node autoscaler's pod-level events
+# (upstream terminator events file): its eviction ("Evicted") and its forced pod delete at the node's termination grace period ("Disrupted").
+EVICTION_REASONS = frozenset(("Evicted", "TaintManagerEviction", "Preempted", "Disrupted"))
+# Checked against upstream for one reason used for two meanings (round 2): only TaintManagerEviction has it. The taint manager emits it for "Marking for deletion Pod
+# <ns>/<name>" (a real delete) and for "Cancelling deletion of Pod <ns>/<name>" (the taint cleared and the pod was NOT deleted), so that reason counts only with the
+# first message. "Evicted" has one meaning each in the kubelet (evictPod, just before it kills the pod) and in the node autoscaler (EvictPod, "Evicted pod: <why>"). "Preempted"
+# is emitted once, on the victim, by the scheduler's preemption executor ("Preempted by ..."). "Disrupted" is the node autoscaler's forced pod delete, once.
+TAINT_DELETE_MESSAGE = "Marking for deletion"
+MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
 MSSQL_PORT = 1433
 MSSQL_UID = 10001            # the SQL Server image's own user
@@ -132,6 +144,10 @@ FATAL_WAITING = ("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "Create
 class Unavailable(Exception):
     """The job cannot start or finish on the cluster. Exit 69, with this text as the reason."""
     code = UNAVAILABLE
+
+
+class Lost(Unavailable):
+    """The connection to the pod ended before CMD reported its end. The result is unknown."""
 
 
 class NotScheduled(Unavailable):
@@ -468,8 +484,8 @@ def mssql_container(svc, password):
 
 
 def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None, cache_pvc=None,
-                          mssql=None, image_volumes=(), local_hostnames=(), password=None):
-    """The one Pod for a job on a kubectl cluster, as a List. The labels and annotations the cluster's policy needs come from its cluster file. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. /cache is an emptyDir, or the profile's claim (cache_pvc: persists between jobs, ReadWriteOncePod, so one job at a time). No Secrets, no pull Secret, no hostPath, no affinity: the cluster's own policy decides."""
+                          mssql=None, image_volumes=(), local_hostnames=(), password=None, name=None, active_deadline=None):
+    """The one Pod for a job on a kubectl cluster, as a List. `name` is the pod's name when it is not the job id (the rerun after an eviction); `active_deadline` is what is left of the job's deadline then. The labels and annotations the cluster's policy needs come from its cluster file. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. /cache is an emptyDir, or the profile's claim (cache_pvc: persists between jobs, ReadWriteOncePod, so one job at a time). No Secrets, no pull Secret, no hostPath, no affinity: the cluster's own policy decides."""
     cpu_limit = cpu_limit or cpu
     labels = {"app": "kgate", "kgate-job": job, **cfg["pod_labels"]}
     env = [{"name": "KGATE_OUT", "value": "/out"}, {"name": "CI", "value": "1"},
@@ -492,7 +508,7 @@ def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral,
                                "limits": {"cpu": str(cpu_limit), "memory": memory_limit, "ephemeral-storage": ephemeral}},
                  "volumeMounts": [{"name": n, "mountPath": path} for n, path in mounts]
                  + [{"name": "imgvol%d" % i, "mountPath": v["path"], "readOnly": True} for i, v in enumerate(image_volumes)]}
-    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": cfg["deadline_s"],
+    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": active_deadline or cfg["deadline_s"],
            "automountServiceAccountToken": False,
            "securityContext": {"runAsNonRoot": True, "runAsUser": uid, "runAsGroup": gid, "seccompProfile": {"type": "RuntimeDefault"}},
            "volumes": [{"name": n, "persistentVolumeClaim": {"claimName": cache_pvc}} if n == "cache" and cache_pvc else {"name": n, "emptyDir": {}} for n, _ in mounts],
@@ -504,7 +520,7 @@ def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral,
         pod["hostAliases"] = [{"ip": "127.0.0.1", "hostnames": list(local_hostnames)}]
     if cache_pvc:  # a new disk's root belongs to root: the group makes it writable for the non-root user
         pod["securityContext"].update({"fsGroup": gid, "fsGroupChangePolicy": "OnRootMismatch"})
-    meta = {"name": job, "labels": labels}
+    meta = {"name": name or job, "labels": labels}
     if cfg["pod_annotations"]:
         meta["annotations"] = dict(cfg["pod_annotations"])
     return {"apiVersion": "v1", "kind": "List", "items": [{"apiVersion": "v1", "kind": "Pod", "metadata": meta, "spec": pod}]}
@@ -1089,6 +1105,8 @@ class Job:
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
         self.t_pod = time.time()
+        self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
+        self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
         self.mssql = None       # the SQL Server sidecar's settings, when the profile asks for one
         self.secret = None      # its generated password: kept out of the log, the record and every message (see mask())
         self.carry = b""        # the end of the last chunk, held back in case it is the start of the password
@@ -1139,7 +1157,7 @@ class Job:
         os.makedirs(os.path.dirname(self.entry), exist_ok=True)
         write_json_atomic(self.entry, {"id": self.id, "job": self.rec["job"] or None, "pid": os.getpid(), "start": ident[0],
                                        "proc_cmd": ident[1], "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
-                                       "node": self.rec["node"], "cluster": self.cluster.name})
+                                       "node": self.rec["node"], "cluster": self.cluster.name, "pod": self.pod})
 
     def unregister(self):
         forget(self.entry, self.cancel_marker)
@@ -1202,6 +1220,7 @@ class Job:
         if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
             raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
         self.rec["quota_wait_s"] = 0
+        self.rec["attempts"] = 1
         self.rec["cpu_limit"] = prof["cpu_limit"] or cpu  # the effective limit, which the pod's build parallelism follows
         if self.o.node:
             raise Unavailable("cluster %s does not take --node; the cluster schedules the pod" % name)
@@ -1267,7 +1286,7 @@ class Job:
         busy_since = None
         last = None
         while True:
-            done = self.cluster.run(["get", "pod", self.id, "-o", "json"])
+            done = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
             if done.returncode != 0:
                 raise Unavailable("lost the pod while waiting for it: " + done.stderr.decode(errors="replace").strip())
             status = json.loads(done.stdout).get("status", {})
@@ -1296,7 +1315,7 @@ class Job:
                 if time.time() - busy_since >= CACHE_BUSY_S:
                     self.note("cache in use by another job; running without it")
                     self.rec["cache"] = "fallback"
-                    gone = self.cluster.run(["delete", "pod/" + self.id, "--ignore-not-found", "--grace-period=0", "--wait=true"])
+                    gone = self.cluster.run(["delete", "pod/" + self.pod, "--ignore-not-found", "--grace-period=0", "--wait=true"])
                     if gone.returncode != 0:
                         raise Unavailable("could not delete the pod to run without the cache: " + gone.stderr.decode(errors="replace").strip())
                     self.create_pod(cold, deadline)
@@ -1325,14 +1344,14 @@ class Job:
         state = sc.get("state") or {}
         crashed = (state.get("terminated") or {}) or (sc.get("lastState") or {}).get("terminated") or {}
         if crashed or sc.get("restartCount"):
-            logs = self.cluster.run(["logs", self.id, "-c", "mssql", "--tail=15"])
+            logs = self.cluster.run(["logs", self.pod, "-c", "mssql", "--tail=15"])
             tail = (logs.stdout + logs.stderr).decode(errors="replace").strip()
             raise Unavailable("the SQL Server sidecar did not become ready (exit %s, %d restarts); its last log lines:\n%s (CMD not run)"
                               % (crashed.get("exitCode", "?"), sc.get("restartCount") or 0, tail))
 
     def sidecar_peak(self):
         """Peak memory of the sidecar's own cgroup, read after CMD ends. Best effort: the record says unknown when it cannot be read."""
-        read = self.cluster.run(["exec", self.id, "-c", "mssql", "--", "sh", "-c",
+        read = self.cluster.run(["exec", self.pod, "-c", "mssql", "--", "sh", "-c",
                                  'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current 2>/dev/null'])
         value = read.stdout.decode(errors="replace").strip()
         if read.returncode == 0 and value.isdigit():
@@ -1343,7 +1362,7 @@ class Job:
         """One exec: unpack, verify, run. Returns (markers, transport exit)."""
         script = self.cluster.exec_script(self.id)
         read, write = os.pipe()
-        proc = self.cluster.popen(["exec", "-i", self.id] + self.job_container() + ["--", "sh", "-c", script], stdin=subprocess.PIPE, stdout=write)
+        proc = self.cluster.popen(["exec", "-i", self.pod] + self.job_container() + ["--", "sh", "-c", script], stdin=subprocess.PIPE, stdout=write)
         os.close(write)
         feeder = threading.Thread(target=lambda: self._send(proc, tar_bytes), daemon=True)
         feeder.start()
@@ -1371,7 +1390,7 @@ class Job:
             pass
 
     def fetch_out(self):
-        done = self.cluster.run(["exec", self.id] + self.job_container() + ["--", "sh", "-c", "tar -cf - -C /out ."])
+        done = self.cluster.run(["exec", self.pod] + self.job_container() + ["--", "sh", "-c", "tar -cf - -C /out ."])
         if done.returncode != 0:
             self.note("could not copy /out back: " + done.stderr.decode(errors="replace").strip()[:200])
             return
@@ -1387,10 +1406,10 @@ class Job:
     def cleanup(self):
         if not self.cluster.configured():  # no cluster address or kubeconfig: nothing was created, and an attempt would only add noise to the exit-69 message
             return
-        done = delete_job_objects(self.cluster, self.id)
+        done = delete_job_objects(self.cluster, self.pod)
         self.rec["cleanup"] = done.returncode == 0
         if done.returncode != 0:
-            self.note("cleanup not confirmed for %s: %s" % (self.id, done.stderr.decode(errors="replace").strip()[:200]))
+            self.note("cleanup not confirmed for %s: %s" % (self.pod, done.stderr.decode(errors="replace").strip()[:200]))
 
     # -- the whole job
 
@@ -1426,30 +1445,47 @@ class Job:
             pull = (host, PULL[host][0], op_read(PULL[host][1]))
         limit = "" if mem_limit == mem else ", %s limit" % mem_limit
         self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
-        cold = None
+        cold = make = None
         if self.cluster.kind == "kubectl":
             args = (self.kcfg, self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], tree_roots_for(self.kcfg, wt), prof["cpu_limit"])
             extra = {"mssql": prof["mssql"], "image_volumes": prof["image_volumes"], "local_hostnames": prof["local_hostnames"]}
             if prof["mssql"]:
                 self.mssql = prof["mssql"]
-                self.secret = new_password()        # throwaway, for this pod only: set in the pod spec of both containers, never logged or recorded
+                self.secret = new_password()        # throwaway, for this job's pods only: set in the pod spec of both containers, never logged or recorded
                 extra["password"] = self.secret
                 self.rec["services"] = ["mssql"]
-            manifests = pod_manifests_kubectl(*args, cache_pvc=prof["cache_pvc"], **extra)
-            cold = pod_manifests_kubectl(*args, **extra) if prof["cache_pvc"] else None
+
+            def make(name=None, active_deadline=None):
+                """The pod, and the same pod without the cache claim. `name` and `active_deadline` are for the rerun."""
+                kw = dict(extra, name=name, active_deadline=active_deadline)
+                return (pod_manifests_kubectl(*args, cache_pvc=prof["cache_pvc"], **kw), pod_manifests_kubectl(*args, **kw) if prof["cache_pvc"] else None)
+            manifests, cold = make()
             self.rec["cache"] = "pvc" if prof["cache_pvc"] else "none"
         else:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"])
+        del secret_env, pull
+        while True:
+            try:
+                return self.attempt(manifests, cold, tar_bytes)
+            except Lost:
+                why = self.eviction() if self.cluster.kind == "kubectl" else None
+                if not why:
+                    raise      # no sign that the cluster took the pod: the result is unknown and CMD may have had effects, so it is not rerun
+                manifests, cold = self.rerun(why, make)
+                self.rec["cache"] = "pvc" if cold else "none"   # the record names the cache of the pod that ends the job: the rerun pod starts with the claim again
+
+    def attempt(self, manifests, cold, tar_bytes):
+        """One pod: create it, run CMD in it, read what it reported. Returns CMD's exit code; raises Lost when the pod went before CMD reported its end."""
         self.t_pod = time.time()
+        self.pod_t0 = self.pod_t0 or self.t_pod
         self.start_pod(manifests, cold)
         self.rec["pod_start_s"] = round(time.time() - self.t_pod, 1)
-        del secret_env, pull
         self.note("pod running on %s" % self.rec["node"])
         self.register()  # again, now that the node is known (kgate cancel --list shows it)
         seen, transport = self.execute(tar_bytes)
         if self.mssql:
             self.sidecar_peak()
-        self.rec["ran"] = "running" in seen
+        self.rec["ran"] = self.rec["ran"] or "running" in seen     # CMD started in some attempt
         peak = seen.get("peak", "").split()
         if peak and peak[0].isdigit():
             self.rec["peak_bytes"], self.rec["peak_source"] = int(peak[0]), (peak[1] if len(peak) > 1 else None)
@@ -1465,11 +1501,71 @@ class Job:
             raise Unavailable("tool version differs: " + seen["preflight"][len("FAILED"):].strip() + " (CMD not run)")
         m = re.fullmatch(r"\d+ exit (\d+)", seen.get("end", ""))
         if "running" not in seen or not m:
-            raise Unavailable("lost the pod before CMD finished (kubectl exit %d); the result is unknown and the job is not rerun" % transport)
+            raise Lost("lost the pod before CMD finished (kubectl exit %d); the result is unknown and the job is not rerun" % transport)
         code = int(m.group(1))
         if transport != code:
             raise Unavailable("kubectl exited %d but CMD reported %d; not trusted" % (transport, code))
         return code
+
+    def eviction(self):
+        """Why the cluster took this job's pod away, or None when nothing says it did. The pod's own status first (an evicted pod can stay as Failed, and a
+        pod being evicted carries a DisruptionTarget condition), then the namespace events for that pod name, which outlive the pod."""
+        def text(reason, message):
+            message = " ".join((message or "").split())
+            return (message if message.startswith(reason) else "%s: %s" % (reason, message) if message else reason)[:200]
+        got = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
+        if got.returncode == 0:
+            try:
+                pod = json.loads(got.stdout)
+                status = pod.get("status") or {}
+            except (ValueError, AttributeError):
+                return None   # the pod exists and its state is unreadable: not confirmed
+            if status.get("reason") == "Evicted":
+                return text("Evicted", status.get("message"))
+            for c in status.get("conditions") or []:
+                if c.get("type") == "DisruptionTarget" and c.get("status") == "True":
+                    return text(c.get("reason") or "DisruptionTarget", c.get("message"))
+            # The pod's own status wins: one that is still Running or Pending, not being deleted and not a disruption target was not evicted, whatever an event says.
+            if status.get("phase") in ("Running", "Pending") and not (pod.get("metadata") or {}).get("deletionTimestamp"):
+                return None
+        events = self.cluster.run(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + self.pod, "-o", "json"])
+        if events.returncode == 0:
+            try:
+                items = json.loads(events.stdout).get("items") or []
+            except ValueError:
+                items = []
+            for e in items:
+                if e.get("reason") not in EVICTION_REASONS:
+                    continue
+                if e["reason"] == "TaintManagerEviction" and not " ".join((e.get("message") or "").split()).startswith(TAINT_DELETE_MESSAGE):
+                    continue   # "Cancelling deletion of Pod ...": the taint cleared and the pod was not deleted
+                return text(e["reason"], e.get("message"))
+        return None
+
+    def rerun(self, why, make):
+        """The cluster evicted the pod: note it, delete what is left of it, and return the manifests for the one more pod this job may have. The job's own
+        deadlines are not reset: --wait counts from the job's start and the pod deadline from its first pod's creation."""
+        old, n = self.pod, self.rec["attempts"]
+        self.rec.setdefault("evicted", []).append({"attempt": n, "pod": old, "reason": why})
+        if n >= MAX_ATTEMPTS:
+            first, second = self.rec["evicted"][-2:]
+            raise Unavailable("lost the pod twice: pod %s was evicted by the cluster (%s), the job was rerun once as pod %s, which was evicted too (%s); not rerun again"
+                              % (first["pod"], first["reason"], second["pod"], second["reason"]))
+        now = time.time()
+        if now >= self.t0 + self.o.wait:
+            raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the job's --wait of %ds has passed" % (old, why, self.o.wait))
+        left = int(self.kcfg["deadline_s"] - (now - self.pod_t0))
+        if left < 1:
+            raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the pod deadline of %ds has passed" % (old, why, self.kcfg["deadline_s"]))
+        self.note("pod %s was evicted by the cluster (%s); rerunning once" % (old, why))
+        gone = delete_job_objects(self.cluster, old)
+        if gone.returncode != 0:
+            raise Unavailable("could not delete the evicted pod %s: %s" % (old, gone.stderr.decode(errors="replace").strip()[:200]))
+        self.pod = "%s-r%d" % (self.id, n + 1)
+        self.rec["attempts"] = n + 1
+        self.rec.pop("service_ready_s", None)
+        self.register()
+        return make(self.pod, left)
 
     def finish(self, code, reason):
         end = time.time()
@@ -1589,14 +1685,15 @@ def cancel_orphan(state, e):
     except Unavailable as err:
         print("kgate cancel: %s (the job's pod and Secrets are not deleted; run it again)" % err, file=sys.stderr)
         return UNAVAILABLE
-    label = cluster.run(["get", "pod", e["id"], "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"])
+    pod = e.get("pod") or e["id"]     # the pod the client was on: after an eviction that is "<id>-r2"
+    label = cluster.run(["get", "pod", pod, "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"])
     if label.returncode != 0:
-        print("kgate cancel: could not look up pod %s: %s; nothing deleted" % (e["id"], label.stderr.decode(errors="replace").strip()[:200]), file=sys.stderr)
+        print("kgate cancel: could not look up pod %s: %s; nothing deleted" % (pod, label.stderr.decode(errors="replace").strip()[:200]), file=sys.stderr)
         return UNAVAILABLE
     if label.stdout.decode().strip() not in ("", "kgate"):
-        print("kgate cancel: pod %s is not a kgate pod; nothing deleted" % e["id"], file=sys.stderr)
+        print("kgate cancel: pod %s is not a kgate pod; nothing deleted" % pod, file=sys.stderr)
         return UNAVAILABLE
-    done = delete_job_objects(cluster, e["id"])
+    done = delete_job_objects(cluster, pod)
     t0 = int(e["id"].split("-")[1])
     now = time.time()
     rec = {"id": e["id"], "job": e.get("job"), "start": utc(t0), "end": utc(now), "duration_s": round(now - t0, 3), "cwd": e.get("cwd"),
@@ -1607,7 +1704,7 @@ def cancel_orphan(state, e):
     forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
     if done.returncode != 0:
         print("kgate cancel: delete not confirmed: %s (delete pod/%s secret/%s-env secret/%s-pull by hand)"
-              % (done.stderr.decode(errors="replace").strip()[:200], e["id"], e["id"], e["id"]), file=sys.stderr)
+              % (done.stderr.decode(errors="replace").strip()[:200], pod, pod, pod), file=sys.stderr)
     return report_end(rec)
 
 
