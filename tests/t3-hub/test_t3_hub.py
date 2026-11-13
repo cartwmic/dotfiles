@@ -26,16 +26,18 @@ CLAUDE_FILE = ".config/t3-hub-claude-settings.json"
 TARGETS = (".t3/userdata/settings.json", CLAUDE_FILE, ".codex/config.toml")
 CODEX_VERSION = "9.9.9"
 WORKTREES = "/Volumes/Workshop/macbook/t3-worktrees"
-WINDOW = "500000"  # T3's "Auto-compact after" (autoCompactWindow), a string; Michael's pick on ask 755
-WINDOW_IDS = ("claudeAgent", "coordinator")
+WINDOWS = {"claudeAgent": "300000", "coordinator": "200000"}  # T3's "Auto-compact after" (autoCompactWindow), strings; Michael's picks, 2026-11-13
+WINDOW_IDS = tuple(WINDOWS)
+IDLE = "beforeCacheExpires"  # T3's "Compact idle threads: Before the cache expires (beta)" (top-level idleCompaction)
 
 
 def with_window(data):
-    """data with autoCompactWindow added to the config of claudeAgent and coordinator, appended last the way the script does."""
+    """data with each instance's autoCompactWindow added to its config (appended last, the way the script does) and idleCompaction set."""
     out = json.loads(json.dumps(data))
-    for i in WINDOW_IDS:
+    for i, w in WINDOWS.items():
         if isinstance(out.get("providerInstances", {}).get(i), dict):
-            out["providerInstances"][i]["config"] = {**out["providerInstances"][i].get("config", {}), "autoCompactWindow": WINDOW}
+            out["providerInstances"][i]["config"] = {**out["providerInstances"][i].get("config", {}), "autoCompactWindow": w}
+    out["idleCompaction"] = IDLE
     return out
 
 
@@ -88,13 +90,15 @@ class Env:
         self._tmp.cleanup()
 
 
-def run_script(script, stdin, want=None, window=None):
-    """Run a rendered modify script. want replaces the one-line WANT definition, window the AUTO_COMPACT_WINDOW one."""
+def run_script(script, stdin, want=None, window=None, idle=None):
+    """Run a rendered modify script. want replaces the one-line WANT definition; window (one value for both instances) the AUTO_COMPACT_WINDOWS one; idle the IDLE_COMPACTION one."""
     if want is not None:
         lines = script.splitlines(keepends=True)
         script = "".join("WANT='%s'\n" % want if l.startswith("WANT=") else l for l in lines)
     if window is not None:
-        script = "".join("AUTO_COMPACT_WINDOW='%s'\n" % window if l.startswith("AUTO_COMPACT_WINDOW=") else l for l in script.splitlines(keepends=True))
+        script = "".join("AUTO_COMPACT_WINDOWS='%s'\n" % json.dumps({i: window for i in WINDOW_IDS}) if l.startswith("AUTO_COMPACT_WINDOWS=") else l for l in script.splitlines(keepends=True))
+    if idle is not None:
+        script = "".join("IDLE_COMPACTION='%s'\n" % idle if l.startswith("IDLE_COMPACTION=") else l for l in script.splitlines(keepends=True))
     r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -175,8 +179,8 @@ class SettingsScriptTest(unittest.TestCase):
         """claudeAgent gains a config holding just the window; coordinator keeps its launchArgs and gains the window; codex and the rest are as T3 wrote them."""
         before = json.loads(FIXTURE)["providerInstances"]
         inst = json.loads(self.apply(FIXTURE))["providerInstances"]
-        self.assertEqual(inst["claudeAgent"], {"driver": "claudeAgent", "enabled": True, "config": {"autoCompactWindow": WINDOW}})
-        self.assertEqual(inst["coordinator"]["config"], {**before["coordinator"]["config"], "autoCompactWindow": WINDOW})
+        self.assertEqual(inst["claudeAgent"], {"driver": "claudeAgent", "enabled": True, "config": {"autoCompactWindow": WINDOWS["claudeAgent"]}})
+        self.assertEqual(inst["coordinator"]["config"], {**before["coordinator"]["config"], "autoCompactWindow": WINDOWS["coordinator"]})
         self.assertEqual({k: v for k, v in inst["coordinator"].items() if k != "config"}, {k: v for k, v in before["coordinator"].items() if k != "config"})
         self.assertEqual(inst["codex"], before["codex"])
         for i in OURS:
@@ -185,15 +189,37 @@ class SettingsScriptTest(unittest.TestCase):
 
     def test_auto_compact_window_does_not_depend_on_the_hub_switch(self):
         inst = json.loads(self.apply(FIXTURE, want="{}"))["providerInstances"]
-        self.assertEqual([inst[i]["config"]["autoCompactWindow"] for i in WINDOW_IDS], [WINDOW, WINDOW])
+        self.assertEqual({i: inst[i]["config"]["autoCompactWindow"] for i in WINDOW_IDS}, WINDOWS)
 
     def test_auto_compact_window_replaces_a_different_value(self):
         data = json.loads(FIXTURE)
         data["providerInstances"]["coordinator"]["config"]["autoCompactWindow"] = "300000"
         data["providerInstances"]["claudeAgent"]["config"] = {"autoCompactWindow": "", "binaryPath": "/x/claude"}
         inst = json.loads(self.apply(json.dumps(data, indent=2)))["providerInstances"]
-        self.assertEqual(inst["coordinator"]["config"]["autoCompactWindow"], WINDOW)
-        self.assertEqual(inst["claudeAgent"]["config"], {"autoCompactWindow": WINDOW, "binaryPath": "/x/claude"})
+        self.assertEqual(inst["coordinator"]["config"]["autoCompactWindow"], WINDOWS["coordinator"])
+        self.assertEqual(inst["claudeAgent"]["config"], {"autoCompactWindow": WINDOWS["claudeAgent"], "binaryPath": "/x/claude"})
+
+    def test_builders_and_the_coordinator_get_different_windows(self):
+        """Leads and builders share claudeAgent at 300000; the coordinator is 200000. The two are separate values."""
+        inst = json.loads(self.apply(FIXTURE))["providerInstances"]
+        self.assertEqual((inst["claudeAgent"]["config"]["autoCompactWindow"], inst["coordinator"]["config"]["autoCompactWindow"]), ("300000", "200000"))
+
+    def test_idle_compaction_is_set_before_the_cache_expires(self):
+        """The top-level idleCompaction goes from T3's "onReturn" to "beforeCacheExpires", with or without the hub, and nothing else at the top level changes but the owned keys."""
+        before = json.loads(FIXTURE)
+        self.assertEqual(before["idleCompaction"], "onReturn")
+        for want in (None, "{}"):
+            out = json.loads(self.apply(FIXTURE, want=want))
+            self.assertEqual(out["idleCompaction"], IDLE)
+            self.assertEqual({k: v for k, v in out.items() if k not in ("idleCompaction", "providerInstances", "worktreesDirectory", "usageLimitSources", "secretProviders")},
+                             {k: v for k, v in before.items() if k not in ("idleCompaction", "providerInstances", "worktreesDirectory", "usageLimitSources", "secretProviders")})
+
+    def test_idle_compaction_is_added_when_absent_and_an_empty_value_leaves_it_alone(self):
+        data = json.loads(FIXTURE)
+        del data["idleCompaction"]
+        self.assertEqual(json.loads(self.apply(json.dumps(data, indent=2), want="{}"))["idleCompaction"], IDLE)
+        self.assertNotIn("idleCompaction", json.loads(self.apply(json.dumps(data, indent=2), want="{}", idle="")))
+        self.assertEqual(json.loads(self.apply(FIXTURE, want="{}", idle=""))["idleCompaction"], "onReturn")
 
     def test_auto_compact_window_does_not_create_an_absent_instance(self):
         data = json.loads(FIXTURE)
@@ -205,11 +231,11 @@ class SettingsScriptTest(unittest.TestCase):
     def test_empty_auto_compact_window_removes_only_our_key(self):
         data = json.loads(self.apply(FIXTURE))
         data["providerInstances"]["coordinator"]["config"]["other"] = 1
-        out = json.loads(self.apply(json.dumps(data, indent=2), window=""))["providerInstances"]
+        out = json.loads(self.apply(json.dumps(data, indent=2), window="", idle=""))["providerInstances"]
         self.assertEqual(out["coordinator"]["config"], {"launchArgs": data["providerInstances"]["coordinator"]["config"]["launchArgs"], "other": 1})
         self.assertEqual(out["claudeAgent"].get("config"), {})
         # With no window ever set, an empty value leaves the file exactly as T3 wrote it (no config key invented).
-        self.assertEqual(json.loads(self.apply(FIXTURE, want="{}", window=""))["providerInstances"], json.loads(FIXTURE)["providerInstances"])
+        self.assertEqual(json.loads(self.apply(FIXTURE, want="{}", window="", idle=""))["providerInstances"], json.loads(FIXTURE)["providerInstances"])
 
     def test_stale_hub_entries_are_replaced_in_place(self):
         data = json.loads(FIXTURE)
@@ -457,9 +483,25 @@ class LinuxSettingsTest(unittest.TestCase):
         self.assertFalse(set(OURS) & set(out["providerInstances"]))
         self.assertEqual(out["providerInstances"]["codex"], json.loads(FIXTURE)["providerInstances"]["codex"], "the codex instance is left alone without the hub")
         for i in WINDOW_IDS:
-            self.assertEqual(out["providerInstances"][i]["config"]["autoCompactWindow"], WINDOW)
+            self.assertEqual(out["providerInstances"][i]["config"]["autoCompactWindow"], WINDOWS[i])
+        self.assertEqual(out["idleCompaction"], IDLE)
         self.assertNotIn("displayName", out["providerInstances"]["coordinator"])
         self.assertNotIn("usageLimitSources", out)
+
+    def test_compaction_values_are_set_per_instance_and_idle_mode_is_set(self):
+        """claudeAgent 300000, coordinator 200000, idleCompaction beforeCacheExpires over T3's onReturn; an empty IDLE_COMPACTION leaves T3's value; a re-run changes nothing."""
+        script, _ = self.render()
+        before = json.loads(FIXTURE)
+        self.assertEqual(before["idleCompaction"], "onReturn")
+        out = json.loads(run_script(script, FIXTURE))
+        self.assertEqual({i: out["providerInstances"][i]["config"]["autoCompactWindow"] for i in WINDOW_IDS}, {"claudeAgent": "300000", "coordinator": "200000"})
+        self.assertEqual(out["idleCompaction"], "beforeCacheExpires")
+        self.assertEqual(list(out), list(before))
+        self.assertEqual(json.loads(run_script(script, FIXTURE, idle=""))["idleCompaction"], "onReturn")
+        data = dict(before)
+        del data["idleCompaction"]
+        self.assertEqual(json.loads(run_script(script, json.dumps(data, indent=2)))["idleCompaction"], IDLE)
+        self.assertNotIn("idleCompaction", json.loads(run_script(script, json.dumps(data, indent=2), idle="")))
 
     def test_a_second_apply_changes_nothing(self):
         script, _ = self.render()

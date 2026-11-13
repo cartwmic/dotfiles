@@ -36,11 +36,18 @@
 #   are, and nothing here moves them. Workshop unmounted: /Volumes is root-owned, so `git worktree add` fails with an error; there is
 #   no fallback to the internal disk. The pnpm store lives on Workshop too (dot_config/pnpm/config.yaml) so installs there can hardlink.
 # autoCompactWindow: T3's per-instance "Auto-compact after" (Settings > Providers). Unset, Claude Code compacts a 1M-window model at about
-#   967K tokens (1,000,000 minus T3's 33,000 reserve), so long threads ran at 600K-967K for hours. Michael chose 500000 (ask 755,
-#   2026-11-08): sessions compact at about 467K. The value is a string ("500000"); T3 accepts empty or 100000-1000000. Set on the existing
-#   claudeAgent and coordinator instances only (an absent instance is not created; no other field of theirs is touched, and the coordinator
-#   repo's `t3 setup` leaves a present instance alone). Applies on every apply, hub switch on or off. It reaches new or restarted sessions
-#   only: a running session keeps the window it started with. To change it, edit AUTO_COMPACT_WINDOW; to drop it, set it to '' (removes our key).
+#   967K tokens (1,000,000 minus T3's 33,000 reserve), so long threads ran at 600K-967K for hours. Michael chose (2026-11-13, replacing his
+#   earlier 500000): claudeAgent "300000" (builders and, until they get their own instance, leads) and coordinator "200000". Sessions compact
+#   about 33K tokens below the value. Values are strings; T3 accepts empty or 100000-1000000. Set on the existing claudeAgent and coordinator
+#   instances only (an absent instance is not created; no other field of theirs is touched, and the coordinator repo's `t3 setup` leaves a
+#   present instance alone). Applies on every apply, hub switch on or off. It reaches new or restarted sessions only: a running session keeps
+#   the window it started with. To change one, edit its value in AUTO_COMPACT_WINDOWS; to drop one, set it to "" (removes our key on that instance).
+# idleCompaction: T3's top-level "Compact idle threads" (Settings). "beforeCacheExpires" is the choice shown as "Before the cache expires (beta)":
+#   after a Claude run ends, T3 sends /compact about 2 minutes before the prompt cache lapses (1h on subscriptions), so the re-read stays cheap.
+#   Other stored values are "onReturn" (compact when the user comes back) and "off". Michael's pick, 2026-11-13. It skips threads under 200K tokens
+#   and threads that are archived, settled, snoozed, deleted or sub-agents; it fires once per finished run, so a big thread nobody returns to is still
+#   compacted once. Applies on every apply, hub switch on or off; to change it, edit IDLE_COMPACTION; '' leaves the key as T3 has it. Source of the
+#   values: T3's settings contract (IDLE_COMPACTION_MODES), checked in the installed 0.1.10 nightly.
 # Each apply replaces exactly the owned ids under providerInstances and sets worktreesDirectory; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
@@ -87,8 +94,8 @@ USAGE_SOURCE='{"kind":"cliproxy","label":"CLIProxy hub","url":"https://cliproxy.
 DEFAULT_BINARY='{{ $defaultBinary }}'
 ORIGINAL='{"driver":"codex","enabled":true,"config":{"setupMode":"managed"}}'
 WORKTREES_DIR='{{- /* personal Linux also applies this file (hub mode n/a): worktrees go to ~/t3-worktrees there; /Volumes/Workshop is the Mac's disk */ -}}{{ if eq .chezmoi.os "darwin" }}/Volumes/Workshop/macbook/t3-worktrees{{ else }}{{ $home }}/t3-worktrees{{ end }}'
-AUTO_COMPACT_WINDOW='500000'
-AUTO_COMPACT_IDS='["claudeAgent","coordinator"]'
+AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
+IDLE_COMPACTION='beforeCacheExpires'
 PREFIX='{{ $home }}/.t3/tools/codex/'
 
 input=$(cat; printf x)
@@ -119,7 +126,7 @@ fi
 
 out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjson owned "$OWNED" --arg mode "$HUB_MODE" \
   --arg bin "$DEFAULT_BINARY" --argjson original "$ORIGINAL" --arg prefix "$PREFIX" \
-  --argjson names "$NAMES" --arg worktrees "$WORKTREES_DIR" --arg compact "$AUTO_COMPACT_WINDOW" --argjson compactIds "$AUTO_COMPACT_IDS" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
+  --argjson names "$NAMES" --arg worktrees "$WORKTREES_DIR" --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
   def upsert($id): if $want[$id] then .[$id] = $want[$id] else del(.[$id]) end;
   (.providerInstances // {}) as $before
   | ($before | reduce $owned[] as $id (.; upsert($id))) as $after
@@ -139,10 +146,11 @@ out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjso
     if $mode == "on" then setNames | dropOnePassword | ownSource
     elif $mode == "off" then dropNames | dropSource | dropOnePassword
     else . end
-  | def setCompact: reduce $compactIds[] as $id (.; if (.providerInstances[$id]? | type) == "object" then
-        (if $compact == "" then (if (.providerInstances[$id].config | type) == "object" then del(.providerInstances[$id].config.autoCompactWindow) else . end)
-         else .providerInstances[$id].config = ((.providerInstances[$id].config // {}) + {autoCompactWindow: $compact}) end) else . end);
-    setCompact
+  | def setCompact: reduce ($windows | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" then
+        (if $windows[$id] == "" then (if (.providerInstances[$id].config | type) == "object" then del(.providerInstances[$id].config.autoCompactWindow) else . end)
+         else .providerInstances[$id].config = ((.providerInstances[$id].config // {}) + {autoCompactWindow: $windows[$id]}) end) else . end);
+    def setIdle: if $idle == "" then . else .idleCompaction = $idle end;
+    setCompact | setIdle
   | .worktreesDirectory = $worktrees')
 printf %s "$out"
 case $input in

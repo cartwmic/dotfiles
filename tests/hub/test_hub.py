@@ -107,9 +107,12 @@ def render(path, case, home=None):
         home = HOME_DIR
     # the pretend OS reaches the template's own .chezmoi.os too (the T3 script's worktrees directory depends on it), not only the hub gates
     text = chezmoi(source(os_name), data, "execute-template", "--override-data", json.dumps({"chezmoi": {"os": os_name}}), stdin=(ROOT / path).read_text(), home=home)
-    # These tests are about the hub and the names. The "Auto-compact after" value the T3 script also sets on claudeAgent and coordinator
-    # is tests/t3-hub's; blank it here (an empty value adds nothing) so the fixture comparisons stay about the hub.
-    return text.replace("AUTO_COMPACT_WINDOW='500000'", "AUTO_COMPACT_WINDOW=''") if path == T3 else text
+    # These tests are about the hub and the names. The "Auto-compact after" values and the "Compact idle threads" mode the T3 script also sets
+    # are tests/t3-hub's; blank them here (an empty value adds nothing) so the fixture comparisons stay about the hub.
+    if path != T3:
+        return text
+    text = re.sub(r"(?m)^AUTO_COMPACT_WINDOWS=.*$", "AUTO_COMPACT_WINDOWS='{}'", text)
+    return re.sub(r"(?m)^IDLE_COMPACTION=.*$", "IDLE_COMPACTION=''", text)
 
 
 def run(script, stdin, home=None, full=False):
@@ -466,9 +469,10 @@ class ApplyPathTest(unittest.TestCase):
         self.set_switch(False)
         self.apply(*self.targets())
         baseline = self.read()  # what an apply leaves with the hub off: the other keys these scripts own are added here
-        settled = json.loads(FIXTURE)  # plus the "Auto-compact after" value the script sets on claudeAgent and coordinator (tests/t3-hub covers it)
-        for i in ("claudeAgent", "coordinator"):
-            settled["providerInstances"][i]["config"] = {**settled["providerInstances"][i].get("config", {}), "autoCompactWindow": "500000"}
+        settled = json.loads(FIXTURE)  # plus the "Auto-compact after" values and idleCompaction the script sets (tests/t3-hub covers them)
+        for i, w in (("claudeAgent", "300000"), ("coordinator", "200000")):
+            settled["providerInstances"][i]["config"] = {**settled["providerInstances"][i].get("config", {}), "autoCompactWindow": w}
+        settled["idleCompaction"] = "beforeCacheExpires"
         self.assertEqual(baseline[".t3/userdata/settings.json"], json.dumps(settled, indent=2, ensure_ascii=False))
         self.assertEqual(baseline[".codex/config.toml"], self.CODEX_BASE)
         self.set_switch(True)
