@@ -160,8 +160,9 @@ Rules for judges:
 
 - House rule: always pass `--panel claude`. The upstream advice is to mix
   providers, because a model grading its own family's work is too kind, and
-  its default panel is `claude,codex`. No OpenAI models are in use here, so
-  compensate with `--rounds 2` or more, a strict rubric, and your own look
+  upstream's default panel is `claude,codex`; here the default is `claude`
+  too. No OpenAI models are in use here, so compensate with `--rounds 2` or
+  more, a strict rubric, and your own look
   at the result.
 - Use `--rounds 2` or more and set `--min-gain` to at least 0.5. Judges are noisy.
 - Never show judges which version is new. They grade the candidate against
