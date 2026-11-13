@@ -41,7 +41,7 @@ Review the work, not the person.
 | tests | Would the tests fail if the changed behavior were wrong? Name a changed behavior with no test, or a test that cannot fail or mirrors the implementation. |
 | maintainability | Does the diff add a lasting cost to the next person who changes this code: duplication, a needless abstraction or layer, a hidden coupling, a misleading name, dead code? Name the cost and who pays it. Judge against the repository's rules and the design principles below, including PR size against the stated limit, the split across CODEOWNERS owners, and the PR template. |
 
-1. **Write one packet per axis.** It holds the axis question, the severity bar (section 3), the intent sources, the repository rules, the size and shape record, the diff `merge_base..head`, a read-only checkout at head, and the files to cover.
+1. **Write one packet per axis.** It holds the axis question, the severity bar (section 3), the intent sources, the repository rules, the size and shape record, the diff `merge_base..head`, a read-only checkout at head, and the files to cover. Tell the reviewer to give every finding a `scope` and a `covered by`, as in step 3.
 2. **Start a fresh session for each packet,** with no other context. Run it from the reviews folder, so session files never land in a repository.
    - Confirm delegation with the owner first, unless it is already authorized.
    - Use the model the owner named.
@@ -49,7 +49,8 @@ Review the work, not the person.
    - the axis and the head sha;
    - the files it covered;
    - a verdict (pass or fail) with a note for each question;
-   - findings, each with id, severity, path, line, text, obligation, evidence and consequence.
+   - findings, each with id, severity, path, line, text, obligation, evidence, consequence, `scope` and `covered by`.
+   - `scope` is `in` or `out`, judged against the stated intent, not against the diff. `covered by` names an existing job, check or process that already handles the problem, or `none`.
 4. **Split a large PR** across sessions by file. Together they must cover every file that is not exempt.
 5. **For a high-risk change,** add a second correctness session. High risk means auth, data migration, concurrency, money, or regulated or sensitive data.
 6. **Axon playbook packets.** Applies only if `~/.local/share/agent-harness/external-skills/axon-agents-playbook/rubrics/` exists and the origin remote is on {{ $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workGitHost" }}`{{ .workGitHost }}` or {{ end }}`github.com/axon-*`. Otherwise skip, silently.
@@ -66,7 +67,7 @@ Review the work, not the person.
 
 A blocker or should-fix must name the obligation, the evidence and the consequence. Without all three it is at most a nit. Do not comment on what CI or a formatter already enforces.
 
-A finding outside the PR's stated intent or scope, especially a problem that existed before the PR, is at most a note marked for a follow-up. It is never a blocker or should-fix.
+A finding can be a blocker or should-fix only when its `scope` is `in` and its `covered by` is `none`. A finding with `scope` `out`, especially a problem that existed before the PR, is at most a note marked for a follow-up. A finding that something existing already handles is declined (section 4).
 
 ## 4. Triage
 
@@ -74,9 +75,9 @@ You (the driver) run the four tests in `~/.local/share/agent-harness/finding-tri
 
 - **confirmed:** it passes all four tests. A confirmed blocker or should-fix records how you checked: the code path, or the command and the tail of its output.
 - **refuted:** it fails test 1 (real). Keep it out of the draft and give the owner the reason.
-- **declined:** it is real but fails test 2 or 3. Keep it out of the draft and give the owner the reason, naming the test. Nits are declined under test 2.
+- **declined:** it is real but fails test 2 or 3. Keep it out of the draft and give the owner the reason, naming the test. Nits are declined under test 2. So is a finding whose `covered by` names an existing job, check or process that already handles it. It fails test 2 (useful): the owner calls such a fix extra work nobody needs. Check that the cover is real before you decline.
 - **duplicate:** name the original finding.
-- **follow-up:** it fails test 4: outside the PR's intent or scope, or pre-existing. Section 5 lets the summary mention it once.
+- **follow-up:** it fails test 4: outside the PR's stated intent, even when the code is inside the diff, or pre-existing. Section 5 lets the summary mention it once.
 
 For test 3 use only the four principle sections under "Design principles" below.
 
