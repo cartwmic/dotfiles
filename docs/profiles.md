@@ -81,7 +81,7 @@ Machine-specific values (hosts, addresses, vault items, work names) are not in t
 | `sshHosts.dailyPhone` (`wgAddress`, `lanAddress`, `user`), `sshHosts.sshPhone` (same fields) | `personal` | The two phone aliases in `~/.ssh/config`: WireGuard address first, home Wi-Fi address as fallback. |
 | `sshHosts.server`, `sshHosts.laptop` (`address`, `user`) | `personal`, `termux` | The `cartwmic-server` / `mac-mini` / `remote` and `laptop` aliases. |
 | `sshHosts.macbook`, `sshHosts.macKvm`, `sshHosts.whonixGw`, `sshHosts.whonixWs` (`address`, `user`) | `termux` | The phone's outbound aliases (`macbook`, `mac-kvm`, `whonix-gw`, `whonix-ws`). |
-| `sshHosts.kgate` (`address`, `user`) | `personal` (every machine, Linux and WSL too) | `~/.config/kgate/host`, the default for `KGATE_SSH`. `kgate` stops with a message naming the key when neither is set. |
+| `sshHosts.kgate` (`address`, `user`) | `personal` (every machine, Linux and WSL too) | `~/.config/kgate/host`, the default for `KGATE_SSH`. `kgate` stops with a message naming the key when neither is set. On the homelab, put a control-plane host that is not on the R720xd first (omarchy, `10.19.1.200`) and master-1 (`10.19.1.196`) in `kgateFallback`: the weekly failover test cuts the R720xd's network every Sunday at 02:00 Pacific, and a job using master-1 then fails with exit 69. |
 
 ### Optional
 
