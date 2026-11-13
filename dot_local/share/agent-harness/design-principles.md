@@ -67,6 +67,10 @@ When uncertainty could determine the architecture, resolve it with the smallest 
 ## 12. Verified from the outside
 Prove a change by driving the same path a user or caller drives, to a completed outcome: black-box journeys for apps (actually opening and using them), contract-level tests for components. Where that path calls an external system, use a dummy or scripted backend unless the test is about that system. Fail closed if the outer path cannot finish. Seam tests may exist; they don't substitute for this proof.
 
+Every test you keep must pass two imagined edits. Break the behaviour it covers (a wrong value, a skipped or doubled effect) and the test fails. Change only the internals and keep every observable result, and the test still passes. A test that survives the first edit proves nothing; one that fails the second is pinned to the implementation.
+
+A claim of done or passing that comes from an earlier session, another agent or a summary is not proof. Re-prove it on the real path before anything relies on it.
+
 A blocking review finding must identify the violated obligation, supporting evidence and concrete consequence. Reviewers should also identify machinery that can be removed while preserving required behavior. Preferences and hypothetical improvements remain suggestions. Revalidate affected work and preserve applicable evidence.
 
 ## 13. Resolve intent tensions and preserve design freedom
@@ -89,5 +93,7 @@ The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new componen
 2. Scaffold: new components start with the core/adapter split, the clean-architecture layers, a contract file, an empty conformance suite and the boundary checks configured.
 3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13, §14).
 4. Agent instructions: AGENTS.md files should reference this document. Instructions alone do not enforce compliance.
+
+Fix a mistake agents repeat at the highest level that works: architecture, then types, then a check whose error names the fix, then a test. Write an instruction last, because nothing fails when an agent skips it. The `correcting-repeated-mistakes` skill walks this.
 
 Use the proportionality and trade-off checks in the existing design and review steps. Do not add separate gates for each check.
