@@ -7,14 +7,15 @@
   Keep-lists: the skills the seat called at least once between 2026-11-11 18:00Z and 2026-11-13 (tool-call counts in the token baseline),
   plus the Loop Engine and lean-change skills for builders and leads, reviewing-prs and review-plans for reviewers, using-viz and
   using-shartifacts for leads and the coordinator, and correcting-repeated-mistakes for builders, leads and the coordinator (playbook
-  rule 3222c71d has the lead run it on a repeat or follow-on finding; builders and the coordinator may need to call it too). The coordinator seat had no attributed skill calls, so it takes the lead's list.
+  rule 3222c71d has the lead run it on a repeat or follow-on finding; builders and the coordinator may need to call it too), and hill-climb for
+  builders and leads (seats could use it before the 2026-11-13 re-apply (#389) turned it off). The coordinator seat had no attributed skill calls, so it takes the lead's list, without hill-climb.
   Advisor, MCP servers and the compaction window are not set here: they belong to the T3 instance (modify_settings.json.tmpl) or to the
   launch arguments.
 */ -}}
 {{- $keeps := dict
       "coordinator" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "herdr" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts" "using-viz")
-      "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "herdr" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts" "using-viz")
-      "builder" (list "correcting-repeated-mistakes" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
+      "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "herdr" "hill-climb" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts" "using-viz")
+      "builder" (list "correcting-repeated-mistakes" "hill-climb" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "designing-the-smallest-version" "no-ai-slop")
       "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider") -}}
 {{- if not (hasKey $keeps .seat) -}}{{ fail (printf "fleet_seat: unknown seat %q" .seat) }}{{- end -}}
