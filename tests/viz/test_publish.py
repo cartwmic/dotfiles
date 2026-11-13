@@ -19,6 +19,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 VIZ = os.path.join(ROOT, "dot_local", "bin", "executable_viz")
+READER = os.path.join(ROOT, "dot_local", "user_scripts", "executable_op_read_cached.sh")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 NODE = shutil.which("node")
 RENDER_DEPS = bool(NODE and shutil.which("mmdc") and (os.environ.get("VIZ_CHROMIUM") or shutil.which("chromium")))
@@ -186,6 +187,40 @@ class PublishTest(unittest.TestCase):
         with open(calls) as f:
             self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
         self.assertEqual(len(Site.files), 3)
+
+    def install_cached_reader(self):
+        """Put the real op_read_cached.sh where viz looks for it, in the scratch HOME."""
+        path = os.path.join(self.state.name, ".local", "user_scripts", "op_read_cached.sh")
+        os.makedirs(os.path.dirname(path))
+        shutil.copyfile(READER, path)
+        os.chmod(path, 0o755)
+
+    def test_two_publishes_read_1password_at_most_once_through_the_cached_reader(self):
+        self.install_cached_reader()
+        calls = self.fake_op()
+        env = {"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": SA_TOKEN}
+        for _ in range(2):
+            self.assertTrue(self.viz("publish", RENDER_ID, env=env)["ok"])
+        with open(calls) as f:
+            self.assertEqual(f.read(), "read op://developer/viz-publish/password --no-newline\n")
+        self.assertEqual(len(Site.files), 3)
+
+    def test_without_the_cached_reader_every_publish_runs_op_read(self):
+        calls = self.fake_op()
+        env = {"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": SA_TOKEN}
+        for _ in range(2):
+            self.assertTrue(self.viz("publish", RENDER_ID, env=env)["ok"])
+        with open(calls) as f:
+            self.assertEqual(f.read(), "read op://developer/viz-publish/password\n" * 2)
+
+    def test_no_token_in_a_terminal_keeps_op_read_even_with_the_cached_reader(self):
+        # The reader refuses without a token, so a terminal without one must keep op's desktop-app path.
+        self.install_cached_reader()
+        calls = self.fake_op()
+        out = self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": None})
+        self.assertTrue(out["ok"], out)
+        with open(calls) as f:
+            self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
 
     def test_bad_input(self):
         for args in (("publish",), ("publish", "20990101-000000-000-abcdef"),

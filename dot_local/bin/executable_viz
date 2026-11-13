@@ -66,7 +66,14 @@ if [ "${1-}" = publish ]; then
 			echo "[viz] ERROR: $NO_TOKEN_MESSAGE" >&2
 			exit 4
 		fi
-		if VIZ_PUBLISH_PASSWORD=$(op read "op://developer/viz-publish/password"); then
+		# The cached reader (one 1Password read per reference per 12 h) when it is installed and the token is set. It refuses without
+		# a token, so a terminal without one keeps op's desktop-app path.
+		if [ -x "$HOME/.local/user_scripts/op_read_cached.sh" ] && [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+			viz_read_password() { "$HOME/.local/user_scripts/op_read_cached.sh" "$1"; }
+		else
+			viz_read_password() { op read "$1"; }
+		fi
+		if VIZ_PUBLISH_PASSWORD=$(viz_read_password "op://developer/viz-publish/password"); then
 			export VIZ_PUBLISH_PASSWORD
 		else
 			echo "[viz] WARN: op read op://developer/viz-publish/password failed" >&2

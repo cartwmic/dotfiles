@@ -82,7 +82,10 @@ logged like any other outcome.
 The shim `~/.local/bin/viz` wires in Michael's site for `publish` only:
 `VIZ_PUBLISH_URL` defaults to `https://viz.internal.cartwmic.com`
 (cartwmic-homelab-v2 `k8s/viz`, LAN and WireGuard only), and an unset
-`VIZ_PUBLISH_PASSWORD` is read with `op read op://developer/viz-publish/password`.
+`VIZ_PUBLISH_PASSWORD` is read with `op read op://developer/viz-publish/password`,
+or, when `~/.local/user_scripts/op_read_cached.sh` is installed and the service-account
+token is set, through that reader (one 1Password read per 12 h; a cached value is
+served when 1Password refuses).
 `viz.mjs` itself reads only the two variables.
 
 ## Output contract
