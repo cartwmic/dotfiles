@@ -33,7 +33,8 @@ Renders the latest version at 390 x 844 and, for every open root comment that ha
 whether it is still there, by the rule of the frame (`web/runtime.js`, `locate`): a comment with a quote needs the
 quote's words on the page (whitespace matched loosely), in its anchor element or anywhere; one without a quote needs
 its anchor selector to match an element, and for a drawing that element must be the one drawn on (its `anchor_tag`
-and the first 120 characters of its text, `anchor_text`, both recorded in the stroke), since a path such as
+and `anchor_text`, both recorded in the stroke: the first 120 characters of its text, cut at whole characters, or, for
+an element with no text such as a chart bar or an image, its attributes except `style`), since a path such as
 `p:nth-of-type(4)` names a slot that an edit can fill with something else. It then posts `{"version": N, "results": [{"id", "found"}]}` to
 `<base>/api/artifacts/<id>/comments/matches`. Resolved comments, replies and comments that point at nothing are left
 out. With nothing to check it posts nothing and starts no browser.

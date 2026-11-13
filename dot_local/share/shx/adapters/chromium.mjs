@@ -77,11 +77,14 @@ const DRAW = `((d, color, w, h) => {
 // Whether each comment still finds its place, by the same rule as the frame (web/runtime.js locate): a comment with a
 // quote needs the quote's words on the page, with whitespace matched loosely, in its anchor element or anywhere; one
 // without needs its anchor selector to match an element, and for a drawing that element must be the one drawn on (the
-// same tag, the same first 120 characters of text), because a path such as p:nth-of-type(4) names a slot that an edit
-// fills with something else.
+// same tag, and the same identity: its first 120 characters of text, cut at whole characters, or for an element with
+// no text its attributes except style), because a path such as p:nth-of-type(4) names a slot that an edit fills with
+// something else.
 const FIND = `((items) => {
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
   const textOf = (el) => norm(el.textContent) || norm(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title'));
+  const clip = (s, n = 120) => Array.from(s).slice(0, n).join('');
+  const identityOf = (el) => clip(textOf(el) || Array.from(el.attributes).filter((a) => a.name !== 'style').map((a) => a.name + '=' + norm(a.value)).join(' '));
   let all = '';
   const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   for (let n; (n = walk.nextNode()); ) {
@@ -93,7 +96,7 @@ const FIND = `((items) => {
     try { el = anchor ? document.querySelector(anchor) : null; } catch {}
     const q = norm(quote);
     if (q) return { id, found: Boolean((el && textOf(el).includes(q)) || all.includes(q)) };
-    const holds = el !== null && (!tag || el.tagName.toLowerCase() === tag) && (text == null || textOf(el).slice(0, 120) === text);
+    const holds = el !== null && (!tag || el.tagName.toLowerCase() === tag) && (text == null || identityOf(el) === text);
     return { id, found: holds };
   });
 })`;

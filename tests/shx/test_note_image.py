@@ -40,7 +40,7 @@ body {{ margin: 0; position: relative; min-height: {PAGE_HEIGHT}px; font: 16px s
 @media (max-width: 400px) {{ #chart {{ background: #ffee00; }} }}
 #bar {{ position: absolute; left: 30px; top: 30px; width: 60px; height: 150px; background: #0a84ff; }}
 </style></head><body>
-<h1>Report</h1><p id="intro">{intro}</p>{legend}
+<h1>Report</h1><p id="intro">{intro}</p>{legend}<p id="emoji">{"😀" * 130}</p>
 <div id="chart"><div id="bar"></div></div>
 </body></html>"""
 
@@ -329,22 +329,31 @@ class CheckTest(ShxTestCase):
         self.assertEqual((line["command"], line["artifact"], line["version"], line["error"]), ("check", ARTIFACT, 2, None))
 
     def test_a_drawing_is_found_only_on_the_element_it_was_drawn_on(self):
-        # The anchor path still finds an element in every case; only the first and the last are the one drawn on.
+        # The anchor path still finds an element in every case; only "same", "older" (no record to compare), "bar-same" and "emoji-same" are the one drawn on.
         def drawn(id, tag, text):
             st = stroke("#ff00ff", "#intro", {"x": 8, "y": 60, "w": 300, "h": 20})
             st.update({"anchor_tag": tag, "anchor_text": text})
             return {"id": id, "author": "person", "body": "look", "anchor": "#intro", "version": 1, "stroke": st}
         older = stroke("#ff00ff", "#intro", {"x": 8, "y": 60, "w": 300, "h": 20})
+        clipped = "😀" * 120  # the frame cuts at 120 whole characters, never inside an emoji
+        def drawn_on(id, anchor, tag, text):
+            return {**drawn(id, tag, text), "anchor": anchor, "stroke": {**drawn(id, tag, text)["stroke"], "anchor": anchor}}
         comments = [
             drawn("same", "p", "Sales rose each quarter."),
             drawn("reworded", "p", "Revenue grew in every quarter."),
             drawn("retagged", "h2", "Sales rose each quarter."),
             {"id": "older", "author": "person", "body": "look", "anchor": "#intro", "version": 1, "stroke": older},
+            # An element with no text is what its attributes say (style left out): #bar is a div with only an id.
+            drawn_on("bar-same", "#bar", "div", "id=bar"),
+            drawn_on("bar-other", "#bar", "div", "id=another-bar"),
+            drawn_on("emoji-same", "#emoji", "p", clipped),
         ]
         server = self.serve(comments=comments)
         out = self.shx("check", server.base, ARTIFACT)
         self.assertEqual(out["results"], [{"id": "same", "found": True}, {"id": "reworded", "found": False},
-                                          {"id": "retagged", "found": False}, {"id": "older", "found": True}])
+                                          {"id": "retagged", "found": False}, {"id": "older", "found": True},
+                                          {"id": "bar-same", "found": True}, {"id": "bar-other", "found": False},
+                                          {"id": "emoji-same", "found": True}])
 
     def test_nothing_to_check_posts_nothing(self):
         server = self.serve(comments=[COMMENTS[-1]])
