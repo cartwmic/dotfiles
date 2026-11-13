@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,14 +42,16 @@ TEXT = {("pr", "create"): dict(title=T, body=B, bodyfile=F), ("pr", "edit"): dic
         ("pr", "merge"): dict(subject=S, body=B, bodyfile=F), ("pr", "close"): dict(comment=C), ("pr", "reopen"): dict(comment=C),
         ("issue", "create"): dict(title=T, body=B, bodyfile=F), ("issue", "edit"): dict(title=T, body=B, bodyfile=F),
         ("issue", "comment"): dict(body=B, bodyfile=F), ("issue", "close"): dict(comment=C), ("issue", "reopen"): dict(comment=C),
-        ("release", "create"): dict(title=T, notes=N, notesfile=NF), ("release", "edit"): dict(title=T, notes=N, notesfile=NF)}
-LABEL = {"title": "title", "subject": "title", "body": "body", "bodyfile": "body", "comment": "comment", "notes": "notes", "notesfile": "notes"}
+        ("release", "create"): dict(title=T, notes=N, notesfile=NF), ("release", "edit"): dict(title=T, notes=N, notesfile=NF, tag=("--tag", "-"))}
+LABEL = {"tag": "tag", "title": "title", "subject": "title", "body": "body", "bodyfile": "body", "comment": "comment", "notes": "notes", "notesfile": "notes"}
 FROM_FILE = {"bodyfile", "notesfile"}
 COMPOSED = {("pr", "create"): [("--fill",), ("--fill-first",), ("--fill-verbose",), ("--template", "-T"), ("--recover",), ("--editor", "-e"), ("--web", "-w")],
             ("issue", "create"): [("--template", "-T"), ("--recover",), ("--editor", "-e"), ("--web", "-w")],
             ("pr", "comment"): [("--edit-last",), ("--editor", "-e"), ("--web", "-w")], ("issue", "comment"): [("--edit-last",), ("--editor", "-e"), ("--web", "-w")]}
 API_VALUE_LONG = {"--method", "--raw-field", "--field", "--header", "--jq", "--template", "--preview", "--cache", "--hostname", "--input"}
 API_VALUE_SHORT = {"X", "f", "F", "H", "q", "t", "p"}
+VALUE_LONG = {"--target", "--discussion-category", "--notes-start-tag", "--repo", "--base", "--head", "--label", "--assignee", "--reviewer", "--milestone", "--project"}
+BUILTIN = set(READ) | set(NOTEXT) | {g for g, _ in TEXT}
 VALUE_SHORT = set("RBHalmrTA")      # short flags that take a value we do not read; what follows one is its value, not more flags
 
 
@@ -204,19 +207,22 @@ def split_command(args):
 
 
 def parse_text(args, group, verb):
-    """([(kind, value, from_file)], positions of values in args, refusal or None) for a pr/issue/release command. Reads nothing."""
+    """([(kind, value, from_file)], positions of values in args, refusal or None, help flag seen) for a pr/issue/release command. Reads nothing."""
     spec = TEXT[(group, verb)]
     by_long = {flags[0]: kind for kind, flags in spec.items()}
     by_short = {flags[1][1:]: kind for kind, flags in spec.items()}
     composed = COMPOSED.get((group, verb), [])
     compose_long = {c[0] for c in composed}
     compose_short = {c[1][1:] for c in composed if len(c) > 1}
-    found, values, refusal, i = [], set(), None, 0
+    found, values, refusal, help_seen, i, other_values, after_dashes = [], set(), None, False, 0, set(), []
     while i < len(args):
         a = args[i]
         if a == "--":
+            after_dashes = list(range(i + 1, len(args)))
             break
-        if a.startswith("--"):
+        if a in ("-h", "--help"):
+            help_seen = True
+        elif a.startswith("--"):
             name, eq, val = a.partition("=")
             if name in compose_long:
                 refusal = refusal or "%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % name
@@ -229,6 +235,9 @@ def parse_text(args, group, verb):
                     val = args[i]
                 values.add(i)
                 found.append((by_long[name], val, by_long[name] in FROM_FILE))
+            elif name in VALUE_LONG and not eq:      # a flag we do not read still owns the next argument, whatever it looks like
+                other_values.add(i + 1)
+                i += 1
         elif a.startswith("-") and len(a) > 1:
             letter = a[1]
             if letter in compose_short:
@@ -245,10 +254,22 @@ def parse_text(args, group, verb):
                 found.append((by_short[letter], val, by_short[letter] in FROM_FILE))
             elif len(a) > 2 and letter not in VALUE_SHORT and any(c in by_short or c in compose_short for c in a[2:]):
                 refusal = refusal or "the flag cluster %s may hide a text flag; write each flag on its own (-t value, or --title value)" % a
+            elif a in ("-R", "-B", "-H", "-a", "-l", "-m", "-r", "-p"):
+                other_values.add(i + 1)
+                i += 1
         i += 1
+    if (group, verb) == ("release", "create"):
+        # `gh release create TAG FILE...` creates the tag and uploads the files: the tag is text, and the files are refused like `release upload`
+        pos = [args[n] for n in range(len(args)) if (not args[n].startswith("-") and n not in values and n not in other_values) or n in after_dashes]
+        if verb in pos:
+            pos.remove(verb)
+        if pos:
+            found.append(("tag", pos[0], False))
+        if len(pos) > 1:
+            refusal = refusal or "`gh release create` with asset files would upload them unchecked, as `gh release upload` is refused for a guarded repository. Create the release without files"
     if not refusal and sys.stdin.isatty():
         refusal = would_prompt(group, verb, args, {k for k, _, _ in found})
-    return found, values, refusal
+    return found, values, refusal, help_seen
 
 
 def has_flag(args, *names):
@@ -269,8 +290,8 @@ def would_prompt(group, verb, args, kinds):
         typed = has_flag(args, "--approve", "-a", "--comment", "-c", "--request-changes", "-r")
         if not typed or (not has_flag(args, "--approve", "-a") and not kinds & {"body", "bodyfile"}):
             return "the review type or its body is missing, so " + ask
-    if (group, verb) == ("release", "create") and not (kinds & {"notes", "notesfile"} or has_flag(args, "--generate-notes", "--notes-from-tag")):
-        return "no release notes were given, so " + ask
+    if (group, verb) == ("release", "create") and ("tag" not in kinds or not (kinds & {"notes", "notesfile"} or has_flag(args, "--generate-notes", "--notes-from-tag"))):
+        return "the release tag or its notes are missing, so " + ask
     if (group, verb) == ("pr", "merge") and not has_flag(args, "--merge", "-m", "--squash", "-s", "--rebase", "-r"):
         return "no merge method flag was given, so gh would ask on the terminal and offer to edit the commit message. Give --squash, --merge or --rebase (with --body-file for a message)"
     return None
@@ -282,11 +303,13 @@ def gather_text(found, texts):
 
 
 def parse_api(args):
-    """(method, endpoint, [(typed, "key=value")], [input path]) for `gh api` arguments. Reads nothing."""
-    method, endpoint, fields, inputs, i = None, None, [], [], 0
+    """(method, endpoint, [(typed, "key=value")], [input path], hostname, help flag seen) for `gh api` arguments. Reads nothing."""
+    method, endpoint, fields, inputs, hostname, help_seen, i = None, None, [], [], None, False, 0
     while i < len(args):
         a = args[i]
-        if a.startswith("--"):
+        if a in ("-h", "--help"):
+            help_seen = True
+        elif a.startswith("--"):
             name, eq, val = a.partition("=")
             if name in API_VALUE_LONG:
                 if not eq:
@@ -298,6 +321,8 @@ def parse_api(args):
                     fields.append((name == "--field", val))
                 elif name == "--input":
                     inputs.append(val)
+                elif name == "--hostname":
+                    hostname = val
         elif a.startswith("-") and len(a) > 1:
             for j in range(1, len(a)):
                 c = a[j]
@@ -314,16 +339,17 @@ def parse_api(args):
         elif endpoint is None:
             endpoint = a
         i += 1
-    return method, endpoint or "", fields, inputs
+    return method, endpoint or "", fields, inputs, hostname, help_seen
 
 
 def gather_api(fields, inputs, texts, graphql):
     """Read every field value and --input into texts. Returns the GraphQL query text, if any."""
     query = None
-    for typed, kv in fields:
+    for n, (typed, kv) in enumerate(fields, 1):
         key, _, val = kv.partition("=")
         data = texts.read(val[1:]) if typed and val.startswith("@") else val.encode()
-        texts.add("field %s" % re.sub(r"[/\x00]", "_", key), data)
+        texts.add("field %d" % n, data)          # the key is text too, but never part of a label: a hit names the field by its position
+        texts.add("field %d key" % n, key.encode())
         if key == "query":
             query = (query or b"") + data
     for path in inputs:
@@ -350,10 +376,11 @@ def endpoint_path(endpoint):
     return re.sub(r"^/*(?:api/v3/)?", "", re.sub(r"^https?://[^/]+/", "", endpoint))
 
 
-def api_targets(endpoint):
+def api_targets(endpoint, hostname=None):
     m = re.match(r"^(?:https?://([^/]+)/)?/?(?:api/v3/)?repos/([^/{}]+)/([^/?{}]+)", endpoint)
     if m:
-        r = parse_repo("%s/%s" % (m.group(2), m.group(3)), "github.com" if m.group(1) in (None, "api.github.com", "uploads.github.com") else m.group(1))
+        host = m.group(1) or hostname
+        r = parse_repo("%s/%s" % (m.group(2), m.group(3)), None if host is None else "github.com" if host in ("api.github.com", "uploads.github.com") else host)
         return [r] if r else []
     if re.search(r"\{(owner|repo)\}", endpoint):
         return targets([], set())
@@ -374,15 +401,84 @@ def command_name(args):
     return group if group in NOT_REPO else "unrecognised"
 
 
-def decide(args, repos, texts=None):
+def lookup_alias(real, name):
+    """The expansion of gh alias `name`, or None when it is no alias. Parses `gh alias list` exactly (`name: expansion` per line, the expansion quoted by YAML
+    rules when it needs it); anything else is a Refuse, so an alias is never guessed at."""
+    try:
+        done = subprocess.run([real, "alias", "list"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Refuse("`gh alias list` cannot be run, so whether `gh %s` is an alias cannot be told" % name)
+    if done.returncode != 0:
+        raise Refuse("`gh alias list` failed, so whether `gh %s` is an alias cannot be told" % name)
+    found = None
+    for line in done.stdout.decode(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        m = re.match(r"^([^\s:]+): (.*)$", line)
+        if not m:
+            raise Refuse("`gh alias list` printed a line this wrapper cannot parse, so whether `gh %s` is an alias cannot be told" % name)
+        value = m.group(2)
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1].replace("''", "'")
+        elif len(value) >= 2 and value[0] == value[-1] == '"':
+            try:
+                value = json.loads(value)
+            except ValueError:
+                raise Refuse("`gh alias list` printed an expansion this wrapper cannot parse, so `gh %s` cannot be checked" % name)
+        if m.group(1) == name:
+            found = value
+    return found
+
+
+def expand_alias(expansion, args):
+    """gh's own expansion of an alias: split the expansion, replace $1, $2, ... with the arguments after the alias name, and append the arguments no placeholder used."""
+    try:
+        tokens = shlex.split(expansion)
+    except ValueError:
+        raise Refuse("the alias expansion cannot be parsed, so it cannot be checked")
+    extra, used = args[1:], set()
+
+    def place(m):
+        n = int(m.group(1))
+        if n < 1 or n > len(extra):
+            raise Refuse("the alias needs more arguments than were given, so it cannot be checked")
+        used.add(n - 1)
+        return extra[n - 1]
+    out = [re.sub(r"\$(\d+)", place, t) for t in tokens]
+    return out + [a for i, a in enumerate(extra) if i not in used]
+
+
+def unknown_command(args, repos, texts, real, depth):
+    """A top-level name that is no built-in: an alias, else an extension. An alias is expanded and the expansion classified; a shell alias or an extension is
+    refused when it is aimed at a guarded repository, because what it sends cannot be seen."""
+    name = args[0]
+    aimed = lambda: any(t in repos for t in targets(args, set(), None))
+    expansion = lookup_alias(real, name) if real and depth == 0 else None
+    if expansion is None:
+        if aimed():
+            raise Refuse("`gh %s` is not a built-in gh command and not an alias, so it is an extension (or a typo), and it is aimed at a guarded repository. "
+                         "It may send text this wrapper cannot see. Use a built-in command" % name)
+        return "", None
+    if expansion.startswith("!"):
+        if aimed():
+            raise Refuse("`gh %s` is a shell alias, and it is aimed at a guarded repository. What it runs cannot be checked. Run the command it stands for" % name)
+        return "", None
+    return decide(expand_alias(expansion, args), repos, texts, real, depth + 1)
+
+
+def decide(args, repos, texts=None, real=None, depth=0):
     """(command name, Texts). Texts None: run gh as is. A Texts with an empty name: run gh as is, with the standard input that was read. Raises Refuse.
-    `texts` is where gathered text (and standard input, if read) goes, so the caller still has the input when this raises."""
+    `texts` is where gathered text (and standard input, if read) goes, so the caller still has the input when this raises. `real` is the real gh, used to
+    expand aliases; with none, an unknown name is treated as an extension."""
     texts = texts if texts is not None else Texts()
-    if not args or args[0].startswith("-") or any(a in ("-h", "--help") for a in args):
+    if not args or args[0].startswith("-"):
         return "", None
     group = args[0]
+    helped = any(a in ("-h", "--help") for a in args)
     if group == "api":
-        method, endpoint, fields, inputs = parse_api(args[1:])
+        method, endpoint, fields, inputs, hostname, helped = parse_api(args[1:])
+        if helped:
+            return "", None
         write = (method or ("POST" if fields or inputs else "GET")).upper() not in ("GET", "HEAD")
         if endpoint_path(endpoint) in ("graphql", "api/graphql"):      # a mutation names objects by node id, never a repository: check every one
             query = gather_api(fields, inputs, texts, True)
@@ -390,32 +486,31 @@ def decide(args, repos, texts=None):
         if write and re.match(r"^repositories/\d+", endpoint_path(endpoint)):
             raise Refuse("this `gh api` write names a repository by its numeric id, which this wrapper cannot map to a guarded repository. "
                          "Use the repos/<owner>/<repo>/... form of the endpoint")
-        if write and any(t in repos for t in api_targets(endpoint)):
+        if write and any(t in repos for t in api_targets(endpoint, hostname)):
             gather_api(fields, inputs, texts, False)
             return "api", texts
         return "", None
     if group in NOT_REPO:
         return "", None
+    if group not in BUILTIN:
+        return ("", None) if helped else unknown_command(args, repos, texts, real, depth)
     group, verb = split_command(args)
     name = command_name(args)
-    if not verb:      # `gh pr` alone is help
+    if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
     if (group, verb) in TEXT:
-        found, values, refusal = parse_text(args[1:], group, verb)
-        if not any(t in repos for t in targets(args, {v + 1 for v in values}, group)):
+        found, values, refusal, helped = parse_text(args[1:], group, verb)
+        if helped or not any(t in repos for t in targets(args, {v + 1 for v in values}, group)):
             return "", None
         if refusal:
             raise Refuse(refusal)
         gather_text(found, texts)
         return name, texts
-    if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
+    if helped or (known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()))):
         return "", None
     if any(t in repos for t in targets(args, set(), group)):
-        if group in READ or group in NOTEXT or any(g == group for g, _ in TEXT):
-            raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
-                         "Use a recognised command" % (group, verb))
-        raise Refuse("`gh %s` is not a gh command this wrapper recognises (an alias or an extension?) and it is aimed at a guarded repository. "
-                     "Run the full command" % group)
+        raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
+                     "Use a recognised command" % (group, verb))
     return "", None
 
 
@@ -453,7 +548,8 @@ def run_real(real, args, stdin_data, no_prompt=False):
         if env is None:
             os.execv(real, ["gh"] + args)
         os.execve(real, ["gh"] + args, env)
-    return subprocess.run([real] + args, input=stdin_data, env=env).returncode
+    rc = subprocess.run([real] + args, input=stdin_data, env=env).returncode
+    return 128 - rc if rc < 0 else rc          # a gh killed by a signal exits as a shell reports it, 128 + the signal
 
 
 def main(argv):
@@ -470,7 +566,7 @@ def main(argv):
     skip = os.environ.get("LEAK_GUARD_SKIP", "").strip()
     texts = Texts()
     try:
-        name, texts = decide(args, repos, texts)
+        name, texts = decide(args, repos, texts, real)
         if not name:
             return run_real(real, args, texts.stdin if texts else None)
         command = name
@@ -494,7 +590,8 @@ def main(argv):
             print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
             return run_real(real, args, texts.stdin)
         log(command, "block", "wrapper", 0, t0)
-        print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"<reason>\" gh ..." % (r, command), file=sys.stderr)
+        shown = args[0] if args and re.match(r"^[a-z][a-z-]*$", args[0]) and command == "unrecognised" else command      # the message names what was typed; the log only a safe name
+        print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"<reason>\" gh ..." % (r, shown), file=sys.stderr)
         return 1
 
 

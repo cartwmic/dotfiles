@@ -27,11 +27,16 @@ PLANTED = "an invented sentence naming fooco here"
 CLEAN = "an invented sentence about gardens"
 
 FAKE_GH = '''#!%s
-import json, os, sys
+import json, os, signal, sys
+if sys.argv[1:3] == ["alias", "list"]:
+    print(os.environ.get("FAKE_ALIASES", "co: pr checkout"))
+    sys.exit(int(os.environ.get("FAKE_ALIASES_EXIT", "0")))
 d = os.environ["FAKE"]
 stdin = sys.stdin.read() if os.environ.get("FAKE_GH_STDIN") else ""
 with open(os.path.join(d, "gh-calls.jsonl"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin, "prompt_disabled": os.environ.get("GH_PROMPT_DISABLED")}) + "\\n")
+if os.environ.get("FAKE_GH_SIGNAL"):
+    os.kill(os.getpid(), int(os.environ["FAKE_GH_SIGNAL"]))
 sys.stdout.write("real gh out\\n")
 sys.stderr.write("real gh err\\n")
 sys.exit(int(os.environ.get("FAKE_GH_EXIT", "0")))
@@ -155,15 +160,21 @@ class Decisions(WrapperBase):
     W = load_wrapper()
     REPOS = {("github.com", GUARDED)}
 
-    def decide(self, *args):
-        with mock.patch.dict(os.environ, {"GH_REPO": GUARDED, "GH_HOST": "github.com"}):
-            name, texts = self.W.decide(list(args), self.REPOS)
+    aliases = "co: pr checkout"
+
+    def decide(self, *args, repo=GUARDED):
+        env = {"GH_HOST": "github.com", "FAKE_ALIASES": self.aliases, **({"GH_REPO": repo} if repo else {})}
+        with mock.patch.dict(os.environ, env):
+            if not repo:
+                os.environ.pop("GH_REPO", None)
+            name, texts = self.W.decide(list(args), self.REPOS, None, str(self.realbin / "gh"))
         return name, ({l: d.decode() for l, d in texts.items} if texts else None)
 
-    def refused(self, *args):
-        with mock.patch.dict(os.environ, {"GH_REPO": GUARDED, "GH_HOST": "github.com"}):
+    def refused(self, *args, repo=GUARDED):
+        env = {"GH_HOST": "github.com", "FAKE_ALIASES": self.aliases, **({"GH_REPO": repo} if repo else {})}
+        with mock.patch.dict(os.environ, env):
             with self.assertRaises(self.W.Refuse) as caught:
-                self.W.decide(list(args), self.REPOS)
+                self.W.decide(list(args), self.REPOS, None, str(self.realbin / "gh"))
         return str(caught.exception)
 
 
@@ -281,6 +292,36 @@ class WrapperText(Decisions):
         self.assertRan(self.gh("pr", "edit", "5", "--add-label", "bug"), "pr", "edit", "5", "--add-label", "bug")
         self.assertEqual(self.claude_calls(), 0)
 
+    def test_release_create_with_asset_files_is_refused_and_the_tag_is_checked_as_text(self):
+        self.assertIn("asset files", self.refused("release", "create", "v1", "CHANGES.txt", "-t", "x", "--notes", CLEAN))
+        self.assertIn("asset files", self.refused("release", "create", "v1", "a.zip#label", "b.zip", "--notes", CLEAN))
+        self.assertIn("asset files", self.refused("release", "create", "--notes", CLEAN, "v1", "--", "CHANGES.txt"))
+        name, texts = self.decide("release", "create", "v1.2", "--target", "main", "--notes", CLEAN)           # --target's value is not a file
+        self.assertEqual((name, texts["tag"]), ("release create", "v1.2"))
+        name, texts = self.decide("release", "create", "-R", GUARDED, "--discussion-category", "General", "v1.2", "-n", CLEAN)
+        self.assertEqual(texts["tag"], "v1.2")
+        self.reset()
+        self.assertBlocked(self.gh("release", "create", "v1-fooco", "--notes", CLEAN), "tag:1: term 1")
+        self.reset()
+        self.assertBlocked(self.gh("release", "create", "v1", "CHANGES.txt", "--notes", CLEAN), "asset files")
+        self.assertIn("tag", self.decide("release", "edit", "v1", "--tag", "v2")[1])
+
+    def test_help_is_help_only_when_it_stands_alone_and_not_as_a_flags_value(self):
+        self.assertEqual(self.decide("pr", "create", "--help"), ("", None))
+        self.assertEqual(self.decide("pr", "create", "-h"), ("", None))
+        name, texts = self.decide("pr", "create", "-t", "x", "--body", "-h")
+        self.assertEqual((name, texts["body"]), ("pr create", "-h"))
+        name, texts = self.decide("pr", "create", "-t", "-h", "--body", "y")
+        self.assertEqual(texts["title"], "-h")
+        self.assertEqual(self.decide("api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=-h")[0], "api")
+        self.assertEqual(self.decide("api", "repos/%s/issues/1/comments" % GUARDED, "--help"), ("", None))
+        name, texts = self.decide("pr", "create", "--label", "--body", "--body", "SECRET", "-t", "x")
+        self.assertEqual(texts["body"], "SECRET")
+
+    def test_a_gh_killed_by_a_signal_exits_as_a_shell_reports_it(self):
+        done = self.gh("pr", "comment", "5", "--body-file", "-", stdin=CLEAN, env={"FAKE_GH_SIGNAL": "15"})      # stdin was read, so the wrapper runs gh as a child
+        self.assertEqual(done.returncode, 143)
+
     def test_a_flag_cluster_that_may_hide_a_text_flag_blocks(self):
         self.assertBlocked(self.gh("pr", "create", "-dt", PLANTED), "cluster")
 
@@ -323,7 +364,7 @@ class WrapperApi(Decisions):
     EP = "repos/%s/issues/1/comments" % GUARDED
 
     def test_a_field_with_no_dash_X_is_a_write_and_the_endpoint_names_the_repository_from_any_directory(self):
-        self.assertBlocked(self.gh("api", self.EP, "-f", "body=" + PLANTED, cwd=self.other_cwd), "field body:1: term 1")
+        self.assertBlocked(self.gh("api", self.EP, "-f", "body=" + PLANTED, cwd=self.other_cwd), "field 1:1: term 1")
         clean = ["api", self.EP, "-f", "body=" + CLEAN]
         self.assertRan(self.gh(*clean, cwd=self.other_cwd), *clean)
 
@@ -367,6 +408,22 @@ class WrapperApi(Decisions):
         done = self.gh("api", "repositories/123/issues/1/comments", "-X", "POST", cwd=self.other_cwd)
         self.assertBlocked(done, "numeric id")
 
+    def test_hostname_sets_the_host_so_another_host_is_not_a_guarded_repository(self):
+        ep = "repos/%s/issues/1/comments" % GUARDED
+        self.assertEqual(self.decide("api", "--hostname", "ghe.example.test", ep, "-f", "body=x"), ("", None))
+        self.assertEqual(self.decide("api", "--hostname=ghe.example.test", ep, "-f", "body=x"), ("", None))
+        self.assertEqual(self.decide("api", "--hostname", "github.com", ep, "-f", "body=x")[0], "api")
+        with mock.patch.dict(os.environ, {"GH_HOST": "github.com"}):
+            name, texts = self.W.decide(["api", "--hostname", "ghe.example.test", "repos/team/proj/issues", "-f", "body=x"], {("ghe.example.test", "team/proj")})
+        self.assertEqual(name, "api")
+
+    def test_field_keys_are_checked_as_text_and_a_hit_names_the_field_by_position_not_by_its_key(self):
+        done = self.gh("api", self.EP, "-f", "body=" + CLEAN, "-f", "fooco-key=1", cwd=self.other_cwd)
+        self.assertBlocked(done, "field 2 key:1: term 1")
+        self.assertNotIn("fooco", done.stderr)
+        name, texts = self.decide("api", self.EP, "-f", "body=x", "-F", "k=@" + self.file("v.txt", "vv"))
+        self.assertEqual(texts, {"field 1": "x", "field 1 key": "body", "field 2": "vv", "field 2 key": "k"})
+
     def test_a_write_to_the_repository_with_no_text_passes_and_is_logged_without_a_check(self):
         args = ["api", "repos/%s/issues/1/comments/5" % GUARDED, "-X", "DELETE"]
         self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
@@ -387,11 +444,11 @@ class WrapperGraphql(Decisions):
         self.assertRan(self.gh(*clean, cwd=self.other_cwd), *clean)
 
     def test_the_variables_are_checked_too(self):
-        self.assertBlocked(self.gh("api", "graphql", "-f", "query=" + self.MUTV, "-F", "b=" + PLANTED, cwd=self.other_cwd), "field b:1: term 1")
+        self.assertBlocked(self.gh("api", "graphql", "-f", "query=" + self.MUTV, "-F", "b=" + PLANTED, cwd=self.other_cwd), "field 2:1: term 1")
         name, texts = self.decide("api", "graphql", "-F", "query=@" + self.file("q.graphql", self.MUTV), "-f", "b=" + PLANTED)
-        self.assertEqual((name, PLANTED in texts["field b"], "addComment" in texts["field query"]), ("api graphql", True, True))
+        self.assertEqual((name, PLANTED in texts["field 2"], "addComment" in texts["field 1"]), ("api graphql", True, True))
         name, texts = self.decide("api", "graphql", "-F", "query=@" + self.file("q2.graphql", self.MUT % PLANTED))
-        self.assertIn(PLANTED, texts["field query"])
+        self.assertIn(PLANTED, texts["field 1"])
 
     def test_json_input_on_stdin_or_in_a_file_is_parsed_and_its_query_and_variables_are_checked(self):
         body = json.dumps({"query": self.MUTV, "variables": {"b": PLANTED}})
@@ -435,7 +492,7 @@ class WrapperUnrecognised(Decisions):
     def test_a_write_command_it_does_not_recognise_blocks_and_names_the_command(self):
         for args, named in ((["repo", "edit", "--description", "x"], "gh repo edit"), (["label", "create", "bug"], "gh label create"),
                             (["workflow", "run", "ci.yml"], "gh workflow run"), (["secret", "set", "X"], "gh secret set"), (["pr", "frobnicate"], "gh pr frobnicate"),
-                            (["frobnicate", "now"], "gh frobnicate"), (["co", "5"], "gh co"), (["agent-task", "create", "do it"], "gh agent-task")):
+                            (["frobnicate", "now"], "gh frobnicate"), (["agent-task", "create", "do it"], "gh agent-task")):
             with self.subTest(args):
                 self.assertIn(named, self.refused(*args))
         self.reset()
@@ -453,8 +510,50 @@ class WrapperUnrecognised(Decisions):
         done = self.gh("pr", "ready", "5")
         self.assertRan(done, "pr", "ready", "5")
 
+    def test_a_bare_built_in_group_is_help_and_an_unknown_name_with_no_verb_is_not(self):
+        self.assertEqual(self.decide("pr"), ("", None))
+        self.assertEqual(self.decide("issue", "-h"), ("", None))
+        for args in (["frobnicate"], ["frobnicate", "--draft"], ["prc"]):
+            with self.subTest(args):
+                self.assertIn("extension", self.refused(*args))
+        self.assertEqual(self.decide("frobnicate", repo="someone/other"), ("", None))        # an extension for another repository runs as it is
+
+    def test_an_alias_is_expanded_with_gh_alias_list_and_its_expansion_is_classified(self):
+        self.aliases = "\n".join(["co: pr checkout", "prc: pr create --fill", "cm: pr comment $1 -R %s --body \"hello world\"" % GUARDED,
+                                  "ship: pr comment -R %s" % GUARDED, "q: 'api graphql -f query=\"mutation { x }\"'", "sh: '!echo $1 | tr a b'",
+                                  "it: 'pr comment 5 --body \"it''s fine\"'"])
+        self.assertIn("--fill", self.refused("prc"))                                  # prc = pr create --fill
+        self.assertIn("--fill", self.refused("prc", "--draft"))
+        self.assertEqual(self.decide("co", "5"), ("", None))                          # an alias for a read passes
+        name, texts = self.decide("cm", "7", repo="someone/other")                    # the repository is inside the alias
+        self.assertEqual((name, texts), ("pr comment", {"body": "hello world"}))
+        name, texts = self.decide("ship", "7", "-b", PLANTED, repo=None)              # extra arguments are appended to the expansion
+        self.assertEqual((name, PLANTED in texts["body"]), ("pr comment", True))
+        self.assertEqual(self.decide("q", repo="someone/other")[0], "api graphql")
+        self.assertEqual(self.decide("it")[1], {"body": "it's fine"})
+        self.assertIn("shell alias", self.refused("sh", "a"))                         # a shell alias on a guarded repository is refused
+        self.assertEqual(self.decide("sh", "a", repo="someone/other"), ("", None))    # and runs for another one
+        self.assertIn("more arguments", self.refused("cm"))                           # a $1 with no argument cannot be checked
+
+    def test_an_alias_list_that_cannot_be_read_exactly_refuses(self):
+        for aliases, exit_code in (("garbage without a colon", "0"), ("ok: pr list\nbad line", "0"), ("x: pr list", "1")):
+            with self.subTest(aliases):
+                self.aliases = aliases
+                with mock.patch.dict(os.environ, {"FAKE_ALIASES_EXIT": exit_code}):
+                    self.assertIn("alias", self.refused("whatever", repo="someone/other"))
+
+    def test_a_write_alias_with_only_flags_is_blocked_end_to_end_and_a_bare_group_passes(self):
+        done = self.gh("prc", "--draft", env={"FAKE_ALIASES": "prc: pr create --fill"})
+        self.assertBlocked(done, "--fill")
+        self.reset()
+        self.assertRan(self.gh("pr"), "pr")
+        self.reset()
+        self.assertBlocked(self.gh("some-extension", "run", cwd=self.guarded_cwd), "extension")
+        self.reset()
+        self.assertRan(self.gh("some-extension", "run", cwd=self.other_cwd), "some-extension", "run")
+
     def test_an_unrecognised_command_for_an_unguarded_repository_passes(self):
-        for args in (["label", "create", "bug"], ["repo", "edit", "someone/other", "--description", "x"]):
+        for args in (["label", "create", "bug"], ["repo", "edit", "someone/other", "--description", "x"], ["some-extension"]):
             with self.subTest(args):
                 self.reset()
                 self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
