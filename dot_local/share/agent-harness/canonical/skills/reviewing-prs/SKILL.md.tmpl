@@ -61,20 +61,22 @@ Review the work, not the person.
 
 - **blocker:** merging causes a defect, a security exposure or data loss on a realistic path.
 - **should-fix:** a real cost the author should address, such as a missing test for changed behavior, a misleading doc, or fragile code the diff introduces.
-- **nit:** a preference.
+- **nit:** a preference. It fails test 2 in section 4.
 - **question:** the reviewer cannot tell.
 
 A blocker or should-fix must name the obligation, the evidence and the consequence. Without all three it is at most a nit. Do not comment on what CI or a formatter already enforces.
 
+A finding outside the PR's stated intent or scope, especially a problem that existed before the PR, is at most a note marked for a follow-up. It is never a blocker or should-fix.
+
 ## 4. Triage
 
-You (the driver) run the four tests in `~/.local/share/agent-harness/finding-triage.md` on every finding. Findings from human reviewers on the PR, from bots, and from this skill's own reviewer sessions all get them. Read the code at head, or run a command, and mark the finding:
+You (the driver) run the four tests in `~/.local/share/agent-harness/finding-triage.md` on every finding. Every finding gets them, this skill's reviewer sessions' findings included, and so does any finding from a person or a bot that the owner passes on. Who raised a finding does not make it true. Read the code at head, or run a command, and mark the finding:
 
 - **confirmed:** it passes all four tests. A confirmed blocker or should-fix records how you checked: the code path, or the command and the tail of its output.
 - **refuted:** it fails test 1 (real). Keep it out of the draft and give the owner the reason.
-- **declined:** it is real but fails test 2, 3 or 4. Keep it out of the draft and give the owner the reason, naming the test.
+- **declined:** it is real but fails test 2 or 3. Keep it out of the draft and give the owner the reason, naming the test. Nits are declined under test 2.
 - **duplicate:** name the original finding.
-- **out-of-scope:** pre-existing, or outside the diff. This is a test 4 failure that section 5 lets the summary mention once.
+- **follow-up:** it fails test 4: outside the PR's intent or scope, or pre-existing. Section 5 lets the summary mention it once.
 
 For test 3 use only the four principle sections under "Design principles" below.
 
@@ -86,8 +88,8 @@ The draft has a summary, inline comments, and an event: COMMENT, REQUEST_CHANGES
 
 - **Every confirmed blocker and should-fix** appears in exactly one comment, or is held back with a reason.
 - **Every comment** cites at least one confirmed finding.
-- **Inline comments** carry only blockers, should-fixes and questions. Nits go in one short optional list in the summary.
-- **Out-of-scope findings** get at most one mention in the summary, as pre-existing. They never block.
+- **Inline comments** carry only blockers, should-fixes and questions. Nits are declined (test 2) and stay out of the draft.
+- **Follow-ups** get at most one mention in the summary. They never block.
 - **APPROVE** is never the event while a confirmed blocker is in the draft.
 - **Every inline line** lies inside a diff hunk at head.
 - **Write the summary and inline comments in the owner's voice** with the no-ai-slop skill, review comments register. Change wording only: keep every finding, file:line, identifier and quoted string.
@@ -95,7 +97,7 @@ The draft has a summary, inline comments, and an event: COMMENT, REQUEST_CHANGES
 
 ## 6. Owner review, then post
 
-1. **Show the owner the draft verbatim.** Below it, collapsed: held-back findings, refuted and declined findings with reasons, and the files covered on each axis.
+1. **Show the owner the draft verbatim.** Below it, collapsed: held-back findings, refuted and declined findings with reasons (nits included), and the files covered on each axis.
 2. **Post only after the owner's own words approve this exact draft.** Any edit needs a new approval.
 3. **Before posting, read the PR head again.** If it moved, stop. The owner withholds or starts a new review.
 4. **Post exactly the approved text as one review,** for example with `gh api` on GitHub. Then read the posted review back and compare it with the draft.

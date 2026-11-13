@@ -3,16 +3,20 @@
 Whoever acts on review findings (the driver, the author, the agent applying fixes) runs these four tests on every finding, whoever raised it: a person, a bot or a reviewer agent. Who wrote a finding does not make it true.
 
 1. **Real.** It holds when checked against the code, the document or a run. Say how you checked.
-2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail.
+2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail. So does a fix that an existing job, check or process already does.
 3. **Maintainable.** The fix serves long-term maintainability under `~/.local/share/agent-harness/design-principles.md`. Cite the section. A fix that adds machinery the need does not require fails §4. A cap that hides a wrong cause fails §9.
-4. **In intent.** It fits the intent of the change under review and of the overall work that change belongs to. Anything else is a follow-up, not part of this change.
+4. **In intent.** It fits the stated intent and scope of the change under review and of the overall work that change belongs to. Anything else, especially a problem that existed before the change, is a follow-up, not part of this change.
 
-Run them in order. Act on a finding that passes all four. Decline the rest with one short reason that starts with the first test it failed:
+Run them in order. Act on a finding that passes all four.
+
+- **Failed test 1, 2 or 3:** decline it with one short reason that starts with the test it failed.
+- **Failed test 4:** it is a follow-up. Do not decline or drop it. Mention it as a non-blocking note that starts "for a follow-up:". It never blocks the change and is never a blocker or should-fix.
 
 ```
 declined (useful): the message is never shown to a user
+for a follow-up: the retry loop already had no cap before this change
 ```
 
-Every draft, report or summary of the review lists the declined findings with their reasons, so the owner can overrule them.
+List the declined findings (with reasons) and the follow-ups in whatever the owner reads: a draft, report or summary. That lets the owner overrule. They need not go in text posted to other people.
 
 Where a findings log is kept (`findings-contract.md`), a declined blocking finding is recorded as `rejected`, with that reason.

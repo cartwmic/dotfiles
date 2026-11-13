@@ -102,4 +102,7 @@ Write `docs/desloppify/desloppify-plan.md`:
 
 ### Declined critiques
 [Each declined critique with the test it failed and why]
+
+### Follow-ups
+[Each critique that fails test 4 (out of scope or pre-existing), not part of this plan]
 ```
