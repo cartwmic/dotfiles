@@ -329,7 +329,7 @@ class CheckTest(ShxTestCase):
         self.assertEqual((line["command"], line["artifact"], line["version"], line["error"]), ("check", ARTIFACT, 2, None))
 
     def test_a_drawing_is_found_only_on_the_element_it_was_drawn_on(self):
-        # The anchor path still finds an element in every case; only "same", "older" (no record to compare), "bar-same" and "emoji-same" are the one drawn on.
+        # The anchor path still finds an element in every case; only "same", "older" (no record to compare) and "emoji-same" are the one drawn on; "bar" has no text and is left out.
         def drawn(id, tag, text):
             st = stroke("#ff00ff", "#intro", {"x": 8, "y": 60, "w": 300, "h": 20})
             st.update({"anchor_tag": tag, "anchor_text": text})
@@ -343,16 +343,14 @@ class CheckTest(ShxTestCase):
             drawn("reworded", "p", "Revenue grew in every quarter."),
             drawn("retagged", "h2", "Sales rose each quarter."),
             {"id": "older", "author": "person", "body": "look", "anchor": "#intro", "version": 1, "stroke": older},
-            # An element with no text is what its attributes say (style left out): #bar is a div with only an id.
-            drawn_on("bar-same", "#bar", "div", "id=bar"),
-            drawn_on("bar-other", "#bar", "div", "id=another-bar"),
             drawn_on("emoji-same", "#emoji", "p", clipped),
+            # A drawing on an element with no text (#bar has none) is not checked at all: it is not in the results.
+            drawn_on("bar", "#bar", "div", ""),
         ]
         server = self.serve(comments=comments)
         out = self.shx("check", server.base, ARTIFACT)
         self.assertEqual(out["results"], [{"id": "same", "found": True}, {"id": "reworded", "found": False},
                                           {"id": "retagged", "found": False}, {"id": "older", "found": True},
-                                          {"id": "bar-same", "found": True}, {"id": "bar-other", "found": False},
                                           {"id": "emoji-same", "found": True}])
 
     def test_nothing_to_check_posts_nothing(self):

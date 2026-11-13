@@ -155,6 +155,9 @@ export function checkItems(comments) {
     if (!quote && !anchor) continue;
     const item = { id: c.id, quote, anchor };
     // A drawing also says what its anchor was when it was drawn, so a path that now finds another element is not found.
+    // One on an element with no text (anchor_text is "") cannot be told from its neighbour: it is not checked, and its
+    // status stays unchecked on a later version.
+    if (!quote && c.stroke && c.stroke.anchor_text === '') continue;
     if (!quote && c.stroke) {
       if (typeof c.stroke.anchor_tag === 'string' && c.stroke.anchor_tag) item.tag = c.stroke.anchor_tag;
       if (typeof c.stroke.anchor_text === 'string') item.text = c.stroke.anchor_text;
