@@ -8,6 +8,7 @@ checked from outside: exit codes, output, the job record, files that came back, 
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -38,6 +40,13 @@ def load():
 
 
 K = load()
+
+_CACHE_HOME = tempfile.mkdtemp(prefix="kt-cache-")
+os.environ["XDG_CACHE_HOME"] = _CACHE_HOME  # no test reads or writes the real ~/.cache/kgate, even one that calls op_read in this process
+
+
+def tearDownModule():
+    shutil.rmtree(_CACHE_HOME, True)
 
 
 def git(cwd, *args, **env):
@@ -358,6 +367,7 @@ case "${OP_SERVICE_ACCOUNT_TOKEN-}" in
 *) echo wrong >> "$FAKE/op-token-checks" ;;
 esac
 [ -n "$FAKE_OP_HANG" ] && sleep 120
+[ -n "$FAKE_OP_SLEEP" ] && sleep "$FAKE_OP_SLEEP"
 [ -n "$FAKE_OP_FAIL" ] && { echo "[ERROR] item not found" >&2; exit 1; }
 printf 'value-of-%s' "$(basename "$2")"
 '''
@@ -388,8 +398,12 @@ class Black(unittest.TestCase):
         self.fake = self.tmp / "fake"
         self.state = self.tmp / "state"
         self.home = self.tmp / "home"  # no token file here, so the real ~/.config is never read
+        self.cache = self.tmp / "cache"  # the secret cache is per test: a cache hit would hide the op calls these tests count
         for d in (self.bin, self.fake, self.home):
             d.mkdir()
+        patch = mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.cache)})
+        patch.start()
+        self.addCleanup(patch.stop)
         for name, text in (("ssh", FAKE_SSH), ("op", FAKE_OP)):
             (self.bin / name).write_text(text)
             (self.bin / name).chmod(0o755)
@@ -859,6 +873,110 @@ class Black(unittest.TestCase):
         done = self.kgate("--image", "docker.io/library/alpine@sha256:" + "ef" * 32, "--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertFalse((self.fake / "op-calls").exists())
+
+    # --- the secret cache: each reference is read with `op` at most once a day
+
+    def op_reads(self):
+        path = self.fake / "op-calls"
+        return path.read_text().splitlines() if path.exists() else []
+
+    def cache_files(self):
+        return sorted(p for p in (self.cache / "kgate").iterdir() if p.name != ".lock") if (self.cache / "kgate").exists() else []
+
+    def test_a_second_job_the_same_day_makes_no_op_call_and_gets_the_same_secret(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        first = self.kgate("--", "true")
+        self.assertEqual(first.returncode, 0, first.stdout)
+        self.assertEqual(self.op_reads(), ["read op://developer/item/password", "read op://developer/kgate-github-packages-read/password"])
+        secrets = [c for c in self.calls() if "manifest" in c]
+        second = self.kgate("--", "true")
+        self.assertEqual(second.returncode, 0, second.stdout)
+        self.assertEqual(len(self.op_reads()), 2, "the second job read nothing with op")
+        self.assertEqual(self.op_token_checks(), ["ok", "ok"])
+        self.assertEqual(len(self.cache_files()), 2)
+        self.assertEqual(secrets[0]["manifest"]["items"][0]["data"], [c for c in self.calls() if "manifest" in c][-1]["manifest"]["items"][0]["data"])
+
+    def test_an_entry_over_a_day_old_is_read_again_and_replaced(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        old = time.time() - K.SECRET_CACHE_TTL - 60
+        for f in self.cache_files():
+            os.utime(f, (old, old))
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(len(self.op_reads()), 4, "both references were read again")
+        self.assertTrue(all(time.time() - f.stat().st_mtime < 60 for f in self.cache_files()), "the entries were rewritten")
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(len(self.op_reads()), 4, "and the new entries are used")
+
+    def test_an_entry_just_under_a_day_old_is_used(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        recent = time.time() - K.SECRET_CACHE_TTL + 300
+        for f in self.cache_files():
+            os.utime(f, (recent, recent))
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(len(self.op_reads()), 2)
+
+    def test_a_failed_read_writes_no_cache_file_and_the_next_job_tries_again(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        done = self.kgate("--", "true", env={"FAKE_OP_FAIL": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertEqual(self.cache_files(), [])
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(len(self.op_reads()), 3, "the failed read, then the secret and the pull credential")
+
+    def test_cache_dir_is_0700_and_entries_are_0600(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(stat.S_IMODE((self.cache / "kgate").stat().st_mode), 0o700)
+        self.assertEqual(len(self.cache_files()), 2)
+        for f in self.cache_files():
+            self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f.name)
+        self.assertEqual([p.name for p in (self.cache / "kgate").iterdir() if p.name.startswith(".tmp-")], [], "no temp file is left behind")
+
+    def test_a_warm_cache_needs_no_token_and_a_cold_one_still_refuses(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        self.assertEqual(self.kgate("--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""}).returncode, 69)
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        done = self.kgate("--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(len(self.op_reads()), 2, "no op run for the third job")
+
+    def test_a_cache_that_cannot_be_written_still_returns_the_secret_and_says_so(self):
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "HOME": str(self.home),
+               "OP_SERVICE_ACCOUNT_TOKEN": FAKE_TOKEN, "FAKE_TOKEN": FAKE_TOKEN}
+        with mock.patch.dict(os.environ, env), mock.patch.object(K.tempfile, "mkstemp", side_effect=OSError("disk full")), \
+                mock.patch("sys.stderr", new=io.StringIO()) as err:
+            self.assertEqual(K.op_read("op://developer/item/password"), b"value-of-password")
+        self.assertIn("kgate: secret cache not written (disk full)", err.getvalue())
+        self.assertEqual(self.cache_files(), [])
+
+    def test_the_cache_dir_falls_back_to_dot_cache_under_home(self):
+        done = self.kgate("--", "true", env={"XDG_CACHE_HOME": ""})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue((self.home / ".cache" / "kgate").is_dir())
+
+    def test_reads_of_one_reference_started_together_make_one_op_call(self):
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "FAKE_OP_SLEEP": "1", "HOME": str(self.home),
+               "OP_SERVICE_ACCOUNT_TOKEN": FAKE_TOKEN, "FAKE_TOKEN": FAKE_TOKEN}
+        got = []
+        with mock.patch.dict(os.environ, env):
+            threads = [threading.Thread(target=lambda: got.append(K.op_read("op://developer/item/password"))) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(60)
+        self.assertEqual(got, [b"value-of-password"] * 4)
+        self.assertEqual(self.op_reads(), ["read op://developer/item/password"])
+
+    def test_an_unusable_cache_dir_does_not_fail_the_job(self):
+        self.cache.write_text("a file where the cache dir should go\n")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(len(self.op_reads()), 1, "read with op as before (the pull credential)")
+        self.assertIn("kgate: secret cache unusable at", done.stdout)
 
     def preferred_hosts(self):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
