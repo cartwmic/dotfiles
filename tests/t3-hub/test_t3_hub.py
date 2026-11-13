@@ -628,8 +628,8 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
 # The skills each seat keeps (restated; the template holds the same lists and the reasons for them).
 KEEP = {
     "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "herdr", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts", "using-viz"},
-    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "herdr", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts", "using-viz"},
-    "builder": {"correcting-repeated-mistakes", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
+    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "herdr", "hill-climb", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts", "using-viz"},
+    "builder": {"correcting-repeated-mistakes", "hill-climb", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"designing-the-smallest-version", "no-ai-slop"},
     "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider"},
 }
