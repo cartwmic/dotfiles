@@ -29,6 +29,7 @@ Contract
   reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
 - 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
+  Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
   there is one); the full output is in <id>.log beside it.
@@ -45,6 +46,7 @@ runs CMD and reports peak memory. Needs python3 3.11+ in the image.
 import argparse
 import base64
 import datetime
+import fcntl
 import hashlib
 import io
 import json
@@ -58,6 +60,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import tomllib
@@ -951,7 +954,65 @@ def op_token():
         return None
 
 
+SECRET_CACHE_TTL = 24 * 3600
+
+
+def secret_cache_dir():
+    return os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "kgate")
+
+
+def cached_secret(path):
+    """The cached value at `path` when it is under SECRET_CACHE_TTL old, else None."""
+    try:
+        age = time.time() - os.stat(path).st_mtime
+        if 0 <= age < SECRET_CACHE_TTL:
+            with open(path, "rb") as f:
+                return f.read()
+    except OSError:
+        pass
+    return None
+
+
+def cache_secret(path, value):
+    """Write `value` to `path` through a temp file and a rename, so a reader never sees half of it. A cache that cannot be written is skipped."""
+    try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")   # mode 0600
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(value)
+            os.replace(tmp, path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+    except OSError:
+        pass
+
+
 def op_read(ref):
+    """`op read ref`, at most once a day: a cached value under 24 h old is used and op is not run. Jobs starting together take turns on one lock, so only the first reads."""
+    d = secret_cache_dir()
+    path = os.path.join(d, hashlib.sha256(ref.encode()).hexdigest())
+    value = cached_secret(path)
+    if value is not None:
+        return value
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        os.chmod(d, 0o700)
+        lock = os.open(os.path.join(d, ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)    # released when `lock` is closed
+    except OSError:
+        return op_read_fresh(ref)           # no usable cache directory: read as before
+    try:
+        value = cached_secret(path)
+        if value is None:
+            value = op_read_fresh(ref)      # a failed read raises here and writes nothing
+            cache_secret(path, value)
+        return value
+    finally:
+        os.close(lock)
+
+
+def op_read_fresh(ref):
     token = op_token()
     if token is None:  # refused before `op` runs: without the token, op falls back to the desktop app
         raise Unavailable(NO_TOKEN)
