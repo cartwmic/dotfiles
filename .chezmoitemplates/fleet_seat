@@ -1,0 +1,28 @@
+{{- /*
+  The Claude Code settings file for one agent seat (~/.claude/fleet/seat-<seat>.json). Call:
+    {{ includeTemplate "fleet_seat" (dict "seat" "lead" "ctx" .) }}
+  Every seat: the Artifact tool is denied, claude.ai skills and Claude Code's bundled skills are off, and every personal skill (a
+  directory with a SKILL.md under ~/.claude/skills, found at apply time) is "off" unless this seat keeps it. skillOverrides has no wildcard,
+  so a skill installed after the last apply shows in the listing until the next apply.
+  Keep-lists: the skills the seat called at least once between 2026-11-11 18:00Z and 2026-11-13 (tool-call counts in the token baseline),
+  plus the Loop Engine and lean-change skills for builders and leads, reviewing-prs and review-plans for reviewers, and using-viz and
+  using-shartifacts for leads and the coordinator. The coordinator seat had no attributed skill calls, so it takes the lead's list.
+  Advisor, MCP servers and the compaction window are not set here: they belong to the T3 instance (modify_settings.json.tmpl) or to the
+  launch arguments.
+*/ -}}
+{{- $keeps := dict
+      "coordinator" (list "coordinating-loop-engine" "herdr" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts" "using-viz")
+      "lead" (list "coordinating-loop-engine" "herdr" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts" "using-viz")
+      "builder" (list "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
+      "planner" (list "designing-the-smallest-version" "no-ai-slop")
+      "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider") -}}
+{{- if not (hasKey $keeps .seat) -}}{{ fail (printf "fleet_seat: unknown seat %q" .seat) }}{{- end -}}
+{{- $keep := get $keeps .seat -}}
+{{- $off := dict -}}
+{{- range $p := glob (joinPath .ctx.chezmoi.homeDir ".claude/skills/*") -}}
+{{-   if stat (joinPath $p "SKILL.md") -}}
+{{-     $name := base $p -}}
+{{-     if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
+{{-   end -}}
+{{- end -}}
+{{- dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" true "skillOverrides" $off | toPrettyJson }}

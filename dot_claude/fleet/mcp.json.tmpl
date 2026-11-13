@@ -1,0 +1,3 @@
+{{- /* The MCP servers every seat keeps: hindsight and shartifacts, taken from the canonical file so the URLs and headers have one home. The seat instances start Claude with --strict-mcp-config --mcp-config this file, so context7, playwright, rea, ticktick, browser-harness and the claude.ai connectors are not loaded; T3 adds its own t3-code server. */ -}}
+{{- $all := includeTemplate "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl" . | fromJson -}}
+{{- dict "mcpServers" (pick $all.mcpServers "hindsight" "shartifacts") | toPrettyJson }}
