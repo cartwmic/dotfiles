@@ -3,11 +3,11 @@
 
 export const USAGE = `usage:
   viz render <file|-> [--as mermaid|svg|html] [--width 1200] [--scale 2]
-  viz publish <file|id> [--as mermaid|svg|html] [--width 1200] [--scale 2]
+  viz publish <file|id> [--as mermaid|svg|html] [--width 1200] [--scale 2] [--workstream NAME] [--ask NUMBER]
   viz list [--limit N]
   viz doctor`;
 
-export const EXIT_CODES = new Map([['bad_input', 2], ['render_failed', 3], ['missing_dependency', 4], ['publish_failed', 5]]);
+export const EXIT_CODES = new Map([['bad_input', 2], ['render_failed', 3], ['missing_dependency', 4], ['publish_failed', 5], ['unlinked_publish', 6]]);
 export const SOURCE_EXT = new Map([['mermaid', 'mmd'], ['svg', 'svg'], ['html', 'html']]);
 const FORMAT_BY_EXT = new Map([['.mmd', 'mermaid'], ['.svg', 'svg'], ['.html', 'html']]);
 export const PAD = 16; // CSS px of white margin around an SVG or Mermaid drawing
@@ -74,14 +74,56 @@ export function parseRenderRequest(args) {
   return { file, as, width, scale };
 }
 
-/** Validate `publish` arguments: a render id, or a file (or -) to render first with the render options. */
+/**
+ * Validate `publish` arguments: a render id, or a file (or -) to render first with the render options.
+ * --workstream NAME and --ask NUMBER are for the tag (tagFor), not for rendering, so they are not in renderArgs.
+ */
 export function parsePublishRequest(args) {
-  const { opts, positional } = parseOptions(args, ['as', 'width', 'scale']);
+  const { opts, positional } = parseOptions(args, ['as', 'width', 'scale', 'workstream', 'ask']);
   if (positional.length !== 1) throw badInput(`publish takes exactly one <file|id>\n${USAGE}`);
   const target = positional[0];
-  if (!isRenderId(target)) return { id: null, renderArgs: args };
-  if (opts.size) throw badInput(`${target} is a render id; --as, --width and --scale apply only when publishing a file`);
-  return { id: target, renderArgs: null };
+  const workstream = opts.has('workstream') ? opts.get('workstream').trim() : null;
+  if (workstream === '') throw badInput(`--workstream needs a name\n${USAGE}`);
+  const ask = opts.has('ask') ? parsePositiveInteger('ask', opts.get('ask')) : null;
+  const link = { workstream, ask };
+  if (!isRenderId(target)) {
+    const renderArgs = [];
+    for (let i = 0; i < args.length; i++) {
+      const name = args[i].startsWith('--') ? args[i].slice(2).split('=')[0] : null;
+      if (name === 'workstream' || name === 'ask') { if (!args[i].includes('=')) i++; } else renderArgs.push(args[i]);
+    }
+    return { id: null, renderArgs, ...link };
+  }
+  if ([...opts.keys()].some((k) => k !== 'workstream' && k !== 'ask')) {
+    throw badInput(`${target} is a render id; --as, --width and --scale apply only when publishing a file`);
+  }
+  return { id: target, renderArgs: null, ...link };
+}
+
+function decodeEntities(s) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (m, e) => {
+    const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[e.toLowerCase()];
+    if (named) return named;
+    const code = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
+}
+
+function textOfElement(html, tag) {
+  const m = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}\\s*>`, 'i').exec(html);
+  if (!m) return null;
+  const text = decodeEntities(m[1].replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+  return text || null;
+}
+
+/**
+ * The tag file for one published page (README, "page.json"). The title is the page's <title>, else its first h1, else
+ * the source file's name, else null (a page read from stdin has no file).
+ */
+export function tagFor({ id, pageHtml, input, machine, thread, workstream, ask, publishedAt }) {
+  const source = input && input !== '-' ? input : null;
+  const title = textOfElement(pageHtml, 'title') ?? textOfElement(pageHtml, 'h1') ?? (source ? source.slice(source.lastIndexOf('/') + 1) : null);
+  return { v: 1, id, title, machine, thread: thread || null, workstream: workstream ?? null, ask: ask ?? null, source, published_at: publishedAt };
 }
 
 /** Where a published render is: the page at <base>/<id>/, the PNG beside it. */

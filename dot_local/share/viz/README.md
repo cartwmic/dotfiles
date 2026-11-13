@@ -7,7 +7,7 @@ when and how to use it from the canonical skill `using-viz`.
 
 ```sh
 viz render <file|-> [--as mermaid|svg|html] [--width 1200] [--scale 2]
-viz publish <file|id> [--as mermaid|svg|html] [--width 1200] [--scale 2]
+viz publish <file|id> [--as mermaid|svg|html] [--width 1200] [--scale 2] [--workstream NAME] [--ask NUMBER]
 viz list [--limit N]
 viz doctor
 ```
@@ -37,6 +37,7 @@ a render id (`20261028-120000-000-abc123`) is an id; anything else is a file.
 - It PUTs `image.png` to `$VIZ_PUBLISH_URL/<id>/image.png` and `page.html` to
   `$VIZ_PUBLISH_URL/<id>/index.html`, with basic auth: user `viz`, password
   `$VIZ_PUBLISH_PASSWORD`. Any static site that accepts authenticated PUTs works.
+- It also PUTs `page.json` (the tag file, below) to `$VIZ_PUBLISH_URL/<id>/page.json`, last.
 - It prints the render's fields plus `url` (`$VIZ_PUBLISH_URL/<id>/`, the page)
   and `png_url`.
 - The site config is checked before rendering. If an upload fails after a file
@@ -45,6 +46,38 @@ a render id (`20261028-120000-000-abc123`) is an id; anything else is a file.
 - A published HTML page is the byte-exact `page.html`: relative assets beside
   the source file are not uploaded, so only self-contained pages work online.
 - Nothing is unpublished or pruned yet.
+
+### page.json: the tag file
+
+Every publish uploads `<id>/page.json` next to the page, so a dashboard can list
+a machine's pages and tie each to the work that made it. It is plain JSON, one
+file per page:
+
+| Key | Value |
+|-----|-------|
+| `v` | `1` |
+| `id` | the render id |
+| `title` | the page's `<title>`, else its first `<h1>` (tags stripped, spaces collapsed), else the source file's name; `null` for a page from stdin with neither |
+| `machine` | `personal` or `work`: the chezmoi profile (`axon-work-computer` is `work`, any other is `personal`), read from `~/.config/viz/machine` (chezmoi writes it from `dot_config/viz/machine.tmpl`); a missing file means `personal`. The caller cannot set it. |
+| `thread` | the `T3CODE_THREAD_ID` environment variable, else `null`. viz only records the id; whoever reads the file resolves it. |
+| `workstream` | the `--workstream NAME` option, else `null` |
+| `ask` | the `--ask NUMBER` option (a positive integer), else `null` |
+| `source` | the input file path recorded with the render (the same for `viz publish <file>` and `viz publish <id>`), or `null` for a page read from stdin |
+| `published_at` | UTC time of this upload, ISO 8601 |
+
+`viz publish <id>` again uploads a new `page.json` for the same id with a new
+`published_at`. The action log's `tag` step (see Action log) holds the object
+that was uploaded.
+
+### `unlinked_publish`
+
+In an agent shell (the wrapper's markers: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
+`T3CODE_THREAD_ID`, `HERDR_ENV`, `CODEX_SANDBOX`, any one set and not empty) with
+no `T3CODE_THREAD_ID` and neither `--workstream` nor `--ask`, `viz publish`
+exits 6 with `{"ok":false,"code":"unlinked_publish",...}` before it renders or
+uploads anything. Pass `--workstream NAME` or `--ask NUMBER` and run it again.
+A terminal with no marker (Michael's own) is never refused. The refusal is
+logged like any other outcome.
 
 The shim `~/.local/bin/viz` wires in Michael's site for `publish` only:
 `VIZ_PUBLISH_URL` defaults to `https://viz.internal.cartwmic.com`
@@ -64,6 +97,7 @@ to stderr.
 | 3 | `render_failed` | the render failed; for Mermaid the message is the parser's text (`Parse error on line ...`) |
 | 4 | `missing_dependency` | no Chromium, `mmdc`, headless shell or `node`; for `publish`, no `VIZ_PUBLISH_URL` or `VIZ_PUBLISH_PASSWORD` |
 | 5 | `publish_failed` | an upload failed: the site was unreachable or answered with an error (401: wrong password) |
+| 6 | `unlinked_publish` | `publish` in an agent shell with no thread id and no `--workstream` or `--ask` (see above); nothing was rendered or uploaded |
 
 `width` and `height` are the PNG's pixels; `bytes` is its file size.
 
@@ -85,7 +119,7 @@ to `$VIZ_STATE_DIR/actions.jsonl`, whatever the outcome. `list` ignores it.
 | `id` | action id; for a render it is the render id (and directory name) |
 | `ts`, `duration_ms` | UTC start time and how long the call took |
 | `command`, `args` | what was run: arguments and paths, never source bodies |
-| `steps` | what viz did: `request` (input as given, resolved format, width, scale), `input` (absolute path, bytes), `chromium` (path), `mmdc` (`ok`, `ensured` when the Playwright cache was restored first, and the parser `message` on failure), `screenshot` (page loaded, PNG size, bytes, page errors), `site` (publish base URL), `render` (id of a saved render being published), `upload` (remote path, bytes, HTTP status, or `ok: false` and the message), `list` (count), `doctor` (missing dependencies). Never the password. |
+| `steps` | what viz did: `request` (input as given, resolved format, width, scale), `input` (absolute path, bytes), `chromium` (path), `mmdc` (`ok`, `ensured` when the Playwright cache was restored first, and the parser `message` on failure), `screenshot` (page loaded, PNG size, bytes, page errors), `site` (publish base URL), `render` (id of a saved render being published), `upload` (remote path, bytes, HTTP status, or `ok: false` and the message), `tag` (the `page.json` object that was uploaded), `list` (count), `doctor` (missing dependencies). Never the password. |
 | `outcome` | the JSON object printed on stdout (`list` records its count instead of the renders) |
 
 A failed Mermaid render leaves no render directory, but its record names the

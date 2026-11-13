@@ -35,6 +35,8 @@ const { output, exitCode } = await runAction(process.argv.slice(2), {
   browser: { locate: () => locateChromium(env), screenshot },
   mermaid: createMermaid(env, () => ensureChromium(env)),
   site: createSite(env),
+  // The wrapper sets these from the chezmoi profile (~/.config/viz/machine) and its agent-shell markers; nothing an agent passes.
+  identity: { machine: env.VIZ_MACHINE === 'work' ? 'work' : 'personal', thread: env.T3CODE_THREAD_ID || null, agentShell: env.VIZ_AGENT_SHELL === '1' },
   clock: { now: () => Date.now() },
   random: { hex: () => randomBytes(3).toString('hex') },
   runtime: { node: process.execPath, nodeVersion: process.version },
