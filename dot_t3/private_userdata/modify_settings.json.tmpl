@@ -1,8 +1,8 @@
 #!/bin/sh
-# Own two provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there.
+# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the four seat-* instances, pi and pi-lead below).
 # Personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # Personal Linux owns two more, pi and pi-lead, and nothing else of the hub (see "pi" and "pi-lead" below).
-# Data switch t3Hub.enabled (default true): false makes WANT empty, so the next apply removes exactly the two owned ids.
+# Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
 #   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub and an empty ANTHROPIC_API_KEY (an ambient key must not win over the helper's), key from ~/.config/t3-hub-claude-settings.json (apiKeyHelper)
 #   codex-hub   "Codex (hub)"   driver codex, not managed: CODEX_HOME stays ~/.codex, `-c model_provider=cliproxy` selects the
 #               [model_providers.cliproxy] block that dot_codex/modify_private_config.toml.tmpl writes
@@ -48,7 +48,24 @@
 #   and threads that are archived, settled, snoozed, deleted or sub-agents; it fires once per finished run, so a big thread nobody returns to is still
 #   compacted once. Applies on every apply, hub switch on or off; to change it, edit IDLE_COMPACTION; '' leaves the key as T3 has it. Source of the
 #   values: T3's settings contract (IDLE_COMPACTION_MODES), checked in the installed 0.1.10 nightly.
-# Each apply replaces exactly the owned ids under providerInstances and sets worktreesDirectory; no other key or instance is touched. No file, or a file that is
+# seat-lead, seat-builder, seat-planner, seat-reviewer  (every file this template runs on: personal macOS and personal Linux)
+#               One claudeAgent instance per agent seat, so a seat starts with its own settings instead of the default ones. Each has its own
+#               autoCompactWindow, optionally an `environment` entry, and `launchArgs` of
+#                 --settings <home>/.claude/fleet/seat-<seat>.json --strict-mcp-config --mcp-config <home>/.claude/fleet/mcp.json
+#               --strict-mcp-config keeps T3's own t3-code server: T3 hands it to Claude through the SDK, not through --mcp-config, and a
+#               session started by T3 on a seat instance lists the t3-code, hindsight and shartifacts tools (checked on a scratch T3 server).
+#               The seat file (source dot_claude/fleet/seat-<seat>.json.tmpl, built by .chezmoitemplates/fleet_seat) removes the Artifact tool and
+#               trims the skills listing; the shared MCP file keeps only hindsight and shartifacts (T3 adds t3-code itself). The files are read when
+#               a session starts, so an edit reaches the next session only. The instance id is what a caller passes: delegate_task
+#               target.providerInstanceId, t3_thread_launch modelSelection.instanceId. Table (docs/profiles.md "Agent seat instances"):
+#                 seat-lead      window 200000  advisor OFF (CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1)
+#                 seat-builder   window 300000  advisor on
+#                 seat-planner   window 300000  advisor on
+#                 seat-reviewer  window 300000  advisor OFF
+#               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
+#               is deployed for it to point at.
+# Compaction point: Claude Code compacts about 33,000 tokens below the window, so 200000 compacts near 167K and 300000 near 267K.
+# Each apply replaces exactly the owned ids under providerInstances, sets worktreesDirectory and idleCompaction; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
 set -eu
@@ -72,8 +89,16 @@ set -eu
       "config" (dict "launchArgs" (printf "--settings %s/.config/t3-hub-claude-settings.json" $home)) }}
 {{- $want := dict }}
 {{- $owned := list "claude-hub" "codex-hub" }}
+{{- $fleet := printf "%s/.claude/fleet" $home }}
+{{- range $seat := list (dict "id" "lead" "window" "200000" "advisor" false) (dict "id" "builder" "window" "300000" "advisor" true) (dict "id" "planner" "window" "300000" "advisor" true) (dict "id" "reviewer" "window" "300000" "advisor" false) }}
+{{-   $inst := dict "driver" "claudeAgent" "displayName" (printf "Claude (%s)" $seat.id) "enabled" true
+        "config" (dict "autoCompactWindow" $seat.window "launchArgs" (printf "--settings %s/seat-%s.json --strict-mcp-config --mcp-config %s/mcp.json" $fleet $seat.id $fleet)) }}
+{{-   if not $seat.advisor }}{{ $_ := set $inst "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false)) }}{{ end }}
+{{-   $want = set $want (printf "seat-%s" $seat.id) $inst }}
+{{-   $owned = append $owned (printf "seat-%s" $seat.id) }}
+{{- end }}
 {{- if eq $hub "on" }}
-{{- $want = dict "claude-hub" $claude "codex-hub" $codex }}
+{{- $want = set (set $want "claude-hub" $claude) "codex-hub" $codex }}
 {{- end }}
 {{- if eq .chezmoi.os "linux" }}
 {{- $want = set $want "pi" (dict "driver" "pi" "enabled" true) }}

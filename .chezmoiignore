@@ -47,6 +47,8 @@ scripts/
 .codex/*
 !.claude/CLAUDE.md
 !.claude/settings.json
+!.claude/fleet
+!.claude/agents
 !.codex/AGENTS.md
 !.codex/config.toml
 !.codex/rules
@@ -312,7 +314,7 @@ Library/Preferences/pnpm/**
 {{- if eq (includeTemplate "t3_hub" .) "n/a" }}
 # T3 provider instances that route through the homelab CLIProxy hub: personal Mac only (docs/profiles.md). With t3Hub.enabled
 # false the files stay managed so the next apply removes the instances, the settings file and the Codex block.
-# Personal Linux keeps the settings file (hub mode n/a there: only worktreesDirectory and the auto-compact window are written).
+# Personal Linux keeps the settings file (hub mode n/a there: it writes worktreesDirectory, the auto-compact windows, idleCompaction, and the pi, pi-lead and seat-* provider instances).
 {{- if not $t3Linux }}
 .t3
 .t3/**
