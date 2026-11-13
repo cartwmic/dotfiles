@@ -267,13 +267,6 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .config/kgate/host
 # /Volumes/Workshop exists only on the personal Mac; the script turns Spotlight off for it.
 80_spotlight_off_workshop.sh
-# shartifacts (Michael's page server on the personal homelab) is personal only: work agents posting work content to a personal host needs
-# Michael's word (rule 272f08d0). The MCP entry in servers.json.tmpl is gated the same way.
-.local/bin/shx-note-image
-.local/share/shx
-.local/share/shx/**
-.local/share/agent-harness/canonical/skills/using-shartifacts
-.local/share/agent-harness/canonical/skills/using-shartifacts/**
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}

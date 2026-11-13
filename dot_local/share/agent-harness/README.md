@@ -126,10 +126,10 @@ configuration or 1Password adapter metadata. In a running Pi session, use
 `/reload` after applying, then `/mcp login ticktick`.
 
 The `shartifacts` entry is Michael's page server (`https://shartifacts.internal.cartwmic.com/mcp`, Streamable
-HTTP, no sign-in). It is on the personal profile only: work profile left out, because posting work content to the personal
-homelab host needs Michael's word (272f08d0). The entry is a profile branch in `servers.json.tmpl`; the command
-`shx-note-image` (`dot_local/share/shx/README.md`) and the canonical skill `using-shartifacts` are left out of the work
-profile in `.chezmoiignore` and have a row in `docs/profiles.md`. Test: `tests/shx/test_agent_access.py`.
+HTTP, no sign-in). It is on both desktop profiles, like TickTick and Hindsight: Michael asked for the work profile too
+(2026-11-13, rule 272f08d0; `docs/profiles.md` records the quote), so it has no row in the coverage table. The command
+`shx-note-image` (`dot_local/share/shx/README.md`) and the canonical skill `using-shartifacts` go with it. Test:
+`tests/shx/test_agent_access.py`.
 
 ## Pattern-kill guard
 

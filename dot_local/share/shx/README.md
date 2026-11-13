@@ -77,4 +77,4 @@ exposes "screenshot a file", and one component does not import another's adapter
   real Chromium (skips without it).
 - `python3 -I tests/shx/test_boundaries.py` fails if a `core/` file imports anything outside `core/`.
 - `python3 -I tests/shx/test_skill.py` and `python3 -I tests/shx/test_agent_access.py` check the skill and what
-  chezmoi renders for each desktop profile (personal gets them, the work profile does not).
+  chezmoi renders for both desktop profiles.
