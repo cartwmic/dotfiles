@@ -3,6 +3,12 @@
 # ~/.local/share/op-shim comes first: its `op` runs the real op with a scratch HOME (see below). Login shells get it
 # first again from ~/.zprofile, because /etc/zprofile's path_helper reorders PATH after this file.
 export PATH="$HOME/.local/share/op-shim:/opt/homebrew/bin:$HOME/.local/bin:$HOME/bin:$PATH"
+# The leak-guard gh wrapper goes ahead of every other gh. Its directory exists only where run_onchange_after_47_install-leak-guard-gh put it (the
+# work profile, with leakGuard data), so this does nothing elsewhere. ~/.zprofile does it again for login shells, and a mise conf.d file keeps it
+# first in shells where mise is active (docs/leak-guard.md).
+if [ -d "$HOME/.local/share/leak-guard/bin" ]; then
+  path=("$HOME/.local/share/leak-guard/bin" ${path:#"$HOME/.local/share/leak-guard/bin"})
+fi
 
 # Pi: 1-hour prompt cache (Anthropic default is 5 minutes). Read by every zsh,
 # so it reaches Herdr panes, the coordinator pane and subagents. Override in

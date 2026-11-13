@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+# leak-guard gh wrapper (managed by chezmoi; run_onchange_after_47_install-leak-guard-gh). Edit scripts/leak-guard-gh in the dotfiles source, not this copy.
+"""gh, with leak-guard in front of every text a command sends to a guarded repository. Work machine only; docs/leak-guard.md.
+
+The guarded repositories are the lines of ~/.config/leak-guard/repos (`owner/name`, or `host/owner/name` off github.com); with no such file this does
+nothing. For a command aimed at a guarded repository it gathers the text the command sends (titles, bodies, notes, comments, `gh api` fields and
+input), runs `leak-guard text` on it as a process, and runs the real gh only on a pass. It blocks, and does not run gh, on a hit, on any failure, on a
+write command it does not recognise, and on any flag that makes gh compose the text itself (--fill, --template, --editor, --web, ...).
+Everything else, and every command for another repository, runs the real gh with the same arguments and stdin.
+
+It writes one log line (mode "gh") to ~/.local/state/leak-guard/log.jsonl for each guarded command it checks or blocks: {utc, mode, command, verdict,
+layer, duration_s, findings}. Never the text, a term, a path or a repository name. LEAK_GUARD_SKIP="<reason>" skips the check for one command; it is logged.
+
+Environment: LEAK_GUARD_CONFIG_DIR, XDG_STATE_HOME as for leak-guard; LEAK_GUARD_BIN is the leak-guard to run (default ~/.local/bin/leak-guard).
+"""
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+MARK = "leak-guard gh wrapper (managed by chezmoi"
+
+# What each gh command group is, when it is aimed at a guarded repository.
+READ = {"pr": {"list", "view", "diff", "checks", "status", "checkout"}, "issue": {"list", "view", "status"},
+        "release": {"list", "view", "download", "verify", "verify-asset"}, "run": {"list", "view", "watch", "download"},
+        "workflow": {"list", "view"}, "repo": {"view", "list", "clone", "gitignore", "license"}, "label": {"list"}, "cache": {"list"},
+        "secret": {"list"}, "variable": {"list", "get"}, "ruleset": {"list", "view", "check"}}
+NOTEXT = {"pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", "unlock", "pin", "unpin", "delete", "transfer"},
+          "release": {"delete", "delete-asset"}, "run": {"rerun", "cancel", "delete"}, "cache": {"delete"}}
+NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help", "version", "search", "status", "browse", "ssh-key", "gpg-key", "gist",
+            "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview"}
+
+# Commands that send text. kind -> (long flag, short flag). Composed: flags after which gh writes the text itself.
+T, B, F, S, C, N, NF = ("--title", "-t"), ("--body", "-b"), ("--body-file", "-F"), ("--subject", "-t"), ("--comment", "-c"), ("--notes", "-n"), ("--notes-file", "-F")
+TEXT = {("pr", "create"): dict(title=T, body=B, bodyfile=F), ("pr", "edit"): dict(title=T, body=B, bodyfile=F),
+        ("pr", "comment"): dict(body=B, bodyfile=F), ("pr", "review"): dict(body=B, bodyfile=F),
+        ("pr", "merge"): dict(subject=S, body=B, bodyfile=F), ("pr", "close"): dict(comment=C), ("pr", "reopen"): dict(comment=C),
+        ("issue", "create"): dict(title=T, body=B, bodyfile=F), ("issue", "edit"): dict(title=T, body=B, bodyfile=F),
+        ("issue", "comment"): dict(body=B, bodyfile=F), ("issue", "close"): dict(comment=C), ("issue", "reopen"): dict(comment=C),
+        ("release", "create"): dict(title=T, notes=N, notesfile=NF), ("release", "edit"): dict(title=T, notes=N, notesfile=NF)}
+LABEL = {"title": "title", "subject": "title", "body": "body", "bodyfile": "body", "comment": "comment", "notes": "notes", "notesfile": "notes"}
+FROM_FILE = {"bodyfile", "notesfile"}
+COMPOSED = {("pr", "create"): [("--fill",), ("--fill-first",), ("--fill-verbose",), ("--template", "-T"), ("--recover",), ("--editor", "-e"), ("--web", "-w")],
+            ("issue", "create"): [("--template", "-T"), ("--recover",), ("--editor", "-e"), ("--web", "-w")],
+            ("pr", "comment"): [("--edit-last",), ("--editor", "-e"), ("--web", "-w")], ("issue", "comment"): [("--edit-last",), ("--editor", "-e"), ("--web", "-w")]}
+API_VALUE_LONG = {"--method", "--raw-field", "--field", "--header", "--jq", "--template", "--preview", "--cache", "--hostname", "--input"}
+API_VALUE_SHORT = {"X", "f", "F", "H", "q", "t", "p"}
+VALUE_SHORT = set("RBHalmrTA")      # short flags that take a value we do not read; what follows one is its value, not more flags
+
+
+class Refuse(Exception):
+    """A wrapper-only block: gh is not run."""
+
+
+def home(*parts):
+    return os.path.join(os.path.expanduser("~"), *parts)
+
+
+def config_dir():
+    return os.environ.get("LEAK_GUARD_CONFIG_DIR") or home(".config", "leak-guard")
+
+
+def log(command, verdict, layer, findings, t0):
+    entry = {"utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "gh", "command": command, "verdict": verdict,
+             "layer": layer, "duration_s": round(time.time() - t0, 3), "findings": findings}
+    if verdict == "skip":
+        entry["reason"] = os.environ.get("LEAK_GUARD_SKIP", "").strip()
+    state = os.path.join(os.environ.get("XDG_STATE_HOME") or home(".local", "state"), "leak-guard")
+    try:
+        os.makedirs(state, mode=0o700, exist_ok=True)
+        os.chmod(state, 0o700)
+        fd = os.open(os.path.join(state, "log.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        print("leak-guard gh: could not write its log: %s" % e.strerror, file=sys.stderr)
+
+
+# ---- the real gh -------------------------------------------------------------------------------------------------------------------------------------
+
+def ours(path):
+    try:
+        with open(path, "rb") as f:
+            return MARK.encode() in f.read(4096)
+    except OSError:
+        return False
+
+
+def real_gh():
+    me = os.path.realpath(__file__)
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = os.path.join(d or ".", "gh")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK) and os.path.realpath(cand) != me and not ours(cand):
+            return cand
+    return None
+
+
+# ---- repositories ------------------------------------------------------------------------------------------------------------------------------------
+
+def parse_repo(s, host=None):
+    """(host, owner/name) lower-cased, from OWNER/REPO, HOST/OWNER/REPO, or an https, ssh or scp-style URL; None when it is none of those."""
+    host = (host or os.environ.get("GH_HOST") or "github.com").lower()
+    s = s.strip()
+    m = re.match(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?([^/:\s]+)(?::\d*)?[/:]([^/\s]+)/([^/\s#?]+)", s, re.I)
+    if m:
+        h, owner, name = m.group(1).lower(), m.group(2), m.group(3)
+        host = "github.com" if h == "api.github.com" else h
+    else:
+        m = re.match(r"^([^/\s:@]+)/([^/\s#?]+)$", s)
+        if not m:
+            return None
+        owner, name = m.group(1), m.group(2)
+    name = name[:-4] if name.endswith(".git") else name
+    return host, ("%s/%s" % (owner, name)).lower()
+
+
+def guarded_repos():
+    try:
+        with open(os.path.join(config_dir(), "repos")) as f:
+            rows = [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
+    except OSError:
+        return set()
+    return {r for r in (parse_repo(row, "github.com") for row in rows) if r}
+
+
+def cwd_remotes():
+    try:
+        done = subprocess.run(["git", "config", "--get-regexp", r"^remote\..+\.(url|pushurl)$"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [r for r in (parse_repo(row.partition(" ")[2]) for row in done.stdout.decode(errors="replace").splitlines()) if r]
+
+
+def flag_value(args, long, short, skip=()):
+    for i, a in enumerate(args):
+        if i in skip:
+            continue
+        if a == long or a == short:
+            return args[i + 1] if i + 1 < len(args) else None
+        if a.startswith(long + "="):
+            return a[len(long) + 1:]
+        if short and a.startswith(short) and len(a) > 2 and not a.startswith("--"):
+            return a[2:].lstrip("=")
+    return None
+
+
+def targets(args, skip, group=None):
+    """The repositories a command is aimed at, in gh's order of precedence: -R/--repo, URLs in the arguments, GH_REPO, then the current directory's remotes."""
+    explicit = flag_value(args, "--repo", "-R", skip)
+    if explicit:
+        r = parse_repo(explicit)
+        return [r] if r else []
+    urls = [r for i, a in enumerate(args) if i not in skip and re.match(r"^https?://", a) for r in [parse_repo(a)] if r]
+    if urls:
+        return urls
+    if group == "repo" and len(args) > 2 and not args[2].startswith("-") and parse_repo(args[2]):
+        return [parse_repo(args[2])]
+    if os.environ.get("GH_REPO"):
+        r = parse_repo(os.environ["GH_REPO"])
+        return [r] if r else []
+    return cwd_remotes()
+
+
+# ---- gathering the text ------------------------------------------------------------------------------------------------------------------------------
+# Nothing is read (no file, no standard input) until the command is known to be aimed at a guarded repository, so every other command runs untouched.
+
+class Texts:
+    """Named texts to check, and the standard input if it was read to get them."""
+
+    def __init__(self):
+        self.items, self.stdin = [], None
+
+    def add(self, label, data):
+        n = sum(1 for l, _ in self.items if l == label or l.startswith(label + "#")) + 1
+        self.items.append((label if n == 1 else "%s#%d" % (label, n), data))
+
+    def read(self, path):
+        try:
+            if path == "-":
+                if self.stdin is None:
+                    self.stdin = sys.stdin.buffer.read()
+                return self.stdin
+            with open(path, "rb") as f:
+                return f.read()
+        except OSError as e:
+            raise Refuse("cannot read a text file the command names (%s), so its text cannot be checked" % e.strerror)
+
+
+def known_verb(group, verb):
+    return verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()) or (group, verb) in TEXT
+
+
+def split_command(args):
+    """(group, verb) of a gh command line. The verb is the first argument after the group that is a verb gh knows for it, so flags before the verb are fine."""
+    group = args[0]
+    rest = [a for a in args[1:] if not a.startswith("-")]
+    verb = next((a for a in rest if known_verb(group, a)), rest[0] if rest else "")
+    return group, verb
+
+
+def parse_text(args, group, verb):
+    """([(kind, value, from_file)], positions of values in args, refusal or None) for a pr/issue/release command. Reads nothing."""
+    spec = TEXT[(group, verb)]
+    by_long = {flags[0]: kind for kind, flags in spec.items()}
+    by_short = {flags[1][1:]: kind for kind, flags in spec.items()}
+    composed = COMPOSED.get((group, verb), [])
+    compose_long = {c[0] for c in composed}
+    compose_short = {c[1][1:] for c in composed if len(c) > 1}
+    found, values, refusal, i = [], set(), None, 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            break
+        if a.startswith("--"):
+            name, eq, val = a.partition("=")
+            if name in compose_long:
+                refusal = refusal or "%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % name
+            if name in by_long:
+                if not eq:
+                    if i + 1 >= len(args):
+                        refusal = refusal or "%s has no value" % name
+                        break
+                    i += 1
+                    val = args[i]
+                values.add(i)
+                found.append((by_long[name], val, by_long[name] in FROM_FILE))
+        elif a.startswith("-") and len(a) > 1:
+            letter = a[1]
+            if letter in compose_short:
+                refusal = refusal or "-%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % letter
+            elif letter in by_short:
+                val = a[2:].lstrip("=") if len(a) > 2 else None
+                if val is None:
+                    if i + 1 >= len(args):
+                        refusal = refusal or "-%s has no value" % letter
+                        break
+                    i += 1
+                    val = args[i]
+                values.add(i)
+                found.append((by_short[letter], val, by_short[letter] in FROM_FILE))
+            elif len(a) > 2 and letter not in VALUE_SHORT and any(c in by_short or c in compose_short for c in a[2:]):
+                refusal = refusal or "the flag cluster %s may hide a text flag; write each flag on its own (-t value, or --title value)" % a
+        i += 1
+    if not refusal and sys.stdin.isatty():
+        refusal = would_prompt(group, verb, args, {k for k, _, _ in found})
+    return found, values, refusal
+
+
+def has_flag(args, *names):
+    return any(a == n or a.startswith(n + "=") for a in args for n in names)
+
+
+def would_prompt(group, verb, args, kinds):
+    """The refusal text when, on a terminal, gh would ask for text (or for how to merge, then let the commit message be edited) at its own prompt, or None.
+    Prompts are also switched off for the real gh (GH_PROMPT_DISABLED), so this is the clear message, not the only guard."""
+    ask = "gh would ask for it on the terminal, where it cannot be checked. Give the text with --body-file (or --notes-file for a release)"
+    if group in ("pr", "issue") and verb == "create" and not ("title" in kinds and kinds & {"body", "bodyfile"}):
+        return "the title or the body is missing, so " + ask
+    if group in ("pr", "issue") and verb == "edit" and not [a for a in args if a.startswith("-") and not a.startswith("-R") and a.split("=")[0] != "--repo"]:
+        return "no flag says what to edit, so gh would open its interactive editor. " + ask
+    if verb == "comment" and not kinds & {"body", "bodyfile"}:
+        return "no --body or --body-file was given, so " + ask
+    if (group, verb) == ("pr", "review"):
+        typed = has_flag(args, "--approve", "-a", "--comment", "-c", "--request-changes", "-r")
+        if not typed or (not has_flag(args, "--approve", "-a") and not kinds & {"body", "bodyfile"}):
+            return "the review type or its body is missing, so " + ask
+    if (group, verb) == ("release", "create") and not (kinds & {"notes", "notesfile"} or has_flag(args, "--generate-notes", "--notes-from-tag")):
+        return "no release notes were given, so " + ask
+    if (group, verb) == ("pr", "merge") and not has_flag(args, "--merge", "-m", "--squash", "-s", "--rebase", "-r"):
+        return "no merge method flag was given, so gh would ask on the terminal and offer to edit the commit message. Give --squash, --merge or --rebase (with --body-file for a message)"
+    return None
+
+
+def gather_text(found, texts):
+    for kind, val, from_file in found:
+        texts.add(LABEL[kind], texts.read(val) if from_file else val.encode())
+
+
+def parse_api(args):
+    """(method, endpoint, [(typed, "key=value")], [input path]) for `gh api` arguments. Reads nothing."""
+    method, endpoint, fields, inputs, i = None, None, [], [], 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--"):
+            name, eq, val = a.partition("=")
+            if name in API_VALUE_LONG:
+                if not eq:
+                    i += 1
+                    val = args[i] if i < len(args) else ""
+                if name == "--method":
+                    method = val
+                elif name in ("--raw-field", "--field"):
+                    fields.append((name == "--field", val))
+                elif name == "--input":
+                    inputs.append(val)
+        elif a.startswith("-") and len(a) > 1:
+            for j in range(1, len(a)):
+                c = a[j]
+                if c in API_VALUE_SHORT:
+                    val = a[j + 1:].lstrip("=")
+                    if not val:
+                        i += 1
+                        val = args[i] if i < len(args) else ""
+                    if c == "X":
+                        method = val
+                    elif c in "fF":
+                        fields.append((c == "F", val))
+                    break
+        elif endpoint is None:
+            endpoint = a
+        i += 1
+    return method, endpoint or "", fields, inputs
+
+
+def gather_api(fields, inputs, texts, graphql):
+    """Read every field value and --input into texts. Returns the GraphQL query text, if any."""
+    query = None
+    for typed, kv in fields:
+        key, _, val = kv.partition("=")
+        data = texts.read(val[1:]) if typed and val.startswith("@") else val.encode()
+        texts.add("field %s" % re.sub(r"[/\x00]", "_", key), data)
+        if key == "query":
+            query = (query or b"") + data
+    for path in inputs:
+        data = texts.read(path)
+        texts.add("input", data)
+        if graphql:
+            try:
+                doc = json.loads(data.decode())
+            except ValueError:
+                doc = None
+            if not isinstance(doc, dict):
+                raise Refuse("the GraphQL input is not a JSON object, so whether it is a mutation cannot be told")
+            if isinstance(doc.get("query"), str):
+                query = (query or b"") + doc["query"].encode()
+    return query
+
+
+def is_mutation(query):
+    return re.search(rb"\bmutation\b", re.sub(rb"#[^\n]*", b"", query)) is not None
+
+
+def endpoint_path(endpoint):
+    """The endpoint without scheme, host, leading slashes and a GitHub Enterprise `api/v3/` prefix."""
+    return re.sub(r"^/*(?:api/v3/)?", "", re.sub(r"^https?://[^/]+/", "", endpoint))
+
+
+def api_targets(endpoint):
+    m = re.match(r"^(?:https?://([^/]+)/)?/?(?:api/v3/)?repos/([^/{}]+)/([^/?{}]+)", endpoint)
+    if m:
+        r = parse_repo("%s/%s" % (m.group(2), m.group(3)), "github.com" if m.group(1) in (None, "api.github.com", "uploads.github.com") else m.group(1))
+        return [r] if r else []
+    if re.search(r"\{(owner|repo)\}", endpoint):
+        return targets([], set())
+    return []
+
+
+# ---- the decision ------------------------------------------------------------------------------------------------------------------------------------
+
+def command_name(args):
+    if not args or args[0].startswith("-"):
+        return ""
+    group = args[0]
+    if group == "api":
+        return "api"
+    if group in READ or group in NOTEXT or any(g == group for g, _ in TEXT):
+        _, verb = split_command(args)
+        return "%s %s" % (group, verb) if re.match(r"^[a-z][a-z-]*$", verb) else group
+    return group if group in NOT_REPO else "unrecognised"
+
+
+def decide(args, repos, texts=None):
+    """(command name, Texts). Texts None: run gh as is. A Texts with an empty name: run gh as is, with the standard input that was read. Raises Refuse.
+    `texts` is where gathered text (and standard input, if read) goes, so the caller still has the input when this raises."""
+    texts = texts if texts is not None else Texts()
+    if not args or args[0].startswith("-") or any(a in ("-h", "--help") for a in args):
+        return "", None
+    group = args[0]
+    if group == "api":
+        method, endpoint, fields, inputs = parse_api(args[1:])
+        write = (method or ("POST" if fields or inputs else "GET")).upper() not in ("GET", "HEAD")
+        if endpoint_path(endpoint) in ("graphql", "api/graphql"):      # a mutation names objects by node id, never a repository: check every one
+            query = gather_api(fields, inputs, texts, True)
+            return ("api graphql", texts) if query is not None and is_mutation(query) else ("", texts)
+        if write and re.match(r"^repositories/\d+", endpoint_path(endpoint)):
+            raise Refuse("this `gh api` write names a repository by its numeric id, which this wrapper cannot map to a guarded repository. "
+                         "Use the repos/<owner>/<repo>/... form of the endpoint")
+        if write and any(t in repos for t in api_targets(endpoint)):
+            gather_api(fields, inputs, texts, False)
+            return "api", texts
+        return "", None
+    if group in NOT_REPO:
+        return "", None
+    group, verb = split_command(args)
+    name = command_name(args)
+    if not verb:      # `gh pr` alone is help
+        return "", None
+    if (group, verb) in TEXT:
+        found, values, refusal = parse_text(args[1:], group, verb)
+        if not any(t in repos for t in targets(args, {v + 1 for v in values}, group)):
+            return "", None
+        if refusal:
+            raise Refuse(refusal)
+        gather_text(found, texts)
+        return name, texts
+    if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
+        return "", None
+    if any(t in repos for t in targets(args, set(), group)):
+        if group in READ or group in NOTEXT or any(g == group for g, _ in TEXT):
+            raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
+                         "Use a recognised command" % (group, verb))
+        raise Refuse("`gh %s` is not a gh command this wrapper recognises (an alias or an extension?) and it is aimed at a guarded repository. "
+                     "Run the full command" % group)
+    return "", None
+
+
+def run_guard(texts, t0, name):
+    """Run `leak-guard text` on the texts. Returns (ok, layer, findings, verdict)."""
+    guard = os.environ.get("LEAK_GUARD_BIN") or home(".local", "bin", "leak-guard")
+    with tempfile.TemporaryDirectory(prefix="lg-gh-") as d:
+        paths = []
+        for n, (label, data) in enumerate(texts.items):
+            sub = os.path.join(d, str(n))
+            os.mkdir(sub)
+            path = os.path.join(sub, label)
+            with open(path, "wb") as f:
+                f.write(data)
+            paths.append(path)
+        result = os.path.join(d, "result.json")
+        try:
+            done = subprocess.run([guard, "text", "--result", result] + paths, stdin=subprocess.DEVNULL)
+        except OSError as e:
+            raise Refuse("leak-guard cannot be run (%s), so the text cannot be checked" % e.strerror)
+        try:
+            with open(result) as f:
+                res = json.load(f)
+        except (OSError, ValueError):
+            res = {}
+    if done.returncode != 0:
+        return False, res.get("layer", "wrapper"), res.get("findings", 0), res.get("verdict")
+    return True, res.get("layer", "none"), res.get("findings", 0), res.get("verdict", "pass")
+
+
+def run_real(real, args, stdin_data, no_prompt=False):
+    """Run the real gh. For a guarded write, with GH_PROMPT_DISABLED=1: gh can then never ask for text at a prompt the wrapper cannot see."""
+    env = dict(os.environ, GH_PROMPT_DISABLED="1") if no_prompt else None
+    if stdin_data is None:
+        if env is None:
+            os.execv(real, ["gh"] + args)
+        os.execve(real, ["gh"] + args, env)
+    return subprocess.run([real] + args, input=stdin_data, env=env).returncode
+
+
+def main(argv):
+    t0 = time.time()
+    args = argv[1:]
+    real = real_gh()
+    if real is None:
+        print("leak-guard gh: no real gh found on PATH (only this wrapper); install gh", file=sys.stderr)
+        return 127
+    repos = guarded_repos()
+    if not repos:
+        return run_real(real, args, None)
+    command = command_name(args)
+    skip = os.environ.get("LEAK_GUARD_SKIP", "").strip()
+    texts = Texts()
+    try:
+        name, texts = decide(args, repos, texts)
+        if not name:
+            return run_real(real, args, texts.stdin if texts else None)
+        command = name
+        if skip:
+            log(command, "skip", "override", 0, t0)
+            print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
+            return run_real(real, args, texts.stdin)
+        if not texts.items:
+            log(command, "pass", "none", 0, t0)
+            return run_real(real, args, texts.stdin, True)
+        ok, layer, findings, verdict = run_guard(texts, t0, command)
+        if not ok:
+            log(command, "block", layer, findings, t0)
+            print("leak-guard gh: BLOCKED. `gh %s` was not run." % command, file=sys.stderr)
+            return 1
+        log(command, "pass", layer, findings, t0)
+        return run_real(real, args, texts.stdin, True)
+    except Refuse as r:
+        if skip:
+            log(command, "skip", "override", 0, t0)
+            print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
+            return run_real(real, args, texts.stdin)
+        log(command, "block", "wrapper", 0, t0)
+        print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"<reason>\" gh ..." % (r, command), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

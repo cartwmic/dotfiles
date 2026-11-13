@@ -171,7 +171,7 @@ class PreCommit(Base):
         self.stage("notes.txt", "fine line\nthis names FooCo here\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("notes.txt:2: fooco", done.stderr)
+        self.assertIn("notes.txt:2: term 1", done.stderr)
         self.assertIn("layer 1", done.stderr)
         self.assertEqual(self.calls(), 0)
         rec = self.log()[-1]
@@ -182,14 +182,14 @@ class PreCommit(Base):
         self.stage("b.txt", "FOOCO\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1)
-        self.assertIn("a.txt:1: bar.*baz", done.stderr)
-        self.assertIn("b.txt:1: fooco", done.stderr)
+        self.assertIn("a.txt:1: term 2", done.stderr)
+        self.assertIn("b.txt:1: term 1", done.stderr)
 
     def test_a_term_in_a_file_name_blocks(self):
         self.stage("fooco-notes.txt", "harmless text\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("fooco-notes.txt:0: fooco", done.stderr)
+        self.assertIn("fooco-notes.txt:0: term 1", done.stderr)
 
     def test_a_term_only_in_a_removed_line_does_not_block(self):
         (self.repo / "old.txt").write_text("fooco was here\nkeep\n")
@@ -330,21 +330,21 @@ class PreCommit(Base):
         self.git("mv", "plain.txt", "fooco-renamed.txt")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("fooco-renamed.txt:0: fooco", done.stderr)
+        self.assertIn("fooco-renamed.txt:0: term 1", done.stderr)
 
     def test_an_empty_new_file_with_a_term_in_its_name_blocks(self):
         (self.repo / "fooco-empty.txt").write_text("")
         self.git("add", "fooco-empty.txt")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("fooco-empty.txt:0: fooco", done.stderr)
+        self.assertIn("fooco-empty.txt:0: term 1", done.stderr)
 
     def test_a_binary_file_with_a_term_in_its_name_blocks_on_the_name(self):
         (self.repo / "fooco-image.bin").write_bytes(b"\x00\x01\x02 binary")
         self.git("add", "fooco-image.bin")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("fooco-image.bin:0: fooco", done.stderr)
+        self.assertIn("fooco-image.bin:0: term 1", done.stderr)
 
     def test_a_binary_file_with_a_clean_name_is_blocked_because_it_cannot_be_read(self):
         (self.repo / "image.bin").write_bytes(b"\x00\x01\x02 fooco inside")
@@ -361,7 +361,7 @@ class PreCommit(Base):
         self.stage("notes.txt", "++ names fooco here\n+++ b/other.txt\nfine\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("notes.txt:1: fooco", done.stderr)
+        self.assertIn("notes.txt:1: term 1", done.stderr)
         self.assertNotIn("other.txt", done.stderr)
 
     def test_leak_false_with_findings_is_contradictory_and_blocks(self):
@@ -383,7 +383,7 @@ class PreCommit(Base):
         self.stage("notes.txt", "a quiet sentence\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("line 2", done.stderr)
+        self.assertIn("term 2 of the terms file", done.stderr)
         self.assertNotIn("SECRETTERM", done.stderr)
         text = (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text()
         self.assertNotIn("SECRETTERM", text)
@@ -432,7 +432,7 @@ class PreCommit(Base):
         self.stage("x.dat", "this names fooco\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("x.dat:1: fooco", done.stderr)
+        self.assertIn("x.dat:1: term 1", done.stderr)
 
     def test_an_existing_wide_log_file_is_made_private(self):
         d = self.home / ".local" / "state" / "leak-guard"
@@ -453,7 +453,7 @@ class PreCommit(Base):
     def test_commit_msg_blocks_a_term_in_the_message_scans_hash_lines_and_stops_at_the_scissors(self):
         done = self.guard("commit-msg", self.message_file("subject\n\nbody names fooco\n"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("COMMIT-MESSAGE:3: fooco", done.stderr)
+        self.assertIn("COMMIT-MESSAGE:3: term 1", done.stderr)
         commented = self.guard("commit-msg", self.message_file("subject\n\n# a real line that git keeps with -m, naming fooco\n"))
         self.assertEqual(commented.returncode, 1, "a # line can be part of the message, so it is scanned; the override is the way out")
         scissors = "subject\n\nquiet body\n# ------------------------ >8 ------------------------\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+names fooco in the verbose diff\n"
@@ -499,7 +499,7 @@ class PreCommit(Base):
         self.stage("sub-dir-notes.txt", "names fooco here\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertRegex(done.stderr, r"(?m)^  sub-dir-notes\.txt:1: fooco$")
+        self.assertRegex(done.stderr, r"(?m)^  sub-dir-notes\.txt:1: term 1$")
 
     def test_a_textconv_driver_and_an_external_diff_in_global_config_cannot_hide_content(self):
         (self.home / ".gitconfig").write_text('[diff "hide"]\n\ttextconv = echo redacted #\n[diff]\n\texternal = echo nothing-to-see #\n')
@@ -507,14 +507,14 @@ class PreCommit(Base):
         self.stage("x.dat", "this names fooco\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertRegex(done.stderr, r"(?m)^  x\.dat:1: fooco$")
+        self.assertRegex(done.stderr, r"(?m)^  x\.dat:1: term 1$")
 
     def test_a_global_color_setting_and_diff_algorithm_do_not_change_the_result(self):
         (self.home / ".gitconfig").write_text("[color]\n\tui = always\n[diff]\n\talgorithm = patience\n\tcolorMoved = zebra\n")
         self.stage("notes.txt", "names fooco\n")
         done = self.guard("pre-commit")
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertRegex(done.stderr, r"(?m)^  notes\.txt:1: fooco$")
+        self.assertRegex(done.stderr, r"(?m)^  notes\.txt:1: term 1$")
 
     def test_usage_errors_are_64(self):
         self.assertEqual(self.guard().returncode, 64)
@@ -556,7 +556,7 @@ class PrePush(Base):
         tip = self.commit("two.txt", "clean\n")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("one.txt:1: fooco", done.stderr)
+        self.assertIn("one.txt:1: term 1", done.stderr)
 
     def test_an_existing_branch_checks_remote_to_local_and_not_older_commits(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -576,7 +576,7 @@ class PrePush(Base):
         tip = self.commit("new.txt", "now it names fooco\n")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, old))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("new.txt:1: fooco", done.stderr)
+        self.assertIn("new.txt:1: term 1", done.stderr)
 
     def test_a_committed_rename_to_a_term_name_blocks_at_pre_push(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -587,7 +587,7 @@ class PrePush(Base):
         tip = self.git("rev-parse", "HEAD").stdout.strip()
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, old))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("fooco-renamed.txt:0: fooco", done.stderr)
+        self.assertIn("fooco-renamed.txt:0: term 1", done.stderr)
 
     def test_a_new_branch_with_no_known_remote_base_is_blocked_not_scanned_from_the_start(self):
         lonely = self.tmp / "lonely"
@@ -620,7 +620,7 @@ class PrePush(Base):
         tip = self.commit("clean.txt", "a quiet sentence\n")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/main", remote_ref="refs/heads/fooco-branch"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("refs/heads/fooco-branch:0: fooco", done.stderr)
+        self.assertIn("refs/heads/fooco-branch:0: term 1", done.stderr)
 
     def test_a_term_added_in_one_commit_and_removed_in_the_next_is_still_caught(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -630,7 +630,7 @@ class PrePush(Base):
         self.assertNotIn("fooco", net, "the net diff is clean: only the history holds the term")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("notes.txt:2: fooco", done.stderr)
+        self.assertIn("notes.txt:2: term 1", done.stderr)
         self.assertIn("[commit ", done.stderr)
 
     def test_a_file_added_and_deleted_across_commits_is_checked_for_its_name_and_content(self):
@@ -692,7 +692,7 @@ class PrePush(Base):
         tip = self.finish_merge("resolved with fooco in it\n")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/left"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("shared.txt:1: fooco", done.stderr)
+        self.assertIn("shared.txt:1: term 1", done.stderr)
 
     def test_a_clean_merge_resolution_passes_and_only_its_own_line_is_sent(self):
         self.merge_fixture()
@@ -724,7 +724,7 @@ class PrePush(Base):
         self.assertEqual(len(self.git("rev-list", "--parents", "-n", "1", tip).stdout.split()) - 1, 3)
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/one"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("extra.txt:1: fooco", done.stderr)
+        self.assertIn("extra.txt:1: term 1", done.stderr)
 
     def test_a_merged_signed_tags_mergetag_header_is_checked(self):
         """git records a `mergetag` header (the merged tag's name, tagger and message) when a SIGNED tag is merged; this builds such a merge commit by hand."""
@@ -742,7 +742,7 @@ class PrePush(Base):
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("COMMIT-HEADER", done.stderr)
-        self.assertIn("fooco", done.stderr)
+        self.assertIn("term 1", done.stderr)
 
     def test_an_empty_commit_with_a_term_in_its_message_is_blocked_at_pre_push(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -750,7 +750,7 @@ class PrePush(Base):
         tip = self.git("rev-parse", "HEAD").stdout.strip()
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("COMMIT-MESSAGE:1: fooco", done.stderr)
+        self.assertIn("COMMIT-MESSAGE:1: term 1", done.stderr)
 
     def test_an_empty_commit_with_a_term_in_its_author_is_blocked_at_pre_push(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -801,7 +801,7 @@ class PrePush(Base):
         tip = self.commit("sub-dir-notes.txt", "names fooco here\n")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertRegex(done.stderr, r"(?m)^  sub-dir-notes\.txt:1: fooco")
+        self.assertRegex(done.stderr, r"(?m)^  sub-dir-notes\.txt:1: term 1")
         self.assertNotRegex(done.stderr, r"sub-dir-notes\.txt sub-dir-notes\.txt")
 
     def test_a_replace_ref_that_hides_a_leaky_commit_blocks_the_push(self):
@@ -843,7 +843,7 @@ class PrePush(Base):
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(outer, ref="refs/tags/outer"))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("TAG-OBJECT", done.stderr)
-        self.assertIn("fooco", done.stderr)
+        self.assertIn("term 1", done.stderr)
 
     def test_a_remote_with_no_branches_says_so_and_points_to_the_override(self):
         empty = self.tmp / "empty.git"
@@ -962,7 +962,7 @@ class PrePush(Base):
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("remote sha unknown", done.stderr)
         self.assertIn("run git fetch", done.stderr)
-        self.assertIn("new.txt:1: fooco", done.stderr)
+        self.assertIn("new.txt:1: term 1", done.stderr)
 
     def test_a_push_to_a_url_is_mapped_to_its_remote_and_uses_that_remotes_tracking_refs(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -1005,10 +1005,10 @@ class PrePush(Base):
         tip = self.commit("clean.txt", "a quiet sentence\n")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/heads/fooco-branch"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("refs/heads/fooco-branch:0: fooco", done.stderr)
+        self.assertIn("refs/heads/fooco-branch:0: term 1", done.stderr)
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip, ref="refs/tags/v1-fooco"))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("refs/tags/v1-fooco:0: fooco", done.stderr)
+        self.assertIn("refs/tags/v1-fooco:0: term 1", done.stderr)
 
     def test_an_annotated_tag_message_is_checked(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -1018,14 +1018,14 @@ class PrePush(Base):
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tag, ref="refs/tags/v1"))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("TAG-OBJECT:", done.stderr)
-        self.assertIn("fooco", done.stderr)
+        self.assertIn("term 1", done.stderr)
 
     def test_a_leak_in_a_commit_message_blocks(self):
         self.git("checkout", "-q", "-b", "feature")
         tip = self.commit("clean.txt", "a quiet sentence\n", message="notes for fooco")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip))
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("COMMIT-MESSAGE:1: fooco", done.stderr)
+        self.assertIn("COMMIT-MESSAGE:1: term 1", done.stderr)
 
     def test_a_commit_message_is_sent_to_claude_too(self):
         self.git("checkout", "-q", "-b", "feature")
@@ -1044,7 +1044,7 @@ class PrePush(Base):
         lines = self.push_line(one, ref="refs/heads/one") + self.push_line(two, ref="refs/heads/two") + self.push_line(ZERO, "a" * 40, ref="refs/heads/gone")
         done = self.guard("pre-push", "origin", str(self.remote), stdin=lines)
         self.assertEqual(done.returncode, 1, done.stderr)
-        self.assertIn("two.txt:1: fooco", done.stderr)
+        self.assertIn("two.txt:1: term 1", done.stderr)
         only_delete = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(ZERO, "a" * 40, ref="refs/heads/gone"))
         self.assertEqual(only_delete.returncode, 0, only_delete.stderr)
 
@@ -1077,7 +1077,7 @@ class PrePush(Base):
         run("reset", "-q")                      # nothing staged: an empty commit, whose message only commit-msg can see
         empty = run("commit", "-q", "--allow-empty", "-m", "an empty commit naming fooco")
         self.assertNotEqual(empty.returncode, 0)
-        self.assertIn("COMMIT-MESSAGE:1: fooco", empty.stderr)
+        self.assertIn("COMMIT-MESSAGE:1: term 1", empty.stderr)
         run("add", "leak.txt")
         bypass = run("commit", "-q", "-m", "leaky", "--no-verify")
         self.assertEqual(bypass.returncode, 0, bypass.stderr)

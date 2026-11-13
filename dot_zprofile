@@ -1,4 +1,8 @@
 # Login zsh (Claude Code and Codex start `zsh -lc`) runs /etc/zprofile after ~/.zshenv, and its path_helper moves
 # /opt/homebrew/bin ahead of everything ~/.zshenv put on PATH. Put the op shim (see ~/.zshenv) first again.
 path=("$HOME/.local/share/op-shim" ${path:#"$HOME/.local/share/op-shim"})
+# The leak-guard gh wrapper's directory (work profile only, see ~/.zshenv) goes ahead of the real gh again after path_helper.
+if [ -d "$HOME/.local/share/leak-guard/bin" ]; then
+  path=("$HOME/.local/share/leak-guard/bin" ${path:#"$HOME/.local/share/leak-guard/bin"})
+fi
 export PATH
