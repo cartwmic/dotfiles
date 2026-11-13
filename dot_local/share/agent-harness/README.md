@@ -131,6 +131,17 @@ HTTP, no sign-in). It is on both desktop profiles, like TickTick and Hindsight: 
 `shx-note-image` (`dot_local/share/shx/README.md`) and the canonical skill `using-shartifacts` go with it. Test:
 `tests/shx/test_agent_access.py`.
 
+The entry sends two request headers so the server can tell which machine and which thread a call came from.
+`X-Origin` is the profile's machine, `personal` or `work`, a plain value from the template. `X-Thread` is written
+`${T3CODE_THREAD_ID:-}` in the canonical file and each harness reads the variable when a session runs, never at apply
+time (the apply installs the entry whether or not the variable is set):
+
+| Harness | How the thread gets there |
+|---|---|
+| Claude Code | Stores the header with the `${T3CODE_THREAD_ID:-}` text (single-quoted in `setup-mcp.sh`) and expands it itself at session start. Unset gives an empty header. Checked with a real session: `tests/shx/test_thread_header.py LiveClaude`. |
+| Codex | `env_http_headers = { "X-Thread" = "T3CODE_THREAD_ID" }`; Codex sends nothing when the variable is unset. |
+| Pi | The header becomes the command value `!printf %s "${T3CODE_THREAD_ID:-none}"`, which Pi runs when the session connects, with the session's environment. Pi fails a server whose header resolves to nothing, so an unset variable sends `none`. |
+
 ## Pattern-kill guard
 
 Agent sessions refuse `pkill` and `killall`, so a pattern kill cannot hit another agent's jobs (three incidents in two days, including a

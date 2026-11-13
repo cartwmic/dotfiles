@@ -19,7 +19,11 @@ ROOT = Path(__file__).resolve().parents[2]
 TMPL = ROOT / "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl"
 PROFILES_DOC = ROOT / "docs/profiles.md"
 PROFILES = ("personal", "axon-work-computer")
-ENTRY = {"type": "http", "url": "https://shartifacts.internal.cartwmic.com/mcp"}
+URL = "https://shartifacts.internal.cartwmic.com/mcp"
+MACHINE = {"personal": "personal", "axon-work-computer": "work"}
+# X-Origin is the profile's machine; X-Thread is ${T3CODE_THREAD_ID:-}, which each harness reads when a session runs, not at apply
+# time (tests/shx/test_thread_header.py).
+ENTRY = {"type": "http", "url": URL, "headers": {"X-Origin": "personal", "X-Thread": "${T3CODE_THREAD_ID:-}"}}
 DEPLOYED = (
     ".local/bin/shx-note-image",
     ".local/share/shx/shx.mjs",
@@ -84,12 +88,17 @@ class AgentAccessTest(unittest.TestCase):
         for profile in PROFILES:
             for os_name in (None, "linux", "darwin"):
                 with self.subTest(profile=profile, os=os_name):
-                    self.assertEqual(servers(profile, os_name)["shartifacts"], ENTRY)
+                    self.assertEqual(servers(profile, os_name)["shartifacts"],
+                                     {**ENTRY, "headers": {**ENTRY["headers"], "X-Origin": MACHINE[profile]}})
 
-    def test_mcp_entry_carries_no_secret_or_header(self):
-        # The server takes no sign-in, so the entry is the URL and nothing else (no ${VAR} placeholder, no headers).
-        self.assertEqual(set(servers("personal")["shartifacts"]), {"type", "url"})
-        self.assertNotIn("${", json.dumps(servers("personal")["shartifacts"]))
+    def test_mcp_entry_sends_the_machine_and_a_run_time_thread_and_no_secret(self):
+        # The server takes no sign-in: the headers are the machine (a plain value) and the thread, left as a
+        # ${T3CODE_THREAD_ID:-} reference for the session to fill in (the apply must not).
+        for profile, machine in MACHINE.items():
+            with self.subTest(profile=profile):
+                entry = servers(profile)["shartifacts"]
+                self.assertEqual(set(entry), {"type", "url", "headers"})
+                self.assertEqual(entry["headers"], {"X-Origin": machine, "X-Thread": "${T3CODE_THREAD_ID:-}"})
 
     def test_command_and_skill_deploy_on_both_profiles(self):
         for profile in PROFILES:
