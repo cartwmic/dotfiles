@@ -100,7 +100,7 @@ Produce a convergent findings table and update the round tracker:
 
 ### Step 3: Stop Conditions
 
-Stop the review loop based on the P0+P1 trajectory in the round tracker:
+Stop the review loop based on the P0+P1 trajectory in the round tracker. Count only findings that were not declined in an earlier round. Blind reviewers raise a declined finding again; treat a repeat of a declined finding as declined. Follow-ups (test 4: out of scope or pre-existing) do not count toward P0+P1.
 
 - **P0+P1 = 0 for this round** — blockers resolved, move to Step 6
 - **P0+P1 flat or rising for 2 consecutive rounds** — treadmill, move to Step 6
@@ -110,9 +110,9 @@ Do NOT stop when P0 or unaddressed P1 findings exist and the trajectory is still
 
 ### Step 4: Apply Revisions
 
-For each finding, classify before applying:
+First run the four tests in `~/.local/share/agent-harness/finding-triage.md` on each finding. A finding that fails test 1, 2 or 3 is declined with its reason and recorded in the decision tracker, not applied. A finding that fails test 4 (intent) is a follow-up: it takes the new-scope path below and never blocks. A finding that passes takes the bug-fix path.
 
-- **Bug fix / gap fill** (reviewer identified a problem, fix is clear) → auto-apply
+- **Bug fix / gap fill** (passes the tests, fix is clear) → auto-apply
 - **New scope / feature addition** (fix requires adding something the plan didn't originally include) → record in the decision tracker, do **not** apply, do **not** pause the loop. It surfaces in Step 6 for the owner.
 
 Track every autonomous decision: what you changed (or deferred), what alternatives existed, whether it was a direct reviewer recommendation or your design choice. The tracker is internal — do not present it to the owner now.
@@ -128,7 +128,7 @@ Return immediately to Step 1 with the updated artifacts. Do **not** summarize th
 Present autonomous decisions from Step 4 as **three tiers**, sorted so the owner can skip what's safe to trust. Each row: stable `#` id, short decision name, one-sentence context (pick + consequence + alternative).
 
 - 🔴 **Need your call** — material UX consequences or behaviorally significant; pick is genuinely contestable.
-- 🟡 **Worth a glance** — real tradeoffs, conservative pick made; flag for visibility, not approval.
+- 🟡 **Worth a glance** — real tradeoffs, conservative pick made; flag for visibility, not approval. Declined findings go here too, each with the test it failed and why, so the owner can overrule. List follow-ups here as well, marked for a follow-up.
 - 🟢 **Trust me, not consequential** — sane defaults, cosmetic, mechanically derived, or already explicitly approved.
 
 ```
@@ -177,6 +177,7 @@ Run one last blind review round against the cleaned-up artifacts. This catches i
 | Leaking prior findings into a reviewer prompt "for context" | Blind by default — break only with explicit user instruction |
 | Auto-applying scope additions without flagging | Distinguish bug fixes from new scope in Step 4 |
 | No round tracker — can't tell if converging | Maintain the P0/P1 table every round |
+| Applying a finding because a reviewer insisted, without the four tests | Run `finding-triage.md` in Step 4; decline what fails and list it in Step 6 |
 | Chasing P3s forever | Stop condition keys off P0+P1 trajectory, not total count |
 | Skipping artifact cleanup | Review rounds cause semantic bleed between artifacts |
 | Skipping backlog cross-reference | Artifacts drift from the original goal over many rounds |

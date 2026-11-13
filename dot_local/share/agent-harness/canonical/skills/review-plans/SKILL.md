@@ -56,6 +56,8 @@ For other missing inputs (requirements/constraints), state assumptions explicitl
 - `P2` Medium: meaningful clarity/maintainability/testing gap
 - `P3` Low: polish or optional optimization
 
+A problem outside the plan's stated scope, especially one that existed before the plan, is not P0 to P2. Put it under Follow-ups.
+
 Do not inflate severity. Keep findings specific and actionable.
 Escalate severity when an unproven assumption or weak design choice can cascade into major rework.
 
@@ -66,9 +68,10 @@ Always return:
 2. Challenged assumptions (what was challenged and why)
 3. Stronger alternatives for key design/implementation decisions
 4. Open questions/assumptions
-5. Verdict (`approve` or `needs revision`)
-6. Minimal revision checklist the author can apply
-7. Approval prompt: ask whether to apply approved edits and whether to commit them
+5. Follow-ups (problems outside the plan's scope or that existed before it; not part of the verdict)
+6. Verdict (`approve` or `needs revision`)
+7. Minimal revision checklist the author can apply
+8. Approval prompt: ask whether to apply approved edits and whether to commit them
 
 Use this concise finding format:
 - `[P1] Missing rollback path` - Rotation service migration has no backout step; add explicit revert commands and state restoration checks.

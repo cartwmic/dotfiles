@@ -36,7 +36,9 @@ A finding is **blocking** only when it has all four:
 - **consequence**: what a user would hit in ordinary single-user use.
 - **component**: the part of the system it is in (a module, command or feature), in your own words.
 
-Data loss, corruption or a broken promised outcome always blocks, however narrow the trigger.
+Judge each finding against the change's stated intent and scope. A problem outside it, especially one that existed before the change, is a note that starts "for a follow-up:". It never blocks.
+
+Data loss, corruption or a broken promised outcome in what the change touches or promises always blocks, however narrow the trigger.
 
 Everything else is a **note**. A note needs no extra round and no disposition; it goes to the residuals. Preferences, wishes and style are notes. Name machinery that could be removed while the required behaviour stays; that is a note unless it breaks a principle. A pass on principle 4 or 11 cites its evidence.
 

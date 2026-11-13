@@ -41,6 +41,8 @@ For each substantive critique, discuss with the user one at a time:
 - "The contextual reviewer found A and B are the same issue listed twice. Merge them?"
 - "The contextual reviewer thinks the effort estimate for C is too optimistic. Revise?"
 
+Before you ask about a critique, run the four tests in `~/.local/share/agent-harness/finding-triage.md` on it. Give your recommendation with the question: act on it, or decline it and name the test it failed. The user decides.
+
 ## Step 4: Socratic Organization
 
 After incorporating review feedback, guide the user through plan organization:
@@ -97,4 +99,10 @@ Write `docs/desloppify/desloppify-plan.md`:
 
 ## Adversarial Review Summary
 [Brief record of what reviews found and how it shaped the final plan]
+
+### Declined critiques
+[Each declined critique with the test it failed and why]
+
+### Follow-ups
+[Each critique that fails test 4 (out of scope or pre-existing), not part of this plan]
 ```
