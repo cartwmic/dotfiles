@@ -6,7 +6,7 @@
 
 The hub applies to the personal profile on any OS and is n/a on every other profile. Templates are rendered with the real chezmoi and the
 real gate text; the pretend OS (darwin or linux) is `--override-data '{"chezmoi":{"os":...}}'`, which reaches `includeTemplate` too (the
-hub-n/a-on-work-or-termux checks below would fail if it did not). They are then run as modify scripts. The ApplyPathTest class runs a
+t3_hub cases, which still read the OS, would fail if it did not). They are then run as modify scripts. The ApplyPathTest class runs a
 real `chezmoi apply` into a throwaway HOME on the OS the test runs on (macOS or Linux). No real HOME, no 1Password, no network.
 
     python3 -m unittest discover -s tests/hub -v
