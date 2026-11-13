@@ -708,30 +708,54 @@ def git(cwd, *args):
     return done.stdout
 
 
-def worktree(cwd):
+def gitlinks(wt):
+    """The submodule paths: index entries of mode 160000. They show up in `ls-files` as directories (empty when not initialised)."""
+    rows = git(wt, "ls-files", "-s", "-z").split(b"\0")
+    return {os.fsdecode(r.split(b"\t", 1)[1]) for r in rows if r.startswith(b"160000 ")}
+
+
+def worktree(cwd, skipped=None):
+    """(worktree root, shared git folder, files to ship). Submodules are left out; their paths are appended to `skipped` when given.
+    Any other directory in the list (such as a nested repo that is not a submodule) is refused."""
     wt = git(cwd, "rev-parse", "--show-toplevel").decode().strip()
     common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()
     files = [os.fsdecode(p) for p in git(wt, "ls-files", "-co", "--exclude-standard", "-z").split(b"\0") if p]
     files = [p for p in files if os.path.lexists(os.path.join(wt, p))]  # deleted but not yet staged
+    links = gitlinks(wt)
+    if skipped is not None:
+        skipped.extend(sorted(p for p in files if p in links))
+    files = [p for p in files if p not in links]
     for p in files:
         full = os.path.join(wt, p)
         if os.path.isdir(full) and not os.path.islink(full):
-            raise Unavailable("%s is a directory in the file list (a submodule); kgate does not ship those" % p)
+            raise Unavailable("%s is a directory in the file list (not a submodule: a nested repo or a stray directory); kgate does not ship those" % p)
     return wt, common, files
 
 
-def archive(wt, common, files, extra, history=True):
-    """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: a kubectl cluster rebuilds a one-commit repo in the pod), plus extra {name: bytes}."""
+def archive(wt, common, files, extra, history=True, skipped=()):
+    """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: a kubectl cluster rebuilds a one-commit repo in the pod), plus extra {name: bytes}.
+    With history, each skipped submodule gets an empty directory, so the shipped .git and the tree agree (git status is clean in the pod), and its repository under modules/ stays out."""
     buf = io.BytesIO()
     root = lambda tarinfo: (setattr(tarinfo, "uid", 0), setattr(tarinfo, "gid", 0),
                             setattr(tarinfo, "uname", ""), setattr(tarinfo, "gname", ""), tarinfo)[-1]
+
+    def no_modules(base):
+        """Drops <base>/modules and <base>/worktrees/<name>/modules: the submodules' own repositories, whose files are not shipped."""
+        def keep(tarinfo):
+            rel = tarinfo.name[len(base):].lstrip("/")
+            return None if re.match(r"(worktrees/[^/]+/)?modules(/|$)", rel) else root(tarinfo)
+        return keep
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
         for p in files:
             tar.add(os.path.join(wt, p), arcname=(wt + "/" + p).lstrip("/"), recursive=False, filter=root)
         if history:
-            tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=root)
+            for p in skipped:
+                info = tarfile.TarInfo((wt + "/" + p).lstrip("/"))
+                info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
+                tar.addfile(root(info))
+            tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=no_modules((wt + "/.git").lstrip("/")))
             if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
-                tar.add(common, arcname=common.lstrip("/"), filter=root)
+                tar.add(common, arcname=common.lstrip("/"), filter=no_modules(common.lstrip("/")))
         for name, data in extra.items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
@@ -1372,7 +1396,10 @@ class Job:
 
     def run(self):
         o = self.o
-        wt, common, files = worktree(os.getcwd())
+        skipped = []
+        wt, common, files = worktree(os.getcwd(), skipped)
+        if skipped:
+            self.note("not shipping submodules: " + ", ".join(skipped))
         self.rec["repo"] = os.path.basename(os.path.dirname(common)) if common.endswith("/.git") else os.path.basename(common)
         head = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.rec["head"] = head.stdout.decode().strip() or None
@@ -1388,7 +1415,7 @@ class Job:
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:
             shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
-        tar_bytes = archive(wt, common, files, shipped, history=self.cluster.kind != "kubectl")
+        tar_bytes = archive(wt, common, files, shipped, history=self.cluster.kind != "kubectl", skipped=skipped)
         self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
         self.reachable()
         self.sweep()
