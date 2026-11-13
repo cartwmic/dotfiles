@@ -179,7 +179,9 @@ class Decisions(WrapperBase):
 
 
 def installed_gh():
-    """The first real gh on PATH (not a copy of this wrapper), or None."""
+    """The gh named by LEAK_GUARD_TEST_GH, else the first real gh on PATH (not a copy of this wrapper), or None."""
+    if os.environ.get("LEAK_GUARD_TEST_GH"):
+        return os.environ["LEAK_GUARD_TEST_GH"]
     for d in os.environ.get("PATH", "").split(os.pathsep):
         cand = os.path.join(d, "gh")
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
@@ -210,11 +212,18 @@ def help_flags(gh, *command):
 
 @unittest.skipUnless(installed_gh(), "needs the real gh")
 class FlagTables(unittest.TestCase):
-    """The wrapper's FLAGS table is gh's own flag list. A gh upgrade that adds, drops or changes a flag shows up here."""
+    """The wrapper's FLAGS table is gh's own flag list, as of the release named by FLAGS_FROM_GH. Where the installed gh is that release, the table must match
+    it. Another release is reported and not compared: a newer gh may list flags the table does not, and the wrapper refuses an unknown flag for a guarded
+    repository until the table is regenerated (docs/leak-guard.md, Limits). To compare against a particular gh, set LEAK_GUARD_TEST_GH to its path."""
     W = load_wrapper()
 
     def test_every_table_matches_what_the_installed_gh_lists_for_that_command(self):
         gh = installed_gh()
+        version = subprocess.run([gh, "--version"], capture_output=True, text=True).stdout.split()[2]
+        if version != self.W.FLAGS_FROM_GH:
+            print("\nFlagTables: the installed gh is %s and the tables are from %s, so they are not compared; regenerate FLAGS from `gh <command> --help` of "
+                  "the new release and set FLAGS_FROM_GH" % (version, self.W.FLAGS_FROM_GH), file=sys.stderr)
+            return
         for (group, verb), spec in self.W.FLAGS.items():
             with self.subTest(group=group, verb=verb):
                 ours = set()
@@ -225,8 +234,10 @@ class FlagTables(unittest.TestCase):
                 theirs = help_flags(gh, *command)
                 # gh accepts -h for --help but does not list it
                 ours = {("", l, t) if l == "help" else (s, l, t) for s, l, t in ours}
-                self.assertEqual(ours, theirs, "the FLAGS table for `gh %s` no longer matches `gh %s --help` (gh %s)" % (" ".join(command), " ".join(command),
-                                 subprocess.run([gh, "--version"], capture_output=True, text=True).stdout.split()[2]))
+                self.assertEqual(ours, theirs, "the FLAGS table for `gh %s` no longer matches `gh %s --help` (gh %s)" % (" ".join(command), " ".join(command), version))
+
+    def test_the_tables_name_the_gh_release_they_came_from(self):
+        self.assertRegex(self.W.FLAGS_FROM_GH, r"^\d+\.\d+\.\d+$")
 
 
 class WrapperRepo(WrapperBase):
@@ -384,6 +395,14 @@ class WrapperText(Decisions):
     def test_a_command_with_no_text_flag_runs_without_a_check(self):
         self.assertRan(self.gh("pr", "edit", "5", "--add-label", "bug"), "pr", "edit", "5", "--add-label", "bug")
         self.assertEqual(self.claude_calls(), 0)
+
+    def test_attach_uploads_files_whose_content_cannot_be_read_so_it_is_refused(self):
+        for group, verb in (("pr", "create"), ("pr", "edit"), ("pr", "comment"), ("issue", "create"), ("issue", "edit"), ("issue", "comment")):
+            for attach in (["--attach", "shot.png"], ["--attach=shot.png#alt text"]):
+                with self.subTest(group=group, verb=verb, attach=attach):
+                    title = [] if verb == "comment" else ["-t", "x"]
+                    self.assertIn("--attach would upload", self.refused(group, verb, *title, "-b", CLEAN, *attach))
+        self.assertEqual(self.decide("pr", "create", "-t", "x", "-b", CLEAN)[0], "pr create")        # without it, checked as usual
 
     def test_release_create_with_asset_files_is_refused_and_the_tag_is_checked_as_text(self):
         self.assertIn("asset files", self.refused("release", "create", "v1", "CHANGES.txt", "-t", "x", "--notes", CLEAN))
@@ -901,7 +920,7 @@ class WrapperRealGh(WrapperBase):
         self.assertRan(done, "pr", "list")
 
     def test_no_real_gh_on_path_exits_127_with_a_message(self):
-        done = self.gh("pr", "list", env={"PATH": "%s:/usr/bin:/bin" % self.wbin}, timeout=20)
+        done = self.gh("pr", "list", env={"PATH": str(self.wbin)}, timeout=20)          # only the wrapper's own directory: a runner may have a gh in /usr/bin
         self.assertEqual(done.returncode, 127)
         self.assertIn("no real gh", done.stderr)
 

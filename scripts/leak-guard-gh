@@ -35,20 +35,21 @@ NOTEXT = {"pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", 
 NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help", "version", "search", "status", "browse", "ssh-key", "gpg-key", "gist",
             "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview"}
 
-# The flags of every command whose text the wrapper reads, as `gh <group> <verb> --help` lists them (gh 2.97.0; tests/leak-guard/test_gh_wrapper.py,
-# FlagTables, compares this table with the installed gh and fails when they differ). "s:long" is a short and a long flag, and a trailing "=" means the flag
+# The flags of every command whose text the wrapper reads, as `gh <group> <verb> --help` lists them in the gh release named by FLAGS_FROM_GH
+# (tests/leak-guard/test_gh_wrapper.py, FlagTables, compares this table with an installed gh of that version and fails when they differ). "s:long" is a short and a long flag, and a trailing "=" means the flag
 # takes a value. The wrapper parses a command's arguments with its own table only, following gh's flag library for the forms in parse_flags, and refuses any flag that is not in it.
+FLAGS_FROM_GH = "2.103.3"
 FLAGS = {
-    ("pr", "create"): "a:assignee=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
-    ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
-    ("pr", "comment"): "b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
+    ("pr", "create"): "a:assignee=,attach=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
+    ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
+    ("pr", "comment"): "attach=,b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
     ("pr", "review"): "a:approve,b:body=,F:body-file=,c:comment,r:request-changes,h:help,R:repo=",
     ("pr", "merge"): "admin,A:author-email=,auto,b:body=,F:body-file=,d:delete-branch,disable-auto,match-head-commit=,m:merge,r:rebase,s:squash,t:subject=,h:help,R:repo=",
     ("pr", "close"): "c:comment=,d:delete-branch,h:help,R:repo=",
     ("pr", "reopen"): "c:comment=,h:help,R:repo=",
-    ("issue", "create"): "a:assignee=,blocked-by=,blocking=,b:body=,F:body-file=,e:editor,l:label=,m:milestone=,parent=,p:project=,recover=,T:template=,t:title=,type=,w:web,h:help,R:repo=",
-    ("issue", "edit"): "add-assignee=,add-blocked-by=,add-blocking=,add-label=,add-project=,add-sub-issue=,b:body=,F:body-file=,m:milestone=,parent=,remove-assignee=,remove-blocked-by=,remove-blocking=,remove-label=,remove-milestone,remove-parent,remove-project=,remove-sub-issue=,remove-type,t:title=,type=,h:help,R:repo=",
-    ("issue", "comment"): "b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
+    ("issue", "create"): "a:assignee=,attach=,blocked-by=,blocking=,b:body=,F:body-file=,e:editor,l:label=,m:milestone=,parent=,p:project=,recover=,T:template=,t:title=,type=,w:web,h:help,R:repo=",
+    ("issue", "edit"): "add-assignee=,add-blocked-by=,add-blocking=,add-label=,add-project=,add-sub-issue=,attach=,b:body=,F:body-file=,m:milestone=,parent=,remove-assignee=,remove-blocked-by=,remove-blocking=,remove-label=,remove-milestone,remove-parent,remove-project=,remove-sub-issue=,remove-type,t:title=,type=,h:help,R:repo=",
+    ("issue", "comment"): "attach=,b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
     ("issue", "close"): "c:comment=,duplicate-of=,r:reason=,h:help,R:repo=",
     ("issue", "reopen"): "c:comment=,h:help,R:repo=",
     ("release", "create"): "discussion-category=,d:draft,fail-on-no-commits,generate-notes,latest,n:notes=,F:notes-file=,notes-from-tag,notes-start-tag=,p:prerelease,target=,t:title=,verify-tag,h:help,R:repo=",
@@ -308,6 +309,8 @@ def parse_text(args, group, verb):
                    "value, and the text after it cannot be checked. Use the long flags gh lists, or update the table" % (unknown + 2, group, verb))
     elif missing is not None:
         refusal = "the flag at argument %d has no value" % (missing + 2)
+    if "attach" in names:      # an attached image or video is uploaded to GitHub, and its content cannot be read
+        refusal = refusal or "--attach would upload files whose content cannot be checked, as `gh release upload` is refused for a guarded repository. Create it without --attach"
     for flag in sorted(names & COMPOSED.get((group, verb), set())):
         refusal = refusal or "--%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % flag
     if (group, verb) == ("release", "create"):
