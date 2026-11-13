@@ -44,6 +44,7 @@ Complete each phase before the next.
 3. **Check recent changes.** `git diff`, recent commits, new dependencies, env differences.
 4. **Instrument component boundaries.** For multi-component systems (CI → build → sign, API → service → DB), log inputs and outputs at each boundary, then run once to see WHERE it breaks before investigating WHY.
 5. **Trace data flow backward.** Where does the bad value originate? See `root-cause-tracing.md` for the full backward-tracing technique.
+6. **Ask whether the state that triggered the symptom is legitimate.** If the system may be in that state, the code that broke on it is the root cause, and handling the state there is the fix. If the state should never exist, a check where it broke hides the bug: find what produced the state. Guards, retries, swallowed errors and clamped values are the usual ways to hide a bug.
 
 ### Phase 2: Pattern Analysis
 
@@ -61,14 +62,14 @@ Complete each phase before the next.
 
 ### Phase 4: Implementation
 
-1. **Write a failing test first.** Automated if possible, one-off script otherwise. Use the `test-driven-development` skill.
+1. **Write a failing test first.** Automated if possible, one-off script otherwise. In a Loop Engine run, the lean-change old-versus-new check enforces failing-first (`using-lean-change-provider`, "The old-vs-new check"). Outside a run, write the failing test or script and run it before the fix.
 2. **Make ONE change.** No "while I'm here" cleanups. No bundled refactors.
 3. **Verify:** test passes, nothing else broke, issue actually resolved.
-4. **If the fix did not work:** count attempts. If <3, return to Phase 1 with new evidence. **If ≥3, STOP — see Phase 4.5.**
+4. **If the fix did not work:** count attempts. After the first, return to Phase 1 with the new evidence. **After the second, do not write a third fix yet:** state in one sentence the premise both fixes assumed. Make one observation that would come out differently if the premise were false, and record the result. If it refutes the premise, the cause is elsewhere: return to Phase 1 with that evidence. If it confirms the premise, ask the next "why": the earlier fixes may have treated a consequence. **If the premise holds and fixes still fail, STOP — see Phase 4.5.**
 
-### Phase 4.5: After 3+ Failed Fixes — Question Architecture
+### Phase 4.5: Premise Holds, Fixes Still Fail — Question Architecture
 
-Pattern of architectural failure (not a wrong hypothesis):
+Reached only after the premise check in Phase 4 step 4 confirmed the premise. Pattern of architectural failure (not a wrong hypothesis):
 - Each fix surfaces a new problem somewhere else
 - Fixes require "massive refactoring" to land
 - Shared state / coupling keeps reappearing
@@ -111,7 +112,7 @@ When you see these: STOP. Return to Phase 1.
 | "Multiple fixes at once saves time" | Cannot isolate what worked. Causes new bugs. |
 | "Reference too long, I'll adapt the pattern" | Partial understanding guarantees bugs. Read it completely. |
 | "I see the problem, let me fix it" | Seeing symptoms ≠ understanding root cause. |
-| "One more fix" (after 2+ failures) | 3+ failures = architectural problem. See Phase 4.5. |
+| "One more fix" (after 2+ failures) | Two failed fixes share a premise. Test it first (Phase 4 step 4). |
 
 ## Quick Reference
 
@@ -121,7 +122,7 @@ When you see these: STOP. Return to Phase 1.
 | 2. Pattern | Find working examples, compare, list differences | Differences enumerated |
 | 3. Hypothesis | State one theory, test minimally | Confirmed, or new hypothesis |
 | 4. Implementation | Failing test → one fix → verify | Bug resolved, no regressions |
-| 4.5. Architecture | After 3+ failures, stop and re-evaluate | Architectural decision made with user |
+| 4.5. Architecture | Premise holds, fixes still fail: stop and re-evaluate | Architectural decision made with user |
 
 ## When the Process Reveals "No Root Cause"
 
@@ -132,11 +133,9 @@ Sometimes investigation shows the issue is genuinely environmental, timing-depen
 ## Supporting Techniques (this directory)
 
 - **`root-cause-tracing.md`** — backward trace through the call stack to find the original trigger
-- **`defense-in-depth.md`** — add validation at multiple layers after finding root cause
 - **`condition-based-waiting.md`** — replace arbitrary timeouts with condition polling
 - **`find-polluter.sh`** — bisect a test suite to find which test creates unwanted shared state
 
 ## Related Skills
 
-- **test-driven-development** — for the failing test in Phase 4
 - **verification-before-completion** — verify the fix actually worked before claiming success
