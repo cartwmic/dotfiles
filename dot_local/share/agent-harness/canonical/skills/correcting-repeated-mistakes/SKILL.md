@@ -12,8 +12,9 @@ Make a mistake that agents keep repeating impossible. Another written instructio
 A mistake class counts once it has happened twice. Sources:
 
 - Review findings logs: `~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl` and `~/.local/bin/agent-traces review report --item <item>`. Findings labelled `repeat` or `follow-on` are classes already; the log keys them by component, and the `label` event in `findings.jsonl` names the earlier finding (`of`), which the report does not print. A class across PRs shows only by searching all logs: `grep -l '"relation":"repeat"' ~/.local/share/agent-traces/emitted/review/*/findings.jsonl`.
+- Fix-a-fix commits in `git log`: commits that only repair an earlier fix. Often the best source. One run found 8 commits that did nothing but move line numbers in a doc. Read the log for repeated subjects and for the same file touched again and again.
 - Michael's corrections: coordinator playbook rules and the quotes behind them.
-- Reverts, review comments, commits that fix a fix, and comments that explain a workaround.
+- Reverts, review comments, and comments that explain a workaround.
 
 Name each class by what the agent did and what it should have done. If you cannot show two cases, it is not a class yet. Stop and say so.
 
@@ -29,9 +30,13 @@ Take the first level that makes the mistake impossible or loud. Say why you pass
 
 If deciding needs judgment, a check cannot own it: write the instruction and say so.
 
+Before you change a doc, schema or format, find what else reads or quotes it (grep for its name and path). Update those in the same change.
+
 ## 3. Prove it
 
-For each new check, show it fails on the real past mistake and passes now: rerun the old commit, or a copy of the bad code. Run the same command locally and where the repo's CI runs it. A check you only saw pass is not proven.
+For each new check, show it fails on the real past mistake and passes now: rerun the old commit, or a copy of the bad code. Run it the way the repo's gate runs it (CI, kgate or whatever the repo uses). A check you only saw pass is not proven.
+
+A fix that removes the mistake (an architecture fix) cannot fail on the past, because the mistake is gone. Add a guard check whose error names the fix, and show the guard fails on the past instance. Example: the fix drops line numbers from a doc; the guard fails on any line-number citation and says to cite the symbol instead.
 
 ## 4. Keep the record
 
