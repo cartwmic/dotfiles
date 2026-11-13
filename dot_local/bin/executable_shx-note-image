@@ -1,0 +1,11 @@
+#!/bin/sh
+# Picture of a drawn comment on a shartifacts page, and the check that tells shartifacts which comments lost their
+# place. The work is in ../share/shx/shx.mjs; this wrapper only finds node.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if ! command -v node >/dev/null 2>&1; then
+	printf '%s\n' '{"ok":false,"code":"missing_dependency","message":"node not found on PATH (shx-note-image needs Node 20 or newer)"}'
+	echo "[shx-note-image] ERROR: node not found on PATH" >&2
+	exit 4
+fi
+exec node "$HERE/../share/shx/shx.mjs" "$@"

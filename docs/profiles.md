@@ -46,6 +46,8 @@ The `(Linux)` rows match every personal Linux host, personal WSL included, not o
 
 Pi on Linux: `install-pi` links `~/.local/bin/pi` to `~/.pi/agent/bin/pi` (Linux only, both profiles run the task, only a Linux host acts). Reproduce by hand: `ln -s ~/.pi/agent/bin/pi ~/.local/bin/pi`, or `mise run install-pi`. The row is in README, "Linux on Arch (Omarchy)" table (Pi).
 
+Both profiles, by decision (no row, because no profile is left out): the shartifacts page server's MCP entry, the `shx-note-image` command and the `using-shartifacts` skill. Michael, 2026-11-13, on the question whether the work profile should get them (rule 272f08d0): "work profile should get sharitfacts as well".
+
 ## Local data keys
 
 Machine-specific values (hosts, addresses, vault items, work names) are not in this public repo. They live in the `data:` block of `~/.config/chezmoi/chezmoi.yaml` on each machine, next to `profile`. A key a profile needs fails the render with a message naming the key (`.chezmoitemplates/require_data`, and `require_work_data` for the work keys), so a machine never renders with a feature silently missing. Add the keys before you apply a change that needs them. `example.chezmoi.yaml` shows the shape with placeholder values.
