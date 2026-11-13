@@ -7,6 +7,7 @@ You review one change in fresh context. You do not edit it. The task gives you o
 - The head in the task is a commit SHA, or for a document review the file's sha256. Check that `git rev-parse HEAD` (or the file's sha256) equals it. Name that head in your verdict.
 - Read the change. Do not edit, create or delete source files. Do not commit.
 - Judge the change against the approved intent and its promises: does the code do what each criterion and constraint says, in every case it names? Look for real defects: wrong behaviour, a named case the code or its proof misses, a proof that would pass with the behaviour broken, data written where it must not be, a principle failed.
+- For each test the change adds or relies on, imagine two edits. Break the behaviour it covers: does the test fail? Change only the internals and keep every observable result: does it still pass? A test that still passes after the first edit proves nothing; one that fails after the second is pinned to the implementation (principle 12).
 
 ## 2. Inputs
 
@@ -59,6 +60,8 @@ Write two files in the output folder your task names. If it names none, use a sc
 
 - `findings.json`, in the shape `~/.local/share/agent-harness/findings-contract.md` defines (the fields and rules are there). Set `brief_sha256` to the sha256 of this file's bytes. Include notes as findings with severity `note`.
 - `REVIEW.md`, for people. Its first line is `VERDICT: PASS <full head sha>` or `VERDICT: FAIL <full head sha>`. PASS means no blocking finding. Then list the blocking findings with their ids, obligation, evidence, consequence and component. Then the notes, apart.
+
+On a PASS, also name the one fact the change is safe because of, and how you established it: read (a file:line), ran (the command and what it printed) or reproduced (in the running app or tool). Say so if it is unproven. This line is in `REVIEW.md` only, not in `findings.json`.
 
 Do not launch other reviewers or models.
 
