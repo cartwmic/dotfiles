@@ -32,7 +32,9 @@ shx-note-image check <base-url> <artifact-id>
 Renders the latest version at 390 x 844 and, for every open root comment that has a `quote` or an anchor, decides
 whether it is still there, by the rule of the frame (`web/runtime.js`, `locate`): a comment with a quote needs the
 quote's words on the page (whitespace matched loosely), in its anchor element or anywhere; one without a quote needs
-its anchor selector to match an element. It then posts `{"version": N, "results": [{"id", "found"}]}` to
+its anchor selector to match an element, and for a drawing that element must be the one drawn on (its `anchor_tag`
+and the first 120 characters of its text, `anchor_text`, both recorded in the stroke), since a path such as
+`p:nth-of-type(4)` names a slot that an edit can fill with something else. It then posts `{"version": N, "results": [{"id", "found"}]}` to
 `<base>/api/artifacts/<id>/comments/matches`. Resolved comments, replies and comments that point at nothing are left
 out. With nothing to check it posts nothing and starts no browser.
 

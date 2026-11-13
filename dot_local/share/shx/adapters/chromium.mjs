@@ -76,7 +76,9 @@ const DRAW = `((d, color, w, h) => {
 
 // Whether each comment still finds its place, by the same rule as the frame (web/runtime.js locate): a comment with a
 // quote needs the quote's words on the page, with whitespace matched loosely, in its anchor element or anywhere; one
-// without needs its anchor selector to match an element.
+// without needs its anchor selector to match an element, and for a drawing that element must be the one drawn on (the
+// same tag, the same first 120 characters of text), because a path such as p:nth-of-type(4) names a slot that an edit
+// fills with something else.
 const FIND = `((items) => {
   const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
   const textOf = (el) => norm(el.textContent) || norm(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title'));
@@ -86,11 +88,13 @@ const FIND = `((items) => {
     if (!(n.parentElement && n.parentElement.closest('script, style, template'))) all += n.data;
   }
   all = norm(all);
-  return items.map(({ id, quote, anchor }) => {
+  return items.map(({ id, quote, anchor, tag, text }) => {
     let el = null;
     try { el = anchor ? document.querySelector(anchor) : null; } catch {}
     const q = norm(quote);
-    return { id, found: q ? Boolean((el && textOf(el).includes(q)) || all.includes(q)) : el !== null };
+    if (q) return { id, found: Boolean((el && textOf(el).includes(q)) || all.includes(q)) };
+    const holds = el !== null && (!tag || el.tagName.toLowerCase() === tag) && (text == null || textOf(el).slice(0, 120) === text);
+    return { id, found: holds };
   });
 })`;
 

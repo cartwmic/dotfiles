@@ -328,6 +328,24 @@ class CheckTest(ShxTestCase):
         line = self.log_lines()[-1]
         self.assertEqual((line["command"], line["artifact"], line["version"], line["error"]), ("check", ARTIFACT, 2, None))
 
+    def test_a_drawing_is_found_only_on_the_element_it_was_drawn_on(self):
+        # The anchor path still finds an element in every case; only the first and the last are the one drawn on.
+        def drawn(id, tag, text):
+            st = stroke("#ff00ff", "#intro", {"x": 8, "y": 60, "w": 300, "h": 20})
+            st.update({"anchor_tag": tag, "anchor_text": text})
+            return {"id": id, "author": "person", "body": "look", "anchor": "#intro", "version": 1, "stroke": st}
+        older = stroke("#ff00ff", "#intro", {"x": 8, "y": 60, "w": 300, "h": 20})
+        comments = [
+            drawn("same", "p", "Sales rose each quarter."),
+            drawn("reworded", "p", "Revenue grew in every quarter."),
+            drawn("retagged", "h2", "Sales rose each quarter."),
+            {"id": "older", "author": "person", "body": "look", "anchor": "#intro", "version": 1, "stroke": older},
+        ]
+        server = self.serve(comments=comments)
+        out = self.shx("check", server.base, ARTIFACT)
+        self.assertEqual(out["results"], [{"id": "same", "found": True}, {"id": "reworded", "found": False},
+                                          {"id": "retagged", "found": False}, {"id": "older", "found": True}])
+
     def test_nothing_to_check_posts_nothing(self):
         server = self.serve(comments=[COMMENTS[-1]])
         self.assertEqual(self.shx("check", server.base, ARTIFACT), {"ok": True, "version": 2, "results": []})

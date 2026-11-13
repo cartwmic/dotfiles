@@ -152,7 +152,14 @@ export function checkItems(comments) {
     if (!c || c.parent || c.resolved || typeof c.id !== 'string') continue;
     const quote = typeof c.quote === 'string' ? c.quote : '';
     const anchor = (typeof c.anchor === 'string' && c.anchor) || (c.stroke && typeof c.stroke.anchor === 'string' ? c.stroke.anchor : '');
-    if (quote || anchor) items.push({ id: c.id, quote, anchor });
+    if (!quote && !anchor) continue;
+    const item = { id: c.id, quote, anchor };
+    // A drawing also says what its anchor was when it was drawn, so a path that now finds another element is not found.
+    if (!quote && c.stroke) {
+      if (typeof c.stroke.anchor_tag === 'string' && c.stroke.anchor_tag) item.tag = c.stroke.anchor_tag;
+      if (typeof c.stroke.anchor_text === 'string') item.text = c.stroke.anchor_text;
+    }
+    items.push(item);
   }
   return items;
 }
