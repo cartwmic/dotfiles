@@ -732,18 +732,30 @@ def worktree(cwd, skipped=None):
     return wt, common, files
 
 
-def archive(wt, common, files, extra, history=True):
-    """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: a kubectl cluster rebuilds a one-commit repo in the pod), plus extra {name: bytes}."""
+def archive(wt, common, files, extra, history=True, skipped=()):
+    """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: a kubectl cluster rebuilds a one-commit repo in the pod), plus extra {name: bytes}.
+    With history, each skipped submodule gets an empty directory, so the shipped .git and the tree agree (git status is clean in the pod), and its repository under modules/ stays out."""
     buf = io.BytesIO()
     root = lambda tarinfo: (setattr(tarinfo, "uid", 0), setattr(tarinfo, "gid", 0),
                             setattr(tarinfo, "uname", ""), setattr(tarinfo, "gname", ""), tarinfo)[-1]
+
+    def no_modules(base):
+        """Drops <base>/modules and <base>/worktrees/<name>/modules: the submodules' own repositories, whose files are not shipped."""
+        def keep(tarinfo):
+            rel = tarinfo.name[len(base):].lstrip("/")
+            return None if re.match(r"(worktrees/[^/]+/)?modules(/|$)", rel) else root(tarinfo)
+        return keep
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
         for p in files:
             tar.add(os.path.join(wt, p), arcname=(wt + "/" + p).lstrip("/"), recursive=False, filter=root)
         if history:
-            tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=root)
+            for p in skipped:
+                info = tarfile.TarInfo((wt + "/" + p).lstrip("/"))
+                info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
+                tar.addfile(root(info))
+            tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=no_modules((wt + "/.git").lstrip("/")))
             if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
-                tar.add(common, arcname=common.lstrip("/"), filter=root)
+                tar.add(common, arcname=common.lstrip("/"), filter=no_modules(common.lstrip("/")))
         for name, data in extra.items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
@@ -1403,7 +1415,7 @@ class Job:
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:
             shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
-        tar_bytes = archive(wt, common, files, shipped, history=self.cluster.kind != "kubectl")
+        tar_bytes = archive(wt, common, files, shipped, history=self.cluster.kind != "kubectl", skipped=skipped)
         self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
         self.reachable()
         self.sweep()

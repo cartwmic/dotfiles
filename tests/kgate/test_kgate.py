@@ -1838,6 +1838,32 @@ class Submodules(unittest.TestCase):
         self.assertIn((wt + "/a.txt").lstrip("/"), names)
         self.assertEqual([n for n in names if "vendor/lib" in n], [])
 
+    def test_the_history_archive_extracts_to_a_clean_tree_with_the_same_hash(self):
+        """The homelab ships .git, so the gitlinks stay in HEAD and the index: each skipped submodule gets an empty directory, and git in the pod sees nothing missing."""
+        add_initialised_submodule(self.repo, "vendor/my lib", self.tmp)
+        add_uninitialised_submodule(self.repo, "other")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "all")
+        skipped = []
+        wt, common, files = K.worktree(str(self.repo), skipped)
+        self.assertEqual(skipped, ["other", "vendor/my lib"])
+        out = self.tmp / "pod"
+        out.mkdir()
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(K.archive(wt, common, files, {}, history=True, skipped=skipped))) as tar:
+            names = tar.getnames()
+            tar.extractall(out)
+        pod = out / wt.lstrip("/")
+        for p in skipped:
+            self.assertTrue((pod / p).is_dir() and not os.listdir(pod / p), p)
+        self.assertEqual([n for n in names if "/.git/modules" in n], [], "a submodule's own repository is not shipped")
+        porcelain = subprocess.run(["git", "status", "--porcelain"], cwd=pod, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual((porcelain.returncode, porcelain.stdout), (0, b""))
+        self.assertEqual(subprocess.run(["git", "diff", "--quiet"], cwd=pod).returncode, 0)
+        pod_files, pod_skipped = K.worktree(str(pod))[2], []
+        self.assertEqual(pod_files, files)
+        self.assertEqual(K.tree_hash(str(pod), pod_files), K.tree_hash(wt, files))
+
 
 class Archive(unittest.TestCase):
     """What is shipped: the homelab keeps .git and the shared git folder; a kubectl cluster ships the files and the extras only."""
@@ -1954,8 +1980,9 @@ class KubectlBlack(unittest.TestCase):
         add_uninitialised_submodule(self.repo, "other")
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "submodules")
-        done = self.run_kgate("--", "sh", "-c", "ls vendor/lib | wc -l")
+        done = self.run_kgate("--", "sh", "-c", "echo ran-ok")
         self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-ok", done.stdout)
         self.assertIn("kgate: not shipping submodules: other, vendor/lib\n", done.stdout)
         self.assertEqual(done.stdout.count("not shipping submodules"), 1)
         rec = self.records()[-1]
@@ -1977,6 +2004,21 @@ class KubectlBlack(unittest.TestCase):
         self.assertIn("nested", done.stdout)
         self.assertEqual(self.kubectl_args(), [], "nothing reached the cluster")
 
+    def test_a_submodule_path_with_a_space_is_skipped_and_the_pod_hash_matches(self):
+        add_initialised_submodule(self.repo, "vendor/my lib", self.tmp)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "submodule with a space")
+        done = self.run_kgate("--", "sh", "-c", "echo ran-ok")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-ok", done.stdout)
+        self.assertIn("kgate: not shipping submodules: vendor/my lib\n", done.stdout)
+        rec = self.records()[-1]
+        self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
+        import tarfile
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            files = tar.extractfile("cache/%s/files.nul" % rec["id"]).read().split(b"\0")[:-1]
+        self.assertEqual([f for f in files if f.startswith(b"vendor")], [])
+        self.assertIn(b".gitmodules", files)
 
     def test_a_linked_worktree_whose_common_dir_is_outside_the_allow_list_is_accepted(self):
         """The common dir is not shipped on a kubectl cluster, so only the worktree's own top directory needs an emptyDir and a place on the allow-list."""
