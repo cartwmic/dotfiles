@@ -90,6 +90,7 @@ let now = Date.UTC(2026, 9, 28, 12, 0, 0);
 let counter = 0;
 const ports = {
   store, input, browser, mermaid, site,
+  identity: { machine: 'personal', thread: null, agentShell: false },
   clock: { now: () => (now += 7) },
   random: { hex: () => (counter++).toString(16).padStart(6, '0') },
   runtime: { node: '/fake/node', nodeVersion: 'v24.0.0' },
@@ -201,13 +202,14 @@ class CoreUseCaseTest(unittest.TestCase):
         self.assertEqual(out["url"], "https://viz.example/%s/" % svg_id)
         self.assertEqual(out["png_url"], "https://viz.example/%s/image.png" % svg_id)
         self.assertEqual(out["png"], self.results[0]["output"]["png"])
-        png, page = self.run_["uploads"][:2]
+        png, page, tag = self.run_["uploads"][:3]
         self.assertEqual((png["path"], png["contentType"], png["bytes"]), (svg_id + "/image.png", "image/png", 24))
         self.assertEqual((page["path"], page["contentType"], page["head"]),
                          (svg_id + "/index.html", "text/html; charset=utf-8", "<!doctype html>"))
+        self.assertEqual((tag["path"], tag["contentType"]), (svg_id + "/page.json", "application/json"))
         steps = self.run_["publishActions"][0]["steps"]
         self.assertEqual(steps[0], {"step": "site", "base": "https://viz.example/"})
-        self.assertEqual([s["status"] for s in steps if s["step"] == "upload"], [201, 201])
+        self.assertEqual([s["status"] for s in steps if s["step"] == "upload"], [201, 201, 201])
 
     def test_publish_file_renders_then_uploads(self):
         pub = self.run_["publishes"][1]
@@ -216,8 +218,8 @@ class CoreUseCaseTest(unittest.TestCase):
         self.assertNotEqual(out["id"], self.run_["svgId"])
         self.assertEqual(out["width"], 600)
         self.assertEqual(out["url"], "https://viz.example/%s/" % out["id"])
-        self.assertEqual([u["path"] for u in self.run_["uploads"][2:4]],
-                         [out["id"] + "/image.png", out["id"] + "/index.html"])
+        self.assertEqual([u["path"] for u in self.run_["uploads"][3:6]],
+                         [out["id"] + "/image.png", out["id"] + "/index.html", out["id"] + "/page.json"])
 
     def test_publish_failures(self):
         unknown, with_opts, unset, down, down_file = self.run_["publishes"][2:]
@@ -231,7 +233,7 @@ class CoreUseCaseTest(unittest.TestCase):
         self.assertIsNotNone(self.run_["keptRender"], "a render made before a failed upload is kept")
         # The site is checked before rendering: only the two file publishes that reached it rendered.
         self.assertEqual(self.run_["publishShots"], 2)
-        self.assertEqual(len(self.run_["uploads"]), 4, "failed publishes upload nothing")
+        self.assertEqual(len(self.run_["uploads"]), 6, "failed publishes upload nothing")
         failed = [s for s in self.run_["publishActions"][5]["steps"] if s["step"] == "upload"]
         self.assertEqual(failed[0]["ok"], False)
 

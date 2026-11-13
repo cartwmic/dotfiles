@@ -40,6 +40,19 @@ if [ "${1-}" = publish ]; then
 	# from 1Password only when publishing. Either can be set in the environment instead.
 	: "${VIZ_PUBLISH_URL:=https://viz.internal.cartwmic.com}"
 	export VIZ_PUBLISH_URL
+	# Who is publishing, for the page's tag file: the machine comes from the chezmoi profile (work or personal, written by
+	# dot_config/viz/machine.tmpl), never from the caller's environment, and the core is told whether this is an agent shell.
+	VIZ_MACHINE=personal
+	if [ -r "$HOME/.config/viz/machine" ] && [ "$(cat "$HOME/.config/viz/machine")" = work ]; then
+		VIZ_MACHINE=work
+	fi
+	export VIZ_MACHINE
+	if agent_shell; then
+		VIZ_AGENT_SHELL=1
+	else
+		VIZ_AGENT_SHELL=0
+	fi
+	export VIZ_AGENT_SHELL
 	if [ -z "${VIZ_PUBLISH_PASSWORD-}" ] && command -v op >/dev/null 2>&1; then
 		# The 1Password service-account token: the environment, else its file (playbook 78819cbd).
 		if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$HOME/.config/agent-harness/op-service-token" ]; then

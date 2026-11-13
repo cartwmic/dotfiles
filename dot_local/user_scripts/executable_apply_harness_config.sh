@@ -340,7 +340,8 @@ for name, cfg in servers.items():
                 refs = env_ref_re.findall(header_value)
                 if refs:
                     required_env_names.extend(refs)
-            parts.append(f"--header {json.dumps(f'{header_name}: {header_value}')}")
+            # Single-quoted: a `${VAR:-}` left in a header is Claude Code's own run-time expansion, so the shell must not expand it.
+            parts.append(f"--header {shlex.quote(f'{header_name}: {header_value}')}")
         desired = {"type": "http", "url": cfg["url"], "headers": {k: v for k, v in cfg.get("headers", {}).items() if isinstance(v, str)}}
         command = f"sync_server {json.dumps(name)} {shlex.quote(json.dumps(desired))} " + " ".join(parts)
         if required_env_names:
@@ -392,6 +393,12 @@ out_file = pathlib.Path(sys.argv[2])
 data = json.loads(mcp_file.read_text())
 servers = data.get("mcpServers", {})
 
+import re
+def run_time_env(value):
+    """The variable name when a header value is exactly ${NAME:-}, else None."""
+    m = re.fullmatch(r"\$\{([A-Z_][A-Z0-9_]*):-\}", value) if isinstance(value, str) else None
+    return m.group(1) if m else None
+
 lines = ["# BEGIN CHEZMOI AGENT HARNESS MCP"]
 # Names of the servers rendered below. The next merge treats these as the harness's own
 # (replaced, or dropped once no longer rendered); any other table in the block is foreign.
@@ -411,10 +418,20 @@ for name, cfg in servers.items():
     elif cfg.get("type") == "http" or "url" in cfg:
         lines.append(f"[mcp_servers.{name}]")
         lines.append(f"url = {json.dumps(cfg['url'])}")
-        if cfg.get("headers"):
+        # A header whose value is exactly ${VAR:-} is read from the environment when the session runs: Codex's
+        # env_http_headers maps the header to the variable name (and sends nothing when it is unset).
+        plain = {k: v for k, v in cfg.get("headers", {}).items() if not run_time_env(v)}
+        from_env = {k: run_time_env(v) for k, v in cfg.get("headers", {}).items() if run_time_env(v)}
+        if plain:
             lines.append(
                 "http_headers = { "
-                + ", ".join(f"{json.dumps(k)} = {json.dumps(v)}" for k, v in cfg["headers"].items())
+                + ", ".join(f"{json.dumps(k)} = {json.dumps(v)}" for k, v in plain.items())
+                + " }"
+            )
+        if from_env:
+            lines.append(
+                "env_http_headers = { "
+                + ", ".join(f"{json.dumps(k)} = {json.dumps(v)}" for k, v in from_env.items())
                 + " }"
             )
         lines.append("")
@@ -649,6 +666,7 @@ merge_pi_mcp() {
   python3 - "$harness_json" "$target_json" "$managed_json" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 harness_path = pathlib.Path(sys.argv[1])
@@ -660,6 +678,15 @@ RETIRED = {"furi", "automation-mcp"}
 
 harness = json.loads(harness_path.read_text())
 harness_servers = harness.get("mcpServers", {})
+
+# A header whose value is exactly ${NAME:-} must be read when the session runs. Pi resolves ${NAME} at run time too, but
+# fails the whole server when NAME is unset, so Pi gets a command value (its "!" form) that falls back to "none".
+for server in harness_servers.values():
+    headers = server.get("headers") if isinstance(server, dict) else None
+    for key, value in list((headers or {}).items()):
+        m = re.fullmatch(r"\$\{([A-Z_][A-Z0-9_]*):-\}", value) if isinstance(value, str) else None
+        if m:
+            headers[key] = '!printf %s "${' + m.group(1) + ':-none}"'
 
 if target_path.exists():
     existing = json.loads(target_path.read_text())

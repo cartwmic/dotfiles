@@ -46,7 +46,9 @@ The `(Linux)` rows match every personal Linux host, personal WSL included, not o
 
 Pi on Linux: `install-pi` links `~/.local/bin/pi` to `~/.pi/agent/bin/pi` (Linux only, both profiles run the task, only a Linux host acts). Reproduce by hand: `ln -s ~/.pi/agent/bin/pi ~/.local/bin/pi`, or `mise run install-pi`. The row is in README, "Linux on Arch (Omarchy)" table (Pi).
 
-Both profiles, by decision (no row, because no profile is left out): the shartifacts page server's MCP entry, the `shx-note-image` command and the `using-shartifacts` skill. Michael, 2026-11-13, on the question whether the work profile should get them (rule 272f08d0): "work profile should get sharitfacts as well".
+Both profiles, by decision (no row, because no profile is left out): the shartifacts page server's MCP entry, the `shx-note-image` command and the `using-shartifacts` skill (the MCP entry sends `X-Origin: personal|work` from the profile). Michael, 2026-11-13, on the question whether the work profile should get them (rule 272f08d0): "work profile should get sharitfacts as well".
+
+`~/.config/viz/machine` (source `dot_config/viz/machine.tmpl`) holds `work` on the work profile and `personal` on every other profile that deploys it; `viz publish` records it as the machine in each page's `page.json`. No row: no profile is left out, and Termux does not deploy `.config`.
 
 ## Local data keys
 

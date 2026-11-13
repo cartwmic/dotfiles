@@ -27,7 +27,11 @@
     },
     "shartifacts": {
       "type": "http",
-      "url": "https://shartifacts.internal.cartwmic.com/mcp"
+      "url": "https://shartifacts.internal.cartwmic.com/mcp",
+      "headers": {
+        "X-Origin": "{{ if eq .profile "axon-work-computer" }}work{{ else }}personal{{ end }}",
+        "X-Thread": "${T3CODE_THREAD_ID:-}"
+      }
     },
     "hindsight": {
       "type": "http",

@@ -110,6 +110,8 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(out["url"], "%s/%s/" % (self.base, RENDER_ID))
         self.assertEqual(out["png_url"], "%s/%s/image.png" % (self.base, RENDER_ID))
         self.assertEqual(out["png"], os.path.join(self.state.name, RENDER_ID, "image.png"))
+        tag = Site.files.pop("/%s/page.json" % RENDER_ID)  # the tag file: tests/viz/test_page_tags.py
+        self.assertEqual(tag[1], "application/json")
         self.assertEqual(Site.files, {
             "/%s/image.png" % RENDER_ID: (PNG, "image/png"),
             "/%s/index.html" % RENDER_ID: (PAGE, "text/html; charset=utf-8"),
@@ -117,7 +119,7 @@ class PublishTest(unittest.TestCase):
         record = self.last_record()
         self.assertEqual(record["command"], "publish")
         self.assertEqual(record["outcome"], out)
-        self.assertEqual([s["status"] for s in record["steps"] if s["step"] == "upload"], [201, 201])
+        self.assertEqual([s["status"] for s in record["steps"] if s["step"] == "upload"], [201, 201, 201])
         with open(os.path.join(self.state.name, "actions.jsonl")) as f:
             self.assertNotIn(PASSWORD, f.read())
 
@@ -154,7 +156,7 @@ class PublishTest(unittest.TestCase):
         self.viz("publish", RENDER_ID, env={"VIZ_PUBLISH_PASSWORD": None, "OP_SERVICE_ACCOUNT_TOKEN": SA_TOKEN})
         with open(calls) as f:
             self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
-        self.assertEqual(len(Site.files), 2)
+        self.assertEqual(len(Site.files), 3)
 
     def test_the_token_from_the_file_reaches_op(self):
         os.makedirs(os.path.join(self.state.name, ".config", "agent-harness"))
@@ -183,7 +185,7 @@ class PublishTest(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         with open(calls) as f:
             self.assertEqual(f.read(), "read op://developer/viz-publish/password\n")
-        self.assertEqual(len(Site.files), 2)
+        self.assertEqual(len(Site.files), 3)
 
     def test_bad_input(self):
         for args in (("publish",), ("publish", "20990101-000000-000-abcdef"),

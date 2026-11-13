@@ -8,6 +8,8 @@
 //   browser { locate() -> path, screenshot({ chromium, pagePath, width, scale, clipTo, pad }) -> { png, pageErrors } }
 //   mermaid { locate() -> { mmdc, browser, ensured? }, toSvg(source, located) -> svg, version(located) -> string|null }
 //   site    { locate() -> base URL, put(path, bytes, contentType) -> HTTP status }   path is '<id>/<name>'
+//   identity { machine, thread, agentShell }   who is publishing: the profile's machine ('personal'|'work'), the T3 thread id or null,
+//             and whether the wrapper saw an agent-shell marker
 //   clock   { now() -> epoch ms }
 //   random  { hex() -> short random hex string }
 //   runtime { node, nodeVersion }
@@ -15,7 +17,7 @@
 // Adapters signal failures by throwing VizError with a contract code.
 import {
   EXIT_CODES, PAD, SOURCE_EXT, USAGE, VizError, newId, newestFirst, parseOptions,
-  parsePositiveInteger, parsePublishRequest, parseRenderRequest, pngSize, publishedUrls, wrapperPage,
+  parsePositiveInteger, parsePublishRequest, parseRenderRequest, pngSize, publishedUrls, tagFor, wrapperPage,
 } from './domain.mjs';
 
 async function render(args, ports, ctx) {
@@ -90,13 +92,20 @@ const UPLOADS = [
 
 async function publish(args, ports, ctx) {
   const req = parsePublishRequest(args);
+  const { machine, thread, agentShell } = ports.identity;
+  // An agent shell must say whose work this is: the thread it runs in, or --workstream or --ask. Refused before anything renders.
+  if (agentShell && !thread && !req.workstream && !req.ask) {
+    throw new VizError('unlinked_publish', 'an agent shell with no T3CODE_THREAD_ID must name the work: pass --workstream NAME or --ask NUMBER');
+  }
   const base = ports.site.locate(); // before rendering: a missing site config fails fast
   ctx.step({ step: 'site', base });
   let rendered;
+  let meta;
   if (req.renderArgs) {
     rendered = await render(req.renderArgs, ports, ctx);
+    meta = await ports.store.readRender(rendered.id);
   } else {
-    const meta = await ports.store.readRender(req.id);
+    meta = await ports.store.readRender(req.id);
     if (!meta) throw new VizError('bad_input', `no render with id ${req.id}; see viz list`);
     ctx.step({ step: 'render', id: meta.id });
     rendered = {
@@ -104,8 +113,16 @@ async function publish(args, ports, ctx) {
       width: meta.width, height: meta.height, bytes: meta.bytes,
     };
   }
-  for (const u of UPLOADS) {
-    const bytes = await ports.store.readFile(rendered.id, u.name);
+  const pageHtml = new TextDecoder().decode(await ports.store.readFile(rendered.id, 'page.html'));
+  const tag = tagFor({
+    id: rendered.id, pageHtml, input: meta.input, machine, thread, workstream: req.workstream, ask: req.ask,
+    publishedAt: new Date(ports.clock.now()).toISOString(),
+  });
+  const files = [];
+  for (const u of UPLOADS) files.push({ remote: u.remote, type: u.type, bytes: await ports.store.readFile(rendered.id, u.name) });
+  files.push({ remote: 'page.json', type: 'application/json', bytes: new TextEncoder().encode(JSON.stringify(tag, null, 2) + '\n') });
+  for (const u of files) {
+    const bytes = u.bytes;
     const path = `${rendered.id}/${u.remote}`;
     let status;
     try {
@@ -116,6 +133,7 @@ async function publish(args, ports, ctx) {
       throw e;
     }
     ctx.step({ step: 'upload', path, bytes: bytes.byteLength, status });
+    if (u.remote === 'page.json') ctx.step({ step: 'tag', tag });
   }
   return { ...rendered, ...publishedUrls(base, rendered.id) };
 }
