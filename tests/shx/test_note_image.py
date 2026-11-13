@@ -207,6 +207,8 @@ class ShxTestCase(unittest.TestCase):
     def shx(self, *args, env=None, code=0):
         e = dict(os.environ, XDG_STATE_HOME=self.state.name)
         e.pop("SHARTIFACTS_URL", None)
+        if os.environ.get("GITHUB_ACTIONS"):
+            e["SHX_NO_SANDBOX"] = "1"  # a hosted runner's kernel refuses Chromium's sandbox
         e.update(env or {})
         r = subprocess.run([CMD, *args], capture_output=True, text=True, env=e, timeout=120)
         out = json.loads(r.stdout)  # exactly one JSON document

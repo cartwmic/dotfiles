@@ -110,6 +110,8 @@ export async function open({ chromium, url, width, height, timeoutMs = 60000 }) 
   const profile = mkdtempSync(join(tmpdir(), 'shx-chromium-'));
   const child = spawn(chromium, [
     '--headless', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
+    // Where the kernel does not allow Chromium's sandbox (a hosted CI runner), SHX_NO_SANDBOX=1 turns it off.
+    ...(process.env.SHX_NO_SANDBOX === '1' ? ['--no-sandbox'] : []),
     '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--mute-audio',
     '--use-mock-keychain', '--password-store=basic', 'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });

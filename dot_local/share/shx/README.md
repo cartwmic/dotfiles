@@ -51,6 +51,8 @@ Every outcome prints one JSON object on stdout.
 | 4 | `missing_dependency` | no `node` or no Chromium (`SHX_CHROMIUM`, else `chromium` on PATH) |
 | 5 | `request_failed` | shartifacts unreachable or answered with an error |
 
+`SHX_NO_SANDBOX=1` starts Chromium with `--no-sandbox`, for a machine whose kernel does not allow its sandbox (the tests set it on a hosted CI runner).
+
 Without `--out` the PNG is `${XDG_STATE_HOME:-~/.local/state}/shx/images/note-<artifact>-<comment>-v<N>.png`.
 
 ## Log
