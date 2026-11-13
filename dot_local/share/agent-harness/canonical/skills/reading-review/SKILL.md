@@ -1,6 +1,6 @@
 ---
 name: reading-review
-description: Use when asked to read, summarize or explore an article, paper, report, repo, spec or other source for Michael's review. Produces one viz page in four parts (what it is, what stands out, implications at every scale, then his setup) and a short report. Read-only.
+description: Use when asked to read, summarize or explore an article, paper, report, repo, spec or other source for Michael's review. Produces one shartifacts page in four parts (what it is, what stands out, implications at every scale, then his setup) and a short report. Read-only.
 ---
 
 # Reading review
@@ -27,8 +27,8 @@ Open the page with a one-line verdict and, if there is one, a top recommendation
 
 ## Output
 
-1. **One viz page** (the `using-viz` skill). Write self-contained HTML in a scratch directory (not in a repo). Michael reads on a phone, so follow the size rules in `using-viz`: run `viz render <file> --as html --width 1000 --scale 1`, read `bytes`, and keep each image about 2 MB or smaller. A long report is often over that as a PNG; publish it anyway and give only the link. Run `viz publish <id>`, print the sizes of `url` and `png_url` with `curl -w '%{size_download}'`, and report the total. Then open the `url` once and confirm it loads and renders. If the viz host is unreachable from where you run (the link opens only on the home network or WireGuard), hand over the HTML file and say so.
-2. **A Review item**, when you work under Michael's coordinator. The first line of its TickTick content is the viz URL, then a one-line verdict. Research results become Review items that are never auto-closed. Create it with
+1. **One shartifacts page** (the `using-shartifacts` skill). Michael comments on it, so it goes on shartifacts, not viz. Write self-contained HTML in a scratch directory (not in a repo). Michael reads on a phone, so keep the page light and put any image inline at the width it shows (1200 px at most, about 2 MB or smaller each). Publish it with `create_artifact` and give him `https://shartifacts.internal.cartwmic.com/view/<id>`. Then open the link once and confirm it loads and renders. If shartifacts is unreachable from where you run (it opens only on the home network or WireGuard), hand over the HTML file and say so.
+2. **A Review item**, when you work under Michael's coordinator. The first line of its TickTick content is the page URL, then a one-line verdict. Research results become Review items that are never auto-closed. Create it with
    `coordinator board write ticktick create <Personal list id> --title "Review: <title>" --content="<url>
 <one-line verdict>" --grant 13 --why R --event E`.
    The list id is in `<board_dir>/config.json` under `trackers.ticktick.list.id`. The CLI is `coordinator` (or `src/coordinatord/cli.ts` in the coordinator repo), never `main.ts`, which starts a second daemon. A real write needs an event id from the coordinator. If you lack one or the write fails, send the coordinator the URL, the verdict and the command, and do not invent an id. Run a `create` once; a repeat makes a duplicate task. To change a Review item's link later, use `ticktick set-content "TT <id>" --content TEXT --grant 28 --why R --event E`, which replaces the whole content, so keep the other lines.

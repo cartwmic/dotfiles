@@ -8,6 +8,10 @@ description: Use when a picture would explain better than text (comparing more t
 `viz` turns Mermaid, SVG or HTML into a PNG and keeps it on disk. Reading the PNG
 shows it to you and, in Pi or Claude Code, to the person at the terminal.
 
+viz is for static charts, diagrams and PNGs. Existing viz links stay. A page Michael should
+review, comment on or answer (a report, a picker, a plan, anything interactive) goes on
+shartifacts instead: see the `using-shartifacts` skill.
+
 ## When to make a visual
 
 Make one when:
@@ -99,7 +103,7 @@ viz publish <id>      # the id from viz render; prints "url" and "png_url"
 
 Attach the PNG when it is within the size cap above; otherwise send the link alone. The link is on `viz.internal.cartwmic.com`, which only
 opens on the home network or WireGuard, and Discord cannot preview it. It is
-there for zooming in or using an interactive page.
+there for zooming in on a static chart or diagram.
 
 If `viz publish` fails (exit 4 or 5), send the PNG anyway (if it is within the cap) and say the link
 failed, with the message. Do not retry in a loop.
