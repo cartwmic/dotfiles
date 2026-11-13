@@ -5,7 +5,7 @@ Whoever acts on review findings (the driver, the author, the agent applying fixe
 1. **Real.** It holds when checked against the code, the document or a run. Say how you checked.
 2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail. So does a fix that an existing job, check or process already does.
 3. **Maintainable.** Test the finding and its fix against the owner's design principles, `~/.local/share/agent-harness/design-principles.md`. A fix that breaks a principle is declined: cite the section. A fix that adds machinery the need does not require fails §4. A cap that hides a wrong cause fails §9.
-4. **In intent.** It fits the stated intent and scope of the change under review and of the overall work that change belongs to. Anything else, especially a problem that existed before the change, is a follow-up, not part of this change. A defect the change itself introduces (a regression, broken behaviour, data loss in what it touches) is always in scope, even if the stated intent does not mention it. Only problems the change did not cause, or gaps already covered elsewhere, can be follow-ups.
+4. **In intent.** It fits the stated intent and scope of the change under review and of the overall work that change belongs to. Anything else, especially a problem that existed before the change, is a follow-up, not part of this change. A defect the change itself introduces (a regression, broken behaviour, data loss in what it touches) is always in scope, even if the stated intent does not mention it. Only problems the change did not cause can be follow-ups.
 
 Run them in order. Act on a finding that passes all four.
 
