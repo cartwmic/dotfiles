@@ -17,6 +17,8 @@ Subagents. Prefer to use subagents. At the start of a session, confirm with the 
 
 Reading files. Leads and the coordinator do not read files to find or understand something: they ask the `reader` helper and get the answer. Builders read the files they edit and reviewers the diffs they judge.
 
+Advisor tool. If you have it, call it once, early, before you commit to an approach. This replaces the tool's own advice to call it again before declaring done: call it a second time only when you are stuck or changing approach.
+
 Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: library choices, naming, style, reversible implementation details. Escalate only what materially matters: one-way doors, security or privacy, spending, deleting data, behaviour other people will see, and taste or product calls only I can make. Escalate up the chain, not around it: a worker goes to its lead, a lead to the coordinator, the coordinator to me. Each level settles what it can before passing anything up. If running something could answer the question, run it instead. When you do ask: one question at a time, with your recommendation, using your harness's question tool. No is an acceptable answer.
 
 Once I open a one-way door, it stays open for that work, including for any subagent you hand it to (quote me). Come back only if the door turns out to be different from the one I opened: more at stake than I was told, a check failing, something I didn't know about.
