@@ -243,28 +243,70 @@ class WrapperRepo(WrapperBase):
             self.reset()
         self.assertEqual(self.claude_calls(), 0)
 
-    def test_dash_R_and_repo_name_the_repository_and_beat_the_current_directory(self):
+    def test_dash_R_and_repo_name_the_repository_from_any_directory(self):
         for flags in (["-R", GUARDED], ["--repo", GUARDED], ["--repo=" + GUARDED], ["-R" + GUARDED.upper()]):
             with self.subTest(flags):
+                self.reset()
                 self.assertBlocked(self.gh("pr", "comment", "5", *flags, "--body", PLANTED, cwd=self.other_cwd), "term 1")
-        self.assertRan(self.gh("pr", "comment", "5", "-R", "someone/other", "--body", PLANTED, cwd=self.guarded_cwd),
-                       "pr", "comment", "5", "-R", "someone/other", "--body", PLANTED)
+        self.reset()
+        args = ["pr", "comment", "5", "-R", "someone/other", "--body", PLANTED]
+        self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)                      # only unguarded targets: gh runs as typed, nothing checked
+        self.assertEqual(self.claude_calls(), 0)
 
-    def test_a_github_url_argument_names_the_repository_and_beats_the_current_directory(self):
+    def test_a_github_url_argument_names_the_repository_from_any_directory(self):
         url = "https://github.com/%s/pull/5" % GUARDED
         self.assertBlocked(self.gh("pr", "comment", url, "--body", PLANTED, cwd=self.other_cwd), "term 1")
+        self.reset()
         other = "https://github.com/someone/other/pull/5"
-        self.assertRan(self.gh("pr", "comment", other, "--body", PLANTED, cwd=self.guarded_cwd), "pr", "comment", other, "--body", PLANTED)
+        self.assertRan(self.gh("pr", "comment", other, "--body", PLANTED, cwd=self.other_cwd), "pr", "comment", other, "--body", PLANTED)
 
     def test_a_url_inside_the_body_text_does_not_name_the_repository(self):
         body = "see https://github.com/%s/pull/5 for details" % GUARDED
         self.assertRan(self.gh("pr", "comment", "5", "--body", body, cwd=self.other_cwd), "pr", "comment", "5", "--body", body)
         self.assertEqual(self.claude_calls(), 0)
 
-    def test_gh_repo_names_the_repository_and_dash_R_beats_it(self):
+    def test_gh_repo_names_the_repository_from_any_directory(self):
         self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=self.other_cwd, env={"GH_REPO": GUARDED}), "term 1")
-        self.assertRan(self.gh("pr", "comment", "5", "-R", "someone/other", "--body", PLANTED, cwd=self.other_cwd, env={"GH_REPO": GUARDED}),
-                       "pr", "comment", "5", "-R", "someone/other", "--body", PLANTED)
+
+    def test_a_command_is_guarded_when_any_target_it_names_is_guarded_whichever_one_gh_prefers(self):
+        # gh takes the repository from a URL and ignores -R, from -R before GH_REPO, from GH_REPO before the checkout; the wrapper checks the union.
+        url = "https://github.com/%s/pull/3" % GUARDED
+        other_url = "https://github.com/someone/other/pull/3"
+        cases = [(["pr", "comment", url, "-R", "someone/other"], self.other_cwd, {}),                    # a guarded URL with an unguarded -R
+                 (["pr", "comment", "-R", "someone/other", url], self.other_cwd, {}),
+                 (["pr", "comment", other_url, "-R", GUARDED], self.other_cwd, {}),                      # an unguarded URL with a guarded -R
+                 (["issue", "comment", "https://github.com/%s/issues/3" % GUARDED, "-R", "someone/other"], self.other_cwd, {}),
+                 (["pr", "comment", "3", "-R", "someone/other"], self.other_cwd, {"GH_REPO": GUARDED}),    # a guarded GH_REPO in an unguarded checkout
+                 (["pr", "comment", "3"], self.other_cwd, {"GH_REPO": GUARDED}),
+                 (["pr", "comment", "3", "-R", "someone/other"], self.guarded_cwd, {}),                  # a guarded checkout with an unguarded -R
+                 (["pr", "comment", other_url], self.guarded_cwd, {}),
+                 (["pr", "comment", "3"], self.guarded_cwd, {"GH_REPO": "someone/other"})]
+        for args, cwd, env in cases:
+            with self.subTest(args=args, cwd=cwd.name, env=env):
+                self.reset()
+                self.assertBlocked(self.gh(*args, "-b", PLANTED, cwd=cwd, env=env), "term 1")
+
+    def test_a_guarded_remote_among_several_remotes_of_the_checkout_guards_the_command(self):
+        cwd = self.repo("multi", "https://github.com/someone/first.git")
+        for name, url in (("second", "https://github.com/someone/second.git"), ("fork", "git@github.com:%s.git" % GUARDED), ("fourth", "https://github.com/someone/fourth.git")):
+            subprocess.run(["git", "-C", str(cwd), "remote", "add", name, url], check=True)
+        self.assertBlocked(self.gh("pr", "comment", "3", "-b", PLANTED, cwd=cwd), "term 1")
+        subprocess.run(["git", "-C", str(cwd), "remote", "set-url", "--push", "fork", "https://github.com/someone/elsewhere.git"], check=True)
+        self.reset()
+        self.assertBlocked(self.gh("pr", "comment", "3", "-b", PLANTED, cwd=cwd), "term 1")          # the fetch URL alone is enough
+
+    def test_a_clean_command_with_only_unguarded_targets_passes_straight_through_untouched(self):
+        other_url = "https://github.com/someone/other/pull/3"
+        for args, env in ((["pr", "comment", "3", "-R", "someone/other", "-b", PLANTED], {}), (["pr", "comment", other_url, "-b", PLANTED], {}),
+                          (["pr", "comment", "3", "-b", PLANTED], {"GH_REPO": "someone/other"}), (["pr", "close", "3", "-c", PLANTED], {}),
+                          (["release", "create", "v1", "--notes", PLANTED, "-R", "someone/other"], {})):
+            with self.subTest(args):
+                self.reset()
+                done = self.gh(*args, cwd=self.other_cwd, env=env, stdin="stdin text\n")
+                self.assertRan(done, *args, stdin="stdin text\n")
+                self.assertEqual(self.claude_calls(), 0)
+                self.assertIsNone(self.real_calls()[0]["prompt_disabled"])
+        self.assertEqual(self.gh_log(), [])
 
     def test_the_repos_file_may_name_another_host_and_a_foreign_host_with_the_same_name_is_not_guarded(self):
         (self.home / ".config" / "leak-guard" / "repos").write_text("git.example.test/team/proj\n")
@@ -432,7 +474,10 @@ class WrapperText(Decisions):
         url = "https://github.com/%s/pull/5" % GUARDED
         self.assertEqual(self.decide("pr", "comment", url, "-b", "x", repo="someone/other")[0], "pr comment")
         self.assertEqual(self.decide("pr", "comment", "5", "-b", url, repo="someone/other"), ("", None))        # a body that is a URL is just text
-        self.assertEqual(self.decide("pr", "comment", "5", "-b", "x", "-R", "someone/other"), ("", None))
+        self.assertEqual(self.decide("pr", "comment", "5", "-b", "x", "-R", "someone/other", repo="someone/another"), ("", None))
+        self.assertEqual(self.decide("pr", "comment", "5", "-b", "x", "-R", "someone/other")[0], "pr comment")        # GH_REPO is guarded: the union is checked
+        self.assertEqual(self.decide("pr", "comment", url, "-R", "someone/other", "-b", "x", repo="someone/other")[0], "pr comment")     # a guarded URL beats -R in gh
+        self.assertEqual(self.decide("pr", "comment", "https://github.com/someone/other/pull/3", "-R", GUARDED, "-b", "x", repo="someone/other")[0], "pr comment")
 
     def test_a_gh_killed_by_a_signal_exits_as_a_shell_reports_it(self):
         done = self.gh("pr", "comment", "5", "--body-file", "-", stdin=CLEAN, env={"FAKE_GH_SIGNAL": "15"})      # stdin was read, so the wrapper runs gh as a child
@@ -514,7 +559,9 @@ class WrapperApi(Decisions):
                      ["api", "repos/someone/other/issues/1/comments", "-f", "body=" + PLANTED], ["api", "user/starred/x/y", "-X", "PUT"],
                      ["api", "orgs/someone/hooks", "-f", "url=" + PLANTED]):
             with self.subTest(args):
-                self.assertEqual(self.decide(*args), ("", None))
+                self.assertEqual(self.decide(*args, repo="someone/other"), ("", None))        # nothing it names is guarded
+        # a guarded checkout or GH_REPO is a target too, whatever the endpoint says
+        self.assertEqual(self.decide("api", "repos/someone/other/issues/1/comments", "-f", "body=" + PLANTED)[0], "api")
 
     def test_an_uploads_host_url_names_the_repository_and_a_numeric_repository_id_is_refused_for_a_write(self):
         name, texts = self.decide("api", "https://uploads.github.com/%s/releases/1/assets" % self.EP.split("/issues")[0], "-f", "body=" + PLANTED)
@@ -529,14 +576,14 @@ class WrapperApi(Decisions):
         self.assertIn("flag this wrapper does not know", self.refused("api", ep, "--frobnicate", "-f", "body=x"))
         self.assertIn("flag this wrapper does not know", self.refused("api", "graphql", "--frobnicate", "-f", "query=mutation { x }"))
         self.assertIn("no value", self.refused("api", ep, "-f"))
-        self.assertEqual(self.decide("api", "repos/someone/other/issues", "--frobnicate", "-f", "body=x"), ("", None))
+        self.assertEqual(self.decide("api", "repos/someone/other/issues", "--frobnicate", "-f", "body=x", repo="someone/other"), ("", None))
         for flags in (["--paginate", "--slurp", "--silent", "--verbose"], ["-i", "-q", ".id"], ["-H", "Accept: x", "--cache", "1h"], ["-p", "x", "--allow-escape-sequences"]):
             self.assertEqual(self.decide("api", ep, *flags, "-f", "body=SECRET")[0], "api")
 
     def test_hostname_sets_the_host_so_another_host_is_not_a_guarded_repository(self):
         ep = "repos/%s/issues/1/comments" % GUARDED
-        self.assertEqual(self.decide("api", "--hostname", "ghe.example.test", ep, "-f", "body=x"), ("", None))
-        self.assertEqual(self.decide("api", "--hostname=ghe.example.test", ep, "-f", "body=x"), ("", None))
+        self.assertEqual(self.decide("api", "--hostname", "ghe.example.test", ep, "-f", "body=x", repo="someone/other"), ("", None))
+        self.assertEqual(self.decide("api", "--hostname=ghe.example.test", ep, "-f", "body=x", repo="someone/other"), ("", None))
         self.assertEqual(self.decide("api", "--hostname", "github.com", ep, "-f", "body=x")[0], "api")
         with mock.patch.dict(os.environ, {"GH_HOST": "github.com"}):
             name, texts = self.W.decide(["api", "--hostname", "ghe.example.test", "repos/team/proj/issues", "-f", "body=x"], {("ghe.example.test", "team/proj")})
@@ -684,9 +731,29 @@ class WrapperUnrecognised(Decisions):
                 self.reset()
                 self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
 
+    def test_a_subcommand_position_that_could_be_a_flag_value_is_refused_on_a_guarded_context(self):
+        # gh takes the first non-flag argument as the subcommand; a flag in front of it makes any word after the flag's value a possible verb
+        for args in (["pr", "-t", "view", "create", "-b", "SECRET"], ["pr", "-R", GUARDED, "create", "-b", "SECRET"], ["issue", "--repo", "x/y", "comment", "-b", "S"],
+                     ["pr", "-t", "x", "list"]):
+            with self.subTest(args):
+                self.assertIn("right after", self.refused(*args))
+        self.assertEqual(self.decide("pr", "-t", "view", "create", "-b", "SECRET", repo="someone/other"), ("", None))      # nothing guarded: gh runs as typed
+        self.assertEqual(self.decide("pr", "--help"), ("", None))
+        self.assertEqual(self.decide("pr", "create", "-b", "x", "-t", "y")[0], "pr create")                                # the subcommand first: no doubt
+
+    def test_an_unknown_write_subcommand_is_not_taken_for_a_read_because_a_later_argument_is_a_read_verb(self):
+        for args in (["release", "upload", "v1", "view"], ["pr", "revert", "3", "-t", "SECRET", "-b", "view"], ["issue", "frobnicate", "list"]):
+            with self.subTest(args):
+                self.assertIn("not a command this wrapper knows", self.refused(*args))
+
+    def test_an_unknown_flag_does_not_hide_a_guarded_repository_named_after_it(self):
+        self.assertIn("does not know", self.refused("pr", "create", "--newflag", "x", "-R", GUARDED, "-t", "T", "-b", "B", repo="someone/other"))
+        self.assertIn("does not know", self.refused("pr", "create", "--newflag", "x", "-t", "T", "https://github.com/%s/pull/3" % GUARDED, repo="someone/other"))
+        self.assertEqual(self.decide("pr", "create", "--newflag", "x", "-R", "someone/other", "-t", "T", repo="someone/other"), ("", None))
+
     def test_repo_commands_take_the_repository_from_their_argument_and_flags_before_the_verb_are_seen(self):
         self.assertBlocked(self.gh("repo", "edit", GUARDED, "--description", "x", cwd=self.other_cwd), "repo edit")
-        self.assertBlocked(self.gh("pr", "-R", GUARDED, "create", "--body", PLANTED, cwd=self.other_cwd), "term 1")
+        self.assertBlocked(self.gh("pr", "-R", GUARDED, "create", "--body", PLANTED, cwd=self.other_cwd), "Put the subcommand right after")
 
 
 class WrapperComposed(Decisions):
@@ -767,7 +834,7 @@ class WrapperPassThrough(WrapperBase):
     def test_leak_guard_is_not_run_for_them(self):
         (self.tmp / "leak-guard").write_text("#!/bin/sh\necho RAN >> %s/guard-ran\nexit 1\n" % self.fake)
         self.gh("pr", "list")
-        self.gh("pr", "comment", "5", "-R", "someone/other", "--body", PLANTED)
+        self.gh("pr", "comment", "5", "-R", "someone/other", "--body", PLANTED, cwd=self.other_cwd)
         self.assertFalse((self.fake / "guard-ran").exists())
 
 

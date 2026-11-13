@@ -156,40 +156,41 @@ def cwd_remotes():
     return [r for r in (parse_repo(row.partition(" ")[2]) for row in done.stdout.decode(errors="replace").splitlines()) if r]
 
 
-def flag_value(args, long, short, skip=()):
+def repo_words(words):
+    """The repositories named by words that are a URL, OWNER/REPO or HOST/OWNER/REPO."""
+    return [r for r in (parse_repo(w) for w in words if w and not w.startswith("-")) if r]
+
+
+def context_targets():
+    """GH_REPO, and every remote of the current directory's git repository."""
+    found = []
+    if os.environ.get("GH_REPO") and parse_repo(os.environ["GH_REPO"]):
+        found.append(parse_repo(os.environ["GH_REPO"]))
+    return found + cwd_remotes()
+
+
+def all_targets(repo_flags=(), words=()):
+    """EVERY repository a command names: its -R/--repo values, the URL and OWNER/REPO arguments, GH_REPO and every remote of the current checkout. gh prefers
+    one of these to the others, and which one differs between commands, so the wrapper does not try to tell: a command is guarded when any of them is."""
+    return [r for r in (parse_repo(v) for v in repo_flags) if r] + repo_words(words) + context_targets()
+
+
+def raw_repo_flags(args):
+    """Every value of -R/--repo among unparsed arguments (a flag value may be one too: this over-approximates)."""
+    out = []
     for i, a in enumerate(args):
-        if i in skip:
-            continue
-        if a == long or a == short:
-            return args[i + 1] if i + 1 < len(args) else None
-        if a.startswith(long + "="):
-            return a[len(long) + 1:]
-        if short and a.startswith(short) and len(a) > 2 and not a.startswith("--"):
-            return a[2:].lstrip("=")
-    return None
+        if a in ("-R", "--repo") and i + 1 < len(args):
+            out.append(args[i + 1])
+        elif a.startswith("--repo="):
+            out.append(a[len("--repo="):])
+        elif a.startswith("-R") and len(a) > 2 and not a.startswith("--"):
+            out.append(a[2:].lstrip("="))
+    return out
 
 
-def resolve_targets(explicit, urls, named=None):
-    """The repositories a command is aimed at, in gh's order of precedence: -R/--repo, URLs among the arguments, GH_REPO, then the current directory's remotes."""
-    if explicit:
-        r = parse_repo(explicit)
-        return [r] if r else []
-    found = [r for r in (parse_repo(u) for u in urls) if r]
-    if found:
-        return found
-    if named and parse_repo(named):
-        return [parse_repo(named)]
-    if os.environ.get("GH_REPO"):
-        r = parse_repo(os.environ["GH_REPO"])
-        return [r] if r else []
-    return cwd_remotes()
-
-
-def targets(args, skip, group=None):
-    """resolve_targets for a command whose flags are not parsed (an unrecognised one): -R/--repo and URLs are looked for among all the arguments."""
-    explicit = flag_value(args, "--repo", "-R", skip)
-    urls = [a for i, a in enumerate(args) if i not in skip and re.match(r"^https?://", a)]
-    return resolve_targets(explicit, urls, args[2] if group == "repo" and len(args) > 2 and not args[2].startswith("-") else None)
+def raw_targets(args):
+    """all_targets for a command whose arguments are not parsed (an unrecognised one, or one with a flag the tables do not list)."""
+    return all_targets(raw_repo_flags(args), args)
 
 
 # ---- gathering the text ------------------------------------------------------------------------------------------------------------------------------
@@ -222,11 +223,13 @@ def known_verb(group, verb):
 
 
 def split_command(args):
-    """(group, verb) of a gh command line. The verb is the first argument after the group that is a verb gh knows for it, so flags before the verb are fine."""
+    """(group, verb, ambiguous) of a gh command line. The verb is the argument right after the group. When a flag stands there, a flag's value could be taken for
+    the verb, so the verb is a guess (the first known verb among the non-flag arguments) and `ambiguous` is true."""
     group = args[0]
     rest = [a for a in args[1:] if not a.startswith("-")]
-    verb = next((a for a in rest if known_verb(group, a)), rest[0] if rest else "")
-    return group, verb
+    if len(args) > 1 and args[1].startswith("-"):
+        return group, next((a for a in rest if known_verb(group, a)), rest[0] if rest else ""), True
+    return group, rest[0] if rest else "", False
 
 
 def flag_table(group, verb):
@@ -290,13 +293,13 @@ def parse_flags(args, group, verb):
 
 
 def parse_text(args, group, verb):
-    """(text to read [(kind, value, from_file)], explicit repository, positional arguments, refusal or None, help flag seen) for a pr/issue/release command.
-    `args` are the arguments after the group. Reads nothing."""
+    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, help flag seen, unparsed) for a pr/issue/release
+    command. `unparsed` is true when parsing stopped at a flag the table does not list. `args` are the arguments after the group. Reads nothing."""
     flags, positionals, unknown, missing = parse_flags(args, group, verb)
     names = {name for name, _ in flags}
     kinds = TEXT[(group, verb)]
     found = [(kinds[name], val, kinds[name] in FROM_FILE) for name, val in flags if name in kinds and val is not None]
-    repo = next((val for name, val in reversed(flags) if name == "repo" and val), None)
+    repo = [val for name, val in flags if name == "repo" and val]
     if verb in positionals:
         positionals.remove(verb)
     refusal = None
@@ -316,7 +319,7 @@ def parse_text(args, group, verb):
                                   "Create the release without files")
     if not refusal and "help" not in names and sys.stdin.isatty():
         refusal = would_prompt(group, verb, names, {k for k, _, _ in found})
-    return found, repo, positionals, refusal, "help" in names
+    return found, repo, positionals, refusal, "help" in names, unknown is not None or missing is not None
 
 
 def would_prompt(group, verb, names, kinds):
@@ -401,9 +404,7 @@ def api_targets(endpoint, hostname=None):
         host = m.group(1) or hostname
         r = parse_repo("%s/%s" % (m.group(2), m.group(3)), None if host is None else "github.com" if host in ("api.github.com", "uploads.github.com") else host)
         return [r] if r else []
-    if re.search(r"\{(owner|repo)\}", endpoint):
-        return targets([], set())
-    return []
+    return []      # {owner}/{repo} placeholders name the current checkout or GH_REPO, which context_targets() covers
 
 
 # ---- the decision ------------------------------------------------------------------------------------------------------------------------------------
@@ -415,7 +416,7 @@ def command_name(args):
     if group == "api":
         return "api"
     if group in READ or group in NOTEXT or any(g == group for g, _ in TEXT):
-        _, verb = split_command(args)
+        _, verb, _ = split_command(args)
         return "%s %s" % (group, verb) if re.match(r"^[a-z][a-z-]*$", verb) else group
     return group if group in NOT_REPO else "unrecognised"
 
@@ -471,7 +472,7 @@ def unknown_command(args, repos, texts, real, depth):
     """A top-level name that is no built-in: an alias, else an extension. An alias is expanded and the expansion classified; a shell alias or an extension is
     refused when it is aimed at a guarded repository, because what it sends cannot be seen."""
     name = args[0]
-    aimed = lambda: any(t in repos for t in targets(args, set(), None))
+    aimed = lambda: any(t in repos for t in raw_targets(args))
     try:
         expansion = lookup_alias(real, name) if real and depth == 0 else None
     except Refuse:
@@ -504,8 +505,7 @@ def decide(args, repos, texts=None, real=None, depth=0):
         if helped:
             return "", None
         if unknown is not None or missing is not None:      # the arguments cannot be read reliably: refuse when the call may be aimed at a guarded repository
-            if (endpoint_path(endpoint) in ("graphql", "api/graphql") or any(t in repos for t in api_targets(endpoint, hostname))
-                    or (not endpoint and any(t in repos for t in resolve_targets(None, [])))):
+            if (endpoint_path(endpoint) in ("graphql", "api/graphql") or any(t in repos for t in api_targets(endpoint, hostname) + context_targets())):
                 raise Refuse("argument %d of this `gh api` call is a flag this wrapper does not know, or a flag with no value, so the call cannot be read "
                              "and its text cannot be checked. Use the flags `gh api --help` lists" % ((unknown if unknown is not None else missing) + 2))
             return "", None
@@ -516,7 +516,7 @@ def decide(args, repos, texts=None, real=None, depth=0):
         if write and re.match(r"^repositories/\d+", endpoint_path(endpoint)):
             raise Refuse("this `gh api` write names a repository by its numeric id, which this wrapper cannot map to a guarded repository. "
                          "Use the repos/<owner>/<repo>/... form of the endpoint")
-        if write and any(t in repos for t in api_targets(endpoint, hostname)):
+        if write and any(t in repos for t in api_targets(endpoint, hostname) + context_targets()):
             gather_api(fields, inputs, texts, False)
             return "api", texts
         return "", None
@@ -524,13 +524,17 @@ def decide(args, repos, texts=None, real=None, depth=0):
         return "", None
     if group not in BUILTIN:
         return ("", None) if helped else unknown_command(args, repos, texts, real, depth)
-    group, verb = split_command(args)
+    group, verb, ambiguous = split_command(args)
     name = command_name(args)
     if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
+    if ambiguous and not helped and any(t in repos for t in raw_targets(args)):
+        raise Refuse("a flag stands between `gh %s` and its subcommand, so a flag's value could be taken for the subcommand and what gh runs cannot be told. "
+                     "Put the subcommand right after `gh %s`" % (group, group))
     if (group, verb) in TEXT:
-        found, repo, positionals, refusal, helped = parse_text(args[1:], group, verb)
-        if helped or not any(t in repos for t in resolve_targets(repo, [p for p in positionals if re.match(r"^https?://", p)])):
+        found, repo, positionals, refusal, helped, unparsed = parse_text(args[1:], group, verb)
+        named = all_targets(repo + (raw_repo_flags(args) if unparsed else []), positionals + (args if unparsed else []))
+        if helped or not any(t in repos for t in named):
             return "", None
         if refusal:
             raise Refuse(refusal)
@@ -538,7 +542,7 @@ def decide(args, repos, texts=None, real=None, depth=0):
         return name, texts
     if helped or (known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()))):
         return "", None
-    if any(t in repos for t in targets(args, set(), group)):
+    if any(t in repos for t in raw_targets(args)):
         raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
                      "Use a recognised command" % (group, verb))
     return "", None
