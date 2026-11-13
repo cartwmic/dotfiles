@@ -32,6 +32,9 @@ IDLE = "beforeCacheExpires"  # T3's "Compact idle threads: Before the cache expi
 # One claudeAgent instance per agent seat: id, window, and whether the advisor tool is switched off. Restated here on purpose, not read from the template.
 SEAT_TABLE = (("seat-lead", "200000", False), ("seat-builder", "300000", True), ("seat-planner", "300000", True), ("seat-reviewer", "300000", False))
 SEATS = tuple(i for i, _, _ in SEAT_TABLE)
+# T3 interrupts a running session to deliver a message; Claude Code then reports a call it skipped as a user decline unless this variable is set (see the template header). Restated here on purpose.
+FIZZY = {"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}
+FIZZY_IDS = ("claudeAgent", "coordinator", "claude-hub") + SEATS  # every Claude instance the template owns or finds
 
 
 def seat_instances(home):
@@ -42,8 +45,7 @@ def seat_instances(home):
         inst = {"config": {"autoCompactWindow": window,
                            "launchArgs": "--settings %s/%s.json --strict-mcp-config --mcp-config %s/mcp.json" % (fleet, sid, fleet)},
                 "displayName": "Claude (%s)" % sid.split("-", 1)[1], "driver": "claudeAgent", "enabled": True}
-        if not advisor:
-            inst["environment"] = [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}]
+        inst["environment"] = ([] if advisor else [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}]) + [FIZZY]
         out[sid] = inst
     return out
 
@@ -54,6 +56,7 @@ def with_window(data):
     for i, w in WINDOWS.items():
         if isinstance(out.get("providerInstances", {}).get(i), dict):
             out["providerInstances"][i]["config"] = {**out["providerInstances"][i].get("config", {}), "autoCompactWindow": w}
+            out["providerInstances"][i]["environment"] = [*out["providerInstances"][i].get("environment", []), FIZZY]
     out["idleCompaction"] = IDLE
     return out
 
@@ -171,7 +174,7 @@ class SettingsScriptTest(unittest.TestCase):
         self.assertEqual(inst["claude-hub"], {
             "driver": "claudeAgent", "displayName": "Claude (hub)", "enabled": True,
             "environment": [{"name": "ANTHROPIC_BASE_URL", "value": "https://cliproxy.internal.cartwmic.com", "sensitive": False},
-                            {"name": "ANTHROPIC_API_KEY", "value": "", "sensitive": False}],
+                            {"name": "ANTHROPIC_API_KEY", "value": "", "sensitive": False}, FIZZY],
             "config": {"launchArgs": "--settings %s/%s" % (home, CLAUDE_FILE)}})
         self.assertEqual(inst["codex-hub"], {
             "driver": "codex", "displayName": "Codex (hub)", "enabled": True,
@@ -674,7 +677,7 @@ class SeatInstanceTest(unittest.TestCase):
         inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
         self.assertEqual(inst["coordinator"]["config"]["launchArgs"], json.loads(FIXTURE)["providerInstances"]["coordinator"]["config"]["launchArgs"])
         self.assertNotIn("launchArgs", inst["claudeAgent"]["config"])
-        self.assertNotIn("environment", inst["claudeAgent"])
+        self.assertEqual(inst["claudeAgent"]["environment"], [FIZZY])  # nothing but the interrupt text variable
 
     def test_idempotent_stale_entries_return_and_dropping_removes(self):
         script, _ = self.script("linux")
@@ -695,6 +698,60 @@ class SeatInstanceTest(unittest.TestCase):
         out = json.loads(run_script(script, FIXTURE))
         for k in before["providerInstances"]:
             self.assertEqual(out["providerInstances"][k], with_window(before)["providerInstances"][k], k)
+
+
+class FizzyGroveTest(unittest.TestCase):
+    """CLAUDE_CODE_FIZZY_GROVE=1 in the `environment` of every Claude instance, merged by name with what is already there."""
+
+    def script(self, chezmoi_os="linux"):
+        return LinuxSettingsTest().render(chezmoi_os)
+
+    def fizzy(self, inst):
+        return [e for e in inst.get("environment", []) if e["name"] == "CLAUDE_CODE_FIZZY_GROVE"]
+
+    def test_every_claude_instance_has_it_exactly_once(self):
+        for os_name in ("linux", "darwin"):
+            script, _ = self.script(os_name)
+            inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
+            for i in ("claudeAgent", "coordinator") + SEATS:
+                self.assertEqual(self.fizzy(inst[i]), [FIZZY], (os_name, i))
+            self.assertEqual(self.fizzy(inst["codex"]), [])
+
+    def test_the_hub_instance_has_it_too(self):
+        # claude-hub is written on personal macOS only (test_instance_shapes checks its exact shape there); on any OS the template text must carry it.
+        src = (REPO / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text()
+        self.assertIn('(dict "name" "ANTHROPIC_API_KEY" "value" "" "sensitive" false) $fizzy)', src)
+
+    def test_existing_environment_entries_are_kept_in_order(self):
+        script, _ = self.script()
+        data = json.loads(FIXTURE)
+        for i in ("claudeAgent", "coordinator"):
+            data["providerInstances"][i]["environment"] = [{"name": "KEEP_ME", "value": "x", "sensitive": False}, {"name": "ALSO", "value": "y", "sensitive": True}]
+        out = json.loads(run_script(script, json.dumps(data)))["providerInstances"]
+        for i in ("claudeAgent", "coordinator"):
+            self.assertEqual(out[i]["environment"], [{"name": "KEEP_ME", "value": "x", "sensitive": False}, {"name": "ALSO", "value": "y", "sensitive": True}, FIZZY], i)
+
+    def test_the_seat_advisor_entry_is_kept(self):
+        script, _ = self.script()
+        inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
+        self.assertEqual([e["name"] for e in inst["seat-lead"]["environment"]], ["CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "CLAUDE_CODE_FIZZY_GROVE"])
+        self.assertEqual([e["name"] for e in inst["seat-builder"]["environment"]], ["CLAUDE_CODE_FIZZY_GROVE"])
+
+    def test_a_wrong_value_is_replaced_in_place_and_a_second_apply_changes_nothing(self):
+        script, _ = self.script()
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["claudeAgent"]["environment"] = [{"name": "CLAUDE_CODE_FIZZY_GROVE", "value": "0", "sensitive": False}, {"name": "AFTER", "value": "z", "sensitive": False}]
+        once = run_script(script, json.dumps(data))
+        env = json.loads(once)["providerInstances"]["claudeAgent"]["environment"]
+        self.assertEqual(env, [FIZZY, {"name": "AFTER", "value": "z", "sensitive": False}])
+        self.assertEqual(run_script(script, once), once)
+
+    def test_an_absent_instance_is_not_created(self):
+        script, _ = self.script()
+        data = json.loads(FIXTURE)
+        del data["providerInstances"]["coordinator"]
+        out = json.loads(run_script(script, json.dumps(data)))["providerInstances"]
+        self.assertNotIn("coordinator", out)
 
 
 class FleetFilesTest(unittest.TestCase):

@@ -19,9 +19,9 @@
 #               setupMode existing with T3's downloaded Codex binary (same active.json lookup as codex-hub), so it reads ~/.codex and
 #               its model_provider = "cliproxy". Without active.json the instance is left alone (T3 on personal Linux has no ~/.t3/tools/codex/active.json, so its codex instance keeps its config there). Off restores the recorded original
 #               entry exactly, but only while the entry still looks like ours (setupMode existing, binary under ~/.t3/tools/codex).
-#               claudeAgent and coordinator are never touched apart from the displayName below: the global ~/.claude settings cover them.
+#               claudeAgent and coordinator are touched only for the displayName below, the autoCompactWindow and the CLAUDE_CODE_FIZZY_GROVE environment entry (further down): the global ~/.claude settings cover the rest.
 #   names       displayName only on claudeAgent "Claude", coordinator "Claude (coordinator)" and codex "Codex" (no other field of
-#               claudeAgent or coordinator; the coordinator repo owns its launchArgs). Off removes a displayName only if it equals ours.
+#               claudeAgent or coordinator here; the coordinator repo owns its launchArgs). Off removes a displayName only if it equals ours.
 #   usage       the hub's usage in T3: usageLimitSources.cliproxy-hub. While on, the apply reads the management key with
 #               ~/.local/user_scripts/op_read_cached.sh (service-account token only, never the 1Password app) and writes it as a literal
 #               string into managementKey. T3 then moves a literal into its own secret store and leaves a placeholder in this file, so the
@@ -64,6 +64,16 @@
 #                 seat-reviewer  window 300000  advisor OFF
 #               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
 #               is deployed for it to point at.
+# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and the four seats; an `environment` entry, merged by name so other entries stay):
+#               T3 delivers a message to a running session as an interrupt (priority "now"). When it lands while Claude Code is still running a
+#               PreToolUse hook, that call is skipped, and Claude Code 2.1.322/323 reports it as "The user doesn't want to take this action right now. STOP
+#               what you are doing and wait for the user to tell you how to proceed." (three false declines in the coordinator session, 2026-11-12/13). With this
+#               variable it says "[Tool call skipped: the turn ended to deliver the message that follows before this call ran. Nothing refused it; re-run it if
+#               still needed.]" instead. Its only read in the binary is the choice between those two texts. It is a process environment variable: the binary lists
+#               the name as host-owned, so `env` in settings.json (user or --settings) does not set it (tested on 2.1.323). It is undocumented and can disappear in a
+#               later Claude Code; tests/t3-hub/test_fizzy_grove_binary.py fails loudly when the installed binary stops reading it.
+#               It reaches new sessions only. Not on the work profile: .chezmoiignore leaves .t3 out there and nothing else in this source manages T3's settings
+#               on the work Mac, so its T3 sessions keep the old text until that is decided (docs/profiles.md).
 # Compaction point: Claude Code compacts about 33,000 tokens below the window, so 200000 compacts near 167K and 300000 near 267K.
 # Each apply replaces exactly the owned ids under providerInstances, sets worktreesDirectory and idleCompaction; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
@@ -84,8 +94,9 @@ set -eu
 {{- if and (eq $hubDefault "on") (stat $active) }}
 {{- $defaultBinary = get $codexConfig "binaryPath" }}
 {{- end }}
+{{- $fizzy := dict "name" "CLAUDE_CODE_FIZZY_GROVE" "value" "1" "sensitive" false }}
 {{- $claude := dict "driver" "claudeAgent" "displayName" "Claude (hub)" "enabled" true
-      "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false) (dict "name" "ANTHROPIC_API_KEY" "value" "" "sensitive" false))
+      "environment" (list (dict "name" "ANTHROPIC_BASE_URL" "value" "https://cliproxy.internal.cartwmic.com" "sensitive" false) (dict "name" "ANTHROPIC_API_KEY" "value" "" "sensitive" false) $fizzy)
       "config" (dict "launchArgs" (printf "--settings %s/.config/t3-hub-claude-settings.json" $home)) }}
 {{- $want := dict }}
 {{- $owned := list "claude-hub" "codex-hub" }}
@@ -93,7 +104,8 @@ set -eu
 {{- range $seat := list (dict "id" "lead" "window" "200000" "advisor" false) (dict "id" "builder" "window" "300000" "advisor" true) (dict "id" "planner" "window" "300000" "advisor" true) (dict "id" "reviewer" "window" "300000" "advisor" false) }}
 {{-   $inst := dict "driver" "claudeAgent" "displayName" (printf "Claude (%s)" $seat.id) "enabled" true
         "config" (dict "autoCompactWindow" $seat.window "launchArgs" (printf "--settings %s/seat-%s.json --strict-mcp-config --mcp-config %s/mcp.json" $fleet $seat.id $fleet)) }}
-{{-   if not $seat.advisor }}{{ $_ := set $inst "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false)) }}{{ end }}
+{{-   $_ := set $inst "environment" (list $fizzy) }}
+{{-   if not $seat.advisor }}{{ $_ := set $inst "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy) }}{{ end }}
 {{-   $want = set $want (printf "seat-%s" $seat.id) $inst }}
 {{-   $owned = append $owned (printf "seat-%s" $seat.id) }}
 {{- end }}
@@ -120,6 +132,7 @@ DEFAULT_BINARY='{{ $defaultBinary }}'
 ORIGINAL='{"driver":"codex","enabled":true,"config":{"setupMode":"managed"}}'
 WORKTREES_DIR='{{- /* personal Linux also applies this file (it has no t3Hub pair, and no codex binaryPath without active.json): worktrees go to ~/t3-worktrees there; /Volumes/Workshop is the Mac's disk */ -}}{{ if eq .chezmoi.os "darwin" }}/Volumes/Workshop/macbook/t3-worktrees{{ else }}{{ $home }}/t3-worktrees{{ end }}'
 AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
+ENV_VARS='{"claudeAgent":[{"name":"CLAUDE_CODE_FIZZY_GROVE","sensitive":false,"value":"1"}],"coordinator":[{"name":"CLAUDE_CODE_FIZZY_GROVE","sensitive":false,"value":"1"}]}'
 IDLE_COMPACTION='beforeCacheExpires'
 PREFIX='{{ $home }}/.t3/tools/codex/'
 
@@ -151,7 +164,7 @@ fi
 
 out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjson owned "$OWNED" --arg mode "$HUB_MODE" \
   --arg bin "$DEFAULT_BINARY" --argjson original "$ORIGINAL" --arg prefix "$PREFIX" \
-  --argjson names "$NAMES" --arg worktrees "$WORKTREES_DIR" --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
+  --argjson names "$NAMES" --arg worktrees "$WORKTREES_DIR" --argjson windows "$AUTO_COMPACT_WINDOWS" --argjson envvars "$ENV_VARS" --arg idle "$IDLE_COMPACTION" --arg usageId "$USAGE_ID" --argjson usageSource "$USAGE_SOURCE" '
   def upsert($id): if $want[$id] then .[$id] = $want[$id] else del(.[$id]) end;
   (.providerInstances // {}) as $before
   | ($before | reduce $owned[] as $id (.; upsert($id))) as $after
@@ -175,7 +188,10 @@ out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjso
         (if $windows[$id] == "" then (if (.providerInstances[$id].config | type) == "object" then del(.providerInstances[$id].config.autoCompactWindow) else . end)
          else .providerInstances[$id].config = ((.providerInstances[$id].config // {}) + {autoCompactWindow: $windows[$id]}) end) else . end);
     def setIdle: if $idle == "" then . else .idleCompaction = $idle end;
-    setCompact | setIdle
+    def upsertEnv($e): ((.environment // []) | if any(.[]; .name == $e.name) then map(if .name == $e.name then $e else . end) else . + [$e] end);
+    def setEnvVars: reduce ($envvars | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" then
+        .providerInstances[$id] |= reduce $envvars[$id][] as $e (.; .environment = upsertEnv($e)) else . end);
+    setCompact | setIdle | setEnvVars
   | .worktreesDirectory = $worktrees')
 printf %s "$out"
 case $input in
