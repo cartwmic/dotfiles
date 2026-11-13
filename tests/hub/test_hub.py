@@ -111,6 +111,12 @@ def render(path, case, home=None):
     # are tests/t3-hub's; blank them here (an empty value adds nothing) so the fixture comparisons stay about the hub.
     if path != T3:
         return text
+    # The four seat-* instances are tests/t3-hub's too: take them out of WANT and OWNED.
+    def drop_seats(m):
+        data = json.loads(m.group(2))
+        data = {k: v for k, v in data.items() if not k.startswith("seat-")} if isinstance(data, dict) else [k for k in data if not k.startswith("seat-")]
+        return "%s='%s'" % (m.group(1), json.dumps(data, separators=(",", ":")))
+    text = re.sub(r"(?m)^(WANT|OWNED)='(.*)'$", drop_seats, text)
     text = re.sub(r"(?m)^AUTO_COMPACT_WINDOWS=.*$", "AUTO_COMPACT_WINDOWS='{}'", text)
     return re.sub(r"(?m)^IDLE_COMPACTION=.*$", "IDLE_COMPACTION=''", text)
 
@@ -473,7 +479,12 @@ class ApplyPathTest(unittest.TestCase):
         for i, w in (("claudeAgent", "300000"), ("coordinator", "200000")):
             settled["providerInstances"][i]["config"] = {**settled["providerInstances"][i].get("config", {}), "autoCompactWindow": w}
         settled["idleCompaction"] = "beforeCacheExpires"
-        self.assertEqual(baseline[".t3/userdata/settings.json"], json.dumps(settled, indent=2, ensure_ascii=False))
+        # the four seat-* instances are there too (tests/t3-hub covers them); everything else is byte for byte what the hub-off script leaves
+        no_seats = json.loads(baseline[".t3/userdata/settings.json"])
+        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer"):
+            self.assertIn(sid, no_seats["providerInstances"])
+            del no_seats["providerInstances"][sid]
+        self.assertEqual(json.dumps(no_seats, indent=2, ensure_ascii=False), json.dumps(settled, indent=2, ensure_ascii=False))
         self.assertEqual(baseline[".codex/config.toml"], self.CODEX_BASE)
         self.set_switch(True)
         self.apply(*self.targets())
@@ -486,6 +497,7 @@ class ApplyPathTest(unittest.TestCase):
         t3 = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
         self.assertEqual(t3["codex"], {"driver": "codex", "enabled": True, "displayName": "Codex", "config": {
             "setupMode": "existing", "binaryPath": "%s/.t3/tools/codex/%s/bin/codex" % (self.home, CODEX_VERSION)}})
+        t3 = {k: v for k, v in t3.items() if not k.startswith("seat-")}
         self.assertEqual({k: v["displayName"] for k, v in t3.items()}, NAMES)
         self.assertEqual(list(t3), ["codex", "claudeAgent", "coordinator"])
         top = json.loads((self.home / ".t3/userdata/settings.json").read_text())
