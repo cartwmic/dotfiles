@@ -8,6 +8,7 @@ checked from outside: exit codes, output, the job record, files that came back, 
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -935,6 +936,23 @@ class Black(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f.name)
         self.assertEqual([p.name for p in (self.cache / "kgate").iterdir() if p.name.startswith(".tmp-")], [], "no temp file is left behind")
 
+    def test_a_warm_cache_needs_no_token_and_a_cold_one_still_refuses(self):
+        self.profile(secrets='TOK = "op://developer/item/password"')
+        self.assertEqual(self.kgate("--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""}).returncode, 69)
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        done = self.kgate("--", "true", env={"OP_SERVICE_ACCOUNT_TOKEN": ""})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(len(self.op_reads()), 2, "no op run for the third job")
+
+    def test_a_cache_that_cannot_be_written_still_returns_the_secret_and_says_so(self):
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "HOME": str(self.home),
+               "OP_SERVICE_ACCOUNT_TOKEN": FAKE_TOKEN, "FAKE_TOKEN": FAKE_TOKEN}
+        with mock.patch.dict(os.environ, env), mock.patch.object(K.tempfile, "mkstemp", side_effect=OSError("disk full")), \
+                mock.patch("sys.stderr", new=io.StringIO()) as err:
+            self.assertEqual(K.op_read("op://developer/item/password"), b"value-of-password")
+        self.assertIn("kgate: secret cache not written (disk full)", err.getvalue())
+        self.assertEqual(self.cache_files(), [])
+
     def test_the_cache_dir_falls_back_to_dot_cache_under_home(self):
         done = self.kgate("--", "true", env={"XDG_CACHE_HOME": ""})
         self.assertEqual(done.returncode, 0, done.stdout)
@@ -958,6 +976,7 @@ class Black(unittest.TestCase):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual(len(self.op_reads()), 1, "read with op as before (the pull credential)")
+        self.assertIn("kgate: secret cache unusable at", done.stdout)
 
     def preferred_hosts(self):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)

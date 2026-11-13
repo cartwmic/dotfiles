@@ -984,8 +984,8 @@ def cache_secret(path, value):
         except BaseException:
             os.unlink(tmp)
             raise
-    except OSError:
-        pass
+    except OSError as e:
+        print("kgate: secret cache not written (%s); the next job reads with op again" % e, file=sys.stderr)
 
 
 def op_read(ref):
@@ -1000,7 +1000,8 @@ def op_read(ref):
         os.chmod(d, 0o700)
         lock = os.open(os.path.join(d, ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)    # released when `lock` is closed
-    except OSError:
+    except OSError as e:
+        print("kgate: secret cache unusable at %s (%s); reading with op without it" % (d, e), file=sys.stderr)
         return op_read_fresh(ref)           # no usable cache directory: read as before
     try:
         value = cached_secret(path)
