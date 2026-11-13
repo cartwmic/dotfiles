@@ -1169,11 +1169,18 @@ if a[:2] == ["get", "events"]:
     name = a[a.index("--field-selector") + 1].split("involvedObject.name=")[1]
     event = {"event": ("Evicted", "Evicted pod: Underutilized"), "taint": ("TaintManagerEviction", "Marking for deletion Pod jobs/x"),
              "other": ("Killing", "Stopping container job")}.get(lost.get(name))
+    if event is None and lost.get(name, "").startswith("reason="):   # "reason=X": gone, and the only event has reason X
+        event = (lost[name][7:], "a message")
+    if os.environ.get("FAKE_EVENTS_FAIL"):   # the events read is refused
+        sys.stderr.write('Error from server (Forbidden): events is forbidden: User "x" cannot list resource "events"\n'); sys.exit(1)
     print(json.dumps({"items": [{"reason": event[0], "message": event[1]}] if event else []})); sys.exit(0)
 if a[:2] == ["create", "-f"]:
     creates = os.path.join(fake, "creates")
     n = int(open(creates).read()) + 1 if os.path.exists(creates) else 1
     open(creates, "w").write(str(n))
+    if os.environ.get("FAKE_QUOTA_ON_CREATE") == str(n) and not os.path.exists(os.path.join(fake, "quota-once")):   # refuse that one create, once
+        open(os.path.join(fake, "quota-once"), "w").write("x")
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=8, limited: requests.cpu=8\n'); sys.exit(1)
     quota = os.environ.get("FAKE_QUOTA", "")   # "N": refuse the first N creates; "always": refuse every create. The used CPU changes after the first.
     if quota.startswith("long:") and n <= int(quota[5:]):   # four resources exceeded, a message over 300 characters, every request under its limited value
         names = ["limits.cpu", "limits.memory", "requests.cpu", "requests.ephemeral-storage"]
@@ -1206,9 +1213,10 @@ if a[:2] == ["get", "pod"]:
     last = json.load(open(os.path.join(fake, "last_manifest.json"))) if os.path.exists(os.path.join(fake, "last_manifest.json")) else {"items": [{"spec": {"volumes": []}}]}
     has_claim = any("persistentVolumeClaim" in v for i in last["items"] for v in i["spec"]["volumes"])
     rwop = "0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod."
-    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-gone" and n > 1):
+    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-r2" and not (has_claim and last["items"][0]["metadata"]["name"].endswith("-r2"))) \
+            or (scenario == "rwop-r1" and not (has_claim and not last["items"][0]["metadata"]["name"].endswith("-r2"))) or (scenario == "rwop-gone" and n > 1):
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
-    elif scenario in ("rwop", "rwop-gone"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
+    elif scenario in ("rwop", "rwop-gone", "rwop-r2", "rwop-r1"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
         st = pending(rwop)
     elif scenario == "queued":   # a full cluster: the scheduler's capacity message
         st = pending("0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.")
@@ -2971,6 +2979,69 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(rec["attempts"], 1)
         self.assertNotIn("evicted", rec)
         self.assertFalse([a for a in self.kubectl_args() if a[:2] == ["get", "events"]])
+
+    def test_only_an_explicit_list_of_reasons_is_an_eviction(self):
+        for reason in ("DisruptionBlocked", "FailedScheduling", "Nominated", "DisruptionTerminating", "Killing"):   # the node autoscaler says a disruption did NOT happen, or no pod went
+            with self.subTest(reason):
+                done = self.lose("1:reason=" + reason)
+                self.assertEqual(done.returncode, 69, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+                self.assertNotIn("rerunning", done.stdout)
+                self.assertNotIn("evicted", rec)
+                self.assertEqual([s for s in self.steps() if s[0] == "create"][-1:], [("create", rec["id"])])
+        self.assertEqual(K.EVICTION_REASONS, {"Evicted", "TaintManagerEviction", "Preempted", "Disrupted"})
+
+    def test_each_allowed_reason_is_rerun(self):
+        for reason in sorted(K.EVICTION_REASONS):
+            with self.subTest(reason):
+                shutil.rmtree(self.fake / "podgit", ignore_errors=True)   # the fake pod's tree from the last job
+                done = self.lose("1:reason=" + reason)
+                self.assertEqual(done.returncode, 0, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["attempts"], 2)
+                self.assertEqual(rec["evicted"], [{"attempt": 1, "pod": rec["id"], "reason": reason + ": a message"}])
+
+    def test_a_failed_events_read_means_no_rerun(self):
+        done = self.lose("1:event", env={"FAKE_EVENTS_FAIL": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+        self.assertIn(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + rec["id"], "-o", "json"], self.kubectl_args())
+        self.assertNotIn("evicted", rec)
+        self.assertEqual([s for s in self.steps() if s[0] == "create"], [("create", rec["id"])])
+
+    def test_the_rerun_pod_waits_for_quota_like_any_pod(self):
+        done = self.lose("1:event", "--wait", "60", env={"FAKE_QUOTA_ON_CREATE": "2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("exceeded quota", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["attempts"], 2)
+        self.assertEqual(int((self.fake / "creates").read_text()), 3, "the first pod, the refused create of the second, its retry")
+
+    def test_the_rerun_pod_falls_back_to_no_cache_and_the_record_names_that_pod_cache(self):
+        self.profile(extra='cache_pvc = "example-cache"')
+        done = self.lose("1:event", "--wait", "60", env={"FAKE_POD": "rwop-r2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["attempts"], rec["cache"]), (2, "fallback"))
+        vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
+        first, second, third = self.pods_created()
+        self.assertEqual(vols(first), [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
+        self.assertEqual(vols(second), [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
+        self.assertEqual(vols(third), [{"name": "cache", "emptyDir": {}}])
+        self.assertEqual([p["metadata"]["name"] for p in (second, third)], [rec["id"] + "-r2"] * 2)
+
+    def test_the_record_says_pvc_when_the_first_pod_fell_back_and_the_rerun_pod_got_the_claim(self):
+        self.profile(extra='cache_pvc = "example-cache"')
+        done = self.lose("1:event", "--wait", "60", env={"FAKE_POD": "rwop-r1"})   # the claim is busy for the first pod only
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(done.stdout.count("cache in use by another job; running without it"), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["attempts"], rec["cache"]), (2, "pvc"))
+        vols = lambda pod: [v for v in pod["spec"]["volumes"] if v["name"] == "cache"]
+        self.assertEqual([vols(p) for p in self.pods_created()][-1], [{"name": "cache", "persistentVolumeClaim": {"claimName": "example-cache"}}])
 
     def test_the_wait_deadline_covers_the_retry_and_is_not_reset(self):
         done = self.lose("1:event", "--wait", "1", env={"FAKE_LOST_DELAY": "2"})

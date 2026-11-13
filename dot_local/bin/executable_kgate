@@ -97,8 +97,11 @@ QUOTA_REFUSAL = re.compile(r'^Error from server \(Forbidden\): (?:error when cre
 CACHE_BUSY_S = 10  # a cache_pvc pod Pending this long on the ReadWriteOncePod conflict runs without the cache
 QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
 # What the cluster records when it takes a pod away on purpose (the node autoscaler's consolidation, the taint manager, the scheduler's preemption).
-# Only these events, or the pod's own status saying the same, make kgate rerun a lost pod.
-EVICTION_REASON = re.compile(r"^(Evicted|TaintManagerEviction|Preempted|Disruption\w*)$")
+# Only these events, or the pod's own status saying the same, make kgate rerun a lost pod. An explicit list: the node autoscaler's DisruptionBlocked and the
+# other Disruption* reasons are about nodes and say a disruption did NOT happen or is only planned, and FailedScheduling or Nominated are not evictions either.
+# Sources: kubelet "Evicted", the taint manager's "TaintManagerEviction" and the scheduler's "Preempted" (Kubernetes); the node autoscaler's pod-level events
+# (upstream terminator events file): its eviction ("Evicted") and its forced pod delete at the node's termination grace period ("Disrupted").
+EVICTION_REASONS = frozenset(("Evicted", "TaintManagerEviction", "Preempted", "Disrupted"))
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
 MSSQL_PORT = 1433
@@ -1464,6 +1467,7 @@ class Job:
                 if not why:
                     raise      # no sign that the cluster took the pod: the result is unknown and CMD may have had effects, so it is not rerun
                 manifests, cold = self.rerun(why, make)
+                self.rec["cache"] = "pvc" if cold else "none"   # the record names the cache of the pod that ends the job: the rerun pod starts with the claim again
 
     def attempt(self, manifests, cold, tar_bytes):
         """One pod: create it, run CMD in it, read what it reported. Returns CMD's exit code; raises Lost when the pod went before CMD reported its end."""
@@ -1522,7 +1526,7 @@ class Job:
             except ValueError:
                 items = []
             for e in items:
-                if EVICTION_REASON.match(e.get("reason") or ""):
+                if e.get("reason") in EVICTION_REASONS:
                     return text(e["reason"], e.get("message"))
         return None
 
