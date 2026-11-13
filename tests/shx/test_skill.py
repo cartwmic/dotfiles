@@ -40,9 +40,11 @@ class SkillTest(unittest.TestCase):
         _, body = parts()
         self.assertEqual([n for n in NAMES if n not in body], [])
 
-    def test_says_pages_for_michael_stay_on_viz_for_now(self):
+    def test_says_pages_for_his_review_or_input_go_on_shartifacts(self):
         _, body = parts()
-        self.assertRegex(body, r"Until Michael switches the playbook rule, pages for Michael still go on viz")
+        self.assertRegex(body, r"Pages for Michael's review or input go on shartifacts")
+        self.assertRegex(body, r"viz\s+\(`using-viz`\) is for static charts, diagrams and PNGs")
+        self.assertNotIn("still go on viz", body)
 
     def test_command_lines_match_the_command(self):
         # The two forms the skill shows are the two the command takes (core/domain.mjs USAGE).

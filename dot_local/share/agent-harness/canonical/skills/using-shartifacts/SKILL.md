@@ -9,8 +9,10 @@ shartifacts is Michael's self-hosted page server at `https://shartifacts.interna
 He reads a page on his phone, selects text or draws on it with a finger, and you get what he
 marked back.
 
-Until Michael switches the playbook rule, pages for Michael still go on viz (`using-viz`). Use
-shartifacts when he asks for it, or when you need his marks on a page back.
+Pages for Michael's review or input go on shartifacts: reports he comments on, pickers, plans,
+explainers, anything interactive. He selects, draws and comments on the page, and you read his
+highlights, drawings and comments here and wait on them. Do not ask him to paste text back. viz
+(`using-viz`) is for static charts, diagrams and PNGs, and its old links stay.
 
 You reach it two ways: the `shartifacts` MCP server (its tools are named below) and the
 command `shx-note-image`.
