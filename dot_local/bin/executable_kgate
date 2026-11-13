@@ -708,15 +708,27 @@ def git(cwd, *args):
     return done.stdout
 
 
-def worktree(cwd):
+def gitlinks(wt):
+    """The submodule paths: index entries of mode 160000. They show up in `ls-files` as directories (empty when not initialised)."""
+    rows = git(wt, "ls-files", "-s", "-z").split(b"\0")
+    return {os.fsdecode(r.split(b"\t", 1)[1]) for r in rows if r.startswith(b"160000 ")}
+
+
+def worktree(cwd, skipped=None):
+    """(worktree root, shared git folder, files to ship). Submodules are left out; their paths are appended to `skipped` when given.
+    Any other directory in the list (such as a nested repo that is not a submodule) is refused."""
     wt = git(cwd, "rev-parse", "--show-toplevel").decode().strip()
     common = git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()
     files = [os.fsdecode(p) for p in git(wt, "ls-files", "-co", "--exclude-standard", "-z").split(b"\0") if p]
     files = [p for p in files if os.path.lexists(os.path.join(wt, p))]  # deleted but not yet staged
+    links = gitlinks(wt)
+    if skipped is not None:
+        skipped.extend(sorted(p for p in files if p in links))
+    files = [p for p in files if p not in links]
     for p in files:
         full = os.path.join(wt, p)
         if os.path.isdir(full) and not os.path.islink(full):
-            raise Unavailable("%s is a directory in the file list (a submodule); kgate does not ship those" % p)
+            raise Unavailable("%s is a directory in the file list (not a submodule: a nested repo or a stray directory); kgate does not ship those" % p)
     return wt, common, files
 
 
@@ -1372,7 +1384,10 @@ class Job:
 
     def run(self):
         o = self.o
-        wt, common, files = worktree(os.getcwd())
+        skipped = []
+        wt, common, files = worktree(os.getcwd(), skipped)
+        if skipped:
+            self.note("not shipping submodules: " + ", ".join(skipped))
         self.rec["repo"] = os.path.basename(os.path.dirname(common)) if common.endswith("/.git") else os.path.basename(common)
         head = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.rec["head"] = head.stdout.decode().strip() or None

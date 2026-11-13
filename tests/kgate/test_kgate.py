@@ -1725,6 +1725,120 @@ class PodSh(unittest.TestCase):
         self.assertIn("[]", done.stdout)
 
 
+SUB_SHA = "1" * 40
+
+
+def add_uninitialised_submodule(repo, path, sha=SUB_SHA):
+    """A gitlink in the index with only an empty directory in the tree: what a clone without --recurse-submodules leaves."""
+    git(repo, "update-index", "--add", "--cacheinfo", "160000,%s,%s" % (sha, path))
+    (Path(repo) / path).mkdir(parents=True, exist_ok=True)
+
+
+def add_initialised_submodule(repo, path, tmp):
+    """A real submodule, checked out, from an invented local repo."""
+    src = Path(tmp) / ("src-" + path.replace("/", "-"))
+    src.mkdir()
+    git(src, "init", "-q")
+    (src / "lib.txt").write_text("library\n")
+    git(src, "add", "-A")
+    git(src, "commit", "-q", "-m", "lib")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(src), path)
+
+
+class Submodules(unittest.TestCase):
+    """A submodule (a gitlink in the index) is left out of the file list, the tar and the tree hash; any other directory in the list is refused."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ksm-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q")
+        (self.repo / "a.txt").write_text("a\n")
+        (self.repo / "run.sh").write_text("#!/bin/sh\n")
+        (self.repo / "run.sh").chmod(0o755)
+        os.symlink("a.txt", self.repo / "link")
+        (self.repo / "pkg").mkdir()
+        (self.repo / "pkg" / "b.txt").write_text("b\n")
+
+    def listing(self):
+        skipped = []
+        wt, common, files = K.worktree(str(self.repo), skipped)
+        return files, skipped
+
+    def git_hash(self, files):
+        """The tree hash by git itself: a throwaway index holding exactly `files`."""
+        env = {**os.environ, "GIT_INDEX_FILE": str(self.tmp / "idx")}
+        run = lambda *a, **kw: subprocess.run(["git", "-c", "core.autocrlf=false", *a], cwd=self.repo, env=env, check=True, stdout=subprocess.PIPE, **kw).stdout
+        run("update-index", "--add", "-z", "--stdin", input=b"".join(os.fsencode(f) + b"\0" for f in files))
+        return run("write-tree").decode().strip()
+
+    def test_an_uninitialised_submodule_is_skipped(self):
+        add_uninitialised_submodule(self.repo, "vendor/lib")
+        add_uninitialised_submodule(self.repo, "other")
+        git(self.repo, "add", "-A")
+        files, skipped = self.listing()
+        self.assertEqual(skipped, ["other", "vendor/lib"])
+        self.assertEqual(sorted(files), ["a.txt", "link", "pkg/b.txt", "run.sh"])
+
+    def test_an_initialised_submodule_is_skipped_with_its_files(self):
+        add_initialised_submodule(self.repo, "vendor/lib", self.tmp)
+        git(self.repo, "add", "-A")
+        self.assertTrue((self.repo / "vendor/lib/lib.txt").exists())
+        files, skipped = self.listing()
+        self.assertEqual(skipped, ["vendor/lib"])
+        self.assertFalse([f for f in files if f.startswith("vendor/lib")], files)
+        self.assertIn(".gitmodules", files)   # a plain tracked file: it ships
+
+    def test_a_directory_that_is_not_a_submodule_is_still_refused(self):
+        nested = self.repo / "nested"
+        nested.mkdir()
+        git(nested, "init", "-q")
+        (nested / "x.txt").write_text("x\n")
+        git(nested, "add", "-A")
+        git(nested, "commit", "-q", "-m", "x")   # an untracked nested repo: `ls-files -o` lists it as a directory, not a gitlink
+        with self.assertRaises(K.Unavailable) as caught:
+            self.listing()
+        self.assertIn("nested", str(caught.exception))
+        self.assertIn("not a submodule", str(caught.exception))
+
+    def test_the_hash_is_the_same_with_the_submodule_uninitialised_initialised_or_absent(self):
+        files, skipped = self.listing()
+        plain = K.tree_hash(str(self.repo), files)
+        self.assertEqual(plain, self.git_hash(files))      # kgate's hash is git's, with an executable file and a symlink in the tree
+        add_uninitialised_submodule(self.repo, "vendor/lib")
+        git(self.repo, "add", "-A")
+        files, skipped = self.listing()
+        self.assertEqual(skipped, ["vendor/lib"])
+        self.assertEqual(K.tree_hash(str(self.repo), files), plain)
+        shutil.rmtree(self.repo / "vendor/lib")
+        git(self.repo, "rm", "-q", "--cached", "vendor/lib")
+        git(self.repo, "reset", "-q")
+        (self.repo / "vendor").rmdir()
+        add_initialised_submodule(self.repo, "vendor/lib", self.tmp)
+        files, skipped = self.listing()
+        self.assertEqual(skipped, ["vendor/lib"])
+        tracked = [f for f in files if f != ".gitmodules"]
+        self.assertEqual(K.tree_hash(str(self.repo), tracked), plain)
+
+    def test_the_hash_still_catches_a_real_change(self):
+        add_uninitialised_submodule(self.repo, "vendor/lib")
+        files, _ = self.listing()
+        before = K.tree_hash(str(self.repo), files)
+        (self.repo / "a.txt").write_text("changed\n")
+        self.assertNotEqual(K.tree_hash(str(self.repo), files), before)
+
+    def test_the_tar_has_no_submodule_path(self):
+        add_initialised_submodule(self.repo, "vendor/lib", self.tmp)
+        git(self.repo, "add", "-A")
+        wt, common, files = K.worktree(str(self.repo))
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(K.archive(wt, common, files, {}, history=False))) as tar:
+            names = tar.getnames()
+        self.assertIn((wt + "/a.txt").lstrip("/"), names)
+        self.assertEqual([n for n in names if "vendor/lib" in n], [])
+
+
 class Archive(unittest.TestCase):
     """What is shipped: the homelab keeps .git and the shared git folder; a kubectl cluster ships the files and the extras only."""
 
@@ -1834,6 +1948,35 @@ class KubectlBlack(unittest.TestCase):
             files = tar.extractfile("cache/%s/files.nul" % rec["id"]).read().split(b"\0")[:-1]
         self.assertFalse((self.fake / "jobroot" / "cache" / rec["id"]).exists(), "the job's own directory is gone from /cache")
         self.assertEqual(sorted(files), [b".gitignore", b"kgate.toml", b"tracked.txt", b"untracked.txt"])  # not ignored.txt
+
+    def test_a_submodule_is_skipped_with_one_line_and_the_pod_hash_matches(self):
+        add_initialised_submodule(self.repo, "vendor/lib", self.tmp)
+        add_uninitialised_submodule(self.repo, "other")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "submodules")
+        done = self.run_kgate("--", "sh", "-c", "ls vendor/lib | wc -l")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("kgate: not shipping submodules: other, vendor/lib\n", done.stdout)
+        self.assertEqual(done.stdout.count("not shipping submodules"), 1)
+        rec = self.records()[-1]
+        self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)   # the pod rebuilt the index from the shipped list with git: same tree
+        import tarfile
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            files = tar.extractfile("cache/%s/files.nul" % rec["id"]).read().split(b"\0")[:-1]
+        self.assertEqual([f for f in files if f.startswith(b"vendor") or f == b"other"], [])
+
+    def test_a_nested_repo_that_is_not_a_submodule_is_exit_69(self):
+        nested = self.repo / "nested"
+        nested.mkdir()
+        git(nested, "init", "-q")
+        (nested / "x.txt").write_text("x\n")
+        git(nested, "add", "-A")
+        git(nested, "commit", "-q", "-m", "x")
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("nested", done.stdout)
+        self.assertEqual(self.kubectl_args(), [], "nothing reached the cluster")
+
 
     def test_a_linked_worktree_whose_common_dir_is_outside_the_allow_list_is_accepted(self):
         """The common dir is not shipped on a kubectl cluster, so only the worktree's own top directory needs an emptyDir and a place on the allow-list."""
