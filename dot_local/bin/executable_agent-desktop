@@ -1,0 +1,298 @@
+#!/bin/sh
+# agent-desktop: screenshot, list windows, focus, move and click the pointer, type and press keys on the Omarchy
+# desktop (Hyprland 0.56.2, Wayland). Agents call it; Michael can run it too. Source: dot_local/bin/executable_agent-desktop,
+# personal Linux only (docs/profiles.md). Docs: README "Linux on Arch (Omarchy)".
+#
+#   agent-desktop shot FILE [REGION]                screenshot to FILE; REGION is one argument, "X,Y WxH" (grim -g); prints FILE
+#   agent-desktop windows                           one line per window: class, title, at, size, workspace, xwayland
+#   agent-desktop focus CLASS                       focus the window whose class is CLASS
+#   agent-desktop move X Y                          move the pointer to logical X,Y
+#   agent-desktop click X Y [left|right|middle]     move, then click (default left)
+#   agent-desktop type TEXT                         type TEXT (wtype -- TEXT)
+#   agent-desktop key KEY [MOD...]                  press KEY with modifiers held: key comma ctrl -> wtype -M ctrl -k comma -m ctrl
+#   agent-desktop cursor                            print the pointer position as "X Y"
+#
+# Lua dispatch (verified live on Hyprland 0.56.2): the config is Lua. The old dispatcher syntax fails with a Lua
+# syntax error: `hyprctl dispatch movecursor 737 277` and `hyprctl dispatch focuswindow class:X` do not work. Use
+#   hyprctl dispatch 'hl.dsp.cursor.move({x=737,y=277})'          (logical coordinates)
+#   hyprctl dispatch 'hl.dsp.focus({window="class:X"})'
+#   hyprctl dispatch 'hl.dsp.workspace.toggle_special("scratchpad")'
+# More names: grep hl.dsp /usr/share/omarchy/default/hypr/bindings/*.lua. Hyprland has no click dispatcher, so click
+# is a move followed by `wlrctl pointer click left` (zwlr_virtual_pointer; works on native Wayland windows; no root).
+# Success is exactly "ok" with exit 0. A missing window prints a warning and still exits 0, so any other output is a
+# failure here. A Lua error exits non-zero (exit 7 seen).
+# CLASS goes into the Lua string, so a double quote or backslash is refused: it would break the string.
+#
+# wtype types through the virtual-keyboard protocol. `key comma ctrl` did not open 1Password's settings in two tries,
+# but clicking worked: prefer clicking for app menus.
+# Coordinates are logical. At scale 1 screenshot pixels equal logical coordinates. For another scale, check
+# `hyprctl monitors -j` and divide.
+# Agent shells under t3code.service may have no WAYLAND_DISPLAY or HYPRLAND_INSTANCE_SIGNATURE. hyprctl then exits 1
+# ("HYPRLAND_INSTANCE_SIGNATURE not set"). When either is unset, the script takes it from the first wayland-* socket
+# and the first $XDG_RUNTIME_DIR/hypr/*/.socket.sock.
+# A missing tool exits 69 and names its package before any action runs (wlrctl is AUR: yay -S --needed wlrctl).
+#
+# Exit: 0 ok; 1 a tool failed or printed something unexpected; 2 usage; 69 missing tool.
+# Log: ${XDG_STATE_HOME:-~/.local/state}/agent-desktop/agent-desktop.log, one line per step: UTC time, run id, elapsed,
+# step, outcome. `type` logs its length, not its text.
+set -eu
+
+SCRIPT_NAME="agent-desktop"
+
+usage() {
+  echo "usage: $SCRIPT_NAME shot FILE [REGION] | windows | focus CLASS | move X Y |" >&2
+  echo "       $SCRIPT_NAME click X Y [left|right|middle] | type TEXT | key KEY [MOD...] | cursor" >&2
+  exit 2
+}
+
+fail() {  # fail EXIT_CODE MESSAGE...
+  code=$1
+  shift
+  echo "[$SCRIPT_NAME] ERROR: $*" >&2
+  exit "$code"
+}
+
+require() {  # require TOOL...: exit 69 naming the package of the first tool that is not on PATH
+  for t in "$@"; do
+    if ! command -v "$t" >/dev/null 2>&1; then
+      case $t in
+        hyprctl) p="Arch package hyprland" ;;
+        wlrctl) p="AUR: yay -S --needed wlrctl" ;;
+        wtype) p="Arch package wtype" ;;
+        grim) p="Arch package grim" ;;
+        python3) p="Arch package python" ;;
+        *) p="" ;;
+      esac
+      echo "[$SCRIPT_NAME] ERROR: $t is not on PATH ($p)" >&2
+      exit 69
+    fi
+  done
+}
+
+find_session() {  # fill in WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE when this shell has neither
+  runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    for sock in "$runtime"/wayland-*; do
+      if [ -S "$sock" ]; then
+        WAYLAND_DISPLAY=${sock##*/}
+        export WAYLAND_DISPLAY
+        break
+      fi
+    done
+  fi
+  if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+    for sock in "$runtime"/hypr/*/.socket.sock; do
+      if [ -S "$sock" ]; then
+        sig=${sock%/.socket.sock}
+        HYPRLAND_INSTANCE_SIGNATURE=${sig##*/}
+        export HYPRLAND_INSTANCE_SIGNATURE
+        break
+      fi
+    done
+  fi
+}
+
+start_log() {
+  state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-desktop"
+  mkdir -p "$state_dir"
+  LOG="$state_dir/agent-desktop.log"
+  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  START=$(date +%s)
+}
+
+record() {  # record TEXT: one line in the log
+  printf '%s run=%s elapsed=%ss %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$(($(date +%s) - START))" "$*" >>"$LOG"
+}
+
+prepare() {  # prepare TOOL...: check the tools, find the session, open the log. Nothing acts before this.
+  require "$@"
+  find_session
+  start_log
+}
+
+is_int() {  # is_int VALUE: optional minus, then digits only
+  case $1 in
+    -*) set -- "${1#-}" ;;
+  esac
+  case $1 in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+valid_word() {  # valid_word VALUE: a key or modifier name such as comma or ctrl
+  case $1 in
+    ''|*[!A-Za-z0-9_]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+dispatch() {  # dispatch LUA: one hyprctl dispatch. Only the exact output "ok" is success.
+  rc=0
+  out=$(hyprctl dispatch "$1" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ] || [ "$out" != ok ]; then
+    record "FAIL hyprctl dispatch $1 exit=$rc output=$out"
+    fail 1 "hyprctl dispatch failed (exit $rc): $out"
+  fi
+  record "hyprctl dispatch $1 ok"
+}
+
+WINDOWS_PY='
+import json, sys
+def clean(v):
+    return str(v).replace("\t", " ").replace("\n", " ")
+print("class\ttitle\tat\tsize\tworkspace\txwayland")
+for c in json.load(sys.stdin):
+    print("\t".join([
+        clean(c["class"]), clean(c["title"]),
+        "%d,%d" % tuple(c["at"]), "%dx%d" % tuple(c["size"]),
+        clean(c["workspace"]["name"]), "true" if c["xwayland"] else "false",
+    ]))
+'
+
+cmd_shot() {  # FILE [REGION]
+  file=$1
+  region=${2:-}
+  if [ -n "$region" ]; then
+    set -- -g "$region" "$file"
+  else
+    set -- "$file"
+  fi
+  if grim "$@"; then
+    record "shot $file region=${region:-full}"
+    echo "$file"
+  else
+    record "FAIL shot $file region=${region:-full}"
+    fail 1 "grim failed for $file"
+  fi
+}
+
+cmd_windows() {
+  if ! json=$(hyprctl clients -j 2>&1); then
+    record "FAIL windows"
+    fail 1 "hyprctl clients failed: $json"
+  fi
+  if printf '%s' "$json" | python3 -c "$WINDOWS_PY"; then
+    record "windows"
+  else
+    record "FAIL windows (parse)"
+    fail 1 "could not read hyprctl clients output"
+  fi
+}
+
+cmd_focus() {  # CLASS
+  dispatch "hl.dsp.focus({window=\"class:$1\"})"
+}
+
+cmd_move() {  # X Y
+  dispatch "hl.dsp.cursor.move({x=$1,y=$2})"
+}
+
+cmd_click() {  # X Y [BUTTON]
+  button=${3:-left}
+  cmd_move "$1" "$2"
+  if wlrctl pointer click "$button"; then
+    record "click $1 $2 $button"
+  else
+    record "FAIL click $1 $2 $button (wlrctl)"
+    fail 1 "wlrctl pointer click $button failed"
+  fi
+}
+
+cmd_type() {  # TEXT
+  if wtype -- "$1"; then
+    record "type length=${#1}"
+  else
+    record "FAIL type length=${#1}"
+    fail 1 "wtype failed"
+  fi
+}
+
+cmd_key() {  # KEY [MOD...]
+  key=$1
+  shift
+  mods=$*
+  set -- wtype
+  for m in $mods; do set -- "$@" -M "$m"; done
+  set -- "$@" -k "$key"
+  for m in $mods; do set -- "$@" -m "$m"; done
+  if "$@"; then
+    record "key $key mods=${mods:-none}"
+  else
+    record "FAIL key $key mods=${mods:-none}"
+    fail 1 "wtype failed for key $key"
+  fi
+}
+
+cmd_cursor() {
+  if ! pos=$(hyprctl cursorpos 2>&1); then
+    record "FAIL cursor"
+    fail 1 "hyprctl cursorpos failed: $pos"
+  fi
+  case $pos in
+    *", "*) ;;
+    *) record "FAIL cursor output=$pos"; fail 1 "unexpected cursorpos output: $pos" ;;
+  esac
+  x=${pos%%,*}
+  y=${pos#*, }
+  if is_int "$x" && is_int "$y"; then
+    record "cursor $x $y"
+    echo "$x $y"
+  else
+    record "FAIL cursor output=$pos"
+    fail 1 "unexpected cursorpos output: $pos"
+  fi
+}
+
+[ $# -ge 1 ] || usage
+cmd=$1
+shift
+case $cmd in
+  shot)
+    [ $# -ge 1 ] && [ $# -le 2 ] || usage
+    [ -n "$1" ] || fail 2 "shot: FILE must not be empty"
+    prepare grim
+    cmd_shot "$@" ;;
+  windows)
+    [ $# -eq 0 ] || usage
+    prepare hyprctl python3
+    cmd_windows ;;
+  focus)
+    [ $# -eq 1 ] || usage
+    case $1 in
+      ''|*'"'*|*\\*) fail 2 "focus: CLASS must be non-empty and have no double quote or backslash (it goes into a Lua string)" ;;
+    esac
+    prepare hyprctl
+    cmd_focus "$1" ;;
+  move)
+    [ $# -eq 2 ] || usage
+    if ! is_int "$1" || ! is_int "$2"; then fail 2 "move: X and Y must be integers"; fi
+    prepare hyprctl
+    cmd_move "$1" "$2" ;;
+  click)
+    [ $# -eq 2 ] || [ $# -eq 3 ] || usage
+    if ! is_int "$1" || ! is_int "$2"; then fail 2 "click: X and Y must be integers"; fi
+    case ${3:-left} in
+      left|right|middle) ;;
+      *) fail 2 "click: button must be left, right or middle" ;;
+    esac
+    prepare hyprctl wlrctl
+    cmd_click "$@" ;;
+  type)
+    [ $# -eq 1 ] || usage
+    prepare wtype
+    cmd_type "$1" ;;
+  key)
+    [ $# -ge 1 ] || usage
+    for w in "$@"; do
+      valid_word "$w" || fail 2 "key: KEY and MOD must be names such as comma or ctrl"
+    done
+    prepare wtype
+    cmd_key "$@" ;;
+  cursor)
+    [ $# -eq 0 ] || usage
+    prepare hyprctl
+    cmd_cursor ;;
+  *)
+    usage ;;
+esac
