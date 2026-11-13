@@ -14,8 +14,8 @@
 # change the default model_provider (hub.enabled does, below); T3's codex-hub instance selects it with `-c model_provider=cliproxy`
 # (dot_t3/private_userdata/modify_settings.json.tmpl). Any other host, or t3Hub.enabled false, drops the block if it is there.
 #
-# CLIProxy hub as the default (personal Mac, data switch hub.enabled, one switch with Claude and the T3 codex instance): sets the
-# top-level `model_provider = "cliproxy"`. Off, or on any other host, removes that line only when it equals "cliproxy"; a different
+# CLIProxy hub as the default (personal profile on macOS and Linux, data switch hub.enabled, one switch with Claude and the T3 codex instance): sets the
+# top-level `model_provider = "cliproxy"`. Off, or on any other profile, removes that line only when it equals "cliproxy"; a different
 # value stays. The provider block above is kept while either switch is on, since the default needs it.
 #
 # Pattern-kill guard (both desktop profiles): the guard hook itself is not here, it is in ~/.codex/hooks.json (modify_hooks.json.tmpl).

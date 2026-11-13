@@ -1,7 +1,7 @@
 #!/bin/sh
 # Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the four seat-* instances, pi and pi-lead below).
-# Personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
-# Personal Linux owns two more, pi and pi-lead, and nothing else of the hub (see "pi" and "pi-lead" below).
+# The hub pair (claude-hub, codex-hub, data switch t3Hub.enabled) is personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
+# The hub as the default (data switch hub.enabled, below) applies on the personal profile on macOS and Linux. Personal Linux also owns two more instances, pi and pi-lead (see "pi" and "pi-lead" below).
 # Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
 #   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub and an empty ANTHROPIC_API_KEY (an ambient key must not win over the helper's), key from ~/.config/t3-hub-claude-settings.json (apiKeyHelper)
 #   codex-hub   "Codex (hub)"   driver codex, not managed: CODEX_HOME stays ~/.codex, `-c model_provider=cliproxy` selects the
@@ -14,10 +14,10 @@
 #               replaces a variable (it cannot prepend PATH), so the binary is a wrapper (dot_local/user_scripts/executable_pi_lead.sh) that runs the
 #               real `pi` with the coordinator's pane-bin first on PATH and COORDINATOR_STATE_DIR set to <home>/.local/share/coordinator. A thread on it
 #               can run `ledger` and the other pane-bin commands. The work profile has no T3 settings file here (.chezmoiignore), so it gets none.
-# Default-provider switch hub.enabled (one switch with Claude and Codex; t3Hub.enabled stays separate and owns only the two ids above):
+# Default-provider switch hub.enabled (personal profile on macOS and Linux; one switch with Claude and Codex; t3Hub.enabled stays separate and owns only the two ids above):
 #   codex       the T3 `codex` instance is managed (its own CODEX_HOME), so it ignores ~/.codex. While hub.enabled is on it becomes
 #               setupMode existing with T3's downloaded Codex binary (same active.json lookup as codex-hub), so it reads ~/.codex and
-#               its model_provider = "cliproxy". Without active.json the instance is left alone. Off restores the recorded original
+#               its model_provider = "cliproxy". Without active.json the instance is left alone (T3 on personal Linux has no ~/.t3/tools/codex/active.json, so its codex instance keeps its config there). Off restores the recorded original
 #               entry exactly, but only while the entry still looks like ours (setupMode existing, binary under ~/.t3/tools/codex).
 #               claudeAgent and coordinator are never touched apart from the displayName below: the global ~/.claude settings cover them.
 #   names       displayName only on claudeAgent "Claude", coordinator "Claude (coordinator)" and codex "Codex" (no other field of
@@ -118,7 +118,7 @@ USAGE_ID='cliproxy-hub'
 USAGE_SOURCE='{"kind":"cliproxy","label":"CLIProxy hub","url":"https://cliproxy.internal.cartwmic.com","enabled":true}'
 DEFAULT_BINARY='{{ $defaultBinary }}'
 ORIGINAL='{"driver":"codex","enabled":true,"config":{"setupMode":"managed"}}'
-WORKTREES_DIR='{{- /* personal Linux also applies this file (hub mode n/a): worktrees go to ~/t3-worktrees there; /Volumes/Workshop is the Mac's disk */ -}}{{ if eq .chezmoi.os "darwin" }}/Volumes/Workshop/macbook/t3-worktrees{{ else }}{{ $home }}/t3-worktrees{{ end }}'
+WORKTREES_DIR='{{- /* personal Linux also applies this file (it has no t3Hub pair, and no codex binaryPath without active.json): worktrees go to ~/t3-worktrees there; /Volumes/Workshop is the Mac's disk */ -}}{{ if eq .chezmoi.os "darwin" }}/Volumes/Workshop/macbook/t3-worktrees{{ else }}{{ $home }}/t3-worktrees{{ end }}'
 AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
 IDLE_COMPACTION='beforeCacheExpires'
 PREFIX='{{ $home }}/.t3/tools/codex/'

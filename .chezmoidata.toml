@@ -9,7 +9,7 @@ passwordReference = "op://developer/RustDesk/password"
 enabled = false
 
 # Homelab CLIProxyAPI hub (https://cliproxy.internal.cartwmic.com) as the default for every Claude Code and Codex session on the
-# personal Mac (macOS only): ~/.claude/settings.json (dot_claude/modify_settings.json.tmpl), ~/.codex/config.toml
+# personal profile (macOS and Linux): ~/.claude/settings.json (dot_claude/modify_settings.json.tmpl), ~/.codex/config.toml
 # (dot_codex/modify_private_config.toml.tmpl) and the T3 `codex` instance (dot_t3/private_userdata/modify_settings.json.tmpl).
 # Rollback: set enabled = false, then apply those three files. Independent of t3Hub.enabled, which only owns the two test instances.
 [hub]

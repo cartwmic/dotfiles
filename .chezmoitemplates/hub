@@ -1,9 +1,9 @@
-{{- /* hub: "on", "off" or "n/a" for the CLIProxy hub as the default of Claude Code, Codex and the T3 codex instance (README "CLIProxy hub as the default"). n/a unless personal on macOS; there the data switch hub.enabled (default true, .chezmoidata.toml) picks on or off. Any other value fails the whole render, so a typo applies nothing. t3Hub.enabled is separate: it only owns the two test instances. */ -}}
+{{- /* hub: "on", "off" or "n/a" for the CLIProxy hub as the default of Claude Code, Codex and the T3 codex instance (README "CLIProxy hub as the default"). n/a unless the profile is personal (any OS); there the data switch hub.enabled (default true, .chezmoidata.toml) picks on or off. Any other value fails the whole render, so a typo applies nothing. t3Hub.enabled is separate: it only owns the two test instances. */ -}}
 {{- $on := dig "hub" "enabled" true . | printf "%v" -}}
 {{- if not (has $on (list "true" "false")) -}}
 {{-   fail (printf "hub.enabled must be true or false, got %q" $on) -}}
 {{- end -}}
-{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") -}}
+{{- if eq .profile "personal" -}}
 {{-   if eq $on "true" -}}on{{- else -}}off{{- end -}}
 {{- else -}}
 n/a
