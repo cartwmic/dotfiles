@@ -35,24 +35,41 @@ NOTEXT = {"pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", 
 NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help", "version", "search", "status", "browse", "ssh-key", "gpg-key", "gist",
             "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview"}
 
-# Commands that send text. kind -> (long flag, short flag). Composed: flags after which gh writes the text itself.
-T, B, F, S, C, N, NF = ("--title", "-t"), ("--body", "-b"), ("--body-file", "-F"), ("--subject", "-t"), ("--comment", "-c"), ("--notes", "-n"), ("--notes-file", "-F")
-TEXT = {("pr", "create"): dict(title=T, body=B, bodyfile=F), ("pr", "edit"): dict(title=T, body=B, bodyfile=F),
-        ("pr", "comment"): dict(body=B, bodyfile=F), ("pr", "review"): dict(body=B, bodyfile=F),
-        ("pr", "merge"): dict(subject=S, body=B, bodyfile=F), ("pr", "close"): dict(comment=C), ("pr", "reopen"): dict(comment=C),
-        ("issue", "create"): dict(title=T, body=B, bodyfile=F), ("issue", "edit"): dict(title=T, body=B, bodyfile=F),
-        ("issue", "comment"): dict(body=B, bodyfile=F), ("issue", "close"): dict(comment=C), ("issue", "reopen"): dict(comment=C),
-        ("release", "create"): dict(title=T, notes=N, notesfile=NF), ("release", "edit"): dict(title=T, notes=N, notesfile=NF, tag=("--tag", "-"))}
-LABEL = {"tag": "tag", "title": "title", "subject": "title", "body": "body", "bodyfile": "body", "comment": "comment", "notes": "notes", "notesfile": "notes"}
+# The flags of every command whose text the wrapper reads, as `gh <group> <verb> --help` lists them (gh 2.97.0; tests/leak-guard/test_gh_wrapper.py,
+# FlagTables, compares this table with the installed gh and fails when they differ). "s:long" is a short and a long flag, and a trailing "=" means the flag
+# takes a value. The wrapper parses a command's arguments with its own table only, the way gh's flag library does, and refuses any flag that is not in it.
+FLAGS = {
+    ("pr", "create"): "a:assignee=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
+    ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
+    ("pr", "comment"): "b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
+    ("pr", "review"): "a:approve,b:body=,F:body-file=,c:comment,r:request-changes,h:help,R:repo=",
+    ("pr", "merge"): "admin,A:author-email=,auto,b:body=,F:body-file=,d:delete-branch,disable-auto,match-head-commit=,m:merge,r:rebase,s:squash,t:subject=,h:help,R:repo=",
+    ("pr", "close"): "c:comment=,d:delete-branch,h:help,R:repo=",
+    ("pr", "reopen"): "c:comment=,h:help,R:repo=",
+    ("issue", "create"): "a:assignee=,blocked-by=,blocking=,b:body=,F:body-file=,e:editor,l:label=,m:milestone=,parent=,p:project=,recover=,T:template=,t:title=,type=,w:web,h:help,R:repo=",
+    ("issue", "edit"): "add-assignee=,add-blocked-by=,add-blocking=,add-label=,add-project=,add-sub-issue=,b:body=,F:body-file=,m:milestone=,parent=,remove-assignee=,remove-blocked-by=,remove-blocking=,remove-label=,remove-milestone,remove-parent,remove-project=,remove-sub-issue=,remove-type,t:title=,type=,h:help,R:repo=",
+    ("issue", "comment"): "b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
+    ("issue", "close"): "c:comment=,duplicate-of=,r:reason=,h:help,R:repo=",
+    ("issue", "reopen"): "c:comment=,h:help,R:repo=",
+    ("release", "create"): "discussion-category=,d:draft,fail-on-no-commits,generate-notes,latest,n:notes=,F:notes-file=,notes-from-tag,notes-start-tag=,p:prerelease,target=,t:title=,verify-tag,h:help,R:repo=",
+    ("release", "edit"): "discussion-category=,draft,latest,n:notes=,F:notes-file=,prerelease,tag=,target=,t:title=,verify-tag,h:help,R:repo=",
+    ("api", ""): "allow-escape-sequences,cache=,F:field=,H:header=,hostname=,i:include,input=,q:jq=,X:method=,paginate,p:preview=,f:raw-field=,silent,slurp,t:template=,verbose,h:help",
+}
+# Which flags carry text, by the label a hit is named with (--subject and --title are both a "title").
+TITLE, BODY, BODYFILE, NOTES, NOTESFILE = {"title": "title"}, {"body": "body"}, {"body-file": "bodyfile"}, {"notes": "notes"}, {"notes-file": "notesfile"}
+TEXT = {("pr", "create"): {**TITLE, **BODY, **BODYFILE}, ("pr", "edit"): {**TITLE, **BODY, **BODYFILE}, ("pr", "comment"): {**BODY, **BODYFILE},
+        ("pr", "review"): {**BODY, **BODYFILE}, ("pr", "merge"): {"subject": "subject", "author-email": "email", **BODY, **BODYFILE},
+        ("pr", "close"): {"comment": "comment"}, ("pr", "reopen"): {"comment": "comment"},
+        ("issue", "create"): {**TITLE, **BODY, **BODYFILE}, ("issue", "edit"): {**TITLE, **BODY, **BODYFILE}, ("issue", "comment"): {**BODY, **BODYFILE},
+        ("issue", "close"): {"comment": "comment"}, ("issue", "reopen"): {"comment": "comment"},
+        ("release", "create"): {**TITLE, **NOTES, **NOTESFILE}, ("release", "edit"): {**TITLE, **NOTES, **NOTESFILE, "tag": "tag"}}
+LABEL = {"tag": "tag", "title": "title", "subject": "title", "email": "email", "body": "body", "bodyfile": "body", "comment": "comment", "notes": "notes", "notesfile": "notes"}
 FROM_FILE = {"bodyfile", "notesfile"}
-COMPOSED = {("pr", "create"): [("--fill",), ("--fill-first",), ("--fill-verbose",), ("--template", "-T"), ("--recover",), ("--editor", "-e"), ("--web", "-w")],
-            ("issue", "create"): [("--template", "-T"), ("--recover",), ("--editor", "-e"), ("--web", "-w")],
-            ("pr", "comment"): [("--edit-last",), ("--editor", "-e"), ("--web", "-w")], ("issue", "comment"): [("--edit-last",), ("--editor", "-e"), ("--web", "-w")]}
-API_VALUE_LONG = {"--method", "--raw-field", "--field", "--header", "--jq", "--template", "--preview", "--cache", "--hostname", "--input"}
-API_VALUE_SHORT = {"X", "f", "F", "H", "q", "t", "p"}
-VALUE_LONG = {"--target", "--discussion-category", "--notes-start-tag", "--repo", "--base", "--head", "--label", "--assignee", "--reviewer", "--milestone", "--project"}
+# Flags after which gh writes the text itself (or reads it from somewhere the wrapper cannot see).
+COMPOSED = {("pr", "create"): {"fill", "fill-first", "fill-verbose", "template", "recover", "editor", "web"},
+            ("issue", "create"): {"template", "recover", "editor", "web"},
+            ("pr", "comment"): {"edit-last", "editor", "web"}, ("issue", "comment"): {"edit-last", "editor", "web"}}
 BUILTIN = set(READ) | set(NOTEXT) | {g for g, _ in TEXT}
-VALUE_SHORT = set("RBHalmrTA")      # short flags that take a value we do not read; what follows one is its value, not more flags
 
 
 class Refuse(Exception):
@@ -152,21 +169,27 @@ def flag_value(args, long, short, skip=()):
     return None
 
 
-def targets(args, skip, group=None):
-    """The repositories a command is aimed at, in gh's order of precedence: -R/--repo, URLs in the arguments, GH_REPO, then the current directory's remotes."""
-    explicit = flag_value(args, "--repo", "-R", skip)
+def resolve_targets(explicit, urls, named=None):
+    """The repositories a command is aimed at, in gh's order of precedence: -R/--repo, URLs among the arguments, GH_REPO, then the current directory's remotes."""
     if explicit:
         r = parse_repo(explicit)
         return [r] if r else []
-    urls = [r for i, a in enumerate(args) if i not in skip and re.match(r"^https?://", a) for r in [parse_repo(a)] if r]
-    if urls:
-        return urls
-    if group == "repo" and len(args) > 2 and not args[2].startswith("-") and parse_repo(args[2]):
-        return [parse_repo(args[2])]
+    found = [r for r in (parse_repo(u) for u in urls) if r]
+    if found:
+        return found
+    if named and parse_repo(named):
+        return [parse_repo(named)]
     if os.environ.get("GH_REPO"):
         r = parse_repo(os.environ["GH_REPO"])
         return [r] if r else []
     return cwd_remotes()
+
+
+def targets(args, skip, group=None):
+    """resolve_targets for a command whose flags are not parsed (an unrecognised one): -R/--repo and URLs are looked for among all the arguments."""
+    explicit = flag_value(args, "--repo", "-R", skip)
+    urls = [a for i, a in enumerate(args) if i not in skip and re.match(r"^https?://", a)]
+    return resolve_targets(explicit, urls, args[2] if group == "repo" and len(args) > 2 and not args[2].startswith("-") else None)
 
 
 # ---- gathering the text ------------------------------------------------------------------------------------------------------------------------------
@@ -206,93 +229,112 @@ def split_command(args):
     return group, verb
 
 
-def parse_text(args, group, verb):
-    """([(kind, value, from_file)], positions of values in args, refusal or None, help flag seen) for a pr/issue/release command. Reads nothing."""
-    spec = TEXT[(group, verb)]
-    by_long = {flags[0]: kind for kind, flags in spec.items()}
-    by_short = {flags[1][1:]: kind for kind, flags in spec.items()}
-    composed = COMPOSED.get((group, verb), [])
-    compose_long = {c[0] for c in composed}
-    compose_short = {c[1][1:] for c in composed if len(c) > 1}
-    found, values, refusal, help_seen, i, other_values, after_dashes = [], set(), None, False, 0, set(), []
-    while i < len(args):
+def flag_table(group, verb):
+    """({long: takes a value}, {short: long}) of a command, from FLAGS."""
+    longs, shorts = {}, {}
+    for item in FLAGS[(group, verb)].split(","):
+        short, _, rest = item.rpartition(":")
+        longs[rest.rstrip("=")] = rest.endswith("=")
+        if short:
+            shorts[short] = rest.rstrip("=")
+    return longs, shorts
+
+
+def parse_flags(args, group, verb):
+    """Parse the arguments after the group with the command's own flag table, the way gh's flag library does: `--name value`, `--name=value`, `-x value`,
+    `-xvalue`, `-x=value`, clusters of switches (`-dw`), a value flag taking the next argument whatever it looks like, and `--` ending the flags.
+    Returns ([(long name, value or None)], [positional arguments], unknown, missing): `unknown` is the position of the first flag the table does not
+    list (parsing stops there, since nothing tells whether it takes a value), `missing` the position of a value flag with no value."""
+    longs, shorts = flag_table(group, verb)
+    flags, positionals, unknown, missing, i = [], [], None, None, 0
+    while i < len(args) and unknown is None and missing is None:
         a = args[i]
         if a == "--":
-            after_dashes = list(range(i + 1, len(args)))
+            positionals += args[i + 1:]
             break
-        if a in ("-h", "--help"):
-            help_seen = True
-        elif a.startswith("--"):
-            name, eq, val = a.partition("=")
-            if name in compose_long:
-                refusal = refusal or "%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % name
-            if name in by_long:
-                if not eq:
-                    if i + 1 >= len(args):
-                        refusal = refusal or "%s has no value" % name
-                        break
+        if a.startswith("--"):
+            name, eq, val = a[2:].partition("=")
+            if name not in longs:
+                unknown = i
+            elif longs[name] and not eq:
+                if i + 1 >= len(args):
+                    missing = i
+                else:
                     i += 1
-                    val = args[i]
-                values.add(i)
-                found.append((by_long[name], val, by_long[name] in FROM_FILE))
-            elif name in VALUE_LONG and not eq:      # a flag we do not read still owns the next argument, whatever it looks like
-                other_values.add(i + 1)
-                i += 1
+                    flags.append((name, args[i]))
+            else:
+                flags.append((name, val if eq else None))
         elif a.startswith("-") and len(a) > 1:
-            letter = a[1]
-            if letter in compose_short:
-                refusal = refusal or "-%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % letter
-            elif letter in by_short:
-                val = a[2:].lstrip("=") if len(a) > 2 else None
-                if val is None:
-                    if i + 1 >= len(args):
-                        refusal = refusal or "-%s has no value" % letter
-                        break
-                    i += 1
-                    val = args[i]
-                values.add(i)
-                found.append((by_short[letter], val, by_short[letter] in FROM_FILE))
-            elif len(a) > 2 and letter not in VALUE_SHORT and any(c in by_short or c in compose_short for c in a[2:]):
-                refusal = refusal or "the flag cluster %s may hide a text flag; write each flag on its own (-t value, or --title value)" % a
-            elif a in ("-R", "-B", "-H", "-a", "-l", "-m", "-r", "-p"):
-                other_values.add(i + 1)
-                i += 1
+            j = 1
+            while j < len(a) and unknown is None and missing is None:
+                if a[j] not in shorts:
+                    unknown = i
+                    break
+                name = shorts[a[j]]
+                if longs[name]:
+                    rest = a[j + 1:]
+                    if rest:
+                        flags.append((name, rest[1:] if rest.startswith("=") else rest))
+                    elif i + 1 < len(args):
+                        i += 1
+                        flags.append((name, args[i]))
+                    else:
+                        missing = i
+                    break
+                flags.append((name, None))
+                j += 1
+        else:
+            positionals.append(a)
         i += 1
+    return flags, positionals, unknown, missing
+
+
+def parse_text(args, group, verb):
+    """(text to read [(kind, value, from_file)], explicit repository, positional arguments, refusal or None, help flag seen) for a pr/issue/release command.
+    `args` are the arguments after the group. Reads nothing."""
+    flags, positionals, unknown, missing = parse_flags(args, group, verb)
+    names = {name for name, _ in flags}
+    kinds = TEXT[(group, verb)]
+    found = [(kinds[name], val, kinds[name] in FROM_FILE) for name, val in flags if name in kinds and val is not None]
+    repo = next((val for name, val in reversed(flags) if name == "repo" and val), None)
+    if verb in positionals:
+        positionals.remove(verb)
+    refusal = None
+    if unknown is not None:
+        refusal = ("argument %d is a flag this wrapper does not know for `gh %s %s` (its table is gh's own flag list), so it cannot tell whether the flag takes a "
+                   "value, and the text after it cannot be checked. Use the long flags gh lists, or update the table" % (unknown + 2, group, verb))
+    elif missing is not None:
+        refusal = "the flag at argument %d has no value" % (missing + 2)
+    for flag in sorted(names & COMPOSED.get((group, verb), set())):
+        refusal = refusal or "--%s makes gh write the text itself, where it cannot be checked. Give the text with --title and --body-file" % flag
     if (group, verb) == ("release", "create"):
         # `gh release create TAG FILE...` creates the tag and uploads the files: the tag is text, and the files are refused like `release upload`
-        pos = [args[n] for n in range(len(args)) if (not args[n].startswith("-") and n not in values and n not in other_values) or n in after_dashes]
-        if verb in pos:
-            pos.remove(verb)
-        if pos:
-            found.append(("tag", pos[0], False))
-        if len(pos) > 1:
-            refusal = refusal or "`gh release create` with asset files would upload them unchecked, as `gh release upload` is refused for a guarded repository. Create the release without files"
-    if not refusal and sys.stdin.isatty():
-        refusal = would_prompt(group, verb, args, {k for k, _, _ in found})
-    return found, values, refusal, help_seen
+        if positionals:
+            found.append(("tag", positionals[0], False))
+        if len(positionals) > 1:
+            refusal = refusal or ("`gh release create` with asset files would upload them unchecked, as `gh release upload` is refused for a guarded repository. "
+                                  "Create the release without files")
+    if not refusal and "help" not in names and sys.stdin.isatty():
+        refusal = would_prompt(group, verb, names, {k for k, _, _ in found})
+    return found, repo, positionals, refusal, "help" in names
 
 
-def has_flag(args, *names):
-    return any(a == n or a.startswith(n + "=") for a in args for n in names)
-
-
-def would_prompt(group, verb, args, kinds):
+def would_prompt(group, verb, names, kinds):
     """The refusal text when, on a terminal, gh would ask for text (or for how to merge, then let the commit message be edited) at its own prompt, or None.
     Prompts are also switched off for the real gh (GH_PROMPT_DISABLED), so this is the clear message, not the only guard."""
     ask = "gh would ask for it on the terminal, where it cannot be checked. Give the text with --body-file (or --notes-file for a release)"
     if group in ("pr", "issue") and verb == "create" and not ("title" in kinds and kinds & {"body", "bodyfile"}):
         return "the title or the body is missing, so " + ask
-    if group in ("pr", "issue") and verb == "edit" and not [a for a in args if a.startswith("-") and not a.startswith("-R") and a.split("=")[0] != "--repo"]:
+    if group in ("pr", "issue") and verb == "edit" and not names - {"repo", "help"}:
         return "no flag says what to edit, so gh would open its interactive editor. " + ask
     if verb == "comment" and not kinds & {"body", "bodyfile"}:
         return "no --body or --body-file was given, so " + ask
     if (group, verb) == ("pr", "review"):
-        typed = has_flag(args, "--approve", "-a", "--comment", "-c", "--request-changes", "-r")
-        if not typed or (not has_flag(args, "--approve", "-a") and not kinds & {"body", "bodyfile"}):
+        if not names & {"approve", "comment", "request-changes"} or (not names & {"approve"} and not kinds & {"body", "bodyfile"}):
             return "the review type or its body is missing, so " + ask
-    if (group, verb) == ("release", "create") and ("tag" not in kinds or not (kinds & {"notes", "notesfile"} or has_flag(args, "--generate-notes", "--notes-from-tag"))):
+    if (group, verb) == ("release", "create") and ("tag" not in kinds or not (kinds & {"notes", "notesfile"} or names & {"generate-notes", "notes-from-tag"})):
         return "the release tag or its notes are missing, so " + ask
-    if (group, verb) == ("pr", "merge") and not has_flag(args, "--merge", "-m", "--squash", "-s", "--rebase", "-r"):
+    if (group, verb) == ("pr", "merge") and not names & {"merge", "squash", "rebase"}:
         return "no merge method flag was given, so gh would ask on the terminal and offer to edit the commit message. Give --squash, --merge or --rebase (with --body-file for a message)"
     return None
 
@@ -303,43 +345,20 @@ def gather_text(found, texts):
 
 
 def parse_api(args):
-    """(method, endpoint, [(typed, "key=value")], [input path], hostname, help flag seen) for `gh api` arguments. Reads nothing."""
-    method, endpoint, fields, inputs, hostname, help_seen, i = None, None, [], [], None, False, 0
-    while i < len(args):
-        a = args[i]
-        if a in ("-h", "--help"):
-            help_seen = True
-        elif a.startswith("--"):
-            name, eq, val = a.partition("=")
-            if name in API_VALUE_LONG:
-                if not eq:
-                    i += 1
-                    val = args[i] if i < len(args) else ""
-                if name == "--method":
-                    method = val
-                elif name in ("--raw-field", "--field"):
-                    fields.append((name == "--field", val))
-                elif name == "--input":
-                    inputs.append(val)
-                elif name == "--hostname":
-                    hostname = val
-        elif a.startswith("-") and len(a) > 1:
-            for j in range(1, len(a)):
-                c = a[j]
-                if c in API_VALUE_SHORT:
-                    val = a[j + 1:].lstrip("=")
-                    if not val:
-                        i += 1
-                        val = args[i] if i < len(args) else ""
-                    if c == "X":
-                        method = val
-                    elif c in "fF":
-                        fields.append((c == "F", val))
-                    break
-        elif endpoint is None:
-            endpoint = a
-        i += 1
-    return method, endpoint or "", fields, inputs, hostname, help_seen
+    """(method, endpoint, [(typed, "key=value")], [input path], hostname, help flag seen, unknown flag position, missing value position) for `gh api`
+    arguments, parsed with gh's own flag table for `gh api`. Reads nothing."""
+    flags, positionals, unknown, missing = parse_flags(args, "api", "")
+    method, fields, inputs, hostname = None, [], [], None
+    for name, val in flags:
+        if name == "method":
+            method = val
+        elif name in ("field", "raw-field"):
+            fields.append((name == "field", val))
+        elif name == "input":
+            inputs.append(val)
+        elif name == "hostname":
+            hostname = val
+    return method, positionals[0] if positionals else "", fields, inputs, hostname, any(n == "help" for n, _ in flags), unknown, missing
 
 
 def gather_api(fields, inputs, texts, graphql):
@@ -453,7 +472,12 @@ def unknown_command(args, repos, texts, real, depth):
     refused when it is aimed at a guarded repository, because what it sends cannot be seen."""
     name = args[0]
     aimed = lambda: any(t in repos for t in targets(args, set(), None))
-    expansion = lookup_alias(real, name) if real and depth == 0 else None
+    try:
+        expansion = lookup_alias(real, name) if real and depth == 0 else None
+    except Refuse:
+        if aimed():
+            raise
+        return "", None          # aliases cannot be listed, and nothing says this is aimed at a guarded repository
     if expansion is None:
         if aimed():
             raise Refuse("`gh %s` is not a built-in gh command and not an alias, so it is an extension (or a typo), and it is aimed at a guarded repository. "
@@ -476,8 +500,14 @@ def decide(args, repos, texts=None, real=None, depth=0):
     group = args[0]
     helped = any(a in ("-h", "--help") for a in args)
     if group == "api":
-        method, endpoint, fields, inputs, hostname, helped = parse_api(args[1:])
+        method, endpoint, fields, inputs, hostname, helped, unknown, missing = parse_api(args[1:])
         if helped:
+            return "", None
+        if unknown is not None or missing is not None:      # the arguments cannot be read reliably: refuse when the call may be aimed at a guarded repository
+            if (endpoint_path(endpoint) in ("graphql", "api/graphql") or any(t in repos for t in api_targets(endpoint, hostname))
+                    or (not endpoint and any(t in repos for t in resolve_targets(None, [])))):
+                raise Refuse("argument %d of this `gh api` call is a flag this wrapper does not know, or a flag with no value, so the call cannot be read "
+                             "and its text cannot be checked. Use the flags `gh api --help` lists" % ((unknown if unknown is not None else missing) + 2))
             return "", None
         write = (method or ("POST" if fields or inputs else "GET")).upper() not in ("GET", "HEAD")
         if endpoint_path(endpoint) in ("graphql", "api/graphql"):      # a mutation names objects by node id, never a repository: check every one
@@ -499,8 +529,8 @@ def decide(args, repos, texts=None, real=None, depth=0):
     if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
     if (group, verb) in TEXT:
-        found, values, refusal, helped = parse_text(args[1:], group, verb)
-        if helped or not any(t in repos for t in targets(args, {v + 1 for v in values}, group)):
+        found, repo, positionals, refusal, helped = parse_text(args[1:], group, verb)
+        if helped or not any(t in repos for t in resolve_targets(repo, [p for p in positionals if re.match(r"^https?://", p)])):
             return "", None
         if refusal:
             raise Refuse(refusal)

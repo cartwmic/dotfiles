@@ -178,6 +178,57 @@ class Decisions(WrapperBase):
         return str(caught.exception)
 
 
+def installed_gh():
+    """The first real gh on PATH (not a copy of this wrapper), or None."""
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = os.path.join(d, "gh")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            try:
+                if b"leak-guard gh wrapper" in Path(cand).read_bytes()[:4096]:
+                    continue
+            except OSError:
+                continue
+            return cand
+    return None
+
+
+def help_flags(gh, *command):
+    """{(short, long, takes a value)} that `gh <command> --help` lists under FLAGS and INHERITED FLAGS."""
+    import re
+    out = subprocess.run([gh, *command, "--help"], capture_output=True, text=True, timeout=60).stdout
+    flags, section = set(), None
+    for line in out.splitlines():
+        if re.match(r"^[A-Z][A-Z ]+$", line):
+            section = line
+        elif section in ("FLAGS", "INHERITED FLAGS") and line.strip():
+            m = re.match(r"^ {2,6}(?:(-\w), )?--([\w-]+)(?: (\S.*?))?(?:\s{2,}\S.*)?$", line)
+            if not m:
+                raise AssertionError("a flag line this test cannot read: %r" % line)
+            flags.add((m.group(1)[1:] if m.group(1) else "", m.group(2), bool(m.group(3))))
+    return flags
+
+
+@unittest.skipUnless(installed_gh(), "needs the real gh")
+class FlagTables(unittest.TestCase):
+    """The wrapper's FLAGS table is gh's own flag list. A gh upgrade that adds, drops or changes a flag shows up here."""
+    W = load_wrapper()
+
+    def test_every_table_matches_what_the_installed_gh_lists_for_that_command(self):
+        gh = installed_gh()
+        for (group, verb), spec in self.W.FLAGS.items():
+            with self.subTest(group=group, verb=verb):
+                ours = set()
+                for item in spec.split(","):
+                    short, _, rest = item.rpartition(":")
+                    ours.add((short, rest.rstrip("="), rest.endswith("=")))
+                command = (group,) + ((verb,) if verb else ())
+                theirs = help_flags(gh, *command)
+                # gh accepts -h for --help but does not list it
+                ours = {("", l, t) if l == "help" else (s, l, t) for s, l, t in ours}
+                self.assertEqual(ours, theirs, "the FLAGS table for `gh %s` no longer matches `gh %s --help` (gh %s)" % (" ".join(command), " ".join(command),
+                                 subprocess.run([gh, "--version"], capture_output=True, text=True).stdout.split()[2]))
+
+
 class WrapperRepo(WrapperBase):
     def test_the_current_directorys_remote_decides_https_scp_and_ssh_forms(self):
         for n, url in enumerate(("https://github.com/Fooco-Dev/Guarded.git", "git@github.com:fooco-dev/guarded.git", "ssh://git@github.com/fooco-dev/guarded",
@@ -318,12 +369,77 @@ class WrapperText(Decisions):
         name, texts = self.decide("pr", "create", "--label", "--body", "--body", "SECRET", "-t", "x")
         self.assertEqual(texts["body"], "SECRET")
 
+    def test_every_other_flag_in_every_form_can_precede_a_text_flag_without_hiding_it(self):
+        # The cause of the review's follow-on: a flag's arity decides what the next argument is. Walk each command's whole table.
+        for (group, verb), kinds in self.W.TEXT.items():
+            longs, shorts = self.W.flag_table(group, verb)
+            text_long = next(name for name in ("body", "notes", "comment", "title") if name in kinds)
+            text_short = next((s for s, l in shorts.items() if l == text_long), None)
+            for name, takes in longs.items():
+                if name in kinds or name in ("help", "repo"):
+                    continue
+                prefixes = [["--%s" % name] + (["v"] if takes else [])]
+                if takes:
+                    prefixes.append(["--%s=v" % name])
+                short = next((s for s, l in shorts.items() if l == name), None)
+                if short:
+                    prefixes += [["-%s" % short] + (["v"] if takes else [])] + ([["-%sv" % short], ["-%s=v" % short]] if takes else [])
+                for prefix in prefixes:
+                    for text_args in [["--%s" % text_long, "SECRET"], ["--%s=SECRET" % text_long]] + ([["-%s" % text_short, "SECRET"], ["-%sSECRET" % text_short]] if text_short else []):
+                        flags, positionals, unknown, missing = self.W.parse_flags(prefix + text_args, group, verb)
+                        self.assertEqual((unknown, missing), (None, None), (group, verb, prefix, text_args))
+                        self.assertIn((text_long, "SECRET"), flags, (group, verb, prefix, text_args))
+                        self.assertEqual(positionals, [], (group, verb, prefix, text_args))
+
+    def test_the_reviewers_examples_with_short_switches_before_a_text_flag(self):
+        for args, label, want in ((("pr", "review", "3", "-r", "-b", "SECRET"), "body", "SECRET"), (("pr", "review", "3", "-a", "-b", "SECRET"), "body", "SECRET"),
+                                  (("pr", "review", "3", "-c", "-b", "SECRET"), "body", "SECRET"), (("pr", "merge", "3", "-r", "--body", "SECRET"), "body", "SECRET"),
+                                  (("pr", "merge", "3", "-m", "-t", "SUBJ", "-b", "SECRET"), "title", "SUBJ"), (("pr", "merge", "3", "-s", "-b", "SECRET"), "body", "SECRET"),
+                                  (("release", "create", "-p", "v1", "--notes", "SECRET"), "notes", "SECRET"), (("release", "create", "-d", "-p", "-t", "SECRET", "v1"), "title", "SECRET"),
+                                  (("pr", "create", "-d", "-t", "SECRET", "-b", "x"), "title", "SECRET"), (("pr", "create", "-dt", "SECRET", "-b", "x"), "title", "SECRET"),
+                                  (("pr", "create", "-l", "bug", "-r", "someone", "-b", "SECRET", "-t", "x"), "body", "SECRET")):
+            with self.subTest(args):
+                name, texts = self.decide(*args)
+                self.assertEqual(texts[label], want)
+                self.assertEqual(name, " ".join(args[:2]))
+        self.assertEqual(self.decide("release", "create", "-p", "v1", "--notes", "x")[1]["tag"], "v1")        # -p is a switch, so v1 is still the tag
+
+    def test_a_flag_that_is_not_in_the_commands_table_is_refused_and_named_by_position(self):
+        for args, position in ((["pr", "create", "--frobnicate", "-t", "SECRET"], 3), (["pr", "review", "3", "-z", "-b", "SECRET"], 4), (["pr", "merge", "3", "-Z"], 4),
+                               (["release", "create", "v1", "--made-up=1", "--notes", "SECRET"], 4), (["issue", "comment", "5", "-ab", "SECRET"], 4)):
+            with self.subTest(args):
+                message = self.refused(*args)
+                self.assertIn("argument %d is a flag this wrapper does not know" % position, message)
+                self.assertNotIn("SECRET", message)
+        self.reset()
+        self.assertBlocked(self.gh("pr", "create", "--frobnicate", "-t", PLANTED), "does not know")
+        self.reset()
+        args = ["pr", "create", "--frobnicate", "-t", PLANTED]
+        self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)               # another repository: gh runs as typed
+
+    def test_the_short_form_of_a_composed_text_flag_is_refused_too(self):
+        for args in (["pr", "create", "-f"], ["pr", "create", "-df"], ["pr", "create", "-t", "x", "-f"], ["pr", "create", "-e"], ["pr", "create", "-w"],
+                     ["pr", "create", "-T", "t.md"], ["issue", "create", "-w"], ["pr", "comment", "5", "-e"], ["pr", "comment", "5", "-w"]):
+            with self.subTest(args):
+                self.assertIn("makes gh write the text itself", self.refused(*args))
+
+    def test_a_value_flag_with_no_value_and_a_value_that_looks_like_a_flag(self):
+        self.assertIn("has no value", self.refused("pr", "create", "-t"))
+        self.assertEqual(self.decide("pr", "create", "-t", "-b", "-b", "SECRET")[1]["title"], "-b")      # gh takes the next argument whatever it looks like
+        self.assertEqual(self.decide("pr", "create", "-t", "x", "-b", "SECRET", "--", "ignored")[1]["body"], "SECRET")
+
+    def test_the_url_among_the_positional_arguments_names_the_repository_but_a_flag_value_does_not(self):
+        url = "https://github.com/%s/pull/5" % GUARDED
+        self.assertEqual(self.decide("pr", "comment", url, "-b", "x", repo="someone/other")[0], "pr comment")
+        self.assertEqual(self.decide("pr", "comment", "5", "-b", url, repo="someone/other"), ("", None))        # a body that is a URL is just text
+        self.assertEqual(self.decide("pr", "comment", "5", "-b", "x", "-R", "someone/other"), ("", None))
+
     def test_a_gh_killed_by_a_signal_exits_as_a_shell_reports_it(self):
         done = self.gh("pr", "comment", "5", "--body-file", "-", stdin=CLEAN, env={"FAKE_GH_SIGNAL": "15"})      # stdin was read, so the wrapper runs gh as a child
         self.assertEqual(done.returncode, 143)
 
-    def test_a_flag_cluster_that_may_hide_a_text_flag_blocks(self):
-        self.assertBlocked(self.gh("pr", "create", "-dt", PLANTED), "cluster")
+    def test_a_cluster_of_switches_ending_in_a_value_flag_is_parsed_like_gh_does(self):
+        self.assertBlocked(self.gh("pr", "create", "-dt", PLANTED), "title:1: term 1")
 
 
 class WrapperBodyFile(WrapperBase):
@@ -407,6 +523,15 @@ class WrapperApi(Decisions):
         self.assertEqual(self.decide("api", "repositories/123/issues/1/comments"), ("", None))        # a read passes
         done = self.gh("api", "repositories/123/issues/1/comments", "-X", "POST", cwd=self.other_cwd)
         self.assertBlocked(done, "numeric id")
+
+    def test_an_api_flag_that_is_not_in_gh_apis_table_is_refused_when_the_call_may_be_aimed_at_a_guarded_repository(self):
+        ep = "repos/%s/issues/1/comments" % GUARDED
+        self.assertIn("flag this wrapper does not know", self.refused("api", ep, "--frobnicate", "-f", "body=x"))
+        self.assertIn("flag this wrapper does not know", self.refused("api", "graphql", "--frobnicate", "-f", "query=mutation { x }"))
+        self.assertIn("no value", self.refused("api", ep, "-f"))
+        self.assertEqual(self.decide("api", "repos/someone/other/issues", "--frobnicate", "-f", "body=x"), ("", None))
+        for flags in (["--paginate", "--slurp", "--silent", "--verbose"], ["-i", "-q", ".id"], ["-H", "Accept: x", "--cache", "1h"], ["-p", "x", "--allow-escape-sequences"]):
+            self.assertEqual(self.decide("api", ep, *flags, "-f", "body=SECRET")[0], "api")
 
     def test_hostname_sets_the_host_so_another_host_is_not_a_guarded_repository(self):
         ep = "repos/%s/issues/1/comments" % GUARDED
@@ -540,7 +665,8 @@ class WrapperUnrecognised(Decisions):
             with self.subTest(aliases):
                 self.aliases = aliases
                 with mock.patch.dict(os.environ, {"FAKE_ALIASES_EXIT": exit_code}):
-                    self.assertIn("alias", self.refused("whatever", repo="someone/other"))
+                    self.assertIn("alias", self.refused("whatever", repo=GUARDED))                       # aimed at a guarded repository: refused
+                    self.assertEqual(self.decide("whatever", repo="someone/other"), ("", None))          # not aimed at one: an extension still runs
 
     def test_a_write_alias_with_only_flags_is_blocked_end_to_end_and_a_bare_group_passes(self):
         done = self.gh("prc", "--draft", env={"FAKE_ALIASES": "prc: pr create --fill"})
