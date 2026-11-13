@@ -104,7 +104,7 @@ def main(argv=None):
     parser.add_argument("--rubric", required=True, help="file with what to score and how")
     parser.add_argument("--candidate", action="append", required=True, help="file or folder to judge")
     parser.add_argument("--reference", action="append", default=[], help="file or folder of good examples")
-    parser.add_argument("--panel", default="claude,codex", help="comma list from: " + ",".join(JUDGES))
+    parser.add_argument("--panel", default="claude", help="comma list from: " + ",".join(JUDGES))
     parser.add_argument("--rounds", type=int, default=1, help="votes per judge, more votes cut noise")
     parser.add_argument("--model", action="append", default=[], help="judge=model, like codex=gpt-5.5")
     parser.add_argument("--notes", default=".hill-climb/judge-notes.md", help="where the panel feedback goes")

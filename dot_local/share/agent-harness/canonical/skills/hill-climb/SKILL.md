@@ -153,8 +153,8 @@ that command print a number. Use the strongest form that fits:
    tokens. Steady and fast.
 3. **A clock:** only when no count fits. Use `--runs` and `--paired`.
 4. **A judge:** `scripts/judge.py` with a rubric, when only taste can tell. Always
-   pass `--panel claude`. The script's default panel is `claude,codex` and it
-   exits unless both CLIs are installed. No OpenAI models are in use here.
+   pass `--panel claude`. The script's default panel is also `claude` and it
+   exits unless the claude CLI is installed. No OpenAI models are in use here.
 
 Examples, not a closed list. Recipes are in `references/checks.md`:
 
@@ -463,4 +463,4 @@ mid-climb, the next one starts at step 0.
 
 ## Attribution
 
-Adapted from Bil0000's [Hill-Climb](https://github.com/Bil0000/Hill-Climb) at commit `84b95909383379d4a84ad02ecadf928aba6b3b9b` under the bundled [MIT License](LICENSE). `scripts/climb.py` and `scripts/judge.py` are unchanged. This version moves the Helpers section and the card and report layouts into `references/`, requires `--panel claude` for `judge.py` (the upstream default panel adds Codex), and adds `--panel claude` to the judge example in `references/checks.md`, and trims the description and some promotional wording.
+Adapted from Bil0000's [Hill-Climb](https://github.com/Bil0000/Hill-Climb) at commit `84b95909383379d4a84ad02ecadf928aba6b3b9b` under the bundled [MIT License](LICENSE). `scripts/climb.py` is unchanged. `scripts/judge.py` has one patch: the default `--panel` is `claude`, not the upstream `claude,codex`, so the Codex CLI is not needed. `references/helpers.md` follows the house seat table (Haiku or Sonnet builders, Sonnet planners, Opus reviewers) instead of upstream's tier advice. This version moves the Helpers section and the card and report layouts into `references/`, adds `--panel claude` to the judge example in `references/checks.md`, and trims the description and some promotional wording.
