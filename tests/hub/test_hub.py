@@ -4,9 +4,10 @@
     dot_codex/modify_private_config.toml.tmpl    top-level model_provider = "cliproxy"
     dot_t3/private_userdata/modify_settings.json.tmpl   providerInstances.codex -> setupMode existing
 
-Templates are rendered with the real chezmoi against a copy of the source whose `hub` template pretends the OS (chezmoi.os cannot be
-overridden by config data), then run as modify scripts. The ApplyPathTest class runs a real `chezmoi apply` into a throwaway HOME
-(macOS only). No real HOME, no 1Password, no network.
+The hub applies to the personal profile on any OS and is n/a on every other profile. Templates are rendered with the real chezmoi and the
+real gate text; the pretend OS (darwin or linux) is `--override-data '{"chezmoi":{"os":...}}'`, which reaches `includeTemplate` too (the
+t3_hub cases, which still read the OS, would fail if it did not). They are then run as modify scripts. The ApplyPathTest class runs a
+real `chezmoi apply` into a throwaway HOME on the OS the test runs on (macOS or Linux). No real HOME, no 1Password, no network.
 
     python3 -m unittest discover -s tests/hub -v
 """
@@ -39,12 +40,12 @@ KEY = "cpa_fake-management-key"
 USAGE = {"kind": "cliproxy", "label": "CLIProxy hub", "url": "https://cliproxy.internal.cartwmic.com", "enabled": True, "managementKey": KEY}
 LEGACY_ONEPASSWORD = {"kind": "one_password", "label": "1Password", "config": {"account": "my"}}  # what #158 wrote
 LEGACY_USAGE = {**USAGE, "managementKey": {"provider": "onepassword", "reference": KEY_REF}}
-GATE = '(eq .chezmoi.os "darwin")'
 CASES = {  # name: (extra chezmoi data, pretend OS, profile)
     "on": ({}, "darwin", "personal"),
     "off": ({"hub": {"enabled": False}}, "darwin", "personal"),
     "work": ({}, "darwin", "axon-work-computer"),
     "linux": ({}, "linux", "personal"),
+    "off_linux": ({"hub": {"enabled": False}}, "linux", "personal"),
     "on_t3hub_off": ({"t3Hub": {"enabled": False}}, "darwin", "personal"),
     "off_t3hub_off": ({"hub": {"enabled": False}, "t3Hub": {"enabled": False}}, "darwin", "personal"),
     "on_t3hub_on": ({"t3Hub": {"enabled": True}}, "darwin", "personal"),
@@ -75,17 +76,12 @@ EMPTY_HOME = SCRATCH / "home-without-active-json"
 EMPTY_HOME.mkdir()
 
 
-def source(os_name):
-    """A copy of the data and templates where the hub and t3_hub gates see os_name."""
-    dest = SCRATCH / ("src-" + os_name)
+def source():
+    """A copy of the data and templates (a small source tree: chezmoi reads only what the tests need). The gates are the real ones."""
+    dest = SCRATCH / "src"
     if not dest.exists():
         shutil.copytree(ROOT / ".chezmoitemplates", dest / ".chezmoitemplates")
         shutil.copy(ROOT / ".chezmoidata.toml", dest / ".chezmoidata.toml")
-        for name in ("hub", "t3_hub"):
-            f = dest / ".chezmoitemplates" / name
-            text = f.read_text()
-            assert GATE in text, name
-            f.write_text(text.replace(GATE, '(eq "%s" "darwin")' % os_name))
     return dest
 
 
@@ -105,8 +101,8 @@ def render(path, case, home=None):
     data = dict({"profile": profile, "instances": {"coordinator": {"repo": "/nonexistent/coordinator"}}}, **extra)
     if home is None:  # the T3 script reads active.json through the HOME the template sees
         home = HOME_DIR
-    # the pretend OS reaches the template's own .chezmoi.os too (the T3 script's worktrees directory depends on it), not only the hub gates
-    text = chezmoi(source(os_name), data, "execute-template", "--override-data", json.dumps({"chezmoi": {"os": os_name}}), stdin=(ROOT / path).read_text(), home=home)
+    # the pretend OS reaches the gates (hub, t3_hub) and the template's own .chezmoi.os (the T3 script's worktrees directory depends on it)
+    text = chezmoi(source(), data, "execute-template", "--override-data", json.dumps({"chezmoi": {"os": os_name}}), stdin=(ROOT / path).read_text(), home=home)
     # These tests are about the hub and the names. The "Auto-compact after" values and the "Compact idle threads" mode the T3 script also sets
     # are tests/t3-hub's; blank them here (an empty value adds nothing) so the fixture comparisons stay about the hub.
     if path != T3:
@@ -160,7 +156,7 @@ class ClaudeTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.scripts = {c: render(CLAUDE, c) for c in ("on", "off", "work", "linux")}
+        cls.scripts = {c: render(CLAUDE, c) for c in ("on", "off", "work", "linux", "off_linux")}
         # the helper path is built from the HOME chezmoi sees, which render() sets to a scratch dir; compare against that
         cls.helper = "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" % HOME_DIR
 
@@ -176,6 +172,13 @@ class ClaudeTest(unittest.TestCase):
         for k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
             self.assertNotIn(k, s["env"])
 
+    def test_personal_linux_is_on_and_the_switch_turns_it_off(self):
+        on = self.modify("on", self.USER)
+        self.assertEqual(self.modify("linux", self.USER), on)  # the same keys on macOS and Linux
+        off = self.modify("off_linux", on)
+        self.assertEqual(off["env"], {"FOO": "bar"})
+        self.assertNotIn("apiKeyHelper", off)
+
     def test_on_is_idempotent_and_works_from_empty(self):
         once = self.modify("on", self.USER)
         self.assertEqual(self.modify("on", once), once)
@@ -184,7 +187,7 @@ class ClaudeTest(unittest.TestCase):
             self.assertEqual((s["env"], s["apiKeyHelper"]), ({"ANTHROPIC_BASE_URL": URL}, self.helper))
 
     def test_off_removes_ours_and_keeps_a_users_env_keys(self):
-        for case in ("off", "work", "linux"):
+        for case in ("off", "work", "off_linux"):
             s = self.modify(case, self.modify("on", self.USER))
             self.assertEqual(s["env"], {"FOO": "bar"}, case)
             self.assertNotIn("apiKeyHelper", s, case)
@@ -192,7 +195,7 @@ class ClaudeTest(unittest.TestCase):
             self.assertEqual(self.modify(case, s), s, case)
 
     def test_off_prunes_env_when_we_emptied_it_and_never_adds_it(self):
-        for case in ("off", "work", "linux"):
+        for case in ("off", "work", "off_linux"):
             s = self.modify(case, self.modify("on", "{}"))
             self.assertNotIn("env", s, case)
             self.assertNotIn("apiKeyHelper", s, case)
@@ -200,7 +203,7 @@ class ClaudeTest(unittest.TestCase):
 
     def test_off_keeps_a_different_url_a_different_helper_and_an_env_the_user_left_empty(self):
         mine = {"env": {"ANTHROPIC_BASE_URL": "https://proxy.example/v1"}, "apiKeyHelper": "/bin/my-helper"}
-        for case in ("off", "work", "linux"):
+        for case in ("off", "work", "off_linux"):
             self.assertEqual(self.modify(case, mine)["env"], mine["env"], case)
             self.assertEqual(self.modify(case, mine)["apiKeyHelper"], "/bin/my-helper", case)
             self.assertEqual(self.modify(case, {"env": {}})["env"], {}, case)
@@ -254,7 +257,7 @@ class CodexTest(unittest.TestCase):
         self.assertEqual((toml["model_provider"], toml["profiles"]["x"]["model_provider"]), ("cliproxy", "keep"))
 
     def test_off_removes_the_key_only_when_it_is_ours_and_restores_the_file(self):
-        for case in ("off_t3hub_off", "work", "linux"):
+        for case in ("off_t3hub_off", "work", "off_linux"):
             self.assertEqual(self.modify(case, self.modify("on", self.BASE)).replace(self.LINE, ""), self.modify(case, self.BASE), case)
             self.assertNotIn("model_provider =", self.modify(case, self.modify("on", self.BASE)).split("[", 1)[0], case)
             self.assertEqual(self.modify(case, 'model_provider = "openai"\n' + self.BASE), 'model_provider = "openai"\n' + self.BASE, case)
@@ -262,14 +265,20 @@ class CodexTest(unittest.TestCase):
             nested = '[profiles.x]\nmodel_provider = "cliproxy"\n'
             self.assertEqual(self.modify(case, nested), nested, case)  # only the top-level key is ours
 
+    def test_personal_linux_gets_the_default_and_the_block(self):
+        toml = tomllib.loads(self.modify("linux", self.BASE))
+        self.assertEqual((toml["model"], toml["model_provider"]), ("gpt-6", "cliproxy"))
+        self.assertIn("cliproxy", toml["model_providers"])
+        self.assertEqual(self.modify("linux", self.BASE), self.modify("on", self.BASE))
+
     def test_on_back_to_off_is_byte_for_byte(self):
         self.assertEqual(self.modify("off_t3hub_off", self.modify("on", self.BASE)), self.BASE)
 
     def test_the_provider_block_stays_while_either_switch_is_on(self):
         has = lambda case: "[model_providers.cliproxy]" in self.modify(case, self.BASE)
-        self.assertEqual({c: has(c) for c in ("on", "off", "on_t3hub_off", "off_t3hub_off", "on_t3hub_on", "off_t3hub_on", "work", "linux")},
+        self.assertEqual({c: has(c) for c in ("on", "off", "on_t3hub_off", "off_t3hub_off", "on_t3hub_on", "off_t3hub_on", "work", "linux", "off_linux")},
                          {"on": True, "off": False, "on_t3hub_off": True, "off_t3hub_off": False, "on_t3hub_on": True,
-                          "off_t3hub_on": True, "work": False, "linux": False})
+                          "off_t3hub_on": True, "work": False, "linux": True, "off_linux": False})
         # hub on and t3Hub off: the default needs the block, so the file stays valid for Codex
         toml = tomllib.loads(self.modify("on_t3hub_off", self.BASE))
         self.assertIn(toml["model_provider"], toml["model_providers"])
@@ -307,11 +316,22 @@ class T3Test(unittest.TestCase):
         self.assertEqual(self.modify("off_t3hub_off", FIXTURE), FIXTURE)  # nothing to restore
         self.assertEqual(self.instances(FIXTURE)["codex"], ORIGINAL_CODEX)
 
-    def test_other_profiles_and_linux_restore_and_never_add(self):
+    def test_the_work_profile_and_hub_off_restore_and_never_add(self):
         on = self.modify("on_t3hub_off", FIXTURE)
-        for case in ("work", "linux"):
+        for case in ("work", "off_linux"):
             self.assertEqual(self.modify(case, FIXTURE).count('"existing"'), 0, case)
             self.assertEqual(self.instances(self.modify(case, on))["codex"], ORIGINAL_CODEX, case)
+
+    def test_personal_linux_is_on_with_its_own_worktrees_directory(self):
+        out = json.loads(self.modify("linux", FIXTURE))
+        self.assertEqual(out["providerInstances"]["codex"], {"driver": "codex", "enabled": True, "displayName": "Codex", "config": {
+            "setupMode": "existing", "binaryPath": "%s/.t3/tools/codex/%s/bin/codex" % (HOME_DIR, CODEX_VERSION)}})
+        self.assertEqual(out["usageLimitSources"], {"cliproxy-hub": USAGE})
+        self.assertEqual(out["worktreesDirectory"], "%s/t3-worktrees" % HOME_DIR)  # not the Mac's Workshop disk
+        self.assertTrue({"pi", "pi-lead"} <= set(out["providerInstances"]))
+        self.assertNotIn("claude-hub", out["providerInstances"])  # the t3Hub pair stays on the Mac
+        no_binary = json.loads(run(render(T3, "linux", home=EMPTY_HOME), FIXTURE))
+        self.assertEqual(no_binary["providerInstances"]["codex"], {**ORIGINAL_CODEX, "displayName": "Codex"})  # no active.json on Linux T3
 
     def test_an_entry_edited_by_hand_is_not_restored_over(self):
         mine = json.loads(FIXTURE)
@@ -427,7 +447,7 @@ class T3Test(unittest.TestCase):
         self.assertEqual(self.instances(only_default)["codex"]["config"]["setupMode"], "existing")
 
 
-@unittest.skipUnless(sys.platform == "darwin" and shutil.which("chezmoi") and shutil.which("jq"), "the hub is gated to macOS")
+@unittest.skipUnless(sys.platform in ("darwin", "linux") and shutil.which("chezmoi") and shutil.which("jq"), "the hub is on the personal profile on macOS and Linux")
 class ApplyPathTest(unittest.TestCase):
     """chezmoi apply into a throwaway HOME: the same path a real apply takes, with exactly the three real targets."""
     CODEX_BASE = 'model = "gpt-6"\n\n[projects."/x"]\ntrust_level = "trusted"\n'
@@ -479,10 +499,11 @@ class ApplyPathTest(unittest.TestCase):
         for i, w in (("claudeAgent", "300000"), ("coordinator", "200000")):
             settled["providerInstances"][i]["config"] = {**settled["providerInstances"][i].get("config", {}), "autoCompactWindow": w}
         settled["idleCompaction"] = "beforeCacheExpires"
+        settled["worktreesDirectory"] = "/Volumes/Workshop/macbook/t3-worktrees" if sys.platform == "darwin" else "%s/t3-worktrees" % self.home
         # the four seat-* instances are there too (tests/t3-hub covers them); everything else is byte for byte what the hub-off script leaves
         no_seats = json.loads(baseline[".t3/userdata/settings.json"])
-        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer"):
-            self.assertIn(sid, no_seats["providerInstances"])
+        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer") + (("pi", "pi-lead") if sys.platform == "linux" else ()):
+            self.assertIn(sid, no_seats["providerInstances"])  # pi and pi-lead are the Linux-only instances
             del no_seats["providerInstances"][sid]
         self.assertEqual(json.dumps(no_seats, indent=2, ensure_ascii=False), json.dumps(settled, indent=2, ensure_ascii=False))
         self.assertEqual(baseline[".codex/config.toml"], self.CODEX_BASE)
@@ -497,7 +518,7 @@ class ApplyPathTest(unittest.TestCase):
         t3 = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
         self.assertEqual(t3["codex"], {"driver": "codex", "enabled": True, "displayName": "Codex", "config": {
             "setupMode": "existing", "binaryPath": "%s/.t3/tools/codex/%s/bin/codex" % (self.home, CODEX_VERSION)}})
-        t3 = {k: v for k, v in t3.items() if not k.startswith("seat-")}
+        t3 = {k: v for k, v in t3.items() if not k.startswith("seat-") and k not in ("pi", "pi-lead")}  # pi and pi-lead: Linux only
         self.assertEqual({k: v["displayName"] for k, v in t3.items()}, NAMES)
         self.assertEqual(list(t3), ["codex", "claudeAgent", "coordinator"])
         top = json.loads((self.home / ".t3/userdata/settings.json").read_text())
@@ -516,6 +537,29 @@ class ApplyPathTest(unittest.TestCase):
         self.apply(str(self.home / ".t3"))
         self.assertEqual(stat.S_IMODE((self.home / ".t3/userdata").stat().st_mode), 0o700)
         self.assertEqual(json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]["codex"]["config"]["setupMode"], "existing")
+
+
+@needs
+class GateTest(unittest.TestCase):
+    """The real `hub` gate: on for the personal profile on any OS, n/a for every other profile, off with the switch off."""
+
+    def gate(self, profile, os_name, **extra):
+        data = dict({"profile": profile}, **extra)
+        return chezmoi(source(), data, "execute-template", "--override-data", json.dumps({"chezmoi": {"os": os_name}}),
+                       stdin='{{ includeTemplate "hub" . }}').strip()
+
+    def test_personal_is_on_on_linux_and_darwin(self):
+        self.assertEqual({os_name: self.gate("personal", os_name) for os_name in ("linux", "darwin")}, {"linux": "on", "darwin": "on"})
+
+    def test_other_profiles_are_n_a_on_every_os(self):
+        for profile in ("axon-work-computer", "termux"):
+            for os_name in ("linux", "darwin"):
+                self.assertEqual(self.gate(profile, os_name), "n/a", (profile, os_name))
+
+    def test_the_switch_turns_personal_off_on_both_oses(self):
+        for os_name in ("linux", "darwin"):
+            self.assertEqual(self.gate("personal", os_name, hub={"enabled": False}), "off", os_name)
+            self.assertEqual(self.gate("personal", os_name, hub={"enabled": True}), "on", os_name)
 
 
 @needs

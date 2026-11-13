@@ -34,10 +34,10 @@
 # cannot hit another agent's jobs (the script is dot_local/share/agent-harness/hooks/refuse_pattern_kill.py, agent-harness README,
 # "Pattern-kill guard"). The entry is found by that script's path in its command: each apply drops it and appends the current one.
 # A hook that cannot run (python3 missing) exits non-2, so it never blocks. Michael's own terminal is not an agent session.
-# Hub (personal profile on macOS, and only while hub.enabled in .chezmoidata.toml is true): points every Claude Code session at the
+# Hub (personal profile on macOS and Linux, and only while hub.enabled in .chezmoidata.toml is true): points every Claude Code session at the
 # homelab CLIProxyAPI hub. hub.enabled is one switch for Claude, Codex and the T3 codex instance. Sets env.ANTHROPIC_BASE_URL (no /v1)
 # and apiKeyHelper (op_read_cached.sh printing the hub key). Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would
-# outrank apiKeyHelper. Off, or on any other profile or OS, an apply removes env.ANTHROPIC_BASE_URL only when it equals the hub URL
+# outrank apiKeyHelper. Off, or on any other profile, an apply removes env.ANTHROPIC_BASE_URL only when it equals the hub URL
 # and apiKeyHelper only when it equals ours, then prunes env if that emptied it; other env keys and a user's own helper stay.
 # ROLLBACK: set hub.enabled = false (data in ~/.config/chezmoi/chezmoi.yaml), then apply ~/.claude/settings.json,
 # ~/.codex/config.toml and ~/.t3/userdata/settings.json. Deleting this block instead would leave the keys behind, so the switch stays.
