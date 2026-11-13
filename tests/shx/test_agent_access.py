@@ -7,6 +7,7 @@ Run: python3 -I tests/shx/test_agent_access.py
 """
 import json
 import os
+import urllib.request
 import re
 import shutil
 import subprocess
@@ -56,6 +57,27 @@ def servers(profile, os_name=None):
     return json.loads(chezmoi(profile, *args, stdin=TMPL.read_text()))["mcpServers"]
 
 
+def mcp_tool_names(url):
+    """Opens a Streamable HTTP MCP session at `url`, lists the tools and returns their names (stdlib only)."""
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+
+    def post(body, session=None):
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=dict(headers, **({"Mcp-Session-Id": session} if session else {})))
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read().decode()
+            sid = r.headers.get("Mcp-Session-Id") or session
+        # A reply is plain JSON or a server-sent event whose data line is the JSON-RPC message.
+        data = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
+        return sid, (json.loads(data[-1]) if data else (json.loads(raw) if raw.strip() else None))
+
+    sid, init = post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                      "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "shx-access-test", "version": "1"}}})
+    assert init and "result" in init, init
+    post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+    _, listed = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid)
+    return [t["name"] for t in listed["result"]["tools"]]
+
+
 @unittest.skipUnless(shutil.which("chezmoi"), "needs chezmoi on PATH")
 class AgentAccessTest(unittest.TestCase):
     def test_mcp_entry_is_on_personal_only_on_every_os(self):
@@ -75,6 +97,20 @@ class AgentAccessTest(unittest.TestCase):
         self.assertEqual([p for p in DEPLOYED if p not in managed], [])
         work = set(chezmoi("axon-work-computer", "managed").split())
         self.assertEqual([p for p in DEPLOYED if p in work], [], "the work profile must get none of them")
+
+    @unittest.skipIf(os.environ.get("GITHUB_ACTIONS"), "the homelab host is not reachable from GitHub's runners")
+    def test_rendered_entry_reaches_the_live_server(self):
+        # The path an agent takes: the URL chezmoi renders for the personal profile, a real MCP session, the tools it needs.
+        # Fails closed when the host cannot be reached.
+        names = mcp_tool_names(servers("personal")["shartifacts"]["url"])
+        for tool in ("artifact_comments", "watch_artifacts", "list_artifacts"):
+            self.assertIn(tool, names)
+
+    def test_picture_command_runs_from_the_source_wrapper(self):
+        r = subprocess.run([str(ROOT / "dot_local/bin/executable_shx-note-image")], capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, XDG_STATE_HOME=tempfile.mkdtemp()))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1])["code"], "bad_input")
 
     def test_coverage_table_says_why_the_work_profile_is_left_out(self):
         table = PROFILES_DOC.read_text().split("\n## Local data keys")[0]
