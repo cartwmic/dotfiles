@@ -609,6 +609,75 @@ class Black(unittest.TestCase):
             done = self.kgate(*args, "--", "true", env=env)
             self.assertEqual(done.returncode, 64, (args, env, done.stdout))
 
+    # --- a command that names a file the pod will not have
+
+    def outside(self, name, text="echo hi\n"):
+        """A real file next to the worktree: it exists here, and kgate does not ship it."""
+        d = self.tmp / "outside"
+        d.mkdir(exist_ok=True)
+        (d / name).write_text(text)
+        return d / name
+
+    def refused(self, done, path):
+        self.assertEqual(done.returncode, 64, done.stdout)
+        self.assertIn("kgate: refused: %s is outside the worktree %s" % (path, self.repo), done.stdout)
+        self.assertIn("sh -c", done.stdout)
+        self.assertEqual(self.records(), [], "nothing was submitted, so the log has no record")
+        self.assertEqual(self.calls(), [], "no ssh or kubectl call was made")
+
+    def test_a_script_outside_the_worktree_is_refused_before_anything_is_submitted(self):
+        # the 2026-11-13 loop-engine builder: kgate -- sh /tmp/.../scratchpad/unit.sh
+        script = self.outside("unit.sh")
+        self.refused(self.kgate("--", "sh", str(script)), script)
+
+    def test_the_profile_may_live_outside_but_the_script_may_not(self):
+        # the 2026-11-13 kgate-only builder: --profile /tmp/probe.toml ... -- sh /tmp/probe.sh. kgate reads the profile here, so only the script is refused.
+        profile = self.outside("probe.toml", (self.repo / "kgate.toml").read_text())
+        script = self.outside("probe.sh")
+        self.refused(self.kgate("--profile", str(profile), "--sched-wait", "3600", "--", "sh", str(script)), script)
+        done = self.kgate("--profile", str(profile), "--", "echo", "ran")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_a_relative_path_that_leaves_the_worktree_is_refused(self):
+        self.outside("up.sh")
+        done = self.kgate("--", "sh", "../outside/up.sh")
+        self.refused(done, self.tmp / "outside" / "up.sh")
+
+    def test_a_directory_outside_the_worktree_is_refused(self):
+        self.outside("x.sh")
+        self.refused(self.kgate("--", "ls", str(self.tmp / "outside")), self.tmp / "outside")
+
+    def test_a_file_in_the_worktree_runs(self):
+        done = self.kgate("--", "cat", str(self.repo / "tracked.txt"), "./untracked.txt")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("tracked and changed", done.stdout)
+
+    def test_an_inline_script_runs(self):
+        done = self.kgate("--", "sh", "-c", "echo inline-ran")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("inline-ran", done.stdout)
+
+    def test_a_system_path_runs(self):
+        done = self.kgate("--", "/bin/sh", "-c", "echo system-ran")
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_a_pod_only_path_that_does_not_exist_here_runs(self):
+        done = self.kgate("--", "echo", "/out/result.txt", "/cache/dir", str(self.tmp / "made-in-the-pod.txt"))
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_a_location_itself_runs(self):
+        # /tmp and the home folder exist in every pod; only something inside them is the user's own file
+        done = self.kgate("--", "echo", "/tmp", "/var/tmp", str(self.home))
+        self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_outside_a_git_worktree_the_run_fails_the_old_way_not_as_a_refusal(self):
+        script = self.outside("unit.sh")
+        done = subprocess.run([sys.executable, str(SCRIPT), "--", "sh", str(script)], cwd=self.tmp / "outside", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              env={**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
+                                   "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", **self.op_env()})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertNotIn("refused", done.stdout)
+
     def test_version_commands_run_in_the_jobs_directory(self):
         # rustup picks the toolchain by directory, so a preflight that ran elsewhere would check the wrong tool
         sub = self.repo / "sub-9.8.7"

@@ -22,7 +22,7 @@ Contract
   memory_limit (optional: the limit, default equal to memory), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
-- Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line. 69 when the job could not
+- Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line, or a CMD element that names a local file outside the worktree (the pod would not have it; nothing is submitted). 69 when the job could not
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
   after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. kgate NEVER runs CMD on this Mac and never
@@ -746,6 +746,30 @@ def worktree(cwd, skipped=None):
         if os.path.isdir(full) and not os.path.islink(full):
             raise Unavailable("%s is a directory in the file list (not a submodule: a nested repo or a stray directory); kgate does not ship those" % p)
     return wt, common, files
+
+
+def user_locations():
+    """The places a user or an agent keeps files of their own: home, the temp folders and the per-user runtime folder."""
+    places = [os.path.expanduser("~"), "/tmp", os.environ.get("TMPDIR"), "/var/tmp", "/run/user"]
+    return {os.path.realpath(p) for p in places if p}
+
+
+def outside_worktree(command, root, cwd):
+    """The first element of CMD that names an existing local file or directory under a user location (home, /tmp, $TMPDIR, /var/tmp, /run/user)
+    but outside the worktree `root`: the pod gets only the worktree, so CMD would not find it there. None when there is no such element.
+    Options (-x), system paths (/bin/sh) and pod-only paths (/out, /cache: not here) are not named. A location itself (/tmp) is not a file of the user's.
+    The text inside `sh -c '...'` is one element and is never read as a path."""
+    root = os.path.realpath(root)
+    places = user_locations()
+    for arg in command:
+        if not arg or arg.startswith("-") or "\0" in arg:
+            continue
+        path = os.path.realpath(os.path.join(cwd, arg))
+        if path == root or path.startswith(root + os.sep) or path in places or not os.path.lexists(path):
+            continue
+        if any(path.startswith(place + os.sep) for place in places):
+            return path
+    return None
 
 
 def archive(wt, common, files, extra, history=True, skipped=()):
@@ -1783,6 +1807,15 @@ def main(argv):
         opts = parse_args(argv)
     except SystemExit as e:
         print(e.code if isinstance(e.code, str) else USAGE_TEXT, file=sys.stderr)
+        return USAGE
+    try:   # outside a git worktree the job fails the old way (69), with the reason worktree() gives
+        root = git(os.getcwd(), "rev-parse", "--show-toplevel").decode().strip()
+    except Unavailable:
+        root = None
+    stray = root and outside_worktree(opts.command, root, os.getcwd())
+    if stray:
+        print("kgate: refused: %s is outside the worktree %s; the pod gets only the worktree. Put the script in the worktree or run the command inline (sh -c '...')." % (stray, root),
+              file=sys.stderr)
         return USAGE
     job = Job(opts)
 
