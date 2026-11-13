@@ -68,14 +68,17 @@ A blocker or should-fix must name the obligation, the evidence and the consequen
 
 ## 4. Triage
 
-You (the driver) judge every finding. Read the code at head, or run a command, and mark the finding:
+You (the driver) run the four tests in `~/.local/share/agent-harness/finding-triage.md` on every finding. Findings from human reviewers on the PR, from bots, and from this skill's own reviewer sessions all get them. Read the code at head, or run a command, and mark the finding:
 
-- **confirmed:** it holds. A confirmed blocker or should-fix records how you checked: the code path, or the command and the tail of its output.
-- **refuted:** it does not hold. Keep it out of the draft and give the owner the reason.
+- **confirmed:** it passes all four tests. A confirmed blocker or should-fix records how you checked: the code path, or the command and the tail of its output.
+- **refuted:** it fails test 1 (real). Keep it out of the draft and give the owner the reason.
+- **declined:** it is real but fails test 2, 3 or 4. Keep it out of the draft and give the owner the reason, naming the test.
 - **duplicate:** name the original finding.
-- **out-of-scope:** pre-existing, or outside the diff.
+- **out-of-scope:** pre-existing, or outside the diff. This is a test 4 failure that section 5 lets the summary mention once.
 
-Do not debate with reviewers. The owner sees refuted findings at the checkpoint and can overrule.
+For test 3 use only the four principle sections under "Design principles" below.
+
+Do not debate with reviewers. The owner sees refuted and declined findings at the checkpoint and can overrule.
 
 ## 5. Draft
 
@@ -92,7 +95,7 @@ The draft has a summary, inline comments, and an event: COMMENT, REQUEST_CHANGES
 
 ## 6. Owner review, then post
 
-1. **Show the owner the draft verbatim.** Below it, collapsed: held-back findings, refuted findings with reasons, and the files covered on each axis.
+1. **Show the owner the draft verbatim.** Below it, collapsed: held-back findings, refuted and declined findings with reasons, and the files covered on each axis.
 2. **Post only after the owner's own words approve this exact draft.** Any edit needs a new approval.
 3. **Before posting, read the PR head again.** If it moved, stop. The owner withholds or starts a new review.
 4. **Post exactly the approved text as one review,** for example with `gh api` on GitHub. Then read the posted review back and compare it with the draft.
