@@ -75,7 +75,7 @@ You (the driver) run the four tests in `~/.local/share/agent-harness/finding-tri
 
 - **confirmed:** it passes all four tests. A confirmed blocker or should-fix records how you checked: the code path, or the command and the tail of its output.
 - **refuted:** it fails test 1 (real). Keep it out of the draft and give the owner the reason.
-- **declined:** it is real but fails test 2 or 3. Keep it out of the draft and give the owner the reason, naming the test. Nits are declined under test 2. So is a finding whose `covered by` names an existing job, check or process that already handles it. It fails test 2 (useful): the owner calls such a fix extra work nobody needs. Check that the cover is real before you decline.
+- **declined:** it is real but fails test 2 or 3. Keep it out of the draft and give the owner the reason, naming the test. Nits are declined under test 2. So is a finding whose `covered by` names an existing job, check or process that already handles it. It fails test 2 (useful). Check that the cover is real before you decline.
 - **duplicate:** name the original finding.
 - **follow-up:** it fails test 4: outside the PR's stated intent, even when the code is inside the diff, or pre-existing. Section 5 lets the summary mention it once.
 
