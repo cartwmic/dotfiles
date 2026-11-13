@@ -178,6 +178,11 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
+# Agent desktop helper (~/.local/bin/agent-desktop: screenshots, windows, focus, pointer, typing on the Omarchy desktop): personal Linux only. macOS is not Wayland, and the work profile has no Linux desktop.
+.local/bin/agent-desktop
+{{- end }}
+
+{{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
 # 1Password windows in screen shares on the Omarchy box (Hyprland): personal Linux only. The work profile has no Linux desktop.
 .config/hypr
 .config/hypr/**
