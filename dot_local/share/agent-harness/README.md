@@ -125,6 +125,11 @@ menu. Credentials stay in the harness's local OAuth store, not in canonical
 configuration or 1Password adapter metadata. In a running Pi session, use
 `/reload` after applying, then `/mcp login ticktick`.
 
+The `shartifacts` entry is Michael's page server (`https://shartifacts.internal.cartwmic.com/mcp`, Streamable
+HTTP, no sign-in). It is on both desktop profiles, like TickTick and Hindsight, so it has no row in
+`docs/profiles.md`. The canonical skill `using-shartifacts` and the command `shx-note-image`
+(`dot_local/share/shx/README.md`) go with it. Test: `tests/shx/test_agent_access.py`.
+
 ## Pattern-kill guard
 
 Agent sessions refuse `pkill` and `killall`, so a pattern kill cannot hit another agent's jobs (three incidents in two days, including a

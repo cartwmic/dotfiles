@@ -66,6 +66,7 @@ python3 scripts/ci-par.py \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
   tests/viz \
+  tests/shx \
   tests/axon-playbook \
   tests/spotlight-workshop \
   tests/t3-hook \
