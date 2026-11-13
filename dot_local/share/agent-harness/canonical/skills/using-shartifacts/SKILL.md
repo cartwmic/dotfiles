@@ -38,6 +38,8 @@ command `shx-note-image`.
 - `status`: `current` (he commented on the latest version), `ok` (the latest version still has
   what he pointed at), `lost` (it no longer does: the text was reworded or the element is
   gone) or `unchecked` (he commented on an older version and nobody has checked the latest).
+  A drawing on an element with no text (a chart bar, an image) stays `unchecked` after any new
+  version, because nothing can tell it from its neighbour: `check` skips it. Look at its picture.
 
 Pass `all: true` to include resolved threads.
 

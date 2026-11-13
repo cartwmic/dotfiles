@@ -353,6 +353,14 @@ class CheckTest(ShxTestCase):
                                           {"id": "retagged", "found": False}, {"id": "older", "found": True},
                                           {"id": "emoji-same", "found": True}])
 
+    def test_only_text_less_drawings_post_nothing_and_start_no_browser(self):
+        st = stroke("#ff00ff", "#bar", {"x": 8, "y": 60, "w": 300, "h": 20})
+        st.update({"anchor_tag": "div", "anchor_text": ""})
+        server = self.serve(comments=[{"id": "bar", "author": "person", "body": "look", "anchor": "#bar", "version": 1, "stroke": st}])
+        self.assertEqual(self.shx("check", server.base, ARTIFACT), {"ok": True, "version": 2, "results": []})
+        self.assertEqual(server.matches, [])
+        self.assertFalse([r for r in server.requests if r.startswith("/view/")], "no browser was needed")
+
     def test_nothing_to_check_posts_nothing(self):
         server = self.serve(comments=[COMMENTS[-1]])
         self.assertEqual(self.shx("check", server.base, ARTIFACT), {"ok": True, "version": 2, "results": []})
