@@ -114,6 +114,7 @@ def render(path, case, home=None):
         return "%s='%s'" % (m.group(1), json.dumps(data, separators=(",", ":")))
     text = re.sub(r"(?m)^(WANT|OWNED)='(.*)'$", drop_seats, text)
     text = re.sub(r"(?m)^AUTO_COMPACT_WINDOWS=.*$", "AUTO_COMPACT_WINDOWS='{}'", text)
+    text = re.sub(r"(?m)^ENV_VARS=.*$", "ENV_VARS='{}'", text)  # the CLAUDE_CODE_FIZZY_GROVE environment entry is tests/t3-hub's too
     return re.sub(r"(?m)^IDLE_COMPACTION=.*$", "IDLE_COMPACTION=''", text)
 
 
@@ -498,6 +499,7 @@ class ApplyPathTest(unittest.TestCase):
         settled = json.loads(FIXTURE)  # plus the "Auto-compact after" values and idleCompaction the script sets (tests/t3-hub covers them)
         for i, w in (("claudeAgent", "300000"), ("coordinator", "200000")):
             settled["providerInstances"][i]["config"] = {**settled["providerInstances"][i].get("config", {}), "autoCompactWindow": w}
+            settled["providerInstances"][i]["environment"] = [{"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}]  # tests/t3-hub covers it
         settled["idleCompaction"] = "beforeCacheExpires"
         settled["worktreesDirectory"] = "/Volumes/Workshop/macbook/t3-worktrees" if sys.platform == "darwin" else "%s/t3-worktrees" % self.home
         # the four seat-* instances are there too (tests/t3-hub covers them); everything else is byte for byte what the hub-off script leaves
