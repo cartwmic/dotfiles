@@ -50,7 +50,7 @@ Review the work, not the person.
    - the files it covered;
    - a verdict (pass or fail) with a note for each question;
    - findings, each with id, severity, path, line, text, obligation, evidence, consequence, `scope` and `covered by`.
-   - `scope` is `in` or `out`, judged against the stated intent, not against the diff. `covered by` names an existing job, check or process that already handles the problem, or `none`.
+   - `scope` is `in` or `out`, judged against the stated intent, not against the diff. A defect the PR itself introduces is always `in`. `covered by` names an existing job, check or process that already handles the problem, or `none`.
 4. **Split a large PR** across sessions by file. Together they must cover every file that is not exempt.
 5. **For a high-risk change,** add a second correctness session. High risk means auth, data migration, concurrency, money, or regulated or sensitive data.
 6. **Axon playbook packets.** Applies only if `~/.local/share/agent-harness/external-skills/axon-agents-playbook/rubrics/` exists and the origin remote is on {{ $_ := includeTemplate "require_work_data" . }}{{ if hasKey . "workGitHost" }}`{{ .workGitHost }}` or {{ end }}`github.com/axon-*`. Otherwise skip, silently.
@@ -65,9 +65,9 @@ Review the work, not the person.
 - **nit:** a preference. It fails test 2 in section 4.
 - **question:** the reviewer cannot tell.
 
-A blocker or should-fix must name the obligation, the evidence and the consequence. Without all three it is at most a nit. Do not comment on what CI or a formatter already enforces.
+A blocker or should-fix must name the obligation, the evidence and the consequence. Without all three it is not a blocker or should-fix: it is a question if you cannot tell, otherwise it is declined. Do not comment on what CI or a formatter already enforces.
 
-A finding can be a blocker or should-fix only when its `scope` is `in` and its `covered by` is `none`. A finding with `scope` `out`, especially a problem that existed before the PR, is at most a note marked for a follow-up. A finding that something existing already handles is declined (section 4).
+A finding can be a blocker or should-fix only when its `scope` is `in` and its `covered by` is `none`. A finding with `scope` `out` (a problem the PR did not cause, especially one that existed before it) gets no severity: mark it **follow-up** (section 4). A defect the PR itself introduces is never `out`. A finding that something existing already handles is declined (section 4).
 
 ## 4. Triage
 
@@ -77,7 +77,7 @@ You (the driver) run the four tests in `~/.local/share/agent-harness/finding-tri
 - **refuted:** it fails test 1 (real). Keep it out of the draft and give the owner the reason.
 - **declined:** it is real but fails test 2 or 3. Keep it out of the draft and give the owner the reason, naming the test. Nits are declined under test 2. So is a finding whose `covered by` names an existing job, check or process that already handles it. It fails test 2 (useful). Check that the cover is real before you decline.
 - **duplicate:** name the original finding.
-- **follow-up:** it fails test 4: outside the PR's stated intent, even when the code is inside the diff, or pre-existing. Section 5 lets the summary mention it once.
+- **follow-up:** it fails test 4: outside the PR's stated intent, even when the code is inside the diff, or pre-existing. A defect the PR itself introduces is never a follow-up. Section 5 lets the summary mention it once.
 
 For test 3 use only the four principle sections under "Design principles" below.
 
@@ -98,7 +98,7 @@ The draft has a summary, inline comments, and an event: COMMENT, REQUEST_CHANGES
 
 ## 6. Owner review, then post
 
-1. **Show the owner the draft verbatim.** Below it, collapsed: held-back findings, refuted and declined findings with reasons (nits included), and the files covered on each axis.
+1. **Show the owner the draft verbatim.** Below it, collapsed: held-back findings, follow-ups, refuted and declined findings with reasons (nits included), and the files covered on each axis.
 2. **Post only after the owner's own words approve this exact draft.** Any edit needs a new approval.
 3. **Before posting, read the PR head again.** If it moved, stop. The owner withholds or starts a new review.
 4. **Post exactly the approved text as one review,** for example with `gh api` on GitHub. Then read the posted review back and compare it with the draft.
