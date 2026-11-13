@@ -25,10 +25,12 @@
       "type": "http",
       "url": "https://mcp.ticktick.com"
     },
+{{- if ne .profile "axon-work-computer" }}
     "shartifacts": {
       "type": "http",
       "url": "https://shartifacts.internal.cartwmic.com/mcp"
     },
+{{- end }}
     "hindsight": {
       "type": "http",
       "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/"
