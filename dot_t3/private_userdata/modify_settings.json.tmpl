@@ -2,7 +2,7 @@
 # Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the four seat-* instances, pi and pi-lead below).
 # Personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # Personal Linux owns two more, pi and pi-lead, and nothing else of the hub (see "pi" and "pi-lead" below).
-# Data switch t3Hub.enabled (default true): false makes WANT empty, so the next apply removes exactly the two owned ids.
+# Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
 #   claude-hub  "Claude (hub)"  driver claudeAgent: ANTHROPIC_BASE_URL at the hub and an empty ANTHROPIC_API_KEY (an ambient key must not win over the helper's), key from ~/.config/t3-hub-claude-settings.json (apiKeyHelper)
 #   codex-hub   "Codex (hub)"   driver codex, not managed: CODEX_HOME stays ~/.codex, `-c model_provider=cliproxy` selects the
 #               [model_providers.cliproxy] block that dot_codex/modify_private_config.toml.tmpl writes
@@ -52,6 +52,8 @@
 #               One claudeAgent instance per agent seat, so a seat starts with its own settings instead of the default ones. Each has its own
 #               autoCompactWindow, optionally an `environment` entry, and `launchArgs` of
 #                 --settings <home>/.claude/fleet/seat-<seat>.json --strict-mcp-config --mcp-config <home>/.claude/fleet/mcp.json
+#               --strict-mcp-config keeps T3's own t3-code server: T3 hands it to Claude through the SDK, not through --mcp-config, and a
+#               session started by T3 on a seat instance lists the t3-code, hindsight and shartifacts tools (checked on a scratch T3 server).
 #               The seat file (source dot_claude/fleet/seat-<seat>.json.tmpl, built by .chezmoitemplates/fleet_seat) removes the Artifact tool and
 #               trims the skills listing; the shared MCP file keeps only hindsight and shartifacts (T3 adds t3-code itself). The files are read when
 #               a session starts, so an edit reaches the next session only. The instance id is what a caller passes: delegate_task
