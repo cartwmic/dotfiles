@@ -1,0 +1,42 @@
+{{- /*
+  Work machine only: installs the leak-guard gh wrapper, from local chezmoi data
+    leakGuard:
+      repos: [<owner/name>, ...]      # the guarded repositories (host/owner/name off github.com)
+  Writes ~/.local/share/leak-guard/bin/gh (scripts/leak-guard-gh), ~/.config/leak-guard/repos and ~/.config/mise/conf.d/leak-guard-gh.toml.
+  Renders nothing (chezmoi runs no script) on any other profile, or without the leakGuard data. With no repos it only prints a notice. docs/leak-guard.md.
+*/ -}}
+{{- if and (eq .profile "axon-work-computer") (hasKey . "leakGuard") -}}
+{{-   $lg := .leakGuard -}}
+{{-   if not (kindIs "map" $lg) }}{{ fail "leakGuard must be a map with terms (a list) and context (a string)" }}{{ end -}}
+{{-   $repos := dig "repos" (list) $lg -}}
+{{-   if not (kindIs "slice" $repos) }}{{ fail "leakGuard.repos must be a list of owner/name strings" }}{{ end -}}
+{{-   range $r := $repos }}{{ if or (not (kindIs "string" $r)) (not (regexMatch "^([^/\\s]+/)?[^/\\s]+/[^/\\s]+$" $r)) }}{{ fail "leakGuard.repos must contain only owner/name (or host/owner/name) strings" }}{{ end }}{{ end -}}
+#!/bin/sh
+# leak-guard gh wrapper, installed from the chezmoi data key `leakGuard.repos`. Edit the data and scripts/leak-guard-gh, not the installed files.
+set -eu
+umask 077
+{{- if not $repos }}
+echo "leak-guard: NOTICE: leakGuard.repos is empty or missing, so the gh wrapper is not installed (docs/leak-guard.md)" >&2
+{{- else }}
+MARK="leak-guard gh wrapper (managed by chezmoi"
+dir="$HOME/.local/share/leak-guard/bin"
+mkdir -p "$dir" "$HOME/.config/leak-guard" "$HOME/.config/mise/conf.d"
+printf '%s' {{ (join "\n" $repos) | b64enc | quote }} | base64 -d > "$HOME/.config/leak-guard/repos.tmp"
+printf '\n' >> "$HOME/.config/leak-guard/repos.tmp"
+mv "$HOME/.config/leak-guard/repos.tmp" "$HOME/.config/leak-guard/repos"
+if [ -e "$dir/gh" ] && ! grep -qF "$MARK" "$dir/gh"; then
+  echo "leak-guard: WARNING: $dir/gh already exists and is not leak-guard's; left alone, so the gh wrapper is NOT installed" >&2
+else
+  printf '%s' {{ include "scripts/leak-guard-gh" | b64enc | quote }} | base64 -d > "$dir/gh.tmp"
+  chmod 755 "$dir/gh.tmp"
+  mv "$dir/gh.tmp" "$dir/gh"
+fi
+conf="$HOME/.config/mise/conf.d/leak-guard-gh.toml"
+if [ -e "$conf" ] && ! grep -qF "$MARK" "$conf"; then
+  echo "leak-guard: WARNING: $conf already exists and is not leak-guard's; left alone, so mise may put another gh ahead of the wrapper" >&2
+else
+  printf '# leak-guard gh wrapper (managed by chezmoi; run_onchange_after_47_install-leak-guard-gh)\n# Keeps the wrapper directory first in the PATH mise builds; mise puts its own tool directories ahead of anything a .zshrc adds.\n[env]\n_.path = ["%s"]\n' "$dir" > "$conf.tmp"
+  mv "$conf.tmp" "$conf"
+fi
+{{- end }}
+{{ end -}}
