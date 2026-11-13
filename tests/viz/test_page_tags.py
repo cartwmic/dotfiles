@@ -21,7 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 VIZ = os.path.join(ROOT, "dot_local", "bin", "executable_viz")
 NODE = shutil.which("node")
 CHEZMOI = shutil.which("chezmoi")
-CHROMIUM = bool(os.environ.get("VIZ_CHROMIUM") or shutil.which("chromium"))
+# The guard tests/viz/test_publish.py and test_viz.py use for a test that renders: CI has node but no mmdc, so those skip there.
+RENDER_DEPS = bool(NODE and shutil.which("mmdc") and (os.environ.get("VIZ_CHROMIUM") or shutil.which("chromium")))
 PASSWORD = "test-password-not-a-secret"
 RENDER_ID = "20261028-120000-000-abc123"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16 + b"rest of a png"
@@ -135,7 +136,7 @@ class TagFile(TagTest):
         self.assertEqual((bare["source"], bare["title"]), (None, None))
         self.assertEqual((titled["source"], titled["title"]), (None, "Quarterly numbers & trends"))
 
-    @unittest.skipUnless(CHROMIUM, "needs chromium (or VIZ_CHROMIUM) on PATH")
+    @unittest.skipUnless(RENDER_DEPS, "needs mmdc and chromium (or VIZ_CHROMIUM) on PATH")
     def test_publishing_a_file_records_the_same_source_as_publishing_its_id(self):
         page = os.path.join(self.state.name, "page-under-test.html")
         with open(page, "wb") as f:
