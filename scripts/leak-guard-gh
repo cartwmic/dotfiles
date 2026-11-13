@@ -37,7 +37,7 @@ NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help",
 
 # The flags of every command whose text the wrapper reads, as `gh <group> <verb> --help` lists them (gh 2.97.0; tests/leak-guard/test_gh_wrapper.py,
 # FlagTables, compares this table with the installed gh and fails when they differ). "s:long" is a short and a long flag, and a trailing "=" means the flag
-# takes a value. The wrapper parses a command's arguments with its own table only, the way gh's flag library does, and refuses any flag that is not in it.
+# takes a value. The wrapper parses a command's arguments with its own table only, following gh's flag library for the forms in parse_flags, and refuses any flag that is not in it.
 FLAGS = {
     ("pr", "create"): "a:assignee=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
@@ -244,7 +244,7 @@ def flag_table(group, verb):
 
 
 def parse_flags(args, group, verb):
-    """Parse the arguments after the group with the command's own flag table, the way gh's flag library does: `--name value`, `--name=value`, `-x value`,
+    """Parse the arguments after the group with the command's own flag table, following gh's flag library for these forms: `--name value`, `--name=value`, `-x value`,
     `-xvalue`, `-x=value`, clusters of switches (`-dw`), a value flag taking the next argument whatever it looks like, and `--` ending the flags.
     Returns ([(long name, value or None)], [positional arguments], unknown, missing): `unknown` is the position of the first flag the table does not
     list (parsing stops there, since nothing tells whether it takes a value), `missing` the position of a value flag with no value."""
@@ -496,7 +496,13 @@ def decide(args, repos, texts=None, real=None, depth=0):
     `texts` is where gathered text (and standard input, if read) goes, so the caller still has the input when this raises. `real` is the real gh, used to
     expand aliases; with none, an unknown name is treated as an extension."""
     texts = texts if texts is not None else Texts()
-    if not args or args[0].startswith("-"):
+    if not args or args in (["-h"], ["--help"], ["--version"]):
+        return "", None
+    if args[0].startswith("-"):
+        # gh accepts flags before the command group (`gh -R <repo> pr comment ...`), and the subcommand then parses the whole command line. Which command
+        # that is cannot be told from here, so the any-target rule decides: refused when any target is guarded, run untouched when none is.
+        if any(t in repos for t in raw_targets(args) + [r for a in args for r in api_targets(a)]):
+            raise Refuse("a flag comes before the command group, so what gh runs cannot be told. Put the command group first, e.g. `gh pr comment ... -R ...`")
         return "", None
     group = args[0]
     helped = any(a in ("-h", "--help") for a in args)
@@ -596,7 +602,7 @@ def main(argv):
     repos = guarded_repos()
     if not repos:
         return run_real(real, args, None)
-    command = command_name(args)
+    command = command_name(args) or "unrecognised"
     skip = os.environ.get("LEAK_GUARD_SKIP", "").strip()
     texts = Texts()
     try:
@@ -624,7 +630,7 @@ def main(argv):
             print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
             return run_real(real, args, texts.stdin)
         log(command, "block", "wrapper", 0, t0)
-        shown = args[0] if args and re.match(r"^[a-z][a-z-]*$", args[0]) and command == "unrecognised" else command      # the message names what was typed; the log only a safe name
+        shown = "command" if args and args[0].startswith("-") else args[0] if args and re.match(r"^[a-z][a-z-]*$", args[0]) and command == "unrecognised" else command      # the message names what was typed; the log only a safe name
         print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"<reason>\" gh ..." % (r, shown), file=sys.stderr)
         return 1
 

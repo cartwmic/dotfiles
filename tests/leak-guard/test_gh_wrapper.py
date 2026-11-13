@@ -731,6 +731,45 @@ class WrapperUnrecognised(Decisions):
                 self.reset()
                 self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
 
+    def test_flags_before_the_command_group_are_refused_when_any_target_is_guarded(self):
+        # gh accepts `gh -R <repo> pr comment ...`; the group is not where the wrapper looks first, so the any-target rule decides
+        ep = "repos/%s/issues/1/comments" % GUARDED
+        url = "https://github.com/%s/pull/3" % GUARDED
+        for args in (["-R", GUARDED, "pr", "comment", "3", "-b", "S"], ["--repo=" + GUARDED, "pr", "create", "-t", "T", "-b", "S"],
+                     ["-b", "S", "pr", "comment", url], ["-X", "POST", "api", ep, "-f", "body=S"], ["--jq", ".id", "api", ep],
+                     ["-R" + GUARDED, "issue", "comment", "3", "-b", "S"], ["--paginate", "api", "repos/%s" % GUARDED]):
+            with self.subTest(args):
+                self.assertIn("Put the command group first", self.refused(*args, repo="someone/other"))
+        for args in (["-R", "someone/other", "pr", "comment", "3", "-b", "S"], ["-b", "S", "pr", "comment", "3"], ["-X", "POST", "api", "user/x"]):
+            with self.subTest(args, context="guarded"):          # nothing on the line names it, but GH_REPO or the checkout is guarded
+                self.assertIn("Put the command group first", self.refused(*args))
+        self.reset()
+        done = self.gh("-R", GUARDED, "pr", "comment", "3", "-b", PLANTED, cwd=self.other_cwd)
+        self.assertBlocked(done, "Put the command group first")
+        self.assertNotIn("fooco", done.stderr)          # the message never repeats the text
+        self.reset()
+        self.assertBlocked(self.gh("-b", "S", "pr", "comment", "3"), "Put the command group first")                # guarded checkout, nothing else names it
+        self.assertEqual([r["command"] for r in self.gh_log()], ["unrecognised", "unrecognised"])
+
+    def test_a_flags_first_command_with_only_unguarded_targets_passes_straight_through_untouched(self):
+        for args in (["-R", "someone/other", "pr", "comment", "3", "-b", PLANTED], ["--repo=someone/other", "pr", "create", "-t", PLANTED],
+                     ["-b", PLANTED, "pr", "comment", "https://github.com/someone/other/pull/3"], ["-X", "POST", "api", "repos/someone/other/issues/1/comments", "-f", "body=" + PLANTED]):
+            with self.subTest(args):
+                self.reset()
+                done = self.gh(*args, cwd=self.other_cwd, stdin="stdin text\n", env={"FAKE_GH_EXIT": "4"})
+                self.assertEqual(done.returncode, 4)
+                self.assertEqual((self.real_calls()[0]["argv"], self.real_calls()[0]["stdin"]), (args, "stdin text\n"))
+                self.assertIsNone(self.real_calls()[0]["prompt_disabled"])
+                self.assertEqual(self.claude_calls(), 0)
+
+    def test_a_lone_version_or_help_flag_passes_and_so_does_a_flags_first_line_when_help_is_all_there_is(self):
+        for args in (["--version"], ["-h"], ["--help"]):
+            with self.subTest(args):
+                self.reset()
+                self.assertRan(self.gh(*args), *args)
+                self.assertEqual(self.decide(*args), ("", None))
+        self.assertEqual(self.decide("--version", repo="someone/other"), ("", None))
+
     def test_a_subcommand_position_that_could_be_a_flag_value_is_refused_on_a_guarded_context(self):
         # gh takes the first non-flag argument as the subcommand; a flag in front of it makes any word after the flag's value a possible verb
         for args in (["pr", "-t", "view", "create", "-b", "SECRET"], ["pr", "-R", GUARDED, "create", "-b", "SECRET"], ["issue", "--repo", "x/y", "comment", "-b", "S"],
