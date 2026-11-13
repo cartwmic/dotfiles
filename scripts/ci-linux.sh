@@ -79,6 +79,7 @@ python3 scripts/ci-par.py \
   tests/ssh-probe \
   tests/hypr-screen-share \
   tests/agent-desktop \
+  tests/hill-climb \
   tests/git-credential \
   tests/ci-par \
   tests/ci-main-status || status=1
