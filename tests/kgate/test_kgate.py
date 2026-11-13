@@ -1162,15 +1162,19 @@ if a[:2] == ["get", "pod"] and a[2] in lost:
         print(json.dumps({"status": {"phase": "Failed", "reason": "Evicted", "message": "The node was low on resource: memory."}})); sys.exit(0)
     if kind == "disruption":
         print(json.dumps({"status": {"phase": "Running", "conditions": [{"type": "DisruptionTarget", "status": "True", "reason": "DeletionByTaintManager", "message": "Taint manager: deleting due to NoExecute taint"}]}})); sys.exit(0)
+    if kind in ("running-cancel", "running-evicted"):   # the pod is still there and Running, with only a stray event about it
+        print(json.dumps({"status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}})); sys.exit(0)
     if kind == "deadline":
         print(json.dumps({"status": {"phase": "Failed", "reason": "DeadlineExceeded", "message": "Pod was active on the node longer than the specified deadline"}})); sys.exit(0)
     sys.stderr.write('Error from server (NotFound): pods "%s" not found\n' % a[2]); sys.exit(1)
 if a[:2] == ["get", "events"]:
     name = a[a.index("--field-selector") + 1].split("involvedObject.name=")[1]
     event = {"event": ("Evicted", "Evicted pod: Underutilized"), "taint": ("TaintManagerEviction", "Marking for deletion Pod jobs/x"),
+             "cancel": ("TaintManagerEviction", "Cancelling deletion of Pod jobs/x"), "running-cancel": ("TaintManagerEviction", "Cancelling deletion of Pod jobs/x"),
+             "running-evicted": ("Evicted", "Evicted pod: Underutilized"),
              "other": ("Killing", "Stopping container job")}.get(lost.get(name))
     if event is None and lost.get(name, "").startswith("reason="):   # "reason=X": gone, and the only event has reason X
-        event = (lost[name][7:], "a message")
+        event = (lost[name][7:], "Marking for deletion Pod jobs/x" if lost[name][7:] == "TaintManagerEviction" else "a message")
     if os.environ.get("FAKE_EVENTS_FAIL"):   # the events read is refused
         sys.stderr.write('Error from server (Forbidden): events is forbidden: User "x" cannot list resource "events"\n'); sys.exit(1)
     print(json.dumps({"items": [{"reason": event[0], "message": event[1]}] if event else []})); sys.exit(0)
@@ -2972,6 +2976,22 @@ class KubectlBlack(unittest.TestCase):
                 self.assertNotIn("evicted", rec)
                 self.assertEqual((rec["attempts"], rec["ran"], rec["cleanup"]), (1, True, True))
 
+    def test_a_taint_manager_cancel_event_is_not_an_eviction(self):
+        # Upstream uses reason TaintManagerEviction for "Cancelling deletion of Pod ..." too: the taint cleared and the pod was not deleted.
+        for kind in ("cancel", "running-cancel", "running-evicted"):   # pod gone / pod still Running / a Running pod with a stray Evicted event
+            with self.subTest(kind):
+                done = self.lose("1:" + kind)
+                self.assertEqual(done.returncode, 69, done.stdout)
+                rec = self.records()[-1]
+                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+                self.assertNotIn("rerunning", done.stdout)
+                self.assertNotIn("evicted", rec)
+                self.assertEqual((rec["attempts"], rec["ran"]), (1, True))
+                self.assertEqual(self.steps()[-2:], [("create", rec["id"]), ("delete", rec["id"])], "one pod; the only delete is the final cleanup, not a rerun's")
+                self.assertEqual(len([p for p in self.pods_created() if p["metadata"]["labels"]["kgate-job"] == rec["id"]]), 1, "CMD was not started again")
+                if kind != "cancel":   # a pod that is Running is trusted over the events: they are not even read
+                    self.assertNotIn(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + rec["id"], "-o", "json"], self.kubectl_args())
+
     def test_a_job_that_is_not_evicted_has_one_attempt_and_asks_nothing_about_evictions(self):
         done = self.run_kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
@@ -3000,7 +3020,7 @@ class KubectlBlack(unittest.TestCase):
                 self.assertEqual(done.returncode, 0, done.stdout)
                 rec = self.records()[-1]
                 self.assertEqual(rec["attempts"], 2)
-                self.assertEqual(rec["evicted"], [{"attempt": 1, "pod": rec["id"], "reason": reason + ": a message"}])
+                self.assertEqual(rec["evicted"], [{"attempt": 1, "pod": rec["id"], "reason": reason + (": Marking for deletion Pod jobs/x" if reason == "TaintManagerEviction" else ": a message")}])
 
     def test_a_failed_events_read_means_no_rerun(self):
         done = self.lose("1:event", env={"FAKE_EVENTS_FAIL": "1"})

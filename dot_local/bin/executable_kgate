@@ -102,6 +102,11 @@ QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries whi
 # Sources: kubelet "Evicted", the taint manager's "TaintManagerEviction" and the scheduler's "Preempted" (Kubernetes); the node autoscaler's pod-level events
 # (upstream terminator events file): its eviction ("Evicted") and its forced pod delete at the node's termination grace period ("Disrupted").
 EVICTION_REASONS = frozenset(("Evicted", "TaintManagerEviction", "Preempted", "Disrupted"))
+# Checked against upstream for one reason used for two meanings (round 2): only TaintManagerEviction has it. The taint manager emits it for "Marking for deletion Pod
+# <ns>/<name>" (a real delete) and for "Cancelling deletion of Pod <ns>/<name>" (the taint cleared and the pod was NOT deleted), so that reason counts only with the
+# first message. "Evicted" has one meaning each in the kubelet (evictPod, just before it kills the pod) and in the node autoscaler (EvictPod, "Evicted pod: <why>"). "Preempted"
+# is emitted once, on the victim, by the scheduler's preemption executor ("Preempted by ..."). "Disrupted" is the node autoscaler's forced pod delete, once.
+TAINT_DELETE_MESSAGE = "Marking for deletion"
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
 MSSQL_PORT = 1433
@@ -1511,14 +1516,18 @@ class Job:
         got = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
         if got.returncode == 0:
             try:
-                status = json.loads(got.stdout).get("status") or {}
-            except ValueError:
-                status = {}
+                pod = json.loads(got.stdout)
+                status = pod.get("status") or {}
+            except (ValueError, AttributeError):
+                return None   # the pod exists and its state is unreadable: not confirmed
             if status.get("reason") == "Evicted":
                 return text("Evicted", status.get("message"))
             for c in status.get("conditions") or []:
                 if c.get("type") == "DisruptionTarget" and c.get("status") == "True":
                     return text(c.get("reason") or "DisruptionTarget", c.get("message"))
+            # The pod's own status wins: one that is still Running or Pending, not being deleted and not a disruption target was not evicted, whatever an event says.
+            if status.get("phase") in ("Running", "Pending") and not (pod.get("metadata") or {}).get("deletionTimestamp"):
+                return None
         events = self.cluster.run(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + self.pod, "-o", "json"])
         if events.returncode == 0:
             try:
@@ -1526,8 +1535,11 @@ class Job:
             except ValueError:
                 items = []
             for e in items:
-                if e.get("reason") in EVICTION_REASONS:
-                    return text(e["reason"], e.get("message"))
+                if e.get("reason") not in EVICTION_REASONS:
+                    continue
+                if e["reason"] == "TaintManagerEviction" and not " ".join((e.get("message") or "").split()).startswith(TAINT_DELETE_MESSAGE):
+                    continue   # "Cancelling deletion of Pod ...": the taint cleared and the pod was not deleted
+                return text(e["reason"], e.get("message"))
         return None
 
     def rerun(self, why, make):
