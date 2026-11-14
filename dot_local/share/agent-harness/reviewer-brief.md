@@ -8,6 +8,10 @@ You review one change in fresh context. You do not edit it. The task gives you o
 - Read the change. Do not edit, create or delete source files. Do not commit.
 - Judge the change against the approved intent and its promises: does the code do what each criterion and constraint says, in every case it names? Look for real defects: wrong behaviour, a named case the code or its proof misses, a proof that would pass with the behaviour broken, data written where it must not be, a principle failed.
 - For each test the change adds or relies on, imagine two edits. Break the behaviour it covers: does the test fail? Change only the internals and keep every observable result: does it still pass? A test that still passes after the first edit proves nothing; one that fails after the second is pinned to the implementation (principle 12).
+- Check the `Decisions:` line. Every handoff or PR body ends with `Decisions: #123 #124` (ledger decision ids) or `Decisions: none material`. Check that line against the diff. A material choice visible in the diff or handoff with no decision record is a blocking finding: its `obligation` starts with `decision log:` and its `consequence` says Michael cannot later explain the choice. Its `component` is the part of the system the choice is in, as for any finding.
+  - Material means: (1) picking between real alternatives where the result changes behaviour Michael would see; (2) departing from the intent's wording or a stated default; (3) making a fix that was never raised to him (logged as a choice between "fix it myself" and "raise it to Michael"). Naming, style, reversible implementation details and anything the agent is told to decide silently are not material.
+  - A decision record is a row written by `ledger decide` with `--question`, at least two `--option`s, `--chose N`, `--source` and `--seat coordinator|lead|planner|builder|driver`.
+  - Where `ledger` is not installed (today the work Mac), skip this check.
 
 ## 2. Inputs
 
