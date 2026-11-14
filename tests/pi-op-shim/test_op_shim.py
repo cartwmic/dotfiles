@@ -1,4 +1,4 @@
-"""Black-box tests for dot_pi/private_agent/bin/executable_op, the op shim Pi's shells see.
+"""Black-box tests for .chezmoitemplates/op-shim-connect, the personal-profile op shim Pi's shells see (dot_pi/private_agent/bin/executable_op.tmpl picks it).
 
     python3 -m unittest discover -s tests/pi-op-shim -v
 
@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SHIM = Path(__file__).resolve().parents[2] / "dot_pi/private_agent/bin/executable_op"
+SHIM = Path(__file__).resolve().parents[2] / ".chezmoitemplates/op-shim-connect"
 FAKE_TOKEN = "ops_fake-token-for-the-shim-test"  # a stand-in service-account token; never a real one
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 MARKERS = {  # one per agent shell marker the shim reads; each is set to a non-empty value
@@ -36,6 +36,8 @@ exit "${FAKE_OP_EXIT:-0}"
 
 
 class OpShim(unittest.TestCase):
+    shim_source = SHIM  # test_op_shim_service_account.py runs this same class against the work-profile variant
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="op-shim-"))
         self.home = self.tmp / "home"
@@ -44,7 +46,7 @@ class OpShim(unittest.TestCase):
         self.bin = self.home / ".pi/agent/bin"
         self.bin.mkdir(parents=True)
         self.shim = self.bin / "op"
-        shutil.copy(SHIM, self.shim)
+        shutil.copy(self.shim_source, self.shim)
         self.shim.chmod(0o755)
         self.real_dir = self.tmp / "real-bin"
         self.real_dir.mkdir()

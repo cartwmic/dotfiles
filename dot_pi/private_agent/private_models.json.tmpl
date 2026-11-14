@@ -12,7 +12,7 @@
 {{-   if not $opToken -}}
 {{-     fail (printf "private_models.json: no 1Password service-account token. Set OP_SERVICE_ACCOUNT_TOKEN, or write it to %s (mode 0600). See docs/profiles.md, 1Password service-account token." $tokenFile) -}}
 {{-   end -}}
-{{-   $privateProvider = output "sh" (joinPath .chezmoi.sourceDir "dot_pi" "private_agent" "bin" "executable_op") "read" .privatePiProviderRef | fromJson -}}
+{{-   $privateProvider = output "sh" (joinPath .chezmoi.sourceDir ".chezmoitemplates" "op-shim-service-account") "read" .privatePiProviderRef | fromJson -}}
 {{- end -}}
 {{- /* Work GLM 5.3 Flash, routed through the work LLM gateway with the user's own key.
        URL, key ref and model id live in local chezmoi data (workGlmBaseUrl, workGlmKeyRef,

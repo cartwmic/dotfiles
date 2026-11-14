@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ZSHENV = ROOT / "dot_zshenv"
 ZPROFILE = ROOT / "dot_zprofile"
-SHIM = ROOT / "dot_pi/private_agent/bin/executable_op"
+SHIM = ROOT / ".chezmoitemplates/op-shim-connect"
 FAKE_TOKEN = "ops_fake-token-for-the-zshenv-test"
 ZSH = shutil.which("zsh")
 

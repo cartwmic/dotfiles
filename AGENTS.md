@@ -241,7 +241,7 @@ For phone config, bootstrap, or SSH/jump changes, load
 to this guide's apply, secrets, and approval rules.
 
 For common Pi extension procedure, read
-[dot_pi/private_agent/extensions/README.md](./dot_pi/private_agent/extensions/README.md)
+[dot_pi/private_agent/extensions/README.md.tmpl](./dot_pi/private_agent/extensions/README.md.tmpl)
 when editing an extension. Other subtree guides are task-specific:
 [pi-patches](./dot_local/share/pi-patches/README.md),
 [Neovim](./dot_config/nvim/README.md), and the opt-in

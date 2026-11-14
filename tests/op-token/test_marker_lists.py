@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SHIM = ROOT / "dot_pi/private_agent/bin/executable_op"
+SHIMS = (ROOT / ".chezmoitemplates/op-shim-connect", ROOT / ".chezmoitemplates/op-shim-service-account")  # personal, then every other profile
 NAME = re.compile(r"\$\{([A-Z][A-Z0-9_]*):-\}")
 EXPECTED = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_SANDBOX"}
 
@@ -23,7 +23,9 @@ def agent_shell_markers(path):
 
 class MarkerLists(unittest.TestCase):
     def test_the_list_is_the_one_the_docs_and_tests_name(self):
-        self.assertEqual(agent_shell_markers(SHIM), EXPECTED)
+        for shim in SHIMS:
+            with self.subTest(shim=shim.name):
+                self.assertEqual(agent_shell_markers(shim), EXPECTED)
 
 
 if __name__ == "__main__":
