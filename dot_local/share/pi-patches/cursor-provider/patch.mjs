@@ -633,8 +633,8 @@ function readPayload() {
 
 const located = locateTargets();
 if (!located) {
-	if (checkOnly) fail("pi-loaded @marckrenn/pi-sub-{shared,core,bar} not installed under ~/.pi/agent/npm; cannot verify patch");
-	log("pi-sub packages not installed under ~/.pi/agent/npm — nothing to patch");
+	// Retired: the desired state is unpatched, and an absent @marckrenn tree is unpatched. Fail here only while a patched tree is left.
+	log("pi-sub packages not installed under ~/.pi/agent/npm — nothing to patch" + (checkOnly ? "; retired, so absent is the desired state" : ""));
 	process.exit(0);
 }
 

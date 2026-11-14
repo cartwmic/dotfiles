@@ -67,6 +67,18 @@ test("check with Pi absent: btw-native-session and response-visibility cannot ve
 	} finally { s.cleanup(); }
 });
 
+for (const profile of ["personal", "axon-work-computer"]) {
+	test(`check with the retired cursor-provider's @marckrenn tree absent (${profile}): exit 0, nothing written`, () => {
+		const s = sandbox();
+		try {
+			const r = spawnSync(process.execPath, [join(PATCHES, "cursor-provider", "patch.mjs"), "--check"], { encoding: "utf8", env: { ...s.env, PI_CHEZMOI_PROFILE: profile } });
+			assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}${r.stderr}`);
+			assert.match(r.stdout, /retired, so absent is the desired state/);
+			assert.deepEqual(files(s.home), [], "no file written under the throwaway HOME");
+		} finally { s.cleanup(); }
+	});
+}
+
 test("Pi present but unpatchable still fails loudly: btw-native-session and response-visibility exit 1, neither skips", () => {
 	const s = sandbox();
 	try {
