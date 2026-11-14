@@ -117,8 +117,8 @@ class Env:
         self._tmp.cleanup()
 
 
-def run_script(script, stdin, want=None, window=None, idle=None):
-    """Run a rendered modify script. want replaces the one-line WANT definition; window (one value for both instances) the AUTO_COMPACT_WINDOWS one; idle the IDLE_COMPACTION one."""
+def run_script(script, stdin, want=None, window=None, idle=None, envvars=None):
+    """Run a rendered modify script. want replaces the one-line WANT definition; window (one value for both instances) the AUTO_COMPACT_WINDOWS one; idle the IDLE_COMPACTION one; envvars the ENV_VARS one."""
     if want is not None:
         lines = script.splitlines(keepends=True)
         script = "".join("WANT='%s'\n" % want if l.startswith("WANT=") else l for l in lines)
@@ -126,6 +126,8 @@ def run_script(script, stdin, want=None, window=None, idle=None):
         script = "".join("AUTO_COMPACT_WINDOWS='%s'\n" % json.dumps({i: window for i in WINDOW_IDS}) if l.startswith("AUTO_COMPACT_WINDOWS=") else l for l in script.splitlines(keepends=True))
     if idle is not None:
         script = "".join("IDLE_COMPACTION='%s'\n" % idle if l.startswith("IDLE_COMPACTION=") else l for l in script.splitlines(keepends=True))
+    if envvars is not None:
+        script = "".join("ENV_VARS='%s'\n" % envvars if l.startswith("ENV_VARS=") else l for l in script.splitlines(keepends=True))
     r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -206,9 +208,11 @@ class SettingsScriptTest(unittest.TestCase):
         """claudeAgent gains a config holding just the window; coordinator keeps its launchArgs and gains the window; codex and the rest are as T3 wrote them."""
         before = json.loads(FIXTURE)["providerInstances"]
         inst = json.loads(self.apply(FIXTURE))["providerInstances"]
-        self.assertEqual(inst["claudeAgent"], {"driver": "claudeAgent", "enabled": True, "config": {"autoCompactWindow": WINDOWS["claudeAgent"]}})
+        self.assertEqual(inst["claudeAgent"], {"driver": "claudeAgent", "enabled": True, "config": {"autoCompactWindow": WINDOWS["claudeAgent"]}, "environment": [FIZZY]})
         self.assertEqual(inst["coordinator"]["config"], {**before["coordinator"]["config"], "autoCompactWindow": WINDOWS["coordinator"]})
-        self.assertEqual({k: v for k, v in inst["coordinator"].items() if k != "config"}, {k: v for k, v in before["coordinator"].items() if k != "config"})
+        # outside config, the coordinator is as T3 wrote it plus the one interrupt-text environment entry (tests below: FizzyGroveTest)
+        self.assertEqual({k: v for k, v in inst["coordinator"].items() if k != "config"},
+                         {**{k: v for k, v in before["coordinator"].items() if k != "config"}, "environment": [*before["coordinator"].get("environment", []), FIZZY]})
         self.assertEqual(inst["codex"], before["codex"])
         for i in OURS:
             self.assertNotIn("autoCompactWindow", inst[i].get("config", {}))
@@ -261,8 +265,8 @@ class SettingsScriptTest(unittest.TestCase):
         out = json.loads(self.apply(json.dumps(data, indent=2), window="", idle=""))["providerInstances"]
         self.assertEqual(out["coordinator"]["config"], {"launchArgs": data["providerInstances"]["coordinator"]["config"]["launchArgs"], "other": 1})
         self.assertEqual(out["claudeAgent"].get("config"), {})
-        # With no window ever set, an empty value leaves the file exactly as T3 wrote it (no config key invented).
-        self.assertEqual(json.loads(self.apply(FIXTURE, want="{}", window="", idle=""))["providerInstances"], json.loads(FIXTURE)["providerInstances"])
+        # With no window ever set, an empty value leaves the file exactly as T3 wrote it (no config key invented). The environment entry is switched off here too: it is not what this test is about.
+        self.assertEqual(json.loads(self.apply(FIXTURE, want="{}", window="", idle="", envvars="{}"))["providerInstances"], json.loads(FIXTURE)["providerInstances"])
 
     def test_stale_hub_entries_are_replaced_in_place(self):
         data = json.loads(FIXTURE)
