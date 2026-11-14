@@ -10,10 +10,28 @@
 # Without a token, an agent shell refuses: exit 69, the message below, and op does not run, so it cannot reach the
 # desktop app. Any other shell runs op unchanged, which is the desktop-app path Michael's own terminals keep.
 # An agent shell is: any call by the Pi name; or a call by the zsh name while one of the markers in agent_shell is set.
+#
+# Connect routing. With a Connect token, op read, op inject, op run and op item get with --format json (or --format=json)
+# go to the homelab 1Password Connect server, and op runs without OP_SERVICE_ACCOUNT_TOKEN. The host is OP_CONNECT_HOST,
+# default https://op-connect.internal.cartwmic.com. The token is OP_CONNECT_TOKEN, else the file
+# ~/.config/agent-harness/op-connect-token of the user running op. That home comes from the passwd entry, so a caller that
+# changed HOME (op_read_cached.sh does) still finds the file. OP_CONNECT_TOKEN_FILE names another file (the tests use it).
+# Every other command, and every call with no Connect token, takes the service-account path exactly as before.
+# Each Connect failure is also appended, with a UTC time, to ~/.local/state/op-shim/connect-fallback.log of that user
+# (OP_CONNECT_FALLBACK_LOG names another file; the tests use it), because callers such as op_read_cached.sh and Pi's key
+# commands discard stderr.
+# Fallback rule. When the Connect attempt fails (refused, silent, or the item is missing), read, item get and inject run
+# once more on the service account, if there is one, and one stderr line names Connect and the reason. The Connect attempt
+# is cut off after 4 s, so a silent host still answers within 9 s. Its output is printed only on success. op run is never
+# retried, because the wrapped command may already have run, and it is not time-bounded. With no service-account token
+# there is no fallback: the Connect error is printed and op exits with its status.
 # The token is never printed.
+
 set -eu
 
 NO_TOKEN_MESSAGE='1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)'
+CONNECT_HOST_DEFAULT='https://op-connect.internal.cartwmic.com'
+CONNECT_TIMEOUT_SECONDS=4
 
 # Is this an agent shell? Any name other than the zsh one is (Pi's bash tool, Retro's PATH). The zsh name is an agent when
 # one of these markers is set and not empty: CLAUDECODE and CLAUDE_CODE_ENTRYPOINT (Claude Code), T3CODE_THREAD_ID (a T3
@@ -45,12 +63,167 @@ takes_no_path() {
   return 0
 }
 
-# The real op: the first op on PATH that is not this file.
+# Does this call go to Connect? op read, op inject, op run, and op item get with --format json or --format=json.
+connect_call() {
+  case "${1-}" in
+    read | inject | run) return 0 ;;
+    item)
+      [ "${2-}" = get ] || return 1
+      shift 2
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --format=json) return 0 ;;
+          --format) [ "${2-}" = json ] && return 0 ;;
+        esac
+        shift
+      done
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Does op inject read its template from stdin? It does unless -i or --in-file names a file.
+reads_stdin() {
+  [ "${1-}" = inject ] || return 1
+  for arg in "$@"; do
+    case "$arg" in
+      -i | --in-file | --in-file=*) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# The Connect token: OP_CONNECT_TOKEN, else the token file of the user running op. Prints nothing when there is none, and
+# always succeeds.
+connect_token() {
+  if [ -n "${OP_CONNECT_TOKEN:-}" ]; then
+    printf '%s' "$OP_CONNECT_TOKEN"
+    return 0
+  fi
+  token_path="${OP_CONNECT_TOKEN_FILE:-}"
+  if [ -z "$token_path" ]; then
+    # The passwd home of the uid running op (perl is on Linux and macOS), not $HOME, which a caller may have changed.
+    user_home=$(perl -e 'print((getpwuid($>))[7])' 2>/dev/null || true)
+    [ -n "$user_home" ] || user_home=$HOME
+    token_path="$user_home/.config/agent-harness/op-connect-token"
+  fi
+  cat "$token_path" 2>/dev/null || true
+  return 0
+}
+
+# The service-account path, as it has always been: an empty HOME for op, and the caller's directory unless the subcommand
+# takes no path. Every call on this path also drops OP_CONNECT_HOST and OP_CONNECT_TOKEN, so op never sees two auth methods.
+sa_op() {
+  op_home="${TMPDIR:-/tmp}/pi-op-home-$(id -u)"
+  mkdir -p -m 700 "$op_home"
+  if takes_no_path "$@"; then
+    cd "$op_home"
+  fi
+  unset OP_CONNECT_HOST OP_CONNECT_TOKEN
+  exec env HOME="$op_home" "$real" "$@"
+}
+
+# The Connect environment for one call, in the current process. HOME and the directory follow the service-account rule when
+# there is a service-account token (an empty HOME; the caller's directory unless the subcommand takes no path). The Connect
+# host and token are set, and op runs without OP_SERVICE_ACCOUNT_TOKEN. $1 the host, $2 the token, the rest op's arguments.
+connect_env() {
+  connect_host=$1 connect_secret=$2
+  shift 2
+  if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+    op_home="${TMPDIR:-/tmp}/pi-op-home-$(id -u)"
+    mkdir -p -m 700 "$op_home"
+    if takes_no_path "$@"; then
+      cd "$op_home"
+    fi
+    HOME="$op_home"
+    export HOME
+  fi
+  unset OP_SERVICE_ACCOUNT_TOKEN
+  OP_CONNECT_HOST="$connect_host"
+  OP_CONNECT_TOKEN="$connect_secret"
+  export OP_CONNECT_HOST OP_CONNECT_TOKEN
+}
+
+# One time-bounded op call through Connect, in a subshell. $1 is the seconds it may run, $2 the host, $3 the token, and the
+# rest are op's arguments. The real op is a Go program that ignores SIGALRM, so perl enforces the limit: it forks op, kills
+# it at the limit and exits 124.
+connect_op() {
+  limit=$1 connect_host=$2 connect_secret=$3
+  shift 3
+  (
+    connect_env "$connect_host" "$connect_secret" "$@"
+    exec perl -e 'my $limit = shift @ARGV; my $pid = fork(); die "op: cannot fork: $!\n" unless defined $pid; if (!$pid) { exec { $ARGV[0] } @ARGV; die "op: cannot start $ARGV[0]: $!\n"; } my $timed_out = 0; $SIG{ALRM} = sub { $timed_out = 1; kill "KILL", $pid; }; alarm $limit; waitpid($pid, 0); alarm 0; exit 124 if $timed_out; exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' -- "$limit" "$real" "$@"
+  )
+}
+
+# Print one line to stderr and append it, timestamped, to the fallback log. A log write that fails is ignored.
+connect_note() {
+  printf '%s\n' "$1" >&2
+  log_file=${OP_CONNECT_FALLBACK_LOG:-}
+  if [ -z "$log_file" ]; then
+    log_home=$(perl -e 'print((getpwuid($>))[7])' 2>/dev/null || true)
+    log_file="${log_home:-$HOME}/.local/state/op-shim/connect-fallback.log"
+  fi
+  { mkdir -p "$(dirname "$log_file")" && printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$log_file"; } 2>/dev/null || true
+}
+
+# A call with a Connect token: try Connect, then the service account for read, item get and inject. Never returns; it
+# exits with the status of the attempt that answered.
+connect_or_service_account() {
+  secret=$1
+  shift
+  host=${OP_CONNECT_HOST:-$CONNECT_HOST_DEFAULT}
+  if [ "${1-}" = run ]; then
+    # op run has no fallback and is not retried: a retry could run the wrapped command twice. It is not time-bounded either.
+    # This process becomes op, so a signal sent to the shim reaches op and the command it runs.
+    connect_env "$host" "$secret" "$@"
+    exec "$real" "$@"
+  fi
+  work=$(mktemp -d "${TMPDIR:-/tmp}/op-connect.XXXXXX")
+  trap 'rm -rf "$work"' EXIT
+  if reads_stdin "$@"; then
+    cat > "$work/stdin"
+  else
+    : > "$work/stdin"
+  fi
+  status=0
+  connect_op "$CONNECT_TIMEOUT_SECONDS" "$host" "$secret" "$@" < "$work/stdin" > "$work/out" 2> "$work/err" || status=$?
+  if [ "$status" -eq 0 ]; then
+    cat "$work/out"
+    cat "$work/err" >&2
+    exit 0
+  fi
+  if [ "$status" -eq 124 ]; then
+    reason="timed out after $CONNECT_TIMEOUT_SECONDS s"
+  else
+    first=$(head -n 1 "$work/err" 2>/dev/null || true)
+    reason="exit $status${first:+: $first}"
+  fi
+  if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+    connect_note "op: 1Password Connect ($host) failed, $reason; retrying on the service account"
+    status=0
+    ( sa_op "$@" ) < "$work/stdin" || status=$?
+    exit "$status"
+  fi
+  connect_note "op: 1Password Connect ($host) failed, $reason; no service-account token to retry with"
+  cat "$work/err" >&2
+  exit "$status"
+}
+
+# Is this file a copy of the shim (the deployed one, or another checkout's)? Only its first bytes are read: the header line.
+is_shim() {
+  head -c 200 "$1" 2>/dev/null | grep -q '^# op for agent shells, Pi and Michael'
+}
+
+# The real op: the first op on PATH that is not this file or another copy of the shim. A checkout's copy run directly
+# would otherwise pick up the deployed one as "real" (and refuse).
 real=
 IFS=:
 for dir in $PATH; do
   [ -n "$dir" ] && [ -f "$dir/op" ] && [ -x "$dir/op" ] || continue
   [ "$dir/op" -ef "$0" ] && continue
+  is_shim "$dir/op" && continue
   real="$dir/op"
   break
 done
@@ -65,6 +238,14 @@ if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$token_file" ]; then
   OP_SERVICE_ACCOUNT_TOKEN=$(cat "$token_file")
   export OP_SERVICE_ACCOUNT_TOKEN
 fi
+
+if connect_call "$@"; then
+  connect_secret=$(connect_token)
+  if [ -n "$connect_secret" ]; then
+    connect_or_service_account "$connect_secret" "$@"
+  fi
+fi
+
 if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
   if agent_shell; then
     printf '%s\n' "$NO_TOKEN_MESSAGE" >&2
@@ -73,9 +254,4 @@ if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
   exec "$real" "$@"
 fi
 
-op_home="${TMPDIR:-/tmp}/pi-op-home-$(id -u)"
-mkdir -p -m 700 "$op_home"
-if takes_no_path "$@"; then
-  cd "$op_home"
-fi
-exec env HOME="$op_home" "$real" "$@"
+sa_op "$@"

@@ -44,6 +44,9 @@ fi
 # Don't accidentally use a stale SA token to fetch the SA token. Force the
 # regular interactive path so this script can prompt for biometrics.
 unset OP_SERVICE_ACCOUNT_TOKEN
+# Keep the op shim off 1Password Connect: the item is in the personal vault, which only the desktop app reads.
+unset OP_CONNECT_TOKEN
+export OP_CONNECT_TOKEN_FILE=/dev/null
 
 log "Fetching service-account token from 1Password: $OP_VAULT / $OP_ITEM / $OP_FIELD"
 log "(biometric / desktop-app auth prompt expected)"

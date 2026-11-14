@@ -67,11 +67,20 @@ class OpShim(unittest.TestCase):
         token.write_text(FAKE_TOKEN + "\n")
         token.chmod(0o600)
 
+    def no_connect_env(self):
+        """These tests cover the shim without a Connect token. The shim finds that token through the passwd home, which a
+        temporary HOME does not hide, so point it at a file that does not exist, and keep fallback lines out of the real log."""
+        return {
+            "OP_CONNECT_TOKEN_FILE": str(self.tmp / "no-connect-token-here"),
+            "OP_CONNECT_FALLBACK_LOG": str(self.tmp / "connect-fallback.log"),
+        }
+
     def run_zsh_name(self, args, env=None, cwd=None):
         """Run op through the zsh name: its directory first on PATH, as in every zsh; the real op after it."""
         base = {
             "HOME": str(self.home), "TMPDIR": str(self.tmpdir), "PATH": f"{self.zsh_dir}:{self.real_dir}:/usr/bin:/bin",
             "FAKE_OP_OUT": str(self.out), "FAKE_TOKEN_EXPECTED": FAKE_TOKEN,
+            **self.no_connect_env(),
         }
         base.update(env or {})
         return subprocess.run(["op", *args], env=base, cwd=cwd, capture_output=True, text=True, timeout=30)
@@ -84,6 +93,7 @@ class OpShim(unittest.TestCase):
             "PATH": path or f"{self.bin}:{self.real_dir}:/usr/bin:/bin",
             "FAKE_OP_OUT": str(self.out),
             "FAKE_TOKEN_EXPECTED": FAKE_TOKEN,
+            **self.no_connect_env(),
         }
         base.update(env or {})
         return subprocess.run(["op", *args], env=base, input=stdin, cwd=cwd, capture_output=True, text=True, timeout=30)
