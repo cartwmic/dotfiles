@@ -168,8 +168,9 @@ the rest of the machine-specific data are in [docs/profiles.md](../docs/profiles
 A missing value stops the helper with a message naming it.
 
 `router-phone.py inspect` reads only public peer identifiers and DHCP metadata
-from `root@$HOMELAB_ROUTER`, using its password from
-`op://developer/opnsense/password`. It never prints router private keys or
+from `root@$HOMELAB_ROUTER`, signed in with the ssh key in the 1Password item
+`opnsense root ssh key` (`op://developer/opnsense root ssh key/private key?ssh-format=openssh`; the router's ssh
+password sign-in is off). The key is written to a 0600 file in a 0700 temp directory for the call and removed after. It never prints router private keys or
 config.xml. SSH host-key verification must already be established. The current
 peer, LAN IP, and MAC are in its output; **do not assume** `.7`/`.88` remain
 correct after a previous replacement.

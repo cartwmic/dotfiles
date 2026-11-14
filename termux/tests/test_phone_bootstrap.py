@@ -92,6 +92,10 @@ if name=='aapt':
     finish(output=f"package: name='{pkg}' versionCode='{version}' versionName='test'\n")
 if name=='ssh':
     if 'root@192.0.2.1' in args:
+        if '-i' not in args or 'PreferredAuthentications=publickey' not in args: finish(255)  # key only: no password fallback
+        import stat
+        _kf=Path(args[args.index('-i')+1])
+        state['router_key']=dict(mode=stat.S_IMODE(_kf.stat().st_mode),dir_mode=stat.S_IMODE(_kf.parent.stat().st_mode),text=_kf.read_text(),path=str(_kf),argv=args)
         source=sys.stdin.read()
         if 'PHONE_SPEC_B64=' in source:
             encoded=re.search(r'PHONE_SPEC_B64=([A-Za-z0-9+/=]+)',source).group(1)
@@ -349,6 +353,18 @@ class PhoneCLITest(unittest.TestCase):
         self.assertEqual(reload, configure)  # Both in one set -eu script; ordering checked below.
         self.assertLess(calls[reload].index('template reload'), calls[reload].index('wireguard configure'))
         self.assertIn('configctl dhcpd restart', ' '.join(calls))
+
+    def test_router_signs_in_with_the_1password_key_in_a_private_temp_file_and_removes_it(self):
+        result = self.invoke("router-phone.py", "inspect")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        seen = self.state['router_key']
+        self.assertEqual((seen['mode'], seen['dir_mode']), (0o600, 0o700))
+        self.assertTrue(seen['text'].startswith('-----BEGIN OPENSSH PRIVATE KEY-----') and seen['text'].endswith('\n'))
+        for option in ('IdentitiesOnly=yes', 'BatchMode=yes', 'StrictHostKeyChecking=yes'):
+            self.assertIn(option, seen['argv'])
+        self.assertNotIn('PubkeyAuthentication=no', seen['argv'])
+        self.assertFalse(Path(seen['path']).exists(), 'the key file is deleted after the call')
+        self.assertNotIn('dummy', result.stdout + result.stderr)
 
     def test_router_inspect_without_subnet_env_stops_before_any_router_call(self):
         for name in ("HOMELAB_LAN_CIDR", "HOMELAB_WG_CIDR"):

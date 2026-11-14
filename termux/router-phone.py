@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Preview, then explicitly apply a staged ssh-phone DHCP/WireGuard cutover.
 
-OPNsense is only accessed over pinned-host-key root SSH. The password comes
-from 1Password at authentication time; only public peer details enter plans.
+OPNsense is only accessed over pinned-host-key root SSH, signed in with the ed25519 key in the
+1Password item `opnsense root ssh key` (the router's ssh password sign-in is off). `op read` writes the key
+to a 0600 file in a fresh 0700 directory for one ssh call and the directory is deleted after; it is never
+printed. Only public peer details enter plans.
 """
 import argparse
 import base64
@@ -19,24 +21,37 @@ import homelab_env
 
 PHP = Path(__file__).with_name("opnsense-phone.php")
 PLANS = Path.home() / ".cache/dotfiles-termux/router-plans"
-PASSWORD_REF = "op://developer/opnsense/password"
+KEY_REF = "op://developer/opnsense root ssh key/private key?ssh-format=openssh"
+TOKEN_FILE = Path.home() / ".config/agent-harness/op-service-token"
 
 
 class Failed(Exception):
     pass
 
 
+def fetch_key(env):
+    """The router's ssh private key from 1Password, with a trailing newline. The message never holds the key."""
+    try:
+        result = subprocess.run(["op", "read", KEY_REF], capture_output=True, text=True, env=env, timeout=45)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Failed(f"cannot read the router ssh key from 1Password ({type(exc).__name__})") from exc
+    if result.returncode or "PRIVATE KEY" not in result.stdout:
+        raise Failed(f"cannot read the router ssh key with `op read {KEY_REF}`")
+    return result.stdout if result.stdout.endswith("\n") else result.stdout + "\n"
+
+
 def router(command):
-    with tempfile.TemporaryDirectory(prefix="phone-router-") as temp:
-        askpass = Path(temp) / "askpass"
-        askpass.write_text("#!/bin/sh\nset -eu\n"
-                           'export OP_SERVICE_ACCOUNT_TOKEN="$(cat "$HOME/.config/agent-harness/op-service-token")"\n'
-                           f"exec op read {shlex.quote(PASSWORD_REF)}\n")
-        askpass.chmod(0o700)
-        env = os.environ.copy()
-        env.update(SSH_ASKPASS=str(askpass), SSH_ASKPASS_REQUIRE="force", DISPLAY=":0")
-        args = ["ssh", "-o", "StrictHostKeyChecking=yes", "-o", "PreferredAuthentications=password",
-                "-o", "PubkeyAuthentication=no", "-o", "NumberOfPasswordPrompts=1",
+    env = os.environ.copy()
+    if not env.get("OP_SERVICE_ACCOUNT_TOKEN") and TOKEN_FILE.is_file():
+        env["OP_SERVICE_ACCOUNT_TOKEN"] = TOKEN_FILE.read_text().strip()
+    key = fetch_key(env)
+    with tempfile.TemporaryDirectory(prefix="phone-router-") as temp:  # mode 0700, removed after the ssh call
+        key_file = Path(temp) / "id"
+        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(key)
+        args = ["ssh", "-i", str(key_file), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+                "-o", "PreferredAuthentications=publickey", "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=8", "root@" + homelab_env.require("HOMELAB_ROUTER", Failed), "sh -s"]
         try:
             result = subprocess.run(args, input=command.encode(), capture_output=True, env=env, timeout=45)
