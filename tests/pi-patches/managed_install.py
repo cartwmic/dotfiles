@@ -200,13 +200,11 @@ Object.defineProperty(globalThis, "fetch", {
 
             def check():
                 for patch in sorted(deployed.glob("*/patch.mjs")):
-                    # Retired restore: absent legacy widgets are a successful apply
-                    # no-op, but its historical --check requires an installed tree.
+                    run([node, str(patch), "--check"], env, base)
                     if patch.parent.name == "cursor-provider":
+                        # Retired restore: absent legacy widgets are the desired state, for apply and for --check.
                         output = run([node, str(patch)], env, base)
                         require("nothing to patch" in output, "retired widget unexpectedly found")
-                    else:
-                        run([node, str(patch), "--check"], env, base)
 
             # Migration still occurs when a legacy pi already exists on PATH.
             task("install-pi")
