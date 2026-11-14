@@ -10,6 +10,14 @@
 .local/share/instances/systemd/retrod.service
 
 {{ end -}}
+# Retired 2026-11-13: viz, the homelab page host, and its tools; agents publish charts, diagrams and pictures on shartifacts.
+# Source deletion alone leaves the deployed CLI, its code, its machine file and the skill. apply_harness_config.sh then prunes
+# the agent-skill symlinks that pointed at the removed skill. Prune once every machine has applied.
+.local/bin/viz
+.local/share/viz
+.config/viz
+.local/share/agent-harness/canonical/skills/using-viz
+
 # Retired 2026-10-29: the Pi recap extension (/recap and automatic periodic,
 # final-response and before-compaction recaps). Its automatic recaps flooded the
 # shared GLM server. Removes the whole deployed directory on apply, including its

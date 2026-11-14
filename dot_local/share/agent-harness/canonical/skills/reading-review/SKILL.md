@@ -27,7 +27,7 @@ Open the page with a one-line verdict and, if there is one, a top recommendation
 
 ## Output
 
-1. **One shartifacts page** (the `using-shartifacts` skill). Michael comments on it, so it goes on shartifacts, not viz. Write self-contained HTML in a scratch directory (not in a repo). Michael reads on a phone, so keep the page light and put any image inline at the width it shows (1200 px at most, about 2 MB or smaller each). Publish it with `create_artifact` and give him `https://shartifacts.internal.cartwmic.com/view/<id>`. Then open the link once and confirm it loads and renders. If shartifacts is unreachable from where you run (it opens only on the home network or WireGuard), hand over the HTML file and say so.
+1. **One shartifacts page** (the `using-shartifacts` skill). Michael comments on it, so it goes on shartifacts. Write self-contained HTML in a scratch directory (not in a repo). Michael reads on a phone, so keep the page light and put any image inline at the width it shows (1200 px at most, about 2 MB or smaller each). Publish it with `create_artifact` and give him `https://shartifacts.internal.cartwmic.com/view/<id>`. Then open the link once and confirm it loads and renders. If shartifacts is unreachable from where you run (it opens only on the home network or WireGuard), hand over the HTML file and say so.
 2. **A Review item**, when you work under Michael's coordinator. The first line of its TickTick content is the page URL, then a one-line verdict. Research results become Review items that are never auto-closed. Create it with
    `coordinator board write ticktick create <Personal list id> --title "Review: <title>" --content="<url>
 <one-line verdict>" --grant 13 --why R --event E`.

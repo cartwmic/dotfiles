@@ -66,7 +66,6 @@ python3 scripts/ci-par.py \
   tests/agent-kill-guard \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
-  tests/viz \
   tests/shx \
   tests/axon-playbook \
   tests/spotlight-workshop \

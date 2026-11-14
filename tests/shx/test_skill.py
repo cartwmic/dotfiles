@@ -12,7 +12,8 @@ SKILL = ROOT / "dot_local/share/agent-harness/canonical/skills/using-shartifacts
 # What the skill must tell an agent, by the exact word it will search for.
 NAMES = ("shx-note-image", "artifact_comments", "watch_artifacts", "stroke", "status", "gap", "cursor",
          "create_artifact", "update_artifact", "check", "--version", "--out", "--pad", "/view/",
-         "current", "ok", "lost", "unchecked", "using-viz")
+         "current", "ok", "lost", "unchecked", "kind: \"mermaid\"", "kind: \"svg\"", "/api/media",
+         "/api/artifacts", "base_version", "409")
 
 
 def parts():
@@ -43,8 +44,7 @@ class SkillTest(unittest.TestCase):
     def test_says_pages_for_his_review_or_input_go_on_shartifacts(self):
         _, body = parts()
         self.assertRegex(body, r"Pages for Michael's review or input go on shartifacts")
-        self.assertRegex(body, r"viz\s+\(`using-viz`\) is for static charts, diagrams and PNGs")
-        self.assertNotIn("still go on viz", body)
+        self.assertNotIn("viz", body)
 
     def test_command_lines_match_the_command(self):
         # The two forms the skill shows are the two the command takes (core/domain.mjs USAGE).

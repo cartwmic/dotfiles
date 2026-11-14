@@ -1,9 +1,7 @@
 // Browser port: drive Chromium over the DevTools Protocol on --remote-debugging-pipe (fd 3: we write, fd 4: Chromium
 // writes; messages are NUL-terminated JSON). No npm packages and no debugging port.
 //
-// The pipe plumbing is copied from viz (../../viz/adapters/chromium.mjs) and cut down, not imported: the viz one
-// only exposes a single "screenshot a file" call, and importing another component's adapter would break the rule
-// that components never import each other.
+// The pipe plumbing lives here, not in a shared module: components never import each other's adapters.
 import { spawn } from 'node:child_process';
 import { accessSync, constants, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';

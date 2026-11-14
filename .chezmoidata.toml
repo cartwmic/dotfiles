@@ -15,7 +15,7 @@ enabled = false
 [hub]
 enabled = true
 
-# The Chromium that ~/.local/bin/chromium (viz, Pi launch_browser) runs: Playwright's Chrome for Testing. The wrapper installs it
+# The Chromium that ~/.local/bin/chromium (Pi launch_browser) runs: Playwright's Chrome for Testing. The wrapper installs it
 # with `npx -y playwright@<version> install chromium` when `chromium-<build>` is missing from the Playwright cache. Bump both
 # together: <build> is the revision that <version> downloads (read it from the install output or ~/Library/Caches/ms-playwright).
 [playwrightChromium]
