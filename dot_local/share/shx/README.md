@@ -73,8 +73,8 @@ dot_local/share/shx/
   vendor/                 perfect-freehand 1.2.3 (MIT) and its licence
 ```
 
-`adapters/chromium.mjs` is the pipe plumbing of `viz/adapters/chromium.mjs`, copied and cut down. viz's adapter only
-exposes "screenshot a file", and one component does not import another's adapter.
+`adapters/chromium.mjs` is the DevTools Protocol pipe plumbing, kept inside this component (components do not import each
+other's adapters).
 
 ## Tests
 

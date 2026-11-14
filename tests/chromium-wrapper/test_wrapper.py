@@ -1,4 +1,4 @@
-"""The managed ~/.local/bin/chromium wrapper (viz and Pi launch_browser find it on PATH).
+"""The managed ~/.local/bin/chromium wrapper (Pi launch_browser finds it on PATH).
 
 The real template is rendered with real chezmoi for each desktop profile, then run with a fake `npx`
 and a fake Playwright cache in a scratch HOME. No real Playwright install runs and no real cache is touched.

@@ -147,7 +147,7 @@ Then add these keys to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`: `s
 
 **AI Tools:**
 
-- Pi coding agent, claude, claude-code-acp, mistral-vibe, mermaid-cli
+- Pi coding agent, claude, claude-code-acp, mistral-vibe
 - Herdr (pinned) with the upstream command palette plugin on `personal` and `axon-work-computer`
 - Portable `session-recap` and `passage-review` workflows; Termux stays an SSH client.
 - [QMD](./docs/qmd.md) (`personal` and `axon-work-computer`): local keyword and semantic search over notes, repo docs, Pi recaps and Pi, Claude Code and Codex sessions; pinned install, collections, one agent skill, `qmd` on PATH for every shell, and an hourly refresh on macOS (launchd; interval and on/off in chezmoi data `qmd.refresh`) that runs `qmd cleanup` once a day (`qmd.refresh.cleanup`).

@@ -1,6 +1,6 @@
 ---
 name: using-shartifacts
-description: Use when you publish a page on shartifacts for Michael to review, read the comments and drawings he leaves on it, need a drawing as a picture (shx-note-image), run the check after changing a page, or wait for his feedback.
+description: Use when you publish a page, chart, diagram or picture on shartifacts for Michael, read the comments and drawings he leaves on it, need a drawing as a picture (shx-note-image), run the check after changing a page, or wait for his feedback.
 ---
 
 # Using shartifacts
@@ -11,8 +11,8 @@ marked back.
 
 Pages for Michael's review or input go on shartifacts: reports he comments on, pickers, plans,
 explainers, anything interactive. He selects, draws and comments on the page, and you read his
-highlights, drawings and comments here and wait on them. Do not ask him to paste text back. viz
-(`using-viz`) is for static charts, diagrams and PNGs, and its old links stay.
+highlights, drawings and comments here and wait on them. Do not ask him to paste text back.
+Charts, diagrams and pictures go here too (see "Charts, diagrams and pictures").
 
 You reach it two ways: the `shartifacts` MCP server (its tools are named below) and the
 command `shx-note-image`.
@@ -26,6 +26,28 @@ command `shx-note-image`.
 - Give Michael `https://shartifacts.internal.cartwmic.com/view/<id>`. The page needs the
   `/view` frame: commenting, drawing and live updates come from the page around it. A bare
   `/preview/<id>` address has none of them.
+
+## Charts, diagrams and pictures
+
+shartifacts is the only place to publish these.
+
+- Mermaid and SVG: `create_artifact` with `kind: "mermaid"` or `kind: "svg"` and the source as
+  `content`. Both render directly; there is no render step. Link `/view/<id>`.
+- PNG or other image: upload the file, then show it in an `html` page with
+  `<img src="/media/<id>.png">`, or hand over the `/media/` URL on its own.
+
+  ```sh
+  curl --fail-with-body --silent --show-error -H 'Content-Type: image/png' \
+    --data-binary '@./chart.png' --url 'https://shartifacts.internal.cartwmic.com/api/media?name=chart.png'
+  ```
+
+  It returns `{"id":...,"url":"/media/<id>.png",...}`. Give Michael the URL with the
+  `https://shartifacts.internal.cartwmic.com` prefix.
+- A script or cluster pod with no MCP publishes over HTTP. `POST /api/artifacts` with JSON
+  `{"title","kind","content"}` returns `201` and the `id`. Update in place with
+  `PUT /api/artifacts/<id>` and `{"base_version": N, "content": ...}`, where N is the latest
+  version. A stale `base_version` returns `409`: read the artifact again and retry. The link
+  stays the same.
 
 ## Read his comments and drawings
 

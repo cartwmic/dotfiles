@@ -112,7 +112,7 @@ yq = "latest" # YAML processor
 # =============================================================================
 "github:rtk-ai/rtk" = "latest" # RTK - Rust Token Killer (AI coding agent proxy)
 shellcheck = "latest"
-# mermaid-cli and claude-code-acp installed via tasks to ensure node is available first
+# claude-code-acp installed via a task to ensure node is available first
 
 # =============================================================================
 # Tool Options
@@ -677,20 +677,6 @@ fi
 sh "$HOME/.local/user_scripts/apply_pi_patches.sh"
 '''
 
-[tasks."install-mermaid-cli"]
-description = "Install mermaid-cli (mmdc)"
-run = '''
-if ! command -v mmdc >/dev/null 2>&1; then
-  # Ensure npm is available
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "ERROR: npm not found. Node.js must be installed first."
-    exit 1
-  fi
-  export PUPPETEER_SKIP_DOWNLOAD=true
-  npm install -g @mermaid-js/mermaid-cli
-fi
-'''
-
 [tasks."install-imagemagick-macos"]
 description = "Install ImageMagick with XQuartz on macOS"
 run = '''
@@ -1007,7 +993,6 @@ depends = [
   "install-antidote",
   "install-fzf-tab",
   "install-kubectl",
-  "install-mermaid-cli",
   "install-imagemagick-macos",
   "install-imagemagick-ubuntu",
   "install-fonts",
@@ -1116,7 +1101,6 @@ verbose = false
 #
 # ✅ AI/Productivity:
 #   - mistral-vibe → task (uv tool install)
-#   - mmdc → npm:@mermaid-js/mermaid-cli
 #   - claude → task (custom installer)
 #   - claude-code-acp → npm:@zed-industries/claude-code-acp
 #

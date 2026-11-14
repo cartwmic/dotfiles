@@ -1,7 +1,7 @@
-"""The agent-shell markers are kept in two files: the op shim (~/.pi/agent/bin/op) and viz (dot_local/bin/executable_viz).
+"""The op shim (~/.pi/agent/bin/op) decides what an agent shell is from a list of environment variables.
 
-Each has an agent_shell function. Both must list the same environment variables, so a marker added to one and not the other
-cannot pass unnoticed. This reads the two functions as text and compares the variable names they test.
+This reads its agent_shell function as text and checks it tests exactly the markers the docs and tests name, so a marker added
+or dropped there cannot pass unnoticed.
 Run: python3 -m unittest discover -s tests/op-token -v
 """
 import re
@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = [ROOT / "dot_pi/private_agent/bin/executable_op", ROOT / "dot_local/bin/executable_viz"]
+SHIM = ROOT / "dot_pi/private_agent/bin/executable_op"
 NAME = re.compile(r"\$\{([A-Z][A-Z0-9_]*):-\}")
 EXPECTED = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_SANDBOX"}
 
@@ -22,14 +22,8 @@ def agent_shell_markers(path):
 
 
 class MarkerLists(unittest.TestCase):
-    def test_the_two_files_test_the_same_markers(self):
-        shim, viz = (agent_shell_markers(f) for f in FILES)
-        self.assertEqual(shim, viz, "agent_shell differs: only in the shim %s, only in viz %s" % (sorted(shim - viz), sorted(viz - shim)))
-
     def test_the_list_is_the_one_the_docs_and_tests_name(self):
-        for f in FILES:
-            with self.subTest(file=f.name):
-                self.assertEqual(agent_shell_markers(f), EXPECTED)
+        self.assertEqual(agent_shell_markers(SHIM), EXPECTED)
 
 
 if __name__ == "__main__":

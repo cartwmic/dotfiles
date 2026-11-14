@@ -166,7 +166,7 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if ne .chezmoi.os "darwin" }}
-# Chromium wrapper (viz and Pi launch_browser find "chromium" on PATH): macOS only, both desktop profiles. The path it runs is the macOS arm64 Playwright cache.
+# Chromium wrapper (Pi launch_browser finds "chromium" on PATH): macOS only, both desktop profiles. The path it runs is the macOS arm64 Playwright cache.
 .local/bin/chromium
 {{- end }}
 

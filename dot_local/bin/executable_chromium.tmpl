@@ -1,7 +1,7 @@
 #!/bin/sh
-# Pi's launch_browser and viz look for "chromium" on PATH; point it at the Playwright Chrome for Testing build.
+# Pi's launch_browser looks for "chromium" on PATH; point it at the Playwright Chrome for Testing build.
 # The version and build are pinned in .chezmoidata.toml (playwrightChromium).
-# chromium-wrapper: --ensure   (viz looks for this marker; `chromium --ensure` installs the pinned build if missing, then exits 0)
+# chromium-wrapper: --ensure   (a caller looks for this marker; `chromium --ensure` installs the pinned build if missing, then exits 0)
 # The build counts as present only when Playwright's INSTALLATION_COMPLETE marker exists for chromium and its headless shell.
 # When it is missing (a cache cleanup removed it), install it once with npx, then run it. A mkdir lock keeps two callers from
 # installing at once; the install runs in its own process group so a caller that is killed does not leave half an install.
