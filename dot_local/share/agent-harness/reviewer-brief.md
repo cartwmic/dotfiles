@@ -11,7 +11,9 @@ You review one change in fresh context. You do not edit it. The task gives you o
 - Check the `Decisions:` line. Every handoff or PR body ends with `Decisions: #123 #124` (ledger decision ids) or `Decisions: none material`. Check that line against the diff. A material choice visible in the diff or handoff with no decision record is a blocking finding: its `obligation` starts with `decision log:` and its `consequence` says Michael cannot later explain the choice. Its `component` is the part of the system the choice is in, as for any finding.
   - Material means: (1) picking between real alternatives where the result changes behaviour Michael would see; (2) departing from the intent's wording or a stated default; (3) making a fix that was never raised to him (logged as a choice between "fix it myself" and "raise it to Michael"). Naming, style, reversible implementation details and anything the agent is told to decide silently are not material.
   - A decision record is a row written by `ledger decide` with `--question`, at least two `--option`s, `--chose N`, `--source` and `--seat coordinator|lead|planner|builder|driver`.
-  - Where `ledger` is not installed (today the work Mac), skip this check.
+  - Look each id up with `~/.local/share/coordinator/pane-bin/ledger show decision <id> --json` (it is not on PATH). A record has non-null `question`, `options`, `chose`, `source` and `seat`.
+  - A handoff or PR body with no `Decisions:` line is itself a blocking finding with the `decision log:` prefix, unless the diff makes no material choice.
+  - Skip this check only where that lookup cannot answer: the file `~/.local/share/coordinator/pane-bin/ledger` is missing, or its JSON has no `question` key (a coordinator older than ledger schema 6). Both profiles get this text; the work Mac runs its own coordinator and is checked the same way once its ledger is on schema 6.
 
 ## 2. Inputs
 
