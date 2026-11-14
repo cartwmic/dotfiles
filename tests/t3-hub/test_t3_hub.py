@@ -7,6 +7,7 @@ chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.j
 import difflib
 import json
 import re
+import shutil
 import stat
 import os
 import subprocess
@@ -638,6 +639,8 @@ KEEP = {
     "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider"},
 }
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
+# The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
+CANONICAL = sorted({p.parent.name for pat in ("*/SKILL.md", "*/SKILL.md.tmpl") for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat)})  # reviewing-prs ships SKILL.md.tmpl
 
 
 def fleet_env(profile):
@@ -775,7 +778,7 @@ class FleetFilesTest(unittest.TestCase):
                     self.assertIs(f["syncClaudeAiSkills"], False)
                     self.assertIs(f["disableBundledSkills"], True)
                     self.assertEqual(set(f["skillOverrides"].values()), {"off"})
-                    self.assertEqual(set(f["skillOverrides"]), set(INSTALLED) - keep, (profile, seat))
+                    self.assertEqual(set(f["skillOverrides"]), (set(INSTALLED) | set(CANONICAL)) - keep, (profile, seat))
                     self.assertNotIn("synced", f["skillOverrides"])
             finally:
                 env.close()
@@ -783,9 +786,31 @@ class FleetFilesTest(unittest.TestCase):
     def test_a_kept_skill_that_is_not_installed_adds_nothing(self):
         env = Env(codex_active=False)
         try:
-            self.assertEqual(self.render(env, "seat-planner.json")["skillOverrides"], {})
+            # nothing under ~/.claude/skills yet: the seat file still lists the source tree's skills, and still not the kept ones
+            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), set(CANONICAL) - KEEP["planner"])
         finally:
             env.close()
+
+    def test_the_first_apply_of_a_new_skill_already_leaves_the_seat_files_final(self):
+        """Chezmoi writes ~/.claude/fleet before apply_harness_config.sh links the canonical skills into ~/.claude/skills. After both, the seat files must equal a fresh render
+        (the work Mac's 2026-11-13 apply left seat files without the "off" of two skills it had just linked, and `chezmoi diff` kept showing them)."""
+        for profile in ("personal", "axon-work-computer"):
+            env = fleet_env(profile)
+            try:
+                skills = env.home / ".claude/skills"
+                shutil.rmtree(skills)  # a machine that has not linked the new skills yet
+                for d in (".claude", ".local/share/agent-harness", ".local/user_scripts"):
+                    (env.home / d).mkdir(parents=True, exist_ok=True)
+                env.chezmoi("apply", "--include=dirs,files,symlinks", str(env.home / ".claude/fleet"), str(env.home / ".local/share/agent-harness/canonical"),
+                            str(env.home / ".local/user_scripts/apply_harness_config.sh"))
+                self.assertFalse(skills.exists(), "the skills are not linked yet when the seat files are written")
+                r = subprocess.run(["sh", str(env.home / ".local/user_scripts/apply_harness_config.sh"), "claude"], capture_output=True, text=True, timeout=120,
+                                   env=dict(os.environ, HOME=str(env.home), AGENT_HARNESS_APPLY_CLAUDE_MCP="0"))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue((skills / "hill-climb/SKILL.md").exists())
+                self.assertEqual(env.chezmoi("diff", "--recursive", str(env.home / ".claude/fleet")), "", profile)
+            finally:
+                env.close()
 
     def test_the_mcp_file_has_only_hindsight_and_shartifacts(self):
         for profile, bank, origin in (("personal", "cartwmic", "personal"), ("axon-work-computer", "work", "work")):

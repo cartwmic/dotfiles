@@ -1,9 +1,13 @@
 {{- /*
   The Claude Code settings file for one agent seat (~/.claude/fleet/seat-<seat>.json). Call:
     {{ includeTemplate "fleet_seat" (dict "seat" "lead" "ctx" .) }}
-  Every seat: the Artifact tool is denied, claude.ai skills and Claude Code's bundled skills are off, and every personal skill (a
-  directory with a SKILL.md under ~/.claude/skills, found at apply time) is "off" unless this seat keeps it. skillOverrides has no wildcard,
-  so a skill installed after the last apply shows in the listing until the next apply.
+  Every seat: the Artifact tool is denied, claude.ai skills and Claude Code's bundled skills are off, and every personal skill is "off"
+  unless this seat keeps it. The skills are the union of two listings, each a directory with a SKILL.md: the canonical skills in this source tree
+  (dot_local/share/agent-harness/canonical/skills) and what is under ~/.claude/skills at apply time. The source listing is there because chezmoi
+  writes this file BEFORE apply_harness_config.sh (a run_onchange_after script) links a newly added canonical skill into ~/.claude/skills; with only
+  the second listing, a skill added by the same pull was missing from every seat file until the next apply, and `chezmoi diff` kept showing it.
+  skillOverrides has no wildcard. A skill that arrives some other way (the review-map external, the private playbook's skills, a hand install)
+  shows in the listing until the next apply.
   Keep-lists: the skills the seat called at least once between 2026-11-11 18:00Z and 2026-11-13 (tool-call counts in the token baseline),
   plus the Loop Engine and lean-change skills for builders and leads, reviewing-prs and review-plans for reviewers, using-shartifacts
   for leads and the coordinator, and correcting-repeated-mistakes for builders, leads and the coordinator (playbook
@@ -21,6 +25,13 @@
 {{- if not (hasKey $keeps .seat) -}}{{ fail (printf "fleet_seat: unknown seat %q" .seat) }}{{- end -}}
 {{- $keep := get $keeps .seat -}}
 {{- $off := dict -}}
+{{- $canonical := joinPath .ctx.chezmoi.sourceDir "dot_local/share/agent-harness/canonical/skills" -}}
+{{- /* a canonical skill is a directory whose SKILL.md is plain or a template (reviewing-prs) */ -}}
+{{- range $f := concat (glob (joinPath $canonical "*/SKILL.md")) (glob (joinPath $canonical "*/SKILL.md.tmpl")) -}}
+{{-   $name := base (dir $f) -}}
+{{-   if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
+{{- end -}}
+{{- /* ~/.claude/skills: a directory or a symlink to one (omarchy's skills are symlinks, which a glob through them would not match) */ -}}
 {{- range $p := glob (joinPath .ctx.chezmoi.homeDir ".claude/skills/*") -}}
 {{-   if stat (joinPath $p "SKILL.md") -}}
 {{-     $name := base $p -}}
