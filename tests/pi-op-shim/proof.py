@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SHIM = HERE.parents[1] / "dot_pi/private_agent/bin/executable_op"
+SHIM = HERE.parents[1] / ".chezmoitemplates/op-shim-connect"
 PROVIDER = HERE / "scripted_provider.ts"
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 FAKE_TOKEN = "ops_fake-token-for-the-shim-proof"

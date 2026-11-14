@@ -1,4 +1,4 @@
-"""Tests for dot_local/bin/executable_kgate.
+"""Tests for dot_local/bin/executable_kgate.tmpl (rendered here for the personal profile).
 
 Pure parts are called directly (tree hash against real git, profile, version match, pod spec, markers, peak meter).
 The client also runs as a real process against a scripted cluster: a fake `ssh` first on PATH answers the kubectl
@@ -24,10 +24,32 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = Path(os.environ.get("KGATE_SCRIPT") or ROOT / "dot_local/bin/executable_kgate")
+TEMPLATE = ROOT / "dot_local/bin/executable_kgate.tmpl"
 DIGEST = "ghcr.io/cartwmic/kgate@sha256:" + "ab" * 32
 FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token; never a real one
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
+
+
+def render_script(profile):
+    """kgate as chezmoi deploys it for a profile: the template through real chezmoi, with a throwaway config (the user's own
+    config and its hooks are never read). Only the 1Password help lines depend on the profile."""
+    with tempfile.TemporaryDirectory(prefix="kgate-render-") as tmp:
+        config = Path(tmp) / "chezmoi.yaml"
+        config.write_text("data:\n  profile: %s\n" % profile)
+        r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination",
+                            str(Path(tmp) / "home"), "--persistent-state", str(Path(tmp) / "state.boltdb"), "--no-tty", "execute-template"],
+                           input=TEMPLATE.read_text(), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+_SCRIPT_DIR = None if os.environ.get("KGATE_SCRIPT") else tempfile.mkdtemp(prefix="kgate-script-")
+if _SCRIPT_DIR:
+    SCRIPT = Path(_SCRIPT_DIR) / "kgate"
+    SCRIPT.write_text(render_script("personal"))
+    SCRIPT.chmod(0o755)
+else:
+    SCRIPT = Path(os.environ["KGATE_SCRIPT"])
 
 
 def load():
@@ -47,6 +69,8 @@ os.environ["XDG_CACHE_HOME"] = _CACHE_HOME  # no test reads or writes the real ~
 
 def tearDownModule():
     shutil.rmtree(_CACHE_HOME, True)
+    if _SCRIPT_DIR:
+        shutil.rmtree(_SCRIPT_DIR, True)
 
 
 def git(cwd, *args, **env):

@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / "dot_local/user_scripts/executable_seed_op_connect_token.sh"
-SHIM = REPO / "dot_pi/private_agent/bin/executable_op"
+SHIM = REPO / ".chezmoitemplates/op-shim-connect"
 CONNECT_REF = "op://developer/y3x5tr3p2calmede76mmkfdele/credential"
 FAKE_SA = "ops_fake-service-token-for-the-seed-tests"  # a stand-in service-account token; never a real one
 FAKE_CONNECT = "fake-connect-value-for-the-seed-tests"  # a stand-in Connect token; never a real one

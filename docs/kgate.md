@@ -1,6 +1,6 @@
 # kgate
 
-`kgate` runs a heavy gate (a repo's slow test or lint command) on a Kubernetes cluster instead of on this Mac: the personal homelab cluster by default, or a second cluster reached through kubectl for a profile with `cluster = "<name>"` (see "A second cluster, reached through kubectl" below). One Python file, `dot_local/bin/executable_kgate`, installed as `~/.local/bin/kgate`. It takes heavy-gate's command line and meets `run-and-wake` and `heavy-gate` only on the command line:
+`kgate` runs a heavy gate (a repo's slow test or lint command) on a Kubernetes cluster instead of on this Mac: the personal homelab cluster by default, or a second cluster reached through kubectl for a profile with `cluster = "<name>"` (see "A second cluster, reached through kubectl" below). One Python file, `dot_local/bin/executable_kgate.tmpl`, installed as `~/.local/bin/kgate`. It takes heavy-gate's command line and meets `run-and-wake` and `heavy-gate` only on the command line:
 
 The cluster host is not in this repo. `KGATE_SSH` (`user@address`) wins; otherwise `kgate` reads `~/.config/kgate/host`, which chezmoi renders from the local data key `sshHosts.kgate` (`address`, `user`) plus the optional list `sshHosts.kgateFallback` (same fields per entry; see [profiles.md](profiles.md), "Local data keys"). With neither set, `kgate` exits 69 and the message names the key.
 

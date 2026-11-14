@@ -1,0 +1,2 @@
+{{- /* The op shim. Only the personal profile gets the 1Password Connect routing; every other profile gets the service-account-only shim, so no work render can reach the personal homelab Connect server (docs/profiles.md). Both variants are plain files so the tests run them directly. */ -}}
+{{ if eq .profile "personal" }}{{ include ".chezmoitemplates/op-shim-connect" }}{{ else }}{{ include ".chezmoitemplates/op-shim-service-account" }}{{ end -}}

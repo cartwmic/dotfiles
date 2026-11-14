@@ -16,7 +16,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SHIM = Path(__file__).resolve().parents[2] / "dot_pi/private_agent/bin/executable_op"
+REPO = Path(__file__).resolve().parents[2]
+SHIM = REPO / ".chezmoitemplates/op-shim-connect"  # the personal profile's shim
+SA_SHIM = REPO / ".chezmoitemplates/op-shim-service-account"  # every other profile's shim: no Connect routing
+SHIM_TEMPLATE = REPO / "dot_pi/private_agent/bin/executable_op.tmpl"  # picks one of the two by profile
 FAKE_SA = "ops_fake-service-token-for-the-connect-tests"  # a stand-in service-account token; never a real one
 FAKE_CONNECT = "fake-connect-token-for-the-connect-tests"  # a stand-in Connect token; never a real one
 DEFAULT_HOST = "https://op-connect.internal.cartwmic.com"
@@ -52,7 +55,23 @@ exit "${FAKE_SA_EXIT:-0}"
 """
 
 
+def render_shim(profile):
+    """The shim file chezmoi deploys to ~/.pi/agent/bin/op for this profile: the real template through real chezmoi (a throwaway
+    config, so the user's own config and its hooks are never read)."""
+    with tempfile.TemporaryDirectory(prefix="op-shim-render-") as tmp:
+        config = Path(tmp) / "chezmoi.yaml"
+        config.write_text("data:\n  profile: %s\n" % profile)
+        result = subprocess.run(
+            ["chezmoi", "--source", str(REPO), "--config", str(config), "--config-format", "yaml", "--destination", str(Path(tmp) / "home"),
+             "--persistent-state", str(Path(tmp) / "state.boltdb"), "--no-tty", "execute-template"],
+            input=SHIM_TEMPLATE.read_text(), capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
 class ShimCase(unittest.TestCase):
+    shim_source = SHIM  # the file copied to ~/.pi/agent/bin/op; a test class may name another
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="op-shim-connect-"))
         self.home = self.tmp / "home"
@@ -60,7 +79,7 @@ class ShimCase(unittest.TestCase):
         self.bin = self.home / ".pi/agent/bin"  # the shim as chezmoi deploys it
         self.bin.mkdir(parents=True)
         self.shim = self.bin / "op"
-        shutil.copy(SHIM, self.shim)
+        shutil.copy(self.shim_source, self.shim)
         self.shim.chmod(0o755)
         self.real_dir = self.tmp / "real-bin"
         self.real_dir.mkdir()
