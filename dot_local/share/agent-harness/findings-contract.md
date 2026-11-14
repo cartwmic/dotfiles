@@ -37,6 +37,7 @@ One JSON object, saved as `findings.json`:
 3. **Disposition.** Only effectively-blocking findings need an outcome (`fixed` or `rejected`, or `residual` in the log). Notes need none.
 4. **Rejected, not demoted.** The return is malformed: not JSON, `findings_schema` missing or not `1`, blank `reviewer` or `head`, `findings` not a list, a finding that is not an object, blank or duplicate `id`, blank `text`, missing or unknown `severity`. The fixture's reject codes, in check order: `bad-json`, `bad-schema-version`, `blank-reviewer`, `blank-head`, `bad-shape` (`findings` is not a list, or any finding is not an object), `blank-id`, `duplicate-id`, `blank-text`, `bad-severity`. Checks run in that order, and each check runs over all findings before the next check starts; the first check that fails gives the code. So a blank `text` on the first finding and a blank `id` on the second give `blank-id`.
 5. **Code checks presence and shape, not truth.** It cannot tell whether evidence is true, whether the consequence is "ordinary single-user use", or whether the obligation applies. Agents judge those. A `brief_sha256` match shows a reviewer was given the brief, not that it followed it.
+6. **Decision-log findings.** A blocking finding that a material choice has no decision record (`reviewer-brief.md` §1) has an `obligation` that starts with the literal prefix `decision log:`. The prefix is only how such findings are told apart; no field, check or code changes, and it is never the `component`.
 
 ## The conformance fixture
 
