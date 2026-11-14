@@ -485,6 +485,15 @@ function locateTargets() {
 	return { files, dropPath };
 }
 
+function findLeftover() {
+	for (const spec of FILE_SPECS) {
+		const path = agentPkgFile(spec.pkg, spec.rel);
+		if (existsSync(path) && readFileSync(path, "utf8").includes(MARKER_PREFIX)) return path;
+	}
+	const dropPath = agentPkgFile("pi-sub-core", DROP_REL);
+	return existsSync(dropPath) ? dropPath : null;
+}
+
 function readPkgVersion(pkg) {
 	try {
 		const pkgJson = JSON.parse(readFileSync(join(AGENT_MARCKRENN, pkg, "package.json"), "utf8"));
@@ -633,8 +642,14 @@ function readPayload() {
 
 const located = locateTargets();
 if (!located) {
-	// Retired: the desired state is unpatched, and an absent @marckrenn tree is unpatched. Fail here only while a patched tree is left.
-	log("pi-sub packages not installed under ~/.pi/agent/npm — nothing to patch" + (checkOnly ? "; retired, so absent is the desired state" : ""));
+	if (checkOnly) {
+		// Retired: an absent @marckrenn tree is the desired state. A partly removed one is not located, but a splice or the dropped cursor.ts left in it still fails.
+		const leftover = findLeftover();
+		if (leftover) fail(`desired state is unpatched but ${leftover} is still patched or present (partial tree, profile=${profile || "(unset)"})`);
+		log("pi-sub packages not installed under ~/.pi/agent/npm — nothing to patch; retired, so absent is the desired state");
+		process.exit(0);
+	}
+	log("pi-sub packages not installed under ~/.pi/agent/npm — nothing to patch");
 	process.exit(0);
 }
 

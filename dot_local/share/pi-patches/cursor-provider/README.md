@@ -19,7 +19,7 @@ Unpatched on **every** profile, including `axon-work-computer`:
 unchanged and still run from `apply_pi_patches.sh`.
 
 `--check` exits 0 when leftover `@marckrenn/pi-sub-*` files are unspliced (or
-the tree is absent in apply mode). It exits non-zero if splices or dropped
+the tree is absent, in apply and in `--check`). It exits non-zero if splices or dropped
 `cursor.ts` are still present.
 
 ## Why it existed
