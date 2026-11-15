@@ -8,3 +8,8 @@ memory_limit = "1Gi"
 
 [tools]
 python3 = "3.14.6"
+
+# GitHub's ci.yml runs these suites: kgate refuses them on a clean tree at a commit where that run was green (playbook 83fbe006).
+[github_ci]
+workflow = "ci.yml"
+suites = ["discover -s tests/heavy-gate", "discover -s tests/workstream-rank", "scripts/ci-linux.sh"]

@@ -82,6 +82,7 @@ python3 scripts/ci-par.py \
   tests/hill-climb \
   tests/git-credential \
   tests/ci-par \
+  tests/release-pins \
   tests/ci-main-status || status=1
 
 # tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their

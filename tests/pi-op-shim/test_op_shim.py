@@ -19,7 +19,7 @@ FAKE_TOKEN = "ops_fake-token-for-the-shim-test"  # a stand-in service-account to
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 MARKERS = {  # one per agent shell marker the shim reads; each is set to a non-empty value
     "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "T3CODE_THREAD_ID": "thread-1", "HERDR_ENV": "1",
-    "CODEX_SANDBOX": "seatbelt",
+    "CODEX_SANDBOX": "seatbelt", "CODEX_THREAD_ID": "019a-test",
 }
 
 FAKE_OP = """#!/bin/sh
@@ -171,6 +171,14 @@ class OpShim(unittest.TestCase):
                 self.assertEqual(result.returncode, 69, (name, result.stderr))
                 self.assertEqual(result.stderr, NO_TOKEN + "\n", name)
                 self.assertFalse(self.out.exists(), f"{name}: op never ran")
+
+    def test_codex_with_its_sandbox_off_refuses_without_a_token(self):
+        # Codex sets CODEX_THREAD_ID in every shell it runs. With its sandbox off it sets no CODEX_SANDBOX, so this is the
+        # only marker there is (playbook 78819cbd). run_zsh_name builds the environment from scratch: CODEX_SANDBOX is unset.
+        result = self.run_zsh_name(["whoami"], env={"CODEX_THREAD_ID": "019a-test"})
+        self.assertEqual(result.returncode, 69, result.stderr)
+        self.assertEqual(result.stderr, NO_TOKEN + "\n")
+        self.assertFalse(self.out.exists(), "op never ran")
 
     def test_an_empty_marker_is_not_an_agent_shell(self):
         result = self.run_zsh_name(["whoami"], env={"CLAUDECODE": ""})

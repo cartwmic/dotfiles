@@ -49,6 +49,11 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: apt packages for the Linux suites (zsh, lsof, rsync)
         run: sudo apt-get install -y -qq zsh lsof rsync >/dev/null
+      # Its own step, not in scripts/ci-linux.sh: it reads GitHub through gh, and kgate pods run ci-linux.sh with no gh login.
+      - name: "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release (playbook 7c57de5a)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-release-pins.py
       - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
 
