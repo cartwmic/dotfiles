@@ -518,10 +518,15 @@ class HeavyGate(unittest.TestCase):
 
     def test_a_bad_limit_warns_once_however_many_tries_a_waiting_job_makes(self):
         self.load("14.20")
-        result = self.gate("--wait", "3", "--", "true", env={"HEAVY_GATE_MAX_LOAD": "zero"})
-        self.assertEqual(result.returncode, 75, result.stderr)
-        self.assertGreater(result.stderr.count("5-minute load average 14.20"), 1, "it tried more than once")
-        self.assertEqual(result.stderr.count("WARN: max load:"), 1)
+        job = self.start("--wait", "60", "--", "true", env={"HEAVY_GATE_MAX_LOAD": "zero"})
+        self.addCleanup(lambda: (job.poll() is None and job.kill(), job.wait(), job.stdout.close(), job.stderr.close()))
+        # the third load reading comes after tries 1 and 2 have printed their refusals; no timing window is needed
+        self.assertTrue(self.wait_for(lambda: self.load_reads() >= 3, 20), "it tried more than once")
+        job.terminate()   # the gate traps TERM and exits 143
+        out, err = job.communicate(timeout=30)
+        self.assertEqual(job.returncode, 143, err)
+        self.assertGreaterEqual(err.count("5-minute load average 14.20"), 2, "it tried more than once")
+        self.assertEqual(err.count("WARN: max load:"), 1)
 
     def test_a_waiting_job_prints_one_line_per_try_and_starts_when_the_load_falls(self):
         self.load("14.20")
