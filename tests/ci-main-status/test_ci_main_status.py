@@ -425,6 +425,67 @@ class TipFlag(Fixture):
         self.assertEqual(rc, 0, out)
 
 
+class MergeGateFlag(Fixture):
+    """--merge-gate: for `ci-main-status --merge-gate REPO && gh pr merge`. Only RED or unreadable blocks a merge (fab9b713)."""
+
+    def test_untested_is_0_and_still_prints_the_untested_line(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        self.assertEqual(self.status("dotfiles")[0], 2)
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("UNTESTED", out)
+
+    def test_no_conclusive_run_is_0(self):
+        self.dotfiles_runs([])
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("UNTESTED", out)
+
+    def test_red_is_1(self):
+        self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)])
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_unreadable_is_1(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.failing = ["cartwmic/dotfiles"]
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR", out)
+
+    def test_green_is_0(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN", out)
+
+    def test_flag_may_follow_the_repo(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        self.assertEqual(self.status("dotfiles", "--merge-gate")[0], 0)
+
+    def test_all_with_merge_gate_is_red_beats_untested_and_untested_is_0(self):
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c2, "success")],
+                     "cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")],
+                     "cartwmic/agent-kit|unit.yml": [run(1, self.c3, "success")]}
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
+        self.assertEqual(self.status("--all")[0], 2)
+        self.assertEqual(self.status("--all", "--merge-gate")[0], 0)
+        self.runs["cartwmic/loop-engine|ci.yml"] = [run(1, self.c3, "failure")]
+        self.assertEqual(self.status("--all", "--merge-gate")[0], 1)
+
+    def test_with_tip_is_a_usage_error(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("--tip", "--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage", out)
+
+    def test_plain_and_tip_keep_their_meaning(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        self.assertEqual(self.status("dotfiles")[0], 2)
+        self.assertEqual(self.status("--tip", "dotfiles")[0], 2)
+
+
 class AllAndHomelab(Fixture):
     def test_all_exit_code_red_beats_untested(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "failure")],

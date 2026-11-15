@@ -7,7 +7,9 @@
   kube        (personal only)  kubectl, helm, k9s, kubectx on a context other than the homelab's: a context flag, `kubectl config
               use-context`, `kubectx X`, or no flag while the current context (--kubeconfig, an inline KUBECONFIG=, the hook's KUBECONFIG,
               else ~/.kube/config) is another. kubectl inside an ssh string is not inspected. No kubeconfig or no current-context: allowed.
-  merge       (personal only)  `gh pr merge` unless `ci-main-status` is joined to it by `&&` earlier in the same and-list; never for
+  merge       (personal only)  `gh pr merge` unless `ci-main-status` is joined to it by `&&` earlier in the same and-list (the refusal names
+              `ci-main-status --merge-gate <repo> && gh pr merge ...`: --merge-gate exits 0 for UNTESTED and 1 for RED, as playbook
+              fab9b713 allows an untested merge; a bare `ci-main-status` exits 2 for UNTESTED and blocks it); never for
               cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh. merge-pr.sh, the playbook
               CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process the hook never sees, so they pass.
 
@@ -38,7 +40,8 @@ HEREDOC = (
 )
 MERGE_BARE = (
     "A bare `gh pr merge` is refused in agent sessions: it skips the red-main gate (playbook fab9b713). "
-    "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run `ci-main-status <repo> && gh pr merge ...`; "
+    "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run `ci-main-status --merge-gate <repo> && gh pr merge ...` "
+    "(--merge-gate lets an untested tip merge and stops only red); "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 MERGE_COORDINATOR = (
