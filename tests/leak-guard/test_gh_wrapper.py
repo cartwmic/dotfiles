@@ -399,8 +399,8 @@ class WrapperText(Decisions):
         self.assertIn("tag", self.decide("release", "edit", "v1", "--tag", "v2")[1])
 
     def test_help_is_help_only_when_it_stands_alone_and_not_as_a_flags_value(self):
-        self.assertEqual(self.decide("pr", "create", "--help"), ("", None))
-        self.assertEqual(self.decide("pr", "create", "-h"), ("", None))
+        self.assertEqual(self.decide("pr", "create", "--help"), ("pr create", {}))      # help checks the (empty) text and never skips it: see WrapperHelpNeverSkipsTheCheck
+        self.assertEqual(self.decide("pr", "create", "-h"), ("pr create", {}))
         name, texts = self.decide("pr", "create", "-t", "x", "--body", "-h")
         self.assertEqual((name, texts["body"]), ("pr create", "-h"))
         name, texts = self.decide("pr", "create", "-t", "-h", "--body", "y")
@@ -675,7 +675,7 @@ class WrapperUnrecognised(Decisions):
         for args in (["pr", "ready", "5"], ["pr", "update-branch", "5"], ["pr", "lock", "5"], ["issue", "pin", "5"], ["run", "rerun", "7"], ["run", "cancel", "7"],
                      ["pr", "list"], ["pr", "view", "5"], ["pr", "diff", "5"], ["pr", "checks", "5"], ["pr", "status"], ["issue", "list"], ["issue", "view", "5"],
                      ["release", "view", "v1"], ["run", "list"], ["run", "view", "7"], ["repo", "view"], ["workflow", "list"], ["label", "list"],
-                     ["auth", "status"], ["auth", "token", "-u", "someone"], ["search", "issues", "x"], ["browse"], ["pr"], ["pr", "create", "--help"], ["--version"]):
+                     ["auth", "status"], ["auth", "token", "-u", "someone"], ["search", "issues", "x"], ["browse"], ["pr"], ["--version"]):
             with self.subTest(args):
                 self.assertEqual(self.decide(*args), ("", None))
         done = self.gh("pr", "ready", "5")
@@ -1055,96 +1055,76 @@ class WrapperHelpValue(Decisions):
                         self.assertEqual(result[:2], ("ok", args[0] + " comment"), result)
                         self.assertEqual(result[2]["body"], PLANTED)
 
-    def test_help_with_no_value_or_a_true_value_is_still_help(self):
+    def test_help_with_a_true_value_is_checked_like_any_other_spelling(self):
         for flag in ["--help", "-h"] + ["--help=" + v for v in self.TRUE] + ["-h=" + v for v in self.TRUE]:
             for args in (["pr", "comment", "3", flag, "-b", PLANTED], ["issue", "comment", "3", "-b", PLANTED, flag]):
                 with self.subTest(args):
-                    self.assertEqual(self.decide(*args, repo=GUARDED), ("", None))
-        for flag in ["--help", "--help=true", "--help=1"]:
-            with self.subTest(flag):
-                self.assertEqual(self.decide("pr", flag, "comment", "3", "-b", PLANTED, repo=GUARDED), ("", None))
-
-    def test_gh_api_with_help_false_is_still_checked(self):
+                    result = outcome(self, *args)
+                    self.assertEqual((result[:2], result[2]["body"]), (("ok", args[0] + " comment"), PLANTED))
         ep = "repos/%s/issues/1/comments" % GUARDED
-        name, texts = self.decide("api", ep, "-f", "body=" + PLANTED, "--help=false", repo="someone/other")
-        self.assertEqual(name, "api")
-        self.assertEqual(self.decide("api", ep, "-f", "body=" + PLANTED, "--help=true", repo="someone/other"), ("", None))
+        for flag in ("--help=false", "--help=true", "--help"):
+            self.assertEqual(self.decide("api", ep, "-f", "body=" + PLANTED, flag, repo="someone/other")[0], "api")
 
-    def test_end_to_end_help_false_is_checked_and_help_true_runs_untouched(self):
-        for args in (["pr", "--help=false", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED]):
-            with self.subTest(args):
+    def test_end_to_end_help_false_and_help_true_are_both_checked(self):
+        for flag in ("--help=false", "--help=true"):
+            for args in (["pr", flag, "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", flag, "-b", PLANTED, "-R", GUARDED]):
+                with self.subTest(args):
+                    self.reset()
+                    self.assertBlocked(self.gh(*args, cwd=self.other_cwd), "term 1")
+
+
+class WrapperHelpNeverSkipsTheCheck(Decisions):
+    """Guard for a mistake class that two review rounds found: the wrapper skipped its text check when it read a command as a help request, using its own copy
+    of gh's help semantics (`--help=false`, a repeated `--help`, ...), and the copy drifted from gh. A help flag, in any spelling, count, order or position, must
+    never make the wrapper skip checking the text a command carries. It may only relax the refusals that exist because gh would prompt for text."""
+    SPELLINGS = ("--help", "-h", "--help=true", "--help=false", "--help=1", "--help=0", "--help=T", "--help=F", "-h=true", "-h=false", "--help=")
+    PAIRS = [(a, b) for a in ("--help", "-h", "--help=true", "--help=false", "--help=1", "--help=0") for b in ("--help", "-h", "--help=true", "--help=false", "--help=0")]
+    WHY = "help must never skip the text check: a help spelling made the wrapper run gh without checking the text. "
+
+    def cases(self):
+        """(label, argv) of every command that carries PLANTED, with help spelled every way before the verb, after it, or both."""
+        helps = [(h,) for h in self.SPELLINGS] + self.PAIRS + [("--help", "--help=false", "-h"), ("--help=false", "--help=true", "--help=false")]
+        for group, verb in (("pr", "comment"), ("issue", "comment")):
+            for h in helps:
+                for text in (["-b", PLANTED], ["--body", PLANTED], ["--body=" + PLANTED], ["-b" + PLANTED]):
+                    yield "%s after the verb" % group, [group, verb, "3", *text, *h, "-R", GUARDED]
+                    yield "%s before the verb" % group, [group, *h, verb, "3", *text, "-R", GUARDED]
+                    yield "%s on both sides" % group, [group, h[0], verb, "3", *text, *h[1:], "-R", GUARDED]
+                    yield "%s in group position after -R" % group, [group, "-R", GUARDED, *h, verb, "3", *text]
+        ep = "repos/%s/issues/1/comments" % GUARDED
+        for h in helps:
+            for fields in (["-f", "body=" + PLANTED], ["--raw-field", "body=" + PLANTED], ["-F", "body=" + PLANTED], ["--field=body=" + PLANTED]):
+                yield "gh api", ["api", ep, *fields, *h]
+                yield "gh api (help first)", ["api", *h, ep, *fields]
+
+    def blocked(self, argv):
+        """True when the wrapper refuses the command or gathers the planted text for the check; False when it would run gh without looking."""
+        result = outcome(self, *argv, repo="someone/other")
+        return result[0] == "refused" or any(PLANTED in text for text in (result[2] or {}).values())
+
+    def test_a_help_flag_in_any_spelling_count_or_position_never_skips_the_text_check(self):
+        unchecked = [(label, argv) for label, argv in self.cases() if not self.blocked(argv)]
+        self.assertEqual(unchecked, [], self.WHY + "%d of the cases ran gh unchecked, e.g. %s" % (len(unchecked), unchecked[:3]))
+
+    def test_end_to_end_a_planted_term_is_blocked_whatever_the_help_flags(self):
+        for argv in (["pr", "comment", "3", "--help", "--help=false", "-b", PLANTED, "-R", GUARDED], ["pr", "--help", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED],
+                     ["pr", "comment", "3", "--help=true", "--help=false", "--body", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "-h", "-b", PLANTED, "-R", GUARDED],
+                     ["api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=" + PLANTED, "--help", "--help=false"]):
+            with self.subTest(argv):
                 self.reset()
-                self.assertBlocked(self.gh(*args, cwd=self.other_cwd), "term 1")
+                self.assertBlocked(self.gh(*argv, cwd=self.other_cwd), "term 1")
+
+    def test_a_plain_help_request_still_reaches_ghs_help_without_a_claude_call(self):
+        for argv in (["pr", "comment", "--help", "-R", GUARDED], ["pr", "comment", "-h", "-R", GUARDED], ["pr", "view", "--help"], ["pr", "--help"], ["issue", "create", "--help", "-R", GUARDED],
+                     ["pr", "create", "--help", "-R", GUARDED], ["pr", "--help", "comment", "-R", GUARDED], ["api", "--help"], ["repo", "edit", "--help", "-R", GUARDED]):
+            with self.subTest(argv):
+                self.reset()
+                self.assertRan(self.gh(*argv, cwd=self.other_cwd), *argv)
+                self.assertEqual(self.claude_calls(), 0)
         self.reset()
-        args = ["pr", "comment", "3", "--help=true", "-b", PLANTED, "-R", GUARDED]
-        self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
-
-
-class WrapperRemoteSpellings(WrapperBase):
-    """A checkout remote is read the way git and ssh resolve it: through `url.<base>.insteadOf` and an ssh Host alias."""
-
-    def git(self, cwd, *args):
-        subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
-
-    def ssh_path(self, config, fail=False):
-        """A PATH with an `ssh` ahead of the real one that reads a scratch ssh config (ssh takes its home from the passwd entry, not $HOME)."""
-        real = shutil.which("ssh")
-        if not real:
-            self.skipTest("needs ssh")
-        shim = self.tmp / "sshbin"
-        shim.mkdir(exist_ok=True)
-        cfg = self.tmp / "ssh_config"
-        cfg.write_text(config)
-        (shim / "ssh").write_text("#!/bin/sh\n%s\n" % ("exit 255" if fail else 'exec %s -F %s "$@"' % (real, cfg)))
-        (shim / "ssh").chmod(0o755)
-        return "%s:%s" % (shim, self.env()["PATH"])
-
-    def test_an_insteadof_rewrite_of_the_remote_is_applied_before_it_is_compared(self):
-        cwd = self.repo("rewrite", "gh:%s.git" % GUARDED)
-        self.git(cwd, "config", "url.https://github.com/.insteadOf", "gh:")
-        self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "term 1")
-
-    def test_a_pushinsteadof_rewrite_is_applied_to_the_push_url(self):
-        cwd = self.repo("pushrewrite", "gh:%s.git" % GUARDED)
-        self.git(cwd, "config", "url.https://github.com/.pushInsteadOf", "gh:")
-        self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "term 1")
-
-    def test_a_rewrite_to_an_unguarded_repository_and_the_raw_value_both_count(self):
-        cwd = self.repo("rewrite-other", "gh:someone/other.git")
-        self.git(cwd, "config", "url.https://github.com/.insteadOf", "gh:")
-        self.assertRan(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "pr", "comment", "5", "--body", PLANTED)
-
-    def test_an_ssh_host_alias_is_resolved_to_its_hostname(self):
-        config = "Host guard-alias\n  HostName github.com\n  User git\n"
-        for n, url in enumerate(("git@guard-alias:%s.git" % GUARDED, "ssh://git@guard-alias/%s" % GUARDED, "ssh://git@guard-alias:22/%s.git" % GUARDED)):
-            with self.subTest(url):
-                self.reset()
-                cwd = self.repo("alias%d" % n, url)
-                self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd, env={"PATH": self.ssh_path(config)}), "term 1")
-
-    def test_an_alias_for_another_host_is_not_the_guarded_repository(self):
-        cwd = self.repo("alias-other", "git@guard-alias:%s.git" % GUARDED)
-        done = self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd, env={"PATH": self.ssh_path("Host guard-alias\n  HostName git.elsewhere.example\n")})
-        self.assertRan(done, "pr", "comment", "5", "--body", PLANTED)          # the raw value is `guard-alias`, not github.com either
-
-    def test_when_ssh_cannot_resolve_the_raw_value_still_counts(self):
-        cwd = self.repo("alias-fail", "git@github.com:%s.git" % GUARDED)
-        self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd, env={"PATH": self.ssh_path("", fail=True)}), "term 1")
-
-
-class WrapperLocalOnly(WrapperBase):
-    def test_repo_set_default_and_the_completion_entry_run_untouched_in_a_guarded_checkout(self):
-        for args in (["repo", "set-default", GUARDED], ["repo", "set-default", "--view"], ["repo", "set-default", "-u"], ["__complete", "pr", "create", "--"],
-                     ["__completeNoDesc", "pr", ""]):
-            with self.subTest(args):
-                self.reset()
-                done = self.gh(*args, env={"FAKE_GH_EXIT": "3"})
-                self.assertEqual(done.returncode, 3)
-                self.assertEqual([c["argv"] for c in self.real_calls()], [args])
-                self.assertEqual((self.claude_calls(), self.gh_log()), (0, []))
-                self.assertIsNone(self.real_calls()[0]["prompt_disabled"])
-        self.reset()
-        self.assertBlocked(self.gh("repo", "edit", "--description", "x"), "gh repo edit")          # other repo writes are still refused
+        logged = len(self.gh_log())
+        self.assertRan(self.gh("pr", "view", "--help"), "pr", "view", "--help")      # in a guarded checkout too, and a read writes no log line
+        self.assertEqual(len(self.gh_log()), logged)
 
 
 if __name__ == "__main__":

@@ -336,15 +336,6 @@ def split_command(args):
     return group, norm[1] if len(norm) > 1 and not norm[1].startswith("-") else "", False
 
 
-TRUE_VALUES = {"1", "t", "T", "TRUE", "true", "True"}      # what gh's flag library (strconv.ParseBool) reads as true
-
-
-def help_asked(flags):
-    """True when parsed flags hold --help (or -h) as help: with no value, or a true one. `--help=false` is not help, and a value gh rejects is not either: the
-    command is then checked as if it sent its text."""
-    return any(name == "help" and (val is None or val in TRUE_VALUES) for name, val in flags)
-
-
 def flag_table(group, verb):
     """({long: takes a value}, {short: long}) of a command, from FLAGS."""
     longs, shorts = {}, {}
@@ -409,8 +400,11 @@ def parse_flags(args, group, verb):
 
 
 def parse_text(args, group, verb):
-    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, help flag seen, unparsed) for a pr/issue/release
-    command. `unparsed` is true when parsing stopped at a flag the table does not list. `args` are the arguments after the group. Reads nothing."""
+    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, unparsed) for a pr/issue/release command.
+    `unparsed` is true when parsing stopped at a flag the table does not list. `args` are the arguments after the group. Reads nothing. A help flag, in any
+    spelling or count, never removes text from `found` and never lifts a refusal about unknown flags, uploads or composed text: whether gh reads the command
+    as help depends on the flag's value, its last repetition and its position, and a copy of those rules in this file drifts from gh's. It lifts only the
+    refusal for text gh would prompt for, which is also switched off when the real gh runs (GH_PROMPT_DISABLED)."""
     flags, positionals, unknown, missing = parse_flags(args, group, verb)
     names = {name for name, _ in flags}
     kinds = TEXT[(group, verb)]
@@ -435,10 +429,9 @@ def parse_text(args, group, verb):
         if len(positionals) > 1:
             refusal = refusal or ("`gh release create` with asset files would upload them unchecked, as `gh release upload` is refused for a guarded repository. "
                                   "Create the release without files")
-    helped = help_asked(flags)
-    if not refusal and not helped and sys.stdin.isatty():
+    if not refusal and "help" not in names and sys.stdin.isatty():
         refusal = would_prompt(group, verb, names, {k for k, _, _ in found})
-    return found, repo, positionals, refusal, helped, unknown is not None or missing is not None
+    return found, repo, positionals, refusal, unknown is not None or missing is not None
 
 
 def would_prompt(group, verb, names, kinds):
@@ -467,7 +460,7 @@ def gather_text(found, texts):
 
 
 def parse_api(args):
-    """(method, endpoint, [(typed, "key=value")], [input path], hostname, help flag seen, unknown flag position, missing value position) for `gh api`
+    """(method, endpoint, [(typed, "key=value")], [input path], hostname, unknown flag position, missing value position) for `gh api`
     arguments, parsed with gh's own flag table for `gh api`. Reads nothing."""
     flags, positionals, unknown, missing = parse_flags(args, "api", "")
     method, fields, inputs, hostname = None, [], [], None
@@ -480,7 +473,7 @@ def parse_api(args):
             inputs.append(val)
         elif name == "hostname":
             hostname = val
-    return method, positionals[0] if positionals else "", fields, inputs, hostname, help_asked(flags), unknown, missing
+    return method, positionals[0] if positionals else "", fields, inputs, hostname, unknown, missing
 
 
 def gather_api(fields, inputs, texts, graphql):
@@ -610,6 +603,12 @@ def unknown_command(args, repos, texts, real, depth):
     return decide(expand_alias(expansion, args), repos, texts, real, depth + 1)
 
 
+def bare_help_only(args):
+    """True when the arguments hold exactly one help flag, spelled bare (`--help` or `-h`). Only a command with no text the wrapper can read (an unrecognised
+    verb) is let through on this, since nothing is skipped that could be checked; a lone bare flag is help whatever gh does with repeats and values."""
+    return [a for a in args if a in ("--help", "-h") or a.startswith(("--help=", "-h="))] in (["--help"], ["-h"])
+
+
 def decide(args, repos, texts=None, real=None, depth=0):
     """(command name, Texts). Texts None: run gh as is. A Texts with an empty name: run gh as is, with the standard input that was read. Raises Refuse.
     `texts` is where gathered text (and standard input, if read) goes, so the caller still has the input when this raises. `real` is the real gh, used to
@@ -624,11 +623,8 @@ def decide(args, repos, texts=None, real=None, depth=0):
             raise Refuse("a flag comes before the command group, so what gh runs cannot be told. Put the command group first, e.g. `gh pr comment ... -R ...`")
         return "", None
     group = args[0]
-    helped = any(a in ("-h", "--help") for a in args)
     if group == "api":
-        method, endpoint, fields, inputs, hostname, helped, unknown, missing = parse_api(args[1:])
-        if helped:
-            return "", None
+        method, endpoint, fields, inputs, hostname, unknown, missing = parse_api(args[1:])
         if unknown is not None or missing is not None:      # the arguments cannot be read reliably: refuse when the call may be aimed at a guarded repository
             if (endpoint_path(endpoint) in ("graphql", "api/graphql") or any(t in repos for t in api_targets(endpoint, hostname) + context_targets())):
                 raise Refuse("argument %d of this `gh api` call is a flag this wrapper does not know, or a flag with no value, so the call cannot be read "
@@ -648,27 +644,27 @@ def decide(args, repos, texts=None, real=None, depth=0):
     if group in NOT_REPO:
         return "", None
     if group not in BUILTIN:
-        return ("", None) if helped else unknown_command(args, repos, texts, real, depth)
+        return unknown_command(args, repos, texts, real, depth)
     args = normalize_group_flags(args) or args      # the group's own flags move behind the subcommand, as gh reads them
     group, verb, ambiguous = split_command(args)
     name = command_name(args)
     if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
-    if ambiguous and not helped and any(t in repos for t in raw_targets(args)):
+    if ambiguous and any(t in repos for t in raw_targets(args)):
         raise Refuse("a flag that is not one of `gh %s`'s own stands between it and its subcommand, so a flag's value could be taken for the subcommand and what gh "
                      "runs cannot be told. Put the subcommand right after `gh %s`" % (group, group))
     if (group, verb) in TEXT:
-        found, repo, positionals, refusal, helped, unparsed = parse_text(args[1:], group, verb)
+        found, repo, positionals, refusal, unparsed = parse_text(args[1:], group, verb)
         named = all_targets(repo + (raw_repo_flags(args) if unparsed else []), positionals + (args if unparsed else []))
-        if helped or not any(t in repos for t in named):
+        if not any(t in repos for t in named):
             return "", None
         if refusal:
             raise Refuse(refusal)
         gather_text(found, texts)
         return name, texts
-    if helped or (known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()))):
+    if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
         return "", None
-    if any(t in repos for t in raw_targets(args)):
+    if any(t in repos for t in raw_targets(args)) and not bare_help_only(args):
         raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
                      "Use a recognised command" % (group, verb))
     return "", None
