@@ -162,6 +162,7 @@ Then add these keys to the `data:` block of `~/.config/chezmoi/chezmoi.yaml`: `s
 - Self-hosted rendezvous and relay configuration
 - Shared unattended-access password loaded from `op://developer/RustDesk/password`
 - RustDesk on the work Mac as a client only: it controls other machines and cannot be reached
+- [`scripts/omarchy-remote-unlock.sh`](./scripts/omarchy-remote-unlock.sh) (personal homelab only; an operations script run on mac-mini, not applied by chezmoi): waits for the Omarchy early-boot SSH server, then types the disk passphrase (read from stdin once, kept in memory, never logged) into it exactly once. `--pin-hostkey` pins the early-boot host key first. Tests: `python3 -m unittest discover -s tests/omarchy-remote-unlock -v`.
 
 ## Docker Provisioning
 
