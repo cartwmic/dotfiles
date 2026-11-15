@@ -239,13 +239,17 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(json.loads(self.live(KIT_DEST + "/package-lock.json"))["packages"]["node_modules/" + PACKAGE]["version"], NEW)
         self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
 
+        # The source checkout moved to the merge commit, so a later full apply cannot restore the old pins.
+        self.assertEqual(self.sh("git", "-C", self.checkout, "rev-parse", "HEAD").strip(), sha)
+        self.assertEqual(self.sh("git", "-C", self.checkout, "status", "--porcelain"), "")
+
         # The install ran once, and the installed version is read back from the package npm ci put there.
         installed = json.loads((self.home / KIT_DEST / "node_modules" / PACKAGE / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(installed["version"], NEW)
         self.assertEqual(len([c for c in calls if c.startswith("npm ci")]), 1)
 
         self.assertEqual([line["step"] for line in self.log_lines()],
-                         ["profile", "pr", "publish", "checks", "gates", "merge", "drift", "apply", "install", "verify"])
+                         ["profile", "pr", "publish", "checks", "gates", "merge", "source", "drift", "apply", "install", "verify"])
         self.assertTrue(all(line["outcome"] == "ok" for line in self.log_lines()))
 
         # A rerun resumes the merged PR: no new PR, no second merge, and it still leaves main's unrelated change alone.
@@ -326,6 +330,29 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("nothing to do", result.stdout)
         self.assertEqual(len([c for c in self.calls() if c.startswith("gh pr create")]), 1)
+
+
+    def test_a_source_checkout_that_cannot_fast_forward_stops_before_apply_and_a_rerun_applies(self):
+        self.world()
+        self.sh("git", "-C", self.checkout, "commit", "-q", "--allow-empty", "-m", "local only, not pushed")
+        result = self.bump()
+        self.assert_stopped(result, "source", "cannot fast-forward the chezmoi source checkout")
+        self.assertEqual(self.prs()[0]["state"], "MERGED")  # the merge happened; only the source is behind
+        self.assert_nothing_applied()
+        self.sh("git", "-C", self.checkout, "reset", "-q", "--hard", "origin/main")  # the fix a person makes
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("resuming PR #100 (MERGED)", again.stdout)
+        self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
+
+    def test_a_source_checkout_not_on_main_stops_before_apply(self):
+        self.world()
+        self.sh("git", "-C", self.checkout, "checkout", "-q", "-b", "wip")
+        result = self.bump()
+        self.assert_stopped(result, "source", "is on wip, not main")
+        self.assertEqual(self.prs()[0]["state"], "MERGED")
+        self.assert_nothing_applied()
+        self.assertEqual(self.sh("git", "-C", self.checkout, "branch", "--show-current").strip(), "wip")
 
 
 class BodyTests(unittest.TestCase):

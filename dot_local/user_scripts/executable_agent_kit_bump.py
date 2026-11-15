@@ -326,10 +326,26 @@ def installed_version(dest):
     return json.loads(path.read_text(encoding="utf-8")).get("version", "(no version)") if path.is_file() else "(not installed)"
 
 
+def fast_forward_source(source, sha, log):
+    """Move the chezmoi source checkout to the merge commit, so a later full apply cannot restore the old pins."""
+    branch = git(source, "symbolic-ref", "-q", "--short", "HEAD", step="source", check=False).stdout.strip()
+    if branch != "main":
+        raise Stop("source", "the chezmoi source checkout %s is on %s, not main, so it cannot move to the merge commit %s. "
+                   "The PR is merged and nothing was applied; check out main there and rerun this script."
+                   % (source, branch or "a detached HEAD", sha))
+    moved = git(source, "merge", "--ff-only", "-q", sha, step="source", check=False)
+    if moved.returncode != 0:
+        raise Stop("source", "cannot fast-forward the chezmoi source checkout %s to the merge commit %s: %s. The PR is merged "
+                   "and nothing was applied; fix the checkout and rerun this script."
+                   % (source, sha, (moved.stderr or moved.stdout).strip()))
+    log.record("source", "ok", "chezmoi source checkout %s is at %s" % (source, sha))
+
+
 def apply(source, dest, sha, pr, version, log):
     git(source, "fetch", "-q", "origin", step="drift")
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
         raise Stop("drift", "merge commit %s is not on origin/main" % sha)
+    fast_forward_source(source, sha, log)
     with Worktree(source, sha, "drift") as wt:
         targets = pr_targets(wt.path, sha, dest)
         check_drift(wt.path, dest, targets, log)

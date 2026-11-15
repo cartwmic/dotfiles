@@ -11,7 +11,10 @@ anything. The steps, and the step a stop names:
   import   fresh worktree from origin/main; import_release_skills.py import TAG --pins --apply; orphans stop it
   publish  commit on loop-engine-vX.Y.Z, push, open the PR; the worktree is removed
   checks   wait for the PR's checks; a red one stops it with the PR left open
-  merge    squash-merge and read the merge SHA
+  gates    ci-main-status --merge-gate dotfiles (a red main stops it) and pr-body-check dotfiles N (a bad body stops it)
+  merge    squash-merge, only while the head is still the one the checks ran on; read the merge SHA
+  source   fast-forward the chezmoi source checkout to the merge SHA (ff-only); if it cannot, stop before apply, so a
+           later full apply cannot restore the old pins
   drift    chezmoi status on the skills tree and the mise config; stop on any change the PR did not make
   apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
   install  mise install for the five tools
@@ -162,7 +165,7 @@ class Worktree:
 
 def find_pr(source, branch):
     prs = json.loads(run(["gh", "pr", "list", "--head", branch, "--state", "all", "--json",
-                          "number,state,url,mergeCommit"], "pr", cwd=source).stdout)
+                          "number,state,url,mergeCommit,headRefOid"], "pr", cwd=source).stdout)
     for state in ("MERGED", "OPEN", "CLOSED"):
         found = sorted((p for p in prs if p["state"] == state), key=lambda p: p["number"])
         if found:
@@ -234,8 +237,20 @@ def wait_for_checks(source, pr, poll, log):
         time.sleep(poll)
 
 
+def gates(source, pr, log):
+    """The merge gates the playbook names. A red main stops the merge, and so does a PR body that fails the body check."""
+    main = run(["ci-main-status", "--merge-gate", "dotfiles"], "gates", cwd=source, check=False)
+    if main.returncode != 0:
+        raise Stop("gates", "ci-main-status --merge-gate dotfiles exited %d: %s" % (main.returncode, (main.stdout or main.stderr).strip()))
+    body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
+    if body.returncode != 0:
+        raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, (body.stdout or body.stderr).strip()))
+    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles and pr-body-check dotfiles %d passed" % pr["number"])
+
+
 def merge(source, pr, log):
-    run(["gh", "pr", "merge", str(pr["number"]), "--squash"], "merge", cwd=source)
+    """Squash-merge, only while the head is still the one the checks ran on, then read the merge SHA back."""
+    run(["gh", "pr", "merge", str(pr["number"]), "--squash", "--match-head-commit", pr["headRefOid"]], "merge", cwd=source)
     view = json.loads(run(["gh", "pr", "view", str(pr["number"]), "--json", "number,state,url,mergeCommit"],
                           "merge", cwd=source).stdout)
     if view["state"] != "MERGED" or not view.get("mergeCommit"):
@@ -301,10 +316,26 @@ def installed_versions(dest):
             for tool in TOOLS}
 
 
+def fast_forward_source(source, sha, log):
+    """Move the chezmoi source checkout to the merge commit, so a later full apply cannot restore the old pins."""
+    branch = git(source, "symbolic-ref", "-q", "--short", "HEAD", step="source", check=False).stdout.strip()
+    if branch != "main":
+        raise Stop("source", "the chezmoi source checkout %s is on %s, not main, so it cannot move to the merge commit %s. "
+                   "The PR is merged and nothing was applied; check out main there and rerun this script."
+                   % (source, branch or "a detached HEAD", sha))
+    moved = git(source, "merge", "--ff-only", "-q", sha, step="source", check=False)
+    if moved.returncode != 0:
+        raise Stop("source", "cannot fast-forward the chezmoi source checkout %s to the merge commit %s: %s. The PR is merged "
+                   "and nothing was applied; fix the checkout and rerun this script."
+                   % (source, sha, (moved.stderr or moved.stdout).strip()))
+    log.record("source", "ok", "chezmoi source checkout %s is at %s" % (source, sha))
+
+
 def apply(source, dest, sha, pr, version, log):
     git(source, "fetch", "-q", "origin", step="drift")
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
         raise Stop("drift", "merge commit %s is not on origin/main" % sha)
+    fast_forward_source(source, sha, log)
     with Worktree(source, sha, "drift") as wt:
         targets = pr_targets(wt.path, sha)
         mise_dest = check_drift(wt.path, dest, targets, log)
@@ -377,6 +408,7 @@ def bump_personal(args, dest, log):
         raise Stop("pr", "PR #%d for %s was closed without merging: %s" % (pr["number"], branch, pr["url"]))
     if pr["state"] == "OPEN":
         wait_for_checks(source, pr, args.poll, log)
+        gates(source, pr, log)
         pr = merge(source, pr, log)
     apply(source, dest, pr["mergeCommit"]["oid"], pr, version, log)
     return 0

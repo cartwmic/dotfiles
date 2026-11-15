@@ -32,6 +32,8 @@ state.setdefault("calls", []).append(args)
 def save():
     json.dump(state, open(os.environ["FAKE_GH_STATE"], "w"))
 save()
+with open(os.environ["FAKE_CALL_LOG"], "a") as call_log:  # one ordered log shared with the scripted gates
+    call_log.write(" ".join(["gh"] + args) + "\n")
 if args[0] == "pr":
     prs = state.setdefault("prs", [])
     def opt(name):
@@ -39,7 +41,8 @@ if args[0] == "pr":
     def git(*a):
         return subprocess.run(["git", "--git-dir", state["origin"], *a], check=True, capture_output=True, text=True).stdout.strip()
     if args[1] == "list":
-        out([{k: p[k] for k in ("number", "state", "url", "mergeCommit")} for p in prs if p["head"] == opt("--head")])
+        out([dict({k: p[k] for k in ("number", "state", "url", "mergeCommit")},
+                  headRefOid=git("rev-parse", "refs/heads/%s" % p["head"])) for p in prs if p["head"] == opt("--head")])
     if args[1] == "create":
         n = 100 + len(prs)
         prs.append({"number": n, "state": "OPEN", "url": "https://example.test/pull/%d" % n, "head": opt("--head"),
@@ -49,11 +52,20 @@ if args[0] == "pr":
         sys.exit(0)
     pr = [p for p in prs if p["number"] == int(args[2])][0]
     if args[1] == "checks":
+        if state.get("move_head_after_checks"):  # someone pushes to the PR branch while the checks run
+            tree = git("rev-parse", "refs/heads/%s^{tree}" % pr["head"])
+            old = git("rev-parse", "refs/heads/%s" % pr["head"])
+            git("update-ref", "refs/heads/%s" % pr["head"], git("commit-tree", tree, "-p", old, "-m", "pushed after the checks"))
+            state["move_head_after_checks"] = False
         rounds = state["checks"]
         current = rounds.pop(0) if len(rounds) > 1 else rounds[0]
         save()
         out(current)
     if args[1] == "merge":
+        if "--match-head-commit" in args:  # as real gh: refuse unless the branch is still that commit
+            if args[args.index("--match-head-commit") + 1] != git("rev-parse", "refs/heads/%s" % pr["head"]):
+                print("Head branch was modified. Review the latest version and try again.", file=sys.stderr)
+                sys.exit(1)
         tree = git("rev-parse", "refs/heads/%s^{tree}" % pr["head"])
         sha = git("commit-tree", tree, "-p", "refs/heads/main", "-m", "%s (#%d)" % (pr["title"], pr["number"]))
         git("update-ref", "refs/heads/main", sha)
@@ -88,6 +100,16 @@ else:
 json.dump(state, open(path, "w"))
 '''
 
+FAKE_GATE = r'''#!/bin/sh
+# A scripted merge gate: logs its call to FAKE_CALL_LOG, and refuses when FAKE_GATE_REFUSE names it.
+echo "$(basename "$0") $*" >> "$FAKE_CALL_LOG"
+if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
+    echo "refused by the fake $(basename "$0")" >&2
+    exit 1
+fi
+'''
+
+
 def pins(version):
     return "".join('%s = { version = "%s", matching_regex = "^x-", rename_exe = "%s" }\n' % (t, version, t) for t in TOOLS)
 
@@ -99,6 +121,10 @@ class BumpTests(Fixture):
         (self.bin / "gh").write_text(FAKE_GH_WITH_PRS)
         (self.bin / "mise").write_text(FAKE_MISE)
         (self.bin / "mise").chmod(0o755)
+        for gate in ("ci-main-status", "pr-body-check"):
+            (self.bin / gate).write_text(FAKE_GATE)
+            (self.bin / gate).chmod(0o755)
+        self.refuse = ""  # the name of a gate the next run should refuse
         self.home = self.dir / "scratch-home"
         self.origin = self.dir / "origin.git"
         self.checkout = self.dir / "checkout"
@@ -126,6 +152,7 @@ class BumpTests(Fixture):
                 "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_CACHE_HOME": str(self.home / ".cache"),
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_GH_STATE": str(self.state_path),
                 "FAKE_MISE_STATE": str(self.dir / "mise.json"), "LOOP_ENGINE_BUMP_POLL_SECONDS": "0",
+                "FAKE_CALL_LOG": str(self.dir / "calls.log"), "FAKE_GATE_REFUSE": self.refuse,
                 "TMPDIR": str(self.dir), **self.git_env}
 
     def sh(self, *cmd, cwd=None):
@@ -243,7 +270,8 @@ class BumpTests(Fixture):
         lines = self.log_lines()
         self.assertEqual(len({line["id"] for line in lines}), 1)
         self.assertEqual([line["step"] for line in lines],
-                         ["profile", "pr", "import", "publish", "checks", "merge", "drift", "apply", "install", "verify"])
+                         ["profile", "pr", "import", "publish", "checks", "gates", "merge", "source", "drift", "apply",
+                          "install", "verify"])
         self.assertTrue(all(line["outcome"] == "ok" and line["utc"].endswith("Z") for line in lines))
         self.assertEqual(len(self.sh("git", "-C", self.checkout, "worktree", "list").splitlines()), 1)
 
@@ -378,6 +406,92 @@ class BumpTests(Fixture):
         self.assert_stopped(result, "apply", "v1.0.0 is already pinned on origin/main")
         self.assertIn("loop-engine (not installed)", result.stderr)
         self.assertNotIn("nothing to do", result.stdout)
+
+    # d3 -------------------------------------------------------------------------------------------
+
+    def ordered_calls(self):
+        path = self.dir / "calls.log"
+        return path.read_text().splitlines() if path.exists() else []
+
+    def checkout_head(self):
+        return self.sh("git", "-C", self.checkout, "rev-parse", "HEAD").strip()
+
+    def origin_head(self):
+        return self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/loop-engine-v1.0.0").strip()
+
+    def test_d3_checks_then_both_gates_then_a_merge_that_names_the_head_the_checks_ran_on(self):
+        self.world()
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = self.ordered_calls()
+        positions = [next(i for i, line in enumerate(lines) if line.startswith(p))
+                     for p in ("gh pr checks", "ci-main-status --merge-gate dotfiles", "pr-body-check dotfiles 100", "gh pr merge")]
+        self.assertEqual(positions, sorted(positions), lines)
+        merge = self.gh_calls("merge")[0]
+        self.assertEqual(merge[merge.index("--match-head-commit") + 1], self.origin_head())
+
+    def test_d3_a_red_main_stops_before_the_merge_and_applies_nothing(self):
+        self.world()
+        before = self.checkout_head()
+        self.refuse = "ci-main-status"
+        result = self.bump()
+        self.assert_stopped(result, "gates", "ci-main-status --merge-gate dotfiles exited 1")
+        self.assertEqual(self.gh_calls("merge"), [])
+        self.assertEqual(self.load()["prs"][0]["state"], "OPEN")
+        self.assert_nothing_applied()
+        self.assertEqual(self.checkout_head(), before)  # the source checkout did not move
+
+    def test_d3_a_pr_body_that_fails_the_body_check_stops_before_the_merge_and_applies_nothing(self):
+        self.world()
+        self.refuse = "pr-body-check"
+        result = self.bump()
+        self.assert_stopped(result, "gates", "pr-body-check dotfiles 100 exited 1")
+        self.assertEqual(self.gh_calls("merge"), [])
+        self.assertEqual(self.load()["prs"][0]["state"], "OPEN")
+        self.assert_nothing_applied()
+
+    def test_d3_a_head_pushed_after_the_checks_is_not_merged(self):
+        self.world()
+        self.state["move_head_after_checks"] = True
+        self.save()
+        result = self.bump()
+        self.assert_stopped(result, "merge", "gh pr merge 100 failed (exit 1)")
+        merge = self.gh_calls("merge")[0]
+        self.assertNotEqual(merge[merge.index("--match-head-commit") + 1], self.origin_head())  # the head the checks saw
+        self.assertEqual(self.load()["prs"][0]["state"], "OPEN")
+        self.assert_nothing_applied()
+
+    def test_d3_the_source_checkout_moves_to_the_merge_commit(self):
+        self.world()
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.checkout_head(), self.load()["prs"][0]["mergeCommit"]["oid"])
+        self.assertEqual(self.sh("git", "-C", self.checkout, "status", "--porcelain"), "")
+        self.assertIn("source", [line["step"] for line in self.log_lines()])
+
+    def test_d3_a_source_checkout_that_cannot_fast_forward_stops_before_apply_and_a_rerun_applies(self):
+        self.world()
+        self.sh("git", "-C", self.checkout, "commit", "-q", "--allow-empty", "-m", "local only, not pushed")
+        result = self.bump()
+        self.assert_stopped(result, "source", "cannot fast-forward the chezmoi source checkout")
+        self.assertEqual(self.load()["prs"][0]["state"], "MERGED")  # the merge happened; only the source is behind
+        self.assert_nothing_applied()
+        self.sh("git", "-C", self.checkout, "reset", "-q", "--hard", "origin/main")  # the fix a person makes
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("resuming PR #100 (MERGED)", again.stdout)
+        self.assertEqual(self.checkout_head(), self.load()["prs"][0]["mergeCommit"]["oid"])
+        self.assertEqual(self.live(".config/mise/config.toml"), 'gh = "latest"\n' + pins("1.0.0"))
+
+    def test_d3_a_source_checkout_not_on_main_stops_before_apply(self):
+        self.world()
+        self.sh("git", "-C", self.checkout, "checkout", "-q", "-b", "wip")
+        result = self.bump()
+        self.assert_stopped(result, "source", "is on wip, not main")
+        self.assertEqual(self.load()["prs"][0]["state"], "MERGED")
+        self.assert_nothing_applied()
+        self.assertEqual(self.sh("git", "-C", self.checkout, "branch", "--show-current").strip(), "wip")
+
 
 class ReadmeTests(unittest.TestCase):
     def test_d4_readme_names_bump_as_the_one_command(self):
