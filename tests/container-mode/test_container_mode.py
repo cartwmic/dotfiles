@@ -22,7 +22,7 @@ SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
 LEFT_OUT = [".codex", ".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
-            ".config/mise/config.toml", ".config/mise/conf.d/linux.toml", ".local/bin/agent-chrome", ".local/bin/agent-desktop",
+            ".config/mise/config.toml", ".config/mise/conf.d/linux.toml", ".local/bin/agent-chrome", ".local/bin/agent-desktop", ".local/bin/agent-session-copy",
             ".local/share/browser-harness-mcp", ".local/share/initramfs-ssh-unlock"]
 HOOK_PRINT = json.dumps({"schema": 1, "entries": [{"event": "PreToolUse", "matcher": "^AskUserQuestion$", "args": [], "failClosed": False, "t3Only": False}]})
 HOOK = "console.log(process.argv.includes('--print-settings-json') ? %s : '');\n" % json.dumps(HOOK_PRINT)
@@ -81,6 +81,7 @@ class ContainerHome(Scratch):
     def test_the_files_that_stay_verify_clean(self):
         r = chezmoi(self.config, self.home, "verify", "--exclude=scripts,externals")
         self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertIn("could not read the hub management key", r.stderr)   # the hub switch is on (f1): the read ran, failed and only warned
         for line in r.stderr.splitlines():   # the hub switch stays on in container mode; its key read cannot succeed here and only warns (f1)
             self.assertTrue(line.startswith(("[modify_settings] WARN: could not read the hub management key", "[op_read_cached.sh]")), line)
         status = chezmoi(self.config, self.home, "status", "--exclude=externals").stdout.split("\n")
@@ -108,7 +109,7 @@ class FirstApplyHasNoNode(unittest.TestCase):
         (home / "git/coordinator/src/t3-hook").mkdir(parents=True)
         (home / "git/coordinator/src/t3-hook/hook.ts").write_text(HOOK)
         bare.mkdir()
-        for tool in IMAGE_TOOLS:   # what the image has when the first apply renders: shell, coreutils, git, curl, jq, unzip, chezmoi, mise. No node, no python3.
+        for tool in IMAGE_TOOLS:   # what the first apply's PATH has here: shell, coreutils, git, curl, jq, unzip, chezmoi, mise. No node, no python3 (the PATH leaves them out so the test shows the no-node first apply).
             if shutil.which(tool) and not os.path.lexists(bare / tool):
                 (bare / tool).symlink_to(shutil.which(tool))
         config = tmp / "chezmoi.yaml"
