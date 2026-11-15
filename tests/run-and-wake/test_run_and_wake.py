@@ -70,8 +70,20 @@ import json, os, sys
 fake = os.environ["FAKE"]
 with open(os.path.join(fake, "t3_sends"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}) + "\n")
+# The two answers the real CLI gives (probed 2026-11-15, t3 0.1.10-nightly.20261113.4643), both exit 1:
+# no server (down: the file holds how many more calls fail, "all" until it is removed) and a server that refuses (t3_error: thread unknown).
+down = os.path.join(fake, "t3_down")
+if os.path.exists(down):
+    left = open(down).read().strip()
+    if left != "all":
+        if int(left) <= 1:
+            os.unlink(down)
+        else:
+            open(down, "w").write(str(int(left) - 1))
+    print("Could not reach the T3 Code server at http://127.0.0.1:3773. fetch failed", file=sys.stderr)
+    sys.exit(1)
 if os.path.exists(os.path.join(fake, "t3_error")):
-    print("thread not found", file=sys.stderr)
+    print(f"Thread {sys.argv[3]} was not found.", file=sys.stderr)
     sys.exit(1)
 '''
 
@@ -467,7 +479,7 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env())))
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "failed"])
-        self.assertEqual(records[-1]["error"], "exit 1: thread not found")
+        self.assertEqual(records[-1]["error"], f"exit 1: Thread {THREAD} was not found.", "the server answered and refused: that is not retried")
         time.sleep(1)
         self.assertEqual(len(self.t3_sends()), 1, "one attempt per job")
 
@@ -672,6 +684,219 @@ class RunAndWake(unittest.TestCase):
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGKILL"])
         self.assertIn("job finished: killed by SIGKILL", self.prompts()[0]["text"])
+
+    # --- a host restart, or T3 down when the job ends: the wake is delivered, once, when T3 is back ---
+    def recover(self, **extra):
+        return subprocess.run([sys.executable, str(SCRIPT), "--recover"], env={**self.env, **self.t3_env(), "RUN_AND_WAKE_T3_RETRY": "0.05:1", **extra},
+                              cwd=self.root, text=True, capture_output=True, timeout=30)
+
+    def seed(self, job, boot, *, end=None, wake=None, thread=THREAD, pane=None, start_ts="2026-11-15T18:05:02.470Z"):
+        """Append a job's records as an earlier run of this script left them (a foreign boot id is a host restart)."""
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        records = [{"ts": start_ts, "job": job, "event": "start", "cmd": ["amz-check.sh", "plus3h"], "cwd": "/w", "pane": pane, "session": None,
+                    "thread": thread, "pid": 4242, "output": f"/o/{job}.log", "op_token": None, "scope": f"run-and-wake-{job}.scope",
+                    "slice": "app-t3code-agents.slice", **({"boot": boot} if boot else {})}]
+        if end:
+            records.append({"ts": "2026-11-15T19:46:25.454Z", "job": job, "event": "end", "duration_s": 6083.0, "signal": None, "exit": None, **end})
+        if wake:
+            records.append({"ts": "2026-11-15T19:46:26.705Z", "job": job, "event": "wake", "target": "t3", "duration_s": 1.2, **wake})
+        with open(self.log, "a") as f:
+            f.writelines(json.dumps(r) + "\n" for r in records)
+
+    def records_of(self, job):
+        return [json.loads(line) for line in self.log.read_text().splitlines() if json.loads(line)["job"] == job]
+
+    def boot_started(self):
+        btime = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines() if line.startswith("btime "))
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(btime))
+
+    LINUX_BOOT = unittest.skipUnless(os.path.exists("/proc/sys/kernel/random/boot_id"), "--recover works from the Linux boot id")
+    ELSEWHERE = "00000000-0000-0000-0000-000000000000"
+    DOWN = "Could not reach the T3 Code server at http://127.0.0.1:3773. fetch failed"
+
+    @LINUX_BOOT
+    def test_the_start_record_names_the_boot(self):
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env())))
+        self.assertEqual(records[0]["boot"], Path("/proc/sys/kernel/random/boot_id").read_text().strip())
+
+    def test_t3_down_for_a_few_tries_still_gets_one_wake(self):
+        (self.fake / "t3_down").write_text("2")  # the first two sends find no server: T3 is restarting
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.1:20"))))
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[-1]["result"], records[-1]["attempts"]], ["sent", 3])
+        sends = self.t3_sends()
+        self.assertEqual(len(sends), 3)
+        self.assertEqual(len({s["stdin"] for s in sends}), 1, "the same text each try")
+
+    def test_a_refused_send_is_not_retried_even_with_a_window(self):
+        (self.fake / "t3_error").write_text("")
+        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.05:20"))))
+        self.assertEqual(records[-1]["result"], "failed")
+        time.sleep(0.5)
+        self.assertEqual(len(self.t3_sends()), 1)
+
+    @LINUX_BOOT
+    def test_t3_down_past_the_window_leaves_a_failed_wake_that_recover_delivers_once(self):
+        (self.fake / "t3_down").write_text("all")
+        job = self.job_id(self.launch("--", "sh", "-c", "exit 3", env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.05:0.3")))
+        records = self.replay(job)
+        self.assertEqual([records[-1]["result"], records[-1]["error"]], ["failed", f"exit 1: {self.DOWN}"])
+        self.assertGreater(records[-1]["attempts"], 1)
+        before = len(self.t3_sends())
+        (self.fake / "t3_down").unlink()  # T3 is back
+        done = self.recover()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        sent = self.t3_sends()[before:]
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["argv"], ["thread", "send", THREAD, "-"])
+        self.assertTrue(sent[0]["stdin"].startswith(f"[run-and-wake k:{job}] job finished: exit 3 after "), sent[0]["stdin"])
+        self.assertIn("delivered late", sent[0]["stdin"])
+        last = self.records_of(job)[-1]
+        self.assertEqual([last["event"], last["result"], last["recover"]], ["wake", "sent", True])
+        self.recover()
+        self.assertEqual(len(self.t3_sends()), before + 1, "a second recover sends nothing")
+
+    def test_a_stopped_job_makes_one_attempt_and_does_not_hold_a_shutdown_up(self):
+        # The shutdown sends ONE SIGTERM, while the job runs. Once the job is gone the watcher must not sit retrying (with a 10 minute window)
+        # until the scope's stop timeout kills it: it tries once, records the failure and exits; --recover owes the wake.
+        (self.fake / "t3_down").write_text("all")
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd, env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.2:600"))
+        job = self.job_id(result)
+        group = os.getpgid(int(result.stdout.split(", pid ")[1].split(",")[0]))
+        os.killpg(group, signal.SIGTERM)
+        records = self.replay(job, timeout=5)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[-1]["result"], records[-1].get("attempts")], ["failed", None], "one attempt, no waiting")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        os.killpg(group, signal.SIGKILL)
+        self.fail("the watcher was still running after its one attempt")
+
+    def test_a_watcher_killed_while_waiting_for_t3_leaves_the_wake_owed(self):
+        (self.fake / "t3_down").write_text("all")
+        result = self.launch("--", "sh", "-c", "sleep 600 & wait", env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.2:600"))
+        job = self.job_id(result)
+        pid = int(result.stdout.split(", pid ")[1].split(",")[0])
+        group = os.getpgid(pid)
+        os.kill(pid, signal.SIGKILL)  # the job ends by itself; the watcher is retrying a send that cannot succeed
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not any(r["event"] == "end" for r in self.records_of(job)):
+            time.sleep(0.05)
+        time.sleep(0.5)
+        os.killpg(group, signal.SIGTERM)  # a stop now ends the waiting watcher at once (its handlers are back to default)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.killpg(group, signal.SIGKILL)
+            self.fail("the watcher kept running after SIGTERM")
+        self.assertEqual([r["event"] for r in self.records_of(job)], ["start", "end"], "killed mid-wait: no wake record")
+
+    @LINUX_BOOT
+    def test_a_job_cut_off_by_a_restart_is_woken_with_the_did_not_finish_text(self):
+        # The incident: the host reboots, scope stop sends SIGTERM, the wake finds T3 gone, the host comes back. Seed what that left behind.
+        self.seed("20261115T180502Z-57edd4", self.ELSEWHERE, end={"signal": "SIGTERM", "stopped": ["SIGTERM"]},
+                  wake={"result": "failed", "error": f"exit 1: {self.DOWN}"})
+        self.seed("20261115T200510Z-60a37c", self.ELSEWHERE)  # started, never ended: the watcher was killed too
+        done = self.recover()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        texts = {s["stdin"].split("]")[0]: s["stdin"] for s in self.t3_sends()}
+        restarted = f"the host restarted at {self.boot_started()} and the job was killed. Rerun it; this is not a result."
+        self.assertEqual(sorted(texts), ["[run-and-wake k:20261115T180502Z-57edd4", "[run-and-wake k:20261115T200510Z-60a37c"])
+        for job, text in ((j[len("[run-and-wake k:"):], t) for j, t in texts.items()):
+            self.assertIn(f"[run-and-wake k:{job}] job did NOT finish: {restarted}", text)
+            self.assertNotIn("job finished", text)
+            self.assertIn("amz-check.sh plus3h", text)
+            self.assertIn(f"Partial output: /o/{job}.log", text)
+            self.assertNotIn("\n", text)
+        self.assertIn("an end at 2026-11-15T19:46:25.454Z (killed by SIGTERM), is not a result either", texts["[run-and-wake k:20261115T180502Z-57edd4"])
+        self.assertNotIn("is not a result either", texts["[run-and-wake k:20261115T200510Z-60a37c"], "no status was written, so none is quoted")
+        no_end = self.records_of("20261115T200510Z-60a37c")
+        self.assertEqual([r["event"] for r in no_end], ["start", "end", "wake"])
+        self.assertEqual([no_end[1]["error"], no_end[1]["recovered"], no_end[1]["exit"]], ["host-restarted", True, None])
+        self.assertEqual([no_end[2]["result"], no_end[2]["recover"]], ["sent", True])
+
+    @LINUX_BOOT
+    def test_a_shutdown_exit_status_is_never_passed_off_as_a_result(self):
+        # f2796c as the log has it (21:02:33.579Z, with the SIGTERM ends at .38): a `bash -c "kgate ...; echo exit $?"` wrapper whose inner job died
+        # first, so it exited 0 with no signal and no `stopped`. Its end record says exit 0; the job did not finish.
+        self.seed("20261115T204024Z-f2796c", self.ELSEWHERE, end={"exit": 0})
+        self.recover()
+        (text,) = [s["stdin"] for s in self.t3_sends()]
+        self.assertIn("job did NOT finish", text)
+        self.assertIn("(exit 0), is not a result either", text)
+        self.assertNotIn("job finished", text)
+
+    @LINUX_BOOT
+    def test_an_earlier_boot_job_is_never_sent_as_a_result_even_when_its_wake_only_found_t3_down(self):
+        self.seed("20261115T170000Z-aaaaaa", self.ELSEWHERE, end={"exit": 0, "duration_s": 61.0}, wake={"result": "failed", "error": f"exit 1: {self.DOWN}"})
+        self.recover()
+        (text,) = [s["stdin"] for s in self.t3_sends()]
+        self.assertIn("job did NOT finish", text)
+        self.assertNotIn("job finished", text)
+
+    @LINUX_BOOT
+    def test_recover_leaves_alone_what_it_does_not_owe(self):
+        here = Path("/proc/sys/kernel/random/boot_id").read_text().strip() if os.path.exists("/proc/sys/kernel/random/boot_id") else self.ELSEWHERE
+        self.seed("old-record", None)  # before the boot field: never replayed
+        self.seed("pane-job", self.ELSEWHERE, thread=None, pane="w1:p1")  # a Pi pane died with the host
+        self.seed("still-running", here)  # this boot, no end: alive
+        self.seed("delivered", self.ELSEWHERE, end={"exit": 0}, wake={"result": "sent"})
+        self.seed("refused", self.ELSEWHERE, end={"exit": 0}, wake={"result": "failed", "error": f"exit 1: Thread {THREAD} was not found."})
+        self.seed("skipped", self.ELSEWHERE, end={"exit": 0})
+        with open(self.log, "a") as f:
+            f.write(json.dumps({"ts": "2026-11-15T19:46:26.705Z", "job": "skipped", "event": "skip", "reason": "pane-gone"}) + "\n")
+        before = self.log.read_text()
+        done = self.recover()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.t3_sends(), [])
+        self.assertEqual(self.log.read_text(), before, "nothing is written either")
+
+    @LINUX_BOOT
+    def test_recover_exits_1_and_keeps_the_debt_when_t3_never_comes_back(self):
+        self.seed("20261115T200510Z-60a37c", self.ELSEWHERE)
+        (self.fake / "t3_down").write_text("all")
+        self.assertEqual(self.recover().returncode, 1)
+        (self.fake / "t3_down").unlink()
+        self.assertEqual(self.recover().returncode, 0, "the next run delivers it")
+        delivered = [r for r in self.records_of("20261115T200510Z-60a37c") if r["event"] == "wake" and r["result"] == "sent"]
+        self.assertEqual(len(delivered), 1, "delivered once, after the failed run left it owed")
+
+    @LINUX_BOOT
+    def test_the_real_path_a_stopped_job_whose_wake_could_not_be_sent_is_recovered_after_a_restart(self):
+        # A real job and watcher; the stop reaches both (as a scope stop does); T3 is down; then "the host restarts" (the boot id on the
+        # records changes) and T3 is back: recover tells the thread the job did not finish.
+        (self.fake / "t3_down").write_text("all")
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd, env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.05:0.3"))
+        job = self.job_id(result)
+        os.killpg(os.getpgid(int(result.stdout.split(", pid ")[1].split(",")[0])), signal.SIGTERM)
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[1]["signal"], records[1]["stopped"]], ["SIGTERM", ["SIGTERM"]])
+        self.assertEqual(records[2]["result"], "failed")
+        lines = [json.loads(line) for line in self.log.read_text().splitlines()]
+        for r in lines:
+            if r["event"] == "start" and r["job"] == job:
+                r["boot"] = self.ELSEWHERE
+        self.log.write_text("".join(json.dumps(r) + "\n" for r in lines))
+        (self.fake / "t3_down").unlink()
+        before = len(self.t3_sends())
+        self.assertEqual(self.recover().returncode, 0)
+        (sent,) = self.t3_sends()[before:]
+        text = sent["stdin"]
+        self.assertIn(f"[run-and-wake k:{job}] job did NOT finish: the host restarted at {self.boot_started()}", text)
+        self.assertIn("(killed by SIGTERM), is not a result either", text)
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):

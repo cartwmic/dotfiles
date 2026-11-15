@@ -1,0 +1,26 @@
+#!/bin/sh
+# Enable the run-and-wake recovery unit (run-and-wake-recover.service) when it or run-and-wake changes. Personal Linux only (.chezmoiignore).
+# It is enabled, not started: it runs at the next login, after a host restart, which is the only time it has anything to send. Start it by hand to
+# run it now: systemctl --user start run-and-wake-recover (nothing is sent twice).
+# unit: {{ include "dot_config/systemd/user/run-and-wake-recover.service" | sha256sum }}
+# command: {{ include "dot_local/bin/executable_run-and-wake" | sha256sum }}
+#
+# Fails (and so fails the apply) when systemd does not end up with the unit enabled: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into: a notice and a clean exit.
+set -eu
+log() { printf '[run_and_wake_recover_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+unit=run-and-wake-recover.service
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; $unit not loaded"
+  exit 0
+fi
+if [ ! -f "$HOME/.config/systemd/user/$unit" ]; then
+  log ERROR "$HOME/.config/systemd/user/$unit is not installed; apply it too, then apply again"
+  exit 1
+fi
+systemctl --user daemon-reload
+systemctl --user enable "$unit" >/dev/null 2>&1 || { log ERROR "could not enable $unit"; exit 1; }
+systemctl --user is-enabled --quiet "$unit" || { log ERROR "$unit is not enabled after enable"; exit 1; }
+log INFO "enabled $unit (runs at login; journalctl --user -u run-and-wake-recover)"

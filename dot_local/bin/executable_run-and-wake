@@ -3,6 +3,7 @@
 
 Usage: run-and-wake [--] CMD [ARGS...]
        run-and-wake -- heavy-gate --wait 7200 -- CMD...
+       run-and-wake --recover      (send the wakes a host restart left undelivered; run by run-and-wake-recover.service)
 
 Contract (docs/run-and-wake.md):
 - Returns at once. Prints the job id, the job's pid and its output file.
@@ -22,6 +23,8 @@ Contract (docs/run-and-wake.md):
   skipped with a reason: no-pane, no-session, pane-gone, session-changed, herdr-error.
 - Started from a T3 Code thread instead (T3CODE_THREAD_ID set, and no Herdr pane plus Pi session to wake): the
   wake is one `t3 thread send <thread> -` with the same text on stdin, using $T3CODE_CLI_PATH, else ~/.t3/bin/t3.
+  While the T3 server cannot be reached (it is restarting), the send is retried every 5 s for up to 10 minutes: one wake is delivered, not one per try.
+  A job that was stopped (a signal reached the watcher) gets one attempt and no wait, so a shutdown is not held up; --recover delivers it.
   A busy thread takes it as its next turn. If both a pane with a Pi session and a thread are set, the pane wins:
   Pi sets HERDR_PANE_ID and PI_SESSION_FILE on every bash call, so that pair names the actual caller, while
   T3CODE_THREAD_ID may only be inherited from the app that launched the shell.
@@ -32,17 +35,24 @@ Contract (docs/run-and-wake.md):
 - 1Password token: when this process has no OP_SERVICE_ACCOUNT_TOKEN, the job gets the one in ~/.config/agent-harness/op-service-token
   in its environment, and only there: not in argv, the log, the job record or the job's output. So a job reads 1Password with the
   service account and never the desktop app (playbook 78819cbd). No token file and no variable: the job runs without one.
+- A host restart kills the job (nothing survives it) and the T3 server stops in the same shutdown, so the wake cannot be sent then.
+  `run-and-wake --recover` (run by run-and-wake-recover.service at boot) sends it once T3 is back, for every T3-thread job that started
+  in an earlier boot and has no delivered wake (whatever its `end` says: a shutdown makes wrapper shells exit 0 as the job inside dies): "job did NOT finish: the host restarted at <boot time> and the job was killed. Rerun it".
+  Jobs logged before the `boot` field existed are never replayed. Pane/Pi-session jobs are not recovered (their panes died too).
+  A watcher killed between the send and the wake record can make recovery send a second copy.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
-    start  {cmd, cwd, pane, session, thread, pid, output, op_token, scope, slice}  (op_token: env, file, or null: where the job's
+    start  {cmd, cwd, pane, session, thread, pid, output, op_token, scope, slice, boot}  (boot: the kernel boot id, null off Linux; op_token: env, file, or null: where the job's
            1Password token came from; the value is never logged. scope: the systemd scope the job runs in, or null;
            slice: the slice that scope is in, read back from /proc, or null)
-    end    {exit, signal, duration_s}
+    end    {exit, signal, duration_s, stopped?}  (stopped: signals this process forwarded to the job; recover also writes one for a job a restart left
+           with no end: exit null, signal null, error "host-restarted", recovered true)
     blocked {}                      (pane showed a dialog; waiting)
-    wake   {target: herdr|t3, result: sent|failed, error?, duration_s, session_after?}  (session_after: the pane
+    wake   {target: herdr|t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), session_after?}  (session_after: the pane
            showed another session right after the send; herdr cannot make the send conditional)
     skip   {reason, detail?}
 """
+import fcntl
 import json
 import os
 import secrets
@@ -66,6 +76,11 @@ SCOPE_ARGS = ["--user", "--scope", "--quiet", "--collect", "--expand-environment
 AGENT_SLICE = "app-t3code-agents.slice"  # T3's agents slice: T3 sets its MemoryHigh and MemoryMax at server start, its parent carries the low CPU weight
 GiB = 1024**3
 FORWARDED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+RECOVER = "--recover"
+# The T3 CLI says one of these (exit 1) when no server answers: T3 is restarting or the host is. Anything else it says (thread not found) is an answer.
+UNREACHABLE = ("Could not reach the T3 Code server", "No running T3 Code server")
+# T3 restarts in seconds; the wake waits this long for it. RUN_AND_WAKE_T3_RETRY=<interval>:<window> (seconds) tunes it.
+T3_RETRY = tuple(float(x) for x in (os.environ.get("RUN_AND_WAKE_T3_RETRY") or "5:600").split(":"))
 
 
 def say(level, message):
@@ -89,6 +104,24 @@ def human(seconds):
     if s < 3600:
         return f"{s // 60}m{s % 60:02d}s"
     return f"{s // 3600}h{s % 3600 // 60:02d}m"
+
+
+def boot_id():
+    """The kernel's id for this boot (Linux), else None. A job that carries another one was cut off by a host restart."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def boot_time():
+    """When this boot began, UTC, from /proc/stat."""
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("btime "):
+                return datetime.fromtimestamp(int(line.split()[1]), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return "an unknown time"
 
 
 # --- decision (pure): send, or skip and why ---
@@ -141,19 +174,46 @@ def t3_cli():
     return os.environ.get("T3CODE_CLI_PATH") or os.path.expanduser("~/.t3/bin/t3")
 
 
-def wake_thread(job, thread, text):
-    """One `t3 thread send`: the message goes on stdin, as the coordinator's deliverer sends it."""
-    started = time.monotonic()
+def t3_send(thread, text):
+    """One `t3 thread send`: the message goes on stdin, as the coordinator's deliverer sends it. None when sent, else the error."""
     try:
         done = subprocess.run([t3_cli(), "thread", "send", thread, "-"], input=text, capture_output=True, text=True)
-        error = None if done.returncode == 0 else f"exit {done.returncode}: {(done.stderr or done.stdout).strip()}"
     except OSError as err:
-        error = f"t3-missing: {err}"
+        return f"t3-missing: {err}"
+    return None if done.returncode == 0 else f"exit {done.returncode}: {(done.stderr or done.stdout).strip()}"
+
+
+def t3_unreachable(error):
+    return error is not None and any(marker in error for marker in UNREACHABLE)
+
+
+def t3_send_when_up(thread, text, deadline):
+    """Send; while no T3 server answers, try again every interval until the deadline. (error or None, attempts)."""
+    interval = T3_RETRY[0]
+    attempts = 0
+    while True:
+        attempts += 1
+        error = t3_send(thread, text)
+        if not t3_unreachable(error) or time.monotonic() + interval > deadline:
+            return error, attempts
+        time.sleep(interval)  # a stop signal now ends the watcher (its handlers are back to default): a shutdown is not held up
+
+
+def record_wake(job, started, error, attempts, **extra):
     took = round(time.monotonic() - started, 3)
+    more = {"attempts": attempts} if attempts > 1 else {}
     if error is None:
-        record(job, "wake", target="t3", result="sent", duration_s=took)
+        record(job, "wake", target="t3", result="sent", duration_s=took, **more, **extra)
     else:
-        record(job, "wake", target="t3", result="failed", error=error, duration_s=took)
+        record(job, "wake", target="t3", result="failed", error=error, duration_s=took, **more, **extra)
+
+
+def wake_thread(job, thread, text, stopped):
+    """One wake. A job that was stopped (a shutdown, a scope stop) gets one attempt and no wait: the stop may be the host going down, and a
+    watcher still waiting would hold the shutdown for the scope's stop timeout. --recover owes the wake then."""
+    started = time.monotonic()
+    error, attempts = t3_send_when_up(thread, text, started if stopped else started + T3_RETRY[1])
+    record_wake(job, started, error, attempts)
 
 
 def wake(job, pane, session, text):
@@ -216,8 +276,10 @@ def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
     started = time.monotonic()
     env, op_token = job_env(job)
     jobs = []
+    stopped = []  # the signals that reached us while the job ran: a job that was stopped did not run to its own end
 
     def forward(signum, _frame):
+        stopped.append(signal.Signals(signum).name)
         # A stop that signals the whole group reaches the watcher too: keep watching so the job's end is recorded and woken.
         # (A Python handler, not SIG_IGN: an ignored signal would be inherited by the job.)
         for running in jobs:
@@ -234,24 +296,24 @@ def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
         try:
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env)
         except OSError as error:
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token, scope=scope, slice=slice_)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=None, output=output, op_token=op_token, scope=scope, slice=slice_, boot=boot_id())
             tell(report, f"failed {error}")
             out.write(f"[{NAME}] ERROR: could not start: {error}\n".encode())
             record(job, "end", exit=127, signal=None, error=str(error), duration_s=0.0)
             status = f"could not start ({error})"
         else:
             jobs.append(child)
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token, scope=scope, slice=slice_)
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token, scope=scope, slice=slice_, boot=boot_id())
             tell(report, f"pid {child.pid}")
             code = child.wait()
             for signum in handled:  # nothing left to forward to: a signal now ends the wake wait as it always did
                 signal.signal(signum, signal.SIG_DFL)
             sig = signal.Signals(-code).name if code < 0 else None
-            record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3))
+            record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3), **({"stopped": stopped} if stopped else {}))
             status = f"killed by {sig}" if sig else f"exit {code}"
     text = message(job, status, time.monotonic() - started, cmd, output)
     if thread:
-        wake_thread(job, thread, text)
+        wake_thread(job, thread, text, stopped)
     else:
         wake(job, pane, session, text)
 
@@ -307,12 +369,102 @@ def own_slice():
     return parts[-2] if len(parts) > 1 and parts[-2].endswith(".slice") else None
 
 
+# --- recovery: wakes a host restart (or a T3 outage longer than the watcher waited) left undelivered ---
+
+def read_jobs():
+    """The log as {job: [records]}; a line that is not JSON (a write cut by the shutdown) is skipped."""
+    jobs = {}
+    try:
+        with open(LOG, encoding="utf-8") as log:
+            lines = log.readlines()
+    except OSError:
+        return jobs
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        jobs.setdefault(r.get("job"), []).append(r)
+    return jobs
+
+
+def owed(rs, boot):
+    """What this job still owes its thread: "lost" (it is from an earlier boot: send the did-not-finish text, whatever its end record says: a
+    shutdown makes wrappers exit 0 as the job inside dies), "late" (this boot: it ended but T3 stayed down past the window: send the normal text) or None. Only T3-thread jobs that carry a boot id: older ones, and pane jobs, are never replayed."""
+    start = next((r for r in rs if r["event"] == "start"), None)
+    if not start or not start.get("boot") or not start.get("thread"):
+        return None
+    wakes = [r for r in rs if r["event"] == "wake"]
+    if any(r["event"] == "skip" for r in rs) or any(w["result"] == "sent" for w in wakes):
+        return None
+    if any(w["result"] == "failed" and not t3_unreachable(w.get("error")) for w in wakes):
+        return None  # T3 answered and refused (thread gone): trying again changes nothing
+    end = next((r for r in rs if r["event"] == "end"), None)
+    if start["boot"] != boot:
+        return "lost"
+    return "late" if wakes and end else None  # this boot: only a wake that found T3 down; a job still running is not ours
+
+
+def status_of(end):
+    return f"killed by {end['signal']}" if end.get("signal") else f"exit {end.get('exit')}"
+
+
+def lost_message(job, start, end, restarted):
+    what = " ".join(shlex.join(start["cmd"]).split())
+    text = (f"[{NAME} k:{job}] job did NOT finish: the host restarted at {restarted} and the job was killed. Rerun it; this is not a result. "
+            f"Started {start['ts']}: {what}. Partial output: {start['output']}.")
+    if end and not end.get("recovered"):
+        text += f" Its last record, an end at {end['ts']} ({status_of(end)}), is not a result either."
+    return text
+
+
+def recover():
+    """Send the wake of every job that owes one. Idempotent: a job with a delivered wake is skipped, and a lock keeps two runs apart."""
+    boot = boot_id()
+    if not boot:
+        say("INFO", "no boot id on this host: nothing to recover")
+        return 0
+    with open(os.path.join(STATE, "recover.lock"), "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            say("INFO", "another --recover is running")
+            return 0
+        jobs = read_jobs()
+        todo = sorted(((rs[0]["ts"], job, rs, kind) for job, rs in jobs.items() if (kind := owed(rs, boot))), key=lambda t: t[0])
+        deadline = time.monotonic() + T3_RETRY[1]  # one wait for T3 for the whole run, not one per job
+        undelivered = 0
+        for _, job, rs, kind in todo:
+            start = next(r for r in rs if r["event"] == "start")
+            end = next((r for r in rs if r["event"] == "end"), None)
+            if kind == "lost":
+                if not end:
+                    record(job, "end", exit=None, signal=None, duration_s=None, error="host-restarted", recovered=True)
+                text = lost_message(job, start, end, boot_time())
+            else:
+                text = message(job, status_of(end), end.get("duration_s") or 0, start["cmd"], start["output"]) + " (delivered late: T3 was not reachable when the job ended.)"
+            started = time.monotonic()
+            error, attempts = t3_send_when_up(start["thread"], text, deadline)
+            record_wake(job, started, error, attempts, recover=True)
+            if error is None:
+                say("INFO", f"job {job}: {kind}, woke thread {start['thread']}")
+            else:
+                undelivered += t3_unreachable(error)
+                say("ERROR", f"job {job}: {kind}, wake failed: {error}")
+        if not todo:
+            say("INFO", "no job owes a wake")
+        return 1 if undelivered else 0
+
+
 def main(argv):
     if argv[:1] == ["--"]:
         argv = argv[1:]
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
         return 0
+    if argv[:1] == [RECOVER]:
+        os.makedirs(STATE, exist_ok=True)
+        return recover()
     scoped = argv[:1] == [SCOPED] and len(argv) > 2
     if scoped:
         job, argv = argv[1], argv[2:]
