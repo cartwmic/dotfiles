@@ -94,7 +94,7 @@ Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that 
 | # | Principle | As found | Target | Evidence |
 |---|---|---|---|---|
 | 1 | Composable components | fail | pass | scope: …; key or decision id; read / sampled / untested |
-… one row for each of 1 to 15; keep each Evidence cell to about 40 words and point to the Section 4 item …
+… one row for each of 1 to 16; keep each Evidence cell to about 40 words and point to the Section 4 item …
 ```
 
 Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode B, write `new` once for the whole As found column unless a row has something real today (say what); an `n/a` row takes one sentence at most. Evidence says what you read and what you did not, and `untested` where the test needs a live run (§14's replay). **Target means after the last increment in Section 6.** The table is required; a design without it is not finished.
