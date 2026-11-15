@@ -540,6 +540,34 @@ class LinuxSettingsTest(unittest.TestCase):
         once = run_script(script, FIXTURE)
         self.assertEqual(run_script(script, once), once)
 
+    def reordered(self, script, **edit):
+        """The script's own output as T3 would rewrite it: other key order and indent, same data. edit sets top-level keys first."""
+        data = json.loads(run_script(script, FIXTURE))
+        data.update(edit)
+        return json.dumps(dict(reversed(list(data.items()))), indent=4, ensure_ascii=False)
+
+    def test_same_data_in_another_key_order_comes_back_byte_for_byte(self):
+        """T3 rewrites the file in its own key order; when the merge changes nothing as data the input is printed as it is (no chezmoi drift)."""
+        script, _ = self.render()
+        text = self.reordered(script)
+        self.assertNotEqual(text, run_script(script, FIXTURE))
+        self.assertEqual(run_script(script, text), text)
+        self.assertEqual(run_script(script, text + "\n"), text + "\n")
+
+    def test_an_owned_key_that_differs_is_still_written_into_reordered_input(self):
+        """The pass-through is only for no change: a seat window T3 edited is put back, and the other keys keep the input's order."""
+        script, _ = self.render()
+        data = json.loads(self.reordered(script))
+        data["providerInstances"]["seat-lead"]["config"]["autoCompactWindow"] = "999999"
+        data["providerInstances"]["pi"]["enabled"] = False
+        text = json.dumps(data, indent=4)
+        out = run_script(script, text)
+        self.assertNotEqual(out, text)
+        fixed = json.loads(out)["providerInstances"]
+        self.assertEqual(fixed["seat-lead"]["config"]["autoCompactWindow"], "200000")
+        self.assertTrue(fixed["pi"]["enabled"])
+        self.assertEqual(list(json.loads(out)), list(data))
+
     def test_pi_is_enabled_and_every_other_instance_is_unchanged(self):
         """T3's Pi provider is on after the apply (Retro and the steward run on it); codex, claudeAgent and coordinator are as they were."""
         script, _ = self.render()
