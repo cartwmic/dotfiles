@@ -178,36 +178,16 @@ class Decisions(WrapperBase):
         return str(caught.exception)
 
 
-def installed_gh():
-    """The gh named by LEAK_GUARD_TEST_GH, else the first real gh on PATH (not a copy of this wrapper), or None."""
-    if os.environ.get("LEAK_GUARD_TEST_GH"):
-        return os.environ["LEAK_GUARD_TEST_GH"]
-    for d in os.environ.get("PATH", "").split(os.pathsep):
-        cand = os.path.join(d, "gh")
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            try:
-                if b"leak-guard gh wrapper" in Path(cand).read_bytes()[:4096]:
-                    continue
-            except OSError:
-                continue
-            return cand
-    return None
+def load_flags_script():
+    loader = importlib.machinery.SourceFileLoader("leak_guard_gh_flags", str(ROOT / "scripts/leak-guard-gh-flags"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("leak_guard_gh_flags", loader))
+    loader.exec_module(mod)
+    return mod
 
 
-def help_flags(gh, *command):
-    """{(short, long, takes a value)} that `gh <command> --help` lists under FLAGS and INHERITED FLAGS."""
-    import re
-    out = subprocess.run([gh, *command, "--help"], capture_output=True, text=True, timeout=60).stdout
-    flags, section = set(), None
-    for line in out.splitlines():
-        if re.match(r"^[A-Z][A-Z ]+$", line):
-            section = line
-        elif section in ("FLAGS", "INHERITED FLAGS") and line.strip():
-            m = re.match(r"^ {2,6}(?:(-\w), )?--([\w-]+)(?: (\S.*?))?(?:\s{2,}\S.*)?$", line)
-            if not m:
-                raise AssertionError("a flag line this test cannot read: %r" % line)
-            flags.add((m.group(1)[1:] if m.group(1) else "", m.group(2), bool(m.group(3))))
-    return flags
+# the help parser and the lookup of the installed gh are the regeneration script's: the table test and the script read gh the same way
+FLAGS_SCRIPT = load_flags_script()
+installed_gh, help_flags = FLAGS_SCRIPT.installed_gh, FLAGS_SCRIPT.help_flags
 
 
 @unittest.skipUnless(installed_gh(), "needs the real gh")
@@ -231,7 +211,7 @@ class FlagTables(unittest.TestCase):
                     short, _, rest = item.rpartition(":")
                     ours.add((short, rest.rstrip("="), rest.endswith("=")))
                 command = (group,) + ((verb,) if verb else ())
-                theirs = help_flags(gh, *command)
+                theirs = set(help_flags(gh, *command))
                 # gh accepts -h for --help but does not list it
                 ours = {("", l, t) if l == "help" else (s, l, t) for s, l, t in ours}
                 self.assertEqual(ours, theirs, "the FLAGS table for `gh %s` no longer matches `gh %s --help` (gh %s)" % (" ".join(command), " ".join(command), version))
@@ -791,8 +771,8 @@ class WrapperUnrecognised(Decisions):
 
     def test_a_subcommand_position_that_could_be_a_flag_value_is_refused_on_a_guarded_context(self):
         # gh takes the first non-flag argument as the subcommand; a flag in front of it makes any word after the flag's value a possible verb
-        for args in (["pr", "-t", "view", "create", "-b", "SECRET"], ["pr", "-R", GUARDED, "create", "-b", "SECRET"], ["issue", "--repo", "x/y", "comment", "-b", "S"],
-                     ["pr", "-t", "x", "list"]):
+        for args in (["pr", "-t", "view", "create", "-b", "SECRET"], ["pr", "-t", "x", "list"], ["pr", "--", "view", "3"], ["pr", "--frob", "view", "3"],
+                     ["issue", "-xR", "x/y", "comment", "-b", "S"]):
             with self.subTest(args):
                 self.assertIn("right after", self.refused(*args))
         self.assertEqual(self.decide("pr", "-t", "view", "create", "-b", "SECRET", repo="someone/other"), ("", None))      # nothing guarded: gh runs as typed
@@ -811,7 +791,73 @@ class WrapperUnrecognised(Decisions):
 
     def test_repo_commands_take_the_repository_from_their_argument_and_flags_before_the_verb_are_seen(self):
         self.assertBlocked(self.gh("repo", "edit", GUARDED, "--description", "x", cwd=self.other_cwd), "repo edit")
-        self.assertBlocked(self.gh("pr", "-R", GUARDED, "create", "--body", PLANTED, cwd=self.other_cwd), "Put the subcommand right after")
+        self.assertBlocked(self.gh("pr", "-R", GUARDED, "create", "--body", PLANTED, cwd=self.other_cwd), "term 1")
+
+
+def outcome(case, *args, repo=GUARDED):
+    """What the wrapper decides for a command: ("refused", message) or ("ok", command name, gathered texts)."""
+    try:
+        return ("ok",) + case.decide(*args, repo=repo)
+    except case.W.Refuse as r:
+        return ("refused", str(r))
+
+
+class WrapperGroupFlags(Decisions):
+    """gh finds the subcommand after the flags of the group (`gh pr -R x view 3` is `gh pr view 3 -R x`). The wrapper reads the group's own flags from its table
+    and decides on the command as if they stood after the verb."""
+    VERBS = {"pr": [["view", "3"], ["list"], ["comment", "3", "-b", PLANTED], ["comment", "3", "-b", CLEAN], ["create", "-t", "T", "-b", "B"], ["create", "--fill"],
+                    ["edit", "3", "-t", "T"], ["review", "3", "-r", "-b", PLANTED], ["merge", "3", "--squash"], ["ready", "3"], ["frobnicate", "x"],
+                    ["close", "3", "-c", "hi"]],
+             "issue": [["view", "3"], ["comment", "3", "-b", PLANTED], ["create", "-t", "T", "-b", "B"], ["frobnicate"]],
+             "release": [["view", "v1"], ["create", "v1", "-n", PLANTED], ["upload", "v1", "f"]],
+             "run": [["view", "7"], ["rerun", "7"]], "label": [["list"], ["create", "bug"]]}
+    flag_forms = lambda self, repo: [["-R", repo], ["-R" + repo], ["-R=" + repo], ["--repo", repo], ["--repo=" + repo], ["-R", repo, "-R", repo], ["--help"]]
+
+    def test_a_group_flag_before_the_verb_decides_like_the_same_flag_after_the_verb(self):
+        seen = set()
+        for group, verbs in self.VERBS.items():
+            for verb in verbs:
+                for target in (GUARDED, "someone/other"):
+                    for flags in self.flag_forms(target):
+                        if flags == ["--help"] and target != GUARDED:
+                            continue
+                        with self.subTest(group=group, verb=verb, flags=flags):
+                            before = outcome(self, group, *flags, *verb, repo="someone/other")
+                            after = outcome(self, group, *verb, *flags, repo="someone/other")
+                            self.assertEqual(before, after)
+                            seen.add(before[0] + (":" + before[1] if before[0] == "ok" and before[2] else ""))
+        self.assertEqual(seen, {"ok", "ok:pr comment", "ok:pr create", "ok:pr edit", "ok:pr review", "ok:pr close", "ok:issue comment", "ok:issue create", "ok:release create", "refused"})
+
+    def test_a_read_with_a_group_flag_before_the_verb_is_not_refused(self):
+        for args in (["pr", "-R", GUARDED, "view", "3"], ["pr", "--repo=" + GUARDED, "list"], ["issue", "-R" + GUARDED, "view", "3"], ["run", "-R", GUARDED, "view", "7"],
+                     ["pr", "-R", GUARDED, "ready", "3"], ["pr", "-R", GUARDED], ["pr", "-h", "view", "3"], ["pr", "--help", "view"]):
+            with self.subTest(args):
+                self.assertEqual(self.decide(*args, repo="someone/other"), ("", None))
+
+    def test_a_write_after_a_group_flag_gathers_its_text_and_an_unknown_write_is_refused_as_before(self):
+        name, texts = self.decide("pr", "-R", GUARDED, "comment", "3", "-b", PLANTED, repo="someone/other")
+        self.assertEqual((name, texts), ("pr comment", {"body": PLANTED}))
+        self.assertIn("not a command this wrapper knows", self.refused("pr", "-R", GUARDED, "frobnicate", repo="someone/other"))
+        self.assertIn("--body-file", self.refused("pr", "-R", GUARDED, "create", "--fill", repo="someone/other"))
+
+    def test_any_other_flag_or_a_double_dash_in_that_position_stays_refused(self):
+        for args in (["pr", "--frob", "view", "3"], ["pr", "-t", "view", "3"], ["pr", "--", "view", "3"], ["pr", "-R", "x/y", "-t", "view", "3"], ["issue", "--title", "x", "comment", "3"],
+                     ["repo", "-R", GUARDED, "view"]):          # `gh repo` has no -R of its own
+            with self.subTest(args):
+                self.assertIn("right after", self.refused(*args))
+
+    def test_end_to_end_a_read_runs_untouched_and_a_write_is_checked_with_the_original_arguments(self):
+        args = ["pr", "-R", GUARDED, "view", "3"]
+        self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
+        self.assertEqual((self.claude_calls(), self.gh_log()), (0, []))
+        self.reset()
+        self.assertBlocked(self.gh("pr", "-R", GUARDED, "comment", "3", "-b", PLANTED, cwd=self.other_cwd), "body:1: term 1")
+        self.assertEqual([(r["command"], r["verdict"], r["layer"]) for r in self.gh_log()], [("pr comment", "block", 1)])
+        self.reset()
+        args = ["pr", "--repo=" + GUARDED, "comment", "3", "-b", CLEAN]
+        done = self.gh(*args, cwd=self.other_cwd)
+        self.assertRan(done, *args)
+        self.assertEqual(self.real_calls()[0]["prompt_disabled"], "1")
 
 
 class WrapperComposed(Decisions):
@@ -995,3 +1041,70 @@ class WrapperLog(WrapperBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WrapperRemoteSpellings(WrapperBase):
+    """A checkout remote is read the way git and ssh resolve it: through `url.<base>.insteadOf` and an ssh Host alias."""
+
+    def git(self, cwd, *args):
+        subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+    def ssh_path(self, config, fail=False):
+        """A PATH with an `ssh` ahead of the real one that reads a scratch ssh config (ssh takes its home from the passwd entry, not $HOME)."""
+        real = shutil.which("ssh")
+        if not real:
+            self.skipTest("needs ssh")
+        shim = self.tmp / "sshbin"
+        shim.mkdir(exist_ok=True)
+        cfg = self.tmp / "ssh_config"
+        cfg.write_text(config)
+        (shim / "ssh").write_text("#!/bin/sh\n%s\n" % ("exit 255" if fail else 'exec %s -F %s "$@"' % (real, cfg)))
+        (shim / "ssh").chmod(0o755)
+        return "%s:%s" % (shim, self.env()["PATH"])
+
+    def test_an_insteadof_rewrite_of_the_remote_is_applied_before_it_is_compared(self):
+        cwd = self.repo("rewrite", "gh:%s.git" % GUARDED)
+        self.git(cwd, "config", "url.https://github.com/.insteadOf", "gh:")
+        self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "term 1")
+
+    def test_a_pushinsteadof_rewrite_is_applied_to_the_push_url(self):
+        cwd = self.repo("pushrewrite", "gh:%s.git" % GUARDED)
+        self.git(cwd, "config", "url.https://github.com/.pushInsteadOf", "gh:")
+        self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "term 1")
+
+    def test_a_rewrite_to_an_unguarded_repository_and_the_raw_value_both_count(self):
+        cwd = self.repo("rewrite-other", "gh:someone/other.git")
+        self.git(cwd, "config", "url.https://github.com/.insteadOf", "gh:")
+        self.assertRan(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "pr", "comment", "5", "--body", PLANTED)
+
+    def test_an_ssh_host_alias_is_resolved_to_its_hostname(self):
+        config = "Host guard-alias\n  HostName github.com\n  User git\n"
+        for n, url in enumerate(("git@guard-alias:%s.git" % GUARDED, "ssh://git@guard-alias/%s" % GUARDED, "ssh://git@guard-alias:22/%s.git" % GUARDED)):
+            with self.subTest(url):
+                self.reset()
+                cwd = self.repo("alias%d" % n, url)
+                self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd, env={"PATH": self.ssh_path(config)}), "term 1")
+
+    def test_an_alias_for_another_host_is_not_the_guarded_repository(self):
+        cwd = self.repo("alias-other", "git@guard-alias:%s.git" % GUARDED)
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd, env={"PATH": self.ssh_path("Host guard-alias\n  HostName git.elsewhere.example\n")})
+        self.assertRan(done, "pr", "comment", "5", "--body", PLANTED)          # the raw value is `guard-alias`, not github.com either
+
+    def test_when_ssh_cannot_resolve_the_raw_value_still_counts(self):
+        cwd = self.repo("alias-fail", "git@github.com:%s.git" % GUARDED)
+        self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd, env={"PATH": self.ssh_path("", fail=True)}), "term 1")
+
+
+class WrapperLocalOnly(WrapperBase):
+    def test_repo_set_default_and_the_completion_entry_run_untouched_in_a_guarded_checkout(self):
+        for args in (["repo", "set-default", GUARDED], ["repo", "set-default", "--view"], ["repo", "set-default", "-u"], ["__complete", "pr", "create", "--"],
+                     ["__completeNoDesc", "pr", ""]):
+            with self.subTest(args):
+                self.reset()
+                done = self.gh(*args, env={"FAKE_GH_EXIT": "3"})
+                self.assertEqual(done.returncode, 3)
+                self.assertEqual([c["argv"] for c in self.real_calls()], [args])
+                self.assertEqual((self.claude_calls(), self.gh_log()), (0, []))
+                self.assertIsNone(self.real_calls()[0]["prompt_disabled"])
+        self.reset()
+        self.assertBlocked(self.gh("repo", "edit", "--description", "x"), "gh repo edit")          # other repo writes are still refused

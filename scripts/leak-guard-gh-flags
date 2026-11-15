@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Regenerate FLAGS and FLAGS_FROM_GH in scripts/leak-guard-gh from the installed gh. Work machine only; docs/leak-guard.md, Flag tables.
+
+    leak-guard-gh-flags [--check] [--gh PATH] [--wrapper FILE]
+
+For every command already in the FLAGS table (the commands whose text the wrapper reads, and the command groups) it runs `gh <command> --help`, rewrites that
+command's row and sets FLAGS_FROM_GH to `gh --version`. It never adds or drops a command: a new command that carries text needs its entries in TEXT, COMPOSED
+and READ/NOTEXT by hand. For each command it prints the flags gh added and removed since the table was written. Classify every added flag before committing:
+one that carries text goes in TEXT, one that makes gh write the text itself in COMPOSED, one that uploads a file (as --attach does) in the refusals of
+parse_text, because a flag in the table is accepted and its text read, and a flag that is not in it is refused for a guarded repository.
+
+--check changes nothing and exits 1 when the file would change. --gh is the gh to read (default: the first gh on PATH that is not the wrapper). The help parser
+here is the one tests/leak-guard/test_gh_wrapper.py (FlagTables) compares the tables with.
+"""
+import argparse
+import ast
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+WRAPPER = Path(__file__).resolve().parent / "leak-guard-gh"
+MARK = b"leak-guard gh wrapper"
+FLAGS_BLOCK = re.compile(r"^FLAGS = \{\n.*?\n\}$", re.S | re.M)
+RELEASE_LINE = re.compile(r'^FLAGS_FROM_GH = ".*"$', re.M)
+
+
+def installed_gh():
+    """The gh named by LEAK_GUARD_TEST_GH, else the first real gh on PATH (not a copy of the wrapper), or None."""
+    if os.environ.get("LEAK_GUARD_TEST_GH"):
+        return os.environ["LEAK_GUARD_TEST_GH"]
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = os.path.join(d, "gh")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            try:
+                if MARK in Path(cand).read_bytes()[:4096]:
+                    continue
+            except OSError:
+                continue
+            return cand
+    return None
+
+
+def gh_version(gh):
+    out = subprocess.run([gh, "--version"], capture_output=True, text=True, timeout=60).stdout.split()
+    return out[2] if len(out) > 2 else None
+
+
+def help_flags(gh, *command):
+    """[(short, long, takes a value)] that `gh <command> --help` lists under FLAGS and INHERITED FLAGS, in the order gh prints them. Raises ValueError for a line it
+    cannot read, for a real `-h` (the tables spell the help flag "h:help" for every command, which only holds while gh lists no short for it) and for a help
+    that lists no flag at all (every command lists --help, so that means gh printed something else)."""
+    done = subprocess.run([gh, *command, "--help"], capture_output=True, text=True, timeout=60)
+    if done.returncode != 0:
+        raise ValueError("`gh %s --help` failed: %s" % (" ".join(command), done.stderr.strip()))
+    flags, section = [], None
+    for line in done.stdout.splitlines():
+        if re.match(r"^[A-Z][A-Z ]+$", line):
+            section = line
+        elif section in ("FLAGS", "INHERITED FLAGS") and line.strip():
+            m = re.match(r"^ {2,6}(?:(-\w), )?--([\w-]+)(?: (\S.*?))?(?:\s{2,}\S.*)?$", line)
+            if not m:
+                raise ValueError("`gh %s --help` has a flag line this script cannot read: %r" % (" ".join(command), line))
+            short = m.group(1)[1:] if m.group(1) else ""
+            if m.group(2) == "help" and short:
+                raise ValueError("`gh %s --help` lists a short flag %r for --help; the tables assume -h" % (" ".join(command), short))
+            flags.append((short, m.group(2), bool(m.group(3))))
+    if not flags:
+        raise ValueError("`gh %s --help` lists no flags" % " ".join(command))
+    return flags
+
+
+def spec_of(flags):
+    """The FLAGS row for a list of (short, long, takes a value): "s:long" for a short and a long flag, a trailing "=" when it takes a value. --help is "h:help"."""
+    return ",".join("%s%s%s" % ("h:" if long == "help" else short + ":" if short else "", long, "=" if takes else "") for short, long, takes in flags)
+
+
+def flags_of(spec):
+    out = set()
+    for item in spec.split(","):
+        short, _, rest = item.rpartition(":")
+        out.add((short, rest.rstrip("="), rest.endswith("=")))
+    return out
+
+
+def regenerate(text, gh):
+    """(new text, [report lines]) for the text of the wrapper, from the help of `gh`."""
+    block = FLAGS_BLOCK.search(text)
+    if not block or not RELEASE_LINE.search(text):
+        raise ValueError("the wrapper has no FLAGS table or FLAGS_FROM_GH line in the shape this script rewrites")
+    old = ast.literal_eval(block.group(0).split("=", 1)[1].strip())
+    version = gh_version(gh)
+    if not version or not re.match(r"^\d+\.\d+\.\d+$", version):
+        raise ValueError("cannot read the release from `gh --version`")
+    rows, report = [], []
+    for (group, verb), spec in old.items():
+        command = (group,) + ((verb,) if verb else ())
+        new = spec_of(help_flags(gh, *command))
+        rows.append('    ("%s", "%s"): "%s",' % (group, verb, new))
+        before, after = flags_of(spec), flags_of(new)
+        names = lambda flags: ", ".join("--" + l for _, l, _ in sorted(flags, key=lambda f: f[1]))
+        changes = []
+        if after - before:
+            changes.append("added " + names(after - before))
+        if before - after:
+            changes.append("removed " + names(before - after))
+        if changes:
+            report.append("gh %s: %s" % (" ".join(command), "; ".join(changes)))
+    text = FLAGS_BLOCK.sub(lambda _: "FLAGS = {\n" + "\n".join(rows) + "\n}", text, count=1)
+    text = RELEASE_LINE.sub('FLAGS_FROM_GH = "%s"' % version, text, count=1)
+    return text, report, version
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--check", action="store_true", help="change nothing; exit 1 when the file would change")
+    ap.add_argument("--gh", help="the gh to read (default: the first gh on PATH that is not the wrapper)")
+    ap.add_argument("--wrapper", default=str(WRAPPER), help="the wrapper file to rewrite")
+    args = ap.parse_args(argv)
+    gh = args.gh or installed_gh()
+    if not gh:
+        print("leak-guard-gh-flags: no real gh found", file=sys.stderr)
+        return 2
+    path = Path(args.wrapper)
+    old = path.read_text()
+    try:
+        new, report, version = regenerate(old, gh)
+    except (ValueError, OSError, subprocess.SubprocessError) as e:
+        print("leak-guard-gh-flags: %s; nothing was written" % e, file=sys.stderr)
+        return 2
+    print("gh %s" % version)
+    for line in report:
+        print(line)
+    if new == old:
+        print("%s already matches gh %s" % (path.name, version))
+        return 0
+    if args.check:
+        print("%s would change (run without --check to rewrite it)" % path.name)
+        return 1
+    path.write_text(new)
+    print("%s rewritten. Classify every added flag (TEXT, COMPOSED, or a refusal in parse_text) before committing." % path.name)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -30,16 +30,30 @@ READ = {"pr": {"list", "view", "diff", "checks", "status", "checkout"}, "issue":
         "release": {"list", "view", "download", "verify", "verify-asset"}, "run": {"list", "view", "watch", "download"},
         "workflow": {"list", "view"}, "repo": {"view", "list", "clone", "gitignore", "license"}, "label": {"list"}, "cache": {"list"},
         "secret": {"list"}, "variable": {"list", "get"}, "ruleset": {"list", "view", "check"}}
-NOTEXT = {"pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", "unlock", "pin", "unpin", "delete", "transfer"},
+NOTEXT = {"repo": {"set-default"}, "pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", "unlock", "pin", "unpin", "delete", "transfer"},
           "release": {"delete", "delete-asset"}, "run": {"rerun", "cancel", "delete"}, "cache": {"delete"}}
 NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help", "version", "search", "status", "browse", "ssh-key", "gpg-key", "gist",
-            "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview"}
+            "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview",
+            "__complete", "__completeNoDesc"}      # the last two are the shell-completion entries, which print candidates and send nothing
 
-# The flags of every command whose text the wrapper reads, as `gh <group> <verb> --help` lists them in the gh release named by FLAGS_FROM_GH
-# (tests/leak-guard/test_gh_wrapper.py, FlagTables, compares this table with an installed gh of that version and fails when they differ). "s:long" is a short and a long flag, and a trailing "=" means the flag
-# takes a value. The wrapper parses a command's arguments with its own table only, following gh's flag library for the forms in parse_flags, and refuses any flag that is not in it.
+# The flags of every command whose text the wrapper reads, and of every command group (the flags gh accepts between the group and its subcommand), as
+# `gh <group> <verb> --help` lists them in the gh release named by FLAGS_FROM_GH. scripts/leak-guard-gh-flags regenerates this block from the installed gh
+# (docs/leak-guard.md, Flag tables), and tests/leak-guard/test_gh_wrapper.py, FlagTables, compares it with an installed gh of that version and fails when
+# they differ. "s:long" is a short and a long flag, and a trailing "=" means the flag takes a value. The wrapper parses a command's arguments with its own
+# table only, following gh's flag library for the forms in parse_flags, and refuses any flag that is not in it.
 FLAGS_FROM_GH = "2.103.3"
 FLAGS = {
+    ("pr", ""): "R:repo=,h:help",
+    ("issue", ""): "R:repo=,h:help",
+    ("release", ""): "R:repo=,h:help",
+    ("run", ""): "R:repo=,h:help",
+    ("workflow", ""): "R:repo=,h:help",
+    ("repo", ""): "h:help",
+    ("label", ""): "R:repo=,h:help",
+    ("cache", ""): "R:repo=,h:help",
+    ("secret", ""): "R:repo=,h:help",
+    ("variable", ""): "R:repo=,h:help",
+    ("ruleset", ""): "R:repo=,h:help",
     ("pr", "create"): "a:assignee=,attach=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
     ("pr", "comment"): "attach=,b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
@@ -149,12 +163,64 @@ def guarded_repos():
     return {r for r in (parse_repo(row, "github.com") for row in rows) if r}
 
 
-def cwd_remotes():
+_REMOTES, _SSH_HOSTS = {}, {}
+SSH_HOST_NAMES = {"ssh.github.com": "github.com"}      # GitHub's ssh-over-443 host serves github.com
+
+
+def git_lines(*args):
     try:
-        done = subprocess.run(["git", "config", "--get-regexp", r"^remote\..+\.(url|pushurl)$"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        done = subprocess.run(["git", *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return []
-    return [r for r in (parse_repo(row.partition(" ")[2]) for row in done.stdout.decode(errors="replace").splitlines()) if r]
+    return done.stdout.decode(errors="replace").splitlines() if done.returncode == 0 else []
+
+
+def ssh_hostname(host):
+    """The real host name ssh connects to for `host` (a Host alias of ~/.ssh/config resolves through `ssh -G`), lower-cased; None when ssh cannot say."""
+    if host not in _SSH_HOSTS:
+        found = None
+        if not host.startswith("-"):
+            try:
+                done = subprocess.run(["ssh", "-G", "--", host], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+                for line in done.stdout.decode(errors="replace").splitlines() if done.returncode == 0 else []:
+                    if line.lower().startswith("hostname "):
+                        found = line.split(None, 1)[1].strip().lower()
+                        found = SSH_HOST_NAMES.get(found, found)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        _SSH_HOSTS[host] = found
+    return _SSH_HOSTS[host]
+
+
+def remote_repos(url):
+    """The repository a remote URL names as written and, for an ssh form, also with the host alias resolved. Both count: a failed resolution loses nothing."""
+    found = parse_repo(url)
+    if not found:
+        return []
+    if re.match(r"^(?:ssh|git\+ssh|ssh\+git)://", url, re.I) or "://" not in url:      # ssh:// and the scp form `user@host:owner/name`
+        real = ssh_hostname(found[0])
+        if real and real != found[0]:
+            return [found, (real, found[1])]
+    return [found]
+
+
+def cwd_remotes():
+    """Every repository the current directory's git repository can fetch from or push to: the configured url and pushurl values as written, and each remote's
+    URLs as git resolves them (`git remote get-url --all`, which applies url.<base>.insteadOf and pushInsteadOf), each with its ssh Host alias resolved too.
+    Computed once per process and directory, since decide() asks several times."""
+    try:
+        key = os.getcwd()
+    except OSError:
+        key = None
+    if key not in _REMOTES:
+        urls = [row.partition(" ")[2] for row in git_lines("config", "--get-regexp", r"^remote\..+\.(url|pushurl)$")]
+        for name in git_lines("remote"):
+            urls += git_lines("remote", "get-url", "--all", name) + git_lines("remote", "get-url", "--push", "--all", name)
+        found = []
+        for url in dict.fromkeys(u for u in urls if u):
+            found += [r for r in remote_repos(url) if r not in found]
+        _REMOTES[key] = found
+    return _REMOTES[key]
 
 
 def repo_words(words):
@@ -223,14 +289,51 @@ def known_verb(group, verb):
     return verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()) or (group, verb) in TEXT
 
 
-def split_command(args):
-    """(group, verb, ambiguous) of a gh command line. The verb is the argument right after the group. When a flag stands there, a flag's value could be taken for
-    the verb, so the verb is a guess (the first known verb among the non-flag arguments) and `ambiguous` is true."""
+def normalize_group_flags(args):
+    """gh finds a command's subcommand by skipping the flags of the group, then the subcommand reads every flag, so `gh pr -R x view 3` is `gh pr view 3 -R x`.
+    Returns `args` with the group's flags moved behind the subcommand (a command line that starts with a bare group stays as it is), or None when a flag
+    there is not one of the group's own, in FLAGS: a value flag of the group takes the next argument, a switch takes none, `--` and anything else leave it
+    unknown, since nothing then says whether the next argument is a flag's value or the subcommand."""
     group = args[0]
-    rest = [a for a in args[1:] if not a.startswith("-")]
-    if len(args) > 1 and args[1].startswith("-"):
+    if len(args) < 2 or not args[1].startswith("-"):
+        return args
+    if (group, "") not in FLAGS:
+        return None
+    longs, shorts = flag_table(group, "")
+    lead, i = [], 1
+    while i < len(args) and args[i].startswith("-"):
+        a = args[i]
+        if a.startswith("--"):
+            name, eq, _ = a[2:].partition("=")
+            if name not in longs:
+                return None
+            takes = longs[name] and not eq
+        else:
+            if a[1:2] not in shorts:
+                return None
+            name = shorts[a[1:2]]
+            if not longs[name] and len(a) > 2:      # a cluster of switches: not a form of the group's flags
+                return None
+            takes = longs[name] and len(a) == 2      # `-Rvalue` and `-R=value` are one argument
+        lead.append(a)
+        if takes:
+            if i + 1 >= len(args):
+                return None
+            i += 1
+            lead.append(args[i])
+        i += 1
+    return [group] + args[i:i + 1] + lead + args[i + 1:]
+
+
+def split_command(args):
+    """(group, verb, ambiguous) of a gh command line. The verb is the first argument that is not one of the group's own flags (normalize_group_flags). When the flags
+    there cannot be told, a flag's value could be taken for the verb, so the verb is a guess (the first known verb among the non-flag arguments) and `ambiguous` is true."""
+    group = args[0]
+    norm = normalize_group_flags(args)
+    if norm is None:
+        rest = [a for a in args[1:] if not a.startswith("-")]
         return group, next((a for a in rest if known_verb(group, a)), rest[0] if rest else ""), True
-    return group, rest[0] if rest else "", False
+    return group, norm[1] if len(norm) > 1 and not norm[1].startswith("-") else "", False
 
 
 def flag_table(group, verb):
@@ -533,13 +636,14 @@ def decide(args, repos, texts=None, real=None, depth=0):
         return "", None
     if group not in BUILTIN:
         return ("", None) if helped else unknown_command(args, repos, texts, real, depth)
+    args = normalize_group_flags(args) or args      # the group's own flags move behind the subcommand, as gh reads them
     group, verb, ambiguous = split_command(args)
     name = command_name(args)
     if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
     if ambiguous and not helped and any(t in repos for t in raw_targets(args)):
-        raise Refuse("a flag stands between `gh %s` and its subcommand, so a flag's value could be taken for the subcommand and what gh runs cannot be told. "
-                     "Put the subcommand right after `gh %s`" % (group, group))
+        raise Refuse("a flag that is not one of `gh %s`'s own stands between it and its subcommand, so a flag's value could be taken for the subcommand and what gh "
+                     "runs cannot be told. Put the subcommand right after `gh %s`" % (group, group))
     if (group, verb) in TEXT:
         found, repo, positionals, refusal, helped, unparsed = parse_text(args[1:], group, verb)
         named = all_targets(repo + (raw_repo_flags(args) if unparsed else []), positionals + (args if unparsed else []))
