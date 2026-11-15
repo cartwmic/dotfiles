@@ -140,16 +140,17 @@ class StateAnchor(unittest.TestCase):
         self.assertEqual(out.count("[hooks.state"), 1)
         self.assertIn('[projects."/p"]\nk = 1\n\n[hooks.state."/x/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:abc"\n', out)
 
-    def test_trust_that_sat_inside_the_hub_block_is_not_what_decides_the_anchor(self):
-        # The anchor is looked for after the hub block is stripped; an old [hooks.state] inside it must not suppress the one above it.
+    def test_trust_that_sat_inside_the_hub_block_moves_out_of_it_and_is_the_anchor(self):
+        # A [hooks.state] table Codex wrote inside the hub block is moved to just after the block and counts as the anchor: no second header.
         inside = 'model = "x"\n\n# chezmoi:cliproxy-hub:begin\n[model_providers.cliproxy]\nname = "stale"\n[hooks.state]\n# chezmoi:cliproxy-hub:end\n'
-        # The hub block is only written back on macOS (the template is "n/a" elsewhere, e.g. the Linux CI runner), but it is stripped everywhere.
+        # The hub block is only written back on macOS (the template is "n/a" elsewhere, e.g. the Linux CI runner), but it is lifted everywhere.
         for name, script in (("hub", self.hub), ("work", self.work)):
             with self.subTest(profile=name):
                 out = modify(script, inside)
                 self.assertEqual(out.count("[hooks.state]"), 1)
+                self.assertNotIn("stale", out)
                 if "# chezmoi:cliproxy-hub:begin" in out:
-                    self.assertLess(out.index("[hooks.state]"), out.index("# chezmoi:cliproxy-hub:begin"))
+                    self.assertLess(out.index("# chezmoi:cliproxy-hub:end"), out.index("[hooks.state]"))
                 self.assertEqual(modify(script, out), out)
 
 

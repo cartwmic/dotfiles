@@ -541,6 +541,85 @@ class ApplyPathTest(unittest.TestCase):
         self.assertEqual(json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]["codex"]["config"]["setupMode"], "existing")
 
 
+@unittest.skipUnless(sys.platform in ("darwin", "linux") and shutil.which("chezmoi") and shutil.which("jq"), "the hub is on the personal profile on macOS and Linux")
+class CodexTablesInHubBlockTest(unittest.TestCase):
+    """Codex appends a table before the file's last comment, which is the hub block's end marker. A real apply keeps those tables."""
+    # The nine lines in the live ~/.codex/config.toml: they sit inside the block, right after our own tables, and end at the end marker.
+    NINE = '\n[tui]\nscreen_reader_detection_done = true\n\n[tui.model_availability_nux]\n"gpt-6.1-sol" = 4\n\n[projects."/fake/chezmoi"]\ntrust_level = "trusted"\n'
+    TOP = 'model_provider = "cliproxy"\n\n[hooks.state]\n\n'
+    BEGIN, END = "# chezmoi:cliproxy-hub:begin\n", "# chezmoi:cliproxy-hub:end\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name) / "home"
+        (self.home / ".codex").mkdir(parents=True)
+        self.cfg = self.home / ".codex/config.toml"
+        self.cfg_yaml = Path(self.tmp.name) / "chezmoi.yaml"
+        self.set_switch(True)
+        self.own = (self.BEGIN + '[model_providers.cliproxy]\nname = "CLIProxy hub"\nbase_url = "https://cliproxy.internal.cartwmic.com/v1"\n'
+                    'wire_api = "responses"\nsupports_websockets = true\n\n[model_providers.cliproxy.auth]\n'
+                    'command = "%s/.local/user_scripts/op_read_cached.sh"\nargs = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]\n' % self.home)
+
+    def set_switch(self, on):
+        self.cfg_yaml.write_text("data:\n  profile: personal\n  hub:\n    enabled: %s\n  t3Hub:\n    enabled: false\n" % ("true" if on else "false"))
+
+    def apply(self):
+        r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(self.cfg_yaml), "--config-format", "yaml",
+                            "--destination", str(self.home), "apply", str(self.cfg)], capture_output=True, text=True,
+                           env=dict(os.environ, HOME=str(self.home)), timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return self.cfg.read_text()
+
+    def test_tables_codex_wrote_inside_the_block_move_after_it_and_stay_through_every_apply(self):
+        self.cfg.write_text(self.TOP + self.own + self.NINE + self.END)
+        want = self.TOP + self.own + self.END + self.NINE
+        self.assertEqual(self.apply(), want)  # our block is exactly ours; the nine lines follow the end marker
+        mtime = self.cfg.stat().st_mtime_ns
+        self.assertEqual(self.apply(), want)  # a second apply changes nothing
+        self.assertEqual(self.cfg.stat().st_mtime_ns, mtime)
+        # Codex adds another table before the last comment (the end marker) of the settled file; both generations survive
+        added = '[tui.notifications]\nenabled = true\n'
+        self.cfg.write_text(want.replace(self.END, "\n" + added + self.END, 1))
+        want = self.TOP + self.own + self.END + "\n" + added + self.NINE
+        self.assertEqual(self.apply(), want)
+        self.assertEqual(self.apply(), want)
+        tomllib.loads(want)
+
+    def test_two_hub_blocks_collapse_to_one_and_every_foreign_table_stays(self):
+        first = self.own + "\n[one]\na = 1\n" + self.END
+        second = self.own + "\n[two]\nb = 2\n" + self.END
+        self.cfg.write_text(self.TOP + first + "\n[mid]\nc = 1\n\n" + second + "\n[z]\nq = 1\n")
+        out = self.apply()
+        toml = tomllib.loads(out)  # one apply leaves a file Codex can parse
+        self.assertEqual((toml["one"], toml["mid"], toml["two"], toml["z"]), ({"a": 1}, {"c": 1}, {"b": 2}, {"q": 1}))
+        self.assertEqual((out.count(self.BEGIN), out.count(self.END)), (1, 1))
+        self.assertEqual(self.apply(), out)
+
+    def test_hooks_state_lands_above_the_block_and_a_key_before_it_does_not_swallow_the_marker(self):
+        # no [hooks.state] and no table before the block: the header goes above the block, not after it
+        self.cfg.write_text('model = "x"\n\n' + self.own + self.END)
+        out = self.apply()
+        tomllib.loads(out)
+        self.assertLess(out.index("[hooks.state]"), out.index(self.BEGIN))
+        self.assertEqual(self.apply(), out)
+        # the model_provider line sits on the line right before the marker: the block stays in place, not moved to the end
+        self.cfg.write_text('model_provider = "cliproxy"\n' + self.own + self.END + '\n[projects.a]\ntrust_level = "trusted"\n')
+        out = self.apply()
+        tomllib.loads(out)
+        self.assertLess(out.index(self.BEGIN), out.index("[projects.a]"))
+        self.assertEqual(self.apply(), out)
+
+    def test_with_the_switch_off_the_block_goes_and_those_tables_stay(self):
+        self.cfg.write_text(self.TOP + self.own + self.NINE + self.END)
+        self.set_switch(False)
+        out = self.apply()
+        self.assertNotIn("chezmoi:cliproxy-hub", out)
+        self.assertNotIn("model_providers.cliproxy", out)
+        self.assertIn(self.NINE.strip("\n"), out)
+        self.assertEqual(self.apply(), out)
+
+
 @needs
 class GateTest(unittest.TestCase):
     """The real `hub` gate: on for the personal profile on any OS, n/a for every other profile, off with the switch off."""

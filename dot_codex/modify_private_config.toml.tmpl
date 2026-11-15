@@ -18,11 +18,17 @@
 # top-level `model_provider = "cliproxy"`. Off, or on any other profile, removes that line only when it equals "cliproxy"; a different
 # value stays. The provider block above is kept while either switch is on, since the default needs it.
 #
+# Tables Codex writes (both profiles): Codex appends a new table just before the file's last comment, and on the personal profile that
+# comment is the hub block's end marker, so the table lands inside the block. This script owns the block, so it rewrites the block in
+# place with only its own tables and moves every other table found in it (a [header] it does not write, with its keys, comments and
+# blank lines up to the next header) to straight after the end marker, unchanged and in order. That holds when the switch is off too.
+# Applying again changes nothing: the moved tables are then ordinary content after the block.
+#
 # Pattern-kill guard (both desktop profiles): the guard hook itself is not here, it is in ~/.codex/hooks.json (modify_hooks.json.tmpl).
-# Codex keeps the trust of a hook as [hooks.state."<key>"] tables in THIS file and writes them itself, next to an existing [hooks.state]
-# header or, failing that, before the file's last comment, which on the personal profile is inside the hub block below and would be stripped
-# on the next apply. So this script does one structural thing for it: when no [hooks.state table exists once the hub block is stripped, it
-# inserts an empty [hooks.state] header above the first table or managed block. No markers, no stripping, nothing else.
+# Codex keeps the trust of a hook as [hooks.state."<key>"] tables in THIS file and writes them next to an existing [hooks.state] header
+# or, failing that, before the file's last comment. So when no [hooks.state table exists (after the move above), this script inserts an
+# empty [hooks.state] header above the first table or managed block, which on the work profile (no hub block) keeps the trust beside
+# the header and outside the harness block. No markers, no stripping, nothing else.
 # Chezmoi runs modify_ scripts with the existing target file content piped
 # on stdin and uses stdout as the new content.
 
@@ -56,10 +62,32 @@ stripped = block_re.sub("", existing)
 # A top-of-file strip can leave a leading blank line; drop those only.
 stripped = re.sub(r"^\n+", "", stripped)
 
-hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n.*?# chezmoi:cliproxy-hub:end\n?", re.DOTALL)
-stripped, dropped = hub_re.subn("", stripped)
-if dropped and stripped and not stripped.endswith("\n"):
-    stripped += "\n"
+HUB = """# chezmoi:cliproxy-hub:begin
+[model_providers.cliproxy]
+name = "CLIProxy hub"
+base_url = "https://cliproxy.internal.cartwmic.com/v1"
+wire_api = "responses"
+supports_websockets = true
+
+[model_providers.cliproxy.auth]
+command = "%s/.local/user_scripts/op_read_cached.sh"
+args = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]
+# chezmoi:cliproxy-hub:end
+"""
+OWNED = set(re.findall(r"(?m)^\[.*\]$", HUB))
+HERE = "# chezmoi:cliproxy-hub:begin\n"
+hub_re = re.compile(r"# chezmoi:cliproxy-hub:begin\n(.*?)# chezmoi:cliproxy-hub:end\n?\n*", re.DOTALL)
+hub_seen = []
+
+def lift(m):
+    """The block becomes the HERE marker, followed by the tables in it that are not ours."""
+    parts = re.split(r"(?m)^(?=\[)", m.group(1))  # the text before the first header, then one part per table
+    foreign = "".join(p for p in parts[1:] if p.split("\n", 1)[0].rstrip() not in OWNED).strip("\n")
+    here = "" if hub_seen else HERE
+    hub_seen.append(1)
+    return here + (foreign + "\n\n" if foreign else "")
+
+stripped = hub_re.sub(lift, stripped)
 # Default provider: only the top-level region (before the first table header) is looked at.
 m = re.search(r"(?m)^\[", stripped)
 cut = m.start() if m else len(stripped)
@@ -81,21 +109,12 @@ if not re.search(r"(?m)^\[hooks\.state", stripped):
     head, tail = stripped[:at], stripped[at:]
     head = head.rstrip("\n") + ("\n\n" if head.strip() else "")
     stripped = head + "[hooks.state]\n" + ("\n" + tail if tail else "")
-home = os.environ.get("HUB_HOME", "")
-if home:
-    hub = """# chezmoi:cliproxy-hub:begin
-[model_providers.cliproxy]
-name = "CLIProxy hub"
-base_url = "https://cliproxy.internal.cartwmic.com/v1"
-wire_api = "responses"
-supports_websockets = true
-
-[model_providers.cliproxy.auth]
-command = "%s/.local/user_scripts/op_read_cached.sh"
-args = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]
-# chezmoi:cliproxy-hub:end
-""" % home
-    stripped = stripped.rstrip("\n") + ("\n\n" if stripped.strip() else "") + hub
+if HERE in stripped:
+    pre, post = stripped.split(HERE, 1)
+    home = os.environ.get("HUB_HOME", "")
+    stripped = "\n\n".join(p.strip("\n") for p in (pre, HUB % home if home else "", post) if p.strip()) + "\n"
+elif os.environ.get("HUB_HOME"):
+    stripped = stripped.rstrip("\n") + ("\n\n" if stripped.strip() else "") + HUB % os.environ["HUB_HOME"]
 
 sys.stdout.write(stripped)
 '
