@@ -211,6 +211,11 @@ class CitationTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("checked 1 citations", out)
 
+    def test_a_doc_with_only_caller_list_claims_exits_2_as_the_skill_says(self):
+        code, out = check("Customers can pay by card (from your list, item 3). Refunds take a day (from your list, item 4).\n", REPO)
+        self.assertEqual(code, 2)
+        self.assertIn("checked 0 citations, 0 bad", out)
+
     def test_a_doc_with_no_citations_fails(self):
         code, out = check("Plain prose, nothing to check.\n", REPO)
         self.assertEqual(code, 2)
