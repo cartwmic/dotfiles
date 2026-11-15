@@ -13,6 +13,7 @@
             The JSON carries "engine" only when it is "ts" (so the load script's "# setting:" line stays what it was and the exporter is not
             restarted). Work with no key renders no engine.
             (It is not called "implementation": that name belonged to the retired AGENT_EVENTS_IMPLEMENTATION path override.)
+agentHost.disableTimers (agent_host_config) forces enabled to false whatever enabled says.
 Used by the plist, its load script and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
 {{- $raw := dig "agentEvents" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
@@ -26,6 +27,7 @@ Used by the plist, its load script and .chezmoiignore. Any other key or value fa
 {{- $profile := printf "%v" (dig "profile" "" .) -}}
 {{- $on := printf "%v" (eq $profile "personal") -}}
 {{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- if (includeTemplate "agent_host_config" . | fromJson).disableTimers -}}{{- $on = "false" -}}{{- end -}}
 {{- $machine := get (dict "personal" "personal" "axon-work-computer" "work") $profile -}}
 {{- if hasKey $raw "machine" -}}{{- $machine = printf "%v" (get $raw "machine") -}}{{- end -}}
 {{- $endpoint := "http://otel-collector.internal.cartwmic.com/v1/metrics" -}}

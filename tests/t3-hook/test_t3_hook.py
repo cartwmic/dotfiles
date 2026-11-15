@@ -164,6 +164,10 @@ CASES = {
     "work_new": {"profile": WORK, "instances": {"coordinator": {"repo": NEW}}},
     "work_prompt": {"profile": WORK, "instances": {"coordinator": {"repo": PROMPT}}},
     "termux": {"profile": "termux", "instances": {"coordinator": {"repo": NEW}}},
+    # agentHost.removeCoordinatorHook (omarchy's cutover switch, tests/agent-host): hook present, so only the switch can explain the removal.
+    "switch_on": {"profile": PERSONAL, "instances": {"coordinator": {"repo": NEW}}, "agentHost": {"removeCoordinatorHook": True}},
+    "switch_on_older": {"profile": PERSONAL, "instances": {"coordinator": {"repo": OLDER}}, "agentHost": {"removeCoordinatorHook": True}},
+    "switch_off": {"profile": PERSONAL, "instances": {"coordinator": {"repo": NEW}}, "agentHost": {"removeCoordinatorHook": False}},
 }
 OPUS_MEDIUM = {"claude-opus-5-5": {"effortLevel": "medium"}}
 USER_HOOK = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user"}]}
@@ -289,6 +293,27 @@ class T3HookSettingsTest(unittest.TestCase):
             self.assertNotIn("effortLevel", s, case)
             saved = {"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}
             self.assertEqual(self.modify(case, saved)["modelSettings"], saved["modelSettings"], case)  # a later pick wins
+
+    def test_switch_on_removes_the_entries_even_with_a_printing_hook_and_keeps_the_rest(self):
+        for case in ("switch_on", "switch_on_older"):  # the older hook would otherwise be the "keep" mode: the switch must not land there
+            s = self.modify(case, stale())
+            self.assertEqual(t3(s), [], case)
+            self.assertEqual(s["hooks"]["PreToolUse"], [USER_HOOK], case)
+            self.assertEqual(s["hooks"]["Stop"], USER["hooks"]["Stop"], case)
+            self.assertNotIn("PostToolUse", s["hooks"], case)
+            self.assertIn("echo mixed", [h["command"] for g in s["hooks"]["SessionStart"] for h in g["hooks"]], case)
+            self.assertEqual((s["theme"], s["cleanupPeriodDays"]), ("dark", 365), case)
+            self.assertEqual(self.modify(case, s), s, case)  # idempotent
+
+    def test_switch_on_does_not_run_the_hook(self):
+        self.assertNotIn("hook.ts", self.scripts["switch_on"].read_text().split("T3_PRINTED=", 1)[1].split("\n", 1)[0])
+
+    def test_switch_off_is_the_default_and_flipping_it_back_restores_the_entries(self):
+        original = self.modify("new", USER)
+        self.assertEqual(self.modify("switch_off", USER), original)
+        removed = self.modify("switch_on", original)
+        self.assertEqual(t3(removed), [])
+        self.assertEqual(self.modify("switch_off", removed), original)
 
     def test_flag_is_not_read(self):
         self.assertEqual(len(self.ours("flag_off")), 4)

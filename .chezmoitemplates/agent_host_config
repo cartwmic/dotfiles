@@ -1,0 +1,31 @@
+{{- /* agent_host_config: the two cutover switches for omarchy once the agent host (the pod on the cluster) runs the coordinator, as JSON
+{"removeCoordinatorHook", "disableTimers"}. Local chezmoi data agentHost (docs/profiles.md, "Local data keys"):
+  removeCoordinatorHook  true or false. Default false. true takes the coordinator's T3 hook entries out of ~/.claude/settings.json
+                         (dot_claude/modify_settings.json.tmpl): no hook file is looked for and hook.ts is not run. It changes that one file.
+  disableTimers          true or false. Default false. true makes the session-cost, mistakes-report and agent-events timers behave as their own
+                         enabled setting being false: the loader stops each timer and removes its two units. It wins over those three settings.
+                         Setting it back to false installs and starts them again (their own settings apply as before).
+Personal profile only: it changes omarchy, the personal desktop. Either switch true on any other profile fails the render, so a
+copied data file can never change the work Mac. Used by the Claude settings template and the three *_config templates. Any other key
+or value fails the whole render, so a typo applies nothing. Default (both false) leaves every render byte-for-byte what it was. */ -}}
+{{- $raw := dig "agentHost" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "agentHost must be a map with removeCoordinatorHook and disableTimers, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if not (has $k (list "removeCoordinatorHook" "disableTimers")) -}}
+{{-     fail (printf "agentHost.%s is not a setting (removeCoordinatorHook, disableTimers)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $out := dict -}}
+{{- range $k := list "removeCoordinatorHook" "disableTimers" -}}
+{{-   $v := printf "%v" (get $raw $k | default false) -}}
+{{-   if not (has $v (list "true" "false")) -}}
+{{-     fail (printf "agentHost.%s must be true or false, got %q" $k $v) -}}
+{{-   end -}}
+{{-   $_ := set $out $k (eq $v "true") -}}
+{{- end -}}
+{{- if and (ne (printf "%v" (dig "profile" "" .)) "personal") (or (get $out "removeCoordinatorHook") (get $out "disableTimers")) -}}
+{{-   fail (printf "agentHost switches apply to the personal profile only (omarchy), not %q" (printf "%v" (dig "profile" "" .))) -}}
+{{- end -}}
+{{- $out | toJson -}}
