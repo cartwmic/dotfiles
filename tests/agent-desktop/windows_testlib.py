@@ -77,7 +77,7 @@ function Start-ScheduledTask { param([string]$TaskName)
     $psi.RedirectStandardError = $true
     $psi.WorkingDirectory = $env:AD_STUB_WORKER_CWD
     $psi.Environment.Clear()
-    foreach ($k in 'PATH', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'USERNAME', 'USERDOMAIN') {
+    foreach ($k in 'PATH', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME') {
         if (Test-Path "env:$k") { $psi.Environment[$k] = (Get-Item "env:$k").Value }
     }
     $p = [System.Diagnostics.Process]::Start($psi)
@@ -210,7 +210,7 @@ class Sandbox:
         env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_DESKTOP_")}
         env.update(
             HOME=str(self.home), USERPROFILE=str(self.home), LOCALAPPDATA=str(self.local),
-            USERNAME="michael", USERDOMAIN="G14",
+            USERNAME="michael", USERDOMAIN="WORKGROUP", COMPUTERNAME="G14",  # USERDOMAIN as an OpenSSH session sets it
             PSModulePath=str(self.mods), AD_STUB_STATE=str(self.state), AD_STUB_RELEASE=str(self.release),
             AD_STUB_WORKER_CWD=str(self.elsewhere),
             PATH=os.pathsep.join([str(self.stubbin), env["PATH"]]),

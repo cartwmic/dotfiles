@@ -118,8 +118,9 @@ if ($existing -and @($existing.Actions).Count -ge 1) {
 if ($same) {
     Write-Info "scheduled task '$TaskName' unchanged"
 } else {
+    # COMPUTERNAME, not USERDOMAIN: an OpenSSH session sets USERDOMAIN to WORKGROUP, which names no account.
     $action = New-ScheduledTaskAction -Execute $program -Argument $taskArguments
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive -RunLevel Limited
     # Parallel: each call starts its own worker. Battery: the G14 is a laptop and must run the task unplugged.
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances Parallel -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
     [void](Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force)
