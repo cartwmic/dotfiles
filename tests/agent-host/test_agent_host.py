@@ -6,6 +6,7 @@ Run: python3 -m unittest discover -s tests/agent-host
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -109,8 +110,8 @@ class AgentHostSwitchTest(unittest.TestCase):
         self.assertEqual(UNITS & self.got["work"], set())
 
     def test_config_defaults_and_values(self):
-        self.assertEqual(self.got["cfg_default"], {"removeCoordinatorHook": False, "disableTimers": False, "podTunnelKey": ""})
-        self.assertEqual(self.got["cfg_on"], {"removeCoordinatorHook": True, "disableTimers": True, "podTunnelKey": ""})
+        self.assertEqual(self.got["cfg_default"], {"removeCoordinatorHook": False, "disableTimers": False, "sessionCopy": False, "podTunnelKey": ""})
+        self.assertEqual(self.got["cfg_on"], {"removeCoordinatorHook": True, "disableTimers": True, "sessionCopy": False, "podTunnelKey": ""})
 
     def test_a_typo_or_unknown_key_fails_the_render(self):
         for data, msg in (({"agentHost": {"disableTimers": "maybe"}}, "agentHost.disableTimers must be true or false"),
@@ -124,7 +125,7 @@ class AgentHostSwitchTest(unittest.TestCase):
             self.assertIn(msg, r.stderr, data)
 
     def test_either_switch_on_the_work_profile_fails_the_render(self):
-        for key, value in (("disableTimers", True), ("removeCoordinatorHook", True), ("podTunnelKey", POD)):
+        for key, value in (("disableTimers", True), ("removeCoordinatorHook", True), ("sessionCopy", True), ("podTunnelKey", POD)):
             r = chezmoi("axon-work-computer", "managed", data={"agentHost": {key: value}})
             self.assertNotEqual(r.returncode, 0, key)
             self.assertIn("personal profile only", r.stderr, key)
@@ -195,6 +196,115 @@ class PodTunnelKeyTest(unittest.TestCase):
         out = self.run_modify("on", loose)
         self.assertIn(POD_LINE, out.splitlines())
         self.assertIn(loose.strip(), out.splitlines())
+
+
+COPY_FILES = {".config/systemd/user/agent-session-copy.service", ".config/systemd/user/agent-session-copy.timer",
+              ".local/bin/agent-session-copy", "89_agent_session_copy_systemd.sh"}
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the timer is a Linux unit")
+class SessionCopyGateTest(unittest.TestCase):
+    """agent-session-copy: personal Linux only, shipped disabled, enabled by agentHost.sessionCopy."""
+
+    @classmethod
+    def setUpClass(cls):
+        text = (REPO / "run_onchange_after_89_agent_session_copy_systemd.sh.tmpl").read_text()
+        with ThreadPoolExecutor() as pool:
+            jobs = dict(personal=pool.submit(managed, "personal"), work=pool.submit(managed, "axon-work-computer"),
+                        off=pool.submit(template, "personal", text), on=pool.submit(template, "personal", text, {"agentHost": {"sessionCopy": True}}))
+            cls.got = {k: v.result() for k, v in jobs.items()}
+
+    def test_personal_linux_gets_the_timer_service_command_and_loader_and_work_gets_none(self):
+        self.assertLessEqual(COPY_FILES, self.got["personal"])
+        self.assertEqual(COPY_FILES & self.got["work"], set())
+
+    def test_the_timer_runs_every_30_minutes_in_the_form_the_check_reads(self):
+        timer = (REPO / "dot_config/systemd/user/agent-session-copy.timer").read_text().splitlines()
+        self.assertIn("OnUnitActiveSec=30min", timer)
+        self.assertIn("ExecStart=%h/.local/bin/agent-session-copy", (REPO / "dot_config/systemd/user/agent-session-copy.service").read_text())
+
+    def test_shipped_disabled_the_loader_stops_the_timer_and_keeps_the_units(self):
+        s = self.got["off"].stdout
+        self.assertEqual(self.got["off"].returncode, 0, self.got["off"].stderr)
+        self.assertIn("disable --now agent-session-copy.timer", s)
+        self.assertNotIn("enable agent-session-copy.timer", s.replace("disable --now", ""))
+        self.assertNotIn("rm -f", s)
+
+    def test_switch_on_enables_and_starts_the_timer(self):
+        s = self.got["on"].stdout
+        self.assertEqual(self.got["on"].returncode, 0, self.got["on"].stderr)
+        self.assertIn("systemctl --user enable agent-session-copy.timer", s)
+        self.assertIn("systemctl --user restart agent-session-copy.timer", s)
+        self.assertNotIn("disable --now", s)
+
+
+STUB = """#!/bin/sh
+# Stands in for scripts/agent-host/kubectl.sh: runs the command after "--" here, as the pod would.
+[ -n "${STUB_FAIL:-}" ] && { echo "stub: pod unreachable" >&2; exit 1; }
+while [ "$1" != "--" ]; do shift; done
+shift
+exec "$@"
+"""
+
+
+@unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("rsync") and shutil.which("flock"), "rsync and flock needed")
+class SessionCopyScriptTest(unittest.TestCase):
+    """The copy command end to end with a stub kubectl that runs the pod's side in a temp directory."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        (self.tmp / "kubectl.sh").write_text(STUB)
+        for d in ("claude/-home-x", "pi/--x--", "dest"):
+            (self.tmp / d).mkdir(parents=True)
+        self.c = self.tmp / "claude/-home-x/s1.jsonl"
+        self.c.write_text('{"a":1}\n')
+        (self.tmp / "claude/-home-x/notes.txt").write_text("not a transcript")
+        (self.tmp / "pi/--x--/p1.jsonl").write_text('{"p":1}\n')
+
+    def run_copy(self, *args, **env):
+        e = dict(os.environ, XDG_RUNTIME_DIR=str(self.tmp), AGENT_SESSION_COPY_KUBECTL=str(self.tmp / "kubectl.sh"),
+                 AGENT_SESSION_COPY_DEST=str(self.tmp / "dest"), AGENT_SESSION_COPY_CLAUDE_SRC=str(self.tmp / "claude"),
+                 AGENT_SESSION_COPY_PI_SRC=str(self.tmp / "pi"), **env)
+        return subprocess.run(["sh", str(REPO / "dot_local/bin/executable_agent-session-copy"), *args], capture_output=True, text=True, env=e, timeout=60)
+
+    def test_copies_jsonl_with_the_same_bytes_and_only_what_changed_afterwards(self):
+        r = self.run_copy()
+        self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+        self.assertIn("claude: 1 file(s) sent", r.stdout)
+        self.assertIn("pi: 1 file(s) sent", r.stdout)
+        got = self.tmp / "dest/claude/-home-x/s1.jsonl"
+        self.assertEqual(got.read_bytes(), self.c.read_bytes())
+        self.assertFalse((self.tmp / "dest/claude/-home-x/notes.txt").exists())
+        again = self.run_copy().stdout
+        self.assertIn("claude: 0 file(s) sent", again)
+        self.assertIn("pi: 0 file(s) sent", again)
+        self.c.write_text('{"a":1}\n{"a":2}\n')
+        third = self.run_copy().stdout
+        self.assertIn("claude: 1 file(s) sent", third)
+        self.assertIn("pi: 0 file(s) sent", third)
+        self.assertEqual(got.read_bytes(), self.c.read_bytes())
+
+    def test_dry_run_sends_nothing_and_nothing_is_ever_deleted_in_the_pod(self):
+        r = self.run_copy("--dry-run")
+        self.assertIn("would be sent", r.stdout)
+        self.assertFalse((self.tmp / "dest/claude/-home-x/s1.jsonl").exists())
+        self.run_copy()
+        self.c.unlink()
+        self.run_copy()
+        self.assertTrue((self.tmp / "dest/claude/-home-x/s1.jsonl").exists())  # removed here, kept there
+
+    def test_an_unreachable_pod_exits_69_with_the_reason(self):
+        r = self.run_copy(STUB_FAIL="1")
+        self.assertEqual(r.returncode, 69)
+        self.assertIn("cannot reach", r.stdout + r.stderr)
+
+    def test_a_missing_source_is_skipped(self):
+        shutil.rmtree(self.tmp / "pi")
+        r = self.run_copy()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("pi:", r.stdout)
+        self.assertIn("does not exist here; skipped", r.stdout)
 
 
 if __name__ == "__main__":

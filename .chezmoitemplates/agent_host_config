@@ -1,10 +1,13 @@
 {{- /* agent_host_config: the cutover settings for omarchy once the agent host (the pod on the cluster) runs the coordinator, as JSON
-{"removeCoordinatorHook", "disableTimers", "podTunnelKey"}. Local chezmoi data agentHost (docs/profiles.md, "Local data keys"):
+{"removeCoordinatorHook", "disableTimers", "sessionCopy", "podTunnelKey"}. Local chezmoi data agentHost (docs/profiles.md, "Local data keys"):
   removeCoordinatorHook  true or false. Default false. true takes the coordinator's T3 hook entries out of ~/.claude/settings.json
                          (dot_claude/modify_settings.json.tmpl): no hook file is looked for and hook.ts is not run. It changes that one file.
   disableTimers          true or false. Default false. true makes the session-cost, mistakes-report and agent-events timers behave as their own
                          enabled setting being false: the loader stops each timer and removes its two units. It wins over those three settings.
                          Setting it back to false installs and starts them again (their own settings apply as before).
+  sessionCopy            true or false. Default false. true enables agent-session-copy.timer (every 30 minutes: new and changed Claude Code and Pi
+                         session files go from this desktop into the agent-host pod, for Retro; run_onchange_after_89_agent_session_copy_systemd.sh.tmpl).
+                         The timer, its service and the command are installed on personal Linux either way, so the copy can be run by hand.
   podTunnelKey           The agent-host pod's ssh public key, one line "ssh-ed25519 <base64> [comment]". Default empty. Set, it makes
                          private_dot_ssh/modify_authorized_keys.tmpl append one line to ~/.ssh/authorized_keys:
                          restrict,port-forwarding,permitopen="127.0.0.1:3773" <key>   (the pod's tunnel to omarchy's T3, and nothing else).
@@ -14,15 +17,15 @@ copied data file can never change the work Mac. Used by the Claude settings temp
 or value fails the whole render, so a typo applies nothing. Default (both switches false, no key) leaves every render byte-for-byte what it was. */ -}}
 {{- $raw := dig "agentHost" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
-{{-   fail (printf "agentHost must be a map with removeCoordinatorHook, disableTimers and podTunnelKey, got %q" (printf "%v" $raw)) -}}
+{{-   fail (printf "agentHost must be a map with removeCoordinatorHook, disableTimers, sessionCopy and podTunnelKey, got %q" (printf "%v" $raw)) -}}
 {{- end -}}
 {{- range $k, $_ := $raw -}}
-{{-   if not (has $k (list "removeCoordinatorHook" "disableTimers" "podTunnelKey")) -}}
-{{-     fail (printf "agentHost.%s is not a setting (removeCoordinatorHook, disableTimers, podTunnelKey)" $k) -}}
+{{-   if not (has $k (list "removeCoordinatorHook" "disableTimers" "sessionCopy" "podTunnelKey")) -}}
+{{-     fail (printf "agentHost.%s is not a setting (removeCoordinatorHook, disableTimers, sessionCopy, podTunnelKey)" $k) -}}
 {{-   end -}}
 {{- end -}}
 {{- $out := dict -}}
-{{- range $k := list "removeCoordinatorHook" "disableTimers" -}}
+{{- range $k := list "removeCoordinatorHook" "disableTimers" "sessionCopy" -}}
 {{-   $v := printf "%v" (get $raw $k | default false) -}}
 {{-   if not (has $v (list "true" "false")) -}}
 {{-     fail (printf "agentHost.%s must be true or false, got %q" $k $v) -}}
@@ -34,7 +37,7 @@ or value fails the whole render, so a typo applies nothing. Default (both switch
 {{-   fail "agentHost.podTunnelKey must be one ssh-ed25519 public key line: ssh-ed25519 <base64> [comment]" -}}
 {{- end -}}
 {{- $_ := set $out "podTunnelKey" $key -}}
-{{- if and (ne (printf "%v" (dig "profile" "" .)) "personal") (or (get $out "removeCoordinatorHook") (get $out "disableTimers") (ne $key "")) -}}
+{{- if and (ne (printf "%v" (dig "profile" "" .)) "personal") (or (get $out "removeCoordinatorHook") (get $out "disableTimers") (get $out "sessionCopy") (ne $key "")) -}}
 {{-   fail (printf "agentHost switches apply to the personal profile only (omarchy), not %q" (printf "%v" (dig "profile" "" .))) -}}
 {{- end -}}
 {{- $out | toJson -}}
