@@ -88,6 +88,7 @@ python3 scripts/ci-par.py \
   tests/git-credential \
   tests/tmp-on-disk \
   tests/ci-par \
+  tests/mcp-pins \
   tests/release-pins \
   tests/ci-main-status || status=1
 

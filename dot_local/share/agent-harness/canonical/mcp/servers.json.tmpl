@@ -7,17 +7,9 @@
         "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
       }
     },
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp"
-      ]
-    },
     "rea": {
-      "command": "npx",
+      "command": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/rea",
       "args": [
-        "-y",
-        "rea-agents@6.4.0",
         "mcp"
       ]
     },

@@ -418,7 +418,7 @@ def main():
     remote = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Remote)
     threading.Thread(target=remote.serve_forever, daemon=True).start()
     port, idle = model.server_port, a.idle
-    for n in ("alpha", "playwright", "rea"):
+    for n in ("alpha", "beta", "rea"):
         register_codes(n)
     CODES["discover-alpha"] = js_names("alpha")
 
@@ -621,7 +621,7 @@ def failure_and_retry(root, port, idle):
 
 
 def six_servers(root, port, remote_port, idle):
-    fakes = [Fake(Path(root), n) for n in ("alpha", "playwright", "rea")]
+    fakes = [Fake(Path(root), n) for n in ("alpha", "beta", "rea")]
     url = "http://127.0.0.1:%d/mcp" % remote_port
     w = World(root, "six", idle, fakes, remotes=[("hindsight", url), ("context7", url), ("ticktick", url)])
     try:
@@ -630,7 +630,7 @@ def six_servers(root, port, remote_port, idle):
 
         @check("rendering: three servers wrapped, three remote entries unchanged")
         def rendering():
-            for n in ("alpha", "playwright", "rea"):
+            for n in ("alpha", "beta", "rea"):
                 require(cfg[n]["command"] == STANDIN and cfg[n]["args"][:3] == [n, str(idle), "--"], cfg[n])
             for n in ("hindsight", "context7", "ticktick"):
                 require(cfg[n] == {"type": "http", "url": url}, cfg[n])
@@ -645,7 +645,7 @@ def six_servers(root, port, remote_port, idle):
             data = json.loads(r.stdout)
             rows = data if isinstance(data, list) else data.get("servers", data)
             names = {x.get("name") for x in rows} if isinstance(rows, list) else set(rows)
-            require(names >= {"alpha", "playwright", "rea", "hindsight", "context7", "ticktick"}, names)
+            require(names >= {"alpha", "beta", "rea", "hindsight", "context7", "ticktick"}, names)
             require('"connected"' in r.stdout and r.stdout.count('"connected"') >= 6, r.stdout[:600])
             for f in fakes:
                 require(f.procs() == [], "pi mcp list started %s" % f.name)
@@ -658,7 +658,7 @@ def six_servers(root, port, remote_port, idle):
             def session_mcp():
                 require(rpc.command("prompt", message="/mcp").get("disposition") == "handled", "/mcp not handled")
                 blob = json.dumps(rpc.events)
-                for n in ("alpha", "playwright", "rea", "hindsight", "context7", "ticktick"):
+                for n in ("alpha", "beta", "rea", "hindsight", "context7", "ticktick"):
                     require("%s: connected" % n in blob, "%s not listed as connected" % n)
                 out = rpc.prompt("remote")
                 require("RESULT:remote-echo:remote" in out, out[:300])
@@ -672,29 +672,16 @@ def six_servers(root, port, remote_port, idle):
 
 
 REAL_CODES = {
-    "real-playwright": "const r = await tools.mcp__playwright__browser_navigate({url:'about:blank'}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
     "real-rea": "const r = await tools.mcp__rea__binary_session({}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
 }
-REAL_PROCESS = {"playwright": "node playwright-mcp", "rea": "node rea"}
+REAL_PROCESS = {"rea": "node rea"}
 
 
-def cached_chromium():
-    """A Chromium build playwright can be pointed at (the cache holds one that is not the exact build playwright-mcp wants)."""
-    base = Path.home() / "Library" / "Caches" / "ms-playwright"
-    for exe in sorted(base.glob("chromium-*/chrome-mac*/*.app/Contents/MacOS/*")):
-        if exe.is_file() and os.access(exe, os.X_OK):
-            return str(exe)
-    return None
-
-
-def is_browser(name):
-    n = name.lower()  # the tool cuts a command at its first space: "Google Chrome for Testing Helper" shows as "Google"
-    return "chromium" in n or "chrome" in n or n == "google"
 REAL_IDLE = 10
 
 
 def real_calls(root, port):
-    """One harmless call to each real server through a real Pi session in a throwaway home. The two entries come
+    """One harmless call to the real server through a real Pi session in a throwaway home. The entry comes
     from the real rendering step and state copies built by the real refresh. The throwaway home is the measurement
     tool's: offline npx from clones of the owner's npx cache, stubbed credential helpers, no credentials."""
     import types
@@ -718,7 +705,7 @@ def real_calls(root, port):
         agent = home / ".pi" / "agent"
         agent.mkdir(parents=True)
         mcp = json.loads(json.dumps(rendered["mcp"]))
-        for n in ("playwright", "rea"):
+        for n in ("rea",):
             mcp["mcpServers"][n]["args"][1] = str(REAL_IDLE)  # shortened idle period, in the proof's own copy only
         (agent / "mcp.json").write_text(json.dumps(mcp))
         (home / ".local" / "state").mkdir(parents=True)
@@ -747,16 +734,12 @@ def real_calls(root, port):
         project.mkdir()
         holder["env"] = {"PATH": ":".join([str(node_dir), str(tools_dir), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]), "HOME": str(home),
                          "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1", "npm_config_offline": "true", "PI_SKIP_VERSION_CHECK": "1",
-                         "PI_TELEMETRY": "0", tool.MARKER: marker, "PLAYWRIGHT_MCP_HEADLESS": "true"}
-        holder["chromium"] = cached_chromium()
-        if holder["chromium"]:  # real Chromium, started by the real playwright-mcp in a session of its own
-            holder["env"]["PLAYWRIGHT_MCP_BROWSER"] = "chromium"
-            holder["env"]["PLAYWRIGHT_MCP_EXECUTABLE_PATH"] = holder["chromium"]
+                         "PI_TELEMETRY": "0", tool.MARKER: marker}
         holder["project"] = project
         servers = rendered["mcp"]["mcpServers"]
-        for n in ("playwright", "rea"):
+        for n in ("rea",):
             require(servers[n]["command"].endswith("pi-mcp-lazy"), "%s not wrapped" % n)
-        require(all((home / ".local" / "state" / "pi-mcp-lazy" / (n + ".json")).exists() for n in ("playwright", "rea")), "state copies missing")
+        require(all((home / ".local" / "state" / "pi-mcp-lazy" / (n + ".json")).exists() for n in ("rea",)), "state copies missing")
 
     prepare()
     if "env" not in holder:
@@ -778,37 +761,24 @@ def real_calls(root, port):
             return {"owned_process_names": names}
         none_before()
 
-        for name in ("playwright", "rea"):
+        for name in ("rea",):
             @check("real server %s: first harmless call starts it and returns a real result" % name)
             def one(name=name):
                 t0 = time.monotonic()
                 out = rpc.prompt("real-" + name, timeout=180)
                 took = time.monotonic() - t0
-                require("RESULT:" in out, out[:400])
-                outcome = "success"
-                if '"isError":true' in out and not (name == "playwright" and holder["chromium"]):
-                    # Only playwright can answer this way here: no browser build matching this playwright-mcp is installed on
-                    # this machine, so the live server gives the same error. It is the real server's own answer, relayed
-                    # through the stand-in; a stand-in start error ("failed to start", "exited") never qualifies.
-                    require(name == "playwright" and ("is not installed" in out or "is not found" in out)
-                            and "failed to start" not in out and "exited" not in out, out[:400])
-                    outcome = "real server's own answer: browser not installed (no matching browser build on this machine)"
-                if name == "playwright" and holder["chromium"]:
-                    require('"isError":false' in out, "real playwright with a real Chromium should succeed: " + out[:300])
-                    outcome = "success, with a real Chromium (%s)" % Path(holder["chromium"]).parts[-6]
+                require("RESULT:" in out and '"isError":false' in out, out[:400])
                 names = owned_names()
                 require(REAL_PROCESS[name] in names, "%s did not start: %r" % (name, names))
-                if name == "playwright" and holder["chromium"]:
-                    require(any(is_browser(n) for n in names), "no Chromium process while playwright is up: %r" % names)
-                return {"call_to_result_s": round(took, 2), "outcome": outcome, "owned_process_names": names,
+                return {"call_to_result_s": round(took, 2), "outcome": "success", "owned_process_names": names,
                         "tool": REAL_CODES["real-" + name].split("tools.")[1].split("(")[0]}
             one()
 
-        @check("real servers: idle stop reclaims every server and npm wrapper, memory back within 10%, restart works")
+        @check("real servers: idle stop reclaims the server, memory back within 10%, restart works")
         def idle_real():
             up = mcp_side_rss_kb(rpc.p.pid)
-            gone = wait_until(lambda: not [n for n in owned_names() if n in tool.MCP_REAL_NAMES or is_browser(n)], REAL_IDLE + 90)
-            require(gone, "real MCP processes (or the browser) remain after the idle period: %r" % owned_names())
+            gone = wait_until(lambda: not [n for n in owned_names() if n in tool.MCP_REAL_NAMES], REAL_IDLE + 90)
+            require(gone, "real MCP processes remain after the idle period: %r" % owned_names())
             time.sleep(1)
             after = mcp_side_rss_kb(rpc.p.pid)
             pre = holder["rss_pre"]
@@ -816,14 +786,10 @@ def real_calls(root, port):
             owned_pre, owned_after = holder["owned_pre"], after + pi_rss_kb(rpc.p.pid)
             require(owned_after <= 1.10 * owned_pre, "owned-set RSS before %d kB, after idle %d kB" % (owned_pre, owned_after))
             names = owned_names()
-            require(len([n for n in names if "pi-mcp-lazy" in n]) == 2, "stand-ins should stay: %r" % names)
+            require(len([n for n in names if "pi-mcp-lazy" in n]) == 1, "stand-in should stay: %r" % names)
             out = rpc.prompt("real-rea", timeout=180)
             require('"isError":false' in out, out[:300])
             require("node rea" in owned_names(), "rea was not started again")
-            if holder["chromium"]:  # leave the real browser running, so Pi's exit is judged with it up
-                out = rpc.prompt("real-playwright", timeout=180)
-                require('"isError":false' in out, out[:300])
-                require(any(is_browser(n) for n in owned_names()), "Chromium was not started again")
             return {"owned_set_rss_kb": {"before_use": owned_pre, "after_idle": owned_after},
                     "stand_ins_only_rss_kb": {"before_use": pre, "servers_up": up, "after_idle": after}, "owned_after_idle": names}
         idle_real()

@@ -49,7 +49,16 @@ Rules:
   Both desktop profiles use codemode's `only` mode: ordinary tools remain
   callable from scripts rather than directly declared to the model.
   Hindsight's automatic hooks use REST and are independent of MCP.
-- The Pi adapter wraps the local `playwright` and `rea` entries in `~/.local/bin/pi-mcp-lazy` (names in
+- `rea` starts straight from a mise-installed, pinned npm package (`npm:rea-agents` in `dot_config/mise/config.toml`, the only place
+  the version lives); the canonical entry names the mise shim (`~/.local/share/mise/shims/rea`), so the server is one process with no
+  `npm exec` wrapper beside it. To bump it, change the pin in `config.toml`, apply, and regenerate the pi-mcp-lazy seed. `mise install`
+  must have run before a harness starts it (the apply's bootstrap does it). Still launched through a package runner: `jira` (work,
+  unpinned `npx -y mcp-remote`, its URL and sign-in exist only on the work Mac) and `browser-harness` (`uvx`, pinned, patched launcher).
+- The Playwright MCP server (`@playwright/mcp`) is retired (Michael, ask #1040): browser work goes through `browser-harness`. The
+  Claude apply step removes a leftover `playwright` registration from `~/.claude.json`; Codex's block and Pi's `mcp.json` drop it
+  on the same apply. (The Chromium wrapper `~/.local/bin/chromium`, which uses Playwright's Chrome for Testing build for Pi's
+  `launch_browser`, is a different thing and stays.)
+- The Pi adapter wraps the local `rea` entry in `~/.local/bin/pi-mcp-lazy` (names in
   `~/.local/share/pi-mcp-lazy/servers.list`) so Pi starts them on first use and stops them when idle. Claude and Codex
   keep the canonical entries. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.

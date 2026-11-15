@@ -114,6 +114,12 @@ yq = "latest" # YAML processor
 shellcheck = "latest"
 # claude-code-acp installed via a task to ensure node is available first
 
+# Local stdio MCP server, installed at an exact pin so a harness starts the server itself, not `npm exec` plus
+# the server (one process, not two). The only home of this version: servers.json.tmpl names the mise shim
+# (~/.local/share/mise/shims/rea), never a version. Bump the pin here, apply, then regenerate
+# the pi-mcp-lazy seed (dot_local/share/pi-mcp-lazy/README.md).
+"npm:rea-agents" = "6.4.0"
+
 # =============================================================================
 # Tool Options
 # =============================================================================
