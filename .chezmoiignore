@@ -393,6 +393,13 @@ Library/Preferences/pnpm/**
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
+# run-and-wake's recovery after a host restart (personal Linux): its systemd user unit and the script that enables it. The command itself deploys on both
+# desktop profiles; the work Mac has no systemd and no T3 service here, so it has no unit to run it. Its --recover mode needs a boot id and finds nothing there.
+.config/systemd/user/run-and-wake-recover.service
+90_run_and_wake_recover_systemd.sh
+{{- end }}
+
+{{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
 # T3 Code as a systemd user service (personal Linux): the PATH drop-in for the unit T3 writes itself, and the script that installs T3 and that unit.
 .config/systemd/user/t3code.service.d
 .config/systemd/user/t3code.service.d/**
