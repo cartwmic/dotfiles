@@ -8,7 +8,9 @@
 #   2. downloads Vercel's agent-desktop v1.3.1 (x86_64-pc-windows-msvc), checks it against the release's checksums.txt and
 #      unpacks agent-desktop.exe into %USERPROFILE%\.local\share\agent-desktop\vercel\;
 #   3. registers the scheduled task "agent-desktop", set to run only when the user is logged on, so it runs inside the desktop
-#      session and can see and drive the screen. The task has no trigger: each agent-desktop call starts it;
+#      session and can see and drive the screen. The task runs one long-lived worker (one instance, no time limit), started at
+#      logon, and by any agent-desktop call that finds none. When the scripts or the task changed, the old worker is ended and a
+#      new one started, so the first call after an install is already fast;
 #   4. adds %USERPROFILE%\.local\bin to the user PATH when it is not there.
 # A second run changes nothing, downloads nothing and says so. It touches no sign-in, PIN, sleep, power or remote-desktop setting.
 #
@@ -108,26 +110,50 @@ if ($have) {
 
 # ---- 3. the scheduled task ------------------------------------------------------------------------------------------------
 $program = 'powershell.exe'
+$restartWorker = ($changed.Count -gt 0)   # a script was replaced: the running worker still has the old code
 $taskArguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $binDir 'agent-desktop.ps1') + '" --worker'
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $same = $false
 if ($existing -and @($existing.Actions).Count -ge 1) {
     $a = @($existing.Actions)[0]
     $same = ($a.Execute -eq $program) -and ($a.Arguments -eq $taskArguments)
+    # the settings count too: a task from the first version ran one instance per call, with a ten minute limit and no trigger
+    if ($same) { $same = ([string]$existing.Settings.MultipleInstances -eq 'IgnoreNew') -and ([string]$existing.Settings.ExecutionTimeLimit -eq 'PT0S') -and (@($existing.Triggers).Count -eq 1) }
 }
 if ($same) {
     Write-Info "scheduled task '$TaskName' unchanged"
 } else {
     # COMPUTERNAME, not USERDOMAIN: an OpenSSH session sets USERDOMAIN to WORKGROUP, which names no account.
+    $account = "$env:COMPUTERNAME\$env:USERNAME"
     $action = New-ScheduledTaskAction -Execute $program -Argument $taskArguments
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-    # Parallel: each call starts its own worker. Battery: the G14 is a laptop and must run the task unplugged.
-    $settings = New-ScheduledTaskSettingsSet -MultipleInstances Parallel -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-    [void](Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force)
+    $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Limited
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
+    # IgnoreNew: one worker at a time, a second start does nothing. No time limit: the worker lives for the session.
+    # Battery: the G14 is a laptop and must run the task unplugged.
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+    [void](Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force)
     $verb = 'registered'
-    if ($existing) { $verb = 'registered again (its command differed)' }
+    if ($existing) { $verb = 'registered again (its command or settings differed)' }
     $changed.Add("scheduled task $verb")
+    $restartWorker = $true
     Write-Info "scheduled task '$TaskName' $verb"
+}
+if ($restartWorker) {
+    # End the old worker (it would answer with the old code), then start one. Not being logged on is not an error here.
+    foreach ($verbArgs in @('/End', '/Run')) {
+        $psiT = New-Object Diagnostics.ProcessStartInfo 'schtasks.exe'
+        $psiT.Arguments = "$verbArgs /TN $TaskName"
+        $psiT.UseShellExecute = $false
+        $psiT.CreateNoWindow = $true
+        $psiT.RedirectStandardOutput = $true
+        $psiT.RedirectStandardError = $true
+        $procT = [Diagnostics.Process]::Start($psiT)
+        $outT = $procT.StandardOutput.ReadToEndAsync()
+        $errT = $procT.StandardError.ReadToEndAsync()
+        $procT.WaitForExit()
+        if ($verbArgs -eq '/Run' -and $procT.ExitCode -ne 0) { Write-Info "the worker did not start now ($($errT.Result.Trim())); the first agent-desktop call starts it" }
+    }
+    Write-Info 'worker restarted'
 }
 
 # ---- 4. the user PATH -----------------------------------------------------------------------------------------------------

@@ -14,12 +14,15 @@
 #   agent-desktop ui ARGS...                        hand ARGS to Vercel's agent-desktop; its output and exit code come back
 #
 # Why a scheduled task: an ssh session on the G14 has no desktop, and the screen and input calls only work inside the
-# logged-in desktop session. So this script, run by the caller, checks the call, writes it as a request file under
-# %LOCALAPPDATA%\agent-desktop\, starts the scheduled task "agent-desktop", waits for the answer file, prints it and exits with
-# its exit code. The task runs this same script as `agent-desktop.ps1 --worker` inside the desktop session; the worker takes
-# the request, does the action and writes the answer.
+# logged-in desktop session. So the task "agent-desktop" runs this same script as `agent-desktop.ps1 --worker` inside the
+# desktop session, and it stays there: one long-lived worker, started at logon or by the first call that finds none, so a call
+# does not pay for a new PowerShell, a C# compile and the ScheduledTasks module (3.6 s per call in the first live run).
+# A call checks itself, writes a request file under %LOCALAPPDATA%\agent-desktop\, and waits for the answer file. The worker takes
+# the request, does the action and writes the answer. If nobody takes the request within 0.3 s the call runs
+# `schtasks /Run` (the task allows one instance, so a running worker ignores it) and again each second until it is taken.
+# The worker checks the lock screen on every request, and exits when this script file changes, so old code never answers.
 #
-# Exit: 0 ok; 1 a tool failed, the screen is locked or no answer came in time; 2 usage; 69 a needed tool is missing.
+# Exit: 0 ok; 1 a tool failed, the screen is locked or no answer came in time; 2 usage; 69 a needed tool or the task is missing.
 # Setting: AGENT_DESKTOP_TIMEOUT, seconds to wait for the answer (default 60).
 # Log: %LOCALAPPDATA%\agent-desktop\agent-desktop.log, one line per step on both sides of the task: UTC time, run id,
 # elapsed, step. `type` logs its length, not its text. `ui` logs its first argument and how many there are, because its
@@ -30,15 +33,19 @@ $script:Name = 'agent-desktop'
 $script:Actions = 'shot', 'windows', 'focus', 'move', 'click', 'type', 'key', 'cursor', 'ui'
 $script:DefaultTimeoutSeconds = 60
 $script:TaskName = 'agent-desktop'
+$script:StartAfterMs = 300      # a request nobody has taken after this long gets the task started, and again every second
+$script:RestartEveryMs = 1000
 $script:KeyIntervalMs = 40   # a burst of keys mistyped on a fresh Notepad tab (poc/g14.md J6); paced keys did not
 
 function Get-StateDir {
     $local = $env:LOCALAPPDATA
     if (-not $local) { $local = [Environment]::GetFolderPath('LocalApplicationData') }
-    Join-Path $local 'agent-desktop'
+    [IO.Path]::Combine($local, 'agent-desktop')
 }
 
-function Get-RunId { (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ', [Globalization.CultureInfo]::InvariantCulture) + '-' + $PID }
+# The call path uses .NET directly: each cmdlet's first use in a fresh PowerShell costs 15 to 50 ms (Get-Date, ConvertTo-Json,
+# ConvertFrom-Json, New-Item, Join-Path, New-Object: 75 ms for the first New-Object), and a call is only a few hundred milliseconds.
+function Get-RunId { [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ', [Globalization.CultureInfo]::InvariantCulture) + '-' + $PID }
 
 # ---- log ----------------------------------------------------------------------------------------------------------------
 $script:RunId = Get-RunId
@@ -47,11 +54,11 @@ $script:Clock = [Diagnostics.Stopwatch]::StartNew()
 function Write-Log([string]$Text) {
     # One line: UTC time, run id, elapsed seconds, step. Opened shared so the two sides of the task can both append.
     $dir = Get-StateDir
-    [void](New-Item -ItemType Directory -Force -Path $dir)
-    $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    [void][IO.Directory]::CreateDirectory($dir)
+    $stamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
     $line = '{0} run={1} elapsed={2}s {3}' -f $stamp, $script:RunId, [int]$script:Clock.Elapsed.TotalSeconds, $Text
-    $bytes = (New-Object Text.UTF8Encoding $false).GetBytes($line + "`n")
-    $stream = New-Object IO.FileStream (Join-Path $dir 'agent-desktop.log'), ([IO.FileMode]::Append), ([IO.FileAccess]::Write), ([IO.FileShare]::ReadWrite)
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($line + "`n")
+    $stream = [IO.FileStream]::new([IO.Path]::Combine($dir, 'agent-desktop.log'), [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
     try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
 }
 
@@ -187,8 +194,43 @@ function Get-Timeout {
 
 function Write-TextAtomic([string]$Path, [string]$Text) {
     $tmp = [IO.Path]::ChangeExtension($Path, '.tmp')
-    [IO.File]::WriteAllText($tmp, $Text, (New-Object Text.UTF8Encoding $false))
-    Move-Item -LiteralPath $tmp -Destination $Path -Force
+    [IO.File]::WriteAllText($tmp, $Text, [Text.UTF8Encoding]::new($false))
+    if ([IO.File]::Exists($Path)) { [IO.File]::Delete($Path) }
+    [IO.File]::Move($tmp, $Path)
+}
+
+function Remove-Quietly([string]$Path) { try { [IO.File]::Delete($Path) } catch { } }
+
+function ConvertTo-JsonString([string]$Text) {
+    $e = $Text.Replace('\', '\\').Replace('"', '\"').Replace("`n", '\n').Replace("`r", '\r').Replace("`t", '\t')
+    if ($e -match '[\x00-\x1f]') { $e = [regex]::Replace($e, '[\x00-\x1f]', [Text.RegularExpressions.MatchEvaluator]{ param($m) '\u{0:x4}' -f [int][char]$m.Value }) }
+    '"' + $e + '"'
+}
+
+function Read-Answer([string]$Path) {
+    # The answer is {"exit":N,"stdout":"..","stderr":".."} written by the worker. A regex reads it in about a millisecond;
+    # ConvertFrom-Json costs 30 ms on first use. Anything else falls back to ConvertFrom-Json.
+    $text = [IO.File]::ReadAllText($Path)
+    $m = [regex]::Match($text, '^\s*\{\s*"exit"\s*:\s*(-?[0-9]+)\s*,\s*"stdout"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*,\s*"stderr"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*\}\s*$', [Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($m.Success) { return @{ exit = [int]$m.Groups[1].Value; stdout = [regex]::Unescape($m.Groups[2].Value); stderr = [regex]::Unescape($m.Groups[3].Value) } }
+    $j = ConvertFrom-Json $text
+    @{ exit = [int]$j.exit; stdout = [string]$j.stdout; stderr = [string]$j.stderr }
+}
+
+function Invoke-Schtasks([string[]]$Argv) {
+    # schtasks.exe takes 40 ms; the ScheduledTasks module takes over a second to load. Run through a process object because on
+    # 5.1 a redirected native stderr turns into error records, which stop the script.
+    $psi = New-Object Diagnostics.ProcessStartInfo 'schtasks.exe'
+    $psi.Arguments = ConvertTo-ArgString $Argv
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [Diagnostics.Process]::Start($psi)
+    $o = $p.StandardOutput.ReadToEndAsync()
+    $e = $p.StandardError.ReadToEndAsync()
+    $p.WaitForExit()
+    @{ exit = $p.ExitCode; out = ($o.Result + $e.Result) }
 }
 
 function Invoke-Call([string[]]$Argv) {
@@ -205,37 +247,44 @@ function Invoke-Call([string[]]$Argv) {
         }
     }
     $dir = Get-StateDir
-    [void](New-Item -ItemType Directory -Force -Path $dir)
-    $request = Join-Path $dir "request-$script:RunId.json"
-    $answer = Join-Path $dir "answer-$script:RunId.json"
+    [void][IO.Directory]::CreateDirectory($dir)
+    $request = [IO.Path]::Combine($dir, "request-$script:RunId.json")
+    $answer = [IO.Path]::Combine($dir, "answer-$script:RunId.json")
     $expires = [DateTime]::UtcNow.AddSeconds($timeout).Ticks
-    $body = [ordered]@{ id = $script:RunId; action = $action; argv = [string[]]$rest; cwd = $PWD.ProviderPath; ui_bin = $uiBin; expires = $expires }
-    Write-TextAtomic $request (ConvertTo-Json -InputObject $body)
+    $argvJson = '[' + ((@($rest) | ForEach-Object { ConvertTo-JsonString ([string]$_) }) -join ',') + ']'
+    $body = '{"id":' + (ConvertTo-JsonString $script:RunId) + ',"action":' + (ConvertTo-JsonString $action) + ',"argv":' + $argvJson + ',"cwd":' + (ConvertTo-JsonString $PWD.ProviderPath) + ',"ui_bin":' + (ConvertTo-JsonString $uiBin) + ',"expires":' + $expires + '}'
+    Write-TextAtomic $request $body
     Write-Log ("request " + (Get-StepText $action $rest))
-    try {
-        Start-ScheduledTask -TaskName $script:TaskName
-    } catch {
-        Remove-Item -LiteralPath $request -ErrorAction SilentlyContinue
-        $registered = Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue
-        if (-not $registered) {
-            Write-Log 'FAIL task is not registered'
-            Exit-Fail 69 "the scheduled task '$script:TaskName' is not registered. Run windows\install.ps1 from the dotfiles repo."
-        }
-        Write-Log 'FAIL task did not start'
-        Exit-Fail 1 "could not start the scheduled task '$script:TaskName': $($_.Exception.Message)"
-    }
-    Write-Log 'task started'
     $wait = [Diagnostics.Stopwatch]::StartNew()
-    while (-not (Test-Path -LiteralPath $answer)) {
-        if ($wait.Elapsed.TotalSeconds -ge $timeout) {
-            Remove-Item -LiteralPath $request -ErrorAction SilentlyContinue   # a late task run must not act on an old call
+    $nextStart = $script:StartAfterMs
+    $started = $false
+    while (-not [IO.File]::Exists($answer)) {
+        $ms = $wait.Elapsed.TotalMilliseconds
+        if ($ms -ge ($timeout * 1000)) {
+            Remove-Quietly $request   # a late worker must not act on an old call
             Write-Log "FAIL timeout after ${timeout}s waiting for the answer"
-            Exit-Fail 1 "no answer from the scheduled task '$script:TaskName' within ${timeout}s. The screen may be locked, nobody may be signed in on the G14, or the task is stuck. Log: $(Join-Path $dir 'agent-desktop.log')"
+            [void](Invoke-Schtasks @('/End', '/TN', $script:TaskName))   # a stuck worker is ended, so the next call starts a fresh one
+            Exit-Fail 1 "no answer from the scheduled task '$script:TaskName' within ${timeout}s. The screen may be locked, nobody may be signed in on the G14, or the worker is stuck (it was ended; the next call starts a new one). Log: $([IO.Path]::Combine($dir, 'agent-desktop.log'))"
         }
-        [Threading.Thread]::Sleep(25)
+        if ($ms -ge $nextStart -and [IO.File]::Exists($request)) {
+            # nobody has taken the request: no worker is running, or it is busy. A running task ignores a second start.
+            $run = Invoke-Schtasks @('/Run', '/TN', $script:TaskName)
+            if ($run.exit -ne 0) {
+                $query = Invoke-Schtasks @('/Query', '/TN', $script:TaskName)
+                if ($query.exit -ne 0) {
+                    Remove-Quietly $request
+                    Write-Log 'FAIL task is not registered'
+                    Exit-Fail 69 "the scheduled task '$script:TaskName' is not registered. Run windows\install.ps1 from the dotfiles repo."
+                }
+            }
+            if (-not $started) { Write-Log 'task start requested'; $started = $true }
+            $nextStart = $ms + $script:RestartEveryMs
+        }
+        [Threading.Thread]::Sleep(10)
     }
-    $reply = ConvertFrom-Json ([IO.File]::ReadAllText($answer))
-    Remove-Item -LiteralPath $answer, $request -ErrorAction SilentlyContinue
+    $reply = Read-Answer $answer
+    Remove-Quietly $answer
+    Remove-Quietly $request
     if ($reply.stdout) { [Console]::Out.Write([string]$reply.stdout) }
     if ($reply.stderr) { [Console]::Error.Write([string]$reply.stderr) }
     Write-Log "answer exit=$($reply.exit)"
@@ -506,23 +555,28 @@ function Invoke-Action([string]$Action, [string[]]$Argv, [string]$Cwd, [string]$
     @{ exit = 2; stdout = ''; stderr = "[$script:Name] ERROR: unknown action $Action`n" }
 }
 
-function Invoke-Worker {
-    $dir = Get-StateDir
-    if (-not (Test-Path -LiteralPath $dir)) { return }
-    foreach ($file in (Get-ChildItem -LiteralPath $dir -Filter 'request-*.json' | Sort-Object Name)) {
-        $claimed = Join-Path $dir ('claimed-' + $file.Name.Substring('request-'.Length))
-        try { [IO.File]::Move($file.FullName, $claimed) } catch { continue }   # another worker took it
+function Get-ScriptStamp([string]$Path) {
+    $i = New-Object IO.FileInfo $Path
+    if (-not $i.Exists) { return '' }
+    '{0}:{1}' -f $i.LastWriteTimeUtc.Ticks, $i.Length
+}
+
+function Invoke-OneRequest([string]$Dir) {
+    # Takes the oldest request, does it and writes the answer. Returns $true when there was one.
+    foreach ($file in (Get-ChildItem -LiteralPath $Dir -Filter 'request-*.json' | Sort-Object Name)) {
+        $claimed = Join-Path $Dir ('claimed-' + $file.Name.Substring('request-'.Length))
+        try { [IO.File]::Move($file.FullName, $claimed) } catch { continue }   # taken by someone else, or withdrawn
         $req = $null
         try { $req = ConvertFrom-Json ([IO.File]::ReadAllText($claimed)) } catch { }
         Remove-Item -LiteralPath $claimed -ErrorAction SilentlyContinue
-        if ($null -eq $req) { $script:RunId = Get-RunId; Write-Log 'worker FAIL unreadable request'; continue }
+        if ($null -eq $req) { $script:RunId = Get-RunId; Write-Log 'worker FAIL unreadable request'; return $true }
         $script:RunId = [string]$req.id
         $script:Clock = [Diagnostics.Stopwatch]::StartNew()
-        if ([DateTime]::UtcNow.Ticks -gt [int64]$req.expires) { Write-Log 'worker dropped an expired request'; continue }
+        if ([DateTime]::UtcNow.Ticks -gt [int64]$req.expires) { Write-Log 'worker dropped an expired request'; return $true }
         $argv = [string[]]@($req.argv)
         $step = Get-StepText ([string]$req.action) $argv
         $result = $null
-        if (Test-ScreenLocked) {
+        if (Test-ScreenLocked) {   # on every request: the screen can lock and unlock while the worker lives
             Write-Log "worker FAIL ${step}: the screen is locked"
             $result = @{ exit = 1; stdout = ''; stderr = "[$script:Name] ERROR: the screen is locked. Unlock the G14, then run the command again. See docs/agent-desktop.md.`n" }
         } else {
@@ -534,10 +588,39 @@ function Invoke-Worker {
                 $result = @{ exit = 1; stdout = ''; stderr = "[$script:Name] ERROR: $($_.Exception.Message)`n" }
             }
         }
-        if ([DateTime]::UtcNow.Ticks -gt [int64]$req.expires) { Write-Log 'worker answer dropped: the caller gave up'; continue }
-        $answer = Join-Path $dir ('answer-' + $script:RunId + '.json')
+        if ([DateTime]::UtcNow.Ticks -gt [int64]$req.expires) { Write-Log 'worker answer dropped: the caller gave up'; return $true }
+        $answer = Join-Path $Dir ('answer-' + $script:RunId + '.json')
         Write-TextAtomic $answer (ConvertTo-Json -InputObject ([ordered]@{ exit = [int]$result.exit; stdout = [string]$result.stdout; stderr = [string]$result.stderr }))
-        return   # one request per worker run: the caller starts the task once per call
+        return $true
+    }
+    $false
+}
+
+function Invoke-Worker {
+    # Lives in the desktop session until the task is ended or this script file changes. One worker at a time: the lock file.
+    $dir = Get-StateDir
+    [void](New-Item -ItemType Directory -Force -Path $dir)
+    $script:RunId = Get-RunId
+    $lock = $null
+    try { $lock = New-Object IO.FileStream (Join-Path $dir 'worker.lock'), ([IO.FileMode]::OpenOrCreate), ([IO.FileAccess]::ReadWrite), ([IO.FileShare]::None) }
+    catch { Write-Log 'worker not started: another worker is running'; return }
+    $stamp = Get-ScriptStamp $PSCommandPath
+    $watcher = New-Object IO.FileSystemWatcher $dir, 'request-*.json'
+    try {
+        $watcher.EnableRaisingEvents = $true
+        foreach ($name in 'Created', 'Renamed', 'Changed') { [void](Register-ObjectEvent -InputObject $watcher -EventName $name -SourceIdentifier "agent-desktop-$name") }
+        try { Initialize-Native } catch { Write-Log "worker native tools not ready: $($_.Exception.Message)" }   # the C# compile happens here, once
+        Write-Log "worker started pid=$PID"
+        while ($true) {
+            if ((Get-ScriptStamp $PSCommandPath) -ne $stamp) { $script:RunId = Get-RunId; Write-Log 'worker exits: its script file changed'; break }
+            if (Invoke-OneRequest $dir) { continue }
+            [void](Wait-Event -Timeout 1)   # woken by a new request file; the timeout is the safety net and the script check
+            Get-Event | Remove-Event
+        }
+    } finally {
+        Get-EventSubscriber | Unregister-Event -Force
+        $watcher.Dispose()
+        $lock.Dispose()
     }
 }
 

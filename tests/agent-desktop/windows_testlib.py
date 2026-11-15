@@ -14,6 +14,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -27,66 +28,113 @@ EIGHT = ("shot", "windows", "focus", "move", "click", "type", "key", "cursor")
 
 STUB_MODULE = r'''
 # Stand-in for the Windows ScheduledTasks module. State lives in $env:AD_STUB_STATE.
+# The module is slow to load on Windows (over a second), so the agent-desktop client must never call it: every call is logged
+# as "module <Name>" and the bridge tests assert there are none during a call. install.ps1 may use it.
 $script:State = $env:AD_STUB_STATE
 function Write-Call([string]$Text) { Add-Content -LiteralPath (Join-Path $script:State 'calls.log') -Value $Text }
 function New-ScheduledTaskAction { param([string]$Execute, [string]$Argument)
     [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
 function New-ScheduledTaskPrincipal { param([string]$UserId, [string]$LogonType, [string]$RunLevel)
     [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel } }
+function New-ScheduledTaskTrigger { param([switch]$AtLogOn, [string]$User)
+    [pscustomobject]@{ Type = $(if ($AtLogOn) { 'LogOn' } else { 'Other' }); UserId = $User } }
 function New-ScheduledTaskSettingsSet { param([string]$MultipleInstances, [switch]$AllowStartIfOnBatteries,
         [switch]$DontStopIfGoingOnBatteries, $ExecutionTimeLimit)
+    # the real module reports the limit as an ISO 8601 duration, and zero as PT0S
+    $limit = 'PT0S'
+    if ($ExecutionTimeLimit -and $ExecutionTimeLimit.TotalSeconds -gt 0) { $limit = 'PT' + [int]$ExecutionTimeLimit.TotalMinutes + 'M' }
     [pscustomobject]@{ MultipleInstances = $MultipleInstances; AllowStartIfOnBatteries = [bool]$AllowStartIfOnBatteries
-        DontStopIfGoingOnBatteries = [bool]$DontStopIfGoingOnBatteries } }
+        DontStopIfGoingOnBatteries = [bool]$DontStopIfGoingOnBatteries; ExecutionTimeLimit = $limit } }
 function Register-ScheduledTask { param([string]$TaskName, $Action, $Principal, $Settings, $Trigger, [switch]$Force)
     Write-Call "Register-ScheduledTask $TaskName"
     $task = [pscustomobject]@{ TaskName = $TaskName; Actions = @($Action); Principal = $Principal; Settings = $Settings
-        HasTrigger = ($null -ne $Trigger) }
+        Triggers = @($Trigger | Where-Object { $_ }); HasTrigger = ($null -ne $Trigger) }
     ConvertTo-Json -InputObject $task -Depth 5 | Set-Content -LiteralPath (Join-Path $script:State 'task.json') -Encoding UTF8
     $task
 }
 function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName)
+    Write-Call "module Get-ScheduledTask"
     $f = Join-Path $script:State 'task.json'
     if (-not (Test-Path -LiteralPath $f)) { Write-Error "No MSFT_ScheduledTask objects found with property 'TaskName' equal to '$TaskName'"; return }
     ConvertFrom-Json (Get-Content -LiteralPath $f -Raw)
 }
-function Start-ScheduledTask { param([string]$TaskName)
-    Write-Call "Start-ScheduledTask $TaskName"
-    $mode = $env:AD_STUB_MODE
-    $local = Join-Path $env:LOCALAPPDATA 'agent-desktop'
-    if ($mode -eq 'absent') { throw "No MSFT_ScheduledTask objects found with property 'TaskName' equal to '$TaskName'" }
-    if ($mode -eq 'none') { return }
-    $request = Get-ChildItem -LiteralPath $local -Filter 'request-*.json' | Sort-Object Name | Select-Object -First 1
-    if ($mode -eq 'answer') {
-        Copy-Item -LiteralPath $request.FullName -Destination (Join-Path $script:State 'seen-request.json')
-        $id = [IO.Path]::GetFileNameWithoutExtension($request.Name).Substring('request-'.Length)
-        $ans = [ordered]@{ exit = [int]$env:AD_STUB_EXIT; stdout = $env:AD_STUB_STDOUT; stderr = $env:AD_STUB_STDERR }
-        $tmp = Join-Path $local ('answer-' + $id + '.tmp')
-        ConvertTo-Json -InputObject $ans | Set-Content -LiteralPath $tmp -Encoding UTF8
-        Move-Item -LiteralPath $tmp -Destination (Join-Path $local ('answer-' + $id + '.json'))
-        return
-    }
-    # mode 'registered': run the registered action the way the task would, in a clean environment and another folder.
-    $task = ConvertFrom-Json (Get-Content -LiteralPath (Join-Path $script:State 'task.json') -Raw)
-    $action = $task.Actions[0]
-    if ($action.Execute -ne 'powershell.exe') { throw "unexpected task program $($action.Execute)" }
-    $argLine = $action.Arguments -replace '-WindowStyle Hidden ', ''
-    $psi = New-Object System.Diagnostics.ProcessStartInfo (Get-Command pwsh).Source
-    $psi.Arguments = $argLine
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.WorkingDirectory = $env:AD_STUB_WORKER_CWD
-    $psi.Environment.Clear()
-    foreach ($k in 'PATH', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME') {
-        if (Test-Path "env:$k") { $psi.Environment[$k] = (Get-Item "env:$k").Value }
-    }
-    $p = [System.Diagnostics.Process]::Start($psi)
-    $o = $p.StandardOutput.ReadToEndAsync(); $e = $p.StandardError.ReadToEndAsync()
-    $p.WaitForExit()
-    Add-Content -LiteralPath (Join-Path $script:State 'worker-output.txt') -Value ($o.Result + $e.Result)
-    Write-Call "worker exit $($p.ExitCode)"
-}
+function Start-ScheduledTask { param([string]$TaskName) Write-Call "module Start-ScheduledTask $TaskName" }
+function Unregister-ScheduledTask { param([string]$TaskName, $Confirm) Write-Call "module Unregister-ScheduledTask $TaskName" }
 Export-ModuleMember -Function *
+'''
+
+# Stand-in for schtasks.exe, which is what the client and install.ps1 use to start and end the task (43 ms against 1.1 s for the
+# module). Modes, from AD_STUB_MODE: absent (no such task: /Run and /Query exit 1), none (starts nothing), answer (writes the
+# answer to the oldest request at once), registered (runs the action install.ps1 registered as a background worker, as the real
+# task does, unless a worker is still running: the task allows one instance).
+SCHTASKS_STUB = r'''#!/usr/bin/env python3
+import json, os, shlex, subprocess, sys
+
+state = os.environ["AD_STUB_STATE"]
+mode = os.environ.get("AD_STUB_MODE", "none")
+args = sys.argv[1:]
+verb = args[0].lower() if args else ""
+name = args[args.index("/TN") + 1] if "/TN" in args else ""
+
+def log(text):
+    with open(os.path.join(state, "calls.log"), "a") as f:
+        f.write(text + "\n")
+
+def alive(pid):
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+def workers():
+    path = os.path.join(state, "workers.pids")
+    pids = [int(x) for x in open(path).read().split()] if os.path.exists(path) else []
+    return [p for p in pids if alive(p)]
+
+log("schtasks %s %s" % (args[0] if args else "", name))
+if verb == "/query":
+    if mode == "absent":
+        sys.stderr.write("ERROR: The system cannot find the file specified.\n"); sys.exit(1)
+    print("TaskName Next Run Time Status"); sys.exit(0)
+if verb == "/end":
+    for pid in workers():
+        os.kill(pid, 9)
+    sys.exit(0)
+if verb != "/run":
+    sys.stderr.write("stub schtasks: unsupported %s\n" % verb); sys.exit(2)
+if mode == "absent":
+    sys.stderr.write("ERROR: The system cannot find the file specified.\n"); sys.exit(1)
+local = os.path.join(os.environ["LOCALAPPDATA"], "agent-desktop")
+if mode == "answer":
+    requests = sorted(n for n in os.listdir(local) if n.startswith("request-") and n.endswith(".json")) if os.path.isdir(local) else []
+    if requests:
+        src = os.path.join(local, requests[0])
+        with open(src) as f: data = f.read()
+        with open(os.path.join(state, "seen-request.json"), "w") as f: f.write(data)
+        rid = requests[0][len("request-"):-len(".json")]
+        answer = {"exit": int(os.environ.get("AD_STUB_EXIT", "0")), "stdout": os.environ.get("AD_STUB_STDOUT", ""), "stderr": os.environ.get("AD_STUB_STDERR", "")}
+        tmp = os.path.join(local, "answer-%s.tmp" % rid)
+        with open(tmp, "w") as f: json.dump(answer, f)
+        os.rename(tmp, os.path.join(local, "answer-%s.json" % rid))
+    sys.exit(0)
+if mode == "registered":
+    if workers():
+        log("schtasks ignored: a worker is running (one instance only)"); sys.exit(0)
+    with open(os.path.join(state, "task.json")) as f: task = json.load(f)
+    action = task["Actions"][0]
+    if action["Execute"] != "powershell.exe":
+        sys.stderr.write("unexpected task program %s\n" % action["Execute"]); sys.exit(1)
+    argline = action["Arguments"].replace("-WindowStyle Hidden ", "")
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "USERNAME", "USERDOMAIN", "COMPUTERNAME") if k in os.environ}
+    pwsh = None
+    for d in os.environ["PATH"].split(os.pathsep):
+        if os.path.isfile(os.path.join(d, "pwsh")): pwsh = os.path.join(d, "pwsh"); break
+    out = open(os.path.join(state, "worker-output.txt"), "a")
+    proc = subprocess.Popen([pwsh] + shlex.split(argline), env=env, cwd=os.environ["AD_STUB_WORKER_CWD"], stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True)
+    with open(os.path.join(state, "workers.pids"), "a") as f: f.write("%d\n" % proc.pid)
+    log("worker started pid-recorded")
+sys.exit(0)
 '''
 
 CURL_STUB = r'''#!/bin/sh
@@ -129,6 +177,18 @@ case $1 in
     done
     echo "The operation completed successfully." ;;
 esac
+'''
+
+TASKLIST_STUB = r'''#!/bin/sh
+# stub tasklist: prints what the real one prints for /FI "IMAGENAME eq LogonUI.exe", from $AD_STUB_TASKLIST (default: no process)
+echo "tasklist $*" >> "$AD_STUB_STATE/calls.log"
+if [ -n "$AD_STUB_TASKLIST" ]; then
+  echo "Image Name                     PID Session Name        Session#    Mem Usage"
+  echo "========================= ======== ================ =========== ============"
+  echo "$AD_STUB_TASKLIST"
+else
+  echo "INFO: No tasks are running which match the specified criteria."
+fi
 '''
 
 UI_STUB = r'''#!/bin/sh
@@ -197,6 +257,8 @@ class Sandbox:
         executable(self.stubbin / "curl.exe", CURL_STUB)
         executable(self.stubbin / "tar.exe", TAR_STUB)
         executable(self.stubbin / "reg.exe", REG_STUB)
+        executable(self.stubbin / "schtasks.exe", SCHTASKS_STUB)
+        executable(self.stubbin / "tasklist", TASKLIST_STUB)
         self.ui_calls = self.tmp / "ui-calls.txt"
         self.ui_exe = self.tmp / "ui-stub.exe"
         executable(self.ui_exe, UI_STUB)
@@ -264,6 +326,37 @@ class Sandbox:
         for proc in self.processes:
             proc.kill()
             proc.wait()
+        for pid in self.worker_pids():
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+    def worker_pids(self):
+        f = self.state / "workers.pids"
+        return [int(x) for x in f.read_text().split()] if f.exists() else []
+
+    def live_workers(self):
+        out = []
+        for pid in self.worker_pids():
+            try:
+                if Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()[0] != "Z":
+                    out.append(pid)
+            except OSError:
+                pass
+        return out
+
+    def count_calls(self, prefix):
+        return len([c for c in self.calls() if c.startswith(prefix)])
+
+    def wait_for(self, what, check, timeout=60):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            got = check()
+            if got:
+                return got
+            time.sleep(0.05)
+        raise AssertionError("timed out waiting for " + what)
 
 
 class WindowsTestCase(unittest.TestCase):

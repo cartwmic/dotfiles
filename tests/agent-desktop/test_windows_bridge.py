@@ -1,21 +1,28 @@
 """c10: the G14 command hands each action to a scheduled task and waits for the answer.
 
-Under PowerShell 7 on Linux, with a stub ScheduledTasks module standing in for the real one:
+Under PowerShell 7 on Linux, with a stub schtasks.exe (and a stub ScheduledTasks module for install.ps1) standing in for the real ones:
   * a bad call exits 2, prints the usage naming all eight actions and `ui`, and writes no request;
-  * a good call writes a request, starts the task, prints the answer and exits with the answer's exit code (0 and 3);
-  * no answer in time: exit 1 with a message, and the request is withdrawn so a late task run cannot act on it;
+  * a good call writes a request, makes sure the task is running, prints the answer and exits with the answer's exit code (0 and 3);
+  * the task is one long-lived worker: many calls start it once, a dead worker is replaced by the next call, and a worker whose
+    script was replaced gives way to a new one. The client uses schtasks.exe and never the ScheduledTasks module (over a second
+    to load on the G14, and the cause of the 3.6 s per call the first live run measured);
+  * no answer in time: exit 1 with a message, the task is ended, and the request is withdrawn so a late run cannot act on it;
   * no task registered: exit 69;
-  * the whole chain: the stub's Start-ScheduledTask runs the action that install.ps1 registered, in a clean environment and
-    another folder, as the real task does. That proves the lock check, `ui` through the task, the shared run id in the log,
-    and that `type` logs only its length, on both sides of the task.
+  * the whole chain: the stub's `schtasks /Run` starts the action that install.ps1 registered, in a clean environment and
+    another folder, as the real task does. That proves the lock check on every call, `ui` through the task, the shared run id in
+    the log, and that `type` logs only its length, on both sides of the task.
 `shot`, `windows`, `focus`, `move`, `click`, `type` and `key` call user32 and .NET drawing, which exist only on Windows, so
 their effect on a screen is for the live run on the G14 (the worker's failure message on Linux is all these tests see).
 Run: mise exec aqua:PowerShell/PowerShell@7.7.0 -- python3 -m unittest discover -s tests/agent-desktop -p test_windows_bridge.py
 """
+import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 import time
+import types
 import unittest
 
 import windows_testlib as wt
@@ -48,6 +55,9 @@ class BridgeBase(WindowsTestCase):
 
     def request_files(self):
         return [n for n in self.box.state_files() if n.startswith("request-")]
+
+    def module_calls(self):
+        return [c for c in self.box.calls() if c.startswith("module ")]
 
 
 class BadCallTest(BridgeBase):
@@ -116,6 +126,22 @@ class RequestAnswerTest(BridgeBase):
                 self.assertEqual(r.stdout, "5 6\n")
                 self.assertEqual(r.stderr, "warn\n")
 
+    def test_awkward_text_survives_the_request_and_the_answer(self):
+        # the client writes and reads these files without ConvertTo-Json/ConvertFrom-Json (30 to 50 ms each on first use)
+        awkward = 'q"uote back\\slash \\n tab\there\nline two \u00e9\u4e2d <>&\' \x01 end'
+        r = self.call("type", awkward, AD_STUB_STDOUT=awkward + "\n", AD_STUB_STDERR="err " + awkward)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        req = json.loads((self.box.state / "seen-request.json").read_text())
+        self.assertEqual(req["argv"], [awkward])
+        self.assertEqual(r.stdout, awkward + "\n")
+        self.assertEqual(r.stderr, "err " + awkward)
+
+    def test_a_large_answer_comes_back_whole(self):
+        big = ("line of output with \"quotes\" and \\ slashes\n" * 2000)
+        r = self.call("windows", AD_STUB_STDOUT=big)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, big)
+
     def test_the_request_names_the_action_its_arguments_and_the_callers_folder(self):
         self.call("shot", "out.png", "1,2 30x40", AD_STUB_STDOUT="out.png\n")
         req = json.loads((self.box.state / "seen-request.json").read_text())
@@ -151,12 +177,23 @@ class RequestAnswerTest(BridgeBase):
         self.assertLess(elapsed, 20, "the wait must end at the time limit")
         self.assertEqual(self.request_files(), [], "a late task run must find nothing to do")
         self.assertTrue(any("FAIL" in l and "timeout" in l for l in self.box.log_lines()), self.box.log_lines())
+        self.assertGreaterEqual(self.box.count_calls("schtasks /Run"), 1, "the task is started while the request waits")
+        self.assertEqual(self.box.count_calls("schtasks /End"), 1, "a stuck worker is ended so the next call starts a fresh one")
 
     def test_no_task_registered_exits_69_and_names_the_install_script(self):
         r = self.call("cursor", mode="absent")
         self.assertEqual(r.returncode, 69, (r.stdout, r.stderr))
         self.assertIn("install.ps1", r.stderr)
         self.assertEqual(self.request_files(), [])
+
+    def test_the_client_never_loads_the_scheduled_tasks_module(self):
+        for mode in ("answer", "none", "absent"):
+            self.call("cursor", mode=mode, AGENT_DESKTOP_TIMEOUT="1", AD_STUB_STDOUT="1 2\n")
+        self.assertEqual(self.module_calls(), [], "the module takes over a second to load on the G14; schtasks.exe takes 40 ms")
+
+    def test_the_task_is_started_when_the_request_is_not_taken_and_not_otherwise(self):
+        self.call("cursor", mode="answer", AD_STUB_STDOUT="1 2\n")
+        self.assertEqual(self.box.count_calls("schtasks /Run"), 1)
 
     def test_every_client_line_is_in_the_log_format_with_one_run_id_and_type_logs_only_its_length(self):
         secret = "hunter2-SECRET"
@@ -217,7 +254,7 @@ class ChainTest(BridgeBase):
 
     def test_both_sides_of_the_task_log_one_line_per_step_with_the_same_run_id(self):
         self.chain("ui", "snapshot", AGENT_DESKTOP_UI_BIN=str(self.box.ui_exe))
-        lines = self.box.log_lines()
+        lines = [l for l in self.box.log_lines() if not re.search(r" worker (started|native tools|exits|not started)", l)]   # the worker's own life is not part of a call
         parsed = [LOG_LINE.match(l) for l in lines]
         self.assertTrue(all(parsed), lines)
         self.assertEqual(len({m.group(1) for m in parsed}), 1, "client and worker share the run id: %s" % lines)
@@ -236,7 +273,7 @@ class ChainTest(BridgeBase):
         self.assertTrue(any(marker in l and " worker " not in l for l in lines), "client side: %s" % lines)
         everything = "\n".join(lines) + r.stdout + r.stderr
         self.assertNotIn(secret, everything)
-        self.assertEqual(self.box.state_files(), ["agent-desktop.log"], "no request or answer may be left behind")
+        self.assertEqual(self.box.state_files(), ["agent-desktop.log", "worker.lock"], "no request or answer may be left behind")
 
     def test_a_call_with_no_desktop_tools_exits_1_and_says_what_failed(self):
         r = self.chain("cursor")
@@ -245,8 +282,57 @@ class ChainTest(BridgeBase):
         self.assertEqual(r.stdout, "")
 
 
+    def ui(self):
+        return self.chain("ui", "snapshot", AGENT_DESKTOP_UI_BIN=str(self.box.ui_exe))
+
+    def test_many_calls_start_the_task_once_and_the_worker_stays_for_the_next_ones(self):
+        installed_with = self.module_calls()   # install.ps1 may use the module; calls must not
+        r = self.ui()
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        runs_after_first = self.box.count_calls("schtasks /Run")
+        self.assertEqual(len(self.box.worker_pids()), 1)
+        for n in range(4):
+            r = self.ui()
+            self.assertEqual(r.returncode, 0, (n, r.stdout, r.stderr))
+        self.assertEqual(len(self.box.ui_argv_lines()), 5)
+        self.assertEqual(self.box.count_calls("schtasks /Run"), runs_after_first, "a call that finds a running worker must not start the task")
+        self.assertEqual(len(self.box.worker_pids()), 1, "one worker answered all five calls")
+        self.assertEqual(self.module_calls(), installed_with, "no call may load the ScheduledTasks module")
+
+    def test_a_dead_worker_is_replaced_by_the_next_call(self):
+        self.assertEqual(self.ui().returncode, 0)
+        for pid in self.box.live_workers():
+            os.kill(pid, 9)
+        self.box.wait_for("the worker to die", lambda: not self.box.live_workers())
+        r = self.ui()
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertEqual(len(self.box.worker_pids()), 2, "the second call started a second worker")
+        self.assertEqual(len(self.box.live_workers()), 1)
+
+    def test_a_worker_whose_script_was_replaced_gives_way_to_a_new_one(self):
+        self.assertEqual(self.ui().returncode, 0)
+        old = self.box.live_workers()
+        self.assertEqual(len(old), 1)
+        with open(self.script, "a") as f:
+            f.write("\n# a later version\n")
+        r = self.ui()
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertEqual(len(self.box.worker_pids()), 2, "old code must never answer a call made after the script changed")
+        self.box.wait_for("the old worker to be gone", lambda: old[0] not in self.box.live_workers())
+        self.assertEqual(len(self.box.live_workers()), 1)
+
+    def test_a_second_worker_exits_at_once_while_one_is_running(self):
+        self.assertEqual(self.ui().returncode, 0)
+        started = time.monotonic()
+        r = self.box.run(self.script, "--worker", env=self.box.env(), timeout=60)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(len(self.box.live_workers()), 1, "the first worker is untouched")
+        self.assertEqual(self.ui().returncode, 0, "and still answers")
+
+
 class WorkerTest(BridgeBase):
-    """The worker side alone: what it does with a request file it finds."""
+    """The worker alone: started by hand in the background, as the task starts it, then given request files."""
 
     def setUp(self):
         super().setUp()
@@ -255,35 +341,120 @@ class WorkerTest(BridgeBase):
         self.script = self.box.bin / "agent-desktop.ps1"
         self.dir = self.box.local / "agent-desktop"
         self.dir.mkdir(parents=True, exist_ok=True)
+        self.worker = None
+
+    def start_worker(self):
+        self.worker = subprocess.Popen([wt.pwsh(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.script), "--worker"],
+                                       env=self.box.env(), cwd=str(self.box.elsewhere), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.box.processes.append(self.worker)
+        self.box.wait_for("the worker to say it started", lambda: any("worker started" in l for l in self.box.log_lines()))
+        return self.worker
 
     def put_request(self, name, expires_in_seconds, action="ui", argv=("snapshot",)):
         ticks = 621355968000000000 + int((time.time() + expires_in_seconds) * 10_000_000)   # .NET ticks since year 1
         req = dict(id=name, action=action, argv=list(argv), cwd=str(self.box.work), ui_bin=str(self.box.ui_exe), expires=ticks)
-        (self.dir / ("request-%s.json" % name)).write_text(json.dumps(req))
+        tmp = self.dir / ("request-%s.tmp" % name)
+        tmp.write_text(json.dumps(req))
+        tmp.rename(self.dir / ("request-%s.json" % name))
 
-    def work(self):
-        return self.box.run(self.script, "--worker", env=self.box.env())
+    def answer(self, name, timeout=30):
+        path = self.dir / ("answer-%s.json" % name)
+        self.box.wait_for("the answer to " + name, path.exists, timeout)
+        return json.loads(path.read_text())
 
-    def test_the_worker_runs_a_live_request_and_writes_the_answer_the_client_reads(self):
+    def test_the_worker_answers_a_live_request_and_stays_to_answer_the_next(self):
+        w = self.start_worker()
         self.put_request("20260101T000000Z-1", 60)
-        r = self.work()
-        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
-        answer = json.loads((self.dir / "answer-20260101T000000Z-1.json").read_text())
-        self.assertEqual(answer["exit"], 0)
-        self.assertEqual(answer["stdout"], "stub ui out\n")
-        self.assertEqual(answer["stderr"], "stub ui err\n")
+        a = self.answer("20260101T000000Z-1")
+        self.assertEqual((a["exit"], a["stdout"], a["stderr"]), (0, "stub ui out\n", "stub ui err\n"))
         self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("request-")], [], "the request is consumed")
+        self.assertIsNone(w.poll(), "the worker keeps running")
+        self.put_request("20260101T000000Z-2", 60)
+        self.answer("20260101T000000Z-2")
+        self.assertEqual(len(self.box.ui_argv_lines()), 2)
+
+    def test_the_worker_takes_a_request_that_arrived_before_it_started(self):
+        self.put_request("20260101T000000Z-3", 60)
+        self.start_worker()
+        self.answer("20260101T000000Z-3")
+
+    def test_the_worker_picks_up_a_request_quickly_while_idle(self):
+        self.start_worker()
+        time.sleep(1.5)   # idle: no request, no answer, no exit
+        self.assertIsNone(self.worker.poll())
+        started = time.monotonic()
+        self.put_request("20260101T000000Z-4", 60)
+        self.answer("20260101T000000Z-4")
+        self.assertLess(time.monotonic() - started, 5, "an idle worker must answer within moments")
 
     def test_the_worker_drops_a_request_whose_client_has_given_up(self):
-        self.put_request("20260101T000000Z-2", -5)
-        r = self.work()
-        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
-        self.assertEqual(self.box.ui_argv_lines(), [], "an old request must never act")
-        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith(("request-", "answer-"))], [])
+        self.start_worker()
+        self.put_request("20260101T000000Z-5", -5)
+        self.box.wait_for("the old request to be taken", lambda: not [n for n in os.listdir(self.dir) if n.startswith("request-")])
+        self.put_request("20260101T000000Z-6", 60)   # a later live request proves the worker got past the old one
+        self.answer("20260101T000000Z-6")
+        self.assertEqual(len(self.box.ui_argv_lines()), 1, "an old request must never act")
+        self.assertFalse((self.dir / "answer-20260101T000000Z-5.json").exists())
 
-    def test_the_worker_with_nothing_to_do_exits_0(self):
-        r = self.work()
-        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+
+class LockAfterRowsTest(WindowsTestCase):
+    """After the rows the driver locks the G14 with a one-off interactive task and keeps the proof (the lead's g14-lock.sh steps).
+    The lock script runs here under PowerShell 7 with the stub ScheduledTasks module and a stub tasklist."""
+
+    def setUp(self):
+        super().setUp()
+        self.box = Sandbox(self)
+        spec = importlib.util.spec_from_file_location("live_run_for_lock", wt.REPO / "tests" / "agent-desktop" / "live_run.py")
+        self.live = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.live)
+        self.out = self.box.tmp / "proof"
+        box = self.box
+
+        class Dev:
+            def ps(self_, script, timeout=120):
+                f = box.tmp / "lock.ps1"
+                f.write_text(script)
+                r = box.run(f, env=box.env(AD_STUB_TASKLIST=box.tasklist_line), timeout=timeout)
+                return types.SimpleNamespace(exit=r.returncode, out=r.stdout + r.stderr)
+
+        self.dev = Dev()
+        self.rec = types.SimpleNamespace(out=self.out)
+        self.out.mkdir()
+        self.box.tasklist_line = ""
+
+    def lock(self, tasklist_line):
+        self.box.tasklist_line = tasklist_line
+        return self.live.g14_lock(self.rec, self.dev)
+
+    def module_lines(self):
+        return [c for c in self.box.calls() if c.startswith("module ") or c.startswith("Register-")]
+
+    def test_it_runs_lockworkstation_in_a_one_off_interactive_task_and_removes_the_task(self):
+        self.assertTrue(self.lock("LogonUI.exe                   1234 Console                    1     20,000 K"))
+        self.assertEqual(self.module_lines(), ["Register-ScheduledTask rad-lock-once", "module Start-ScheduledTask rad-lock-once", "module Unregister-ScheduledTask rad-lock-once"])
+        task = self.box.task()
+        self.assertEqual(task["Actions"][0]["Execute"], "rundll32.exe")
+        self.assertEqual(task["Actions"][0]["Arguments"], "user32.dll,LockWorkStation")
+        self.assertEqual(str(task["Principal"]["LogonType"]), "Interactive", "it must run in the desktop session, not in the ssh session")
+        self.assertEqual(task["Principal"]["UserId"], "G14\\michael")
+
+    def test_the_proof_is_saved_in_the_output_folder(self):
+        self.lock("LogonUI.exe                   1234 Console                    1     20,000 K")
+        proof = (self.out / "lock-after-rows.txt").read_text()
+        self.assertIn("LogonUI.exe", proof)
+        self.assertIn("locked: LogonUI.exe is running in session 1", proof)
+
+    def test_a_logonui_in_session_0_or_no_logonui_is_not_a_lock(self):
+        for line, word in (("LogonUI.exe                   1234 Services                   0     20,000 K", "session 0"), ("", "no LogonUI")):
+            with self.subTest(line=line):
+                self.assertFalse(self.lock(line))
+                self.assertIn("NOT LOCKED", (self.out / "lock-after-rows.txt").read_text())
+                self.assertIn(word, (self.out / "lock-after-rows.txt").read_text())
+
+    def test_the_dry_run_plan_names_the_lock_step(self):
+        r = subprocess.run([sys.executable, "-I", str(wt.REPO / "tests" / "agent-desktop" / "live_run.py"), "g14", "--dry-run"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("lock_after_rows", r.stdout)
 
 
 if __name__ == "__main__":
