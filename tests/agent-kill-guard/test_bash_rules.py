@@ -202,6 +202,16 @@ class Merge(unittest.TestCase):
                 self.assertIn("merge-pr.sh", message)
                 self.assertIn("ci-main-status", message)
 
+    def test_the_merge_gate_form_is_allowed_and_the_exit_code_workaround_is_not(self):
+        self.assertIsNone(check("ci-main-status --merge-gate X && gh pr merge 5"))
+        self.assertIsNone(check("ci-main-status --merge-gate dotfiles && gh pr merge 5 --squash -R cartwmic/dotfiles"))
+        message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")
+        self.assertIsNotNone(message)
+        self.assertIn("merge-pr.sh", message)
+
+    def test_the_refusal_names_the_merge_gate_form(self):
+        self.assertIn("ci-main-status --merge-gate <repo> && gh pr merge", check("gh pr merge 12"))
+
     def test_ci_main_status_first_allows_a_repo_that_is_not_the_coordinator(self):
         for text in ["ci-main-status homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
                      "cd /tmp && ci-main-status homelab && gh pr merge 182 --squash",

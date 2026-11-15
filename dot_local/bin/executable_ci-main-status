@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """ci-main-status: is main green, red, or untested? Read before every merge.
 
-usage: ci-main-status [--tip] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab)
-       ci-main-status [--tip] --all
+usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab)
+       ci-main-status [--tip | --merge-gate] --all
+
+--merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
+merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
+REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
 
 --tip is for deploy. Without it, green means "not red": the newest conclusive commit passed, and untested commits
 may sit on top while a run is going. That is right for the merge freeze. With --tip, exit 0 needs main's tip itself
@@ -27,6 +31,7 @@ Exit codes:
      untested commits while a run is going: the tip is not tested yet, so wait.
 Under --tip the GREEN line ends with the full 40-char tip sha ("tip <sha>"). A deploy pulls that sha
 (git merge --ff-only <sha>), because main can move between the check and the pull.
+Under --merge-gate, 2 becomes 0 (the line is unchanged), so the exit is 0 unless a repo is red or unreadable.
 --all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab has no main run: "n/a", never affects the code.
 
 GitHub repos: the full workflow's runs on main, read from gh run list (the newest RUN_LIMIT runs).
@@ -319,13 +324,16 @@ def describe(name, tip_only=False):
 
 def main(argv):
     tip_only = "--tip" in argv
-    argv = [a for a in argv if a != "--tip"]
+    merge_gate = "--merge-gate" in argv
+    argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
+    if tip_only and merge_gate:
+        argv = []   # the two flags disagree about UNTESTED: usage error
     if argv == ["--all"]:
         names = ORDER
     elif len(argv) == 1 and argv[0] in REPOS:
         names = argv
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip] REPO | [--tip] --all", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
@@ -334,7 +342,7 @@ def main(argv):
         print("\n".join(lines))
         if rank[code] > rank[worst]:
             worst = code
-    return worst
+    return 0 if merge_gate and worst == 2 else worst
 
 
 if __name__ == "__main__":
