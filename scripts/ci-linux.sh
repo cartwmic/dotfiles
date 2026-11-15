@@ -51,6 +51,7 @@ python3 scripts/ci-par.py \
   tests/zshenv-op-token \
   tests/agent-scratch \
   tests/run-and-wake \
+  tests/video-rename \
   tests/worktree-reap \
   tests/workstream-rank \
   tests/agent-events \

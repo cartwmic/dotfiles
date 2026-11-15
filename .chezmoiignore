@@ -38,6 +38,9 @@
 # The kgate profile of this repo's heavy suites (source-only; run from the checkout).
 ./kgate.toml
 docs/
+# video-rename's config is written by hand on the one machine that uses it (README.md, "video-rename"); chezmoi must never manage or add it.
+.config/video-rename
+.config/video-rename/**
 # T8 proof driver/backend are source-only; no repository tests deploy into $HOME.
 ./tests/
 # CI scripts (scripts/ci-par.py, scripts/ci-linux.sh) are source-only; they run from the checkout.
@@ -312,6 +315,8 @@ Library/Preferences/pnpm/**
 .local/user_scripts/agent_tmp_move.py
 .local/share/agent-scratch
 .local/share/agent-scratch/**
+# video-rename: a personal media task on the personal Mac (README.md, "video-rename").
+.local/bin/video-rename
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
