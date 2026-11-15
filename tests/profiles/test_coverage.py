@@ -2,7 +2,9 @@
 
 Runs `chezmoi managed` against the real source for personal and axon-work-computer with a minimal config
 (no read-source-state hook, no secrets) and a throwaway HOME. Gates that also need darwin only show up on macOS;
-rows marked "(macOS)" or "(Linux)" are skipped on the other OS.
+rows marked "(macOS)" or "(Linux)" are skipped on the other OS, and rows marked "(Windows)" are always skipped here:
+chezmoi never deploys them (they are source files for a Windows install script), so no managed set can show them.
+tests/profiles/test_windows_rows.py checks those rows.
 """
 import os
 import re
@@ -44,7 +46,7 @@ def rows():
         profile = cells[1].split()[0]
         if profile not in PROFILES:
             raise AssertionError("row %r: profile must be one of %s" % (line, PROFILES))
-        flags = {"(macOS)": DARWIN, "(Linux)": LINUX}
+        flags = {"(macOS)": DARWIN, "(Linux)": LINUX, "(Windows)": False}
         runs_here = all(here for flag, here in flags.items() if flag in cells[1])   # a gate that also needs another OS cannot be checked here
         out.append((re.findall(r"`([^`]+)`", cells[0]), profile, runs_here, cells[2]))
     return out
@@ -80,7 +82,7 @@ class CoverageTest(unittest.TestCase):
                 continue
             stale += ["%s: %s" % (profile, x) for x in paths if not any(covers(x, p) for p in self.only[profile])]
         if skipped:
-            print("\nprofiles: skipped %d (macOS or Linux) rows on the other OS" % skipped, file=sys.stderr)
+            print("\nprofiles: skipped %d (macOS, Linux or Windows) rows that this OS cannot check" % skipped, file=sys.stderr)
         self.assertEqual(stale, [], "rows in docs/profiles.md whose path is gone or no longer one-profile")
 
     def test_reasons_needed_are_counted(self):
