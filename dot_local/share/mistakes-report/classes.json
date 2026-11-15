@@ -1,0 +1,51 @@
+{
+  "model": "claude-haiku-5-5",
+  "logs_partial_before": "2026-11-11",
+  "classes": [
+    {
+      "id": "journey-missed-after-merge",
+      "name": "A journey test failed after merge and the change's own test run did not catch it",
+      "description": "An end-to-end journey (a scripted run of a whole user path) fails on main, or in a batch or gate run, after the change landed. The change's own journey run left that journey out, or did not exercise what the change touched. Timing races that make a journey fail after merge belong here too."
+    },
+    {
+      "id": "claim-not-true",
+      "name": "A document, comment or report said something the code or data does not back",
+      "description": "A wrong fact, a wrong line citation, a summary that claims more than was done, or a doc that contradicts the code it describes."
+    },
+    {
+      "id": "promise-not-delivered",
+      "name": "The change does not do what the approved request promised",
+      "description": "A requirement or deliverable is missing, a design contradicts the approved intent, or a step cannot be run as written."
+    },
+    {
+      "id": "failure-path-unhandled",
+      "name": "An error, retry, rollback or odd-input case was not handled",
+      "description": "The normal path works, but a failure, a partial state, an unusual input, a repeat run or an undo leaves things wrong or crashes."
+    },
+    {
+      "id": "logic-bug",
+      "name": "Plain wrong logic or state on the normal path",
+      "description": "A wrong condition, count, order or comparison; stale or double-counted data; the code does something other than what its author meant."
+    },
+    {
+      "id": "test-too-weak",
+      "name": "A test or proof does not check what it claims",
+      "description": "A test that cannot fail, depends on timing, skips its control run, is not run, or hand-copies the thing it should test."
+    },
+    {
+      "id": "rule-skipped",
+      "name": "A repo or process rule was skipped",
+      "description": "A required route, document, decision record, review step or repo convention was not followed."
+    },
+    {
+      "id": "works-here-not-there",
+      "name": "It behaves differently in the real environment",
+      "description": "Platform, deploy settings, permissions, size limits or load make the real run differ from the author's run."
+    },
+    {
+      "id": "other",
+      "name": "Something else",
+      "description": "None of the above fits."
+    }
+  ]
+}

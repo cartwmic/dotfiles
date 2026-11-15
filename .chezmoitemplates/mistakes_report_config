@@ -1,0 +1,18 @@
+{{- /* mistakes_report_config: the weekly repeated-mistakes report's settings as JSON {"enabled"}. Local chezmoi data mistakesReport:
+  enabled   true or false. Default: true on the personal profile, false everywhere else (nothing is read on the work Mac).
+Used by .chezmoiignore and the load script. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+{{- $raw := dig "mistakesReport" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "mistakesReport must be a map with enabled, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if ne $k "enabled" -}}
+{{-     fail (printf "mistakesReport.%s is not a setting (enabled)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $on := printf "%v" (eq (printf "%v" (dig "profile" "" .)) "personal") -}}
+{{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "mistakesReport.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") | toJson -}}

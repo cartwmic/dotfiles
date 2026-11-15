@@ -1,0 +1,29 @@
+#!/bin/sh
+# Load or reload the weekly mistakes-report timer when its units change. Linux only, and only while chezmoi data mistakesReport.enabled is true
+# (default: personal profile only) - .chezmoiignore leaves this script out otherwise. To turn the report off after it was applied:
+# systemctl --user disable --now mistakes-report.timer, then set mistakesReport.enabled false.
+# service: {{ include "dot_config/systemd/user/mistakes-report.service" | sha256sum }}
+# timer: {{ include "dot_config/systemd/user/mistakes-report.timer" | sha256sum }}
+# setting: {{ includeTemplate "mistakes_report_config" . }}
+#
+# Fails (and so fails the apply) when systemd does not end up with the timer active: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into: a notice and a clean exit.
+set -eu
+log() { printf '[mistakes_report_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; mistakes-report.timer not loaded"
+  exit 0
+fi
+dir="$HOME/.config/systemd/user"
+if [ ! -f "$dir/mistakes-report.service" ] || [ ! -f "$dir/mistakes-report.timer" ]; then
+  log ERROR "$dir/mistakes-report.service or mistakes-report.timer is not installed; apply them too, then apply again"
+  exit 1
+fi
+mkdir -p "$HOME/.local/state/mistakes-report"
+systemctl --user daemon-reload
+systemctl --user enable mistakes-report.timer >/dev/null 2>&1 || { log ERROR "could not enable mistakes-report.timer"; exit 1; }
+systemctl --user restart mistakes-report.timer || { log ERROR "could not start mistakes-report.timer; see: journalctl --user -u mistakes-report.timer"; exit 1; }
+systemctl --user is-active --quiet mistakes-report.timer || { log ERROR "mistakes-report.timer is not active after the restart"; exit 1; }
+log INFO "loaded mistakes-report.timer (Mondays 07:30; journalctl --user -u mistakes-report)"

@@ -1,0 +1,6 @@
+#!/bin/sh
+# mistakes-report: publish the weekly repeated-mistakes page (see ~/.local/share/mistakes-report/README.md). Options: --no-publish, --state-dir, --review-dir, --sessions-dir.
+set -eu
+impl=${MISTAKES_REPORT_IMPLEMENTATION:-${HOME:?HOME is not set}/.local/share/mistakes-report/mistakes_report.py}
+[ -f "$impl" ] || { printf '%s\n' "mistakes-report: implementation not found: $impl" >&2; exit 1; }
+exec python3 -I "$impl" "$@"
