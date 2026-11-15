@@ -194,6 +194,17 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 78_agent_chrome_systemd.sh
 {{- end }}
 
+{{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
+# Kelsey intake (her shartifacts page to the board's New box): the pickup script, its page source, its timer units and the script that loads them. Personal Linux only:
+# it files into the personal board on the Omarchy box, and her page has nothing to do with the work machine.
+.local/user_scripts/kelsey_intake.py
+.local/share/kelsey-intake
+.local/share/kelsey-intake/**
+.config/systemd/user/kelsey-intake.service
+.config/systemd/user/kelsey-intake.timer
+79_kelsey_intake_systemd.sh
+{{- end }}
+
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
 # Coordinator LaunchAgent unit (cartwmic/coordinator): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.

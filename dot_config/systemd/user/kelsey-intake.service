@@ -1,0 +1,9 @@
+# One pickup of Kelsey's page: files each new submission on the board (kelsey_intake.py). Started every 15 minutes by kelsey-intake.timer.
+# Output goes to the journal: journalctl --user -u kelsey-intake.
+[Unit]
+Description=Kelsey intake (shartifacts page submissions to the board's New box)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 %h/.local/user_scripts/kelsey_intake.py
