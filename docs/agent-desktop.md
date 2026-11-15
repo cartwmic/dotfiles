@@ -26,7 +26,7 @@ Exit codes:
 |---|---|
 | 0 | ok |
 | 1 | a tool failed, or printed something unexpected |
-| 2 | a bad call: unknown action or a bad argument. The usage text is printed and names all eight actions |
+| 2 | a bad call. A wrong-shape call (no action, an unknown action, a missing or extra argument) prints the usage naming all eight actions. A bad value (a non-integer coordinate, an unknown button or key word) prints one error line starting with the action name; Windows also prints the usage |
 | 69 | a needed tool is missing; the message names how to install it |
 
 Log: every step writes one line to `agent-desktop.log` with the UTC time, a run id, the elapsed time, the step and its outcome. `type` logs the length of the text, never the text. On Linux and macOS the file is `~/.local/state/agent-desktop/agent-desktop.log` (under `$XDG_STATE_HOME` instead when it is set). On Windows it is `%LOCALAPPDATA%\agent-desktop\agent-desktop.log`.
