@@ -11,6 +11,7 @@ source or the real home directory.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from test_import_release_skills import FAKE_GH, GOOD_TREE, Fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/user_scripts/executable_loop_engine_bump.py"
+_HEADINGS = re.findall(r"(?m)^## (\d+)\. (.+)$", (ROOT / "dot_local/share/agent-harness/design-principles.md").read_text())
+LAST_PRINCIPLE = (int(_HEADINGS[-1][0]), _HEADINGS[-1][1])
 README = ROOT / "dot_local/share/agent-harness/README.md"
 SKILLS_SRC = "dot_local/share/agent-harness/canonical/skills"
 SKILLS_DEST = ".local/share/agent-harness/canonical/skills"
@@ -246,7 +249,7 @@ class BumpTests(Fixture):
         pr = self.load()["prs"][0]
         self.assertEqual(pr["head"], "loop-engine-v1.0.0")
         self.assertIn("Profiles: both.", pr["body"])
-        self.assertIn("| 15 | Fast proof |", pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
         self.assertRegex(pr["body"], r"(?m)^Decisions: none material$")  # rule ccc6c94b
         sha = pr["mergeCommit"]["oid"]
         changed = self.sh("git", "--git-dir", self.origin, "diff", "--name-only", sha + "^", sha).split()

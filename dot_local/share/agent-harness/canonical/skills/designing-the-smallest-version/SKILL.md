@@ -55,7 +55,7 @@ Write a ≤1-page orientation a cold agent could read instead of the repo.
 **3. Requirements.** The owner's words are `given`: one `OR-n` row per requirement, quoting or tightly paraphrasing, with "enforced today?". Take ids from a `requirements/1` file or a repo document if present. Infer the rest from the journeys the entry points serve and the invariants the code or the integrated system relies on, marked `inferred` (`IR-n` requirements, `II-n` invariants; note which nothing enforces). Separate enduring obligations from incidental implementation. Where a component is a state machine in disguise and none is given, draw it as Mermaid `stateDiagram-v2`.
 
 **4. Diagnose.** Name the 3–5 tensions that matter (§13): where requirements, simplicity, accuracy and reuse pull apart, and what each resolution costs. That is usually the most valuable part. Then:
-- **A:** give each principle 1–15 a verdict with its **scope** (pass at module level, fail inside one module: write both) and evidence; rank failures by proven harm; **reproduce each** with a small script against the extracted pin (symlink `node_modules`; no installs; on Node 22.18+ a `.ts` or `.mjs` script runs and imports `.ts` directly) or a scratch clone, else label it `read only` and make the experiment the first increment. Check that each test double the proof relies on does what the real adapter does, and re-run the reproduction with the double the unit tests use.
+- **A:** give each principle a verdict with its **scope** (pass at module level, fail inside one module: write both) and evidence; rank failures by proven harm; **reproduce each** with a small script against the extracted pin (symlink `node_modules`; no installs; on Node 22.18+ a `.ts` or `.mjs` script runs and imports `.ts` directly) or a scratch clone, else label it `read only` and make the experiment the first increment. Check that each test double the proof relies on does what the real adapter does, and re-run the reproduction with the double the unit tests use.
 - **B:** list gaps (a requirement with no home, a fact still unverified), ranked by consequence. Reproduce or cite the fact each rests on, else `read only`.
 - Where the owner's goal is "separable" or "testable on its own", that is not reuse: use a contract-level test and an import fence, not a folder, unless a second user exists.
 
@@ -94,7 +94,7 @@ Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that 
 | # | Principle | As found | Target | Evidence |
 |---|---|---|---|---|
 | 1 | Composable components | fail | pass | scope: …; key or decision id; read / sampled / untested |
-… one row for each of 1 to 15; keep each Evidence cell to about 40 words and point to the Section 4 item …
+… one row for each principle; keep each Evidence cell to about 40 words and point to the Section 4 item …
 ```
 
 Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode B, write `new` once for the whole As found column unless a row has something real today (say what); an `n/a` row takes one sentence at most. Evidence says what you read and what you did not, and `untested` where the test needs a live run (§14's replay). **Target means after the last increment in Section 6.** The table is required; a design without it is not finished.
@@ -109,4 +109,4 @@ Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode 
 
 ## Done when
 
-`DESIGN.md` exists, every section is filled or marked n/a with a reason, the principles table has 15 rows with evidence, and the first increment could start today without a further question. Report the file path, the three decisions that matter most, anything left for the owner, and which proofs you observed versus only planned (a design is not proof).
+`DESIGN.md` exists, every section is filled or marked n/a with a reason, the principles table has a row with evidence for every principle, and the first increment could start today without a further question. Report the file path, the three decisions that matter most, anything left for the owner, and which proofs you observed versus only planned (a design is not proof).

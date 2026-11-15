@@ -23,7 +23,7 @@ Inner layers never import outer ones; external concerns are reached only through
 **Gate:** dependency checks fail the build on any outward import.
 
 ## 4. YAGNI and KISS
-Don't add code, abstractions, configuration or files the current need doesn't require, and don't design for requests that haven't been made. Prefer the smallest thing that works: a function beats a new layer, a script beats a service. The structure in §2 and §3 defines dependency boundaries. It does not justify speculative abstraction.
+Don't add code, abstractions, configuration or files the current need doesn't require, and don't design for requests that haven't been made. Prefer the smallest thing that works: a function beats a new layer, a script beats a service. The structure in §2 and §3 defines dependency boundaries. It does not justify speculative abstraction. Smallest means least scope, not lowest quality (§16).
 
 Design and plan review may be skipped when the diff fits in one sentence and git can revert it.
 
@@ -86,12 +86,19 @@ Every component that acts for a user records enough to replay one user action: w
 ## 15. Fast proof
 Observable proof tests and journeys should be optimized aggressively for time. In practice, wait for a fact when one can be observed instead of sleeping a fixed time, run independent tests and journeys in parallel, measure and report suite time, and treat a slow suite as a defect.
 
+## 16. Built to last
+Every change should leave the system easier to understand and change than it found it. Small scope is not licence for shortcuts: build only what the need requires (§4), and build that properly, with clear organization, the right layer and the repo's established patterns. No workarounds, duplicated logic, special cases bolted on, or "clean up later" left behind. When a change makes code, configuration, docs or tests unused, delete them in the same change. When the existing structure no longer fits the change, fix the structure instead of working around it. Scope this to what the change touches; do not retrofit the rest.
+
+§4 decides how much to build; §16 decides how well. A design that is smaller only because it takes a shortcut fails §16. §10's "good enough" is about scale and hardening, not code quality.
+
+**Test:** a reviewer who knows the repo finds nothing in the change that someone will have to clean up later.
+
 ## Enforcement (strongest first)
 The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new components and new cross-component boundaries, not to a small change inside an existing component.
 
 1. Build gates: dependency-boundary and layer checks (§2, §3, §7) and conformance suites (§6).
 2. Scaffold: new components start with the core/adapter split, the clean-architecture layers, a contract file, an empty conformance suite and the boundary checks configured.
-3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13, §14).
+3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13, §14, §16).
 4. Agent instructions: AGENTS.md files should reference this document. Instructions alone do not enforce compliance.
 
 Fix a mistake agents repeat at the highest level that works: architecture, then types, then a check whose error names the fix, then a test. Write an instruction last, because nothing fails when an agent skips it. The `correcting-repeated-mistakes` skill walks this.
