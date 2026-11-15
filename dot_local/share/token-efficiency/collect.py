@@ -308,6 +308,8 @@ def main(out_dir=None):
     out_dir = out_dir or (sys.argv[1] if len(sys.argv) > 1 else STATE_DIR)
     os.makedirs(out_dir, exist_ok=True)
     db_path = os.path.join(out_dir, 'usage.sqlite')
+    final_path = db_path
+    db_path = final_path + '.new'   # built beside the old file and moved into place, so a reader never sees a half-built database
     if os.path.exists(db_path):
         os.remove(db_path)
     db = sqlite3.connect(db_path)
@@ -393,7 +395,9 @@ def main(out_dir=None):
     d = db.execute('select count(*) from dupes').fetchone()[0]
     print('files', len(pending), 'requests', n[0], 'dupes dropped', d)
     print('input', n[1], 'cache write 1h', n[2], 'cache write 5m', n[3], 'cache read', n[4], 'output', n[5])
-    print('wrote', db_path)
+    db.close()
+    os.replace(db_path, final_path)
+    print('wrote', final_path)
 
 
 if __name__ == '__main__':

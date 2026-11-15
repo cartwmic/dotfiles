@@ -13,7 +13,7 @@ session-cost --since ISO --until ISO # one window, e.g. the published baseline b
 
 ## What runs when
 
-- `session-cost.timer` (systemd user timer, daily at midnight, `Persistent`) runs `session-cost.service`: `collect.py`, then `session_cost.py --snapshot`.
+- `session-cost.timer` (systemd user timer, daily at midnight PST = 08:00 UTC, `Persistent`) runs `session-cost.service`: `collect.py`, then `session_cost.py --snapshot`.
 - `collect.py` reads the logs (read-only) and rebuilds `~/.local/state/token-efficiency/usage.sqlite` (numbers only).
 - `session_cost.py --snapshot` writes `~/.local/share/token-efficiency-snapshots/YYYY-MM-DD.json` (PST day). Snapshots are never deleted or rewritten except a rerun on the same day, which replaces that day's file. Each holds the two windows per seat and a per-day, per-seat table, so two dates compare with `jq` even after Claude Code prunes old logs.
 - The unit logs to the journal: `journalctl --user -u session-cost`. Run it now: `systemctl --user start session-cost.service`.

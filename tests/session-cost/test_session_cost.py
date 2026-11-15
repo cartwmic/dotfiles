@@ -184,6 +184,29 @@ class SessionCostTest(unittest.TestCase):
         self.assertAlmostEqual(days["2026-11-15"]["lead"]["list_usd"], 3.65)
         self.assertAlmostEqual(days["2026-11-16"]["builder"]["list_usd"], 3.00)
 
+    def test_timer_fires_at_the_moment_the_snapshot_day_changes(self):
+        # Snapshots are named by PST day (UTC-8 all year). The timer must fire at PST midnight, 08:00 UTC, in winter and summer alike,
+        # so the run's file is the new day and never the previous one.
+        timer = (ROOT / "dot_config/systemd/user/session-cost.timer").read_text()
+        self.assertIn("OnCalendar=*-*-* 08:00:00 UTC", timer)
+        sys.path.insert(0, str(SHARE))
+        from datetime import datetime, timezone
+        from session_cost import pst_day
+        for date in ("2026-07-15", "2026-12-15"):   # summer (PDT) and winter (PST) in California
+            before = datetime.fromisoformat(date + "T07:59:59+00:00")
+            at = datetime.fromisoformat(date + "T08:00:00+00:00")
+            self.assertNotEqual(pst_day(before), pst_day(at))
+            self.assertEqual(pst_day(at), date)
+        d = self.snapshot(directory=self.tmp / "snaps-timer")   # NOW is 2026-11-20T00:00Z, which is PST day 11-19
+        self.assertEqual([p.name for p in d.iterdir()], ["2026-11-19.json"])
+
+    def test_database_is_replaced_whole(self):
+        home = self.tmp / "home3"
+        write_logs(home)
+        for _ in range(2):
+            self.assertEqual(run([sys.executable, str(SHARE / "collect.py")], home).returncode, 0)
+        self.assertEqual(sorted(p.name for p in (home / ".local/state/token-efficiency").iterdir()), ["usage.sqlite"])
+
     def test_command_runs_from_path_with_default_database(self):
         r = run(["sh", str(COMMAND), "--now", NOW], self.home)
         self.assertEqual(r.returncode, 0, r.stderr)
