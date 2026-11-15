@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -60,7 +61,7 @@ def extract_title(body, cfg):
     source = cfg["title_from"]
     if source == "html":
         m = HTML_TITLE.search(body)
-        raw = html.unescape(m.group(1)) if m else None
+        raw = m.group(1) if m else None
     elif source == "regex":
         m = cfg["title_regex"].search(body)
         raw = (m.group(1) if cfg["title_regex"].groups else m.group(0)) if m else None
@@ -72,6 +73,7 @@ def extract_title(body, cfg):
         raw = raw if isinstance(raw, str) else None
     if raw is None:
         return None
+    raw = html.unescape(raw)   # &amp; and &#39; in the title, whichever way it was found
     for pattern in cfg["strip"]:
         raw = pattern.sub("", raw)
     return safe_title(raw) or None
@@ -85,19 +87,24 @@ def safe_title(title):
     return title.lstrip(".").rstrip(". ")
 
 
-def fit_name(title, ext):
-    """title + ext cut to 255 bytes of UTF-8 (the file name limit), cutting the title only."""
-    room = MAX_NAME_BYTES - len(ext.encode())
+def fit_name(title, ext, suffix=""):
+    """title + suffix + ext within 255 bytes of UTF-8 (the file name limit). Only the title is cut; the suffix and extension stay."""
+    room = MAX_NAME_BYTES - len((suffix + ext).encode())
     cut = title.encode()[:room].decode(errors="ignore").rstrip(". ")
-    return cut + ext
+    return cut + suffix + ext
+
+
+def name_key(name):
+    """What macOS compares to decide two names are the same file: case-insensitive, and NFC and NFD spellings are one."""
+    return unicodedata.normalize("NFC", name).lower()
 
 
 def unique_name(title, ext, taken):
-    """title+ext, or title (2)+ext, (3)... the first one not in `taken` (compared case-insensitively, as macOS does)."""
+    """title+ext, or title (2)+ext, (3)... the first one whose name_key is not in `taken`."""
     name = fit_name(title, ext)
     n = 2
-    while name.lower() in taken:
-        name = fit_name(f"{title} ({n})", ext)
+    while name_key(name) in taken:
+        name = fit_name(title, ext, f" ({n})")
         n += 1
     return name
 
@@ -189,7 +196,7 @@ def fetch(url, headers):
 def plan(folder, cfg, delay):
     """Look up each numbered video in `folder`. Returns (renames, skipped, already) where renames is a list of (old_path, new_path, id)."""
     entries = sorted(e for e in os.listdir(folder) if os.path.isfile(os.path.join(folder, e)))
-    taken = {e.lower() for e in entries}
+    taken = {name_key(e) for e in entries}
     renames, skipped, already = [], [], 0
     first = True
     for entry in entries:
@@ -211,8 +218,12 @@ def plan(folder, cfg, delay):
             skipped.append((entry, str(e)))
             continue
         name = unique_name(title, ext, taken)
-        taken.discard(entry.lower())
-        taken.add(name.lower())
+        if find_id(os.path.splitext(name)[0], cfg["id_regex"]) is not None:
+            # A rerun would take this new name for a number and look it up again, so leave the file as it is.
+            skipped.append((entry, f"the title {name!r} would look like an id to a rerun"))
+            continue
+        taken.discard(name_key(entry))
+        taken.add(name_key(name))
         renames.append((os.path.join(folder, entry), os.path.join(folder, name), vid))
     return renames, skipped, already
 
@@ -224,9 +235,13 @@ def apply_renames(renames, folder, log_path):
         log.write(json.dumps({"event": "start", "at": now(), "folder": folder}) + "\n")
         log.flush()
         for old, new, vid in renames:
-            if os.path.lexists(new) and old.lower() != new.lower():
-                raise Error(f"refusing to overwrite {new}")  # planned names avoid this; the disk changed since
-            os.rename(old, new)
+            if os.path.lexists(new) and name_key(old) != name_key(new):
+                # planned names avoid this; the disk changed since
+                raise Error(f"refusing to overwrite {new}; renames made so far are in the undo log {log_path}")
+            try:
+                os.rename(old, new)
+            except OSError as e:
+                raise Error(f"cannot rename {old}: {e}; renames made so far are in the undo log {log_path}")
             log.write(json.dumps({"event": "rename", "at": now(), "id": vid, "from": old, "to": new}) + "\n")
             log.flush()
 
