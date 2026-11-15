@@ -397,6 +397,7 @@ Library/Preferences/pnpm/**
 .config/systemd/user/t3code.service.d
 .config/systemd/user/t3code.service.d/**
 74_t3_service_linux.sh
+.local/user_scripts/install_t3.sh
 # The Pi wrapper behind the T3 pi-lead instance (personal Linux, where modify_settings.json.tmpl owns that instance).
 .local/user_scripts/pi_lead.sh
 # The portable GitHub credential helper for git (personal Linux). macOS keeps its own setup; the work profile has no Linux machine.
@@ -410,4 +411,83 @@ Library/Preferences/pnpm/**
 .local/share/initramfs-ssh-unlock/**
 .local/user_scripts/ssh_unlock_check_image.sh
 88_initramfs_ssh_unlock_linux.sh
+{{- end }}
+
+{{- /* Container mode (the agent host pod; docs/container-mode.md): a personal Linux home with no desktop, no systemd and no launchd, and only the tools the pod uses. */}}
+{{- if (includeTemplate "container" . | fromJson).enabled }}
+# Container mode. Everything above that is not left out stays. This leaves out what needs a desktop, systemd or launchd, and the files of tools the container does not install
+# (the lean set is dot_config/mise/conf.d/container.toml.tmpl). A new path is in the pod unless it is listed here; tests/container-mode names the exact set that stays.
+# Run scripts: only the five below run (the tools, the harness config, agent-kit, and the two git settings a pod needs to push and commit). A script nobody listed is left out, so a new one never reaches the pod unseen, and plain `chezmoi verify` has no always-pending run_after
+# script to fail on (c6). The list is computed, not written: every run_ script in the source root, minus these.
+{{- $keep := list "05_container_tools.sh" "20_apply_harness_config.sh" "65_agent_kit_install.sh" "76_git_credential_linux.sh" "77_git_identity_linux.sh" }}
+{{- range $path := glob (joinPath .chezmoi.sourceDir "run_*") }}
+{{-   $name := regexReplaceAll "^run_(once_|onchange_)?(before_|after_)?" (base $path | trimSuffix ".tmpl") "" }}
+{{-   if not (has $name $keep) }}
+{{ $name }}
+{{-   end }}
+{{- end }}
+# Desktop, systemd and launchd.
+.config/systemd
+.config/systemd/**
+.config/hypr
+.config/hypr/**
+.config/kitty
+.config/kitty/**
+.config/zellij
+.config/zellij/**
+.local/share/instances
+.local/share/instances/**
+.local/user_scripts/instances_reconcile_systemd.sh
+.local/user_scripts/configure_rustdesk.sh
+.local/user_scripts/kelsey_intake.py
+.local/user_scripts/ssh_unlock_check_image.sh
+.local/bin/agent-chrome
+.local/bin/agent-desktop
+# Copies desktop agent sessions to the pod, so it has no use inside it (its timer is already left out with .config/systemd).
+.local/bin/agent-session-copy
+.local/bin/heavy-gate-watchdog
+.local/bin/ntfy-zellij-notify.sh
+.local/bin/mistakes-report
+.local/bin/session-cost
+.local/share/browser-harness-mcp
+.local/share/browser-harness-mcp/**
+.local/share/initramfs-ssh-unlock
+.local/share/initramfs-ssh-unlock/**
+.local/share/kelsey-intake
+.local/share/kelsey-intake/**
+.local/share/mistakes-report
+.local/share/mistakes-report/**
+.local/share/token-efficiency
+.local/share/token-efficiency/**
+# No sshd in the pod, and the jump-host aliases need local data the pod does not have.
+.ssh
+.ssh/**
+# Tools the container does not install (Codex too: there is no OpenAI model in the pod, so Codex is out of scope): their config and the pins that install them.
+.codex
+.codex/**
+.config/nvim
+.config/nvim/**
+.config/lazygit
+.config/lazygit/**
+.config/starship.toml
+.config/qmd
+.config/qmd/**
+.config/mise/config.toml
+.config/mise/conf.d/linux.toml
+.config/mise/conf.d/qmd.toml
+.config/mise/conf.d/agentsview.toml
+.local/bin/qmd
+.local/bin/qmd-export
+.local/bin/qmd-refresh
+.local/bin/qmd-refresh-scheduled
+.local/share/agentsview
+.local/share/agentsview/**
+{{- if not (dig "sshHosts" "kgate" "" .) }}
+# kgate reaches the cluster over ssh to this host. Without it in the data there is nothing to write.
+.config/kgate/host
+{{- end }}
+{{- else }}
+# Not container mode: the container-only files.
+.config/mise/conf.d/container.toml
+05_container_tools.sh
 {{- end }}

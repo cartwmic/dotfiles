@@ -1,6 +1,6 @@
 """run_onchange_after_74_t3_service_linux.sh.tmpl: install T3 and its service on a Linux host that has none, reload (never restart) one that has.
 
-The real script (its two template hash comments dropped) runs in a private HOME with scripted systemctl, t3 and curl that record every call.
+The real script (its two template hash comments dropped) and the install_t3.sh it calls run in a private HOME with scripted systemctl, t3 and curl that record every call.
 """
 import hashlib
 import json
@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "run_onchange_after_74_t3_service_linux.sh.tmpl"
+HELPER = ROOT / "dot_local/user_scripts/executable_install_t3.sh"   # the installer step the script calls from ~/.local/user_scripts
 SYSTEMCTL = '''#!/bin/sh
 [ "$1" = --user ] || exit 2
 shift
@@ -55,6 +56,7 @@ class T3Service(unittest.TestCase):
         write_exec(self.bin / "systemctl", SYSTEMCTL)
         write_exec(self.stub / "t3-binary", T3)
         write_exec(self.bin / "curl", CURL)
+        write_exec(self.home / ".local/user_scripts/install_t3.sh", HELPER.read_text())
         self.script = root / "script.sh"
         self.script.write_text("".join(line for line in TEMPLATE.read_text().splitlines(True) if "{{" not in line))
         self.unit = self.home / ".config/systemd/user/t3code.service"

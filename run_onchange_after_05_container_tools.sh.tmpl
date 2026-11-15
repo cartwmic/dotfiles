@@ -1,0 +1,25 @@
+#!/bin/sh
+# Container mode only (.chezmoiignore leaves this script out everywhere else; docs/container-mode.md): install the pod's tools.
+#   1. mise install: the lean set in ~/.config/mise/conf.d/container.toml (node, python, gh, jq, chezmoi, loop-engine, lean-change, op);
+#   2. claude: the install-claude mise task from the same file (the Claude Code installer puts `claude` in ~/.local/bin);
+#   3. t3: install_t3.sh, the same installer step the Linux service script uses.
+# It sorts before script 20 (harness config sync) and 65 (agent-kit install), which need node and python. Files are already in place when it runs,
+# but settings.json was rendered before node existed: see docs/container-mode.md, "Two applies".
+# A failure stops the apply, and the next apply runs this script again (chezmoi records a run_onchange script only when it succeeds).
+# Mise pins, the lean set and the claude task: {{ include "dot_config/mise/config.toml" | sha256sum }}
+# Lean set: {{ include "dot_config/mise/conf.d/container.toml.tmpl" | sha256sum }}
+# T3 installer: {{ include "dot_local/user_scripts/executable_install_t3.sh" | sha256sum }}
+set -eu
+log() { printf '[container_tools] %s: %s\n' "$1" "$2"; }
+
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+command -v mise >/dev/null 2>&1 || { log ERROR "mise is not on PATH; the image installs it"; exit 1; }
+
+log INFO "mise install"
+mise install || { log ERROR "mise install failed"; exit 1; }
+log INFO "mise run install-claude"
+mise run install-claude || { log ERROR "the Claude Code install failed"; exit 1; }
+"$HOME/.local/user_scripts/install_t3.sh" || exit 1
+missing=$(mise ls --missing 2>&1)   # stderr too, as the c6 check reads it
+[ -z "$missing" ] || { log ERROR "mise tools are still missing after the install:"; printf '%s\n' "$missing" >&2; exit 1; }
+log INFO "done"
