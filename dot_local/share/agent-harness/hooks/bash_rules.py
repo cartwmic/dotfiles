@@ -1,4 +1,4 @@
-"""Five refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Six refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -14,6 +14,13 @@
               blocks it. Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
               which runs both checks itself. The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
               the hook never sees, so they pass.
+
+  pr-body     (personal only)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
+              and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
+              `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
+              `pr-body-check --body-file F && gh pr create ... --body-file F`, so a Result cell such as `partial` fails when the body is
+              written, not at merge. `gh pr edit` with no body flag (title, labels, reviewers) passes. No repo is exempt: unlike the merge
+              rule, nothing else runs this check at create time.
 
   docker      (personal, Linux only)  `docker run`, `docker build`, `docker compose up` and their spellings (`docker container run`,
               `docker image build`, `docker buildx build`, `docker builder build`, `docker-compose up`, global options before the
@@ -54,6 +61,7 @@ HEREDOC = (
     "Quote the delimiter (`<<'EOF'`), or escape each backtick."
 )
 MERGE_CHECKS = ("ci-main-status", "pr-body-check")
+BODY_FILE = "pr-body-check --body-file "  # prefix of the gated entry that names a file the body check already read
 MERGE_BARE = (
     "`gh pr merge` without both gates is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
@@ -61,6 +69,12 @@ MERGE_BARE = (
     "(--merge-gate lets an untested tip merge and stops only red; pr-body-check enforces playbook rules ecd63156, 385acc43 and ccc6c94b); "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
+PR_BODY = (
+    "`gh pr %s` without a checked body file is refused in agent sessions: a design-principles Result cell such as `partial` is otherwise found "
+    "only when `gh pr merge` runs. Run `pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both); "
+    "a Result cell must start with pass, fail or n/a."
+)
+PR_BODY_VERBS = ("create", "new", "edit")  # `gh pr new` is an alias of `gh pr create`
 MERGE_COORDINATOR = (
     "`gh pr merge` on cartwmic/coordinator is refused in agent sessions: " + MERGE_PR + " also runs the red-main gate and the decisions check. "
     "Use `" + MERGE_PR + " PR`."
@@ -147,7 +161,8 @@ class Walk:
 
     @staticmethod
     def _and_listed(scan, index):
-        """The merge checks (`ci-main-status`, `pr-body-check`) earlier in this command's and-list, joined to it only by `&&`."""
+        """The merge checks (`ci-main-status`, `pr-body-check`) earlier in this command's and-list, joined to it only by `&&`, and for each
+        `pr-body-check --body-file F` the entry BODY_FILE + F."""
         found = set()
         j = index
         while j > 0 and scan.joins[j].strip() == "&&":
@@ -155,6 +170,10 @@ class Walk:
             earlier = _command_words(scan.commands[j])
             if earlier and _base(earlier[0]) in MERGE_CHECKS:
                 found.add(_base(earlier[0]))
+                if _base(earlier[0]) == "pr-body-check":
+                    body_file = _flag_value(earlier[1:], "--body-file")
+                    if body_file is not None:
+                        found.add(BODY_FILE + body_file)
         return frozenset(found)
 
     def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
@@ -315,6 +334,25 @@ def merge_rule(walk, ctx):
     return None
 
 
+def pr_body_rule(walk, ctx):
+    if ctx.profile != "personal":
+        return None
+    for cmd in walk.cmds:
+        args = cmd.words[1:]
+        verb = next((b for a, b in zip(args, args[1:]) if a == "pr" and b in PR_BODY_VERBS), None)
+        if _base(cmd.words[0]) != "gh" or verb is None:
+            continue
+        verb = "create" if verb == "new" else verb
+        body_file = _flag_value(args, "--body-file")
+        body_file = _flag_value(args, "-F") if body_file is None else body_file
+        sets_body = body_file is not None or _flag_value(args, "--body") is not None or _flag_value(args, "-b") is not None
+        if verb == "edit" and not sets_body:
+            continue  # a title, label or reviewer change carries no body
+        if body_file is None or body_file == "-" or BODY_FILE + body_file not in cmd.gated:
+            return PR_BODY % (verb, verb)
+    return None
+
+
 def _docker_spelling(words):
     """The refused docker command in words (`docker run`, `docker compose up`, ...), else None. Only the subcommand position counts."""
     name = _base(words[0])
@@ -351,7 +389,7 @@ def docker_rule(walk, ctx):
 def check(text, ctx):
     """The refusal message for the command text, or None."""
     walk = Walk(text, ctx.cwd)
-    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, docker_rule):
+    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule):
         message = rule(walk, ctx)
         if message:
             return message
