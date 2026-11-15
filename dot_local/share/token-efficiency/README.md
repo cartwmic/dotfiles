@@ -1,0 +1,53 @@
+# token-efficiency
+
+Measures what the Claude Code agent fleet costs at list price, from the session logs in `~/.claude/projects`. Python 3, standard library only. Personal Linux only (`docs/profiles.md`).
+
+```sh
+session-cost                         # list-price $/day per seat: last 7 days next to the 7 days before
+session-cost --days 3                # windows of 3 days
+session-cost --refresh               # run collect.py first (about 10 seconds), so the last hour is in
+session-cost --since ISO --until ISO # one window, e.g. the published baseline below
+```
+
+"List price" is what the tokens would cost at public per-token rates (the table at the top of `analyze.py`). It is a weight for comparing seats and windows, not the subscription bill.
+
+## What runs when
+
+- `session-cost.timer` (systemd user timer, daily at midnight PST = 08:00 UTC, `Persistent`) runs `session-cost.service`: `collect.py`, then `session_cost.py --snapshot`.
+- `collect.py` reads the logs (read-only) and rebuilds `~/.local/state/token-efficiency/usage.sqlite` (numbers only).
+- `session_cost.py --snapshot` writes `~/.local/share/token-efficiency-snapshots/YYYY-MM-DD.json` (PST day). Snapshots are never deleted or rewritten except a rerun on the same day, which replaces that day's file. Each holds the two windows per seat and a per-day, per-seat table, so two dates compare with `jq` even after Claude Code prunes old logs.
+- The unit logs to the journal: `journalctl --user -u session-cost`. Run it now: `systemctl --user start session-cost.service`.
+
+## Counting rules
+
+- One API request is one assistant message id. Streaming writes several records per id (one per content block); the last wins. An id copied into another file (resumed or moved sessions) is counted once, in the file where it first appears.
+- Token kinds stay apart: fresh input, cache write (1-hour and 5-minute), cache read, output. Each kind is priced at its list rate; Haiku has a short-context and a long-context rate (over 100K prompt tokens).
+- Seat comes from the `Seat:` line of a session's first prompt, then from known brief openings. Agent-tool helpers with no seat line are "helper of <seat of their session>".
+- Days are PST (UTC-8).
+- `$/day` = a window's list $ divided by the days between its first and last request. That is the divisor `analyze.py` uses for "per day", so `session-cost --since ... --until ...` matches a published baseline.
+- Advisor-tool calls sit outside the normal usage fields; `analyze.py` reports them in their own table and `session-cost` leaves them out.
+
+## Coverage
+
+- Logs are complete from 2026-11-11 18:00Z (`COMPLETE_FROM` in `analyze.py`), when the fleet moved to this Linux machine. The first complete PST day is 2026-11-12. `session-cost` counts nothing before that and says so.
+- Before that the fleet ran on the Mac. Only sessions that were moved over are here (roughly 40% of requests).
+- Pi and Codex are outside `collect.py`.
+
+## Full tables (`analyze.py`, `rereads.py`)
+
+```sh
+python3 collect.py                                   # logs -> ~/.local/state/token-efficiency/usage.sqlite
+python3 analyze.py --since ISO --until ISO           # every table: by seat, model, day, prompt size, cache rewrites, tool results...
+python3 analyze.py --since ISO --until ISO --json out.json > out.md
+python3 rereads.py --json rereads.json > rereads.md  # cache read split by what is re-read, and avoidable re-reading
+```
+
+`baseline-linux-era.md` is the published baseline: 2026-11-11T18:00Z to 2026-11-13T01:14Z (31.1 hours, 1.30 days), made with `analyze.py --since 2026-11-11T18:00:00Z --until 2026-11-13T01:14:00Z`. Its "per day" figures are the window divided by 1.30, not calendar days. Compare a later run on whole PST days (`--since`/`--until` at 08:00Z) or on per-request figures (average prompt, cache read per request, median smallest prompt per seat).
+
+- The tool-result, Bash, hook and repeat-read tables count whole transcript files of sessions active in the window. They shift when `collect.py` is re-run on sessions that are still going. The request-level tables do not.
+- Tables that size text convert characters to tokens at a fixed ratio named in the table title. The true ratio measured on two real first requests was about 2.85 characters per token, so chars/4 figures understate by about 40%.
+- `rereads.py` rebuilds what was in the prompt at each request and shares that request's real cache-read tokens over the pieces by size (text at 3 characters per token, model output at its real token count). Totals add up to the real cache read; shares inside a request are estimates. "Avoidable" rows are proxies (age in requests, size over 2K tokens, repeats, one-reply acknowledgements) and overlap.
+
+## Tests
+
+`tests/session-cost` (run: `python3 -m unittest discover -s tests/session-cost`) builds a small hand-written set of Claude Code logs, runs `collect.py` and `session-cost` on it and checks hand-computed dollars.

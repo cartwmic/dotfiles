@@ -1,0 +1,11 @@
+# Daily: rebuild the usage database from the Claude Code logs (collect.py), then write today's dated snapshot
+# (~/.local/share/token-efficiency-snapshots/YYYY-MM-DD.json, PST day). Started by session-cost.timer. Output goes to the journal:
+# journalctl --user -u session-cost. Personal Linux only (.chezmoiignore).
+[Unit]
+Description=session-cost daily snapshot (Claude Code usage, list price per agent seat)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/python3 %h/.local/share/token-efficiency/collect.py
+ExecStart=/usr/bin/python3 %h/.local/share/token-efficiency/session_cost.py --snapshot

@@ -54,6 +54,7 @@ python3 scripts/ci-par.py \
   tests/video-rename \
   tests/worktree-reap \
   tests/workstream-rank \
+  tests/session-cost \
   tests/agent-events \
   tests/instances \
   tests/launchd-reload \

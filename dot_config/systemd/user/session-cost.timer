@@ -1,0 +1,11 @@
+# Starts session-cost.service once a day at midnight PST (08:00 UTC, all year), the same day boundary the snapshot file names use (PST = UTC-8,
+# the harness's fixed convention), so the run's file is always the new day. Persistent: a run missed while the machine was off happens at the next start.
+[Unit]
+Description=session-cost daily snapshot
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+{{- /* session_cost_config: "true" or "false": whether the daily session-cost timer, the session-cost command and their code are installed.
+Local chezmoi data sessionCost.enabled (true or false). Default: true on the personal profile on Linux, false everywhere else
+(the work profile reads and applies nothing of it). Used by .chezmoiignore and its load script. Any other value fails the render, so a typo applies nothing. */ -}}
+{{- $on := and (eq (printf "%v" (dig "profile" "" .)) "personal") (eq .chezmoi.os "linux") -}}
+{{- $set := printf "%v" (dig "sessionCost" "enabled" "" .) -}}
+{{- if ne $set "" -}}
+{{-   if not (has $set (list "true" "false")) -}}
+{{-     fail (printf "sessionCost.enabled must be true or false, got %q" $set) -}}
+{{-   end -}}
+{{-   $on = eq $set "true" -}}
+{{- end -}}
+{{- $on -}}

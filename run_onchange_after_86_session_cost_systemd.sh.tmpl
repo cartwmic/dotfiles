@@ -1,0 +1,42 @@
+#!/bin/sh
+# Load, reload or unload the session-cost timer (session-cost.timer) when its units or its setting change. Linux only, and only while chezmoi data
+# sessionCost.enabled is true (default: personal profile on Linux) or the units are still installed (.chezmoiignore). Same shape as the agent-events
+# loader (run_onchange_after_77_agent_events_systemd.sh.tmpl): the timer runs collect.py and a snapshot once a day.
+# service: {{ include "dot_config/systemd/user/session-cost.service" | sha256sum }}
+# timer: {{ include "dot_config/systemd/user/session-cost.timer" | sha256sum }}
+# setting: {{ includeTemplate "session_cost_config" . }}
+#
+# Fails (and so fails the apply) when systemd does not end up with the timer active: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into: a notice and a clean exit.
+set -eu
+log() { printf '[session_cost_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; session-cost.timer not loaded"
+  exit 0
+fi
+dir="$HOME/.config/systemd/user"
+{{- if eq (includeTemplate "session_cost_config" .) "true" }}
+if [ ! -f "$dir/session-cost.service" ] || [ ! -f "$dir/session-cost.timer" ]; then
+  log ERROR "$dir/session-cost.service or session-cost.timer is not installed; apply them too, then apply again"
+  exit 1
+fi
+mkdir -p "$HOME/.local/state/token-efficiency" "$HOME/.local/share/token-efficiency-snapshots"
+systemctl --user daemon-reload
+systemctl --user enable session-cost.timer >/dev/null 2>&1 || { log ERROR "could not enable session-cost.timer"; exit 1; }
+systemctl --user restart session-cost.timer || { log ERROR "could not start session-cost.timer; see: journalctl --user -u session-cost.timer"; exit 1; }
+systemctl --user is-active --quiet session-cost.timer || { log ERROR "session-cost.timer is not active after the restart"; exit 1; }
+log INFO "loaded session-cost.timer (daily; journalctl --user -u session-cost)"
+{{- else }}
+# sessionCost.enabled is false: .chezmoiignore leaves the units alone, so this script stops the timer, then removes both units.
+# Snapshots and the usage database are data and stay. A failed stop fails the apply and keeps the units, so the next apply runs this again.
+systemctl --user disable --now session-cost.timer >/dev/null 2>&1 || :
+if systemctl --user is-active --quiet session-cost.timer; then
+  log ERROR "could not stop session-cost.timer; try: systemctl --user disable --now session-cost.timer, then chezmoi apply again"
+  exit 1
+fi
+rm -f "$dir/session-cost.service" "$dir/session-cost.timer"
+systemctl --user daemon-reload
+log INFO "sessionCost.enabled is false: session-cost.timer is stopped and its units removed"
+{{- end }}
