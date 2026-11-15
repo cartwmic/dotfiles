@@ -65,6 +65,38 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(text_of(s.call("echo", {"text": "again"})), "echo:again")
         self.assertEqual(self.e.starts(), 1)
 
+    def test_discovery_probe_and_empty_lists_are_answered_without_starting_the_server(self):
+        # Claude Code sends these at session start. If any of them started the real server, every session would start every server.
+        write_copy(self.e.state, "fake", self.e.key("--prompts"), prompts=True)
+        s = self.sess("--prompts")
+        r = s.request("server/discover")  # sent before initialize
+        self.assertEqual(r["error"]["code"], -32601)
+        s.initialize()
+        self.assertEqual(s.request("prompts/list")["result"], {"prompts": []})
+        self.assertEqual(s.request("resources/list")["result"], {"resources": []})
+        self.assertEqual(s.request("resources/templates/list")["result"], {"resourceTemplates": []})
+        self.assertEqual(self.e.starts(), 0)
+        self.assertEqual(procs(self.e.marker), [])
+
+    def test_first_call_starts_server_and_prompts_then_come_from_it(self):
+        write_copy(self.e.state, "fake", self.e.key("--prompts"), prompts=True)
+        s = self.sess("--prompts")
+        s.initialize()
+        self.assertEqual(s.request("prompts/list")["result"], {"prompts": []})
+        self.assertEqual(text_of(s.call("echo", {"text": "go"})), "echo:go")
+        self.assertEqual(self.e.starts(), 1)
+        self.assertIn("notifications/prompts/list_changed", s.notes)  # the client was served an empty list, so it must read again
+        self.assertEqual([p["name"] for p in s.request("prompts/list")["result"]["prompts"]], ["real-prompt"])
+        self.assertEqual(self.e.starts(), 1)
+
+    def test_no_prompts_notification_when_the_saved_handshake_does_not_advertise_prompts(self):
+        write_copy(self.e.state, "fake", self.e.key())
+        s = self.sess()
+        s.initialize()
+        s.call("echo", {"text": "go"})
+        self.assertEqual(self.e.starts(), 1)
+        self.assertNotIn("notifications/prompts/list_changed", s.notes)
+
     def test_resource_request_forwarded(self):
         write_copy(self.e.state, "fake", self.e.key("--resources"))
         s = self.sess("--resources")

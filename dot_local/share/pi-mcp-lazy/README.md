@@ -1,16 +1,25 @@
 # pi-mcp-lazy
 
-Pi starts every enabled MCP server when a session opens and never stops one. For the local servers
-that costs most of an idle session's memory (cartwmic/dotfiles#14). `pi-mcp-lazy` (deployed to
-`~/.local/bin/pi-mcp-lazy`) sits in front of one local server so it runs only while it is used.
+Pi, Claude Code and Codex start every enabled MCP server when a session opens and never stop one. For the local servers
+that costs most of an idle session's memory (cartwmic/dotfiles#14 for Pi; ask #1040 for Claude Code and Codex, where each
+session held its own `rea` and `browser-harness`). `pi-mcp-lazy` (deployed to `~/.local/bin/pi-mcp-lazy`) sits in front of one
+local server so it runs only once a session first uses it.
 
-Pi's built-in MCP client is unchanged. It still reads `~/.pi/agent/mcp.json` and still starts one stdio process per
-server, but for `rea` that process is the stand-in:
+The harnesses' MCP clients are unchanged. Each still reads its own config (`~/.pi/agent/mcp.json`, Claude's `~/.claude.json`,
+`~/.codex/config.toml`) and still starts one stdio process per server, but for `rea` and `browser-harness` that process is the
+stand-in. The apply script writes the same wrapped command into all three. The rest of this file says "Pi" where the first client
+was Pi; it holds for Claude Code and Codex unless a line says otherwise.
 
 - **Handshake and tool list come from a saved copy.** Pi sees the same tools (`mcp__<server>__<tool>`) and the
   `mcp_servers` listing in the system prompt, and `searchTools`, `describeTool`, `describeNamespace` and `ALL_TOOLS`
   work, with no real server running.
-- **The first request that needs the real server starts it** (a tool call, or a resource or prompt request). It runs in
+- **Startup probes are answered here.** Claude Code sends `server/discover` (answered "method not found", as the real servers do),
+  `prompts/list`, `resources/list` and `resources/templates/list` at session start, and without these answers each of them would
+  start the real server. While no real server runs they are answered locally (empty lists). When the saved handshake advertises
+  `prompts.listChanged` (`rea` does), the stand-in sends `notifications/prompts/list_changed` once the real server has started, and
+  from then on those list requests go to the real server. So a session sees `rea`'s prompts (its slash commands) only after the first
+  `rea` call, and again only after a restart if the server idled out.
+- **The first request that needs the real server starts it** (a tool call or `resources/read`). It runs in
   the stand-in's own process group (Pi starts each stand-in as the leader of a group of its own), receives Pi's own `initialize`, and everything after that is forwarded unchanged, including the
   server's own requests to Pi (for example `roots/list`).
 - **After the idle period with no request in flight** the whole process tree is stopped (stdin closed, SIGTERM, a
@@ -24,9 +33,13 @@ server, but for `rea` that process is the stand-in:
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on every profile, plus `jira` on
-`axon-work-computer`; the source is `servers.list.tmpl`, which renders the `jira` line only on that profile). The remote HTTP
-servers (`hindsight`, `context7`, `ticktick`) are not touched.
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` and `browser-harness` on both profiles, plus `jira` on
+`axon-work-computer`; the source is `servers.list.tmpl`, which renders the `jira` line only on that profile). One server per line,
+optionally followed by that server's idle seconds and the word `pi-only`. `jira` is `pi-only`: Claude Code and Codex keep it as
+rendered, and only Pi runs it lazily (#1890). `browser-harness` is `604800` (a week, so never stopped): stopping it would
+close the agent's own Chrome tab. A listed name that the profile does not render is skipped: `browser-harness` is not rendered on
+Linux with the work profile, which has no Linux machine. The remote HTTP servers (`hindsight`, `context7`, `ticktick`, and the
+work servers) are not touched.
 
 ### jira (work profile)
 
@@ -63,30 +76,35 @@ credentials.
 
 ## Defaults and commands
 
-- Idle period: 600 seconds, written into each rendered entry as its second argument. Change it for one server by editing
-  that entry's argument in `~/.pi/agent/mcp.json`, or for all by exporting `PI_MCP_LAZY_IDLE` when applying.
+- Idle period: 600 seconds, written into each rendered entry as its second argument. Change it for one server by giving it a value
+  in `servers.list`, or for every server without one by exporting `PI_MCP_LAZY_IDLE` when applying.
 - Rebuild a copy by hand: `pi-mcp-lazy --refresh NAME -- COMMAND [ARGS...]` (starts the real server once, saves, stops).
 - Ask whether serving would show Pi any tools: `pi-mcp-lazy --check NAME -- COMMAND [ARGS...]` (exit 0 if the state copy, else
   the seed, holds at least one tool; starts nothing). The apply uses it after each refresh.
 - Regenerate the seeds from the real servers (do this when preparing a change that bumps a server):
-  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh rea -- ~/.local/share/mise/shims/rea mcp`. The seed's `key` holds the command line it was saved with, so it
+  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh rea -- ~/.local/share/mise/shims/rea mcp`,
+  and for `browser-harness`: `PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh browser-harness -- uvx --from browser-use==1.0.2 python -I ~/.local/share/browser-harness-mcp/server.py` (no Chrome needed). The seed's `key` holds the command line it was saved with, so it
   names the path of the machine that saved it; on another home a seed is still served, with the stale note, until the apply-time refresh writes a state copy.
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
   default 1.0), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
 
 ## How it is rendered
 
-`apply_harness_config.sh` (Pi path only) runs the refresh for each name in `servers.list` and then rewrites that
-entry in `~/.pi/agent/mcp.json` to `{"command": "~/.local/bin/pi-mcp-lazy", "args": [NAME, "600", "--", <original command and
-args>]}`, keeping any other keys of the entry. A failed refresh is logged by name with the stderr tail (URLs and env values
-hidden). The entry is still wrapped when `--check` finds a saved list with tools (an older state copy, or the seed); otherwise it is
-left as rendered and Pi starts the server at session start. The canonical `servers.json`, and therefore the Claude and Codex renderings,
-are unchanged.
+`apply_harness_config.sh` runs `wrap_lazy_servers` for Claude, Codex and Pi. It refreshes each name in `servers.list` once per
+apply run (the first harness that wraps it does it; the saved copy is shared; a `pi-only` name is skipped for Claude and Codex) and then rewrites that entry in the harness's rendered MCP
+file to `{"command": "~/.local/bin/pi-mcp-lazy", "args": [NAME, IDLE, "--", <original command and args>]}`, keeping any other
+keys of the entry (`env` reaches the real server through the stand-in). Claude's registration step replaces a stored entry that
+differs, so the first apply moves an existing `rea` and `browser-harness` registration to the wrapped form. A failed refresh is
+logged by name with the stderr tail (URLs and env values hidden). The entry is still wrapped when `--check` finds a saved list with
+tools (an older state copy, or the seed), checked for each harness; otherwise it is left as rendered and the harness starts the
+server at session start. The canonical `servers.json` is unchanged.
 
 ## Accepted limits
 
-- A cold first call can take seconds (server start). Pi's per-request timeout is 60 seconds by default; add a larger
-  `"timeout"` to the entry if a cold start is ever slower.
+- A cold first call can take seconds (server start: `browser-harness` about 1.6 s, `rea` 2-3 s). Pi's per-request timeout is 60 seconds
+  by default; add a larger `"timeout"` to the entry if a cold start is ever slower.
+- Sessions already running when an apply lands keep the servers they started until they end.
+- When `rea` idles out after 600 s, its in-memory state (an opened binary) is gone, and its prompts read empty until the next call.
 - **Exit and /reload.** The server shares the stand-in's process group. Pi's shutdown (close stdin, SIGTERM to the group after
   0.5 s, SIGKILL to the group after 2.5 s) reaches the server and every same-group helper while the stand-in is still running. Pi
   cancels those timers when the stand-in exits and then sends the group one last SIGTERM only, so on the normal path the stand-in's own

@@ -1,7 +1,11 @@
-# Local MCP servers that Pi starts lazily (through ~/.local/bin/pi-mcp-lazy).
-# One name per line, matching a server in the canonical mcp/servers.json. Remove a line and
-# re-apply to roll that server back to Pi's normal start-at-session-start behaviour.
+# Local MCP servers that Claude Code, Codex and Pi start lazily (through ~/.local/bin/pi-mcp-lazy).
+# One server per line: its name in the canonical mcp/servers.json, then optionally its idle seconds (default 600) and the word
+# pi-only (wrapped for Pi, left as rendered for Claude Code and Codex; #1890). A name this
+# profile does not render is skipped. Remove a line and re-apply to roll that server back to the harness's normal
+# start-at-session-start behaviour.
+# browser-harness is never stopped (a week): stopping it would close the agent's own Chrome tab.
 rea
+browser-harness 604800
 {{ if eq .profile "axon-work-computer" -}}
-jira
+jira pi-only
 {{ end -}}

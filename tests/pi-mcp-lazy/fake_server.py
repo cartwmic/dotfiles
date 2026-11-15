@@ -19,6 +19,7 @@ ap.add_argument("--escaped-helper", action="store_true", help="start a SIGTERM-i
 ap.add_argument("--late-fork", action="store_true", help="start a helper in its own session that, once <dir>/fork.now exists, starts a SIGTERM-ignoring child of its own; the helper itself dies on SIGTERM")
 ap.add_argument("--ignore-term", action="store_true", help="ignore SIGTERM (server and grandchild), so only SIGKILL stops them")
 ap.add_argument("--resources", action="store_true")
+ap.add_argument("--prompts", action="store_true", help="advertise prompts (listChanged) and answer prompts/list with one real prompt")
 ap.add_argument("--start-delay", type=float, default=0)
 ap.add_argument("--name", default="fake")
 ap.add_argument("--ping-every", type=float, default=0, help="send server-originated pings and log notifications this often")
@@ -95,12 +96,16 @@ def handle(msg):
         caps = {"tools": {"listChanged": True}}
         if a.resources:
             caps["resources"] = {}
+        if a.prompts:
+            caps["prompts"] = {"listChanged": True}
         send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": p.get("protocolVersion", "2025-11-25"),
               "capabilities": caps, "serverInfo": {"name": a.name, "version": "1.0"}, "instructions": "fake server"}})
     elif m == "tools/list":
         send({"jsonrpc": "2.0", "id": rid, "result": {"tools": [tool_def(n) for n in TOOLS]}})
     elif m == "ping":
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
+    elif m == "prompts/list" and a.prompts:
+        send({"jsonrpc": "2.0", "id": rid, "result": {"prompts": [{"name": "real-prompt", "description": "from the real server"}]}})
     elif m == "resources/read":
         send({"jsonrpc": "2.0", "id": rid, "result": {"contents": [{"uri": p.get("uri"), "text": "resource-text"}]}})
     elif m == "tools/call":

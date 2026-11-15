@@ -41,6 +41,13 @@ CRED_ENV_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIAL|^OP
 ENV_ALLOW = ("TERM", "LANG", "LC_ALL", "TMPDIR")
 
 
+def mise_env() -> dict:
+    """Where mise finds its installs and pins. rea runs from a mise shim (shims/rea); under a throwaway HOME the shim has neither
+    and exits "not a valid shim". Read-only pointers at the owner's mise directories; empty when they do not exist."""
+    data, conf = REAL_HOME / ".local" / "share" / "mise", REAL_HOME / ".config" / "mise"
+    return {"MISE_DATA_DIR": str(data), "MISE_CONFIG_DIR": str(conf)} if data.is_dir() and conf.is_dir() else {}
+
+
 class Fatal(RuntimeError):
     """Cleanup or isolation could not be guaranteed: stop the whole run."""
 
@@ -371,7 +378,7 @@ LAZY_SEED = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "seed"
 APPLY_SRC = REPO_ROOT / "dot_local" / "user_scripts" / "executable_apply_harness_config.sh"
 LAZY_VARIANTS = {"full-lazy": "state", "full-lazy-nostate": "nostate", "full-lazy-failedrefresh": "failed"}
 # Process names (cmd_name) of the real MCP servers and their npm wrappers in the owner's configuration.
-MCP_REAL_NAMES = {"furi", "npm exec", "node rea"}
+MCP_REAL_NAMES = {"furi", "npm exec", "node rea.mjs"}  # rea runs as `node <install>/rea.mjs mcp` from its mise shim
 FAILING_WRAPPER = """#!/bin/sh
 [ "$1" = "--refresh" ] && { echo "simulated refresh failure" >&2; exit 1; }
 exec "$(dirname "$0")/pi-mcp-lazy-real" "$@"
@@ -423,7 +430,7 @@ def lazy_render(store: "Store", kind: str, node_dir: Path) -> dict:
         "AGENT_HARNESS_CANONICAL_ROOT": str(canon), "AGENT_HARNESS_GENERATED_ROOT": str(root / "generated"),
         "AGENT_HARNESS_ADAPTERS_ROOT": str(root / "adapters"), "AGENT_HARNESS_EXTERNAL_ROOT": str(root / "external"),
         "AGENT_HARNESS_APPLY_CLAUDE_MCP": "0", "PI_MCP_LAZY_LIST": str(lazy_list_file(root)), "PI_MCP_LAZY_BIN": str(bindir / "pi-mcp-lazy"),
-        "PI_MCP_LAZY_SEED_DIR": str(LAZY_SEED),
+        "PI_MCP_LAZY_SEED_DIR": str(LAZY_SEED), **mise_env(),
     })
     r = subprocess.run(["sh", str(APPLY_SRC), "pi"], env=env, capture_output=True, text=True, timeout=900)
     kill_owned(marker_value, None)  # the refresh stops its servers; verify nothing is left
@@ -540,7 +547,7 @@ def launch_env(h: dict, marker_value: str, node_dir: Path) -> dict:
         "PATH": ":".join([str(h["stubs"]), str(node_dir), str(h["tools"]), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
         "PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0", "npm_config_offline": "true",
         "TERM": env.get("TERM", "xterm-256color"), "PI_MANAGED_INSTALL_ROOT": str(REAL_AGENT / "install"),
-        "SESSION_RECAP_PYTHON": str(h["tools"] / "python3"), MARKER: marker_value,
+        "SESSION_RECAP_PYTHON": str(h["tools"] / "python3"), MARKER: marker_value, **mise_env(),
     })
     return env
 

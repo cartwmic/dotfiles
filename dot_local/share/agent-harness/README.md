@@ -58,9 +58,9 @@ Rules:
   Claude apply step removes a leftover `playwright` registration from `~/.claude.json`; Codex's block and Pi's `mcp.json` drop it
   on the same apply. (The Chromium wrapper `~/.local/bin/chromium`, which uses Playwright's Chrome for Testing build for Pi's
   `launch_browser`, is a different thing and stays.)
-- The Pi adapter wraps the local `rea` entry in `~/.local/bin/pi-mcp-lazy` (names in
-  `~/.local/share/pi-mcp-lazy/servers.list`) so Pi starts them on first use and stops them when idle. Claude and Codex
-  keep the canonical entries. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
+- The Claude, Codex and Pi adapters wrap the local `rea` and `browser-harness` entries in `~/.local/bin/pi-mcp-lazy` (names in
+  `~/.local/share/pi-mcp-lazy/servers.list`) so a session starts each server on first use, not at session start. `rea` stops when idle;
+  `browser-harness` is never stopped. (`jira` on the work profile is lazy in Pi only.) See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
 
@@ -285,7 +285,7 @@ An MCP process picks the launcher up when it starts: sessions started before an 
 The journey tests need a real, visible Chrome (on this machine's Wayland session; kgate cannot run them). Each starts its own scratch Chrome on a port Chrome picks, with a throw-away profile and its own harness runtime dir, and never touches the agent Chrome on 9333; they skip without Chrome, a display or uvx.
 
 Run `agent-chrome` before the agent's first browser call; the harness attaches to a running Chrome and does not start one.
-The server is not wrapped by `pi-mcp-lazy` (idle it holds about 120 MB RSS). Add it to `servers.list.tmpl` and ship a seed if that matters.
+The server runs behind `pi-mcp-lazy` (`servers.list.tmpl`, idle value 604800 s, so it is never stopped: a stop would close the agent's own tab). A session starts it on the first `browser_*` call, about 1.6 s; a launcher that exits at start (pin mismatch above) shows as that call's error, with the launcher's message, instead of at session start. The tool list comes from the seed `pi-mcp-lazy/seed/browser-harness.json`; regenerate it when the pin changes (command in the `pi-mcp-lazy` README).
 Tests: `tests/agent-browser`, `tests/mise/test_install_google_chrome.py`.
 
 ## Add A Canonical Skill
