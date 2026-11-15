@@ -81,11 +81,12 @@ class Env:
         return p.read_text().count("start ") if p.exists() else 0
 
 
-def write_copy(directory, name, key, tools=("echo", "slow", "roots"), version="2025-11-25", sha=None):
+def write_copy(directory, name, key, tools=("echo", "slow", "roots"), version="2025-11-25", sha=None, prompts=False):
     """Write a saved copy in the stand-in's format: one JSON header line, then the tool list as raw JSON."""
     directory.mkdir(parents=True, exist_ok=True)
     head = {"server": name, "key": key, "tools_sha": sha,
-            "initialize": {"protocolVersion": version, "capabilities": {"tools": {"listChanged": True}},
+            "initialize": {"protocolVersion": version,
+                           "capabilities": {"tools": {"listChanged": True}, **({"prompts": {"listChanged": True}} if prompts else {})},
                            "serverInfo": {"name": "fake", "version": "1.0"}, "instructions": "fake server"}}
     tool_defs = [{"name": n, "description": "fake %s" % n, "inputSchema": {"type": "object", "properties": {}}} for n in tools]
     (directory / (name + ".json")).write_text(json.dumps(head) + "\n" + json.dumps(tool_defs) + "\n")

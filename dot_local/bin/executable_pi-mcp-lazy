@@ -5,8 +5,9 @@
 """pi-mcp-lazy: a lazy stdio stand-in for one local MCP server.
 
 Pi starts this program in place of the real server (see apply_harness_config.sh). Until a
-request needs the real server, nothing real runs: the handshake and tools/list are answered
-from a saved copy (state copy, else shipped seed). The first other request starts the real
+request needs the real server, nothing real runs: the handshake, tools/list, server/discover and
+the prompt and resource lists are answered here (the tool list from a saved copy: state copy, else
+shipped seed). The first other request starts the real
 server in the stand-in's own process group, replays Pi's initialize, and forwards everything unchanged.
 After the idle period with nothing in flight the whole process tree is stopped again.
 
@@ -39,6 +40,8 @@ VERSION = "1"
 GRACE = float(os.environ.get("PI_MCP_LAZY_GRACE", "1.0"))
 START_TIMEOUT = float(os.environ.get("PI_MCP_LAZY_START_TIMEOUT", "120"))
 STDERR_KEEP = 4000
+# List requests that are empty while no real server runs (the answer key in the result).
+EMPTY_LISTS = {"prompts/list": "prompts", "resources/list": "resources", "resources/templates/list": "resourceTemplates"}
 
 
 def valid_name(s):
@@ -489,15 +492,25 @@ class Lazy:
             if self.cache is None:
                 self.cache = self.load()
             return self.send_tools(rid)
+        # Claude Code sends these at session start. None of them is use, so none may start the server: the discovery probe is
+        # answered the way the real servers answer it, and the lists are empty until the server is up (then the real server answers).
+        if m == "server/discover":
+            return self.error(rid, "Method not found", -32601)
+        if m in EMPTY_LISTS and not (self.child and self.child.alive()):
+            return self.reply(rid, {EMPTY_LISTS[m]: []})
         if self.closing:
             return self.error(rid, "MCP server '%s' is shutting down" % self.name)
         with self.lock:
+            was_up = bool(self.child and self.child.alive())
             try:
                 changed = self.ensure_child()
             except StartError as e:
                 return self.error(rid, str(e))
             if changed:
                 self.to_client({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+            if not was_up and (((self.cache or {}).get("initialize") or {}).get("capabilities") or {}).get("prompts", {}).get("listChanged"):
+                # The client was served an empty prompt list before the server existed: tell it to read the real one.
+                self.to_client({"jsonrpc": "2.0", "method": "notifications/prompts/list_changed"})
             with self.state_lock:
                 self.inflight[idkey(rid)] = rid
                 self.last = time.time()
