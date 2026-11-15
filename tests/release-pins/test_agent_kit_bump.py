@@ -22,6 +22,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/user_scripts/executable_agent_kit_bump.py"
+PRINCIPLE_HEADINGS = re.findall(r"(?m)^## (\d+)\. (.+)$", (ROOT / "dot_local/share/agent-harness/design-principles.md").read_text())
+LAST_PRINCIPLE = (int(PRINCIPLE_HEADINGS[-1][0]), PRINCIPLE_HEADINGS[-1][1])
 INSTALL_TEMPLATE = "run_onchange_after_65_agent_kit_install.sh.tmpl"
 KIT_SRC = "dot_local/share/agent-kit"
 KIT_DEST = ".local/share/agent-kit"
@@ -218,7 +220,7 @@ class AgentKitBumpTests(unittest.TestCase):
 
         prs = self.prs()
         self.assertEqual(len(prs), 1)
-        self.assertIn("| 16 | Built to last |", prs[0]["body"])
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, prs[0]["body"])
         self.assertRegex(prs[0]["body"], r"(?m)^Decisions: none material$")
 
         # Checks, then the two gates in order, then the squash merge, which must name the head the checks ran on.
@@ -369,7 +371,7 @@ class BodyTests(unittest.TestCase):
         spec.loader.exec_module(module)
         body = module.pr_body(NEW)
         rows = {int(m.group(1)) for m in re.finditer(r"^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", body, re.M)}
-        self.assertEqual(rows, set(range(1, 17)))
+        self.assertEqual(rows, set(range(1, LAST_PRINCIPLE[0] + 1)))
         self.assertRegex(body, r"(?m)^Decisions: none material$")
         self.assertEqual(re.findall(r"(?<![\w-])(?:D-\d+|D\d+|MK-\d+|T\d+)(?![\w-])", body), [])
 
