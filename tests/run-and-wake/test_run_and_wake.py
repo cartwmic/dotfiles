@@ -898,6 +898,22 @@ class RunAndWake(unittest.TestCase):
         self.assertIn(f"[run-and-wake k:{job}] job did NOT finish: the host restarted at {self.boot_started()}", text)
         self.assertIn("(killed by SIGTERM), is not a result either", text)
 
+    def test_a_malformed_retry_setting_warns_and_the_default_is_used(self):
+        for setting in ("garbage", "5", "x:y", "0:10", "-1:5"):
+            with self.subTest(setting=setting):
+                result = self.launch("--", "true", env=self.t3_env(RUN_AND_WAKE_T3_RETRY=setting))
+                self.assertIn(f"WARN: RUN_AND_WAKE_T3_RETRY={setting!r} is not <interval>:<window>", result.stderr)
+                self.assertEqual(self.replay(self.job_id(result))[-1]["result"], "sent", "the job still runs and wakes")
+
+    @LINUX_BOOT
+    def test_a_log_line_that_is_json_but_not_a_record_is_skipped_by_recover(self):
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        self.log.write_text('[1, 2]\n"text"\nnull\n3\n{"job": 7, "event": "start"}\n{"no": "job"}\n{"job": "j", "event": 5}\n')
+        self.seed("20261115T200510Z-60a37c", self.ELSEWHERE)
+        done = self.recover()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("job did NOT finish", self.t3_sends()[0]["stdin"], "the real record after the odd lines is still recovered")
+
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):
             with self.subTest(args=args):

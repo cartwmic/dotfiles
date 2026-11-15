@@ -80,7 +80,20 @@ RECOVER = "--recover"
 # The T3 CLI says one of these (exit 1) when no server answers: T3 is restarting or the host is. Anything else it says (thread not found) is an answer.
 UNREACHABLE = ("Could not reach the T3 Code server", "No running T3 Code server")
 # T3 restarts in seconds; the wake waits this long for it. RUN_AND_WAKE_T3_RETRY=<interval>:<window> (seconds) tunes it.
-T3_RETRY = tuple(float(x) for x in (os.environ.get("RUN_AND_WAKE_T3_RETRY") or "5:600").split(":"))
+def t3_retry():
+    """(interval, window) in seconds from RUN_AND_WAKE_T3_RETRY=<interval>:<window>; a value that is not two such numbers falls back to 5:600 with a warning."""
+    setting = os.environ.get("RUN_AND_WAKE_T3_RETRY") or "5:600"
+    try:
+        interval, window = (float(x) for x in setting.split(":"))
+        if interval > 0 and window >= 0:
+            return interval, window
+    except ValueError:
+        pass
+    print(f"[{NAME}] WARN: RUN_AND_WAKE_T3_RETRY={setting!r} is not <interval>:<window> in seconds; using 5:600", file=sys.stderr)
+    return 5.0, 600.0
+
+
+T3_RETRY = t3_retry()
 
 
 def say(level, message):
@@ -372,7 +385,7 @@ def own_slice():
 # --- recovery: wakes a host restart (or a T3 outage longer than the watcher waited) left undelivered ---
 
 def read_jobs():
-    """The log as {job: [records]}; a line that is not JSON (a write cut by the shutdown) is skipped."""
+    """The log as {job: [records]}; a line that is not a JSON record (a write cut by the shutdown, or anything else) is skipped."""
     jobs = {}
     try:
         with open(LOG, encoding="utf-8") as log:
@@ -384,7 +397,8 @@ def read_jobs():
             r = json.loads(line)
         except ValueError:
             continue
-        jobs.setdefault(r.get("job"), []).append(r)
+        if isinstance(r, dict) and isinstance(r.get("job"), str) and isinstance(r.get("event"), str):
+            jobs.setdefault(r["job"], []).append(r)
     return jobs
 
 
