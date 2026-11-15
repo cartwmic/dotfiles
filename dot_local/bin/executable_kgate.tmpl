@@ -213,7 +213,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit", "cache_pvc", "mssql", "image_volumes", "local_hostnames"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -275,12 +275,71 @@ def parse_profile(text):
     user = raw.get("user", "1000:1000" if cluster == "homelab" else None)   # a kubectl cluster's default user is in its cluster file
     if user is not None and (not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user)):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
-    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"),
+    github_ci = parse_github_ci(raw.get("github_ci"))
+    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
             "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc,
             "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
 
+
+def parse_github_ci(table):
+    """The [github_ci] table of a profile: the GitHub workflow that runs these suites, and the CMD strings that name them (None when absent)."""
+    if table is None:
+        return None
+    if not isinstance(table, dict) or set(table) != {"workflow", "suites"}:
+        raise Unavailable("profile [github_ci] must be a table with exactly workflow and suites")
+    workflow, suites = table["workflow"], table["suites"]
+    if not isinstance(workflow, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", workflow):
+        raise Unavailable("profile [github_ci] workflow must be a workflow file name like ci.yml, got %r" % (workflow,))
+    if not isinstance(suites, list) or not suites or not all(isinstance(s, str) and s for s in suites):
+        raise Unavailable("profile [github_ci] suites must be a non-empty list of non-empty strings, got %r" % (suites,))
+    return {"workflow": workflow, "suites": list(suites)}
+
+
+RECEIPT_EVENTS = ("push", "workflow_dispatch")
+
+
+def suite_matches(table, cmd):
+    return any(s in cmd for s in table["suites"])
+
+
+def ci_receipt(clean, cmd, table, runs, head):
+    """The GitHub run that already ran CMD's suite green on this exact commit, or None. Pure: `runs` is what gh listed (dicts with status, conclusion, headSha, url, event). Only a push or workflow_dispatch run counts: a pull_request run tests the merge commit, not HEAD."""
+    if not table or not clean or not head or not suite_matches(table, cmd):
+        return None
+    for r in runs:
+        if r.get("status") == "completed" and r.get("conclusion") == "success" and r.get("headSha") == head and r.get("event") in RECEIPT_EVENTS:
+            return r
+    return None
+
+
+class CiUnchecked(Exception):
+    """gh could not say whether CI ran green (missing, not signed in, timed out, or an error). The job runs as before."""
+
+
+def gh_runs(wt, workflow, head):
+    """gh's list of the workflow's runs on `head`; the repo comes from wt's git remote."""
+    try:
+        done = subprocess.run(["gh", "run", "list", "--workflow", workflow, "--commit", head, "--json", "status,conclusion,headSha,url,databaseId,event", "-L", "20"],
+                              cwd=wt, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=GH_TIMEOUT_S)
+    except FileNotFoundError:
+        raise CiUnchecked("gh is not installed")
+    except subprocess.TimeoutExpired:
+        raise CiUnchecked("gh did not answer in %d s" % GH_TIMEOUT_S)
+    if done.returncode != 0:
+        lines = done.stderr.decode(errors="replace").strip().splitlines()
+        raise CiUnchecked(lines[0] if lines else "gh exited %d" % done.returncode)
+    try:
+        runs = json.loads(done.stdout)
+    except ValueError:
+        raise CiUnchecked("gh printed something that is not JSON")
+    if not isinstance(runs, list):
+        raise CiUnchecked("gh printed something that is not a list of runs")
+    return [r for r in runs if isinstance(r, dict)]
+
+
+GH_TIMEOUT_S = 15
 
 
 IMAGE_DIGEST = r"[^@\s]+@sha256:[0-9a-f]{64}"
@@ -1194,6 +1253,7 @@ class Job:
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
+        self.receipt_refused = False
         self.t_pod = time.time()
         self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
         self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
@@ -1258,7 +1318,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "ephemeral_storage": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
+                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -1289,6 +1349,25 @@ class Job:
             raise Unavailable("node %s only takes kgate overflow; it cannot be pinned" % o.node)
         self.rec.update(image=image, cpu=cpu, mem=mem, mem_limit=mem_limit)
         return image, cpu, mem, mem_limit, prof
+
+    def github_receipt(self, wt, table):
+        """Refuse a suite GitHub CI already ran green on this commit with a clean tree (playbook 83fbe006). Any gh trouble: say so and run."""
+        head = self.rec["head"]
+        if not table or not head or not suite_matches(table, self.rec["cmd"]):
+            return
+        status = subprocess.run(["git", "-C", wt, "status", "--porcelain"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        clean = status.returncode == 0 and not status.stdout.strip()
+        if not clean:
+            return
+        try:
+            runs = gh_runs(wt, table["workflow"], head)
+        except CiUnchecked as e:
+            self.note("could not check GitHub's CI run for this commit (%s); running here as before" % e)
+            return
+        found = ci_receipt(clean, self.rec["cmd"], table, runs, head)
+        if found:
+            self.receipt_refused = True
+            raise Unavailable("GitHub CI already ran this suite green on %s (%s): GitHub's run is the receipt (playbook 83fbe006)" % (head[:12], found.get("url")))
 
     def use_kubectl(self, image, prof, cpu):
         """The profile names a kubectl cluster: refuse what it cannot take."""
@@ -1494,6 +1573,8 @@ class Job:
         self.note("/out -> %s (%d files)" % (target, self.rec["out_files"]))
 
     def cleanup(self):
+        if self.receipt_refused:   # refused before anything was created: no cluster call, not even a delete
+            return
         if not self.cluster.configured():  # no cluster address or kubeconfig: nothing was created, and an attempt would only add noise to the exit-69 message
             return
         done = delete_job_objects(self.cluster, self.pod)
@@ -1513,6 +1594,7 @@ class Job:
         head = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.rec["head"] = head.stdout.decode().strip() or None
         image, cpu, mem, mem_limit, prof = self.settings(wt)
+        self.github_receipt(wt, prof["github_ci"])
         tree = self.rec["tree"] = tree_hash(wt, files)
         job = {"id": self.id, "root": wt, "cwd": os.getcwd(), "files": files, "tree": tree, "argv": o.command,
                "uid": int(prof["user"].split(":")[0]), "gid": int(prof["user"].split(":")[1]),
