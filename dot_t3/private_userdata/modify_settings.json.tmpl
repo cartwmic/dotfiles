@@ -91,6 +91,8 @@ set -eu
 {{- end }}
 {{- $_ := set $codex "config" $codexConfig }}
 {{- $hubDefault := includeTemplate "hub" . }}
+{{- /* Container mode (docs/container-mode.md): the hub switch here covers Codex and the usage panel (a 1Password read of the hub management key at the external URL). The pod has neither, so it is off: no op call at apply time. Claude's hub is set in ~/.claude/settings.json. */}}
+{{- if (includeTemplate "container" . | fromJson).enabled }}{{ $hubDefault = "off" }}{{ end }}
 {{- $defaultBinary := "" }}
 {{- if and (eq $hubDefault "on") (stat $active) }}
 {{- $defaultBinary = get $codexConfig "binaryPath" }}
