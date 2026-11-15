@@ -45,7 +45,7 @@ cmd_status() { "$BIN" --version; "$BIN" status; "$BIN" permissions status; }
 
 cmd_undo() {
   "$BIN" stop 2>/dev/null || true
-  tccutil reset All "$BUNDLE_ID" || true      # not run during the trial
+  tccutil reset All "$BUNDLE_ID" || true      # resets only this app's own grants; run 2026-11-15, ask #1077
   rm -rf "$APP" "$HOME/.cua-driver" "$HOME/Library/Caches/cua-driver" "$WORK"
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" 2>/dev/null || true
 }
