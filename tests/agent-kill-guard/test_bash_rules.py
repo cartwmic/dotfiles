@@ -1,4 +1,4 @@
-"""The five bash_rules checks (sleep-poll, heredoc, kube context, merge, local docker): what each refuses and what it lets through.
+"""The six bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -101,7 +101,7 @@ class Heredoc(unittest.TestCase):
         "cat <<-'EOF'\n\tsee `notes`\n\tEOF",
         "cat > /tmp/x <<EOF\nhello $HOME\nEOF",
         "cat > /tmp/x <<EOF\nrun \\`date\\` later\nEOF",
-        'gh pr create --body "$(cat <<\'EOF\'\nRuns `make test` first.\nEOF\n)"',
+        'git commit -m "$(cat <<\'EOF\'\nRuns `make test` first.\nEOF\n)"',
         "echo `date`",
     ]
 
@@ -289,6 +289,65 @@ class Merge(unittest.TestCase):
             self.assertIsNone(check("gh pr merge 12", profile=profile))
 
 
+class PrBody(unittest.TestCase):
+    def test_a_create_or_edit_without_the_check_names_the_chained_form(self):
+        for text in ["gh pr create --title t --body-file /tmp/b.md", "gh pr edit 5 --body-file /tmp/b.md", "gh pr create -F /tmp/b.md",
+                     "gh pr create --body-file=/tmp/b.md", "gh pr new --body-file /tmp/b.md", "gh -R cartwmic/dotfiles pr edit 5 -F /tmp/b.md",
+                     "sh -c 'gh pr create --body-file /tmp/b.md'", "cd /tmp && gh pr create --body-file b.md", "echo $(gh pr create --body-file b.md)"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("refused in agent sessions", message)
+                self.assertIn("pr-body-check --body-file F && gh pr", message)
+                self.assertIn("pass, fail or n/a", message)
+
+    def test_the_check_chained_with_the_same_file_is_allowed(self):
+        for text in ["pr-body-check --body-file /tmp/b.md && gh pr create --title t --body-file /tmp/b.md",
+                     "pr-body-check --body-file /tmp/b.md && gh pr edit 5 --body-file /tmp/b.md",
+                     "pr-body-check --body-file=/tmp/b.md && gh pr create -F /tmp/b.md",
+                     "pr-body-check --body-file /tmp/b.md && gh pr new --body-file=/tmp/b.md",
+                     "cd /tmp && pr-body-check --body-file b.md && gh pr create --body-file b.md -R cartwmic/coordinator",
+                     "pr-body-check --body-file /tmp/b.md && sh -c 'gh pr create --body-file /tmp/b.md'",
+                     "pr-body-check --body-file /tmp/b.md &&\n gh pr create --body-file /tmp/b.md",
+                     "pr-body-check --body-file /tmp/a.md && pr-body-check --body-file /tmp/b.md && gh pr create --body-file /tmp/a.md"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_a_different_file_or_a_broken_chain_is_refused(self):
+        for text in ["pr-body-check --body-file /tmp/a.md && gh pr create --body-file /tmp/b.md",
+                     "pr-body-check --body-file /tmp/a.md && gh pr edit 5 -F /tmp/b.md",
+                     "pr-body-check --body-file /tmp/b.md; gh pr create --body-file /tmp/b.md",
+                     "pr-body-check --body-file /tmp/b.md || gh pr create --body-file /tmp/b.md",
+                     "pr-body-check --body-file /tmp/b.md & gh pr create --body-file /tmp/b.md",
+                     "gh pr create --body-file /tmp/b.md && pr-body-check --body-file /tmp/b.md",
+                     "pr-body-check cartwmic/dotfiles 5 && gh pr create --body-file /tmp/b.md",  # the saved-PR form reads no file
+                     "ci-main-status x && gh pr create --body-file /tmp/b.md"]:
+            with self.subTest(text=text):
+                self.assertIn("pr-body-check --body-file F", check(text))
+
+    def test_a_body_that_is_not_a_checked_file_is_refused(self):
+        for text in ["gh pr create --title t --body 'text'", "gh pr create -b text", "gh pr create --body=text", "gh pr edit 5 --body text",
+                     "gh pr create --fill", "gh pr create --title t", "gh pr create", "gh pr create --web",
+                     "pr-body-check --body-file - && gh pr create --body-file -", "gh pr create --body-file -",
+                     "pr-body-check --body-file /tmp/b.md && gh pr create --title t --body 'text'"]:
+            with self.subTest(text=text):
+                self.assertIn("pr-body-check --body-file F", check(text))
+
+    def test_an_edit_that_sets_no_body_and_other_pr_commands_pass(self):
+        for text in ["gh pr edit 5 --title t", "gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
+                     "echo gh pr create", "gh issue create --body-file /tmp/b.md", "gh issue edit 5 --body-file /tmp/b.md"]:
+            with self.subTest(text=text):
+                self.assertNotIn("pr-body-check --body-file F", check(text) or "")
+
+    def test_the_coordinator_is_not_exempt(self):
+        self.assertIn("pr-body-check --body-file F", check("gh pr create -R cartwmic/coordinator --body-file /tmp/b.md"))
+        self.assertIsNone(check("pr-body-check --body-file /tmp/b.md && gh pr create -R cartwmic/coordinator --body-file /tmp/b.md"))
+
+    def test_the_work_profile_and_no_profile_do_not_run_it(self):
+        for profile in ("axon-work-computer", None):
+            self.assertIsNone(check("gh pr create --body 'x'", profile=profile))
+            self.assertIsNone(check("gh pr edit 5 --body-file /tmp/b.md", profile=profile))
+
+
 class Docker(unittest.TestCase):
     REFUSED = [
         ("docker run --rm alpine true", "docker run"),
@@ -415,6 +474,7 @@ class Hook(unittest.TestCase):
 
     def test_every_refusal_carries_the_phrase_the_pi_extension_looks_for(self):
         for command, profile in [("until ok; do sleep 1; done", None), ("cat <<EOF\n`x`\nEOF", None), ("gh pr merge 1", "personal"),
+                                 ("gh pr create --body-file b.md", "personal"),
                                  ("kubectl --context a get no", "personal"), ("pkill x", None)] + (
                 [("docker build .", "personal")] if sys.platform.startswith("linux") else []):
             with self.subTest(command=command):

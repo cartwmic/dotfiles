@@ -12,7 +12,7 @@ dot_local/share/agent-harness/
   reviewer-examples.md   # twelve real cases (seven blocking, five notes) for calibrating the bar
   hooks/
     refuse_pattern_kill.py   # the pkill/killall classifier that Claude's hook, Codex's hook and Pi's extension run (see "Pattern-kill guard")
-    bash_rules.py            # the five extra refusals it calls: sleep-poll, heredoc, kube context, merge, local docker
+    bash_rules.py            # the six extra refusals it calls: sleep-poll, heredoc, kube context, merge, PR body, local docker
     profile                  # rendered from profile.tmpl: just the chezmoi profile name, read by bash_rules
   canonical/
     instructions/
@@ -166,7 +166,7 @@ reviewer's `pkill -f "sleep 30" -P 1`). Decision: Michael, ask 744, "Add the gua
 | Pi | extension that blocks the `bash` tool call, running the same classifier | `dot_pi/private_agent/extensions/refuse-pattern-kill/` | `~/.pi/agent/extensions/refuse-pattern-kill/` |
 | Codex | PreToolUse hook on its Bash tool, running the same classifier, in `~/.codex/hooks.json` (a JSON `modify_` script that appends our group and finds it by exact command, never by a substring); Codex runs a hook only once it is trusted, so `codex_trust_hooks.py` trusts exactly that hook through Codex's own API after every full apply. A rules file is the second layer for the time the hook is untrusted | `dot_codex/modify_hooks.json.tmpl`, `.chezmoitemplates/codex_guard_command`, `run_after_90_codex_hook_trust.sh.tmpl`, `dot_local/user_scripts/executable_codex_trust_hooks.py`, `dot_codex/rules/agent-guard.rules`; `dot_codex/modify_private_config.toml.tmpl` only adds an empty `[hooks.state]` header | `~/.codex/hooks.json`, `~/.codex/rules/agent-guard.rules`, `~/.local/user_scripts/codex_trust_hooks.py` |
 | shared classifier | command-position parser: sees through quotes, `;`, `&&`, `\|`, `$( )`, `sh -c`, `eval`, wrappers, `find -exec` | `dot_local/share/agent-harness/hooks/refuse_pattern_kill.py` | `~/.local/share/agent-harness/hooks/` |
-| bash rules | the five refusals below, on the classifier's parser; the profile comes from `AGENT_HARNESS_PROFILE`, else the rendered file `profile` beside the script | `dot_local/share/agent-harness/hooks/bash_rules.py`, `profile.tmpl` | `~/.local/share/agent-harness/hooks/` |
+| bash rules | the six refusals below, on the classifier's parser; the profile comes from `AGENT_HARNESS_PROFILE`, else the rendered file `profile` beside the script | `dot_local/share/agent-harness/hooks/bash_rules.py`, `profile.tmpl` | `~/.local/share/agent-harness/hooks/` |
 
 Both desktop profiles, macOS and Linux; not Termux. Michael's own terminal, and Pi's own `!` command, are not agent tool calls and are not touched.
 It fails open: a missing script, a missing `python3` or an unreadable input allows the command, so a fault in the guard never stops an agent from working.
@@ -181,10 +181,10 @@ Codex's trust tables land beside it and never inside the hub block. Trust is che
 add `--check` to only look). The hook command text is frozen, so its trust (kept by Codex under a key made of the file and the position) is lost only if its position changes: another group inserted above ours in `hooks.json` (the owner's,
 or one Codex imports) leaves ours untrusted, and so skipped, until the next full apply.
 
-### The five bash rules
+### The six bash rules
 
 The same hook, no new entries. Each refusal names its fix, and every message says "refused in agent sessions" (the Pi extension looks for it). The first two run on both
-desktop profiles; the last three only on `personal` (a missing or unreadable `profile` file turns them off too); the docker rule also needs a Linux host. Any error inside them allows the command.
+desktop profiles; the last four only on `personal` (a missing or unreadable `profile` file turns them off too); the docker rule also needs a Linux host. Any error inside them allows the command.
 
 | Rule | Refuses | Fix it names |
 |---|---|---|
@@ -192,6 +192,7 @@ desktop profiles; the last three only on `personal` (a missing or unreadable `pr
 | heredoc | an unquoted heredoc delimiter (`<<EOF`) with an unescaped backtick in the body, in any command and also inside `$( )` | `<<'EOF'` |
 | kube context (personal) | kubectl, helm, k9s, kubectx on a context other than `kubernetes-admin@kubernetes`: a `--context` / `--kube-context` flag, `kubectl config use-context`, `kubectx X`, or no flag while the current context is another (read from `--kubeconfig F`, else an inline `KUBECONFIG=`, else the hook's `KUBECONFIG`, else `~/.kube/config`). `--kubeconfig F` with no such file is refused unless `--context` names the homelab. No kubeconfig or no current-context is allowed | `--context kubernetes-admin@kubernetes`; the homelab grant (playbook f90b9301) covers only that cluster |
 | merge (personal) | `gh pr merge` unless both `ci-main-status` and `pr-body-check` come earlier in the same `&&` list (any order); always for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in) | `merge-pr.sh PR` for the coordinator (it runs both checks); `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> ...` for others (`--merge-gate`: UNTESTED exits 0, RED 1; `pr-body-check` enforces playbook rules ecd63156, 385acc43 and ccc6c94b); `loop_engine_bump.py` / `agent_kit_bump.py` for pin bumps (they pass `--pr N`: `ci-main-status --merge-gate dotfiles --pr N` also passes a main that is red only on the release-pins step when PR N is exactly the pin fix and its own run passed that step); the playbook CLI with `--pr --merge` |
+| PR body (personal) | `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`) and `pr-body-check --body-file F` with the same F comes earlier in the same `&&` list. Also refused: an inline `--body` / `-b`, `--fill`, a create with no body flag, `-F -`, a different file. `gh pr edit` with no body flag (title, labels) passes. No repo is exempt (merge-pr.sh runs its checks at merge, not at create) | `pr-body-check --body-file F && gh pr create ... --body-file F`; a design-principles Result cell must start with pass, fail or n/a. Without this a cell such as `partial` is found only at merge |
 | local docker (personal, Linux) | `docker run`, `docker build` and `docker compose up`, and their spellings: `docker container run`, `docker image build`, `docker buildx build`, `docker builder build`, `docker-compose up`, global options before the subcommand (`docker -H x run`, `docker compose -f f.yml up`), after `sudo`, `env`, `timeout`, `run-and-wake`, in `bash -c`, after `&&`, `;`, `||`, `|`, in `$( )`. Read-only commands (`docker ps`, `images`, `inspect`, `manifest inspect`, `compose ps`, `buildx ls`) pass, and so does anything after `kgate`. The personal Mac is not touched: it has Docker Desktop for agents on purpose (`docs/agent-docker.md`) | `run-and-wake -- kgate -- <cmd>`, or a throwaway namespace on the homelab cluster under ledger grant 21 (create it, run the job, delete it) |
 
 Gaps, left as they are: commands built at run time, a kubeconfig path or `cd` target that holds a shell variable (`--kubeconfig $tmp` is allowed), kubectl inside an `ssh '...'` string, a `sleep` inside `$( )` in a loop body, and `$( )` (not only backticks) in an unquoted heredoc.
