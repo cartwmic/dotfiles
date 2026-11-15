@@ -78,6 +78,7 @@
 # Each apply replaces exactly the owned ids under providerInstances, sets worktreesDirectory and idleCompaction; no other key or instance is touched. No file, or a file that is
 # not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
+# When the merge changes nothing as data (only key order or indentation differ from what T3 wrote), the input is printed byte for byte, so chezmoi shows no drift.
 set -eu
 
 {{- $home := .chezmoi.homeDir }}
@@ -193,6 +194,14 @@ out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjso
         .providerInstances[$id] |= reduce $envvars[$id][] as $e (.; .environment = upsertEnv($e)) else . end);
     setCompact | setIdle | setEnvVars
   | .worktreesDirectory = $worktrees')
+# T3 writes the file in its own key order and the merge emits the template's order for the owned instances, so the bytes would differ on every
+# apply with nothing to change. When the merged result equals the input as data (jq -S sorts object keys; arrays keep their order), print the input as it is.
+sorted_in=$(printf %s "$input" | jq -S .)
+sorted_out=$(printf %s "$out" | jq -S .)
+if [ "$sorted_in" = "$sorted_out" ]; then
+  printf %s "$input"
+  exit 0
+fi
 printf %s "$out"
 case $input in
   *"
