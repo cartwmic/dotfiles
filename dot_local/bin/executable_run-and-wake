@@ -37,7 +37,7 @@ Contract (docs/run-and-wake.md):
   service account and never the desktop app (playbook 78819cbd). No token file and no variable: the job runs without one.
 - A host restart kills the job (nothing survives it) and the T3 server stops in the same shutdown, so the wake cannot be sent then.
   `run-and-wake --recover` (run by run-and-wake-recover.service at boot) sends it once T3 is back, for every T3-thread job that started
-  in an earlier boot and has no delivered wake: "job did NOT finish: the host restarted at <boot time> and the job was killed. Rerun it".
+  in an earlier boot and has no delivered wake (whatever its `end` says: a shutdown makes wrapper shells exit 0 as the job inside dies): "job did NOT finish: the host restarted at <boot time> and the job was killed. Rerun it".
   Jobs logged before the `boot` field existed are never replayed. Pane/Pi-session jobs are not recovered (their panes died too).
   A watcher killed between the send and the wake record can make recovery send a second copy.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
@@ -389,8 +389,8 @@ def read_jobs():
 
 
 def owed(rs, boot):
-    """What this job still owes its thread: "lost" (a restart cut it off: send the did-not-finish text), "late" (it ended but T3 was down:
-    send the normal text) or None. Only T3-thread jobs that carry a boot id: older ones, and pane jobs, are never replayed."""
+    """What this job still owes its thread: "lost" (it is from an earlier boot: send the did-not-finish text, whatever its end record says: a
+    shutdown makes wrappers exit 0 as the job inside dies), "late" (this boot: it ended but T3 stayed down past the window: send the normal text) or None. Only T3-thread jobs that carry a boot id: older ones, and pane jobs, are never replayed."""
     start = next((r for r in rs if r["event"] == "start"), None)
     if not start or not start.get("boot") or not start.get("thread"):
         return None
@@ -401,7 +401,7 @@ def owed(rs, boot):
         return None  # T3 answered and refused (thread gone): trying again changes nothing
     end = next((r for r in rs if r["event"] == "end"), None)
     if start["boot"] != boot:
-        return "lost" if not end or end.get("stopped") or end.get("recovered") else "late"
+        return "lost"
     return "late" if wakes and end else None  # this boot: only a wake that found T3 down; a job still running is not ours
 
 
@@ -414,7 +414,7 @@ def lost_message(job, start, end, restarted):
     text = (f"[{NAME} k:{job}] job did NOT finish: the host restarted at {restarted} and the job was killed. Rerun it; this is not a result. "
             f"Started {start['ts']}: {what}. Partial output: {start['output']}.")
     if end and not end.get("recovered"):
-        text += f" The status written during the shutdown ({status_of(end)}) is not a result either."
+        text += f" Its last record, an end at {end['ts']} ({status_of(end)}), is not a result either."
     return text
 
 

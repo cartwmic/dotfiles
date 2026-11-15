@@ -710,10 +710,11 @@ class RunAndWake(unittest.TestCase):
         btime = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines() if line.startswith("btime "))
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(btime))
 
+    LINUX_BOOT = unittest.skipUnless(os.path.exists("/proc/sys/kernel/random/boot_id"), "--recover works from the Linux boot id")
     ELSEWHERE = "00000000-0000-0000-0000-000000000000"
     DOWN = "Could not reach the T3 Code server at http://127.0.0.1:3773. fetch failed"
 
-    @unittest.skipUnless(os.path.exists("/proc/sys/kernel/random/boot_id"), "boot id is Linux")
+    @LINUX_BOOT
     def test_the_start_record_names_the_boot(self):
         records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env())))
         self.assertEqual(records[0]["boot"], Path("/proc/sys/kernel/random/boot_id").read_text().strip())
@@ -734,6 +735,7 @@ class RunAndWake(unittest.TestCase):
         time.sleep(0.5)
         self.assertEqual(len(self.t3_sends()), 1)
 
+    @LINUX_BOOT
     def test_t3_down_past_the_window_leaves_a_failed_wake_that_recover_delivers_once(self):
         (self.fake / "t3_down").write_text("all")
         job = self.job_id(self.launch("--", "sh", "-c", "exit 3", env=self.t3_env(RUN_AND_WAKE_T3_RETRY="0.05:0.3")))
@@ -800,6 +802,7 @@ class RunAndWake(unittest.TestCase):
             self.fail("the watcher kept running after SIGTERM")
         self.assertEqual([r["event"] for r in self.records_of(job)], ["start", "end"], "killed mid-wait: no wake record")
 
+    @LINUX_BOOT
     def test_a_job_cut_off_by_a_restart_is_woken_with_the_did_not_finish_text(self):
         # The incident: the host reboots, scope stop sends SIGTERM, the wake finds T3 gone, the host comes back. Seed what that left behind.
         self.seed("20261115T180502Z-57edd4", self.ELSEWHERE, end={"signal": "SIGTERM", "stopped": ["SIGTERM"]},
@@ -816,27 +819,33 @@ class RunAndWake(unittest.TestCase):
             self.assertIn("amz-check.sh plus3h", text)
             self.assertIn(f"Partial output: /o/{job}.log", text)
             self.assertNotIn("\n", text)
-        self.assertIn("(killed by SIGTERM) is not a result either", texts["[run-and-wake k:20261115T180502Z-57edd4"])
+        self.assertIn("an end at 2026-11-15T19:46:25.454Z (killed by SIGTERM), is not a result either", texts["[run-and-wake k:20261115T180502Z-57edd4"])
         self.assertNotIn("is not a result either", texts["[run-and-wake k:20261115T200510Z-60a37c"], "no status was written, so none is quoted")
         no_end = self.records_of("20261115T200510Z-60a37c")
         self.assertEqual([r["event"] for r in no_end], ["start", "end", "wake"])
         self.assertEqual([no_end[1]["error"], no_end[1]["recovered"], no_end[1]["exit"]], ["host-restarted", True, None])
         self.assertEqual([no_end[2]["result"], no_end[2]["recover"]], ["sent", True])
 
+    @LINUX_BOOT
     def test_a_shutdown_exit_status_is_never_passed_off_as_a_result(self):
-        # f2796c-style: a wrapper shell exits 0 (or 69) after the stop reached it; its end record says exit, but the job did not finish.
-        self.seed("20261115T204024Z-f2796c", self.ELSEWHERE, end={"exit": 0, "stopped": ["SIGTERM"]})
+        # f2796c as the log has it (21:02:33.579Z, with the SIGTERM ends at .38): a `bash -c "kgate ...; echo exit $?"` wrapper whose inner job died
+        # first, so it exited 0 with no signal and no `stopped`. Its end record says exit 0; the job did not finish.
+        self.seed("20261115T204024Z-f2796c", self.ELSEWHERE, end={"exit": 0})
+        self.recover()
+        (text,) = [s["stdin"] for s in self.t3_sends()]
+        self.assertIn("job did NOT finish", text)
+        self.assertIn("(exit 0), is not a result either", text)
+        self.assertNotIn("job finished", text)
+
+    @LINUX_BOOT
+    def test_an_earlier_boot_job_is_never_sent_as_a_result_even_when_its_wake_only_found_t3_down(self):
+        self.seed("20261115T170000Z-aaaaaa", self.ELSEWHERE, end={"exit": 0, "duration_s": 61.0}, wake={"result": "failed", "error": f"exit 1: {self.DOWN}"})
         self.recover()
         (text,) = [s["stdin"] for s in self.t3_sends()]
         self.assertIn("job did NOT finish", text)
         self.assertNotIn("job finished", text)
 
-    def test_a_job_that_really_ended_before_the_restart_is_sent_as_the_result_it_was(self):
-        self.seed("20261115T170000Z-aaaaaa", self.ELSEWHERE, end={"exit": 0, "duration_s": 61.0}, wake={"result": "failed", "error": f"exit 1: {self.DOWN}"})
-        self.recover()
-        (text,) = [s["stdin"] for s in self.t3_sends()]
-        self.assertTrue(text.startswith("[run-and-wake k:20261115T170000Z-aaaaaa] job finished: exit 0 after 1m01s: amz-check.sh plus3h."), text)
-
+    @LINUX_BOOT
     def test_recover_leaves_alone_what_it_does_not_owe(self):
         here = Path("/proc/sys/kernel/random/boot_id").read_text().strip() if os.path.exists("/proc/sys/kernel/random/boot_id") else self.ELSEWHERE
         self.seed("old-record", None)  # before the boot field: never replayed
@@ -853,6 +862,7 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual(self.t3_sends(), [])
         self.assertEqual(self.log.read_text(), before, "nothing is written either")
 
+    @LINUX_BOOT
     def test_recover_exits_1_and_keeps_the_debt_when_t3_never_comes_back(self):
         self.seed("20261115T200510Z-60a37c", self.ELSEWHERE)
         (self.fake / "t3_down").write_text("all")
@@ -862,6 +872,7 @@ class RunAndWake(unittest.TestCase):
         delivered = [r for r in self.records_of("20261115T200510Z-60a37c") if r["event"] == "wake" and r["result"] == "sent"]
         self.assertEqual(len(delivered), 1, "delivered once, after the failed run left it owed")
 
+    @LINUX_BOOT
     def test_the_real_path_a_stopped_job_whose_wake_could_not_be_sent_is_recovered_after_a_restart(self):
         # A real job and watcher; the stop reaches both (as a scope stop does); T3 is down; then "the host restarts" (the boot id on the
         # records changes) and T3 is back: recover tells the thread the job did not finish.
@@ -885,7 +896,7 @@ class RunAndWake(unittest.TestCase):
         (sent,) = self.t3_sends()[before:]
         text = sent["stdin"]
         self.assertIn(f"[run-and-wake k:{job}] job did NOT finish: the host restarted at {self.boot_started()}", text)
-        self.assertIn("(killed by SIGTERM) is not a result either", text)
+        self.assertIn("(killed by SIGTERM), is not a result either", text)
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):
