@@ -586,6 +586,30 @@ class CodexTablesInHubBlockTest(unittest.TestCase):
         self.assertEqual(self.apply(), want)
         tomllib.loads(want)
 
+    def test_two_hub_blocks_collapse_to_one_and_every_foreign_table_stays(self):
+        first = self.own + "\n[one]\na = 1\n" + self.END
+        second = self.own + "\n[two]\nb = 2\n" + self.END
+        self.cfg.write_text(self.TOP + first + "\n[mid]\nc = 1\n\n" + second + "\n[z]\nq = 1\n")
+        out = self.apply()
+        toml = tomllib.loads(out)  # one apply leaves a file Codex can parse
+        self.assertEqual((toml["one"], toml["mid"], toml["two"], toml["z"]), ({"a": 1}, {"c": 1}, {"b": 2}, {"q": 1}))
+        self.assertEqual((out.count(self.BEGIN), out.count(self.END)), (1, 1))
+        self.assertEqual(self.apply(), out)
+
+    def test_hooks_state_lands_above_the_block_and_a_key_before_it_does_not_swallow_the_marker(self):
+        # no [hooks.state] and no table before the block: the header goes above the block, not after it
+        self.cfg.write_text('model = "x"\n\n' + self.own + self.END)
+        out = self.apply()
+        tomllib.loads(out)
+        self.assertLess(out.index("[hooks.state]"), out.index(self.BEGIN))
+        self.assertEqual(self.apply(), out)
+        # the model_provider line sits on the line right before the marker: the block stays in place, not moved to the end
+        self.cfg.write_text('model_provider = "cliproxy"\n' + self.own + self.END + '\n[projects.a]\ntrust_level = "trusted"\n')
+        out = self.apply()
+        tomllib.loads(out)
+        self.assertLess(out.index(self.BEGIN), out.index("[projects.a]"))
+        self.assertEqual(self.apply(), out)
+
     def test_with_the_switch_off_the_block_goes_and_those_tables_stay(self):
         self.cfg.write_text(self.TOP + self.own + self.NINE + self.END)
         self.set_switch(False)

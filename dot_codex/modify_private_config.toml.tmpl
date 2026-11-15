@@ -76,7 +76,7 @@ args = ["op://developer/tb36gtnaocyezjk3dslomp64he/laptop-codex"]
 """
 OWNED = set(re.findall(r"(?m)^\[.*\]$", HUB))
 HERE = "# chezmoi:cliproxy-hub:begin\n"
-hub_re = re.compile(r"\n*# chezmoi:cliproxy-hub:begin\n(.*?)# chezmoi:cliproxy-hub:end\n?\n*", re.DOTALL)
+hub_re = re.compile(r"# chezmoi:cliproxy-hub:begin\n(.*?)# chezmoi:cliproxy-hub:end\n?\n*", re.DOTALL)
 hub_seen = []
 
 def lift(m):
