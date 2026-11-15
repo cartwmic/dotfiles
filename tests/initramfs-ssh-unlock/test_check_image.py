@@ -22,7 +22,7 @@ PIECES = [
     "usr/lib/systemd/system/systemd-networkd.service", "usr/lib/systemd/system/ssh-unlock.service",
     "usr/lib/systemd/system/initrd.target.wants/ssh-unlock.service", "etc/systemd/network/10-ssh-unlock.network", "usr/bin/dropbear",
     "etc/ssh-unlock/dropbear_ed25519_host_key", "root/.ssh/authorized_keys",
-    "usr/lib/modules/7.0/kernel/drivers/net/usb/r8152.ko", "usr/lib/modules/7.0/kernel/drivers/net/usb/r8153_ecm.ko",
+    "usr/lib/modules/7.0/kernel/drivers/usb/dwc3/dwc3-apple.ko", "usr/lib/modules/7.0/kernel/drivers/net/usb/r8152.ko", "usr/lib/modules/7.0/kernel/drivers/net/usb/r8153_ecm.ko",
     "usr/lib/modules/7.0/kernel/drivers/net/usb/cdc_ether.ko", "usr/lib/modules/7.0/kernel/drivers/net/usb/usbnet.ko",
     "usr/lib/modules/7.0/kernel/drivers/net/mii.ko",
     # the pieces that were there before

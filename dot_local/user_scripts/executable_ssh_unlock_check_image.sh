@@ -24,7 +24,7 @@ has() { grep -qx "$1" "$work/list" || fail "$1"; }
 same() { $as_root cmp -s "$1" "$2"; }
 has_glob() { grep -q "$1" "$work/list" || fail "$2"; }
 
-# The SSH unlock: network unit and config, server, host key, authorized key, drivers.
+# The SSH unlock: network unit and config, server, host key, authorized key, USB controller and network drivers.
 has usr/lib/systemd/system/systemd-networkd.service
 has usr/lib/systemd/system/ssh-unlock.service
 has usr/lib/systemd/system/initrd.target.wants/ssh-unlock.service
@@ -42,6 +42,8 @@ same "$root/root/.ssh/authorized_keys" "$dir/authorized_keys" \
 for f in passwd shadow group; do
   grep -q '^systemd-network:' "$root/etc/$f" || fail "systemd-network line in etc/$f"
 done
+# dwc3-apple binds the Type-C USB controllers; without it the cable has no USB bus in early boot.
+has_glob 'usr/lib/modules/.*/dwc3-apple\.ko' "kernel module dwc3-apple"
 for m in r8152 r8153_ecm cdc_ether usbnet mii; do
   has_glob "usr/lib/modules/.*/$m\.ko" "kernel module $m"
 done
