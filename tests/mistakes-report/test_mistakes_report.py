@@ -177,6 +177,44 @@ class ClassifyTest(Base):
         self.assertEqual(Shartifacts.log, [])      # nothing published
         self.assertEqual(json.loads((self.state / "classifications.json").read_text())["labels"], {})
 
+    def test_a_failed_call_loses_only_its_own_batch(self):
+        with open(self.review / "x#1/findings.jsonl", "a") as fh:
+            for i in range(3):
+                fh.write(json.dumps(finding("r9.f%d" % i, 9, NOW, "second batch item %d" % i)) + "\n")
+
+        def flaky(prompt, model):
+            if "second batch" in prompt:
+                raise RuntimeError("claude did not answer within 600 seconds")
+            return fake_model(prompt, model)
+        old, mr.BATCH = mr.BATCH, 4
+        self.addCleanup(setattr, mr, "BATCH", old)
+        with self.assertRaises(RuntimeError) as cm:
+            self.run_at(NOW, flaky)
+        self.assertIn("did not answer within 600 seconds", str(cm.exception))
+        self.assertEqual(len(json.loads((self.state / "classifications.json").read_text())["labels"]), 4)   # the first batch is kept
+        self.assertEqual(Shartifacts.log, [])
+        self.run_at(NOW + timedelta(hours=1))                                                                # the rerun pays only for the rest
+        self.assertEqual(FAKE.calls, [4, 3])
+
+    def test_a_timeout_is_one_plain_line(self):
+        import subprocess
+        from unittest import mock
+        with mock.patch.object(mr.subprocess, "run", side_effect=subprocess.TimeoutExpired("claude", 600)):
+            with self.assertRaises(RuntimeError) as cm:
+                mr.call_claude("p", "m")
+        self.assertEqual(str(cm.exception), "claude did not answer within 600 seconds")
+
+    def test_main_prints_a_failure_as_one_line_and_exits_1(self):
+        import contextlib
+        import io
+        from unittest import mock
+        err = io.StringIO()
+        with mock.patch.object(mr, "call_claude", side_effect=RuntimeError("boom")), contextlib.redirect_stderr(err):
+            code = mr.main(["--review-dir", str(self.review), "--sessions-dir", str(self.sessions), "--state-dir", str(self.state), "--shartifacts", self.url])
+        self.assertEqual(code, 1)
+        self.assertEqual(err.getvalue().count("\n"), 1)
+        self.assertIn("boom", err.getvalue())
+
     def test_parse_reply_keeps_only_valid_entries(self):
         ids = {"a", "b"}
         self.assertEqual(mr.parse_reply('noise {"1": "a", "2": "zzz", "5": "b", "x": "a"} noise', 2, ids), {1: "a"})
@@ -212,6 +250,16 @@ class WeeklyTest(Base):
         self.assertEqual((b["page_id"], b["created"], b["version_before"], b["version_after"]), ("id1", False, 1, 2))
         self.assertEqual([m for m, _ in Shartifacts.log], ["POST", "PUT"])
         self.assertEqual(b["url"], self.url + "/view/id1")
+
+    def test_a_preview_does_not_replace_the_snapshot(self):
+        self.run_at(NOW)
+        snap = self.state / "snapshots/2026-11-15.json"
+        before = snap.read_text()
+        with open(self.review / "x#1/findings.jsonl", "a") as fh:
+            fh.write(json.dumps(finding("r4.f1", 4, NOW, "journey again")) + "\n")
+        self.run_at(NOW + timedelta(hours=1), fake_model, "--no-publish")
+        self.assertEqual(snap.read_text(), before)
+        self.assertEqual(len(Shartifacts.log), 1)
 
     def test_a_run_record_is_appended(self):
         self.run_at(NOW)
@@ -271,6 +319,24 @@ class ToolErrorTest(Base):
         key = ("bash", "Error")
         rows = mr.tool_rows({}, {key: 50, ("a", "b"): 3}, [], top=10)
         self.assertEqual((rows[0]["tool"], rows[0]["this"], rows[0]["last"]), ("bash", 0, 50))
+
+    def test_every_argument_failure_of_one_tool_is_one_row_that_names_the_argument(self):
+        ts = ISO(NOW - DAY)
+        rows = []
+        for n, text in enumerate(["Invalid parameters for tool 'w': Missing key\n  at [\"taskIds\"]\n\nschema...", "Invalid parameters for tool 'w': Missing key\n  at [\"taskIds\"]",
+                                  "Invalid parameters for tool 'w': Unknown argument \"taskId\". Accepted arguments: taskIds."]):
+            rows += [{"type": "assistant", "timestamp": ts, "message": {"content": [{"type": "tool_use", "id": "w%d" % n, "name": "mcp__w"}]}},
+                     {"type": "user", "timestamp": ts, "message": {"content": [{"type": "tool_result", "tool_use_id": "w%d" % n, "is_error": True, "content": text}]}}]
+        jsonl(self.sessions / "p/w.jsonl", rows)
+        r = self.run_at(NOW)["model"]
+        w = [x for x in r["tools"] if x["tool"] == "mcp__w"]
+        self.assertEqual(len(w), 1)
+        self.assertEqual(w[0]["this"], 3)
+        self.assertEqual(w[0]["error"], "Invalid parameters for tool 'w': Missing key at [\"taskIds\"]")
+        self.assertEqual(w[0]["variants"], 2)
+
+    def test_a_bash_exit_line_followed_by_output_starting_with_at_stays_an_exit_line(self):
+        self.assertEqual(mr.first_line("Exit code 1\nat foo.js:3"), "Exit code 1")
 
     def test_the_page_shows_the_tool_table(self):
         html = Path(self.run_at(NOW)["page_html"]).read_text()

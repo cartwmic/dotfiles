@@ -22,11 +22,15 @@ PATHS = (".config/systemd/user/mistakes-report.service", ".config/systemd/user/m
          ".local/bin/mistakes-report", ".local/share/mistakes-report")
 
 
-def render(path, profile="personal", os_name="linux", data=None):
+def render(path, profile="personal", os_name="linux", data=None, installed=False):
     with tempfile.TemporaryDirectory() as tmp:
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text("{}\n")
-        override = {"profile": profile, "chezmoi": {"os": os_name, "destDir": str(Path(tmp) / "dest")}}
+        dest = Path(tmp) / "dest"
+        (dest / ".config/systemd/user").mkdir(parents=True)
+        if installed:
+            (dest / ".config/systemd/user/mistakes-report.timer").write_text("")
+        override = {"profile": profile, "chezmoi": {"os": os_name, "destDir": str(dest)}}
         if data is not None:
             override["mistakesReport"] = data
         return subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "execute-template", "--override-data", json.dumps(override)],
@@ -57,7 +61,15 @@ class GateTest(unittest.TestCase):
             for p in PATHS:
                 self.assertIn(p, ignored(profile=profile, os_name=os_name), (profile, os_name))
 
-    def test_personal_can_turn_it_off(self):
+    def test_turned_off_with_the_timer_installed_keeps_only_the_unload_script(self):
+        ig = ignored(data={"enabled": False}, installed=True)
+        for p in PATHS:
+            if p == "78_mistakes_report_systemd.sh":
+                self.assertNotIn(p, ig)
+            else:
+                self.assertIn(p, ig)
+
+    def test_turned_off_with_nothing_installed_manages_nothing(self):
         for p in PATHS:
             self.assertIn(p, ignored(data={"enabled": False}))
 
@@ -94,8 +106,8 @@ class UnitTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
 class LoaderTest(unittest.TestCase):
-    def run_loader(self, installed=True, active=True):
-        r = render(LOADER)
+    def run_loader(self, installed=True, active=True, data=None, wsl=False):
+        r = render(LOADER, data=data)
         self.assertEqual(r.returncode, 0, r.stderr)
         with tempfile.TemporaryDirectory() as tmp:
             home, bin_ = Path(tmp) / "home", Path(tmp) / "bin"
@@ -109,7 +121,12 @@ class LoaderTest(unittest.TestCase):
             (bin_ / "systemctl").chmod(0o755)
             script = Path(tmp) / "load.sh"
             script.write_text(r.stdout)
-            p = subprocess.run(["sh", str(script)], capture_output=True, text=True, env={"HOME": str(home), "PATH": "%s:/usr/bin:/bin" % bin_})
+            marker = Path(tmp) / "wsl"
+            if wsl:
+                marker.write_text("")
+            p = subprocess.run(["sh", str(script)], capture_output=True, text=True,
+                               env={"HOME": str(home), "PATH": "%s:/usr/bin:/bin" % bin_, "MISTAKES_REPORT_WSL_MARKER": str(marker)})
+            self.units = sorted(x.name for x in (home / ".config/systemd/user").iterdir())
             return p, log.read_text().splitlines() if log.exists() else []
 
     def test_it_enables_and_restarts_the_timer(self):
@@ -117,6 +134,24 @@ class LoaderTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual([c for c in calls if "mistakes-report.timer" in c],
                          ["--user enable mistakes-report.timer", "--user restart mistakes-report.timer", "--user is-active --quiet mistakes-report.timer"])
+
+    def test_turned_off_it_stops_the_timer_and_removes_both_units(self):
+        p, calls = self.run_loader(data={"enabled": False}, active=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.units, [])
+        self.assertIn("--user disable --now mistakes-report.timer", calls)
+        self.assertNotIn("--user enable mistakes-report.timer", calls)
+
+    def test_turned_off_it_fails_and_keeps_the_units_when_the_timer_will_not_stop(self):
+        p, _ = self.run_loader(data={"enabled": False}, active=True)
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(self.units, ["mistakes-report.service", "mistakes-report.timer"])
+
+    def test_wsl_is_left_alone(self):
+        for data in (None, {"enabled": False}):
+            p, calls = self.run_loader(data=data, wsl=True)
+            self.assertEqual((p.returncode, calls), (0, []))
+            self.assertEqual(self.units, ["mistakes-report.service", "mistakes-report.timer"])
 
     def test_it_fails_when_the_units_are_not_installed_or_the_timer_is_not_active(self):
         self.assertEqual(self.run_loader(installed=False)[0].returncode, 1)

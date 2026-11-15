@@ -26,11 +26,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 WEEK = timedelta(days=7)
+CALL_SECONDS = 600    # one model call
 BATCH = 20            # findings per model call
 WORKERS = 4           # model calls in flight
 TITLE = "Repeated mistakes: weekly report"
 EXIT_LINE = re.compile(r"^Exit code \d+$")   # a Bash command's own exit status: counted in one line, not as a table row
 KEY_CHARS = 100       # failures group by tool and the first 100 characters of the error's first line (a hook's refusal text varies after that)
+BAD_ARGS = re.compile(r"Invalid parameters for tool '[^']+'")   # every argument-check failure of one tool is one group, whatever argument it names
 
 
 def utc(text):
@@ -75,14 +77,21 @@ def read_review_log(review_dir):
 
 
 def first_line(content):
+    """The error's first line; when the next line is an "at [...]" pointer (which argument), it is added, so "Missing key" says which key."""
     if isinstance(content, list):
         content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
-    for line in str(content or "").splitlines():
-        line = re.sub(r"</?tool_use_error>", "", line)
-        line = " ".join(line.split())
-        if line:
-            return line
-    return "(empty error)"
+    lines = [" ".join(re.sub(r"</?tool_use_error>", "", l).split()) for l in str(content or "").splitlines()]
+    lines = [l for l in lines if l]
+    if not lines:
+        return "(empty error)"
+    if len(lines) > 1 and lines[1].startswith("at ") and not EXIT_LINE.match(lines[0]):
+        return lines[0] + " " + lines[1]
+    return lines[0]
+
+
+def group_key(msg):
+    m = BAD_ARGS.match(msg)
+    return m.group(0) if m else msg[:KEY_CHARS]
 
 
 def scan_tool_errors(sessions_dir):
@@ -152,7 +161,10 @@ def call_claude(prompt, model):
            "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "user", "--settings", '{"disableAllHooks":true}',
            "--effort", "low", "--system-prompt", "You label review findings. Reply with JSON only."]
     with tempfile.TemporaryDirectory() as cwd:
-        r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=cwd, timeout=600)
+        try:
+            r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=cwd, timeout=CALL_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("claude did not answer within %d seconds" % CALL_SECONDS)
     out = r.stdout[r.stdout.index("{"):] if "{" in r.stdout else ""
     try:
         data = json.loads(out)
@@ -167,11 +179,14 @@ def call_claude(prompt, model):
 
 
 def classify(items, labels, config, model_fn):
-    """Fill labels[key] for every item without one. -> (usage, failed keys). Cost is list price as the CLI reports it."""
+    """Fill labels[key] for every item without one. -> (usage, keys left without a class, error texts). A failed call loses only its own batch.
+    Cost is list price as the CLI reports it."""
     todo = [it for it in items if it["key"] not in labels]
     ids = {c["id"] for c in config["classes"]}
     usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "classified": len(todo)}
     batches = [todo[i:i + BATCH] for i in range(0, len(todo), BATCH)]
+
+    errors = []
 
     def one(batch):
         got, spent = {}, []
@@ -180,7 +195,11 @@ def classify(items, labels, config, model_fn):
             if not missing:
                 break
             sub = [it for _, it in missing]
-            reply = model_fn(build_prompt(config, sub), config["model"])
+            try:
+                reply = model_fn(build_prompt(config, sub), config["model"])
+            except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+                errors.append(str(e))
+                break
             spent.append(reply)
             for n, cid in parse_reply(reply["text"], len(sub), ids).items():
                 got[missing[n - 1][0]] = cid
@@ -197,7 +216,7 @@ def classify(items, labels, config, model_fn):
                 usage["cost_usd"] += s["cost_usd"]
             for n, cid in got.items():
                 labels[batch[n - 1]["key"]] = cid
-    return usage, [it["key"] for it in todo if it["key"] not in labels]
+    return usage, [it["key"] for it in todo if it["key"] not in labels], errors
 
 
 # ---------- counting (pure) ----------
@@ -243,7 +262,7 @@ def tool_counts(failures, w):
             if EXIT_LINE.match(msg):
                 exits += 1
             else:
-                rows[(tool, msg[:KEY_CHARS])] += 1
+                rows[(tool, group_key(msg))] += 1
     return rows, exits
 
 
@@ -251,11 +270,11 @@ def tool_rows(this, last, failures, top=10):
     """Top rows by the bigger of the two weeks. Each row shows the commonest full first line that has its key."""
     shown = {}
     for _, tool, msg in failures:
-        shown.setdefault((tool, msg[:KEY_CHARS]), Counter())[msg] += 1
+        shown.setdefault((tool, group_key(msg)), Counter())[msg] += 1
     keys = set(this) | set(last)
     ranked = sorted(keys, key=lambda k: (-max(this.get(k, 0), last.get(k, 0)), -this.get(k, 0), k))[:top]
     return [{"tool": k[0], "error": min(shown[k], key=lambda m: (-shown[k][m], m)) if k in shown else k[1],
-             "this": this.get(k, 0), "last": last.get(k, 0)} for k in ranked]
+             "variants": len(shown.get(k, ())), "this": this.get(k, 0), "last": last.get(k, 0)} for k in ranked]
 
 
 # ---------- the page (pure) ----------
@@ -336,7 +355,8 @@ def render_page(m):
                "<tr><th>Tool</th><th>First line of the error</th><th>This week</th><th>Last week</th></tr>")
     for r in m["tools"]:
         err = r["error"] if len(r["error"]) <= 240 else r["error"][:237] + "..."
-        out.append('<tr><td><code>%s</code></td><td>%s</td><td class="n">%d</td><td class="n">%d</td></tr>' % (h(r["tool"]), h(err), r["this"], r["last"]))
+        more = '<span class="small"> (and %d other wording%s of the same error)</span>' % (r["variants"] - 1, "" if r["variants"] == 2 else "s") if r["variants"] > 1 else ""
+        out.append('<tr><td><code>%s</code></td><td>%s%s</td><td class="n">%d</td><td class="n">%d</td></tr>' % (h(r["tool"]), h(err), more, r["this"], r["last"]))
     out.append("</table></div><p class=\"small\">Not in the table: %d Bash results this week (%d last week) that only say “Exit code N”. That is a command's own exit status (a failing test, a grep with no match), not a mistake in calling the tool.</p>"
                % (m["exits"]["this"], m["exits"]["last"]))
     if m["partial_logs"]:
@@ -411,8 +431,9 @@ def publish(base, state_dir, html):
 
 # ---------- one run ----------
 
-def run(a, model_fn=call_claude, now=None):
+def run(a, model_fn=None, now=None):
     started = time.monotonic()
+    model_fn = model_fn or call_claude
     now = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     config = read_json(a.classes, None)
     if not config:
@@ -425,10 +446,11 @@ def run(a, model_fn=call_claude, now=None):
     cache = read_json(cache_path, {})
     labels = cache.get("labels", {}) if cache.get("classes_hash") == chash else {}
     cached = sum(1 for it in items if it["key"] in labels)
-    usage, failed = classify(items, labels, config, model_fn)
+    usage, failed, errors = classify(items, labels, config, model_fn)
     write_json(cache_path, {"classes_hash": chash, "labels": labels})     # answers already paid for are kept even if some failed
     if failed:
-        raise RuntimeError("%d items got no valid class after two tries; nothing published; run again (saved answers are kept): %s" % (len(failed), failed[:3]))
+        raise RuntimeError("%d items got no class%s; nothing published; run again (saved answers are kept)"
+                           % (len(failed), (" (" + errors[0] + ")") if errors else " after two tries"))
 
     failures, stats = scan_tool_errors(a.sessions_dir)
     this_rows, this_exits = tool_counts(failures, wins["this"])
@@ -467,7 +489,8 @@ def run(a, model_fn=call_claude, now=None):
     snapshot = {"start": stamp(wins["this"][0]), "end": stamp(now), "classes_hash": chash, "findings": {c: v["this"] for c, v in findings.items()},
                 "escapes": {c: v["this"] for c, v in escapes.items()}, "tool_errors": [[t, e, n] for (t, e), n in sorted(this_rows.items())],
                 "command_exits": this_exits}
-    write_json(os.path.join(a.state_dir, "snapshots", now.strftime("%Y-%m-%d") + ".json"), snapshot)
+    if not a.no_publish:                       # a preview must not replace the snapshot of a published run
+        write_json(os.path.join(a.state_dir, "snapshots", now.strftime("%Y-%m-%d") + ".json"), snapshot)
     record = {"run_id": model["run_id"], "at": stamp(now), "duration_s": round(time.monotonic() - started, 1), "published": not a.no_publish,
               "page_id": result.get("page_id"), "version": result.get("version_after"), "classified": usage["classified"], "calls": usage["calls"],
               "input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"], "cost_usd": round(usage["cost_usd"], 6),

@@ -1,22 +1,25 @@
 #!/bin/sh
-# Load or reload the weekly mistakes-report timer when its units change. Linux only, and only while chezmoi data mistakesReport.enabled is true
-# (default: personal profile only) - .chezmoiignore leaves this script out otherwise. To turn the report off after it was applied:
-# systemctl --user disable --now mistakes-report.timer, then set mistakesReport.enabled false.
+# Load, reload or unload the weekly mistakes-report timer (mistakes-report.timer) when its units or its setting change. Linux only, and only while
+# chezmoi data mistakesReport.enabled is true (default: personal profile only) or the timer is still installed (.chezmoiignore). Twin of
+# run_onchange_after_77_agent_events_systemd.sh.tmpl.
 # service: {{ include "dot_config/systemd/user/mistakes-report.service" | sha256sum }}
 # timer: {{ include "dot_config/systemd/user/mistakes-report.timer" | sha256sum }}
 # setting: {{ includeTemplate "mistakes_report_config" . }}
 #
-# Fails (and so fails the apply) when systemd does not end up with the timer active: chezmoi records a run_onchange script only when it succeeds,
-# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into: a notice and a clean exit.
+# Fails (and so fails the apply) when systemd does not end up in the wanted state: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into, and WSL
+# is left alone: both are a notice and a clean exit. Test hook: MISTAKES_REPORT_WSL_MARKER (the WSL interop file).
 set -eu
 log() { printf '[mistakes_report_systemd] %s: %s\n' "$1" "$2"; }
 
 [ "$(uname -s)" = Linux ] || exit 0
+if [ -f "${MISTAKES_REPORT_WSL_MARKER:-/proc/sys/fs/binfmt_misc/WSLInterop}" ]; then log INFO "WSL: not running the report from here"; exit 0; fi
 if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
-  log INFO "no systemd user manager here; mistakes-report.timer not loaded"
+  log INFO "no systemd user manager here; mistakes-report.timer not changed"
   exit 0
 fi
 dir="$HOME/.config/systemd/user"
+{{- if (includeTemplate "mistakes_report_config" . | fromJson).enabled }}
 if [ ! -f "$dir/mistakes-report.service" ] || [ ! -f "$dir/mistakes-report.timer" ]; then
   log ERROR "$dir/mistakes-report.service or mistakes-report.timer is not installed; apply them too, then apply again"
   exit 1
@@ -27,3 +30,15 @@ systemctl --user enable mistakes-report.timer >/dev/null 2>&1 || { log ERROR "co
 systemctl --user restart mistakes-report.timer || { log ERROR "could not start mistakes-report.timer; see: journalctl --user -u mistakes-report.timer"; exit 1; }
 systemctl --user is-active --quiet mistakes-report.timer || { log ERROR "mistakes-report.timer is not active after the restart"; exit 1; }
 log INFO "loaded mistakes-report.timer (Mondays 07:30; journalctl --user -u mistakes-report)"
+{{- else }}
+# mistakesReport.enabled is false: .chezmoiignore leaves the units alone, so this script stops the timer, then removes both units.
+# A failed stop fails the apply and keeps the units, so the next apply runs this again. The command, the state directory and the page stay.
+systemctl --user disable --now mistakes-report.timer >/dev/null 2>&1 || :
+if systemctl --user is-active --quiet mistakes-report.timer; then
+  log ERROR "could not stop mistakes-report.timer; try: systemctl --user disable --now mistakes-report.timer, then chezmoi apply again"
+  exit 1
+fi
+rm -f "$dir/mistakes-report.service" "$dir/mistakes-report.timer"
+systemctl --user daemon-reload
+log INFO "mistakesReport.enabled is false: mistakes-report.timer is stopped and its units removed"
+{{- end }}

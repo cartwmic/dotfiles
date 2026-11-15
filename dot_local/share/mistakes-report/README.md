@@ -24,7 +24,7 @@ Counted: blocking findings by their log time, this week against last; escapes th
 
 ## Table 3: failed tool calls
 
-No model. A result counts once per `tool_use_id` (the files repeat records per content block and hold copies of resumed sessions). Rows group by tool name and the first 100 characters of the first line of the error text, with `<tool_use_error>` tags removed. A first line that is exactly `Exit code N` is a command's own exit status: counted in one summary line under the table, not as rows. Top ten by the larger of the two weeks.
+No model. A result counts once per `tool_use_id` (the files repeat records per content block and hold copies of resumed sessions). Rows group by tool name and the first 100 characters of the first line of the error text, with `<tool_use_error>` tags removed. When the second line is an `at [...]` pointer (which argument a check complained about) it is added to the text. Every `Invalid parameters for tool 'X'` failure of one tool is one group, whatever argument it names; the row shows the commonest wording and how many other wordings it covers. A first line that is exactly `Exit code N` is a command's own exit status: counted in one summary line under the table, not as rows. Top ten by the larger of the two weeks.
 
 ## Weeks and snapshots
 
@@ -44,7 +44,7 @@ This week is the 7 days up to the run; last week the 7 days before. After each r
 
 ```
 mistakes-report                 # classify, build, publish; prints tokens, cost and the page URL
-mistakes-report --no-publish    # write page.html in the state directory and stop
+mistakes-report --no-publish    # write page.html in the state directory and stop; saves no snapshot
 systemctl --user start mistakes-report.service
 journalctl --user -u mistakes-report
 ```
@@ -53,4 +53,4 @@ Tests: `python3 -m unittest discover -s tests/mistakes-report` (the model and sh
 
 ## Turning it off
 
-`systemctl --user disable --now mistakes-report.timer`, then set `mistakesReport.enabled: false` in the local chezmoi data.
+Set `mistakesReport.enabled: false` in the local chezmoi data and apply. The load script stops and disables `mistakes-report.timer` and removes its two units. The command, `~/.local/state/mistakes-report/` and the published page stay.
