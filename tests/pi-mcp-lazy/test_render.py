@@ -337,7 +337,7 @@ class JiraTests(unittest.TestCase):
     def test_list_renders_per_profile(self):
         names = lambda p: [l for l in render_list(p).splitlines() if l and not l.startswith("#")]
         self.assertEqual(names("personal"), ["rea", "browser-harness 604800"])
-        self.assertEqual(names("axon-work-computer"), ["rea", "browser-harness 604800", "jira"])
+        self.assertEqual(names("axon-work-computer"), ["rea", "browser-harness 604800", "jira pi-only"])
 
     def test_chezmoi_renders_the_same_list_for_both_profiles(self):
         if not shutil.which("chezmoi"):
@@ -361,15 +361,24 @@ class JiraTests(unittest.TestCase):
         self.assertIn("refreshed jira", r.stdout)
         self.assertNotIn(JIRA_URL, r.stdout + r.stderr)
 
-    def test_work_profile_wraps_jira_for_claude_and_codex_too(self):
+    def test_work_profile_keeps_jira_raw_for_claude_and_codex_but_lazy_for_pi(self):
         w = self.world()
         r = w.run("claude", "codex", "pi", extra={"JIRA_MCP_URL": JIRA_URL})
         self.assertEqual(r.returncode, 0, r.stderr)
-        want = ["jira", "600", "--", "npx", "-y", "mcp-remote", JIRA_URL]
-        self.assertEqual(w.claude_servers()["jira"]["args"], want)
-        self.assertEqual(w.codex_servers()["jira"]["args"], want)
-        self.assertEqual(w.refreshed().count("jira"), 1)
+        raw = {"command": "npx", "args": ["-y", "mcp-remote", JIRA_URL]}
+        self.assertEqual(w.claude_servers()["jira"], raw)
+        self.assertEqual({k: v for k, v in w.codex_servers()["jira"].items() if k in raw}, raw)
+        self.assertEqual(w.pi_servers()["jira"]["args"], ["jira", "600", "--", "npx", "-y", "mcp-remote", JIRA_URL])
+        self.assertEqual(w.refreshed().count("jira"), 1)  # refreshed once, for Pi
+        for name in ("rea", "browser-harness"):  # the other two stay wrapped for all three
+            self.assertEqual(w.claude_servers()[name]["command"], str(w.bin), name)
+            self.assertEqual(w.codex_servers()[name]["command"], str(w.bin), name)
         self.assertNotIn(JIRA_URL, r.stdout + r.stderr)
+
+    def test_jira_is_not_refreshed_when_only_claude_and_codex_are_applied(self):
+        w = self.world()
+        self.assertEqual(w.run("claude", "codex", extra={"JIRA_MCP_URL": JIRA_URL}).returncode, 0)
+        self.assertNotIn("jira", w.refreshed())
 
     def test_personal_profile_has_no_jira(self):
         w = self.world(profile="personal")

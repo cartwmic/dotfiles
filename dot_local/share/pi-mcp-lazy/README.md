@@ -35,7 +35,8 @@ was Pi; it holds for Claude Code and Codex unless a line says otherwise.
 
 Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` and `browser-harness` on both profiles, plus `jira` on
 `axon-work-computer`; the source is `servers.list.tmpl`, which renders the `jira` line only on that profile). One server per line,
-optionally followed by that server's idle seconds. `browser-harness` is `604800` (a week, so never stopped): stopping it would
+optionally followed by that server's idle seconds and the word `pi-only`. `jira` is `pi-only`: Claude Code and Codex keep it as
+rendered, and only Pi runs it lazily (#1890). `browser-harness` is `604800` (a week, so never stopped): stopping it would
 close the agent's own Chrome tab. A listed name that the profile does not render is skipped: `browser-harness` is not rendered on
 Linux with the work profile, which has no Linux machine. The remote HTTP servers (`hindsight`, `context7`, `ticktick`, and the
 work servers) are not touched.
@@ -90,7 +91,7 @@ credentials.
 ## How it is rendered
 
 `apply_harness_config.sh` runs `wrap_lazy_servers` for Claude, Codex and Pi. It refreshes each name in `servers.list` once per
-apply run (the first harness applied does it; the saved copy is shared) and then rewrites that entry in the harness's rendered MCP
+apply run (the first harness that wraps it does it; the saved copy is shared; a `pi-only` name is skipped for Claude and Codex) and then rewrites that entry in the harness's rendered MCP
 file to `{"command": "~/.local/bin/pi-mcp-lazy", "args": [NAME, IDLE, "--", <original command and args>]}`, keeping any other
 keys of the entry (`env` reaches the real server through the stand-in). Claude's registration step replaces a stored entry that
 differs, so the first apply moves an existing `rea` and `browser-harness` registration to the wrapped form. A failed refresh is

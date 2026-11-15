@@ -60,7 +60,7 @@ Rules:
   `launch_browser`, is a different thing and stays.)
 - The Claude, Codex and Pi adapters wrap the local `rea` and `browser-harness` entries in `~/.local/bin/pi-mcp-lazy` (names in
   `~/.local/share/pi-mcp-lazy/servers.list`) so a session starts each server on first use, not at session start. `rea` stops when idle;
-  `browser-harness` is never stopped. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
+  `browser-harness` is never stopped. (`jira` on the work profile is lazy in Pi only.) See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
 

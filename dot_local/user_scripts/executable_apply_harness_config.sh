@@ -374,7 +374,7 @@ apply_claude() {
   resolved_mcp="$GENERATED_ROOT/claude/mcp-resolved.json"
   claude_script="$GENERATED_ROOT/claude/setup-mcp.sh"
   render_harness_mcp_json "claude" "$resolved_mcp"
-  wrap_lazy_servers "$resolved_mcp"
+  wrap_lazy_servers claude "$resolved_mcp"
   render_claude_mcp_commands "$resolved_mcp" "$claude_script"
   log "Generated Claude MCP script: $claude_script"
 
@@ -567,7 +567,7 @@ apply_codex() {
   resolved_mcp="$GENERATED_ROOT/codex/mcp-resolved.json"
   codex_block="$GENERATED_ROOT/codex/mcp.toml"
   render_harness_mcp_json "codex" "$resolved_mcp"
-  wrap_lazy_servers "$resolved_mcp"
+  wrap_lazy_servers codex "$resolved_mcp"
   render_codex_mcp_block "$resolved_mcp" "$codex_block"
   merge_codex_config "$codex_block"
   log "Updated Codex config: $HOME/.codex/config.toml"
@@ -575,16 +575,18 @@ apply_codex() {
 
 # Claude, Codex and Pi: wrap the local MCP servers named in servers.list in the lazy stand-in,
 # so a session does not start them until a call needs them. servers.list holds one name per
-# line, optionally followed by that server's idle seconds. Each server is refreshed once per
-# apply run (the stand-in's --refresh mode saves its handshake and tool list into a state copy
-# that all three harnesses share; the first harness applied does it, LAZY_REFRESHED marks that
-# it ran). A failed refresh is logged. The entry is still wrapped when a saved list with tools
+# line, optionally followed by that server's idle seconds and the word pi-only (a pi-only
+# server is wrapped for Pi and left as rendered for Claude and Codex). Each server is refreshed
+# once per apply run (the stand-in's --refresh mode saves its handshake and tool list into a
+# state copy that the harnesses share; the first harness that wraps the server does it,
+# LAZY_REFRESHED lists the names already done). A failed refresh is logged. The entry is still wrapped when a saved list with tools
 # exists (an earlier state copy or the shipped seed); with none, it is left as rendered so the
 # harness starts the server at session start instead of showing no tools.
 # Roll back by removing the name from servers.list.
-LAZY_REFRESHED=""
+LAZY_REFRESHED=" "
 wrap_lazy_servers() {
-  resolved_json="$1"
+  lazy_harness="$1"
+  resolved_json="$2"
   lazy_list="${PI_MCP_LAZY_LIST:-$HOME/.local/share/pi-mcp-lazy/servers.list}"
   lazy_bin="${PI_MCP_LAZY_BIN:-$HOME/.local/bin/pi-mcp-lazy}"
   lazy_idle="${PI_MCP_LAZY_IDLE:-600}"
@@ -598,16 +600,16 @@ wrap_lazy_servers() {
     return 0
   fi
 
-  refresh=1
-  [ -z "$LAZY_REFRESHED" ] || refresh=0
-  python3 - "$resolved_json" "$lazy_list" "$lazy_bin" "$lazy_idle" "$refresh" <<'PY'
+  lazy_done=$(mktemp)
+  python3 - "$resolved_json" "$lazy_list" "$lazy_bin" "$lazy_idle" "$lazy_harness" "$LAZY_REFRESHED" "$lazy_done" <<'PY'
 import json
 import os
 import pathlib
 import subprocess
 import sys
 
-path, list_file, binp, idle, refresh = sys.argv[1:6]
+path, list_file, binp, idle, harness, already, done_file = sys.argv[1:8]
+refreshed_now = []
 
 def run_bounded(argv, env, cwd, limit):
     """Run argv; on timeout ask it to stop (SIGTERM, so the stand-in stops the server it started) before killing it."""
@@ -625,11 +627,15 @@ def run_bounded(argv, env, cwd, limit):
     return p.returncode == 0, (err or "").strip()[-600:]
 data = json.loads(pathlib.Path(path).read_text())
 servers = data.get("mcpServers", {})
-entries = []  # (name, idle seconds): one server per line, "NAME" or "NAME IDLE"
+entries = []  # (name, idle seconds): one server per line, "NAME", "NAME IDLE", "NAME pi-only" or "NAME IDLE pi-only"
 for l in pathlib.Path(list_file).read_text().splitlines():
     f = l.split("#", 1)[0].split()
-    if f:
-        entries.append((f[0], f[1] if len(f) > 1 else idle))
+    if not f:
+        continue
+    if "pi-only" in f[1:] and harness != "pi":
+        continue
+    nums = [x for x in f[1:] if x != "pi-only"]
+    entries.append((f[0], nums[0] if nums else idle))
 
 def say(msg):
     print(f"[apply_harness_config] pi-mcp-lazy: {msg}")
@@ -646,7 +652,8 @@ for name, name_idle in entries:
     # Arguments and env values can carry a resolved secret (a server URL); keep them out of the log.
     hidden = [a for a in args if a.startswith(("http://", "https://"))]
     hidden += [str(v) for v in (cfg.get("env") or {}).values() if len(str(v)) > 3]
-    if refresh == "1":
+    if " %s " % name not in already:
+        refreshed_now.append(name)
         try:
             ok, tail = run_bounded([binp, "--refresh", name, "--", cfg["command"], *args], env, cwd, 240)
         except Exception as e:  # never abort the apply for the other entries
@@ -669,8 +676,10 @@ for name, name_idle in entries:
     servers[name] = wrapped
 
 pathlib.Path(path).write_text(json.dumps(data, indent=2) + "\n")
+pathlib.Path(done_file).write_text(" ".join(refreshed_now))
 PY
-  LAZY_REFRESHED=1
+  LAZY_REFRESHED="$LAZY_REFRESHED$(cat "$lazy_done") "
+  rm -f "$lazy_done"
 }
 
 # Merge the rendered servers into Pi's mcp.json. Names this script wrote on an earlier apply
@@ -742,7 +751,7 @@ apply_pi() {
   resolved_mcp="$GENERATED_ROOT/pi/mcp-resolved.json"
   pi_mcp_json="$HOME/.pi/agent/mcp.json"
   render_harness_mcp_json "pi" "$resolved_mcp"
-  wrap_lazy_servers "$resolved_mcp"
+  wrap_lazy_servers pi "$resolved_mcp"
   ensure_parent "$pi_mcp_json"
   merge_pi_mcp "$resolved_mcp" "$pi_mcp_json" "$GENERATED_ROOT/pi/mcp-managed.json"
   log "Updated Pi MCP config: $pi_mcp_json"
