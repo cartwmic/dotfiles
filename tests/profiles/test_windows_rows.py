@@ -1,9 +1,9 @@
 """The Windows install files under windows/ have rows in docs/profiles.md, and chezmoi never deploys them.
 
 chezmoi does not manage these files (they are the source of a script run by hand on the G14), so test_coverage.py skips
-rows flagged "(Windows)". This test checks them instead: every file under windows/ is covered by a row that names its
-profile and gives a reason, every row names a path that exists, and no system or profile gets anything under windows/ from
-chezmoi. The checks are plain functions, tried on made-up inputs first so a broken check cannot pass by finding nothing,
+rows flagged "(Windows)". This test checks them instead: every file under windows/ has its own row (the exact file, not a
+folder row) that names its profile and gives a reason, every row names one path and it is an existing file, and no system or
+profile gets anything under windows/ from chezmoi. The checks are plain functions, tried on made-up inputs first so a broken check cannot pass by finding nothing,
 then run on the real tree. The old Linux row for agent-desktop is one row, not two.
 Run: python3 -m unittest discover -s tests/profiles -p 'test_windows_rows.py'
 """
@@ -33,11 +33,18 @@ def windows_rows(text):
 
 
 def files_without_a_row(files, rows):
-    return sorted(f for f in files if not any(covers(p, f) for paths, _, _ in rows for p in paths))
+    """Files with no row of their own. A row for a folder does not cover the files under it."""
+    named = {p for paths, _, _ in rows for p in paths}
+    return sorted(f for f in files if f not in named)
 
 
-def rows_for_missing_paths(rows, exists):
-    return sorted(p for paths, _, _ in rows for p in paths if not exists(p))
+def rows_for_missing_paths(rows, is_file):
+    """Paths named by a row that are not an existing file (gone, or a folder)."""
+    return sorted(p for paths, _, _ in rows for p in paths if not is_file(p))
+
+
+def rows_naming_more_than_one_path(rows):
+    return sorted(", ".join(paths) for paths, _, _ in rows if len(paths) != 1)
 
 
 def deployed_windows_paths(managed):
@@ -61,7 +68,7 @@ def chezmoi_managed(source, system, profile):
 
 SAMPLE = """| Path or feature | Profiles | Reason the other profile is left out |
 |---|---|---|
-| `windows` | personal (Windows) | The work profile has no Windows machine. |
+| `windows/a.ps1` | personal (Windows) | The work profile has no Windows machine. |
 | `.local/bin/agent-desktop` | personal (Linux) | Omarchy only. |
 
 ## Local data keys
@@ -71,14 +78,23 @@ SAMPLE = """| Path or feature | Profiles | Reason the other profile is left out 
 
 class CheckLogicTest(unittest.TestCase):
     def test_windows_rows_reads_only_flagged_rows_before_the_local_data_keys(self):
-        self.assertEqual(windows_rows(SAMPLE), [(["windows"], "personal", "The work profile has no Windows machine.")])
+        self.assertEqual(windows_rows(SAMPLE), [(["windows/a.ps1"], "personal", "The work profile has no Windows machine.")])
 
     def test_a_file_with_no_row_is_found(self):
         rows = [(["windows/install.ps1"], "personal", "x")]
         self.assertEqual(files_without_a_row(["windows/install.ps1", "windows/extra.ps1"], rows), ["windows/extra.ps1"])
 
-    def test_a_folder_row_covers_the_files_under_it(self):
-        self.assertEqual(files_without_a_row(["windows/a.ps1", "windows/b.cmd"], [(["windows"], "personal", "x")]), [])
+    def test_a_folder_row_does_not_cover_the_files_under_it(self):
+        self.assertEqual(files_without_a_row(["windows/a.ps1", "windows/b.cmd"], [(["windows"], "personal", "x")]),
+                         ["windows/a.ps1", "windows/b.cmd"])
+
+    def test_a_row_for_a_folder_is_found(self):
+        rows = [(["windows"], "personal", "x"), (["windows/a.ps1"], "personal", "x")]
+        self.assertEqual(rows_for_missing_paths(rows, lambda p: p == "windows/a.ps1"), ["windows"])
+
+    def test_a_row_naming_two_paths_is_found(self):
+        rows = [(["windows/a.ps1", "windows/b.cmd"], "personal", "x"), (["windows/c.ps1"], "personal", "x")]
+        self.assertEqual(rows_naming_more_than_one_path(rows), ["windows/a.ps1, windows/b.cmd"])
 
     def test_a_row_for_a_gone_file_is_found(self):
         rows = [(["windows/install.ps1", "windows/gone.ps1"], "personal", "x")]
@@ -111,8 +127,9 @@ class RealTreeTest(unittest.TestCase):
     def test_every_file_under_windows_has_a_row(self):
         self.assertEqual(files_without_a_row(self.files, self.rows), [])
 
-    def test_every_windows_row_names_a_path_that_exists(self):
-        self.assertEqual(rows_for_missing_paths(self.rows, lambda p: (REPO / p).exists()), [])
+    def test_every_windows_row_names_one_path_and_it_is_an_existing_file(self):
+        self.assertEqual(rows_naming_more_than_one_path(self.rows), [])
+        self.assertEqual(rows_for_missing_paths(self.rows, lambda p: (REPO / p).is_file()), [])
 
     def test_every_windows_row_names_its_profile_and_why_the_other_is_left_out(self):
         for paths, profile, reason in self.rows:
