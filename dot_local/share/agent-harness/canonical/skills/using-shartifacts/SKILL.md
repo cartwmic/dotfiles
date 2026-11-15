@@ -27,6 +27,18 @@ command `shx-note-image`.
   `/view` frame: commenting, drawing and live updates come from the page around it. A bare
   `/preview/<id>` address has none of them.
 
+## Publish a plan page
+
+- A lead's plan page, the page that shows Michael the plan's choices, is published only with
+  `ledger publish-plan PAGE.html --artifact ID`. The first time, use `--title T` instead of
+  `--artifact`. Never PUT it by hand, and never use `update_artifact` on it.
+- The page carries `<!-- Decisions: #id ... -->`, listing every ledger decision behind its
+  choices. Decisions that belong on another page go in `<!-- Not on this page: #id ... -->`.
+- The command refuses a page whose choices lack a decision, or whose text changed with no new
+  decision. Log the choice with `ledger decide` and list it, or pass `--no-new-choices "<reason>"`
+  for an edit that makes no choice.
+- `ledger publish-plan --help` has the rest.
+
 ## Charts, diagrams and pictures
 
 shartifacts is the only place to publish these.

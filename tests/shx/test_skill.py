@@ -13,7 +13,9 @@ SKILL = ROOT / "dot_local/share/agent-harness/canonical/skills/using-shartifacts
 NAMES = ("shx-note-image", "artifact_comments", "watch_artifacts", "stroke", "status", "gap", "cursor",
          "create_artifact", "update_artifact", "check", "--version", "--out", "--pad", "/view/",
          "current", "ok", "lost", "unchecked", "kind: \"mermaid\"", "kind: \"svg\"", "/api/media",
-         "/api/artifacts", "base_version", "409")
+         "/api/artifacts", "base_version", "409",
+         "ledger publish-plan", "--artifact", "--title", "--no-new-choices", "<!-- Decisions:",
+         "<!-- Not on this page:")
 
 
 def parts():
