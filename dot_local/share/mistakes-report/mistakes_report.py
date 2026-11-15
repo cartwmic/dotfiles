@@ -472,7 +472,7 @@ def run(a, model_fn=None, now=None):
             table[cid] = {"this": 0, "last": 0, "all": 0}
         for cid, row in table.items():
             row["last"] = last.get(cid, 0)
-    partial = config.get("logs_partial_before") if wins["last"][0] < utc(config["logs_partial_before"] + "T00:00:00Z") else ""
+    partial = config.get("logs_partial_before") if wins["last"][0] < datetime.fromisoformat(config["logs_partial_before"]).replace(tzinfo=timezone.utc) else ""
     model = {"generated": now.strftime("%Y-%m-%d %H:%M"), "run_id": uuid.uuid4().hex[:12], "this": wins["this"][0:1] + (now,), "last": wins["last"],
              "last_source": last_source, "model": config["model"], "classes": config["classes"], "findings": findings, "escapes": escapes,
              "examples": {"finding": examples(items, labels, "finding", {"t": wins["this"], "l": wins["last"]}),
