@@ -80,6 +80,7 @@ python3 scripts/ci-par.py \
   tests/hypr-screen-share \
   tests/agent-desktop \
   tests/hill-climb \
+  tests/deriving-readable-docs \
   tests/git-credential \
   tests/ci-par \
   tests/release-pins \
