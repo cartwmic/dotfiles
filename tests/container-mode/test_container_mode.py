@@ -21,11 +21,13 @@ LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "
 SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
-LEFT_OUT = [".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
+LEFT_OUT = [".codex", ".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
             ".config/mise/config.toml", ".config/mise/conf.d/linux.toml", ".local/bin/agent-chrome", ".local/bin/agent-desktop",
             ".local/share/browser-harness-mcp", ".local/share/initramfs-ssh-unlock"]
 HOOK_PRINT = json.dumps({"schema": 1, "entries": [{"event": "PreToolUse", "matcher": "^AskUserQuestion$", "args": [], "failClosed": False, "t3Only": False}]})
 HOOK = "console.log(process.argv.includes('--print-settings-json') ? %s : '');\n" % json.dumps(HOOK_PRINT)
+IMAGE_TOOLS = ("sh bash cat sed awk grep egrep tr head tail cut sort uniq dirname basename mktemp rm mkdir cp mv chmod ln wc tee uname env date sleep tar gzip find xargs "
+               "readlink realpath expr test true false printf echo id whoami printenv diff cmp od sha256sum stat touch rmdir ls git curl jq unzip chezmoi mise").split()
 CONFIG = "data:\n  profile: %s\n  container:\n    enabled: true\n%s"
 
 
@@ -102,11 +104,7 @@ class FirstApplyHasNoNode(unittest.TestCase):
         (home / "git/coordinator/src/t3-hook").mkdir(parents=True)
         (home / "git/coordinator/src/t3-hook/hook.ts").write_text(HOOK)
         bare.mkdir()
-        for directory in ("/usr/bin", "/bin"):   # every system tool, and no node
-            for tool in os.listdir(directory):
-                if not tool.startswith(("node", "npm", "npx", "corepack")) and not os.path.lexists(bare / tool):
-                    (bare / tool).symlink_to(Path(directory) / tool)
-        for tool in ("jq", "chezmoi"):
+        for tool in IMAGE_TOOLS:   # what the image has when the first apply renders: shell, coreutils, git, curl, jq, unzip, chezmoi, mise. No node, no python3.
             if shutil.which(tool) and not os.path.lexists(bare / tool):
                 (bare / tool).symlink_to(shutil.which(tool))
         config = tmp / "chezmoi.yaml"

@@ -13,6 +13,11 @@
 # See termux/README.md for ops_... clipboard SSH key provision.
 data:
   profile: "personal"
+  # Container mode, the agent host pod only (personal profile on Linux; docs/container-mode.md): no desktop, systemd or launchd, the lean tool set, Claude through the in-cluster cliproxy.
+  # container:
+  #   enabled: true
+  #   cliproxyUrl: http://cliproxyapi.cliproxyapi.svc.cluster.local   # default
+  #   cliproxyKeyFile: /run/secrets/cliproxy/api-key                  # default; the file holds the key
   # Coordinator daemon: one opt-in flag; apply sets up and starts it. See README "Instances".
   # instances:
   #   coordinator: {enabled: true}

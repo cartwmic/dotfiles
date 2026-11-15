@@ -451,7 +451,9 @@ Library/Preferences/pnpm/**
 # No sshd in the pod, and the jump-host aliases need local data the pod does not have.
 .ssh
 .ssh/**
-# Tools the container does not install: their config and the pins that install them.
+# Tools the container does not install (Codex too: no OpenAI model in the pod, and its modify scripts need python3 before mise has installed it): their config and the pins that install them.
+.codex
+.codex/**
 .config/nvim
 .config/nvim/**
 .config/lazygit
