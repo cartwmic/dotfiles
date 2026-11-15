@@ -69,8 +69,9 @@ credentials.
 - Ask whether serving would show Pi any tools: `pi-mcp-lazy --check NAME -- COMMAND [ARGS...]` (exit 0 if the state copy, else
   the seed, holds at least one tool; starts nothing). The apply uses it after each refresh.
 - Regenerate the seeds from the real servers (do this when preparing a change that bumps a server):
-  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh playwright -- npx @playwright/mcp`
-  and likewise for `rea` (`npx -y rea-agents@6.4.0 mcp`).
+  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh playwright -- ~/.local/share/mise/shims/playwright-mcp`
+  and likewise for `rea` (`~/.local/share/mise/shims/rea mcp`). The seed's `key` holds the command line it was saved with, so it
+  names the path of the machine that saved it; on another home a seed is still served, with the stale note, until the apply-time refresh writes a state copy.
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
   default 1.0), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
 
@@ -87,7 +88,7 @@ are unchanged.
 
 - Stopping `playwright` when idle closes its browser, so open pages and signed-in state are gone on the next use. Raise
   the idle period for that entry if that matters.
-- A cold first call can take seconds (`npx` start). Pi's per-request timeout is 60 seconds by default; add a larger
+- A cold first call can take seconds (server start). Pi's per-request timeout is 60 seconds by default; add a larger
   `"timeout"` to the entry if a cold start is ever slower.
 - **Exit and /reload.** The server shares the stand-in's process group. Pi's shutdown (close stdin, SIGTERM to the group after
   0.5 s, SIGKILL to the group after 2.5 s) reaches the server and every same-group helper while the stand-in is still running. Pi

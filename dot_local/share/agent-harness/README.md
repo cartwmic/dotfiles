@@ -49,6 +49,12 @@ Rules:
   Both desktop profiles use codemode's `only` mode: ordinary tools remain
   callable from scripts rather than directly declared to the model.
   Hindsight's automatic hooks use REST and are independent of MCP.
+- `playwright` and `rea` start straight from a mise-installed, pinned npm package (`npm:@playwright/mcp`, `npm:rea-agents` in
+  `dot_config/mise/config.toml`, the only place the versions live); the canonical entries name the mise shims
+  (`~/.local/share/mise/shims/playwright-mcp`, `.../rea`), so each server is one process with no `npm exec` wrapper beside it.
+  To bump one, change the pin in `config.toml`, apply, and regenerate the pi-mcp-lazy seeds. `mise install` must have run
+  before a harness starts them (the apply's bootstrap does it). Still launched through a package runner: `jira` (work, unpinned
+  `npx -y mcp-remote`, its URL and sign-in exist only on the work Mac) and `browser-harness` (`uvx`, pinned, patched launcher).
 - The Pi adapter wraps the local `playwright` and `rea` entries in `~/.local/bin/pi-mcp-lazy` (names in
   `~/.local/share/pi-mcp-lazy/servers.list`) so Pi starts them on first use and stops them when idle. Claude and Codex
   keep the canonical entries. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).

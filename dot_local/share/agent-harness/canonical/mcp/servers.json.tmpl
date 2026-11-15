@@ -8,16 +8,11 @@
       }
     },
     "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp"
-      ]
+      "command": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/playwright-mcp"
     },
     "rea": {
-      "command": "npx",
+      "command": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/rea",
       "args": [
-        "-y",
-        "rea-agents@6.4.0",
         "mcp"
       ]
     },

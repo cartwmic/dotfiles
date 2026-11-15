@@ -116,7 +116,7 @@ class RenderTests(unittest.TestCase):
         c = w.canonical["mcpServers"]
         for name in ("playwright", "rea"):
             self.assertEqual(s[name]["command"], str(w.bin))
-            self.assertEqual(s[name]["args"], [name, "600", "--", c[name]["command"], *c[name]["args"]])
+            self.assertEqual(s[name]["args"], [name, "600", "--", c[name]["command"], *c[name].get("args", [])])
         for name in ("hindsight", "context7", "ticktick"):
             self.assertEqual(s[name], c[name])
         self.assertEqual(set(s), set(c))

@@ -86,6 +86,7 @@ python3 scripts/ci-par.py \
   tests/kelsey-intake \
   tests/git-credential \
   tests/ci-par \
+  tests/mcp-pins \
   tests/release-pins \
   tests/ci-main-status || status=1
 
