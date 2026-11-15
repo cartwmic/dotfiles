@@ -88,6 +88,7 @@ python3 scripts/ci-par.py \
   tests/kelsey-intake \
   tests/git-credential \
   tests/tmp-on-disk \
+  tests/initramfs-ssh-unlock \
   tests/ci-par \
   tests/mcp-pins \
   tests/release-pins \

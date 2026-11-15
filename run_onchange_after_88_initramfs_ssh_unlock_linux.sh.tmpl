@@ -1,0 +1,125 @@
+#!/bin/sh
+# SSH unlock for the encrypted disk on the Apple Silicon Omarchy box (personal Linux, .chezmoiignore): adds a small SSH server (dropbear, key only) to the
+# early-boot screen, on the USB network cable only, so the disk passphrase can be typed from another machine. WiFi and routes are untouched.
+# Runs when this script or a staged file changes (the hashes below); the work profile is a Mac with no mkinitcpio, so it is left out.
+# Staged files hash: {{ include "dot_local/share/initramfs-ssh-unlock/install/sd-ssh-unlock" | sha256sum }} {{ include "dot_local/share/initramfs-ssh-unlock/mkinitcpio.conf.d/zz-ssh-unlock.conf" | sha256sum }} {{ include "dot_local/share/initramfs-ssh-unlock/10-ssh-unlock.network" | sha256sum }} {{ include "dot_local/share/initramfs-ssh-unlock/ssh-unlock.service" | sha256sum }}
+# Image check hash: {{ include "dot_local/user_scripts/executable_ssh_unlock_check_image.sh" | sha256sum }}
+#
+# What it does, in order. Any failure stops it with a non-zero exit, so the next apply retries; nothing reboots.
+#   1. Skips unless this is the Apple Silicon Omarchy box (the omarchy-mac-encrypt drop-in and the limine mkinitcpio wrapper exist).
+#   2. Installs dropbear (pacman), makes the host key once (never in git, never remade), builds the authorized key from ~/.ssh/homelab.pub.
+#   3. Installs the hook and its files under /etc/initcpio/, then the drop-in /etc/mkinitcpio.conf.d/zz-ssh-unlock.conf LAST. From then on any rebuild
+#      uses it, so a trap takes the drop-in out again if anything below fails.
+#   4. Builds an image to /var/tmp (not /boot) and checks it (ssh_unlock_check_image.sh). Stops here if it fails; the boot image is untouched.
+#   5. Saves the current boot image once as the "known-good" Limine entry.
+#   6. limine-mkinitcpio rebuilds the boot image (its exit code proves nothing: it swallows build failures). The file must be newer and pass the check.
+#   7. Prints the host key fingerprint and the unlock command.
+# Reproduce by hand: the same commands as sudo (see the code); then the check:  sudo ~/.local/user_scripts/ssh_unlock_check_image.sh /boot/efi/EFI/Linux/omarchy_linux-aurora.efi
+# Undo: sudo rm /etc/mkinitcpio.conf.d/zz-ssh-unlock.conf && sudo limine-mkinitcpio     (the saved image: sudo limine-entry-tool --remove-uki known-good)
+# Unlock from another machine:  ssh -t -i ~/.ssh/homelab -o IdentitiesOnly=yes -o HostKeyAlias=omarchy-unlock root@<address of the cable>
+# Test hooks: SSH_UNLOCK_ROOT (stands in for /), SSH_UNLOCK_CHECK (the image check).
+set -eu
+log() { printf '[88_initramfs_ssh_unlock_linux] %s: %s\n' "$1" "$2"; }
+die() { log ERROR "$1"; exit 1; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+ROOT=${SSH_UNLOCK_ROOT:-}
+STAGE=$HOME/.local/share/initramfs-ssh-unlock
+CHECK=${SSH_UNLOCK_CHECK:-$HOME/.local/user_scripts/ssh_unlock_check_image.sh}
+# The one place the homelab key is written down is private_dot_ssh/modify_authorized_keys.tmpl; this blob is read from it when the script is rendered.
+BLOB='{{ regexFind "BLOB='[^']+'" (include "private_dot_ssh/modify_authorized_keys.tmpl") | trimPrefix "BLOB='" | trimSuffix "'" }}'
+HOMELAB_PUB=$HOME/.ssh/homelab.pub
+KEYDIR=$ROOT/etc/initcpio/ssh-unlock
+HOOK=$ROOT/etc/initcpio/install/sd-ssh-unlock
+DROPIN=$ROOT/etc/mkinitcpio.conf.d/zz-ssh-unlock.conf
+SCRATCH=$ROOT/var/tmp/ssh-unlock-test.img
+KNOWN_GOOD=$ROOT/var/tmp/ssh-unlock-known-good.efi
+UKI=$ROOT/boot/efi/EFI/Linux/omarchy_linux-aurora.efi
+LIMINE_CONF=$ROOT/boot/efi/limine.conf
+KNOWN_GOOD_COMMENT='Omarchy before SSH unlock'
+
+if [ ! -f "$ROOT/etc/mkinitcpio.conf.d/91-omarchy-mac-encrypt.conf" ] || [ ! -x "$ROOT/usr/local/bin/mkinitcpio" ]; then
+  log INFO "not the Apple Silicon Omarchy box (no omarchy-mac-encrypt drop-in or limine mkinitcpio wrapper); nothing to set up"
+  exit 0
+fi
+
+as_root=""
+[ "$(id -u)" = 0 ] || as_root="sudo -n"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/ssh-unlock.XXXXXX")
+marker=$tmp/start
+touch "$marker"
+armed=0
+ok=0
+cleanup() {
+  if [ "$armed" = 1 ]; then
+    $as_root rm -f "$SCRATCH"
+    if [ "$ok" != 1 ]; then
+      $as_root rm -f "$DROPIN" && log WARN "failed: took the drop-in out again, so no later rebuild uses it. The boot image is the one from before."
+    fi
+  fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+[ -f "$HOMELAB_PUB" ] || die "$HOMELAB_PUB is missing; run the dotfiles apply that provisions the homelab key first"
+grep -qF "$BLOB" "$HOMELAB_PUB" || die "$HOMELAB_PUB is not the homelab key listed in private_dot_ssh/modify_authorized_keys.tmpl"
+printf 'command="/usr/bin/systemd-tty-ask-password-agent --watch" %s\n' "$(cat "$HOMELAB_PUB")" > "$tmp/authorized_keys"
+
+check() { $as_root env SSH_UNLOCK_DIR="$KEYDIR" "$CHECK" "$1"; }
+same() { $as_root cmp -s "$1" "$2"; }
+up_to_date() {
+  same "$STAGE/install/sd-ssh-unlock" "$HOOK" &&
+  same "$STAGE/mkinitcpio.conf.d/zz-ssh-unlock.conf" "$DROPIN" &&
+  same "$STAGE/10-ssh-unlock.network" "$KEYDIR/10-ssh-unlock.network" &&
+  same "$STAGE/ssh-unlock.service" "$KEYDIR/ssh-unlock.service" &&
+  same "$tmp/authorized_keys" "$KEYDIR/authorized_keys" &&
+  $as_root test -f "$KEYDIR/dropbear_ed25519_host_key" &&
+  check "$UKI" >/dev/null 2>&1
+}
+if up_to_date; then
+  log INFO "already installed and the boot image passes the check; nothing to do"
+  ok=1
+  exit 0
+fi
+
+log INFO "installing dropbear"
+$as_root pacman -S --needed --noconfirm dropbear >/dev/null || die "pacman could not install dropbear"
+$as_root install -d -m 755 "$ROOT/etc/initcpio/install" "$ROOT/etc/mkinitcpio.conf.d" "$ROOT/var/tmp"
+$as_root install -d -m 700 "$KEYDIR"
+if ! $as_root test -f "$KEYDIR/dropbear_ed25519_host_key"; then
+  log INFO "making the host key (once; it stays on this machine)"
+  $as_root dropbearkey -t ed25519 -f "$KEYDIR/dropbear_ed25519_host_key" >/dev/null 2>&1 || die "dropbearkey could not make the host key"
+fi
+
+$as_root install -m 644 "$STAGE/install/sd-ssh-unlock" "$HOOK"
+$as_root install -m 644 "$STAGE/10-ssh-unlock.network" "$STAGE/ssh-unlock.service" "$KEYDIR/"
+$as_root install -m 600 "$tmp/authorized_keys" "$KEYDIR/authorized_keys"
+armed=1
+$as_root install -m 644 "$STAGE/mkinitcpio.conf.d/zz-ssh-unlock.conf" "$DROPIN"
+
+log INFO "building a test image to $SCRATCH (not /boot) and checking it"
+$as_root "$ROOT/usr/bin/mkinitcpio" --kernel "$(uname -r)" --nopost --generate "$SCRATCH" >"$tmp/mkinitcpio.log" 2>&1 || { cat "$tmp/mkinitcpio.log"; die "mkinitcpio could not build the test image"; }
+check "$SCRATCH" || die "the test image fails the check; the boot image was not touched"
+
+default_entry() { $as_root sed -n 's/^default_entry:[[:space:]]*//p' "$LIMINE_CONF"; }
+has_known_good() { $as_root grep -qF "$KNOWN_GOOD_COMMENT" "$LIMINE_CONF"; }
+default_before=$(default_entry)
+if ! has_known_good; then
+  log INFO "saving the current boot image as the known-good Limine entry"
+  $as_root cp -f "$UKI" "$KNOWN_GOOD"
+  $as_root limine-entry-tool --add-uki known-good "$KNOWN_GOOD" --comment "$KNOWN_GOOD_COMMENT" >/dev/null || die "limine-entry-tool could not add the known-good entry"
+  has_known_good || die "the known-good entry is not in $LIMINE_CONF after adding it"
+  [ "$(default_entry)" = "$default_before" ] || die "adding the known-good entry changed default_entry in $LIMINE_CONF (was: $default_before)"
+fi
+
+log INFO "rebuilding the boot image with limine-mkinitcpio"
+$as_root limine-mkinitcpio >"$tmp/limine.log" 2>&1 || { cat "$tmp/limine.log"; die "limine-mkinitcpio failed"; }
+[ -n "$(find "$UKI" -newer "$marker" 2>/dev/null)" ] || { cat "$tmp/limine.log"; die "$UKI was not rebuilt (limine-mkinitcpio hides build failures); the saved image is in place"; }
+check "$UKI" || die "the rebuilt boot image fails the check"
+has_known_good || die "the known-good entry is gone from $LIMINE_CONF after limine-mkinitcpio"
+[ "$(default_entry)" = "$default_before" ] || die "limine-mkinitcpio changed default_entry in $LIMINE_CONF (was: $default_before)"
+
+ok=1
+log INFO "done. Host key: $($as_root dropbearkey -y -f "$KEYDIR/dropbear_ed25519_host_key" | sed -n 's/^Fingerprint: //p')"
+log INFO "unlock from another machine: ssh -t -i ~/.ssh/homelab -o IdentitiesOnly=yes -o HostKeyAlias=omarchy-unlock root@<address of the cable>"
+log INFO "kernel option ssh-unlock=off (edit the Limine entry) turns the server off for one boot. Nothing was rebooted."

@@ -1,0 +1,15 @@
+# Inside the boot image only. Port 22 on all addresses: the cable is the only network interface in the initramfs.
+# Wants=, never Requires=, and nothing is ordered before the cryptsetup targets or plymouth, so the passphrase prompt on the screen never waits on this.
+# Kernel option ssh-unlock=off skips it for one boot.
+[Unit]
+Description=Early-boot SSH for disk unlock
+DefaultDependencies=no
+Wants=systemd-networkd.service
+After=systemd-networkd.service
+Conflicts=shutdown.target initrd-switch-root.target
+Before=shutdown.target initrd-switch-root.target
+ConditionKernelCommandLine=!ssh-unlock=off
+
+[Service]
+ExecStart=/usr/bin/dropbear -F -E -s -p 22 -r /etc/ssh-unlock/dropbear_ed25519_host_key
+Restart=on-failure

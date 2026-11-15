@@ -1,0 +1,23 @@
+# Inside the boot image only (the hook adds it as /etc/systemd/network/10-ssh-unlock.network); never installed on the running system.
+# Matches the USB cable by driver, not by name: before udev renames it the cable is eth0.
+# KeepConfiguration=no overrides networkd's initrd default (dynamic-on-stop): the address and routes are dropped before switch-root,
+# so NetworkManager brings the cable up afterwards exactly as it does today. UseGateway/UseRoutes=no: no default route even while it runs.
+[Match]
+Type=ether
+Driver=r8152 r8153_ecm
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+KeepConfiguration=no
+
+[DHCPv4]
+ClientIdentifier=mac
+UseDNS=no
+UseNTP=no
+UseGateway=no
+UseRoutes=no
+
+[Link]
+RequiredForOnline=no
