@@ -9,7 +9,8 @@ and READ/NOTEXT by hand. For each command it prints the flags gh added and remov
 one that carries text goes in TEXT, one that makes gh write the text itself in COMPOSED, one that uploads a file (as --attach does) in the refusals of
 parse_text, because a flag in the table is accepted and its text read, and a flag that is not in it is refused for a guarded repository.
 
---check changes nothing and exits 1 when the file would change. --gh is the gh to read (default: the first gh on PATH that is not the wrapper). The help parser
+--check changes nothing and exits 1 when the file would change. --gh is the gh to read (default: the first gh on PATH that is not the wrapper). The group rows list every flag gh shows (help as "h:help"), but the wrapper reads only -R/--repo
+before a verb (normalize_group_flags; gh has no -h there and takes its next argument as a value), so a new group flag changes nothing there. The help parser
 here is the one tests/leak-guard/test_gh_wrapper.py (FlagTables) compares the tables with.
 """
 import argparse

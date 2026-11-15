@@ -817,7 +817,7 @@ class WrapperGroupFlags(Decisions):
              "issue": [["view", "3"], ["comment", "3", "-b", PLANTED], ["create", "-t", "T", "-b", "B"], ["frobnicate"]],
              "release": [["view", "v1"], ["create", "v1", "-n", PLANTED], ["upload", "v1", "f"]],
              "run": [["view", "7"], ["rerun", "7"]], "label": [["list"], ["create", "bug"]]}
-    flag_forms = lambda self, repo: [["-R", repo], ["-R" + repo], ["-R=" + repo], ["--repo", repo], ["--repo=" + repo], ["-R", repo, "-R", repo], ["--help"]]
+    flag_forms = lambda self, repo: [["-R", repo], ["-R" + repo], ["-R=" + repo], ["--repo", repo], ["--repo=" + repo], ["-R", repo, "-R", repo]]
 
     def test_a_group_flag_before_the_verb_decides_like_the_same_flag_after_the_verb(self):
         seen = set()
@@ -825,14 +825,56 @@ class WrapperGroupFlags(Decisions):
             for verb in verbs:
                 for target in (GUARDED, "someone/other"):
                     for flags in self.flag_forms(target):
-                        if flags == ["--help"] and target != GUARDED:
-                            continue
                         with self.subTest(group=group, verb=verb, flags=flags):
                             before = outcome(self, group, *flags, *verb, repo="someone/other")
                             after = outcome(self, group, *verb, *flags, repo="someone/other")
                             self.assertEqual(before, after)
                             seen.add(before[0] + (":" + before[1] if before[0] == "ok" and before[2] else ""))
         self.assertEqual(seen, {"ok", "ok:pr comment", "ok:pr create", "ok:pr edit", "ok:pr review", "ok:pr close", "ok:issue comment", "ok:issue create", "ok:release create", "refused"})
+
+    def test_only_the_repo_flag_is_accepted_before_the_verb(self):
+        """Every flag of every group row but -R/--repo, in every form, makes the verb unknown: normalize_group_flags returns None, and the command is rebuilt as help
+        (a help token) or refused on a guarded repository. Nothing but the five -R/--repo spellings is read."""
+        W = self.W
+        for spelling in (["-R", "x/y"], ["-Rx/y"], ["-R=x/y"], ["--repo", "x/y"], ["--repo=x/y"]):
+            self.assertEqual(W.normalize_group_flags(["pr", *spelling, "view", "3"]), ["pr", "view", *spelling, "3"], spelling)
+        for (group, verb), spec in W.FLAGS.items():
+            if verb or group == "api":
+                continue
+            for item in spec.split(","):
+                short, _, rest = item.rpartition(":")
+                long, takes = rest.rstrip("="), rest.endswith("=")
+                if long == "repo":
+                    continue      # the one flag read: the five spellings above
+                for spelling in ([["--" + long], ["--" + long + "=v"], ["--" + long, "v"], ["-" + short], ["-" + short + "=v"], ["-" + short, "v"], ["-" + short + "v"]] if short
+                                 else [["--" + long], ["--" + long + "=v"], ["--" + long, "v"]]):
+                    with self.subTest(group=group, flag=spelling):
+                        self.assertIsNone(W.normalize_group_flags([group, *spelling, "view", "3"]))
+        for spelling in (["--help"], ["--help=false"], ["-h"], ["-h", "--help"], ["--frob"]):
+            result = outcome(self, "repo", *spelling, "view", "edit", GUARDED, "--description", PLANTED, repo="someone/other")
+            self.assertIn(result[0], ("help", "refused"), spelling)
+            if result[0] == "help":
+                self.assertEqual(result[1][-1], "--help")
+
+    def test_h_before_the_verb_is_never_a_switch_because_gh_takes_the_next_argument_as_its_value(self):
+        """gh has no -h at group level: `gh pr -h view` shows `gh pr`'s help (view is skipped as -h's value), and `gh repo -h view edit ...` runs `repo edit` with
+        `-h view` read as --homepage. So -h in that position, in every form, leaves the verb unknown: help is rebuilt, never the user's arguments."""
+        for group, verb in (("repo", ["view", "edit", GUARDED, "--description", PLANTED]), ("pr", ["view", "comment", "3", "-b", PLANTED, "-R", GUARDED]), ("issue", ["view", "comment", "3", "-b", PLANTED, "-R", GUARDED])):
+            for flag in (["-h"], ["-h=false"], ["-h=true"], ["-hview"], ["-h", "--help=false"], ["-R", GUARDED, "-h"]):
+                with self.subTest(group=group, flag=flag):
+                    result = outcome(self, group, *flag, *verb, repo="someone/other")
+                    self.assertEqual(result[0], "help", result)
+                    self.assertEqual(result[1][-1], "--help")
+                    self.assertNotIn(PLANTED, " ".join(result[1]))
+        self.assertEqual(outcome(self, "repo", "-h", "view", "edit", GUARDED, "--description", PLANTED, repo="someone/other")[0], "help")
+
+    def test_end_to_end_the_reviewers_repo_h_view_edit_command_never_reaches_gh_with_its_arguments(self):
+        for argv in (["repo", "-h", "view", "edit", GUARDED, "--description", PLANTED], ["repo", "-h=x", "view", "edit", GUARDED, "--description", PLANTED]):
+            with self.subTest(argv):
+                self.reset()
+                done = self.gh(*argv, cwd=self.other_cwd)
+                self.assertEqual([c["argv"] for c in self.real_calls()], [["repo", "view", "--help"]], done.stderr)
+                self.assertEqual(self.claude_calls(), 0)
 
     def test_a_read_with_a_group_flag_before_the_verb_is_not_refused(self):
         for args in (["pr", "-R", GUARDED, "view", "3"], ["pr", "--repo=" + GUARDED, "list"], ["issue", "-R" + GUARDED, "view", "3"], ["run", "-R", GUARDED, "view", "7"],
@@ -1045,21 +1087,22 @@ class WrapperLog(WrapperBase):
         self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o700)
 
 class WrapperHelpValue(Decisions):
-    """`--help=false` is not help (gh's flag library parses a boolean flag's value with strconv.ParseBool), so the command still sends its text."""
+    """`--help=false` is not help (gh's flag library parses a boolean flag's value with strconv.ParseBool), so the command still sends its text. `-h=false` is
+    different in gh: it has no -h flag, so any `-h` shows help. The wrapper reads `-h=false` like `--help=false` and checks the text, which is stricter and safe."""
     TRUE = ("true", "TRUE", "True", "t", "T", "1")
     NOT_TRUE = ("false", "FALSE", "False", "f", "F", "0", "no", "")      # the first six are false; "no" and "" gh rejects as invalid, and neither is help here
 
     def test_help_with_a_value_that_is_not_true_does_not_hide_the_text_in_any_position(self):
         for value in self.NOT_TRUE:
             for flag in ("--help=" + value, "-h=" + value):
-                for args in (["pr", flag, "comment", "3", "-b", PLANTED], ["pr", "comment", "3", flag, "-b", PLANTED], ["pr", "-R", GUARDED, flag, "comment", "3", "-b", PLANTED],
-                             ["issue", "comment", "3", "-b", PLANTED, flag]):
+                for args in (["pr", "comment", "3", flag, "-b", PLANTED], ["issue", "comment", "3", "-b", PLANTED, flag]):
                     with self.subTest(args):
-                        if flag.startswith("-h=") and args.index("comment") > 1:
-                            continue          # `gh pr -h=x comment` is a group flag the table does not list: refused as before
                         result = outcome(self, *args)
                         self.assertEqual(result[:2], ("ok", args[0] + " comment"), result)
                         self.assertEqual(result[2]["body"], PLANTED)
+                for args in (["pr", flag, "comment", "3", "-b", PLANTED], ["pr", "-R", GUARDED, flag, "comment", "3", "-b", PLANTED]):      # before the verb: not read at all
+                    with self.subTest(args):
+                        self.assertEqual(outcome(self, *args), ("help", ["pr", "comment", "--help"], None))
 
     def test_help_with_a_true_value_shows_the_commands_help_and_forwards_none_of_the_arguments(self):
         for flag in ["--help", "-h"] + ["--help=" + v for v in self.TRUE] + ["-h=" + v for v in self.TRUE]:
@@ -1072,11 +1115,12 @@ class WrapperHelpValue(Decisions):
             self.assertEqual(outcome(self, "api", ep, "-f", "body=" + PLANTED, flag, repo="someone/other"), ("help", ["api", "--help"], None))
 
     def test_end_to_end_help_false_is_checked_and_help_true_runs_the_rebuilt_help(self):
-        for args in (["pr", "--help=false", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED]):
+        for args in (["pr", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED],):
             with self.subTest(args):
                 self.reset()
                 self.assertBlocked(self.gh(*args, cwd=self.other_cwd), "term 1")
-        for args in (["pr", "--help=true", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "--help=true", "-b", PLANTED, "-R", GUARDED]):
+        for args in (["pr", "--help=true", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "--help=false", "comment", "3", "-b", PLANTED, "-R", GUARDED],
+                     ["pr", "comment", "3", "--help=true", "-b", PLANTED, "-R", GUARDED]):      # a help flag before the verb is never read: help is rebuilt
             with self.subTest(args):
                 self.reset()
                 self.assertRan(self.gh(*args, cwd=self.other_cwd), "pr", "comment", "--help")
@@ -1120,7 +1164,7 @@ class WrapperHelpNeverSkipsTheCheck(Decisions):
         self.assertEqual(unchecked, [], self.WHY + "%d of the cases ran gh unchecked, e.g. %s" % (len(unchecked), unchecked[:3]))
 
     def test_end_to_end_a_planted_term_is_blocked_whatever_the_help_flags(self):
-        for argv in (["pr", "comment", "3", "--help", "--help=false", "-b", PLANTED, "-R", GUARDED], ["pr", "--help", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED],
+        for argv in (["pr", "comment", "3", "--help", "--help=false", "-b", PLANTED, "-R", GUARDED],
                      ["pr", "comment", "3", "--help=true", "--help=false", "--body", PLANTED, "-R", GUARDED],
                      ["api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=" + PLANTED, "--help", "--help=false"]):
             with self.subTest(argv):
@@ -1155,6 +1199,7 @@ class WrapperHelpRunsOnlyBuiltInNames(WrapperBase):
         ("help flag before the verb", ["pr", "--help", "comment", "3", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
         ("-t --help", ["pr", "comment", "3", "-t", "--help", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
         ("-dh", ["pr", "comment", "3", "-dh", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("review f1: repo -h view edit", ["repo", "-h", "view", "edit", GUARDED, "--description", PLANTED], {}, ["repo", "view", "--help"], None),
         ("--help then --help=false is checked", ["pr", "comment", "3", "--help", "--help=false", "-b", PLANTED, "-R", GUARDED], {}, None, "term"),
         ("--help=foo is checked", ["pr", "comment", "3", "--help=foo", "-b", PLANTED, "-R", GUARDED], {}, None, "term"),
         ("-- --help is a word, checked", ["pr", "comment", "3", "-b", PLANTED, "-R", GUARDED, "--", "--help"], {}, None, "term"),

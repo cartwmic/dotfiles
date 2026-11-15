@@ -323,30 +323,26 @@ def known_verb(group, verb):
 
 def normalize_group_flags(args):
     """gh finds a command's subcommand by skipping the flags of the group, then the subcommand reads every flag, so `gh pr -R x view 3` is `gh pr view 3 -R x`.
-    Returns `args` with the group's flags moved behind the subcommand (a command line that starts with a bare group stays as it is), or None when a flag
-    there is not one of the group's own, in FLAGS: a value flag of the group takes the next argument, a switch takes none, `--` and anything else leave it
-    unknown, since nothing then says whether the next argument is a flag's value or the subcommand."""
+    Returns `args` with the group's `-R`/`--repo` moved behind the subcommand (a command line that starts with a bare group stays as it is), or None when any
+    other flag stands there. Only `-R x`, `-Rx`, `-R=x`, `--repo x` and `--repo=x` are read: for every other flag (`--help` and `-h` included, since gh skips `-h`'s
+    next argument as a value) nothing here says whether the next argument is a flag's value or the subcommand, so the command is ambiguous and never forwarded as it is."""
     group = args[0]
     if len(args) < 2 or not args[1].startswith("-"):
         return args
-    if (group, "") not in FLAGS:
+    if (group, "") not in FLAGS or "repo" not in flag_table(group, "")[0]:
         return None
-    longs, shorts = flag_table(group, "")
     lead, i = [], 1
     while i < len(args) and args[i].startswith("-"):
         a = args[i]
         if a.startswith("--"):
             name, eq, _ = a[2:].partition("=")
-            if name not in longs:
+            if name != "repo":
                 return None
-            takes = longs[name] and not eq
+            takes = not eq
         else:
-            if a[1:2] not in shorts:
+            if a[1:2] != "R":
                 return None
-            name = shorts[a[1:2]]
-            if not longs[name] and len(a) > 2:      # a cluster of switches: not a form of the group's flags
-                return None
-            takes = longs[name] and len(a) == 2      # `-Rvalue` and `-R=value` are one argument
+            takes = len(a) == 2      # `-Rvalue` and `-R=value` are one argument
         lead.append(a)
         if takes:
             if i + 1 >= len(args):
@@ -420,7 +416,7 @@ def parse_flags(args, group, verb):
                     else:
                         missing = i
                     break
-                if name == "help" and a[j + 1:j + 2] == "=":      # `-h=false`: pflag reads the rest of the argument as the switch's value
+                if name == "help" and a[j + 1:j + 2] == "=":      # `-h=false`: read as a switch with a value, so the text is checked. gh itself shows help for any `-h` (it has no -h flag), so this is stricter than gh
                     flags.append((name, a[j + 2:]))
                     break
                 flags.append((name, None))
