@@ -15,13 +15,15 @@ from common import BLOB, INSTALLER_TMPL, ROOT, STAGE_SRC, chezmoi, scratch_dir, 
 
 LOG = 'echo "$(basename "$0") $*" >> "$STUB_DIR/calls"\n'
 STUBS = {
-    "sudo": LOG + '[ "$1" = -n ] && shift\nexec "$@"\n',
+    # The ESP (vfat, dmask=0077) is readable by root only: mode 000 here, opened for the length of a call that goes through sudo.
+    "sudo": LOG + '[ "$1" = -n ] && shift\nesp="$SSH_UNLOCK_ROOT/boot/efi"\nchmod 755 "$esp"\n"$@"\nrc=$?\nchmod 000 "$esp"\nexit $rc\n',
     "pacman": LOG,
     "dropbearkey": LOG + 'if [ "$1" = -y ]; then echo "Fingerprint: SHA256:abc"; else shift 3; [ -e "$1" ] || echo HOSTKEY > "$1"; fi\n',
     # Builds "an image": a file whose content says whether it has the SSH unlock in it.
-    "limine-mkinitcpio": LOG + '[ -n "${STUB_LIMINE_NOOP:-}" ] || echo "ssh rebuilt" > "$SSH_UNLOCK_ROOT/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"\n',
+    "limine-mkinitcpio": LOG + '[ -n "${STUB_LIMINE_FAILS_AFTER_FIRST:-}" ] && [ "$(grep -c "^limine-mkinitcpio" "$STUB_DIR/calls")" -gt 1 ] && exit 1\n[ -n "${STUB_LIMINE_NOOP:-}" ] && exit 0\nif [ -e "$SSH_UNLOCK_ROOT/etc/mkinitcpio.conf.d/zz-ssh-unlock.conf" ]; then w="ssh rebuilt"; else w="plain rebuilt"; fi\n'
+                         'echo "$w" > "$SSH_UNLOCK_ROOT/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"\n',
     "limine-entry-tool": LOG + 'conf="$SSH_UNLOCK_ROOT/boot/efi/limine.conf"\nshift 3\n'
-                         'echo "comment: $2" >> "$conf"\n[ -z "${STUB_SHIFT_DEFAULT:-}" ] || sed -i "s/^default_entry:.*/default_entry: 3/" "$conf"\n',
+                         "printf '//known-good\\ncomment: %s\\n' \"$2\" >> \"$conf\"\n" '[ -z "${STUB_SHIFT_DEFAULT:-}" ] || sed -i "s/^default_entry:.*/default_entry: 3/" "$conf"\n',
 }
 MKINITCPIO = LOG + 'while [ "$1" != --generate ]; do shift; done\necho "ssh scratch" > "$2"\n'
 # The image check: passes for an image that says "ssh" in it, unless this is the image the test wants to fail.
@@ -61,6 +63,9 @@ class Installer(unittest.TestCase):
         self.uki.write_text("old image")
         self.limine = self.root / "boot/efi/limine.conf"
         self.limine.write_text("default_entry: 2\n")
+        esp = self.root / "boot/efi"
+        esp.chmod(0o000)
+        self.addCleanup(esp.chmod, 0o755)    # runs before the temp dir is removed
         shutil.copytree(STAGE_SRC, self.home / ".local/share/initramfs-ssh-unlock")
         (self.home / ".ssh").mkdir()
         (self.home / ".ssh/homelab.pub").write_text(f"ssh-ed25519 {BLOB}\n")
@@ -69,6 +74,14 @@ class Installer(unittest.TestCase):
 
     def run_script(self, **extra):
         return subprocess.run(["/bin/sh", str(self.script)], env={**self.env, **extra}, capture_output=True, text=True, timeout=60)
+
+    def esp_read(self, path):
+        esp = self.root / "boot/efi"
+        esp.chmod(0o755)
+        try:
+            return path.read_text()
+        finally:
+            esp.chmod(0o000)
 
     def calls(self):
         f = self.stub / "calls"
@@ -95,7 +108,7 @@ class Installer(unittest.TestCase):
         self.assertEqual((keydir / "authorized_keys").read_text(),
                          f'command="/usr/bin/systemd-tty-ask-password-agent --watch" ssh-ed25519 {BLOB}\n')
         self.assertEqual((self.root / "var/tmp/ssh-unlock-known-good.efi").read_text(), "old image")
-        self.assertEqual(self.uki.read_text(), "ssh rebuilt\n")
+        self.assertEqual(self.esp_read(self.uki), "ssh rebuilt\n")
         self.assertFalse((self.root / "var/tmp/ssh-unlock-test.img").exists())
         self.assertIn("SHA256:abc", r.stdout)
 
@@ -118,8 +131,8 @@ class Installer(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertFalse(self.dropin.exists())                        # rolled back
         self.assertEqual(self.named("limine-"), [])                   # the boot image was never rebuilt, no entry added
-        self.assertEqual(self.uki.read_text(), "old image")
-        self.assertNotIn("known-good", self.limine.read_text())
+        self.assertEqual(self.esp_read(self.uki), "old image")
+        self.assertNotIn("known-good", self.esp_read(self.limine))
 
     def test_a_boot_image_that_was_not_rebuilt_fails_and_takes_the_drop_in_out(self):
         r = self.run_script(STUB_LIMINE_NOOP="1")                     # limine-mkinitcpio exits 0 without building
@@ -127,17 +140,34 @@ class Installer(unittest.TestCase):
         self.assertIn("was not rebuilt", r.stdout)
         self.assertFalse(self.dropin.exists())
 
-    def test_a_rebuilt_boot_image_that_fails_the_check_takes_the_drop_in_out(self):
+    def test_a_rebuilt_boot_image_that_fails_the_check_is_rebuilt_again_without_the_drop_in_and_the_message_says_so(self):
         r = self.run_script(STUB_CHECK_FAILS="uki")
         self.assertEqual(r.returncode, 1)
         self.assertFalse(self.dropin.exists())
+        self.assertEqual(len(self.named("limine-mkinitcpio")), 2)     # the second one runs after the drop-in is gone
+        self.assertEqual(self.esp_read(self.uki), "plain rebuilt\n")  # the boot image in place is the stock one
+        self.assertIn("rebuilt again without the SSH unlock", r.stdout)
+        self.assertIn("known-good", r.stdout)
+        self.assertNotIn("one from before", r.stdout)
+
+    def test_when_the_second_rebuild_also_fails_the_message_names_the_image_in_place_and_the_fallback(self):
+        r = self.run_script(STUB_CHECK_FAILS="uki", STUB_LIMINE_FAILS_AFTER_FIRST="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self.esp_read(self.uki), "ssh rebuilt\n")    # the image that failed the check is still in place, and the message says so
+        self.assertIn("rebuilding it without failed", r.stdout)
+        self.assertIn("known-good", r.stdout)
+
+    def test_a_failure_before_the_boot_image_is_rebuilt_says_it_was_not_touched(self):
+        r = self.run_script(STUB_CHECK_FAILS="scratch")
+        self.assertIn("boot image was not touched", r.stdout)
+        self.assertEqual(len(self.named("limine-mkinitcpio")), 0)
 
     def test_the_known_good_entry_must_not_move_the_default_boot_entry(self):
         r = self.run_script(STUB_SHIFT_DEFAULT="1")
         self.assertEqual(r.returncode, 1)
         self.assertIn("default_entry", r.stdout)
         self.assertFalse(self.dropin.exists())
-        self.assertEqual(self.named("limine-mkinitcpio"), [])
+        self.assertEqual(self.named("limine-mkinitcpio"), [])          # the failure came before the boot image was rebuilt
 
     def test_a_host_that_is_not_the_apple_silicon_omarchy_box_is_left_alone(self):
         (self.root / "etc/mkinitcpio.conf.d/91-omarchy-mac-encrypt.conf").unlink()

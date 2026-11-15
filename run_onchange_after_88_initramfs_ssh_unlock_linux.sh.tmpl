@@ -13,6 +13,7 @@
 #   4. Builds an image to /var/tmp (not /boot) and checks it (ssh_unlock_check_image.sh). Stops here if it fails; the boot image is untouched.
 #   5. Saves the current boot image once as the "known-good" Limine entry.
 #   6. limine-mkinitcpio rebuilds the boot image (its exit code proves nothing: it swallows build failures). The file must be newer and pass the check.
+#      If anything fails after this point the script rebuilds the boot image again without the drop-in and says so; the known-good entry is the fallback.
 #   7. Prints the host key fingerprint and the unlock command.
 # Reproduce by hand: the same commands as sudo (see the code); then the check:  sudo ~/.local/user_scripts/ssh_unlock_check_image.sh /boot/efi/EFI/Linux/omarchy_linux-aurora.efi
 # Undo: sudo rm /etc/mkinitcpio.conf.d/zz-ssh-unlock.conf && sudo limine-mkinitcpio     (the saved image: sudo limine-entry-tool --remove-uki known-good)
@@ -49,12 +50,25 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/ssh-unlock.XXXXXX")
 marker=$tmp/start
 touch "$marker"
 armed=0
+rebuilt=0
 ok=0
 cleanup() {
   if [ "$armed" = 1 ]; then
     $as_root rm -f "$SCRATCH"
     if [ "$ok" != 1 ]; then
-      $as_root rm -f "$DROPIN" && log WARN "failed: took the drop-in out again, so no later rebuild uses it. The boot image is the one from before."
+      if $as_root rm -f "$DROPIN"; then
+        log WARN "failed: took the drop-in out again, so no later rebuild uses it."
+      fi
+      if [ "$rebuilt" = 1 ]; then
+        # limine-mkinitcpio already replaced the boot image, so the drop-in alone is not a rollback: rebuild it again, now without the drop-in.
+        if $as_root limine-mkinitcpio >/dev/null 2>&1; then
+          log WARN "the boot image was rebuilt again without the SSH unlock, so it is the stock image. Fallback if it does not boot: the known-good Limine entry (hold a key at the Limine menu)."
+        else
+          log WARN "the boot image in place is the one limine-mkinitcpio built with the SSH unlock, and rebuilding it without failed. Fallback: the known-good Limine entry (hold a key at the Limine menu); a copy is at $KNOWN_GOOD."
+        fi
+      else
+        log WARN "the boot image was not touched."
+      fi
     fi
   fi
   rm -rf "$tmp"
@@ -102,7 +116,7 @@ $as_root "$ROOT/usr/bin/mkinitcpio" --kernel "$(uname -r)" --nopost --generate "
 check "$SCRATCH" || die "the test image fails the check; the boot image was not touched"
 
 default_entry() { $as_root sed -n 's/^default_entry:[[:space:]]*//p' "$LIMINE_CONF"; }
-has_known_good() { $as_root grep -qF "$KNOWN_GOOD_COMMENT" "$LIMINE_CONF"; }
+has_known_good() { $as_root grep -qF known-good "$LIMINE_CONF"; }
 default_before=$(default_entry)
 if ! has_known_good; then
   log INFO "saving the current boot image as the known-good Limine entry"
@@ -113,8 +127,9 @@ if ! has_known_good; then
 fi
 
 log INFO "rebuilding the boot image with limine-mkinitcpio"
+rebuilt=1
 $as_root limine-mkinitcpio >"$tmp/limine.log" 2>&1 || { cat "$tmp/limine.log"; die "limine-mkinitcpio failed"; }
-[ -n "$(find "$UKI" -newer "$marker" 2>/dev/null)" ] || { cat "$tmp/limine.log"; die "$UKI was not rebuilt (limine-mkinitcpio hides build failures); the saved image is in place"; }
+[ -n "$($as_root find "$UKI" -newer "$marker" 2>/dev/null)" ] || { cat "$tmp/limine.log"; die "$UKI was not rebuilt (limine-mkinitcpio hides build failures); the saved image is in place"; }
 check "$UKI" || die "the rebuilt boot image fails the check"
 has_known_good || die "the known-good entry is gone from $LIMINE_CONF after limine-mkinitcpio"
 [ "$(default_entry)" = "$default_before" ] || die "limine-mkinitcpio changed default_entry in $LIMINE_CONF (was: $default_before)"
