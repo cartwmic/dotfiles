@@ -399,14 +399,18 @@ class WrapperText(Decisions):
         self.assertIn("tag", self.decide("release", "edit", "v1", "--tag", "v2")[1])
 
     def test_help_is_help_only_when_it_stands_alone_and_not_as_a_flags_value(self):
-        self.assertEqual(self.decide("pr", "create", "--help"), ("pr create", {}))      # help checks the (empty) text and never skips it: see WrapperHelpNeverSkipsTheCheck
-        self.assertEqual(self.decide("pr", "create", "-h"), ("pr create", {}))
+        for flag in ("--help", "-h"):      # help runs a help command the wrapper builds itself: see WrapperHelpNeverSkipsTheCheck
+            with self.assertRaises(self.W.Help) as help_run:
+                self.decide("pr", "create", flag)
+            self.assertEqual(help_run.exception.argv, ["pr", "create", "--help"])
         name, texts = self.decide("pr", "create", "-t", "x", "--body", "-h")
         self.assertEqual((name, texts["body"]), ("pr create", "-h"))
         name, texts = self.decide("pr", "create", "-t", "-h", "--body", "y")
         self.assertEqual(texts["title"], "-h")
         self.assertEqual(self.decide("api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=-h")[0], "api")
-        self.assertEqual(self.decide("api", "repos/%s/issues/1/comments" % GUARDED, "--help"), ("", None))
+        with self.assertRaises(self.W.Help) as help_run:
+            self.decide("api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=x", "--help")
+        self.assertEqual(help_run.exception.argv, ["api", "--help"])
         name, texts = self.decide("pr", "create", "--label", "--body", "--body", "SECRET", "-t", "x")
         self.assertEqual(texts["body"], "SECRET")
 
@@ -795,11 +799,13 @@ class WrapperUnrecognised(Decisions):
 
 
 def outcome(case, *args, repo=GUARDED):
-    """What the wrapper decides for a command: ("refused", message) or ("ok", command name, gathered texts)."""
+    """What the wrapper decides for a command: ("refused", message), ("help", the argument list it would run instead, note) or ("ok", command name, gathered texts)."""
     try:
         return ("ok",) + case.decide(*args, repo=repo)
     except case.W.Refuse as r:
         return ("refused", str(r))
+    except case.W.Help as h:
+        return ("help", h.argv, h.note)
 
 
 class WrapperGroupFlags(Decisions):
@@ -1055,22 +1061,25 @@ class WrapperHelpValue(Decisions):
                         self.assertEqual(result[:2], ("ok", args[0] + " comment"), result)
                         self.assertEqual(result[2]["body"], PLANTED)
 
-    def test_help_with_a_true_value_is_checked_like_any_other_spelling(self):
+    def test_help_with_a_true_value_shows_the_commands_help_and_forwards_none_of_the_arguments(self):
         for flag in ["--help", "-h"] + ["--help=" + v for v in self.TRUE] + ["-h=" + v for v in self.TRUE]:
             for args in (["pr", "comment", "3", flag, "-b", PLANTED], ["issue", "comment", "3", "-b", PLANTED, flag]):
                 with self.subTest(args):
-                    result = outcome(self, *args)
-                    self.assertEqual((result[:2], result[2]["body"]), (("ok", args[0] + " comment"), PLANTED))
+                    self.assertEqual(outcome(self, *args), ("help", [args[0], "comment", "--help"], None))
         ep = "repos/%s/issues/1/comments" % GUARDED
-        for flag in ("--help=false", "--help=true", "--help"):
-            self.assertEqual(self.decide("api", ep, "-f", "body=" + PLANTED, flag, repo="someone/other")[0], "api")
+        self.assertEqual(outcome(self, "api", ep, "-f", "body=" + PLANTED, "--help=false", repo="someone/other")[:2], ("ok", "api"))
+        for flag in ("--help=true", "--help"):
+            self.assertEqual(outcome(self, "api", ep, "-f", "body=" + PLANTED, flag, repo="someone/other"), ("help", ["api", "--help"], None))
 
-    def test_end_to_end_help_false_and_help_true_are_both_checked(self):
-        for flag in ("--help=false", "--help=true"):
-            for args in (["pr", flag, "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", flag, "-b", PLANTED, "-R", GUARDED]):
-                with self.subTest(args):
-                    self.reset()
-                    self.assertBlocked(self.gh(*args, cwd=self.other_cwd), "term 1")
+    def test_end_to_end_help_false_is_checked_and_help_true_runs_the_rebuilt_help(self):
+        for args in (["pr", "--help=false", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED]):
+            with self.subTest(args):
+                self.reset()
+                self.assertBlocked(self.gh(*args, cwd=self.other_cwd), "term 1")
+        for args in (["pr", "--help=true", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "--help=true", "-b", PLANTED, "-R", GUARDED]):
+            with self.subTest(args):
+                self.reset()
+                self.assertRan(self.gh(*args, cwd=self.other_cwd), "pr", "comment", "--help")
 
 
 class WrapperHelpNeverSkipsTheCheck(Decisions):
@@ -1080,6 +1089,7 @@ class WrapperHelpNeverSkipsTheCheck(Decisions):
     SPELLINGS = ("--help", "-h", "--help=true", "--help=false", "--help=1", "--help=0", "--help=T", "--help=F", "-h=true", "-h=false", "--help=")
     PAIRS = [(a, b) for a in ("--help", "-h", "--help=true", "--help=false", "--help=1", "--help=0") for b in ("--help", "-h", "--help=true", "--help=false", "--help=0")]
     WHY = "help must never skip the text check: a help spelling made the wrapper run gh without checking the text. "
+    BUILT_IN_WORDS = {w for g, verbs in (*Decisions.W.READ.items(), *Decisions.W.NOTEXT.items()) for w in (g, *verbs)} | {g for g, _ in Decisions.W.TEXT} | {v for _, v in Decisions.W.TEXT} | {"api", "--help"}
 
     def cases(self):
         """(label, argv) of every command that carries PLANTED, with help spelled every way before the verb, after it, or both."""
@@ -1098,8 +1108,11 @@ class WrapperHelpNeverSkipsTheCheck(Decisions):
                 yield "gh api (help first)", ["api", *h, ep, *fields]
 
     def blocked(self, argv):
-        """True when the wrapper refuses the command or gathers the planted text for the check; False when it would run gh without looking."""
+        """True when the wrapper refuses the command, gathers the planted text for the check, or runs gh with an argument list of its own that holds only built-in
+        names and --help; False when it would hand the planted text to gh without looking."""
         result = outcome(self, *argv, repo="someone/other")
+        if result[0] == "help":
+            return all(w in self.BUILT_IN_WORDS for w in result[1] or []) and (result[1] or ["--help"])[-1] == "--help"
         return result[0] == "refused" or any(PLANTED in text for text in (result[2] or {}).values())
 
     def test_a_help_flag_in_any_spelling_count_or_position_never_skips_the_text_check(self):
@@ -1108,23 +1121,72 @@ class WrapperHelpNeverSkipsTheCheck(Decisions):
 
     def test_end_to_end_a_planted_term_is_blocked_whatever_the_help_flags(self):
         for argv in (["pr", "comment", "3", "--help", "--help=false", "-b", PLANTED, "-R", GUARDED], ["pr", "--help", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED],
-                     ["pr", "comment", "3", "--help=true", "--help=false", "--body", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "-h", "-b", PLANTED, "-R", GUARDED],
+                     ["pr", "comment", "3", "--help=true", "--help=false", "--body", PLANTED, "-R", GUARDED],
                      ["api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=" + PLANTED, "--help", "--help=false"]):
             with self.subTest(argv):
                 self.reset()
                 self.assertBlocked(self.gh(*argv, cwd=self.other_cwd), "term 1")
 
-    def test_a_plain_help_request_still_reaches_ghs_help_without_a_claude_call(self):
-        for argv in (["pr", "comment", "--help", "-R", GUARDED], ["pr", "comment", "-h", "-R", GUARDED], ["pr", "view", "--help"], ["pr", "--help"], ["issue", "create", "--help", "-R", GUARDED],
-                     ["pr", "create", "--help", "-R", GUARDED], ["pr", "--help", "comment", "-R", GUARDED], ["api", "--help"], ["repo", "edit", "--help", "-R", GUARDED]):
+    def test_a_plain_help_request_reaches_ghs_help_without_a_claude_call(self):
+        for argv, ran in ((["pr", "comment", "--help", "-R", GUARDED], ["pr", "comment", "--help"]), (["pr", "comment", "-h", "-R", GUARDED], ["pr", "comment", "--help"]),
+                          (["pr", "--help", "comment", "-R", GUARDED], ["pr", "comment", "--help"]), (["issue", "create", "--help", "-R", GUARDED], ["issue", "create", "--help"]),
+                          (["pr", "create", "--help", "-R", GUARDED], ["pr", "create", "--help"]), (["repo", "edit", "--help", "-R", GUARDED], ["repo", "--help"]),
+                          (["pr", "view", "--help"], ["pr", "view", "--help"]), (["pr", "--help"], ["pr", "--help"]), (["api", "--help"], ["api", "--help"])):
             with self.subTest(argv):
                 self.reset()
-                self.assertRan(self.gh(*argv, cwd=self.other_cwd), *argv)
+                self.assertRan(self.gh(*argv, cwd=self.other_cwd), *ran)
                 self.assertEqual(self.claude_calls(), 0)
         self.reset()
         logged = len(self.gh_log())
         self.assertRan(self.gh("pr", "view", "--help"), "pr", "view", "--help")      # in a guarded checkout too, and a read writes no log line
         self.assertEqual(len(self.gh_log()), logged)
+
+
+class WrapperHelpRunsOnlyBuiltInNames(WrapperBase):
+    """The rule behind WrapperHelpNeverSkipsTheCheck: when the wrapper reads a command on a guarded repository as a help request it never forwards the user's
+    arguments. It runs gh with an argument list it builds itself, `<group> [<verb>] --help`, from built-in names only, with standard input closed. Each row is
+    the exact argument list that reached the real gh (None: gh was not run) and the text of the refusal or note, if any."""
+    ALIAS = {"sh": "sh: !echo hi", "prc": "prc: pr create --fill"}
+    # label: (argv, environment, the argument list the real gh got, a word in what the wrapper printed)
+    ROWS = [
+        ("--help", ["pr", "comment", "3", "--help", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("-h", ["pr", "comment", "3", "-h", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("--help=true", ["pr", "comment", "3", "--help=true", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("help flag before the verb", ["pr", "--help", "comment", "3", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("-t --help", ["pr", "comment", "3", "-t", "--help", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("-dh", ["pr", "comment", "3", "-dh", "-b", PLANTED, "-R", GUARDED], {}, ["pr", "comment", "--help"], None),
+        ("--help then --help=false is checked", ["pr", "comment", "3", "--help", "--help=false", "-b", PLANTED, "-R", GUARDED], {}, None, "term"),
+        ("--help=foo is checked", ["pr", "comment", "3", "--help=foo", "-b", PLANTED, "-R", GUARDED], {}, None, "term"),
+        ("-- --help is a word, checked", ["pr", "comment", "3", "-b", PLANTED, "-R", GUARDED, "--", "--help"], {}, None, "term"),
+        ("repo edit -d --help", ["repo", "edit", GUARDED, "-d", "--help"], {}, ["repo", "--help"], None),
+        ("round 3: label create --color -h", ["label", "create", "foo", "--color", "-h", "--description", PLANTED, "-R", GUARDED], {}, ["label", "--help"], None),
+        ("round 3: repo edit --homepage -h", ["repo", "edit", GUARDED, "--homepage", "-h", "--description", PLANTED], {}, ["repo", "--help"], None),
+        ("an unrecognised write without help is refused", ["label", "create", "foo", "--description", PLANTED, "-R", GUARDED], {}, None, "not a command this wrapper knows"),
+        ("gh api, true", ["api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=" + PLANTED, "--help"], {}, ["api", "--help"], None),
+        ("gh api, last false is checked", ["api", "repos/%s/issues/1/comments" % GUARDED, "-f", "body=" + PLANTED, "--help", "--help=false"], {}, None, "term"),
+        ("shell alias", ["sh", "--help", "-R", GUARDED], ALIAS, None, "sh = !echo hi"),
+        ("non-shell alias", ["prc", "--help", "--title", PLANTED, "-R", GUARDED], ALIAS, ["pr", "create", "--help"], "prc = pr create --fill"),
+        ("extension", ["some-extension", "--help", "-R", GUARDED], {}, None, "own code"),
+    ]
+    def test_each_command_reaches_the_real_gh_with_exactly_this_argument_list(self):
+        for label, argv, extra, ran, said in self.ROWS:
+            with self.subTest(label):
+                self.reset()
+                done = self.gh(*argv, cwd=self.other_cwd, env={"FAKE_ALIASES": self.ALIAS.get(argv[0], "co: pr checkout")} if extra else None)
+                calls = self.real_calls()
+                self.assertEqual([c["argv"] for c in calls], [ran] if ran else [], done.stderr)
+                if ran:
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertEqual(calls[0]["stdin"], "")
+                    self.assertEqual(self.claude_calls(), 0)
+                    self.assertTrue(ran[-1] == "--help" and all(w.isalpha() for w in ran[:-1]), "a help run holds only path words and --help: %r" % ran)
+                if said:
+                    self.assertIn(said, done.stdout + done.stderr)
+                else:
+                    self.assertNotIn("BLOCKED", done.stderr)
+
+    def test_help_on_a_repository_that_is_not_guarded_is_not_rewritten(self):
+        self.assertRan(self.gh("pr", "comment", "3", "--help", "-R", "someone/other", cwd=self.other_cwd), "pr", "comment", "3", "--help", "-R", "someone/other")
 
 
 if __name__ == "__main__":

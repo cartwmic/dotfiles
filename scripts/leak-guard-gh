@@ -91,6 +91,30 @@ class Refuse(Exception):
     """A wrapper-only block: gh is not run."""
 
 
+class Help(Exception):
+    """The command is read as a help request, so the user's arguments are never forwarded: `argv` is an argument list the wrapper built itself from built-in group and
+    verb names, `<group> [<verb>] --help`, or None to run nothing; `note` is printed first. A wrong "help" decision can then only show help, and a wrong "not
+    help" decision goes down the checked path, so nothing here depends on gh's rules for what a help flag's value or repeat means."""
+
+    def __init__(self, argv, note=None):
+        super().__init__(note or "")
+        self.argv, self.note = argv, note
+
+
+TRUE_VALUES = {"1", "t", "T", "TRUE", "true", "True"}      # what gh's flag library (strconv.ParseBool) reads as true
+
+
+def last_help(flags):
+    """None when parsed flags hold no --help/-h; else whether the LAST one is true (no value, or a ParseBool true), as gh's flag library keeps the last value."""
+    values = [val for name, val in flags if name == "help"]
+    return None if not values else values[-1] is None or values[-1] in TRUE_VALUES
+
+
+def help_token(args):
+    """True when any argument could be a help flag: --help, --help=..., or a single-dash cluster with an h. Over-matching is harmless: it only shows help."""
+    return any(a.startswith("--help") or re.match(r"^-[^-=]*h", a) for a in args)
+
+
 def home(*parts):
     return os.path.join(os.path.expanduser("~"), *parts)
 
@@ -285,6 +309,14 @@ class Texts:
             raise Refuse("cannot read a text file the command names (%s), so its text cannot be checked" % e.strerror)
 
 
+def help_args(group, verb=None):
+    """The argument list of a help run, built from built-in names only: the group, and the verb only when it is a known verb of that group."""
+    path = [group] if group in BUILTIN or group == "api" else []
+    if path and verb and known_verb(group, verb):
+        path.append(verb)
+    return path + ["--help"]
+
+
 def known_verb(group, verb):
     return verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()) or (group, verb) in TEXT
 
@@ -400,11 +432,9 @@ def parse_flags(args, group, verb):
 
 
 def parse_text(args, group, verb):
-    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, unparsed) for a pr/issue/release command.
-    `unparsed` is true when parsing stopped at a flag the table does not list. `args` are the arguments after the group. Reads nothing. A help flag, in any
-    spelling or count, never removes text from `found` and never lifts a refusal about unknown flags, uploads or composed text: whether gh reads the command
-    as help depends on the flag's value, its last repetition and its position, and a copy of those rules in this file drifts from gh's. It lifts only the
-    refusal for text gh would prompt for, which is also switched off when the real gh runs (GH_PROMPT_DISABLED)."""
+    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, unparsed, last help value) for a pr/issue/release
+    command. `unparsed` is true when parsing stopped at a flag the table does not list. The last help value is None (no help flag), True or False (last_help).
+    `args` are the arguments after the group. Reads nothing."""
     flags, positionals, unknown, missing = parse_flags(args, group, verb)
     names = {name for name, _ in flags}
     kinds = TEXT[(group, verb)]
@@ -429,9 +459,9 @@ def parse_text(args, group, verb):
         if len(positionals) > 1:
             refusal = refusal or ("`gh release create` with asset files would upload them unchecked, as `gh release upload` is refused for a guarded repository. "
                                   "Create the release without files")
-    if not refusal and "help" not in names and sys.stdin.isatty():
+    if not refusal and sys.stdin.isatty():
         refusal = would_prompt(group, verb, names, {k for k, _, _ in found})
-    return found, repo, positionals, refusal, unknown is not None or missing is not None
+    return found, repo, positionals, refusal, unknown is not None or missing is not None, last_help(flags)
 
 
 def would_prompt(group, verb, names, kinds):
@@ -460,7 +490,7 @@ def gather_text(found, texts):
 
 
 def parse_api(args):
-    """(method, endpoint, [(typed, "key=value")], [input path], hostname, unknown flag position, missing value position) for `gh api`
+    """(method, endpoint, [(typed, "key=value")], [input path], hostname, last help value, unknown flag position, missing value position) for `gh api`
     arguments, parsed with gh's own flag table for `gh api`. Reads nothing."""
     flags, positionals, unknown, missing = parse_flags(args, "api", "")
     method, fields, inputs, hostname = None, [], [], None
@@ -473,7 +503,7 @@ def parse_api(args):
             inputs.append(val)
         elif name == "hostname":
             hostname = val
-    return method, positionals[0] if positionals else "", fields, inputs, hostname, unknown, missing
+    return method, positionals[0] if positionals else "", fields, inputs, hostname, last_help(flags), unknown, missing
 
 
 def gather_api(fields, inputs, texts, graphql):
@@ -582,7 +612,8 @@ def expand_alias(expansion, args):
 
 def unknown_command(args, repos, texts, real, depth):
     """A top-level name that is no built-in: an alias, else an extension. An alias is expanded and the expansion classified; a shell alias or an extension is
-    refused when it is aimed at a guarded repository, because what it sends cannot be seen."""
+    refused when it is aimed at a guarded repository, because what it sends cannot be seen. With a help token, an alias is never run under its own name:
+    it is shown as `name = expansion`, with the help of the built-in command it expands to; an extension is refused, since `--help` runs its own code."""
     name = args[0]
     aimed = lambda: any(t in repos for t in raw_targets(args))
     try:
@@ -594,19 +625,27 @@ def unknown_command(args, repos, texts, real, depth):
     if expansion is None:
         if aimed():
             raise Refuse("`gh %s` is not a built-in gh command and not an alias, so it is an extension (or a typo), and it is aimed at a guarded repository. "
-                         "It may send text this wrapper cannot see. Use a built-in command" % name)
+                         "It may send text this wrapper cannot see%s. Use a built-in command" % (name, ", and `--help` would run the extension's own code" if help_token(args[1:]) else ""))
         return "", None
+    if help_token(args[1:]):
+        try:
+            expanded = expand_alias(expansion, args)
+        except Refuse:
+            expanded = None
+        if aimed() or expanded is None or any(t in repos for t in raw_targets(expanded)):
+            note = "gh alias: %s = %s" % (name, expansion)
+            if expansion.startswith("!"):
+                raise Help(None, note)
+            try:
+                words = [w for w in shlex.split(expansion) if not w.startswith("-")]
+            except ValueError:
+                words = []
+            raise Help(help_args(words[0], words[1] if len(words) > 1 else None) if words else ["--help"], note)
     if expansion.startswith("!"):
         if aimed():
             raise Refuse("`gh %s` is a shell alias, and it is aimed at a guarded repository. What it runs cannot be checked. Run the command it stands for" % name)
         return "", None
     return decide(expand_alias(expansion, args), repos, texts, real, depth + 1)
-
-
-def bare_help_only(args):
-    """True when the arguments hold exactly one help flag, spelled bare (`--help` or `-h`). Only a command with no text the wrapper can read (an unrecognised
-    verb) is let through on this, since nothing is skipped that could be checked; a lone bare flag is help whatever gh does with repeats and values."""
-    return [a for a in args if a in ("--help", "-h") or a.startswith(("--help=", "-h="))] in (["--help"], ["-h"])
 
 
 def decide(args, repos, texts=None, real=None, depth=0):
@@ -624,13 +663,17 @@ def decide(args, repos, texts=None, real=None, depth=0):
         return "", None
     group = args[0]
     if group == "api":
-        method, endpoint, fields, inputs, hostname, unknown, missing = parse_api(args[1:])
+        method, endpoint, fields, inputs, hostname, helped, unknown, missing = parse_api(args[1:])
         if unknown is not None or missing is not None:      # the arguments cannot be read reliably: refuse when the call may be aimed at a guarded repository
             if (endpoint_path(endpoint) in ("graphql", "api/graphql") or any(t in repos for t in api_targets(endpoint, hostname) + context_targets())):
+                if help_token(args):
+                    raise Help(help_args("api"))
                 raise Refuse("argument %d of this `gh api` call is a flag this wrapper does not know, or a flag with no value, so the call cannot be read "
                              "and its text cannot be checked. Use the flags `gh api --help` lists" % ((unknown if unknown is not None else missing) + 2))
             return "", None
         write = (method or ("POST" if fields or inputs else "GET")).upper() not in ("GET", "HEAD")
+        if helped and (endpoint_path(endpoint) in ("graphql", "api/graphql") or (write and any(t in repos for t in api_targets(endpoint, hostname) + context_targets()))):
+            raise Help(help_args("api"))
         if endpoint_path(endpoint) in ("graphql", "api/graphql"):      # a mutation names objects by node id, never a repository: check every one
             query = gather_api(fields, inputs, texts, True)
             return ("api graphql", texts) if query is not None and is_mutation(query) else ("", texts)
@@ -651,20 +694,26 @@ def decide(args, repos, texts=None, real=None, depth=0):
     if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
     if ambiguous and any(t in repos for t in raw_targets(args)):
+        if help_token(args):
+            raise Help(help_args(group, verb))
         raise Refuse("a flag that is not one of `gh %s`'s own stands between it and its subcommand, so a flag's value could be taken for the subcommand and what gh "
                      "runs cannot be told. Put the subcommand right after `gh %s`" % (group, group))
     if (group, verb) in TEXT:
-        found, repo, positionals, refusal, unparsed = parse_text(args[1:], group, verb)
+        found, repo, positionals, refusal, unparsed, helped = parse_text(args[1:], group, verb)
         named = all_targets(repo + (raw_repo_flags(args) if unparsed else []), positionals + (args if unparsed else []))
         if not any(t in repos for t in named):
             return "", None
+        if helped or (unparsed and help_token(args)):      # a clean parse whose last help flag is true; else any help token of an unclean one: only help is shown
+            raise Help(help_args(group, verb))
         if refusal:
             raise Refuse(refusal)
         gather_text(found, texts)
         return name, texts
     if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
         return "", None
-    if any(t in repos for t in raw_targets(args)) and not bare_help_only(args):
+    if any(t in repos for t in raw_targets(args)):
+        if help_token(args):
+            raise Help(help_args(group, verb))
         raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
                      "Use a recognised command" % (group, verb))
     return "", None
@@ -740,6 +789,10 @@ def main(argv):
             return 1
         log(command, "pass", layer, findings, t0)
         return run_real(real, args, texts.stdin, True)
+    except Help as h:
+        if h.note:
+            print(h.note, flush=True)
+        return 0 if h.argv is None else run_real(real, h.argv, b"", True)          # stdin closed, and none of the user's arguments
     except Refuse as r:
         if skip:
             log(command, "skip", "override", 0, t0)
