@@ -56,8 +56,8 @@ One T3 provider instance per agent seat, so a seat starts with its own settings 
 
 | Seat | Instance id | Window (T3 compacts about 33,000 below it) | Advisor | MCP servers | Skills kept |
 |---|---|---|---|---|---|
-| Lead | `seat-lead` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, t3-code | coordinating-loop-engine, correcting-repeated-mistakes, herdr, hill-climb, omarchy, using-lean-change-provider, using-loop-engine, using-shartifacts |
-| Builder | `seat-builder` | 300000 (about 267K) | on | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, hill-climb, no-ai-slop, omarchy, systematic-debugging, using-lean-change-provider, using-loop-engine, using-policy-document-provider |
+| Lead | `seat-lead` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, t3-code | coordinating-loop-engine, correcting-repeated-mistakes, deriving-readable-docs, herdr, hill-climb, omarchy, using-lean-change-provider, using-loop-engine, using-shartifacts |
+| Builder | `seat-builder` | 300000 (about 267K) | on | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, deriving-readable-docs, hill-climb, no-ai-slop, omarchy, systematic-debugging, using-lean-change-provider, using-loop-engine, using-policy-document-provider |
 | Planner | `seat-planner` | 300000 (about 267K) | on | hindsight, shartifacts, t3-code | designing-the-smallest-version, no-ai-slop |
 | Reviewer | `seat-reviewer` | 300000 (about 267K) | off | hindsight, shartifacts, t3-code | designing-the-smallest-version, review-plans, reviewing-prs, using-lean-change-provider |
 | Coordinator | `coordinator` (owned by the coordinator repo; its launch arguments are not written here) | 200000 (about 167K) | on | to change in the coordinator repo | same as lead, without hill-climb; file `~/.claude/fleet/seat-coordinator.json` is deployed for it to use |

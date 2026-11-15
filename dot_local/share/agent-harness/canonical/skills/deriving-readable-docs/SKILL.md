@@ -1,0 +1,36 @@
+---
+name: deriving-readable-docs
+description: Use when you need plain-English product, design and spec documents for any repo, written from what its tests, journeys and scenarios prove (each with an intended observed effect), whether or not the repo has a PRD, docs or any ids. Produces three narrative documents, PRD.md (who it is for, what they get, why, what it does not do), DESIGN.md (how the parts fit and why) and SPEC.md (precise behaviours), each claim cited as `path:line` and checked by a script. Takes a caller-supplied list of validation points, a REQUIREMENTS.md or existing docs as extra input when present. Not for reviewing a PR (review-map), not for a register of requirements with state machines and coverage gaps (distilling-requirements), not for designing a new smaller version (designing-the-smallest-version).
+---
+
+# Deriving readable docs
+
+Turn a repo's validation points into three documents a person can read cold. A validation point is one check with an observed effect: a test, a black-box journey, an acceptance scenario, a Gherkin scenario, or a line the caller supplies in the owner's words. What the points prove is the source of truth. Nothing else has to exist.
+
+Output: `PRD.md`, `DESIGN.md`, `SPEC.md` in a folder outside the repo. Default `~/.local/share/derived-docs/<repo-name>/`; use the caller's path if given. Never write inside the repo unless asked.
+
+## Rules for every sentence
+
+- Narrative plain English for a human. Short paragraphs. No tables of ids, no `P12`-style point ids and no requirement codes in the prose: a reader should never need a lookup.
+- Every claim ends with a citation in exactly this form: backticked `path/to/file.ext:LINE` or `path/to/file.ext:START-END`, relative to the repo root. Several may share one pair of backticks, separated by commas. Cite the point's own line, or a line you opened. Nothing else in backticks may look like `word:number`.
+- A claim you took from a point's name without reading its body, or from the repo's structure, or from a doc, is labelled **inferred** in the sentence. A sentence that mixes proven and inferred claims is split, or labelled inferred as a whole. Never present inference as proof.
+- Something the repo plainly does that no point backs goes in a short "Not backed by any validation point" section at the end of the document and is never stated as fact elsewhere.
+- Say what the owner wants only when the caller supplied it or the repo states it. The docs describe what is proven, not what should be.
+- Do not add security, privacy or threat sections unless the caller asks.
+
+## Procedure
+
+1. **Orient.** Record the repo name and `git rev-parse HEAD` (no git: say so). Skim the README and any `AGENTS.md`/`CLAUDE.md` only to learn names and who the users are. Read a `REQUIREMENTS.md` or existing docs if present. They suggest claims; each still needs a point or goes under "Not backed". None is required.
+2. **Harvest.** Run `python3 -I <this skill's dir>/scripts/harvest_points.py <repo> > points.json` (outside the repo). It lists points as a JSON array: `id`, `name`, `kind`, `file`, `line`, `framework`, `context`. It covers pytest/unittest, Rust, Go, JS/TS, JUnit, xUnit/NUnit, GoogleTest/Catch2, XCTest, RSpec/minitest, ExUnit, bats/shell and Gherkin, and lists a file named like a journey, e2e, acceptance or smoke script as one `journey-file` point when it finds no cases inside. Same repo, same output.
+   Then add by hand what it cannot see: journeys defined through a house helper, checks in another language, and any list of validation points the caller gave in the owner's words (quote those as given). Judge which points to leave out: copies of other repos' tests and eval baselines (the repo's own suite does not run them as checks), and helpers or properties whose names only look like tests. Say what you left out in each header. Record hand-added points in the headers and leave `points.json` as the raw harvest.
+3. **Group into capabilities.** Cluster points by what a user gets, not by file. Start from `context` and the directory a point lives in, and rename each cluster in the user's words. For thousands of points, group by file and directory first, then read selectively. Name a capability only if at least one point backs it.
+4. **Read what carries a claim.** For each capability open the bodies of the points you will cite and note the intended observed effect: what is done, what is seen. A point you only know by its name is cited as inferred. Stop reading a cluster when more points stop adding new behaviour.
+5. **Write the three documents.** Each opens with a short header: repo, commit, which inputs were used (say whether existing docs were read), and the point counts: harvested; left out; used (body read, cited as proven); read by name only (cited as inferred); not cited (grouped by name, no claim made). A journey is one point at its file's first line. Cite the assertion lines you opened inside it, not line 1.
+   - **PRD.md.** Who it is for. What they get, one paragraph per capability. Why it matters. What it does not do, only where a point or the repo says so. "Not backed by any validation point".
+   - **DESIGN.md.** How the parts fit together and why, from the repo's structure plus what the points prove: the pieces, what each owns, how they talk, which behaviours hold them together. Reasons the repo does not state are labelled inferred. "Not backed by any validation point".
+   - **SPEC.md.** Precise behaviours grouped by capability, one short paragraph or list item per behaviour: the trigger, what happens, what the user or caller sees. "Not backed by any validation point".
+6. **Remove slop.** Load the `no-ai-slop` skill (Skill tool) and apply it in edit mode to each of the three files, one at a time, editing in place. Keep every backticked citation, number and name exactly as written. Put the `Voice:` line it requires in your report. Load its voice profile only when the caller says the docs are the owner's own writing.
+7. **Check citations.** Run `python3 -I <this skill's dir>/scripts/check_citations.py <doc.md> <repo>` for each doc. It reports each citation whose file is missing or whose line is out of range, and exits non-zero on any bad one or when a doc has no citations. Fix the citation (reopen the file for the right line) or drop the claim, then rerun until it exits 0.
+8. **Spot-check relevance.** The script proves a line exists, not that it supports the sentence. Open a handful of citations per doc, chosen across capabilities, and confirm the line says what the sentence claims. Fix any that do not and say how many you checked.
+9. **Publish only if asked.** Publish to shartifacts (skill `using-shartifacts`) only when the caller says the docs are for Michael to review. Otherwise stop at the folder.
+10. **Report.** Give the folder, counts (points harvested, used, left out, read by name only), how many claims are inferred, what sits under "Not backed", the `Voice:` line and the citation check result. Say what you did not read.
