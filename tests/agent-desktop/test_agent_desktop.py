@@ -354,16 +354,61 @@ class DesktopTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stderr), (0, ""))
 
     @unittest.skipUnless(LINUX, "needs /proc")
-    def test_only_the_unset_variable_is_filled_in(self):
-        make_instance(self.runtime, "abc_1000_1", os.getpid())
-        r = self.run_script("cursor", unset=("HYPRLAND_INSTANCE_SIGNATURE",), WAYLAND_DISPLAY="wayland-9")
+    def test_a_set_signature_whose_instance_is_dead_is_replaced_with_the_display_too(self):
+        # t3code started under an earlier Hyprland (the shell inherits its pair), then Hyprland restarted.
+        make_instance(self.runtime, "old_1000_1", dead_pid(), display="wayland-0")
+        make_instance(self.runtime, "new_2000_1", os.getpid(), display="wayland-1")
+        r = self.run_script("cursor", HYPRLAND_INSTANCE_SIGNATURE="old_1000_1", WAYLAND_DISPLAY="wayland-0")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.env_file.read_text().splitlines(),
-                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=abc_1000_1 WAYLAND_DISPLAY=wayland-9"])
+                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=new_2000_1 WAYLAND_DISPLAY=wayland-1"])
 
     @unittest.skipUnless(LINUX, "needs /proc")
-    def test_a_set_session_is_left_alone(self):
-        make_instance(self.runtime, "abc_1000_1", os.getpid())
+    def test_a_set_signature_with_no_folder_is_replaced(self):
+        make_instance(self.runtime, "new_2000_1", os.getpid())
+        r = self.run_script("cursor", HYPRLAND_INSTANCE_SIGNATURE="gone_1000_1", WAYLAND_DISPLAY="wayland-9")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env_file.read_text().splitlines(),
+                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=new_2000_1 WAYLAND_DISPLAY=wayland-1"])
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_a_set_signature_whose_instance_is_live_is_kept_even_when_a_newer_one_exists(self):
+        make_instance(self.runtime, "old_1000_1", os.getpid(), display="wayland-0")
+        make_instance(self.runtime, "new_2000_1", os.getpid(), display="wayland-1")
+        r = self.run_script("cursor", HYPRLAND_INSTANCE_SIGNATURE="old_1000_1", WAYLAND_DISPLAY="wayland-0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env_file.read_text().splitlines(),
+                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=old_1000_1 WAYLAND_DISPLAY=wayland-0"])
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_a_live_signature_with_no_display_gets_that_instances_display(self):
+        make_instance(self.runtime, "old_1000_1", os.getpid(), display="wayland-0")
+        make_instance(self.runtime, "new_2000_1", os.getpid(), display="wayland-1")
+        r = self.run_script("cursor", unset=("WAYLAND_DISPLAY",), HYPRLAND_INSTANCE_SIGNATURE="old_1000_1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env_file.read_text().splitlines(),
+                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=old_1000_1 WAYLAND_DISPLAY=wayland-0"])
+
+    def test_a_set_signature_is_kept_when_no_session_is_live(self):
+        # Nothing to replace it with: keep what is set, say nothing.
+        for dead in (False, True):
+            with self.subTest(dead_folder=dead):
+                if dead:
+                    make_instance(self.runtime, "old_1000_1", dead_pid(), display="wayland-0")
+                r = self.run_script("cursor", HYPRLAND_INSTANCE_SIGNATURE="old_1000_1", WAYLAND_DISPLAY="wayland-0")
+                self.assertEqual((r.returncode, r.stderr), (0, ""))
+                self.assertEqual(self.env_file.read_text().splitlines()[-1],
+                                 "hyprctl HYPRLAND_INSTANCE_SIGNATURE=old_1000_1 WAYLAND_DISPLAY=wayland-0")
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_a_set_live_session_is_left_alone(self):
+        make_instance(self.runtime, "sig_test", os.getpid())
+        r = self.run_script("cursor")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env_file.read_text().splitlines(),
+                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=sig_test WAYLAND_DISPLAY=wayland-1"])
+
+    def test_a_set_session_with_nothing_running_is_left_alone(self):
         r = self.run_script("cursor")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.env_file.read_text().splitlines(),
@@ -428,10 +473,16 @@ class ZshenvTest(unittest.TestCase):
         make_instance(self.runtime, "aaa_1000_1", os.getpid())
         self.assertEqual(self.session(marker=None), "unset unset")
 
-    def test_set_variables_are_kept(self):
-        make_instance(self.runtime, "aaa_1000_1", os.getpid())
-        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-9", HYPRLAND_INSTANCE_SIGNATURE="mine_1_1"), "wayland-9 mine_1_1")
-        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-9"), "wayland-9 aaa_1000_1")
+    def test_a_live_set_session_is_kept_and_a_dead_one_is_replaced(self):
+        make_instance(self.runtime, "old_1000_1", os.getpid(), display="wayland-0")
+        make_instance(self.runtime, "new_2000_1", os.getpid(), display="wayland-1")
+        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-0", HYPRLAND_INSTANCE_SIGNATURE="old_1000_1"), "wayland-0 old_1000_1")
+        # t3code outlived a Hyprland restart: its shells inherit the dead pair.
+        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-7", HYPRLAND_INSTANCE_SIGNATURE="dead_1_1"), "wayland-1 new_2000_1")
+        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-9"), "wayland-1 new_2000_1")
+
+    def test_a_set_pair_is_kept_when_nothing_is_live(self):
+        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-7", HYPRLAND_INSTANCE_SIGNATURE="dead_1_1"), "wayland-7 dead_1_1")
 
     def test_no_live_session_is_silent(self):
         self.assertEqual(self.session(), "unset unset")                        # no hypr folder at all
