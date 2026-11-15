@@ -30,16 +30,30 @@ READ = {"pr": {"list", "view", "diff", "checks", "status", "checkout"}, "issue":
         "release": {"list", "view", "download", "verify", "verify-asset"}, "run": {"list", "view", "watch", "download"},
         "workflow": {"list", "view"}, "repo": {"view", "list", "clone", "gitignore", "license"}, "label": {"list"}, "cache": {"list"},
         "secret": {"list"}, "variable": {"list", "get"}, "ruleset": {"list", "view", "check"}}
-NOTEXT = {"pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", "unlock", "pin", "unpin", "delete", "transfer"},
+NOTEXT = {"repo": {"set-default"}, "pr": {"ready", "update-branch", "lock", "unlock"}, "issue": {"lock", "unlock", "pin", "unpin", "delete", "transfer"},
           "release": {"delete", "delete-asset"}, "run": {"rerun", "cancel", "delete"}, "cache": {"delete"}}
 NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help", "version", "search", "status", "browse", "ssh-key", "gpg-key", "gist",
-            "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview"}
+            "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview",
+            "__complete", "__completeNoDesc"}      # the last two are the shell-completion entries, which print candidates and send nothing
 
-# The flags of every command whose text the wrapper reads, as `gh <group> <verb> --help` lists them in the gh release named by FLAGS_FROM_GH
-# (tests/leak-guard/test_gh_wrapper.py, FlagTables, compares this table with an installed gh of that version and fails when they differ). "s:long" is a short and a long flag, and a trailing "=" means the flag
-# takes a value. The wrapper parses a command's arguments with its own table only, following gh's flag library for the forms in parse_flags, and refuses any flag that is not in it.
+# The flags of every command whose text the wrapper reads, and of every command group (the flags gh accepts between the group and its subcommand), as
+# `gh <group> <verb> --help` lists them in the gh release named by FLAGS_FROM_GH. scripts/leak-guard-gh-flags regenerates this block from the installed gh
+# (docs/leak-guard.md, Flag tables), and tests/leak-guard/test_gh_wrapper.py, FlagTables, compares it with an installed gh of that version and fails when
+# they differ. "s:long" is a short and a long flag, and a trailing "=" means the flag takes a value. The wrapper parses a command's arguments with its own
+# table only, following gh's flag library for the forms in parse_flags, and refuses any flag that is not in it.
 FLAGS_FROM_GH = "2.103.3"
 FLAGS = {
+    ("pr", ""): "R:repo=,h:help",
+    ("issue", ""): "R:repo=,h:help",
+    ("release", ""): "R:repo=,h:help",
+    ("run", ""): "R:repo=,h:help",
+    ("workflow", ""): "R:repo=,h:help",
+    ("repo", ""): "h:help",
+    ("label", ""): "R:repo=,h:help",
+    ("cache", ""): "R:repo=,h:help",
+    ("secret", ""): "R:repo=,h:help",
+    ("variable", ""): "R:repo=,h:help",
+    ("ruleset", ""): "R:repo=,h:help",
     ("pr", "create"): "a:assignee=,attach=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
     ("pr", "comment"): "attach=,b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
@@ -75,6 +89,30 @@ BUILTIN = set(READ) | set(NOTEXT) | {g for g, _ in TEXT}
 
 class Refuse(Exception):
     """A wrapper-only block: gh is not run."""
+
+
+class Help(Exception):
+    """The command is read as a help request, so the user's arguments are never forwarded: `argv` is an argument list the wrapper built itself from built-in group and
+    verb names, `<group> [<verb>] --help`, or None to run nothing; `note` is printed first. A wrong "help" decision can then only show help, and a wrong "not
+    help" decision goes down the checked path, so nothing here depends on gh's rules for what a help flag's value or repeat means."""
+
+    def __init__(self, argv, note=None):
+        super().__init__(note or "")
+        self.argv, self.note = argv, note
+
+
+TRUE_VALUES = {"1", "t", "T", "TRUE", "true", "True"}      # what gh's flag library (strconv.ParseBool) reads as true
+
+
+def last_help(flags):
+    """None when parsed flags hold no --help/-h; else whether the LAST one is true (no value, or a ParseBool true), as gh's flag library keeps the last value."""
+    values = [val for name, val in flags if name == "help"]
+    return None if not values else values[-1] is None or values[-1] in TRUE_VALUES
+
+
+def help_token(args):
+    """True when any argument could be a help flag: --help, --help=..., or a single-dash cluster with an h. Over-matching is harmless: it only shows help."""
+    return any(a.startswith("--help") or re.match(r"^-[^-=]*h", a) for a in args)
 
 
 def home(*parts):
@@ -149,12 +187,64 @@ def guarded_repos():
     return {r for r in (parse_repo(row, "github.com") for row in rows) if r}
 
 
-def cwd_remotes():
+_REMOTES, _SSH_HOSTS = {}, {}
+SSH_HOST_NAMES = {"ssh.github.com": "github.com"}      # GitHub's ssh-over-443 host serves github.com
+
+
+def git_lines(*args):
     try:
-        done = subprocess.run(["git", "config", "--get-regexp", r"^remote\..+\.(url|pushurl)$"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        done = subprocess.run(["git", *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return []
-    return [r for r in (parse_repo(row.partition(" ")[2]) for row in done.stdout.decode(errors="replace").splitlines()) if r]
+    return done.stdout.decode(errors="replace").splitlines() if done.returncode == 0 else []
+
+
+def ssh_hostname(host):
+    """The real host name ssh connects to for `host` (a Host alias of ~/.ssh/config resolves through `ssh -G`), lower-cased; None when ssh cannot say."""
+    if host not in _SSH_HOSTS:
+        found = None
+        if not host.startswith("-"):
+            try:
+                done = subprocess.run(["ssh", "-G", "--", host], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+                for line in done.stdout.decode(errors="replace").splitlines() if done.returncode == 0 else []:
+                    if line.lower().startswith("hostname "):
+                        found = line.split(None, 1)[1].strip().lower()
+                        found = SSH_HOST_NAMES.get(found, found)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        _SSH_HOSTS[host] = found
+    return _SSH_HOSTS[host]
+
+
+def remote_repos(url):
+    """The repository a remote URL names as written and, for an ssh form, also with the host alias resolved. Both count: a failed resolution loses nothing."""
+    found = parse_repo(url)
+    if not found:
+        return []
+    if re.match(r"^(?:ssh|git\+ssh|ssh\+git)://", url, re.I) or "://" not in url:      # ssh:// and the scp form `user@host:owner/name`
+        real = ssh_hostname(found[0])
+        if real and real != found[0]:
+            return [found, (real, found[1])]
+    return [found]
+
+
+def cwd_remotes():
+    """Every repository the current directory's git repository can fetch from or push to: the configured url and pushurl values as written, and each remote's
+    URLs as git resolves them (`git remote get-url --all`, which applies url.<base>.insteadOf and pushInsteadOf), each with its ssh Host alias resolved too.
+    Computed once per process and directory, since decide() asks several times."""
+    try:
+        key = os.getcwd()
+    except OSError:
+        key = None
+    if key not in _REMOTES:
+        urls = [row.partition(" ")[2] for row in git_lines("config", "--get-regexp", r"^remote\..+\.(url|pushurl)$")]
+        for name in git_lines("remote"):
+            urls += git_lines("remote", "get-url", "--all", name) + git_lines("remote", "get-url", "--push", "--all", name)
+        found = []
+        for url in dict.fromkeys(u for u in urls if u):
+            found += [r for r in remote_repos(url) if r not in found]
+        _REMOTES[key] = found
+    return _REMOTES[key]
 
 
 def repo_words(words):
@@ -219,18 +309,59 @@ class Texts:
             raise Refuse("cannot read a text file the command names (%s), so its text cannot be checked" % e.strerror)
 
 
+def help_args(group, verb=None):
+    """The argument list of a help run, built from built-in names only: the group, and the verb only when it is a known verb of that group."""
+    path = [group] if group in BUILTIN or group == "api" else []
+    if path and verb and known_verb(group, verb):
+        path.append(verb)
+    return path + ["--help"]
+
+
 def known_verb(group, verb):
     return verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()) or (group, verb) in TEXT
 
 
-def split_command(args):
-    """(group, verb, ambiguous) of a gh command line. The verb is the argument right after the group. When a flag stands there, a flag's value could be taken for
-    the verb, so the verb is a guess (the first known verb among the non-flag arguments) and `ambiguous` is true."""
+def normalize_group_flags(args):
+    """gh finds a command's subcommand by skipping the flags of the group, then the subcommand reads every flag, so `gh pr -R x view 3` is `gh pr view 3 -R x`.
+    Returns `args` with the group's `-R`/`--repo` moved behind the subcommand (a command line that starts with a bare group stays as it is), or None when any
+    other flag stands there. Only `-R x`, `-Rx`, `-R=x`, `--repo x` and `--repo=x` are read: for every other flag (`--help` and `-h` included, since gh skips `-h`'s
+    next argument as a value) nothing here says whether the next argument is a flag's value or the subcommand, so the command is ambiguous and never forwarded as it is."""
     group = args[0]
-    rest = [a for a in args[1:] if not a.startswith("-")]
-    if len(args) > 1 and args[1].startswith("-"):
+    if len(args) < 2 or not args[1].startswith("-"):
+        return args
+    if (group, "") not in FLAGS or "repo" not in flag_table(group, "")[0]:
+        return None
+    lead, i = [], 1
+    while i < len(args) and args[i].startswith("-"):
+        a = args[i]
+        if a.startswith("--"):
+            name, eq, _ = a[2:].partition("=")
+            if name != "repo":
+                return None
+            takes = not eq
+        else:
+            if a[1:2] != "R":
+                return None
+            takes = len(a) == 2      # `-Rvalue` and `-R=value` are one argument
+        lead.append(a)
+        if takes:
+            if i + 1 >= len(args):
+                return None
+            i += 1
+            lead.append(args[i])
+        i += 1
+    return [group] + args[i:i + 1] + lead + args[i + 1:]
+
+
+def split_command(args):
+    """(group, verb, ambiguous) of a gh command line. The verb is the first argument that is not one of the group's own flags (normalize_group_flags). When the flags
+    there cannot be told, a flag's value could be taken for the verb, so the verb is a guess (the first known verb among the non-flag arguments) and `ambiguous` is true."""
+    group = args[0]
+    norm = normalize_group_flags(args)
+    if norm is None:
+        rest = [a for a in args[1:] if not a.startswith("-")]
         return group, next((a for a in rest if known_verb(group, a)), rest[0] if rest else ""), True
-    return group, rest[0] if rest else "", False
+    return group, norm[1] if len(norm) > 1 and not norm[1].startswith("-") else "", False
 
 
 def flag_table(group, verb):
@@ -285,6 +416,9 @@ def parse_flags(args, group, verb):
                     else:
                         missing = i
                     break
+                if name == "help" and a[j + 1:j + 2] == "=":      # `-h=false`: read as a switch with a value, so the text is checked. gh itself shows help for any `-h` (it has no -h flag), so this is stricter than gh
+                    flags.append((name, a[j + 2:]))
+                    break
                 flags.append((name, None))
                 j += 1
         else:
@@ -294,8 +428,9 @@ def parse_flags(args, group, verb):
 
 
 def parse_text(args, group, verb):
-    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, help flag seen, unparsed) for a pr/issue/release
-    command. `unparsed` is true when parsing stopped at a flag the table does not list. `args` are the arguments after the group. Reads nothing."""
+    """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, unparsed, last help value) for a pr/issue/release
+    command. `unparsed` is true when parsing stopped at a flag the table does not list. The last help value is None (no help flag), True or False (last_help).
+    `args` are the arguments after the group. Reads nothing."""
     flags, positionals, unknown, missing = parse_flags(args, group, verb)
     names = {name for name, _ in flags}
     kinds = TEXT[(group, verb)]
@@ -320,9 +455,9 @@ def parse_text(args, group, verb):
         if len(positionals) > 1:
             refusal = refusal or ("`gh release create` with asset files would upload them unchecked, as `gh release upload` is refused for a guarded repository. "
                                   "Create the release without files")
-    if not refusal and "help" not in names and sys.stdin.isatty():
+    if not refusal and sys.stdin.isatty():
         refusal = would_prompt(group, verb, names, {k for k, _, _ in found})
-    return found, repo, positionals, refusal, "help" in names, unknown is not None or missing is not None
+    return found, repo, positionals, refusal, unknown is not None or missing is not None, last_help(flags)
 
 
 def would_prompt(group, verb, names, kinds):
@@ -351,7 +486,7 @@ def gather_text(found, texts):
 
 
 def parse_api(args):
-    """(method, endpoint, [(typed, "key=value")], [input path], hostname, help flag seen, unknown flag position, missing value position) for `gh api`
+    """(method, endpoint, [(typed, "key=value")], [input path], hostname, last help value, unknown flag position, missing value position) for `gh api`
     arguments, parsed with gh's own flag table for `gh api`. Reads nothing."""
     flags, positionals, unknown, missing = parse_flags(args, "api", "")
     method, fields, inputs, hostname = None, [], [], None
@@ -364,7 +499,7 @@ def parse_api(args):
             inputs.append(val)
         elif name == "hostname":
             hostname = val
-    return method, positionals[0] if positionals else "", fields, inputs, hostname, any(n == "help" for n, _ in flags), unknown, missing
+    return method, positionals[0] if positionals else "", fields, inputs, hostname, last_help(flags), unknown, missing
 
 
 def gather_api(fields, inputs, texts, graphql):
@@ -473,7 +608,8 @@ def expand_alias(expansion, args):
 
 def unknown_command(args, repos, texts, real, depth):
     """A top-level name that is no built-in: an alias, else an extension. An alias is expanded and the expansion classified; a shell alias or an extension is
-    refused when it is aimed at a guarded repository, because what it sends cannot be seen."""
+    refused when it is aimed at a guarded repository, because what it sends cannot be seen. With a help token, an alias is never run under its own name:
+    it is shown as `name = expansion`, with the help of the built-in command it expands to; an extension is refused, since `--help` runs its own code."""
     name = args[0]
     aimed = lambda: any(t in repos for t in raw_targets(args))
     try:
@@ -485,8 +621,22 @@ def unknown_command(args, repos, texts, real, depth):
     if expansion is None:
         if aimed():
             raise Refuse("`gh %s` is not a built-in gh command and not an alias, so it is an extension (or a typo), and it is aimed at a guarded repository. "
-                         "It may send text this wrapper cannot see. Use a built-in command" % name)
+                         "It may send text this wrapper cannot see%s. Use a built-in command" % (name, ", and `--help` would run the extension's own code" if help_token(args[1:]) else ""))
         return "", None
+    if help_token(args[1:]):
+        try:
+            expanded = expand_alias(expansion, args)
+        except Refuse:
+            expanded = None
+        if aimed() or expanded is None or any(t in repos for t in raw_targets(expanded)):
+            note = "gh alias: %s = %s" % (name, expansion)
+            if expansion.startswith("!"):
+                raise Help(None, note)
+            try:
+                words = [w for w in shlex.split(expansion) if not w.startswith("-")]
+            except ValueError:
+                words = []
+            raise Help(help_args(words[0], words[1] if len(words) > 1 else None) if words else ["--help"], note)
     if expansion.startswith("!"):
         if aimed():
             raise Refuse("`gh %s` is a shell alias, and it is aimed at a guarded repository. What it runs cannot be checked. Run the command it stands for" % name)
@@ -508,17 +658,18 @@ def decide(args, repos, texts=None, real=None, depth=0):
             raise Refuse("a flag comes before the command group, so what gh runs cannot be told. Put the command group first, e.g. `gh pr comment ... -R ...`")
         return "", None
     group = args[0]
-    helped = any(a in ("-h", "--help") for a in args)
     if group == "api":
         method, endpoint, fields, inputs, hostname, helped, unknown, missing = parse_api(args[1:])
-        if helped:
-            return "", None
         if unknown is not None or missing is not None:      # the arguments cannot be read reliably: refuse when the call may be aimed at a guarded repository
             if (endpoint_path(endpoint) in ("graphql", "api/graphql") or any(t in repos for t in api_targets(endpoint, hostname) + context_targets())):
+                if help_token(args):
+                    raise Help(help_args("api"))
                 raise Refuse("argument %d of this `gh api` call is a flag this wrapper does not know, or a flag with no value, so the call cannot be read "
                              "and its text cannot be checked. Use the flags `gh api --help` lists" % ((unknown if unknown is not None else missing) + 2))
             return "", None
         write = (method or ("POST" if fields or inputs else "GET")).upper() not in ("GET", "HEAD")
+        if helped and (endpoint_path(endpoint) in ("graphql", "api/graphql") or (write and any(t in repos for t in api_targets(endpoint, hostname) + context_targets()))):
+            raise Help(help_args("api"))
         if endpoint_path(endpoint) in ("graphql", "api/graphql"):      # a mutation names objects by node id, never a repository: check every one
             query = gather_api(fields, inputs, texts, True)
             return ("api graphql", texts) if query is not None and is_mutation(query) else ("", texts)
@@ -532,26 +683,33 @@ def decide(args, repos, texts=None, real=None, depth=0):
     if group in NOT_REPO:
         return "", None
     if group not in BUILTIN:
-        return ("", None) if helped else unknown_command(args, repos, texts, real, depth)
+        return unknown_command(args, repos, texts, real, depth)
+    args = normalize_group_flags(args) or args      # the group's own flags move behind the subcommand, as gh reads them
     group, verb, ambiguous = split_command(args)
     name = command_name(args)
     if not verb:      # a bare built-in group (`gh pr`) is help
         return "", None
-    if ambiguous and not helped and any(t in repos for t in raw_targets(args)):
-        raise Refuse("a flag stands between `gh %s` and its subcommand, so a flag's value could be taken for the subcommand and what gh runs cannot be told. "
-                     "Put the subcommand right after `gh %s`" % (group, group))
+    if ambiguous and any(t in repos for t in raw_targets(args)):
+        if help_token(args):
+            raise Help(help_args(group, verb))
+        raise Refuse("a flag that is not one of `gh %s`'s own stands between it and its subcommand, so a flag's value could be taken for the subcommand and what gh "
+                     "runs cannot be told. Put the subcommand right after `gh %s`" % (group, group))
     if (group, verb) in TEXT:
-        found, repo, positionals, refusal, helped, unparsed = parse_text(args[1:], group, verb)
+        found, repo, positionals, refusal, unparsed, helped = parse_text(args[1:], group, verb)
         named = all_targets(repo + (raw_repo_flags(args) if unparsed else []), positionals + (args if unparsed else []))
-        if helped or not any(t in repos for t in named):
+        if not any(t in repos for t in named):
             return "", None
+        if helped or (unparsed and help_token(args)):      # a clean parse whose last help flag is true; else any help token of an unclean one: only help is shown
+            raise Help(help_args(group, verb))
         if refusal:
             raise Refuse(refusal)
         gather_text(found, texts)
         return name, texts
-    if helped or (known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ()))):
+    if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
         return "", None
     if any(t in repos for t in raw_targets(args)):
+        if help_token(args):
+            raise Help(help_args(group, verb))
         raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
                      "Use a recognised command" % (group, verb))
     return "", None
@@ -627,6 +785,10 @@ def main(argv):
             return 1
         log(command, "pass", layer, findings, t0)
         return run_real(real, args, texts.stdin, True)
+    except Help as h:
+        if h.note:
+            print(h.note, flush=True)
+        return 0 if h.argv is None else run_real(real, h.argv, b"", True)          # stdin closed, and none of the user's arguments
     except Refuse as r:
         if skip:
             log(command, "skip", "override", 0, t0)
