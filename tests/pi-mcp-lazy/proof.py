@@ -674,7 +674,7 @@ def six_servers(root, port, remote_port, idle):
 REAL_CODES = {
     "real-rea": "const r = await tools.mcp__rea__binary_session({}); const j = JSON.stringify(r); text('RESULT:' + JSON.stringify({isError: !!(r && r.isError), bytes: j.length, head: (r && r.isError) ? String((r.content && r.content[0] && r.content[0].text) || '').slice(0, 200) : ''}));",
 }
-REAL_PROCESS = {"rea": "node rea"}
+REAL_PROCESS = {"rea": "node rea.mjs"}
 
 
 REAL_IDLE = 10
@@ -683,7 +683,8 @@ REAL_IDLE = 10
 def real_calls(root, port):
     """One harmless call to the real server through a real Pi session in a throwaway home. The entry comes
     from the real rendering step and state copies built by the real refresh. The throwaway home is the measurement
-    tool's: offline npx from clones of the owner's npx cache, stubbed credential helpers, no credentials."""
+    tool's: stubbed credential helpers, no credentials; rea runs from the owner's mise shim (pointed at by MISE_DATA_DIR and
+    MISE_CONFIG_DIR), and offline npx clones remain for jira-style npx servers."""
     import types
     sys.path.insert(0, str(ROOT / "tests" / "pi-idle-rss"))
     import pi_idle_rss as tool
@@ -734,7 +735,7 @@ def real_calls(root, port):
         project.mkdir()
         holder["env"] = {"PATH": ":".join([str(node_dir), str(tools_dir), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]), "HOME": str(home),
                          "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1", "npm_config_offline": "true", "PI_SKIP_VERSION_CHECK": "1",
-                         "PI_TELEMETRY": "0", tool.MARKER: marker}
+                         "PI_TELEMETRY": "0", tool.MARKER: marker, **tool.mise_env()}
         holder["project"] = project
         servers = rendered["mcp"]["mcpServers"]
         for n in ("rea",):
@@ -789,7 +790,7 @@ def real_calls(root, port):
             require(len([n for n in names if "pi-mcp-lazy" in n]) == 1, "stand-in should stay: %r" % names)
             out = rpc.prompt("real-rea", timeout=180)
             require('"isError":false' in out, out[:300])
-            require("node rea" in owned_names(), "rea was not started again")
+            require(REAL_PROCESS["rea"] in owned_names(), "rea was not started again")
             return {"owned_set_rss_kb": {"before_use": owned_pre, "after_idle": owned_after},
                     "stand_ins_only_rss_kb": {"before_use": pre, "servers_up": up, "after_idle": after}, "owned_after_idle": names}
         idle_real()

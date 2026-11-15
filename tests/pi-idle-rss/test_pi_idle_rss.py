@@ -525,7 +525,7 @@ class LazyVariantTests(unittest.TestCase):
 
     def test_mcp_process_counts_separate_stand_ins_from_real_servers(self):
         owned = [{"name": "pi", "rss_kb": 1}, {"name": "python3 pi-mcp-lazy", "rss_kb": 1}, {"name": "python3 pi-mcp-lazy", "rss_kb": 1},
-                 {"name": "node rea", "rss_kb": 1}, {"name": "npm exec", "rss_kb": 1}, {"name": "furi", "rss_kb": 1}, {"name": "node other", "rss_kb": 1}]
+                 {"name": "node rea.mjs", "rss_kb": 1}, {"name": "npm exec", "rss_kb": 1}, {"name": "furi", "rss_kb": 1}, {"name": "node other", "rss_kb": 1}]
         self.assertEqual(m.mcp_process_counts(owned), (2, 3))
 
     def test_report_lists_mcp_process_counts_per_sample(self):
