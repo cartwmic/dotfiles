@@ -192,11 +192,11 @@ class SessionCostTest(unittest.TestCase):
         sys.path.insert(0, str(SHARE))
         from datetime import datetime, timezone
         from session_cost import pst_day
-        for date in ("2026-07-15", "2026-12-15"):   # summer (PDT) and winter (PST) in California
-            before = datetime.fromisoformat(date + "T07:59:59+00:00")
-            at = datetime.fromisoformat(date + "T08:00:00+00:00")
+        for month in (7, 12):   # summer (PDT) and winter (PST) in California
+            before = datetime(2026, month, 15, 7, 59, 59, tzinfo=timezone.utc)
+            at = datetime(2026, month, 15, 8, 0, 0, tzinfo=timezone.utc)
             self.assertNotEqual(pst_day(before), pst_day(at))
-            self.assertEqual(pst_day(at), date)
+            self.assertEqual(pst_day(at), "2026-%02d-15" % month)
         d = self.snapshot(directory=self.tmp / "snaps-timer")   # NOW is 2026-11-20T00:00Z, which is PST day 11-19
         self.assertEqual([p.name for p in d.iterdir()], ["2026-11-19.json"])
 
