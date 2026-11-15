@@ -540,7 +540,7 @@ class PinFixException(Fixture):
                            {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
                      str(own_run["databaseId"]): [{"name": "tests", "conclusion": "success", "steps": own_steps or steps()},
                                                   {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
-        self.prs = {"7": {"files": [{"path": f} for f in files], "headRefOid": PR_HEAD}}
+        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": PR_HEAD}}
 
     def gate(self, *extra):
         self.write_fixture()
@@ -600,6 +600,11 @@ class PinFixException(Fixture):
     def test_an_extra_file_in_the_diff_stays_red(self):
         self.set_world(files=KIT_FILES + ["README.md"])
         self.assert_stays_red("its diff is not exactly the pin files: " + ", ".join(KIT_FILES + ["README.md"]))
+
+    def test_a_file_list_shorter_than_the_changed_file_count_stays_red(self):
+        self.set_world()
+        self.prs["7"]["changedFiles"] = 150   # gh returned the pin files but not the other 148
+        self.assert_stays_red("gh listed 2 of its 150 changed files")
 
     def test_half_the_agent_kit_pin_files_stays_red(self):
         self.set_world(files=KIT_FILES[:1])

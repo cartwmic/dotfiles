@@ -292,8 +292,10 @@ def pin_fix_reason(spec, red, pr):
         jobs = gh(["run", "view", str(red.run_id), "-R", repo, "--attempt", str(red.attempt), "--json", "jobs"])["jobs"]
         if not only_pins_step_failed(jobs):
             return refuse(pr, f"{red.label} failed on more than the release-pins step")
-        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "files,headRefOid"])
+        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "files,headRefOid,changedFiles"])
         names = [f["path"] for f in pull["files"]]
+        if pull["changedFiles"] != len(names):   # gh lists a PR's files in pages and may return only the first
+            return refuse(pr, f"gh listed {len(names)} of its {pull['changedFiles']} changed files")
         if not pin_files_only(names):
             return refuse(pr, f"its diff is not exactly the pin files: {', '.join(names) or 'nothing'}")
         head = pull["headRefOid"]
