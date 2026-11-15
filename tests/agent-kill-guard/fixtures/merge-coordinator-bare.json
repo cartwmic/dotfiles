@@ -1,0 +1,12 @@
+{
+ "session_id": "2c6a099c-5a8a-464c-8f70-42b8c1cd6663",
+ "transcript_path": "2c6a099c-5a8a-464c-8f70-42b8c1cd6663.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd ~/tmp-home/integ-linux-batch && gh pr merge 440 --merge 2>&1 | tail -1; gh pr view 440 --json state,mergeCommit --jq '.state+\" \"+.mergeCommit.oid'; for p in 437 438 439; do gh pr view $p --json number,state --jq '\"\\(.number) \\(.state)\"'; done",
+  "description": "Merge integration PR and check constituent PR states"
+ },
+ "tool_use_id": "toolu_01GBZTqNdMUwFoXx7SXfFVyS"
+}
