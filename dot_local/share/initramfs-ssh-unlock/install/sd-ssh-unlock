@@ -1,0 +1,48 @@
+#!/bin/bash
+# mkinitcpio install hook: an SSH server in the early-boot (systemd) initramfs, on the USB network cable only, so the disk
+# passphrase can be typed from another machine. Installed to /etc/initcpio/install/ by run_onchange_after_88_initramfs_ssh_unlock_linux.sh.tmpl
+# and switched on by /etc/mkinitcpio.conf.d/zz-ssh-unlock.conf. Sources of the files it adds: /etc/initcpio/ssh-unlock/ (SSH_UNLOCK_DIR overrides);
+# the systemd-network user lines come from /etc (SSH_UNLOCK_ETC overrides);
+# the server is /usr/bin/dropbear (SSH_UNLOCK_DROPBEAR overrides; mkinitcpio forces PATH to /usr/bin:/bin, so PATH cannot).
+# Everything it adds is Wants=-only, so a failing network or SSH server never blocks the passphrase prompt on the screen.
+
+build() {
+    local dir=${SSH_UNLOCK_DIR:-/etc/initcpio/ssh-unlock} etc=${SSH_UNLOCK_ETC:-/etc} name
+    for name in 10-ssh-unlock.network ssh-unlock.service authorized_keys dropbear_ed25519_host_key; do
+        if [[ ! -f $dir/$name ]]; then
+            error 'sd-ssh-unlock: %s/%s is missing; run a dotfiles apply' "$dir" "$name"
+            return 1
+        fi
+    done
+
+    add_binary "${SSH_UNLOCK_DROPBEAR:-/usr/bin/dropbear}" /usr/bin/dropbear
+    add_binary networkctl
+    add_systemd_unit systemd-networkd.service
+
+    # The systemd hook writes a passwd, shadow and group with root only; networkd runs as systemd-network.
+    for name in passwd shadow group; do
+        grep -q '^systemd-network:' "$BUILDROOT/etc/$name" && continue
+        grep '^systemd-network:' "$etc/$name" >>"$BUILDROOT/etc/$name" || {
+            error 'sd-ssh-unlock: no systemd-network entry in %s/%s' "$etc" "$name"
+            return 1
+        }
+    done
+
+    add_file "$dir/10-ssh-unlock.network" /etc/systemd/network/10-ssh-unlock.network 644
+    add_file "$dir/ssh-unlock.service" /usr/lib/systemd/system/ssh-unlock.service 644
+    add_symlink /usr/lib/systemd/system/initrd.target.wants/ssh-unlock.service ../ssh-unlock.service
+
+    add_file "$dir/dropbear_ed25519_host_key" /etc/ssh-unlock/dropbear_ed25519_host_key 600
+    add_dir /root/.ssh 700
+    add_file "$dir/authorized_keys" /root/.ssh/authorized_keys 600
+    add_dir /var/log
+    : >"$BUILDROOT/var/log/lastlog"
+}
+
+help() {
+    cat <<HELPEOF
+Adds dropbear (key-only SSH, forced to the passphrase prompt), systemd-networkd and a DHCP config for the USB
+network cable to a systemd initramfs, so the disk can be unlocked from another machine. The kernel option
+ssh-unlock=off turns the server off for one boot.
+HELPEOF
+}

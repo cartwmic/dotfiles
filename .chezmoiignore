@@ -396,4 +396,9 @@ Library/Preferences/pnpm/**
 77_git_identity_linux.sh
 # /tmp on the root disk (masks systemd's tmp.mount; personal Linux). The work profile is a Mac with no systemd, so it has no tmp.mount.
 87_tmp_on_disk_linux.sh
+# SSH unlock for the encrypted disk (Apple Silicon Omarchy box; personal Linux): the staged mkinitcpio hook and its files, the image check, and the script that installs them. The work profile is a Mac with no mkinitcpio, so it has none of it.
+.local/share/initramfs-ssh-unlock
+.local/share/initramfs-ssh-unlock/**
+.local/user_scripts/ssh_unlock_check_image.sh
+88_initramfs_ssh_unlock_linux.sh
 {{- end }}
