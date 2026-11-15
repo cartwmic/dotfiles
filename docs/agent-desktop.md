@@ -74,25 +74,45 @@ Reproduce: `chezmoi apply ~/.local/bin/agent-desktop` (after the preflight in `A
 
 A Mac gets the macOS script from the install step `run_onchange_after_66_agent_desktop_macos.sh.tmpl` (its deploy name is `66_agent_desktop_macos.sh`). It copies the macOS script, from `.chezmoitemplates/agent-desktop-macos.sh`, to `~/.local/bin/agent-desktop`, and downloads Vercel's agent-desktop v1.3.1 for the Mac's architecture into `~/.local/share/agent-desktop/vercel/`. It downloads the release archive and the release's `checksums.txt`, checks the archive against it, and installs everything the archive holds at the top level: `agent-desktop` and `agent-desktop-macos-helper`. Applying again downloads nothing and changes nothing (the folder's `.installed` file records the version and the processor). Both profiles, personal and work, run this step on a Mac; Linux and Windows skip it. It is a run step and not a managed file because chezmoi refuses two source files for one destination, and `~/.local/bin/agent-desktop` is already the Linux script's destination.
 
-The eight actions use `screencapture` for `shot` and `osascript` (JavaScript for Automation: the window list and pointer events from Core Graphics, and System Events for focus, keys and typing). `ui ARGS...` runs the Vercel binary, and `AGENT_DESKTOP_UI_BIN` overrides its path. If the binary is missing, `ui` exits 69 and says how to install it.
+The eight actions use `screencapture` for `shot` and `osascript` (JavaScript for Automation: the window list, pointer, key and typing events from Core Graphics, and AppKit's NSRunningApplication for focus; nothing talks to System Events, so no Automation permission is needed). `ui ARGS...` runs the Vercel binary, and `AGENT_DESKTOP_UI_BIN` overrides its path. If the binary is missing, `ui` exits 69 and says how to install it.
 
 The script is copied before the download, so if the download fails, the eight actions still work. A failed download, a checksum that does not match, an archive that will not unpack, or a processor Vercel has no build for makes the step exit 1. chezmoi then stops the apply at that step, so steps 70 and later do not run until the next apply that gets past it. The step is retried at every apply until it succeeds.
 
-One-time steps for Michael on each Mac (an ssh session runs under a macOS program called `sshd-keygen-wrapper`, so that is the program that needs the permissions). macOS does not let a script grant these. The click-by-click steps are in "Mac mini permissions (host change)" below:
+Permissions. macOS gives Screen Recording (macOS 27 calls it Screen & System Audio Recording) and Accessibility to the app that started a process, and a plain ssh shell has neither. On the Mac mini, the personal profile installs a small helper that runs inside kitty, which already has both, so nothing is granted to ssh. Over ssh, `agent-desktop` hands the whole call to the helper before it touches the screen and returns the helper's stdout, stderr and exit code unchanged. What the helper is, how it starts and how to restart or check it are in "Mac mini permissions (host change)" below.
 
-1. System Settings, Privacy & Security, Screen Recording: allow `/usr/libexec/sshd-keygen-wrapper`.
-2. System Settings, Privacy & Security, Accessibility: allow `/usr/libexec/sshd-keygen-wrapper`.
-3. macOS asks again about Screen Recording from time to time; someone clicks Allow at the Mac.
-
-These direct grants are tried first. A helper that runs inside the terminal app is only added if they fail. Do not run `osascript` or `screencapture` over ssh before the grants exist: a denied call puts a prompt on the Mac's screen. A denied call exits 1 with a message that names Screen Recording or Accessibility and this page. Without the Screen Recording grant, window titles come back blank, so the script says so rather than printing blanks.
+The work profile leaves the helper and its login item out: the work Mac's permission route is settled after merge by a read-only check of its limits, and each action there is its own ask (see "Work Mac"). Without the helper an ssh call runs in place. A call that runs in place and finds a permission missing exits 1 with a message that names Screen Recording or Accessibility, the app to allow and this page. Without the Screen Recording permission, window titles come back blank, so the script says so rather than printing blanks.
 
 Reproduce: on a Mac, run a dotfiles apply (`chezmoi apply`). To redo one Mac by hand, delete `~/.local/bin/agent-desktop` and `~/.local/share/agent-desktop/`, then render and run the `66` step: `chezmoi execute-template < run_onchange_after_66_agent_desktop_macos.sh.tmpl | sh`. That works as written when you run it in the Mac's chezmoi source. From any other copy of this repo (a worktree, a scratch copy), name the copy: `chezmoi --source <copy> execute-template < <copy>/run_onchange_after_66_agent_desktop_macos.sh.tmpl | sh`. Then check with `agent-desktop cursor`.
 
 ### Mac mini permissions (host change)
 
-PLACEHOLDER: the lead confirms this subsection once the grant has been done on the Mac mini. Until then, treat the steps as the by-hand repeat, not as a record that the grant exists.
+What it is. `agent-desktop-relay` (source: `.chezmoitemplates/agent-desktop-relay.sh`) is a loop that runs in a small kitty window. The helper asks kitty for a minimized window, but kitty 0.37 on macOS ignores that, so `agent-desktop-relay start` hides that kitty once the helper is up (NSRunningApplication `hide`, which needs no permission; a failure is only logged). The window shows for about a second while kitty opens and may take the keyboard focus then. The helper keeps working hidden; to see it, click kitty's Dock icon or use Cmd+Tab. It takes one call at a time, runs `~/.local/bin/agent-desktop` with the caller's arguments in the caller's folder, and hands back stdout, stderr and the exit code byte for byte. Arguments with spaces, quotes, newlines or nothing in them arrive as given. Calls from several ssh sessions at once are run one after the other, each with its own answer. Standard input is not passed on, and neither is the caller's environment (an `AGENT_DESKTOP_UI_BIN` set in the ssh shell does not reach the helper; the helper's own environment applies). A call and its answer travel as files in `~/.local/state/agent-desktop/relay/`, and the helper's pid file is there too.
 
-Repeat by hand: System Settings > Privacy & Security > Screen & System Audio Recording: `+`, Cmd+Shift+G, `/usr/libexec/sshd-keygen-wrapper`, switch on; repeat under Accessibility. (macOS does not let a script grant these.)
+When a call goes to it. `agent-desktop` sends the call to the helper when it runs in an ssh session (`SSH_CONNECTION` is set), is not already inside the helper, and the helper is installed. Anywhere else, such as a shell in kitty or a Mac with no helper, it runs the call itself. Measured on the Mac mini, forwarding adds about 0.1 s (`cursor`: 167 ms forwarded, 67 ms run in place).
+
+Which permissions it uses. kitty's own: Screen & System Audio Recording and Accessibility. Nothing is added for ssh.
+
+Start at login. A per-user login item, `~/Library/LaunchAgents/com.cartwmic.agent-desktop-relay.plist`, runs `agent-desktop-relay start` when the user logs in. `start` opens kitty with `open` (so kitty, not launchd, is the app macOS checks) and waits until the helper is up. The `66` step on the personal profile installs the helper and the login item, loads the login item and starts the helper, so an apply over ssh leaves it working without a login. Applying again changes nothing. A new copy of the helper restarts it. If the login item will not load or the helper will not start (nobody is logged in at the Mac, for example), the step prints a WARN and still succeeds, and the login item starts the helper at the next login.
+
+By hand, from any shell on the Mac (over ssh too):
+
+- `agent-desktop-relay status` prints `running (pid N)` and exits 0, or prints `not running` and exits 1.
+- `agent-desktop-relay start` starts it if it is not running.
+- `agent-desktop-relay stop`, then `agent-desktop-relay start`, restarts it. Closing its kitty window stops it too.
+
+Helper not running. A call over ssh exits 1 with one line that names the helper, says `agent-desktop-relay start`, and points at this page. If the helper stops during a call, the call exits 1 and says so.
+
+No Automation permission. `focus`, `type` and `key` used to talk to System Events, which makes macOS ask on the Mac's screen "kitty wants access to control System Events". They now post key events and activate apps directly, so they need only Accessibility, and nobody has to allow anything beyond the two permissions above. If that System Events question is on the Mac's screen from an earlier build, it can stay unanswered. What `focus`, `type` and `key` do now:
+
+- `focus NAME` activates the running app whose name is exactly NAME (the first column of `windows`). The app comes to the front; which of its windows takes the keys is the app's choice, so click into the field you want before typing if the app has several windows.
+- `key KEY [MOD...]` presses each modifier key, then KEY with the modifier flags set, then lets go, the way a keyboard does.
+- `type TEXT` presses the key that makes each character on a US keyboard, with Shift held for capitals and symbols like `!` and `"`, a short pause between characters; newline is Return and tab is Tab. Characters with no key on a US keyboard (an accented letter, an emoji) are refused with exit 1 before anything is typed: setting a Unicode string on the key event did nothing on macOS 27. Apps may still change what arrives (TextEdit capitalizes the first letter of a sentence).
+
+When kitty loses its permissions. macOS asks again about Screen Recording about once a month, and it asks on the Mac's screen. Michael re-allows kitty there, or under System Settings > Privacy & Security > Screen & System Audio Recording (and Accessibility), by switching kitty on.
+
+Log. A forwarded call writes one `relay call` line in `agent-desktop.log` (its run id and exit code). The helper passes that run id to the script, so the script's own step lines for the call carry the same id. The helper also logs when it starts and stops. `type` logs only the length of the text.
+
+Reproduce: on the Mac mini, run a dotfiles apply (`chezmoi apply`), or the `66` step by hand as above; then `agent-desktop-relay status`, and from another machine `ssh mac-mini agent-desktop cursor`. To start clean, run `agent-desktop-relay stop`, delete `~/.local/bin/agent-desktop-relay` and `~/Library/LaunchAgents/com.cartwmic.agent-desktop-relay.plist` (after `launchctl bootout gui/$(id -u)/com.cartwmic.agent-desktop-relay`), and run the `66` step again.
 
 ## G14 (Windows 11 laptop)
 
@@ -125,7 +145,7 @@ Reproduce: the install steps above, then `agent-desktop cursor` while the G14 is
 
 ## Work Mac
 
-The work profile gives a work Mac the same setup as any Mac: the `66` step runs on a dotfiles apply and installs the same script and the same pinned Vercel program. The Omarchy script and the Windows files are personal only; the work profile has no Linux or Windows machine (see [profiles.md](profiles.md)).
+The work profile gives a work Mac the same setup as any Mac: the `66` step runs on a dotfiles apply and installs the same script and the same pinned Vercel program, but not the kitty helper or its login item (`66` installs those on the personal profile only). Why: the work Mac's permission route is not settled. A read-only check of its limits comes after merge, and each action on that machine is its own ask to Michael. The Omarchy script and the Windows files are personal only; the work profile has no Linux or Windows machine (see [profiles.md](profiles.md)).
 
 On the work profile, a blocked GitHub download makes the `66` step exit 1 and stops the apply there; steps 70 and later wait for the next apply.
 

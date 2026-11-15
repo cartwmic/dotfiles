@@ -89,12 +89,20 @@ class DocTest(unittest.TestCase):
         self.assertRegex(omarchy, r"(?i)cannot list buttons by name")
         self.assertIn("unchanged", omarchy)
 
-    def test_the_mac_steps_name_the_two_permissions_and_the_ssh_program(self):
+    def test_the_mac_steps_name_the_two_permissions_and_the_kitty_helper(self):
         mac = section("Mac mini")
-        for word in ("Screen Recording", "Accessibility", "sshd-keygen-wrapper"):
+        for word in ("Screen Recording", "Screen & System Audio Recording", "Accessibility", "kitty", "agent-desktop-relay start",
+                     "agent-desktop-relay status", "com.cartwmic.agent-desktop-relay", "No Automation permission", "US keyboard"):
             self.assertIn(word, mac, word)
+        self.assertNotIn("sshd-keygen-wrapper", mac)
         self.assertRegex(mac, r"(?i)asks again")
         self.assertIn("66_agent_desktop_macos.sh", mac)
+        self.assertNotIn("PLACEHOLDER", mac)
+
+    def test_the_work_mac_section_says_the_helper_is_left_out_and_why(self):
+        work = section("work Mac")
+        self.assertIn("not the kitty helper", work)
+        self.assertRegex(work, r"(?i)read-only check")
 
     def test_the_g14_section_covers_unlock_install_and_the_pinned_vercel_download(self):
         g14 = section("G14")

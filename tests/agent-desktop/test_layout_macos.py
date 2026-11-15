@@ -66,6 +66,7 @@ class MacLayoutTest(unittest.TestCase):
     def test_the_install_step_source_and_the_script_body_exist(self):
         self.assertTrue((REPO / "run_onchange_after_66_agent_desktop_macos.sh.tmpl").is_file(), "the 66 install step is missing")
         self.assertTrue((REPO / ".chezmoitemplates/agent-desktop-macos.sh").is_file(), "the macOS script body is missing")
+        self.assertTrue((REPO / ".chezmoitemplates/agent-desktop-relay.sh").is_file(), "the kitty helper source is missing")
 
 
 if __name__ == "__main__":

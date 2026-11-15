@@ -18,7 +18,8 @@ timeout; there is no fixed sleep and no retry wrapper: a failed row is recorded 
 row itself is "N2 three times").
 
 Device preconditions (INTENT-NOTES.md section 4): Omarchy has a Hyprland session with wlrctl, wtype, grim and foot. The Mac
-mini has the console user logged in and Screen Recording and Accessibility granted to sshd-keygen-wrapper. The G14 is
+mini has the console user logged in and kitty holding Screen & System Audio Recording and Accessibility; calls over ssh run in the
+kitty helper (agent-desktop-relay), which the install step and its login item start. The G14 is
 unlocked for the rows phase (an ask each time); the prepare phase and the locked-screen check need it locked.
 Nothing here changes a G14 login, PIN, sleep, power or RustDesk setting; the settings are only read.
 
@@ -919,8 +920,13 @@ def install_mac(rec, dev):
     expect(p.returncode == 0, "copying the branch to the Mac mini failed: %s" % p.stderr.decode(errors="replace")[:200])
     script = (
         "set -eu; D=%s; cd \"$D/src\"; "
+        # the login item is loaded through this library, which a full chezmoi apply installs and this partial install does not
+        "mkdir -p \"$HOME/.local/share/launchd-reload\"; "
+        "chezmoi --source \"$D/src\" apply -x scripts --force \"$HOME/.local/share/launchd-reload/launchd_reload.sh\"; "
         "chezmoi --source \"$D/src\" execute-template < run_onchange_after_66_agent_desktop_macos.sh.tmpl > \"$D/66.sh\"; "
-        "sh \"$D/66.sh\"; test -x \"$HOME/.local/bin/agent-desktop\"; ls -l \"$HOME/.local/bin/agent-desktop\" \"$HOME/.local/share/agent-desktop/vercel\"" % sc
+        "sh \"$D/66.sh\"; test -x \"$HOME/.local/bin/agent-desktop\"; "
+        "\"$HOME/.local/bin/agent-desktop-relay\" status; launchctl print \"gui/$(id -u)/com.cartwmic.agent-desktop-relay\" >/dev/null; "
+        "ls -l \"$HOME/.local/bin/agent-desktop\" \"$HOME/.local/share/agent-desktop/vercel\"" % sc
     )
     r = rec.sh("fresh install", script, timeout=600)
     return {"fresh": rec.cmds[-1]}
