@@ -1,0 +1,10 @@
+# Starts session-cost.service once a day at midnight. Persistent: a run missed while the machine was off happens at the next start.
+[Unit]
+Description=session-cost daily snapshot
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

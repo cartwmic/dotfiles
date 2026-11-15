@@ -208,6 +208,21 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 79_kelsey_intake_systemd.sh
 {{- end }}
 
+{{- $sessionCost := eq (includeTemplate "session_cost_config" .) "true" }}
+{{- if not $sessionCost }}
+# session-cost (list-price cost per agent seat from the Claude Code logs): the command, its code folder and the daily timer units. chezmoi data
+# sessionCost.enabled, default true on personal Linux only: the logs and the timer live on that host and the work profile reads and applies none of it.
+# Disabled: chezmoi leaves the units alone; the load script below stops the timer and removes them.
+.local/bin/session-cost
+.local/share/token-efficiency
+.local/share/token-efficiency/**
+.config/systemd/user/session-cost.service
+.config/systemd/user/session-cost.timer
+{{- end }}
+{{- if and (not $sessionCost) (not (stat (joinPath (toString .chezmoi.destDir) ".config/systemd/user/session-cost.timer"))) }}
+86_session_cost_systemd.sh
+{{- end }}
+
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
 # Coordinator LaunchAgent unit (cartwmic/coordinator): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.

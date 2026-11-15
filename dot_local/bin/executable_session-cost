@@ -1,0 +1,10 @@
+#!/bin/sh
+# session-cost: list-price cost per agent seat, last 7 days next to the 7 days before (plain text).
+# Reads ~/.local/state/token-efficiency/usage.sqlite, which the daily session-cost.timer refreshes; --refresh rebuilds it first.
+# Code: ~/.local/share/token-efficiency (README.md there). Personal Linux only (.chezmoiignore, docs/profiles.md).
+set -eu
+dir=$(dirname "$0")
+impl="$dir/../share/token-efficiency/session_cost.py"
+[ -f "$impl" ] || impl="${HOME:?HOME is not set}/.local/share/token-efficiency/session_cost.py"
+[ -f "$impl" ] || { echo "session-cost: $impl not found" >&2; exit 1; }
+exec python3 "$impl" "$@"
