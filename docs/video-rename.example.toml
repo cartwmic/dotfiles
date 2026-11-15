@@ -1,0 +1,34 @@
+# video-rename config. Copy to ~/.config/video-rename/config.toml and fill in your own values.
+# Everything here is a placeholder. The real file stays on your Mac and is never committed
+# (.chezmoiignore keeps chezmoi away from ~/.config/video-rename).
+
+# The page (or API address) for one video. {id} is replaced with the number from the file name.
+url_template = "https://example.invalid/video/{id}"
+
+# Where the title is. One of:
+#   "html"  - the page's <title> (the default, so you can leave this line out)
+#   "regex" - the first group of title_regex, searched in the page text
+#   "json"  - the field at title_json_path, when the address returns JSON
+title_from = "html"
+
+# title_from = "regex": one pair of brackets around the title.
+# title_regex = "<h1 class=\"video-title\">(.*?)</h1>"
+
+# title_from = "json": dotted path to the title field; a number steps into a list.
+# title_json_path = "data.title"
+
+# Text to cut out of every title (regular expressions). Typical use: the site name the page adds.
+strip = [
+  "\\s*[|-]\\s*Example Site$",
+]
+
+# Which file names count as numbered. One pair of brackets around the id.
+# Default when left out: the whole name (without extension) is digits, e.g. 12345.mp4.
+# id_regex = "^video-([0-9]+)$"
+
+# Seconds to wait between requests (default 1). --delay on the command line overrides it.
+delay_seconds = 1
+
+# Some sites need a cookie or token. Put the lines in a file (one "Name: value" per line, # for comments)
+# and name it here. Keep that file outside git too.
+# headers_file = "~/.config/video-rename/headers.txt"
