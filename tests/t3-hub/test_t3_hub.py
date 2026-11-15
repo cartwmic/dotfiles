@@ -636,7 +636,7 @@ KEEP = {
     "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
     "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"designing-the-smallest-version", "no-ai-slop"},
-    "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider"},
+    "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
 }
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
@@ -655,16 +655,31 @@ def fleet_env(profile):
     return env
 
 
-# A skill whose procedure loads other skills. Every seat that keeps the skill must keep what it requires.
-SKILL_REQUIRES = {"deriving-readable-docs": ["no-ai-slop"]}
+# A canonical skill that tells the agent to "Load the `X` skill" needs X on every seat that keeps it. The map is read from the
+# SKILL.md files, so a new such line is checked without anyone adding it here. EXEMPT is {(skill, dependency): reason} for an optional one.
+EXEMPT = {}
+LOADS = re.compile(r"\b(?:Load|Run|Use|Invoke)\s+the\s+`([a-z0-9-]+)`\s+skill")
+
+
+def skill_requires():
+    out = {}
+    for pat in ("*/SKILL.md", "*/SKILL.md.tmpl"):
+        for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat):
+            needs = sorted(set(LOADS.findall(p.read_text())) - {p.parent.name})
+            if needs:
+                out[p.parent.name] = needs
+    return out
 
 
 class SkillRequiresTest(unittest.TestCase):
+    def test_the_map_is_read_from_the_skills(self):
+        self.assertTrue(skill_requires(), "no 'Load the `X` skill' line found in any canonical SKILL.md: has the wording or the path changed?")
+
     def test_a_seat_that_keeps_a_skill_keeps_what_it_requires(self):
-        missing = ["seat %s keeps %s but not %s it requires: add %s to the %s keep list in .chezmoitemplates/fleet_seat"
+        missing = ["seat %s keeps %s but not %s, which that skill says to load: add %s to the %s keep list in .chezmoitemplates/fleet_seat"
                    % (seat, skill, need, need, seat)
-                   for seat, keep in sorted(KEEP.items()) for skill, needs in sorted(SKILL_REQUIRES.items()) if skill in keep
-                   for need in needs if need not in keep]
+                   for seat, keep in sorted(KEEP.items()) for skill, needs in sorted(skill_requires().items()) if skill in keep
+                   for need in needs if need not in keep and (skill, need) not in EXEMPT]
         self.assertEqual(missing, [])
 
 
