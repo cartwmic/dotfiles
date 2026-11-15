@@ -38,7 +38,7 @@ class Parsing(unittest.TestCase):
         self.assertEqual(owned, {100, 101, 102})
 
     def test_cmd_name_never_returns_environment(self):
-        self.assertEqual(m.cmd_name("/x/node /y/playwright-mcp --a TERM=xterm HOME=/h"), "node playwright-mcp")
+        self.assertEqual(m.cmd_name("/x/node /y/rea --a TERM=xterm HOME=/h"), "node rea")
         self.assertEqual(m.cmd_name("pi TOKEN=secret"), "pi")
 
     def test_footprint_units(self):

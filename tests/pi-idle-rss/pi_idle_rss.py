@@ -371,7 +371,7 @@ LAZY_SEED = REPO_ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "seed"
 APPLY_SRC = REPO_ROOT / "dot_local" / "user_scripts" / "executable_apply_harness_config.sh"
 LAZY_VARIANTS = {"full-lazy": "state", "full-lazy-nostate": "nostate", "full-lazy-failedrefresh": "failed"}
 # Process names (cmd_name) of the real MCP servers and their npm wrappers in the owner's configuration.
-MCP_REAL_NAMES = {"furi", "npm exec", "node rea", "node playwright-mcp"}
+MCP_REAL_NAMES = {"furi", "npm exec", "node rea"}
 FAILING_WRAPPER = """#!/bin/sh
 [ "$1" = "--refresh" ] && { echo "simulated refresh failure" >&2; exit 1; }
 exec "$(dirname "$0")/pi-mcp-lazy-real" "$@"

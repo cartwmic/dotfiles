@@ -1,11 +1,11 @@
 # pi-mcp-lazy
 
-Pi starts every enabled MCP server when a session opens and never stops one. For the three local servers
+Pi starts every enabled MCP server when a session opens and never stops one. For the local servers
 that costs most of an idle session's memory (cartwmic/dotfiles#14). `pi-mcp-lazy` (deployed to
 `~/.local/bin/pi-mcp-lazy`) sits in front of one local server so it runs only while it is used.
 
 Pi's built-in MCP client is unchanged. It still reads `~/.pi/agent/mcp.json` and still starts one stdio process per
-server, but for `playwright` and `rea` that process is the stand-in:
+server, but for `rea` that process is the stand-in:
 
 - **Handshake and tool list come from a saved copy.** Pi sees the same tools (`mcp__<server>__<tool>`) and the
   `mcp_servers` listing in the system prompt, and `searchTools`, `describeTool`, `describeNamespace` and `ALL_TOOLS`
@@ -24,7 +24,7 @@ server, but for `playwright` and `rea` that process is the stand-in:
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`playwright` and `rea` on every profile, plus `jira` on
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on every profile, plus `jira` on
 `axon-work-computer`; the source is `servers.list.tmpl`, which renders the `jira` line only on that profile). The remote HTTP
 servers (`hindsight`, `context7`, `ticktick`) are not touched.
 
@@ -69,8 +69,7 @@ credentials.
 - Ask whether serving would show Pi any tools: `pi-mcp-lazy --check NAME -- COMMAND [ARGS...]` (exit 0 if the state copy, else
   the seed, holds at least one tool; starts nothing). The apply uses it after each refresh.
 - Regenerate the seeds from the real servers (do this when preparing a change that bumps a server):
-  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh playwright -- ~/.local/share/mise/shims/playwright-mcp`
-  and likewise for `rea` (`~/.local/share/mise/shims/rea mcp`). The seed's `key` holds the command line it was saved with, so it
+  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh rea -- ~/.local/share/mise/shims/rea mcp`. The seed's `key` holds the command line it was saved with, so it
   names the path of the machine that saved it; on another home a seed is still served, with the stale note, until the apply-time refresh writes a state copy.
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
   default 1.0), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
@@ -86,8 +85,6 @@ are unchanged.
 
 ## Accepted limits
 
-- Stopping `playwright` when idle closes its browser, so open pages and signed-in state are gone on the next use. Raise
-  the idle period for that entry if that matters.
 - A cold first call can take seconds (server start). Pi's per-request timeout is 60 seconds by default; add a larger
   `"timeout"` to the entry if a cold start is ever slower.
 - **Exit and /reload.** The server shares the stand-in's process group. Pi's shutdown (close stdin, SIGTERM to the group after
@@ -134,7 +131,7 @@ footprint after /reload 269 MB with no real MCP process at any stage; the baseli
 The stand-ins read 16 MB each here because the measurement home has no Python bytecode cache; with a warm cache one idles at
 about 12 MB. A stand-in runs on the system Python (`/usr/bin/python3`) when the macOS command-line tools are present, because it
 is about 10 MB smaller than a current mise Python, and on `python3` from PATH otherwise. The first call to a stopped server
-costs the server's own start time (rea about 2 s, playwright about 1 s here) plus about 0.04 s for the stand-in.
+costs the server's own start time (rea about 2 s here) plus about 0.04 s for the stand-in.
 
 ## Tests and measurement
 

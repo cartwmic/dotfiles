@@ -108,29 +108,30 @@ class RenderTests(unittest.TestCase):
         self.addCleanup(w.cleanup)
         return w
 
-    def test_two_servers_wrapped_remote_unchanged(self):
+    def test_local_server_wrapped_remote_unchanged(self):
         w = self.world()
         r = w.run("pi")
         self.assertEqual(r.returncode, 0, r.stderr)
         s = w.pi_servers()
         c = w.canonical["mcpServers"]
-        for name in ("playwright", "rea"):
+        for name in ("rea",):
             self.assertEqual(s[name]["command"], str(w.bin))
             self.assertEqual(s[name]["args"], [name, "600", "--", c[name]["command"], *c[name].get("args", [])])
         for name in ("hindsight", "context7", "ticktick"):
             self.assertEqual(s[name], c[name])
         self.assertEqual(set(s), set(c))
         refreshed = w.log.read_text().splitlines()
-        self.assertEqual([l.split()[1] for l in refreshed if l.startswith("--refresh")], ["playwright", "rea"])
+        self.assertEqual([l.split()[1] for l in refreshed if l.startswith("--refresh")], ["rea"])
 
     def test_failed_refresh_is_logged_by_name_and_entry_still_wrapped(self):
         w = self.world()
-        r = w.run("pi", fail="playwright")
+        w.list.write_text("rea\nbrowser-harness\n")  # a second local server, so one can fail while the other refreshes
+        r = w.run("pi", fail="browser-harness")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("refresh of playwright failed", r.stdout)
-        self.assertIn("refresh exploded for playwright", r.stdout)
+        self.assertIn("refresh of browser-harness failed", r.stdout)
+        self.assertIn("refresh exploded for browser-harness", r.stdout)
         s = w.pi_servers()
-        for name in ("playwright", "rea"):
+        for name in ("browser-harness", "rea"):
             self.assertEqual(s[name]["command"], str(w.bin), name)
         self.assertIn("refreshed rea", r.stdout)
 
@@ -145,7 +146,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         claude = json.loads(w.generated("claude", "mcp-resolved.json"))["mcpServers"]
         self.assertEqual(claude["rea"], w.canonical["mcpServers"]["rea"])
-        self.assertEqual(claude["playwright"], w.canonical["mcpServers"]["playwright"])
+        self.assertNotIn("playwright", claude)  # the Playwright MCP server is retired
         for rel in (("claude", "mcp-resolved.json"), ("claude", "setup-mcp.sh"), ("codex", "mcp-resolved.json"), ("codex", "mcp.toml")):
             self.assertNotIn("pi-mcp-lazy", w.generated(*rel), rel)
         self.assertNotIn("pi-mcp-lazy", (w.home / ".codex" / "config.toml").read_text())
@@ -167,8 +168,9 @@ class RenderTests(unittest.TestCase):
         w_old.script = oldfile
         self.assertEqual(w_new.run("claude", "codex").returncode, 0)
         self.assertEqual(w_old.run("claude", "codex").returncode, 0)
+        retired = lambda text: "".join(l for l in text.splitlines(True) if "retired, removed" not in l)  # the Claude step that removes a retired server (tests/mcp-pins)
         for rel in (("claude", "mcp-resolved.json"), ("claude", "setup-mcp.sh"), ("codex", "mcp-resolved.json"), ("codex", "mcp.toml")):
-            self.assertEqual(w_new.generated(*rel), w_old.generated(*rel), rel)
+            self.assertEqual(retired(w_new.generated(*rel)), w_old.generated(*rel), rel)
         self.assertEqual((w_new.home / ".codex" / "config.toml").read_text(), (w_old.home / ".codex" / "config.toml").read_text())
 
     def test_idempotent(self):
@@ -187,11 +189,11 @@ class RenderTests(unittest.TestCase):
     def test_rollback_by_removing_list_entry(self):
         w = self.world()
         w.run("pi")
-        w.list.write_text("playwright\n")
+        w.list.write_text("browser-harness\n")
         w.run("pi")
         s = w.pi_servers()
         self.assertEqual(s["rea"], w.canonical["mcpServers"]["rea"])
-        self.assertEqual(s["playwright"]["command"], str(w.bin))
+        self.assertEqual(s["browser-harness"]["command"], str(w.bin))
 
     def test_missing_list_or_binary_leaves_entries_as_rendered_and_exits_zero(self):
         w = self.world(with_list=False)
@@ -307,8 +309,8 @@ class JiraTests(unittest.TestCase):
 
     def test_list_renders_per_profile(self):
         names = lambda p: [l for l in render_list(p).splitlines() if l and not l.startswith("#")]
-        self.assertEqual(names("personal"), ["playwright", "rea"])
-        self.assertEqual(names("axon-work-computer"), ["playwright", "rea", "jira"])
+        self.assertEqual(names("personal"), ["rea"])
+        self.assertEqual(names("axon-work-computer"), ["rea", "jira"])
 
     def test_chezmoi_renders_the_same_list_for_both_profiles(self):
         if not shutil.which("chezmoi"):
@@ -341,13 +343,13 @@ class JiraTests(unittest.TestCase):
         before = self.world(profile="personal")
         before.script = before.tmp / "old_apply.sh"
         before.script.write_text(old.stdout)
-        before.list.write_text("playwright\nrea\n")
+        before.list.write_text("rea\n")
         self.assertEqual(new.run("pi").returncode, 0)
         self.assertEqual(before.run("pi").returncode, 0)
         self.assertNotIn("jira", new.pi_servers())
         self.assertEqual((new.home / ".pi" / "agent" / "mcp.json").read_text().replace(str(new.bin), "BIN"),
                          (before.home / ".pi" / "agent" / "mcp.json").read_text().replace(str(before.bin), "BIN"))
-        self.assertEqual([l.split()[1] for l in new.log.read_text().splitlines() if l.startswith("--refresh")], ["playwright", "rea"])
+        self.assertEqual([l.split()[1] for l in new.log.read_text().splitlines() if l.startswith("--refresh")], ["rea"])
 
     def test_unseeded_and_failed_refresh_leaves_jira_eager_and_hides_the_url(self):
         w = self.world()
@@ -359,7 +361,7 @@ class JiraTests(unittest.TestCase):
         self.assertIn("refresh of jira failed", r.stdout)
         self.assertNotIn(JIRA_URL, r.stdout + r.stderr)
         self.assertNotIn("SECRET-JIRA", r.stdout + r.stderr)
-        for name in ("playwright", "rea"):
+        for name in ("rea",):
             self.assertEqual(s[name]["command"], str(w.bin), name)
 
     def test_failed_refresh_with_an_existing_saved_list_still_wraps(self):
