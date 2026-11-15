@@ -11,7 +11,7 @@ from common import DROPIN, HOOK, scratch_dir, write_exe  # noqa: E402
 # Stand-ins for what omarchy's drop-ins do to HOOKS and MODULES before ours is sourced.
 OMARCHY_BASE = "HOOKS=(base systemd plymouth autodetect keyboard sd-vconsole block)\n"
 OMARCHY_ADD = "HOOKS+=(omarchy-mac-encrypt sd-encrypt filesystems fsck)\nHOOKS+=(aurora-vendor-order)\nMODULES+=(hid_apple)\n"
-MODINFO = '#!/bin/sh\ncase "$5" in r8152|r8153_ecm|cdc_ether|usbnet) echo /lib/modules/x/$5.ko ;; mii) echo "(builtin)" ;; *) exit 1 ;; esac\n'
+MODINFO = '#!/bin/sh\ncase "$5" in dwc3_apple|r8152|r8153_ecm|cdc_ether|usbnet) echo /lib/modules/x/$5.ko ;; mii) echo "(builtin)" ;; *) exit 1 ;; esac\n'
 
 
 class DropIn(unittest.TestCase):
@@ -38,7 +38,7 @@ class DropIn(unittest.TestCase):
         hooks, modules, _ = self.sourced(OMARCHY_BASE + OMARCHY_ADD, times=2)
         self.assertEqual(hooks, base + ["sd-ssh-unlock"])
         # Only modules modinfo finds as a file are added (mii is built in here, so it is left out); the others stay.
-        self.assertEqual(modules, ["hid_apple", "r8152", "r8153_ecm", "cdc_ether", "usbnet"])
+        self.assertEqual(modules, ["hid_apple", "dwc3_apple", "r8152", "r8153_ecm", "cdc_ether", "usbnet"])
 
     def test_a_busybox_initramfs_or_a_missing_dropbear_changes_nothing(self):
         busybox = "HOOKS=(base udev plymouth keyboard autodetect modconf block encrypt filesystems fsck)\nMODULES=()\n"

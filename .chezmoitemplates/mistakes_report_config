@@ -1,5 +1,6 @@
 {{- /* mistakes_report_config: the weekly repeated-mistakes report's settings as JSON {"enabled"}. Local chezmoi data mistakesReport:
   enabled   true or false. Default: true on the personal profile, false everywhere else (nothing is read on the work Mac).
+agentHost.disableTimers (agent_host_config) forces enabled to false whatever enabled says.
 Used by .chezmoiignore and the load script. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
 {{- $raw := dig "mistakesReport" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
@@ -12,6 +13,7 @@ Used by .chezmoiignore and the load script. Any other key or value fails the who
 {{- end -}}
 {{- $on := printf "%v" (eq (printf "%v" (dig "profile" "" .)) "personal") -}}
 {{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- if (includeTemplate "agent_host_config" . | fromJson).disableTimers -}}{{- $on = "false" -}}{{- end -}}
 {{- if not (has $on (list "true" "false")) -}}
 {{-   fail (printf "mistakesReport.enabled must be true or false, got %q" $on) -}}
 {{- end -}}

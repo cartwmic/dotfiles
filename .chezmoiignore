@@ -384,6 +384,15 @@ Library/Preferences/pnpm/**
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
+# Copy of desktop agent sessions to the agent-host pod (personal Linux; the timer, its service, the command and the loader). The work profile has no agent
+# host: its coordinator runs on the work Mac, so there is no pod to copy to.
+.config/systemd/user/agent-session-copy.service
+.config/systemd/user/agent-session-copy.timer
+.local/bin/agent-session-copy
+89_agent_session_copy_systemd.sh
+{{- end }}
+
+{{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
 # T3 Code as a systemd user service (personal Linux): the PATH drop-in for the unit T3 writes itself, and the script that installs T3 and that unit.
 .config/systemd/user/t3code.service.d
 .config/systemd/user/t3code.service.d/**
