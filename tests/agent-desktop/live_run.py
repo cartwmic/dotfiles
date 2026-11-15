@@ -456,7 +456,7 @@ def omarchy_rows(rec, dev):
         if {"rad-proof-clicks", "rad-proof-type"} <= set(windows()):
             return
         rec.sh("scratch dir", "rm -rf %s; mkdir -p %s" % (sc, sc))
-        clicks = ("foot --app-id rad-proof-clicks -e sh -c 'printf \"\\033[?1000h\\033[?1006h\"; exec cat -v > %s/clicks.txt' >/dev/null 2>&1 &" % sc)
+        clicks = ("foot --app-id rad-proof-clicks -e sh -c 'stty -icanon min 1 -echo; printf \"\\033[?1000h\\033[?1006h\"; exec cat -v > %s/clicks.txt' >/dev/null 2>&1 &" % sc)
         typing = "foot --app-id rad-proof-type -e sh -c 'exec cat > %s/typed.txt' >/dev/null 2>&1 &" % sc
         rec.sh("start the click target", clicks)
         rec.sh("start the typing target", typing)
