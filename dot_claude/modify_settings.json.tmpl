@@ -30,6 +30,9 @@
 # Off (no hook file, or termux), they are removed. A checkout that cannot print its entries (an older hook without the flag, output that
 # is not schema 1 JSON, or a run that fails here) keeps the entries it already has: nothing is added or removed, and one line goes to stderr.
 # An agent applies on the work Mac only with Michael's confirmation for that action.
+# agentHost.removeCoordinatorHook (personal profile only, local data, default false; .chezmoitemplates/agent_host_config): true puts the hook in the
+# Off state above without looking for a hook file or running it, so the entries are removed. It is the cutover switch for omarchy, once the
+# coordinator runs on the agent host. Flip it back to false and apply this file to bring the entries back. It changes only this file.
 # Pattern-kill guard (both desktop profiles): a PreToolUse hook on Bash and Monitor (both run shell commands) that refuses pkill and killall, so an agent's pattern kill
 # cannot hit another agent's jobs (the script is dot_local/share/agent-harness/hooks/refuse_pattern_kill.py, agent-harness README,
 # "Pattern-kill guard"). The entry is found by that script's path in its command: each apply drops it and appends the current one.
@@ -62,7 +65,10 @@ HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
 {{- end }}
 {{ $t3hook := printf "%s/src/t3-hook/hook.ts" $t3repo }}
 {{- $t3printed := "" }}
-{{- if and $t3repo (stat $t3hook) }}
+{{- if (includeTemplate "agent_host_config" . | fromJson).removeCoordinatorHook }}
+{{- /* agentHost.removeCoordinatorHook: the coordinator runs elsewhere (the agent host). T3_WANT=false is mode off: the printed entries are neither looked for nor run, and the installed ones are removed. */ -}}
+T3_WANT=false
+{{- else if and $t3repo (stat $t3hook) }}
 {{- /* Run at render time. A checkout that cannot print its entries gives "" here, and the modify script then keeps what is installed. */ -}}
 {{-   $t3printed = output "sh" "-c" `node --experimental-strip-types --disable-warning=ExperimentalWarning "$1" --print-settings-json </dev/null 2>/dev/null || true` "sh" $t3hook }}
 T3_WANT=true

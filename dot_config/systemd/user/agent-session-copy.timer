@@ -1,0 +1,12 @@
+# Starts agent-session-copy.service every 30 minutes, so Retro can read the sessions that still run on this desktop. Shipped disabled: the loader
+# (run_onchange_after_89_agent_session_copy_systemd.sh.tmpl) enables it only while chezmoi data agentHost.sessionCopy is true (the cutover switch).
+# OnBootSec is the first run: OnUnitActiveSec counts from the last run of the service, which a fresh timer has not had.
+[Unit]
+Description=Copy new agent session files to the agent-host pod every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+
+[Install]
+WantedBy=timers.target
