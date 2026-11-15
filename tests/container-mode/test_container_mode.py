@@ -32,7 +32,8 @@ CONFIG = "data:\n  profile: %s\n  container:\n    enabled: true\n%s"
 
 
 def chezmoi(config, home, *args, path=None):
-    env = {**os.environ, "HOME": str(home)}
+    env = {k: v for k, v in os.environ.items() if k != "OP_SERVICE_ACCOUNT_TOKEN"}   # no 1Password token: the hub key read fails and warns, as on a CI runner
+    env["HOME"] = str(home)
     if path is not None:
         env["PATH"] = path
     return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination", str(home), *args],
@@ -79,13 +80,16 @@ class ContainerHome(Scratch):
 
     def test_the_files_that_stay_verify_clean(self):
         r = chezmoi(self.config, self.home, "verify", "--exclude=scripts,externals")
-        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        for line in r.stderr.splitlines():   # the hub switch stays on in container mode; its key read cannot succeed here and only warns (f1)
+            self.assertTrue(line.startswith(("[modify_settings] WARN: could not read the hub management key", "[op_read_cached.sh]")), line)
         status = chezmoi(self.config, self.home, "status", "--exclude=externals").stdout.split("\n")
         self.assertEqual({line.split()[-1] for line in status if line}, SCRIPTS)   # exactly the kept scripts are still to run
 
     def test_the_four_seat_instances_exist_on_a_pod_where_t3_has_not_written_its_settings_yet(self):   # playbook 05f37568
         instances = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
         self.assertEqual({k for k in instances if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer"})
+        self.assertFalse({"pi", "pi-lead"} & set(instances))   # Pi is not in the pod's tool set
         for seat in ("lead", "builder", "planner", "reviewer"):
             self.assertIn("--settings %s/.claude/fleet/seat-%s.json" % (self.home, seat), instances["seat-" + seat]["config"]["launchArgs"])
             self.assertTrue((self.home / ".claude/fleet" / ("seat-%s.json" % seat)).exists())

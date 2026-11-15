@@ -20,6 +20,6 @@ mise install || { log ERROR "mise install failed"; exit 1; }
 log INFO "mise run install-claude"
 mise run install-claude || { log ERROR "the Claude Code install failed"; exit 1; }
 "$HOME/.local/user_scripts/install_t3.sh" || exit 1
-missing=$(mise ls --missing 2>/dev/null)   # stdout only: a mise warning is not a missing tool
+missing=$(mise ls --missing 2>&1)   # stderr too, as the c6 check reads it
 [ -z "$missing" ] || { log ERROR "mise tools are still missing after the install:"; printf '%s\n' "$missing" >&2; exit 1; }
 log INFO "done"

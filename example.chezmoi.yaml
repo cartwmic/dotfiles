@@ -18,6 +18,8 @@ data:
   #   enabled: true
   #   cliproxyUrl: http://cliproxyapi.cliproxyapi.svc.cluster.local   # default
   #   cliproxyKeyFile: /run/secrets/cliproxy/api-key                  # default; the file holds the key
+  # The pod also sets sshHosts.kgate (below), as in the homelab repo's k8s/agent-host configmap: container mode writes ~/.config/kgate/host from it, and kgate reaches the cluster over that ssh host.
+  #   sshHosts: {kgate: {address: "192.0.2.12", user: "<user>"}}   # a top-level key beside container, not under it
   # Coordinator daemon: one opt-in flag; apply sets up and starts it. See README "Instances".
   # instances:
   #   coordinator: {enabled: true}
