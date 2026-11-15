@@ -3,10 +3,20 @@
 
 usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab)
        ci-main-status [--tip | --merge-gate] --all
+       ci-main-status --merge-gate dotfiles --pr N     (the pin-fix exception, below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
+
+--pr N (only with --merge-gate dotfiles) is for the PR that fixes a red main: a red main passes the gate only when all
+three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or Loop Engine release
+turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's package.json and
+package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills tree). (3) PR N's own
+pull_request run succeeded and passed that step. Then the RED lines print as usual, followed by one "merge-gate:" line, and the
+exit is 0. Anything else exits 1 with the same stdout as without --pr; the reason goes to stderr. Without --pr nothing changes.
+This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
+`ci-main-status ... && pr-body-check ... && gh pr merge`.
 
 --tip is for deploy. Without it, green means "not red": the newest conclusive commit passed, and untested commits
 may sit on top while a run is going. That is right for the merge freeze. With --tip, exit 0 needs main's tip itself
@@ -66,6 +76,12 @@ LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-jour
 RUN_EVENTS = ("push", "workflow_dispatch")
 RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,url"
 RUN_LIMIT = 100
+# The pin-fix exception. The step name and the file lists are copies: the step is in .github/workflows/ci.yml, the files are
+# agent_kit_bump.py (KIT, PIN_FILES) and loop_engine_bump.py (MISE_CONFIG, SKILLS); tests/ci-main-status checks that they match.
+PINS_STEP = "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release"
+AGENT_KIT_PIN_FILES = {"dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json"}
+LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
+LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills/"
 WALK_CAP = 250
 
 
@@ -74,10 +90,11 @@ class Unreadable(Exception):
 
 
 class Record:
-    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None):
+    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None, run_id=None, attempt=None):
         self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass", "fail" or (journal) "flake"
         self.rerun_going = rerun_going   # the verdict is an earlier attempt, and a rerun of its run is going
         self.tree, self.line, self.issue = tree, line, issue   # journal only: the tip's tree, its line number, a flake's issue
+        self.run_id, self.attempt = run_id, attempt   # GitHub only: the run and the attempt that gave the verdict
 
     def by_tree(self, sha):
         """This pass, read as the verdict of another commit `sha` with the same tree."""
@@ -120,7 +137,7 @@ def run_record(r, found):
     conclusion, attempt = found
     label = f"run {r['databaseId']}" + ("" if attempt == r["attempt"] else f" attempt {attempt}")
     return Record(r["headSha"], "pass" if conclusion == "success" else "fail", label,
-                  rerun_going=r["status"] != "completed")
+                  rerun_going=r["status"] != "completed", run_id=r["databaseId"], attempt=attempt)
 
 
 def commit_verdict(repo, runs):
@@ -244,7 +261,65 @@ def first_parent_walk(repo, tip, verdicts, trees=None):
     return walked
 
 
-def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None):
+def pin_files_only(names):
+    """True when `names` (a PR's changed files) are exactly one bump's pin files: agent-kit's two, or the Loop Engine mise config plus skills."""
+    names = set(names)
+    if names == AGENT_KIT_PIN_FILES:
+        return True
+    return LOOP_ENGINE_MISE_CONFIG in names and all(n == LOOP_ENGINE_MISE_CONFIG or n.startswith(LOOP_ENGINE_SKILLS) for n in names)
+
+
+def not_ok(steps):
+    """The steps (or jobs) that neither passed nor were skipped."""
+    return [s for s in steps if s["conclusion"] not in ("success", "skipped")]
+
+
+def only_pins_step_failed(jobs):
+    """Exactly one job failed, and the release-pins step is the only step in it that did not pass or skip."""
+    bad_jobs = not_ok(jobs)
+    if len(bad_jobs) != 1 or bad_jobs[0]["conclusion"] != "failure":
+        return False
+    bad_steps = not_ok(bad_jobs[0]["steps"])
+    return len(bad_steps) == 1 and bad_steps[0]["conclusion"] == "failure" and bad_steps[0]["name"].startswith(PINS_STEP)
+
+
+def pin_fix_reason(spec, red, pr):
+    """Why PR `pr` may merge into a red main, or None. Prints the reason it may not to stderr. A gh failure is a refusal, not an error."""
+    repo = spec["github"]
+    try:
+        if red.run_id is None:
+            return refuse(pr, "the red verdict is not a GitHub run")
+        jobs = gh(["run", "view", str(red.run_id), "-R", repo, "--attempt", str(red.attempt), "--json", "jobs"])["jobs"]
+        if not only_pins_step_failed(jobs):
+            return refuse(pr, f"{red.label} failed on more than the release-pins step")
+        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "files,headRefOid"])
+        names = [f["path"] for f in pull["files"]]
+        if not pin_files_only(names):
+            return refuse(pr, f"its diff is not exactly the pin files: {', '.join(names) or 'nothing'}")
+        head = pull["headRefOid"]
+        own = [r for r in gh(["run", "list", "-R", repo, "--workflow", spec["workflow"], "--commit", head, "--event", "pull_request",
+                              "--limit", "20", "--json", "databaseId,headSha,status,conclusion"]) if r["headSha"] == head]
+        if not own:
+            return refuse(pr, f"no pull_request run of {head[:7]}")
+        newest = max(own, key=lambda r: r["databaseId"])   # run ids order runs of one commit
+        if newest["status"] != "completed" or newest["conclusion"] != "success":
+            return refuse(pr, f"its own run {newest['databaseId']} is {newest['conclusion'] or newest['status']}, not success")
+        own_jobs = gh(["run", "view", str(newest["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]
+        steps = [s for j in own_jobs for s in j["steps"] if s["name"].startswith(PINS_STEP)]
+        if len(steps) != 1 or steps[0]["conclusion"] != "success":
+            return refuse(pr, f"its own run {newest['databaseId']} did not pass the release-pins step")
+        return (f"  merge-gate: PR #{pr} is the pin fix for this red: only the release-pins step failed, the PR changes only the pin files, "
+                f"and its own run {newest['databaseId']} passed that step. Allowed.")
+    except (Unreadable, KeyError, TypeError) as e:
+        return refuse(pr, f"could not read it ({e})")
+
+
+def refuse(pr, why):
+    print(f"ci-main-status: --pr {pr} is not the pin fix for this red: {why}", file=sys.stderr)
+    return None
+
+
+def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, spec=None, pr=None):
     """One repo's state. Returns (exit code, output lines). Used by every repo kind.
 
     tip_only (--tip): green below untested commits is 2 even while a run is going.
@@ -271,16 +346,21 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None):
     if newest.verdict == "fail":
         note = "  (a rerun is going)" if newest.rerun_going else ("  (a newer run is going)" if going else "")
         lines = [f"{name}: RED  {newest.label} failed on {sha[:7]}{note}"]
+
+        def red():
+            allowed = pin_fix_reason(spec, newest, pr) if pr is not None else None
+            return (0, lines + [allowed]) if allowed else (1, lines)
+
         greens = [j for j in hits if walked[j][2].verdict == "pass"]
         if not greens:
             lines.append("  no earlier green run; red range not computed")
-            return 1, lines
+            return red()
         j = greens[0]
         green_sha, _, green = walked[j]
         lines.append(f"  last green: {green_sha[:7]} ({green.label})")
         lines.append("  first-parent commits last green..red tip:")
         lines += [f"    {s[:7]} {subject}" for s, subject, _ in walked[i:j]]
-        return 1, lines
+        return red()
 
     untested = i
     if untested == 0:
@@ -296,7 +376,7 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None):
                f"and no run is going. Start one."]
 
 
-def check(name, tip_only=False):
+def check(name, tip_only=False, pr=None):
     spec = REPOS[name]
     if spec is None:
         return 0, [f"{name}: n/a (gate is per-PR only)"]
@@ -305,16 +385,16 @@ def check(name, tip_only=False):
     else:
         verdicts, going = github_verdicts(spec)
     trees = passing_trees(verdicts) if "journal" in spec else None
-    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only, trees)
+    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only, trees, spec, pr)
     if "journal" in spec and not verdicts:
         lines.insert(0, f"  (no journal record at {JOURNAL})")
     return code, lines
 
 
-def describe(name, tip_only=False):
+def describe(name, tip_only=False, pr=None):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     try:
-        return check(name, tip_only)
+        return check(name, tip_only, pr)
     except Unreadable as e:
         return 1, [f"{name}: ERROR  cannot read state: {e}"]
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
@@ -326,6 +406,14 @@ def main(argv):
     tip_only = "--tip" in argv
     merge_gate = "--merge-gate" in argv
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
+    pr = None
+    if "--pr" in argv:
+        k = argv.index("--pr")
+        value = argv[k + 1] if k + 1 < len(argv) else ""
+        pr = int(value) if value.isdigit() and int(value) > 0 else 0
+        del argv[k:k + 2]
+        if not pr or not merge_gate or tip_only or argv != ["dotfiles"]:
+            argv = []   # --pr needs a PR number, --merge-gate and the dotfiles repo alone: usage error
     if tip_only and merge_gate:
         argv = []   # the two flags disagree about UNTESTED: usage error
     if argv == ["--all"]:
@@ -333,12 +421,12 @@ def main(argv):
     elif len(argv) == 1 and argv[0] in REPOS:
         names = argv
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate dotfiles --pr N", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
     for name in names:
-        code, lines = describe(name, tip_only)
+        code, lines = describe(name, tip_only, pr)
         print("\n".join(lines))
         if rank[code] > rank[worst]:
             worst = code

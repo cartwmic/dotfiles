@@ -205,6 +205,8 @@ class Merge(unittest.TestCase):
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
+        # The pin-fix exception (issue 429) adds `--pr N` to the gate; the hook reads the command name, so this still merges.
+        self.assertIsNone(check("ci-main-status --merge-gate dotfiles --pr 5 && pr-body-check dotfiles 5 && gh pr merge 5 --squash -R cartwmic/dotfiles"))
         self.assertIsNone(check("pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && gh pr merge 5 --squash -R cartwmic/dotfiles"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")

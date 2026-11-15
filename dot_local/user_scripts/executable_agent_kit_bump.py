@@ -11,7 +11,8 @@ The steps, and the step a stop names (the same shape as loop_engine_bump.py):
   publish  fresh worktree from origin/main: set the exact pin in package.json and regenerate package-lock.json; commit, push and
            open the PR. Nothing to do when origin/main already pins X.Y.Z.
   checks   wait for the PR's checks; a red one stops it with the PR left open
-  gates    ci-main-status --merge-gate dotfiles, then pr-body-check dotfiles <pr>; either one stops the merge
+  gates    ci-main-status --merge-gate dotfiles --pr <pr>, then pr-body-check dotfiles <pr>; either one stops the merge.
+           --pr lets this pin-fix PR merge into a main that is red only because this pin lags (ci-main-status docstring)
   merge    gh pr merge --squash --match-head-commit <the head read before the checks>; read the merge SHA
   drift    the PR changes only the two pin files; stop on any live change the PR did not make; print the diff of the targets
   apply    chezmoi apply of exactly those two files (scripts excluded), then the install: the 65 install template rendered
@@ -251,13 +252,13 @@ def wait_for_checks(source, pr, poll, log):
 
 def gates(source, pr, log):
     """The merge gates the playbook names. A red main stops the merge, and so does a PR body that fails the body check."""
-    main = run(["ci-main-status", "--merge-gate", "dotfiles"], "gates", cwd=source, check=False)
+    main = run(["ci-main-status", "--merge-gate", "dotfiles", "--pr", str(pr["number"])], "gates", cwd=source, check=False)
     if main.returncode != 0:
-        raise Stop("gates", "ci-main-status --merge-gate dotfiles exited %d: %s" % (main.returncode, (main.stdout or main.stderr).strip()))
+        raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, (main.stdout or main.stderr).strip()))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
         raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, (body.stdout or body.stderr).strip()))
-    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles and pr-body-check dotfiles %d passed" % pr["number"])
+    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed" % (pr["number"], pr["number"]))
 
 
 def merge(source, pr, log):
