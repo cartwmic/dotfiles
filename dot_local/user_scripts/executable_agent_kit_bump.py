@@ -63,6 +63,7 @@ PRINCIPLES = [
     ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the merge runs under the standing dotfiles grant (playbook rule 7c57de5a)."),
     ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/agent-kit-bump/log.jsonl."),
     ("Fast proof", "n/a", "A pin bump runs no journey; the proof is the PR's CI run."),
+    ("Built to last", "pass", "The script changes only the pins; nothing it replaces is left behind."),
 ]
 
 

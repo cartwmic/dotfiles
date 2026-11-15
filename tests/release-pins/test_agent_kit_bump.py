@@ -218,7 +218,7 @@ class AgentKitBumpTests(unittest.TestCase):
 
         prs = self.prs()
         self.assertEqual(len(prs), 1)
-        self.assertIn("| 15 | Fast proof |", prs[0]["body"])
+        self.assertIn("| 16 | Built to last |", prs[0]["body"])
         self.assertRegex(prs[0]["body"], r"(?m)^Decisions: none material$")
 
         # Checks, then the two gates in order, then the squash merge, which must name the head the checks ran on.
@@ -369,7 +369,7 @@ class BodyTests(unittest.TestCase):
         spec.loader.exec_module(module)
         body = module.pr_body(NEW)
         rows = {int(m.group(1)) for m in re.finditer(r"^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", body, re.M)}
-        self.assertEqual(rows, set(range(1, 16)))
+        self.assertEqual(rows, set(range(1, 17)))
         self.assertRegex(body, r"(?m)^Decisions: none material$")
         self.assertEqual(re.findall(r"(?<![\w-])(?:D-\d+|D\d+|MK-\d+|T\d+)(?![\w-])", body), [])
 

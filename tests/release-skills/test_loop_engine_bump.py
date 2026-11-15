@@ -246,7 +246,7 @@ class BumpTests(Fixture):
         pr = self.load()["prs"][0]
         self.assertEqual(pr["head"], "loop-engine-v1.0.0")
         self.assertIn("Profiles: both.", pr["body"])
-        self.assertIn("| 15 | Fast proof |", pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
+        self.assertIn("| 16 | Built to last |", pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
         self.assertRegex(pr["body"], r"(?m)^Decisions: none material$")  # rule ccc6c94b
         sha = pr["mergeCommit"]["oid"]
         changed = self.sh("git", "--git-dir", self.origin, "diff", "--name-only", sha + "^", sha).split()
