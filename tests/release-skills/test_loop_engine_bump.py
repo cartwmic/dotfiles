@@ -425,7 +425,7 @@ class BumpTests(Fixture):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         lines = self.ordered_calls()
         positions = [next(i for i, line in enumerate(lines) if line.startswith(p))
-                     for p in ("gh pr checks", "ci-main-status --merge-gate dotfiles", "pr-body-check dotfiles 100", "gh pr merge")]
+                     for p in ("gh pr checks", "ci-main-status --merge-gate dotfiles --pr 100", "pr-body-check dotfiles 100", "gh pr merge")]
         self.assertEqual(positions, sorted(positions), lines)
         merge = self.gh_calls("merge")[0]
         self.assertEqual(merge[merge.index("--match-head-commit") + 1], self.origin_head())
@@ -435,7 +435,7 @@ class BumpTests(Fixture):
         before = self.checkout_head()
         self.refuse = "ci-main-status"
         result = self.bump()
-        self.assert_stopped(result, "gates", "ci-main-status --merge-gate dotfiles exited 1")
+        self.assert_stopped(result, "gates", "ci-main-status --merge-gate dotfiles --pr 100 exited 1")
         self.assertEqual(self.gh_calls("merge"), [])
         self.assertEqual(self.load()["prs"][0]["state"], "OPEN")
         self.assert_nothing_applied()

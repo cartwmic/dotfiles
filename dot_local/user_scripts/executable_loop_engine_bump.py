@@ -11,7 +11,8 @@ anything. The steps, and the step a stop names:
   import   fresh worktree from origin/main; import_release_skills.py import TAG --pins --apply; orphans stop it
   publish  commit on loop-engine-vX.Y.Z, push, open the PR; the worktree is removed
   checks   wait for the PR's checks; a red one stops it with the PR left open
-  gates    ci-main-status --merge-gate dotfiles (a red main stops it) and pr-body-check dotfiles N (a bad body stops it)
+  gates    ci-main-status --merge-gate dotfiles --pr N (a red main stops it, unless this pin-fix PR is what turns it green)
+           and pr-body-check dotfiles N (a bad body stops it)
   merge    squash-merge, only while the head is still the one the checks ran on; read the merge SHA
   source   fast-forward the chezmoi source checkout to the merge SHA (ff-only); if it cannot, stop before apply, so a
            later full apply cannot restore the old pins
@@ -239,13 +240,13 @@ def wait_for_checks(source, pr, poll, log):
 
 def gates(source, pr, log):
     """The merge gates the playbook names. A red main stops the merge, and so does a PR body that fails the body check."""
-    main = run(["ci-main-status", "--merge-gate", "dotfiles"], "gates", cwd=source, check=False)
+    main = run(["ci-main-status", "--merge-gate", "dotfiles", "--pr", str(pr["number"])], "gates", cwd=source, check=False)
     if main.returncode != 0:
-        raise Stop("gates", "ci-main-status --merge-gate dotfiles exited %d: %s" % (main.returncode, (main.stdout or main.stderr).strip()))
+        raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, (main.stdout or main.stderr).strip()))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
         raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, (body.stdout or body.stderr).strip()))
-    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles and pr-body-check dotfiles %d passed" % pr["number"])
+    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed" % (pr["number"], pr["number"]))
 
 
 def merge(source, pr, log):

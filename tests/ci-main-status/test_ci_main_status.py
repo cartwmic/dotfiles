@@ -33,7 +33,24 @@ GH_FAKE = textwrap.dedent('''\
         wf = args[args.index("--workflow") + 1]
         if repo in fixture.get("fail", []):
             fail("HTTP 502 from fake api")
-        print(json.dumps(fixture["runs"].get(repo + "|" + wf, [])))
+        rows = fixture["runs"].get(repo + "|" + wf, [])
+        if "--commit" in args:   # the real filters: --commit SHA, --event NAME
+            rows = [r for r in rows if r["headSha"] == args[args.index("--commit") + 1]]
+        if "--event" in args:
+            rows = [r for r in rows if r["event"] == args[args.index("--event") + 1]]
+        print(json.dumps(rows))
+    elif args[:2] == ["run", "view"]:
+        jobs = fixture.get("jobs", {}).get(args[2])
+        if jobs is None:
+            fail("fake gh: no jobs fixture for run " + args[2])
+        print(json.dumps({"jobs": jobs}))
+    elif args[:2] == ["pr", "view"]:
+        if args[args.index("-R") + 1] in fixture.get("fail_pr", []):
+            fail("HTTP 502 from fake api")
+        pull = fixture.get("prs", {}).get(args[2])
+        if pull is None:
+            fail("fake gh: no PR fixture " + args[2])
+        print(json.dumps(pull))
     elif args[0] == "api":
         path = args[1]
         repo = path.split("/")[1] + "/" + path.split("/")[2]
@@ -109,6 +126,9 @@ class Fixture(unittest.TestCase):
         self.runs = {}
         self.failing = []
         self.attempts = {}                           # run id -> {attempt number -> attempts API row}
+        self.jobs = {}                               # run id -> the jobs `gh run view --json jobs` returns
+        self.prs = {}                                # PR number -> `gh pr view --json files,headRefOid`
+        self.failing_pr = []                         # repos whose `gh pr view` fails
         self.journal = t / "journal.jsonl"           # absent unless a test writes it
         self.lock = t / "lock.d"
         self.log = t / "gh.log"
@@ -126,7 +146,8 @@ class Fixture(unittest.TestCase):
     def write_fixture(self):
         repos = {r: str(self.src) for r in ("cartwmic/dotfiles", "cartwmic/loop-engine", "cartwmic/agent-kit", "cartwmic/coordinator")}
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
-            {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts}))
+            {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts,
+             "jobs": self.jobs, "prs": self.prs, "fail_pr": self.failing_pr}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -484,6 +505,185 @@ class MergeGateFlag(Fixture):
         self.dotfiles_runs([run(1, self.c2, "success")])
         self.assertEqual(self.status("dotfiles")[0], 2)
         self.assertEqual(self.status("--tip", "dotfiles")[0], 2)
+
+
+PINS_STEP_FULL = "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release (playbook 7c57de5a)"
+KIT_FILES = ["dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json"]
+LE_FILES = ["dot_config/mise/config.toml", "dot_local/share/agent-harness/canonical/skills/loop-engine/SKILL.md"]
+PR_HEAD = "81b63016555d0346d97e03934ced3abe0e7dc93f"
+
+
+def steps(**conclusions):
+    """A `tests` job's steps. Keys: pins, linux (the step after it), other (an earlier step)."""
+    return [{"name": "Set up job", "conclusion": "success"},
+            {"name": "Some other step", "conclusion": conclusions.get("other", "success")},
+            {"name": PINS_STEP_FULL, "conclusion": conclusions.get("pins", "success")},
+            {"name": "Linux checks: scripts/ci-linux.sh", "conclusion": conclusions.get("linux", "success")}]
+
+
+class PinFixException(Fixture):
+    """--merge-gate dotfiles --pr N: the fix PR for a red release-pins step may merge into that red main (issue 429).
+
+    The shape is the 2026-11-15 case: main's tip failed only the release-pins step, and the bump PR's own run passed it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.set_world()
+
+    def set_world(self, red_steps=None, red_extra_jobs=(), files=KIT_FILES, own_run=None, own_steps=None):
+        """Run 2 on main's tip c3 is red; PR 7's head has its own pull_request run 3."""
+        own_run = own_run or run(3, PR_HEAD, "success", event="pull_request", age=7)
+        self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1), own_run])
+        red_steps = red_steps or steps(pins="failure", linux="skipped")
+        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": red_steps},
+                           {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
+                     str(own_run["databaseId"]): [{"name": "tests", "conclusion": "success", "steps": own_steps or steps()},
+                                                  {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
+        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": PR_HEAD}}
+
+    def gate(self, *extra):
+        self.write_fixture()
+        r = subprocess.run([sys.executable, str(SCRIPT), "--merge-gate", "dotfiles", *extra], capture_output=True, text=True,
+                           env=self.env, timeout=120)
+        return r.returncode, r.stdout, r.stderr
+
+    def assert_stays_red(self, why, *args):
+        """The same exit code and stdout as the gate without --pr; the reason goes to stderr."""
+        rc0, out0, _ = self.gate()
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate(*args or ("--pr", "7"))
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertIn(why, err)
+
+    def test_pass_case_only_pins_step_failed_pin_files_only_and_the_prs_own_run_passed_it(self):
+        rc0, out0, _ = self.gate()
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(out.startswith(out0), "the RED lines print as before:\n" + out)
+        self.assertIn("merge-gate: PR #7 is the pin fix for this red", out)
+        self.assertIn("its own run 3 passed that step", out)
+        self.assertEqual(err, "")
+        calls = self.log.read_text().splitlines()
+        self.assertIn("run view 2 -R cartwmic/dotfiles --attempt 1 --json jobs", calls, "the red run's own attempt is the one read")
+        self.assertTrue(any(c.startswith("run list") and f"--commit {PR_HEAD}" in c and "--event pull_request" in c for c in calls))
+
+    def test_pass_case_for_a_loop_engine_bump_the_mise_config_and_skills(self):
+        self.set_world(files=LE_FILES)
+        self.assertEqual(self.gate("--pr", "7")[0], 0)
+
+    def test_no_pr_given_stays_red(self):
+        rc, out, err = self.gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+        self.assertNotIn("merge-gate:", out)
+        self.assertFalse([c for c in self.log.read_text().splitlines() if c.startswith(("pr view", "run view"))],
+                         "without --pr nothing about a PR or a run's steps is read")
+
+    def test_another_step_failed_in_the_red_run_stays_red(self):
+        self.set_world(red_steps=steps(other="failure", pins="skipped"))
+        self.assert_stays_red("failed on more than the release-pins step")
+
+    def test_the_pins_step_and_another_step_failed_stays_red(self):
+        self.set_world(red_steps=steps(pins="failure", linux="failure"))
+        self.assert_stays_red("failed on more than the release-pins step")
+
+    def test_another_job_failed_in_the_red_run_stays_red(self):
+        self.set_world(red_extra_jobs=[{"name": "mise-tests", "conclusion": "failure", "steps": steps(linux="failure")}])
+        self.assert_stays_red("failed on more than the release-pins step")
+
+    def test_a_cancelled_job_in_the_red_run_stays_red(self):
+        self.set_world(red_extra_jobs=[{"name": "mise-tests", "conclusion": "cancelled", "steps": []}])
+        self.assert_stays_red("failed on more than the release-pins step")
+
+    def test_an_extra_file_in_the_diff_stays_red(self):
+        self.set_world(files=KIT_FILES + ["README.md"])
+        self.assert_stays_red("its diff is not exactly the pin files: " + ", ".join(KIT_FILES + ["README.md"]))
+
+    def test_a_file_list_shorter_than_the_changed_file_count_stays_red(self):
+        self.set_world()
+        self.prs["7"]["changedFiles"] = 150   # gh returned the pin files but not the other 148
+        self.assert_stays_red("gh listed 2 of its 150 changed files")
+
+    def test_half_the_agent_kit_pin_files_stays_red(self):
+        self.set_world(files=KIT_FILES[:1])
+        self.assert_stays_red("its diff is not exactly the pin files")
+
+    def test_loop_engine_skills_without_the_mise_config_stays_red(self):
+        self.set_world(files=LE_FILES[1:])
+        self.assert_stays_red("its diff is not exactly the pin files")
+
+    def test_a_loop_engine_diff_with_a_file_outside_the_skills_stays_red(self):
+        self.set_world(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"])
+        self.assert_stays_red("its diff is not exactly the pin files")
+
+    def test_the_prs_own_run_failing_the_pins_step_stays_red(self):
+        self.set_world(own_run=run(3, PR_HEAD, "failure", event="pull_request", age=7), own_steps=steps(pins="failure", linux="skipped"))
+        self.assert_stays_red("its own run 3 is failure, not success")
+
+    def test_the_prs_own_run_passing_the_step_but_failing_the_run_stays_red(self):
+        self.set_world(own_run=run(3, PR_HEAD, "failure", event="pull_request", age=7), own_steps=steps(linux="failure"))
+        self.assert_stays_red("its own run 3 is failure, not success")
+
+    def test_the_prs_own_run_not_finished_stays_red(self):
+        self.set_world(own_run=run(3, PR_HEAD, status="in_progress", event="pull_request", age=7))
+        self.assert_stays_red("its own run 3 is in_progress, not success")
+
+    def test_the_prs_own_run_without_the_pins_step_stays_red(self):
+        self.set_world(own_steps=[s for s in steps() if not s["name"].startswith("Release pins")])
+        self.assert_stays_red("did not pass the release-pins step")
+
+    def test_a_run_on_another_commit_is_not_the_prs_own_run(self):
+        self.set_world(own_run=run(3, "f" * 40, "success", event="pull_request", age=7))
+        self.assert_stays_red("no pull_request run of 81b6301")
+
+    def test_a_push_run_on_the_pr_head_is_not_the_prs_own_run(self):
+        self.set_world(own_run=run(3, PR_HEAD, "success", event="push", age=7))
+        self.assert_stays_red("no pull_request run of 81b6301")
+
+    def test_a_gh_failure_in_the_check_stays_red_with_the_same_stdout(self):
+        self.set_world()
+        self.failing_pr = ["cartwmic/dotfiles"]
+        self.assert_stays_red("could not read it")
+
+    def test_a_green_main_with_pr_prints_what_it_prints_without_it(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.assertEqual(self.gate("--pr", "7")[:2], self.gate()[:2])
+
+    def test_pr_needs_a_number_merge_gate_and_dotfiles_alone(self):
+        self.set_world()
+        script = [sys.executable, str(SCRIPT)]
+        for args in (["--merge-gate", "dotfiles", "--pr"], ["--merge-gate", "dotfiles", "--pr", "x"], ["--merge-gate", "dotfiles", "--pr", "0"],
+                     ["dotfiles", "--pr", "7"], ["--tip", "--merge-gate", "dotfiles", "--pr", "7"], ["--merge-gate", "--all", "--pr", "7"],
+                     ["--merge-gate", "loop-engine", "--pr", "7"], ["--merge-gate", "dotfiles", "--pr", "7", "--pr", "8"],
+                     ["--merge-gate", "dotfiles", "--pr=7"]):
+            with self.subTest(args=args):
+                r = subprocess.run(script + args, capture_output=True, text=True, env=self.env, timeout=120)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn("usage", r.stderr)
+
+
+class PinFixCopiesMatchTheirSources(unittest.TestCase):
+    """The exception copies the pin step's name and the bump scripts' file lists; they must not drift apart."""
+
+    @staticmethod
+    def load(name, path):
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader(name, str(REPO / path))
+        spec = importlib.util.spec_from_loader(name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    def test_file_lists_and_step_name(self):
+        gate = self.load("gate_under_test", "dot_local/bin/executable_ci-main-status")
+        kit = self.load("agent_kit_bump_under_test", "dot_local/user_scripts/executable_agent_kit_bump.py")
+        engine = self.load("loop_engine_bump_under_test", "dot_local/user_scripts/executable_loop_engine_bump.py")
+        self.assertEqual(gate.AGENT_KIT_PIN_FILES, {f"{kit.KIT}/{name}" for name in kit.PIN_FILES})
+        self.assertEqual(gate.LOOP_ENGINE_MISE_CONFIG, engine.MISE_CONFIG)
+        self.assertEqual(gate.LOOP_ENGINE_SKILLS, engine.SKILLS + "/")
+        self.assertIn(f"name: \"{gate.PINS_STEP} (playbook 7c57de5a)\"", (REPO / ".github/workflows/ci.yml").read_text())
 
 
 class AllAndHomelab(Fixture):

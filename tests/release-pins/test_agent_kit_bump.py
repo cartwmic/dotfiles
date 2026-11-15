@@ -227,6 +227,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertLess(index["gh pr checks"], index["ci-main-status"])
         self.assertLess(index["ci-main-status"], index["pr-body-check"])
         self.assertLess(index["pr-body-check"], index["gh pr merge"])
+        self.assertEqual(calls[index["ci-main-status"]], "ci-main-status --merge-gate dotfiles --pr 100")
         self.assertEqual(calls[index["pr-body-check"]], "pr-body-check dotfiles 100")
         head = self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/agent-kit-v" + NEW).strip()
         self.assertIn("--match-head-commit " + head, calls[index["gh pr merge"]])
