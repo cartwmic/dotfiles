@@ -1,0 +1,20 @@
+import sys, json, time; sys.path.insert(0, "/home/cartwmic/.cache/cua-driver-trial/scripts")
+import cua
+def show(label, r): print(label, "->", json.dumps({k: r.get(k) for k in ["route","effect","code","delivery","_exit","_ms","reason","detail","summary"] if r.get(k) is not None})[:330])
+w = cua.windows(); f = w["foot"]; o = w["omacalc"]; c = w["cmake-gui"]
+LBL = cua.L("base")
+show("J3 bring_to_front foot", cua.call("bring_to_front", {"pid": f["pid"], "window_id": f["window_id"]}))
+print("   active:", json.loads(cua.hypr("-j","activewindow")).get("class"))
+cua.call("get_desktop_state", {"session": LBL, "screenshot_out_file": "/tmp/bd28-cua/b.png"})
+show("J4 move pointer 500,400", cua.call("move_cursor", {"target":{"kind":"desktop","display_id":"primary"},"x":500,"y":400}, LBL))
+print("   cursorpos:", cua.hypr("cursorpos"))
+cua.snap(o["pid"], o["window_id"], LBL, shot=True, shot_file="/tmp/bd28-cua/b2.png")
+s = cua.snap(o["pid"], o["window_id"], LBL, shot=True, shot_file="/tmp/bd28-cua/b2.png"); tok = {e["label"]: e["element_token"] for e in cua.els(s) if e.get("label")}
+show("J5 left click ref (omacalc 5)", cua.call("click", {"pid": o["pid"], "window_id": o["window_id"], "element_token": tok["5"]}, LBL))
+show("J5 left click xy bg", cua.call("click", {"pid": o["pid"], "window_id": o["window_id"], "x": 245, "y": 414}, LBL))
+show("J5 right click xy foreground (omacalc)", cua.call("right_click", {"pid": o["pid"], "window_id": o["window_id"], "x": 245, "y": 414, "delivery_mode":"foreground"}, LBL))
+show("J6 type foot bg", cua.call("type_text", {"pid": f["pid"], "window_id": f["window_id"], "text": "x"}, LBL))
+show("J6 type foot fg", cua.call("type_text", {"pid": f["pid"], "window_id": f["window_id"], "text": "y", "delivery_mode":"foreground"}, LBL))
+show("J7 hotkey ctrl+u foot fg", cua.call("hotkey", {"pid": f["pid"], "window_id": f["window_id"], "keys":["ctrl","u"], "delivery_mode":"foreground"}, LBL))
+show("J8 cursor pos", cua.call("get_cursor_position", {}))
+cua.call("end_session", {"session": LBL})
