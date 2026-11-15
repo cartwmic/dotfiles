@@ -152,11 +152,27 @@ def elements(env):
     return out
 
 
+def native_values(env):
+    """Values a control carries in its native id, e.g. the Mac Calculator display `StandardInputView;value:408`.
+    After an equals the display's text child is gone and the number is only here."""
+    out = []
+
+    def one(n):
+        nid = n.get("native_id")
+        v = nid.get("value") if isinstance(nid, dict) else None
+        m = re.search(r";value:(.*)$", v) if isinstance(v, str) else None
+        if m:
+            out.append(m.group(1))
+
+    walk(((env or {}).get("data") or {}).get("tree"), one)
+    return out
+
+
 def texts(env):
     out = []
     tree = ((env or {}).get("data") or {}).get("tree")
     walk(tree, lambda n: out.extend(str(n[k]) for k in ("name", "value") if n.get(k) is not None))
-    return out
+    return out + native_values(env)
 
 
 def find_box(obj):
@@ -680,6 +696,23 @@ def desktop_rows(rec, dev):
         if win:
             dev.s1("$sh = New-Object -ComObject Shell.Application; foreach ($w in @($sh.Windows())) { if ($w.LocationName -eq 'This PC') { $w.Quit() } }")
 
+    def open_finder():
+        """The Finder only has the desktop window (no accessibility tree) until a folder window is open. Open the home folder
+        if no Finder window can be read yet. Returns True when this call opened one."""
+        def readable():
+            r = rec.ui("Finder snapshot", "snapshot", "--app", "Finder", "-i", "--compact", save=False)
+            return r.exit == 0 and r.env and r.env.get("ok") is not False
+        if readable():
+            return False
+        dev.sh("open ~")
+        wait_for("a readable Finder window", readable, timeout=30)
+        return True
+
+    def close_finder():
+        """Close the folder window open_finder made: Cmd+W in Finder. Never quit Finder."""
+        rec.ad("focus Finder", "focus", "Finder")
+        rec.ad("close the Finder window", "key", "w", "cmd")
+
     def close_editor():
         if win:
             close_explorer()
@@ -710,6 +743,8 @@ def desktop_rows(rec, dev):
                 return m.group(1).strip()
         vals = []
         walk(((env or {}).get("data") or {}).get("tree"), lambda n: vals.append(str(n["value"])) if n.get("role") == "statictext" and n.get("value") is not None else None)
+        if not vals:
+            vals = native_values(env)
         return vals[0].strip() if vals else ""
 
     def ensure_apps(rec):
@@ -810,8 +845,14 @@ def desktop_rows(rec, dev):
         wait_for("the editor in front", lambda: hk["editor"].lower() in foreground().lower(), timeout=20)
         r = rec.ad("type", "type", "hello agent-desktop")
         expect(r.exit == 0, "type exited %d: %s" % (r.exit, r.out.strip()[:200]))
-        got = wait_for("the typed text in the editor", lambda: (lambda t: t if "hello agent-desktop" in t else None)(editor_text()), timeout=15)
+        # TextEdit capitalises the first letter of a sentence, so 'hello' reads back 'Hello': compare without case
+        got = wait_for("the typed text in the editor", lambda: (lambda t: t if "hello agent-desktop" in t.lower() else None)(editor_text()), timeout=15)
         rec.note("text read back from the editor", got)
+        if not win:  # capital letters only arrive if Shift was held: they must come back as capitals
+            r = rec.ad("type capitals", "type", " ABC 123")
+            expect(r.exit == 0, "type exited %d: %s" % (r.exit, r.out.strip()[:200]))
+            got = wait_for("the typed capitals in the editor", lambda: (lambda t: t if "ABC 123" in t else None)(editor_text()), timeout=15)
+            rec.note("text read back after typing capitals", got)
 
     def pad_keys():
         return dev.ps("Get-Content -Raw ($env:LOCALAPPDATA + '\\agent-desktop\\proof\\keys.txt')").out
@@ -820,6 +861,9 @@ def desktop_rows(rec, dev):
         ensure_apps(rec)
         rec.ad("focus editor", "focus", hk["editor"])
         wait_for("the editor in front", lambda: hk["editor"].lower() in foreground().lower(), timeout=20)
+        before = editor_text()
+        expect(before.strip(), "the editor has no text before select-all, so emptying it proves nothing (did J6 type nothing?)")
+        rec.note("text in the editor before select-all", before)
         key, mods = hk["select_all"]
         r = rec.ad("select all", "key", key, *mods)
         expect(r.exit == 0, "key %s %s exited %d: %s" % (key, " ".join(mods), r.exit, r.out.strip()[:200]))
@@ -840,14 +884,21 @@ def desktop_rows(rec, dev):
     def n1(rec):
         seen = []
         ensure_apps(rec)
+        opened = False
         if win:
             open_explorer()
-        for label, extra, hint in hk["n1_apps"]:
-            r = snapshot_app("snapshot " + label, extra, hint)
-            expect(r.exit == 0 and r.env and r.env.get("ok") is not False, "snapshot of %s failed (exit %d): %s" % (label, r.exit, r.out.strip()[:200]))
-            labelled = [n for n in elements(r.env) if n.get("name")]
-            expect(len(labelled) >= 5, "%s: only %d labelled controls" % (label, len(labelled)))
-            seen.append("%s=%d" % (label, len(labelled)))
+        else:
+            opened = open_finder()
+        try:
+            for label, extra, hint in hk["n1_apps"]:
+                r = snapshot_app("snapshot " + label, extra, hint)
+                expect(r.exit == 0 and r.env and r.env.get("ok") is not False, "snapshot of %s failed (exit %d): %s" % (label, r.exit, r.out.strip()[:200]))
+                labelled = [n for n in elements(r.env) if n.get("name")]
+                expect(len(labelled) >= 5, "%s: only %d labelled controls" % (label, len(labelled)))
+                seen.append("%s=%d" % (label, len(labelled)))
+        finally:
+            if opened:
+                close_finder()
 
     def calc_sequence(rec):
         env = calc_snapshot()
