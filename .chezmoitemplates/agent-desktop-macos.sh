@@ -16,18 +16,27 @@
 #   agent-desktop ui ARGS...                        run Vercel's agent-desktop with ARGS; its output and exit code come back unchanged
 #
 # Built on what macOS ships: `screencapture` for shot, and `osascript` running JavaScript for Automation (JXA) for the rest: Core
-# Graphics for the window list, the pointer and clicks, System Events for focus, typing and keys. Every osascript call is
+# Graphics for the window list, the pointer, clicks, typing and keys, AppKit (NSRunningApplication) for focus. Nothing talks to
+# another app through Apple events, so no Automation permission is needed. Every osascript call is
 #   osascript -l JavaScript -e "$JXA" ACTION [ARG...]
 # so the arguments reach the JavaScript as data and are never put into code. Vercel's program is started only by `ui`.
 #
-# Permissions. An ssh session runs under /usr/libexec/sshd-keygen-wrapper, and that program needs Screen Recording (shot, windows)
-# and Accessibility (focus, move, click, type, key). macOS drops posted input and blanks window titles silently when they are
-# missing, so those actions first ask the system whether the grant is there (CGPreflightScreenCaptureAccess, AXIsProcessTrusted;
-# neither raises a prompt) and exit 1 with a message that names the permission and docs/agent-desktop.md. `cursor` needs neither.
+# Permissions. macOS gives Screen Recording (shot, windows) and Accessibility (focus, move, click, type, key) to the app that started
+# the process, and a plain ssh session has neither. On the Mac mini (personal profile) a helper runs inside kitty, which has both:
+# over ssh this script hands the whole call to ~/.local/bin/agent-desktop-relay and returns its stdout, stderr and exit code
+# unchanged, before it touches the screen. Inside the helper, in a shell that has the permissions, or on a Mac with no helper
+# installed (the work profile), it runs the call itself. A session counts as ssh when SSH_CONNECTION is set and the helper's own
+# AGENT_DESKTOP_IN_RELAY is not. When a call runs here, macOS drops posted input and blanks window titles silently if a
+# permission is missing, so those actions first ask the system whether the grant is there (CGPreflightScreenCaptureAccess,
+# AXIsProcessTrusted; neither raises a prompt) and exit 1 with a message that names the permission and docs/agent-desktop.md.
+# `cursor` needs neither.
 #
-# `key` looks the key name up in a table of macOS key codes and sends the code to System Events with the modifiers held ("using
-# command down"). It does not post a key event with modifier flags set. Vercel's trial lost a cmd+a now and then; the cause was not
-# found there, so the live proof (docs/agent-desktop.md) repeats key a cmd and reports it.
+# `key` looks the key name up in a table of macOS key codes, then posts what a keyboard sends: each modifier key down, the key down
+# and up with the modifier flags set, each modifier key up. `type` posts the key that makes each character on a US keyboard, with
+# Shift held where needed and a short pause between characters; newline is Return and tab is Tab. A character with no US key (such as
+# an accented letter) is refused with exit 1 before anything is typed: a Unicode string set on the key event did nothing on macOS 27.
+# `focus` activates the running app whose name is exactly NAME. Vercel's trial lost a cmd+a now and then; the cause was not found there, so the live
+# proof (docs/agent-desktop.md) repeats key a cmd and reports it.
 #
 # Coordinates are what macOS uses for the pointer: points of the global display space. A Retina screenshot is larger than that in
 # pixels (twice, on a 2x display), so divide screenshot pixels by the scale before clicking on something seen in a shot.
@@ -39,6 +48,7 @@ set -eu
 
 SCRIPT_NAME="agent-desktop"
 DOC="docs/agent-desktop.md"
+RELAY="$HOME/.local/bin/agent-desktop-relay"
 UI_DEFAULT="$HOME/.local/share/agent-desktop/vercel/agent-desktop"
 
 usage() {
@@ -67,7 +77,7 @@ start_log() {
   state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-desktop"
   mkdir -p "$state_dir"
   LOG="$state_dir/agent-desktop.log"
-  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  RUN_ID="${AGENT_DESKTOP_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"  # the helper passes the id of the call it is running
   START=$(date +%s)
 }
 
@@ -108,6 +118,9 @@ valid_word() {  # valid_word VALUE: a key or modifier name such as comma or ctrl
 JXA='
 ObjC.import("CoreGraphics");
 ObjC.import("ApplicationServices");
+ObjC.import("AppKit");
+// macOS 27 does not expose this function to JavaScript until its type is given (found on the Mac mini).
+ObjC.bindFunction("CGPreflightScreenCaptureAccess", ["bool", []]);
 function point(x, y) { return $.CGPointMake(x, y); }
 function post(ev) { $.CGEventPost($.kCGHIDEventTap, ev); }
 function mouse(kind, x, y, button) { return $.CGEventCreateMouseEvent($(), kind, point(x, y), button); }
@@ -115,6 +128,40 @@ function warp(x, y) {
   $.CGWarpMouseCursorPosition(point(x, y));
   post(mouse($.kCGEventMouseMoved, x, y, $.kCGMouseButtonLeft));
 }
+// Keyboard: CGEvents posted to the system, which need only Accessibility, with no Automation permission.
+var MODIFIERS = {  // name: [flag mask, key code of the modifier key]
+  shift: [0x20000, 56], control: [0x40000, 59], option: [0x80000, 58], command: [0x100000, 55]
+};
+function pause() { $.NSThread.sleepForTimeInterval(0.01); }
+function press(code, down, flags) {
+  var ev = $.CGEventCreateKeyboardEvent($(), code, down);
+  $.CGEventSetFlags(ev, flags);
+  post(ev);
+}
+// What a keyboard sends: each modifier key down, the key down and up with the modifier flags set, each modifier key up. Flags alone
+// are not enough: TextEdit ignored cmd+a without the modifier key events.
+function chord(code, held) {
+  var flags = 0;
+  held.forEach(function (m) { flags |= m[0]; press(m[1], true, flags); pause(); });
+  press(code, true, flags);
+  press(code, false, flags);
+  held.slice().reverse().forEach(function (m) { pause(); flags &= ~m[0]; press(m[1], false, flags); });
+}
+// Typing sends the key that makes each character on a US keyboard, with Shift where needed. Setting a Unicode string on the key event
+// did nothing on macOS 27 (live check), so a character the US keyboard has no key for is refused. [unshifted, shifted, key codes]
+var US_KEYS = [
+  ["abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6]],
+  ["1234567890", "!@#$%^&*()", [18, 19, 20, 21, 23, 22, 26, 28, 25, 29]],
+  ["-=[]\\;\u0027,./`", "_+{}|:\"<>?~", [27, 24, 33, 30, 42, 41, 39, 43, 47, 44, 50]],
+  [" ", " ", [49]]
+];
+var TYPEABLE = { "\n": [36, false], "\t": [48, false] };
+US_KEYS.forEach(function (row) {
+  for (var i = 0; i < row[2].length; i++) {
+    TYPEABLE[row[0][i]] = [row[2][i], false];
+    if (row[1][i] !== row[0][i]) { TYPEABLE[row[1][i]] = [row[2][i], true]; }
+  }
+});
 function clean(v) { return String(v).replace(/[\t\n\r]/g, " "); }
 function run(argv) {
   var action = argv[0];
@@ -157,19 +204,29 @@ function run(argv) {
     });
     return "";
   }
-  var se = Application("System Events");
   if (action === "focus") {
-    var proc;
-    try { proc = se.processes.byName(argv[1]); proc.name(); }
-    catch (e) { throw new Error("no running app named " + argv[1]); }
-    proc.frontmost = true;
+    var app = null;
+    ObjC.unwrap($.NSWorkspace.sharedWorkspace.runningApplications).forEach(function (a) {
+      if (ObjC.unwrap(a.localizedName) !== argv[1]) { return; }
+      if (app === null || (a.activationPolicy === 0 && app.activationPolicy !== 0)) { app = a; }  // an app with a Dock icon wins over a background process of the same name
+    });
+    if (app === null) { throw new Error("no running app named " + argv[1]); }
+    app.activateWithOptions($.NSApplicationActivateIgnoringOtherApps | $.NSApplicationActivateAllWindows);
     return "";
   }
-  if (action === "type") { se.keystroke(argv[1]); return ""; }
+  if (action === "type") {
+    var chars = Array.from(argv[1]);
+    chars.forEach(function (ch) {
+      if (!TYPEABLE.hasOwnProperty(ch)) { throw new Error("cannot type " + ch + ": only characters on a US keyboard can be typed"); }
+    });
+    chars.forEach(function (ch, i) {
+      if (i > 0) { pause(); }
+      chord(TYPEABLE[ch][0], TYPEABLE[ch][1] ? [MODIFIERS.shift] : []);
+    });
+    return "";
+  }
   if (action === "key") {
-    var mods = argv.slice(2).map(function (m) { return m + " down"; });
-    if (mods.length > 0) { se.keyCode(parseInt(argv[1], 10), { using: mods }); }
-    else { se.keyCode(parseInt(argv[1], 10)); }
+    chord(parseInt(argv[1], 10), argv.slice(2).map(function (m) { return MODIFIERS[m]; }));
     return "";
   }
   throw new Error("unknown action " + action);
@@ -190,7 +247,7 @@ denied() {  # denied screen|accessibility: exit 1 with a message that names the 
     *) what="Accessibility" ;;
   esac
   record "FAIL permission $what"
-  fail 1 "$what is not allowed for this session, so macOS would drop the request or blank its result. Allow /usr/libexec/sshd-keygen-wrapper under System Settings, Privacy & Security, $what. Steps: $DOC"
+  fail 1 "$what is not allowed for the app that runs this session, so macOS would drop the request or blank its result. Over ssh that app is kitty (through the helper): allow kitty under System Settings, Privacy & Security, $what. Steps: $DOC"
 }
 
 allowed() {  # allowed screen|accessibility: continue only when the system says the grant is there
@@ -248,7 +305,7 @@ cmd_shot() {  # FILE [REGION]
   screencapture "$@" || rc=$?
   if [ "$rc" -ne 0 ] || [ ! -s "$file" ]; then
     record "FAIL shot $file region=${region:-full} exit=$rc"
-    fail 1 "screencapture did not write $file (exit $rc). The usual cause is a missing Screen Recording permission for /usr/libexec/sshd-keygen-wrapper. Steps: $DOC"
+    fail 1 "screencapture did not write $file (exit $rc). The usual cause is a missing Screen Recording permission for the app that runs this session (over ssh, kitty through the helper). Steps: $DOC"
   fi
   record "shot $file region=${region:-full}"
   echo "$file"
@@ -308,7 +365,7 @@ key_code() {  # key_code NAME: print the macOS key code for a US-layout key name
   esac
 }
 
-modifier_name() {  # modifier_name NAME: print the System Events modifier for a modifier name, or return 1
+modifier_name() {  # modifier_name NAME: print the canonical modifier name (shift, control, option, command), or return 1
   name=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
   case $name in
     ctrl|control) echo control ;;
@@ -332,6 +389,9 @@ cmd_ui() {  # ARGS...: Vercel's program, output and exit code unchanged
   exit "$rc"
 }
 
+if [ -n "${SSH_CONNECTION:-}" ] && [ -z "${AGENT_DESKTOP_IN_RELAY:-}" ] && [ -x "$RELAY" ]; then
+  exec "$RELAY" call "$@"
+fi
 [ $# -ge 1 ] || usage
 cmd=$1
 shift

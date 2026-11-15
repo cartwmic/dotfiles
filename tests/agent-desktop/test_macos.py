@@ -31,7 +31,7 @@ for a in "$@"; do
   line="$line [$shown]"
   prev=$a
 done
-echo "$line" >> "$FAKE_CALLS"
+printf '%s\n' "$line" >> "$FAKE_CALLS"  # not echo: dash's echo turns a backslash-c in an argument into text
 case $name in
   screencapture)
     if [ -n "${FAKE_SC_EXIT:-}" ]; then echo "screencapture: could not create image from display" >&2; exit "$FAKE_SC_EXIT"; fi
@@ -166,6 +166,13 @@ class MacTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertEqual(r.stdout, "")
 
+    def test_the_screen_permission_check_is_bound_before_it_is_called(self):
+        # A seam test: JavaScript for Automation on macOS 27 has no CGPreflightScreenCaptureAccess until it is bound, so every
+        # shot and windows failed with "is not a function" on the Mac mini while the stubbed tests passed. The live check is the proof.
+        text = BODY.read_text()
+        self.assertIn('ObjC.bindFunction("CGPreflightScreenCaptureAccess", ["bool", []]);', text)
+        self.assertLess(text.index("bindFunction"), text.index("$.CGPreflightScreenCaptureAccess()"))
+
     # windows
     def test_windows_prints_a_header_then_the_tab_separated_rows(self):
         r = self.run_script("windows")
@@ -262,7 +269,7 @@ class MacTest(unittest.TestCase):
         self.assertEqual(self.run_script("type", "a", "b").returncode, 2)
         self.assertEqual(self.calls(), [])
 
-    # key: the script turns the key name into a macOS key code, so the modifier is held by System Events
+    # key: the script turns the key name into a macOS key code and gives the JavaScript the modifier names (what it posts: test_macos_input.py)
     def test_key_comma_with_ctrl_is_the_docs_example(self):
         r = self.run_script("key", "comma", "ctrl")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -306,6 +313,18 @@ class MacTest(unittest.TestCase):
         r = self.run_script("cursor")
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, "")
+
+    # denied: the message points at the app that runs the session (kitty, through the helper), not at ssh's own program
+    def test_a_denied_message_names_kitty_and_the_permission_and_no_longer_sshd_keygen_wrapper(self):
+        for args, env, what in ((("shot", str(self.shot_file)), {"FAKE_SCREEN": "denied"}, "Screen Recording"),
+                                (("move", "1", "2"), {"FAKE_AX": "denied"}, "Accessibility"),
+                                (("shot", str(self.shot_file)), {"FAKE_SC_EXIT": "1"}, "Screen Recording")):
+            with self.subTest(args=args, env=env):
+                r = self.run_script(*args, **env)
+                self.assertEqual(r.returncode, 1)
+                self.assertIn(what, r.stderr)
+                self.assertIn("kitty", r.stderr)
+                self.assertNotIn("sshd-keygen-wrapper", r.stderr)
 
     # denied accessibility
     def test_actions_that_send_input_stop_with_a_message_when_accessibility_is_denied(self):
