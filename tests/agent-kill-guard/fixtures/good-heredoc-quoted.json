@@ -1,0 +1,12 @@
+{
+ "session_id": "0cf06496-354d-4da3-8a62-e8ee78402b7a",
+ "transcript_path": "0cf06496-354d-4da3-8a62-e8ee78402b7a.jsonl",
+ "cwd": "/home/cartwmic/.local/share/coordinator-workspace/loop-engine/dashboard-inbox-20261113",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd ~/.local/share/coordinator-workspace/loop-engine/dashboard-inbox-20261113; cat >> PLAN.md <<'E'\n\n## Addendum (lead, after the intent check): intent-2 is the approved intent\n\nRead criteria from `intent-2.json`, not intent-1. Lead's decisions on section 7: risk 1 accepted as is (redirects unchanged; script off lands on Needs you); readings in risk 4 confirmed; unknown-workstream order and ask-link targets in section 6 confirmed. The check helpers are in this run's `checks/` folder and use `repo/node_modules` (agent-kit 0.45.0).\n\nChanges from the intent check:\n- **ib22 (SHELL, NEEDS, T-SHELL):** a hash naming an ask (`#ask-N`) makes that ask the open ask (full screen on a phone); `#done-N`, `#ws-N`, `#task-\u2026` open that row and scroll to it. The named thing is never left hidden. The test must assert the named ask is the selected, visible one, not only `data-view` and a scroll call.\n- **ib21, ib14 (HUB, T-SHELL):** for a pushed page with no switch slot and no `__VIEW__` placeholder (an old page, as the work machine pushes), the hub serves it as today with its own Personal / Work bar. Test both the new page and an old page.\n- **ib37 (SHELL, T-SHELL):** with both a flash key and a hash that names something, the hash decides the view; the last view is used only when there is no such hash.\n- **ib51 (new; WIRE, T-SHELL writes the test in `status-page-server-views.test.ts`):** `startStatusPage` takes an optional pages reader (a function returning the list). With a reader returning the fixture, `?view=activity` has the Pages section; with none, no section. On the old code the test must fail on its assertion (the old server ignores the reader), so it must not import a new module.\n- Deploy: the code lead merges and deploys, hub first, then the daemon.\nE\necho ok",
+  "description": "Add the intent-check changes to the plan for the builders"
+ },
+ "tool_use_id": "toolu_01CCTxzMxBLd1QT1R3pZ33gC"
+}

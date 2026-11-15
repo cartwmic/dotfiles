@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command.
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the four checks of bash_rules.py (sleep-poll, heredoc, kube context, merge).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
-  Claude Code  PreToolUse hook on Bash:  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
+  Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
   Pi           extension refuse-pattern-kill, which runs this script the same way
-  Codex        a static rules file instead (dot_codex/rules/agent-guard.rules): Codex's own exec policy, no script
+  Codex        PreToolUse hook on its Bash tool (dot_codex/modify_hooks.json.tmpl), which runs this script the same way; a rules file
+               (dot_codex/rules/agent-guard.rules) is the backup while the hook is untrusted
 
-Input: JSON on stdin with the command at tool_input.command (Claude's and Pi's shape), or `--command TEXT`.
-Output: exit 2 and the reason on stderr when a simple command in the text is pkill or killall, else exit 0 and nothing.
-It fails open: input it cannot read is allowed, so a bug never stops an agent from working.
+Input: JSON on stdin with the command at tool_input.command (Claude's and Pi's shape; tool_name and cwd are used when sent), or `--command TEXT`.
+Output: exit 2 and the reason on stderr when a simple command in the text is pkill or killall, or a bash_rules check refuses it, else exit 0.
+It fails open: input it cannot read is allowed, and an error inside bash_rules allows the command, so a bug never stops an agent from working.
+The bash_rules checks that depend on the profile read AGENT_HARNESS_PROFILE, else the file `profile` beside this script (rendered by chezmoi).
 
 What counts: the command position of any simple command, found through quotes, `;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `$( )`,
 backticks, `sh -c '...'` (and bash, zsh, dash, ksh; also `-lc`), `eval`, heredocs fed to a shell, and wrappers such as `sudo`, `env`,
@@ -47,7 +49,7 @@ NO_COMMAND_FLAGS = {"sudo": {"-l", "-ll", "-V", "--list", "--version"}, "doas": 
 SKIP = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "case", "esac", "fi", "done", "for", "function"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 REDIRECT = re.compile(r"^[0-9]*[<>]")
-HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z0-9_.\-]+))")
+HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|(\\?)([A-Za-z0-9_.\-]+))")
 
 
 class Scan:
@@ -57,8 +59,10 @@ class Scan:
         self.text = text
         self.commands = []   # list of word lists
         self.nested = []     # texts of $( ), backticks, <( ), >( ) to scan on their own
-        self.heredocs = []   # (delimiter, strip_tabs, index of the command that owns it)
+        self.heredocs = []   # (delimiter, strip_tabs, index of the command that owns it, delimiter was quoted)
         self.bodies = {}     # command index -> heredoc body text
+        self.documents = []  # (delimiter was quoted, body text) of every heredoc, in order
+        self.joins = []      # for each command, the operators between it and the one before (`&&`, `;`, `|`, ...)
         self._run()
 
     def _balanced(self, i, open_c, close_c):
@@ -89,6 +93,7 @@ class Scan:
     def _run(self):
         t, n = self.text, len(self.text)
         words, cur, in_word = [], [], False
+        ops = ""
         i = 0
 
         def end_word():
@@ -98,10 +103,12 @@ class Scan:
             cur, in_word = [], False
 
         def end_command():
-            nonlocal words
+            nonlocal words, ops
             end_word()
             if words:
                 self.commands.append(words)
+                self.joins.append(ops)
+                ops = ""
             words = []
 
         while i < n:
@@ -172,13 +179,15 @@ class Scan:
                 continue
             if c == "\n":
                 end_command()
+                ops += "\n"
                 i = self._take_heredocs(i + 1)
                 continue
             if c in "<>":
                 m = HEREDOC.match(t, i) if t.startswith("<<", i) and not t.startswith("<<<", i) else None
                 if m:
-                    delim = m.group(2) or m.group(3) or m.group(4)
-                    self.heredocs.append((delim, m.group(1) == "-", len(self.commands)))
+                    delim = m.group(2) or m.group(3) or m.group(5)
+                    quoted = m.group(2) is not None or m.group(3) is not None or bool(m.group(4))
+                    self.heredocs.append((delim, m.group(1) == "-", len(self.commands), quoted))
                     end_word()
                     words.append("<<")
                     i = m.end()
@@ -194,6 +203,7 @@ class Scan:
                 continue
             if c in ";&|()":
                 end_command()
+                ops += c
                 i += 1
                 continue
             cur.append(c)
@@ -204,7 +214,7 @@ class Scan:
     def _take_heredocs(self, i):
         t, n = self.text, len(self.text)
         while self.heredocs and i <= n:
-            delim, strip_tabs, owner = self.heredocs.pop(0)
+            delim, strip_tabs, owner, quoted = self.heredocs.pop(0)
             lines = []
             while i < n:
                 k = t.find("\n", i)
@@ -214,6 +224,7 @@ class Scan:
                     break
                 lines.append(line)
             self.bodies[owner] = self.bodies.get(owner, "") + "\n".join(lines) + "\n"
+            self.documents.append((quoted, "\n".join(lines) + "\n"))
         return i
 
 
@@ -281,18 +292,19 @@ def find_refused(text, depth=0):
     return None
 
 
-def _wrapped(wrapper, rest, depth):
-    """Look at the command a wrapper runs: skip its options (and their arguments) and its leading plain arguments, then test that word."""
+def unwrap(wrapper, rest):
+    """What a wrapper runs: (the command words after its options and leading plain arguments, the command strings given by `env -S`)."""
     takes_arg, plain = WRAPPERS[wrapper]
     short_with_arg = {o[1] for o in takes_arg if len(o) == 2}
     no_command = NO_COMMAND_FLAGS.get(wrapper, ())
+    strings = []
     if wrapper == "command" and rest and rest[0] in ("-v", "-V"):
-        return None  # `command -v pkill` only looks the name up
+        return [], strings  # `command -v pkill` only looks the name up
     i = 0
     while i < len(rest):
         w = rest[i]
         if w in no_command:
-            return None  # `sudo -l` and friends only report; only the wrapper's own options are looked at here
+            return [], strings  # `sudo -l` and friends only report; only the wrapper's own options are looked at here
         if w == "--":
             i += 1
             break
@@ -303,9 +315,7 @@ def _wrapped(wrapper, rest, depth):
                 text, step = w.split("=", 1)[1], 1
             else:
                 text, step = w[2:], 1
-            hit = find_refused(text, depth + 1)
-            if hit:
-                return hit
+            strings.append(text)
             i += step
         elif w in takes_arg:
             i += 2
@@ -326,7 +336,16 @@ def _wrapped(wrapper, rest, depth):
             i += 1
         else:
             break
-    command = rest[i:]
+    return rest[i:], strings
+
+
+def _wrapped(wrapper, rest, depth):
+    """Look at the command a wrapper runs (see unwrap) and test it."""
+    command, strings = unwrap(wrapper, rest)
+    for text in strings:
+        hit = find_refused(text, depth + 1)
+        if hit:
+            return hit
     if not command:
         return None
     if _base(command[0]) in REFUSED:
@@ -343,17 +362,22 @@ def _quote(word):
     return "'" + word.replace("'", "'\\''") + "'"
 
 
-def _shell_text(words, depth):
-    """Recurse into the script text of `sh -c TEXT` / `bash -lc TEXT` (also after a wrapper such as sudo)."""
+def shell_script(words):
+    """The script text of `sh -c TEXT` / `bash -lc TEXT` (also after a wrapper such as sudo), else None."""
     for k, w in enumerate(words):
         if _base(w) in SHELLS:
             for j in range(k + 1, len(words)):
                 flag = words[j]
                 if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", flag) and j + 1 < len(words):
-                    return find_refused(words[j + 1], depth + 1)
+                    return words[j + 1]
                 if not flag.startswith("-"):
                     break
     return None
+
+
+def _shell_text(words, depth):
+    text = shell_script(words)
+    return find_refused(text, depth + 1) if text is not None else None
 
 
 def command_from_stdin(raw):
@@ -373,12 +397,51 @@ def command_from_stdin(raw):
     return value if isinstance(value, str) else None
 
 
+def hook_fields(raw):
+    """(tool_name, cwd) from the hook JSON; either is None when the harness does not send it (Pi sends neither)."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    tool, cwd = data.get("tool_name"), data.get("cwd")
+    return tool if isinstance(tool, str) else None, cwd if isinstance(cwd, str) else None
+
+
+def load_profile(env, directory):
+    """The chezmoi profile: AGENT_HARNESS_PROFILE, else the `profile` file beside this script; None when neither is there."""
+    if env.get("AGENT_HARNESS_PROFILE"):
+        return env["AGENT_HARNESS_PROFILE"].strip()
+    try:
+        with open(os.path.join(directory, "profile")) as handle:
+            return handle.read().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def bash_rules_message(command, raw):
+    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge), else None. Any error allows the command."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import bash_rules
+        tool, cwd = hook_fields(raw)
+        ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd())
+        return bash_rules.check(command, ctx)
+    except Exception:
+        return None
+
+
 def main(argv):
+    raw = ""
     if len(argv) >= 3 and argv[1] == "--command":
         command = argv[2]
     else:
         try:
-            command = command_from_stdin(sys.stdin.read())
+            raw = sys.stdin.read()
+            command = command_from_stdin(raw)
         except Exception:
             command = None
     if not command:
@@ -389,6 +452,10 @@ def main(argv):
         return 0  # fail open
     if hit:
         sys.stderr.write(MESSAGE.format(name=hit) + "\n")
+        return 2
+    message = bash_rules_message(command, raw)
+    if message:
+        sys.stderr.write(message + "\n")
         return 2
     return 0
 

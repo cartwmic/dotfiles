@@ -1,0 +1,12 @@
+{
+ "session_id": "2c6a099c-5a8a-464c-8f70-42b8c1cd6663",
+ "transcript_path": "2c6a099c-5a8a-464c-8f70-42b8c1cd6663.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd /tmp && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash --match-head-commit 9f5a41ddd820d81d32ae5ae22f48cedfe5de8f19 && gh pr view 182 -R cartwmic/cartwmic-homelab-v2 --json mergeCommit --jq .mergeCommit.oid",
+  "description": "Squash-merge homelab#182 at reviewed head"
+ },
+ "tool_use_id": "toolu_01Fib3DuAg3R3ETBwK8QuSxh"
+}

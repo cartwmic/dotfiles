@@ -1,0 +1,13 @@
+{
+ "session_id": "2c6a099c-5a8a-464c-8f70-42b8c1cd6663",
+ "transcript_path": "2c6a099c-5a8a-464c-8f70-42b8c1cd6663.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "until journalctl --user -u coordinatord --since '2026-11-11 18:38:50' --no-pager | grep -qE 'restarting|running; state dir'; do sleep 2; done; journalctl --user -u coordinatord --since '2026-11-11 18:38:50' --no-pager | grep -E 'restarting|stopping|starting|running; state dir|installing|installed|error|ERROR' | cut -c1-220 | head",
+  "description": "Wait for daemon restart line",
+  "timeout": 300000
+ },
+ "tool_use_id": "toolu_01C7k8V9yXVMP9fBNMuJwztm"
+}
