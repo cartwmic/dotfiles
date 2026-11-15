@@ -21,7 +21,7 @@ FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
 state = json.load(open(os.environ["FAKE_GH_STATE"]))
 path = sys.argv[2]
-key = "le" if "loop-engine/releases/latest" in path else "ak" if "agent-kit/tags" in path else None
+key = "le" if "loop-engine/releases/latest" in path else "ak" if "packages/npm/agent-kit/versions" in path else None
 if key is None:
     sys.stderr.write("fake gh: unexpected " + " ".join(sys.argv[1:]) + "\n")
     sys.exit(1)
@@ -50,8 +50,8 @@ class CheckReleasePinsTests(unittest.TestCase):
         (self.dir / "bin").mkdir()
         (self.dir / "bin/gh").write_text(FAKE_GH)
         (self.dir / "bin/gh").chmod(0o755)
-        # tags are out of order and include non-release tags: the highest vX.Y.Z wins, compared as integers
-        self.state = {"le_tag": "v0.49.0", "ak_tags": ["v0.9.0", "v0.10.0", "v0.49.0", "v0.48.1", "nightly", "v0.50.0-rc1"]}
+        # package versions are out of order and include non-release names: the highest X.Y.Z wins, compared as integers
+        self.state = {"le_tag": "v0.49.0", "ak_tags": ["0.9.0", "0.10.0", "0.49.0", "0.48.1", "nightly", "0.50.0-rc1"]}
 
     def run_check(self, mise_versions=None, kit="0.49.0", **state):
         self.state.update(state)
@@ -81,7 +81,7 @@ class CheckReleasePinsTests(unittest.TestCase):
                 self.assertIn("loop_engine_bump.py v0.49.0", lines[0])
 
     def test_agent_kit_lagging_refuses(self):
-        result = self.run_check(kit="0.10.0", ak_tags=["v0.49.0", "v0.9.0", "v0.48.1"])
+        result = self.run_check(kit="0.10.0", ak_tags=["0.49.0", "0.9.0", "0.48.1"])
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual(len(result.stdout.splitlines()), 1)
         self.assertIn("agent-kit pin 0.10.0 lags the latest release 0.49.0", result.stdout)
@@ -89,22 +89,32 @@ class CheckReleasePinsTests(unittest.TestCase):
 
     def test_agent_kit_latest_is_compared_as_integers(self):
         # string order would call v0.9.0 the highest; the integer order is v0.10.0
-        result = self.run_check(kit="0.9.0", ak_tags=["v0.9.0", "v0.10.0"])
+        result = self.run_check(kit="0.9.0", ak_tags=["0.9.0", "0.10.0"])
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("latest release 0.10.0", result.stdout)
 
-    def test_agent_kit_unreadable_warns_and_passes_when_loop_engine_matches(self):
+    def test_agent_kit_unreadable_fails_naming_the_cause(self):
         result = self.run_check(ak_error="HTTP 404: Not Found")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("::warning::cannot read cartwmic/agent-kit tags (HTTP 404: Not Found); "
-                      "the agent-kit pin was not checked", result.stdout)
-        self.assertNotIn("second line", result.stdout)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        out = result.stdout + result.stderr
+        self.assertIn("cannot read the published versions of the cartwmic/agent-kit package (HTTP 404: Not Found)", out)
+        self.assertIn("packages: read", out)
+        self.assertNotIn("OK", result.stdout)
+        self.assertNotIn("second line", out)
 
-    def test_agent_kit_unreadable_still_refuses_a_lagging_loop_engine_pin(self):
+    def test_agent_kit_unreadable_fails_even_when_a_loop_engine_pin_lags(self):
         result = self.run_check({"research": "0.48.1"}, ak_error="HTTP 404: Not Found")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("::warning::cannot read cartwmic/agent-kit tags", result.stdout)
-        self.assertIn("research pin 0.48.1 lags the latest release 0.49.0", result.stdout)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cartwmic/agent-kit package", result.stdout)
+
+    def test_agent_kit_with_no_release_versions_fails(self):
+        result = self.run_check(ak_tags=["nightly", "0.50.0-rc1"])
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no X.Y.Z versions", result.stdout)
+
+    def test_pass_line_names_the_agent_kit_pin_and_latest(self):
+        result = self.run_check(kit="0.49.0")
+        self.assertIn("agent-kit pin 0.49.0 at latest 0.49.0", result.stdout)
 
     def test_loop_engine_unreadable_exits_2(self):
         result = self.run_check(le_error="HTTP 401: Bad credentials")

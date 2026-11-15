@@ -3,9 +3,12 @@
 
     python3 scripts/check-release-pins.py [--mise-config FILE] [--agent-kit-package FILE]
 
-Exit 0: every checked pin equals its latest release. Exit 1: a pin lags (one line per pin). Exit 2: the Loop Engine
-release could not be read, so the check could not run. cartwmic/agent-kit is private and CI may have no token that
-reads it: then a GitHub Actions warning is printed and only the Loop Engine pins are checked.
+Exit 0: every checked pin equals its latest release. Exit 1: a pin lags (one line per pin). Exit 2: a latest release
+could not be read, so the check could not run; the message names the source and the cause. Nothing is skipped.
+
+cartwmic/agent-kit is private and ships as a GitHub Packages npm package, so its tags are not readable with the
+workflow's token (HTTP 404). The check reads the package's published versions instead, the same source the kit installs
+from. In CI that needs `packages: read` on the job and the package's Actions access to include this repository.
 """
 
 import argparse
@@ -17,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOOP_ENGINE_TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
-SEMVER_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 def gh(*args):
@@ -41,12 +44,12 @@ def latest_loop_engine():
 
 
 def latest_agent_kit():
-    out, error = gh("api", "repos/cartwmic/agent-kit/tags", "--paginate", "--jq", ".[].name")
+    out, error = gh("api", "users/cartwmic/packages/npm/agent-kit/versions", "--paginate", "--jq", ".[].name")
     if error:
         return None, error
-    versions = [tuple(map(int, m.groups())) for m in map(SEMVER_TAG.match, out.split()) if m]
+    versions = [tuple(map(int, m.groups())) for m in map(SEMVER.match, out.split()) if m]
     if not versions:
-        return None, "no vX.Y.Z tags"
+        return None, "no X.Y.Z versions"
     return ".".join(map(str, max(versions))), None
 
 
@@ -82,22 +85,25 @@ def main():
         print("cannot read the latest cartwmic/loop-engine release (%s); the release pins were not checked" % error)
         return 2
     kit_latest, kit_error = latest_agent_kit()
+    if kit_error:
+        print("cannot read the published versions of the cartwmic/agent-kit package (%s); the release pins were not "
+              "checked. In CI the job needs `packages: read` and the package's Actions access must include this "
+              "repository." % kit_error)
+        return 2
 
     lagging = []
     for tool, version in pins.items():
         if version != le_latest:
             lagging.append("%s pin %s lags the latest release %s (cartwmic/loop-engine); bump it with "
                            "loop_engine_bump.py v%s (playbook 7c57de5a)" % (tool, version, le_latest, le_latest))
-    if kit_error:
-        print("::warning::cannot read cartwmic/agent-kit tags (%s); the agent-kit pin was not checked" % kit_error)
-    elif kit_pin != kit_latest:
+    if kit_pin != kit_latest:
         lagging.append("agent-kit pin %s lags the latest release %s (cartwmic/agent-kit); bump it with "
                        "agent_kit_bump.py v%s (playbook 7c57de5a)" % (kit_pin, kit_latest, kit_latest))
 
     if lagging:
         print("\n".join(lagging))
         return 1
-    print("OK: loop-engine pins at %s%s" % (le_latest, "" if kit_error else ", agent-kit pin at %s" % kit_latest))
+    print("OK: loop-engine pins at %s, agent-kit pin %s at latest %s" % (le_latest, kit_pin, kit_latest))
     return 0
 
 

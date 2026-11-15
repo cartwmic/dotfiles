@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  packages: read # check-release-pins.py reads the published versions of the private @cartwmic/agent-kit package
 
 # PR runs cancel the superseded run of the same PR. Main runs (push and workflow_dispatch both use
 # refs/heads/main) share one group that never cancels: GitHub keeps one running and one pending, and a
