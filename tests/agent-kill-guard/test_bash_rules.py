@@ -200,52 +200,74 @@ class Merge(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("merge-pr.sh", message)
-                self.assertIn("ci-main-status", message)
+                self.assertIn("ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr>", message)
+                self.assertIn("ecd63156, 385acc43 and ccc6c94b", message)
 
-    def test_the_merge_gate_form_is_allowed_and_the_exit_code_workaround_is_not(self):
-        self.assertIsNone(check("ci-main-status --merge-gate X && gh pr merge 5"))
-        self.assertIsNone(check("ci-main-status --merge-gate dotfiles && gh pr merge 5 --squash -R cartwmic/dotfiles"))
+    def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
+        self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
+        self.assertIsNone(check("pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && gh pr merge 5 --squash -R cartwmic/dotfiles"))
+        self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")
         self.assertIsNotNone(message)
         self.assertIn("merge-pr.sh", message)
 
-    def test_the_refusal_names_the_merge_gate_form(self):
-        self.assertIn("ci-main-status --merge-gate <repo> && gh pr merge", check("gh pr merge 12"))
+    def test_the_refusal_names_a_command_that_satisfies_both_gates(self):
+        # The command the refusal prints, with <repo>/<pr> filled in, must itself pass the hook.
+        message = check("gh pr merge 12")
+        self.assertIn("ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr>", message)
+        self.assertIsNone(check("ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 12 && gh pr merge 12"))
 
-    def test_ci_main_status_first_allows_a_repo_that_is_not_the_coordinator(self):
-        for text in ["ci-main-status homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "cd /tmp && ci-main-status homelab && gh pr merge 182 --squash",
-                     "ci-main-status homelab &&\n gh pr merge 182",
-                     "ci-main-status homelab && cd /tmp && gh pr merge 182",
-                     "ci-main-status homelab && sh -c 'gh pr merge 182'",
-                     "ci-main-status homelab && gh pr merge 182 -R cartwmic/homelab"]:
+    def test_both_checks_first_allow_a_repo_that_is_not_the_coordinator(self):
+        for text in ["ci-main-status homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "pr-body-check homelab 182 && ci-main-status homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "ci-main-status dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
+                     "pr-body-check dotfiles 5 && ci-main-status dotfiles && pr-body-check dotfiles 1 && gh pr merge 5 -R cartwmic/dotfiles --merge",
+                     "cd /tmp && ci-main-status homelab && pr-body-check homelab 182 && gh pr merge 182 --squash",
+                     "ci-main-status homelab && pr-body-check homelab 182 &&\n gh pr merge 182",
+                     "ci-main-status homelab && pr-body-check homelab 182 && cd /tmp && gh pr merge 182",
+                     "ci-main-status homelab && pr-body-check homelab 182 && sh -c 'gh pr merge 182'",
+                     "ci-main-status homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/homelab"]:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
 
+    def test_one_check_alone_is_refused_with_the_full_form(self):
+        for text in ["ci-main-status dotfiles && gh pr merge 5 -R cartwmic/dotfiles",
+                     "pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status dotfiles && echo && gh pr merge 5 -R cartwmic/dotfiles",
+                     "pr-body-check dotfiles 5; gh pr merge 5",
+                     "ci-main-status dotfiles && pr-body-check dotfiles 5; gh pr merge 5",
+                     "ci-main-status dotfiles; pr-body-check dotfiles 5 && gh pr merge 5",
+                     "ci-main-status dotfiles && pr-body-check dotfiles 5 || gh pr merge 5",
+                     "gh pr merge 5 && ci-main-status dotfiles && pr-body-check dotfiles 5"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr>", message)
+                self.assertIn("ecd63156, 385acc43 and ccc6c94b", message)
+
     def test_the_coordinator_is_refused_even_after_ci_main_status(self):
-        for text in ["ci-main-status coordinator && gh pr merge 440 -R cartwmic/coordinator --merge",
-                     "ci-main-status coordinator && gh pr merge 440 --repo cartwmic/coordinator",
-                     "ci-main-status coordinator && gh pr merge 440 --repo=cartwmic/coordinator.git",
-                     "ci-main-status coordinator && gh pr merge 440 -R https://github.com/cartwmic/coordinator"]:
+        for text in ["ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R cartwmic/coordinator --merge",
+                     "ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo cartwmic/coordinator",
+                     "ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo=cartwmic/coordinator.git",
+                     "ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R https://github.com/cartwmic/coordinator"]:
             with self.subTest(text=text):
                 self.assertIn("merge-pr.sh", check(text))
 
     def test_the_directory_decides_when_there_is_no_repo_flag(self):
         origins = {"/repos/coord": "git@github.com:cartwmic/coordinator.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git",
                    "/work": "https://github.com/cartwmic/coordinator"}
-        self.assertIn("merge-pr.sh", check("cd /repos/coord && ci-main-status coordinator && gh pr merge 1", origins=origins))
-        self.assertIn("merge-pr.sh", check("ci-main-status coordinator && gh pr merge 1", origins=origins))  # the hook cwd
-        self.assertIsNone(check("cd /repos/other && ci-main-status dotfiles && gh pr merge 1", origins=origins))
-        self.assertIsNone(check("cd /repos/coord && ci-main-status coordinator && cd /repos/other && gh pr merge 1", origins=origins))
-        self.assertIsNone(check("ci-main-status x && gh pr merge 1 -R cartwmic/dotfiles", origins=origins))  # -R decides, not the cwd
-        self.assertIsNone(check("cd /nowhere && ci-main-status x && gh pr merge 1", origins=origins))
-        self.assertIsNone(check("cd $d && ci-main-status x && gh pr merge 1", origins=origins))
+        self.assertIn("merge-pr.sh", check("cd /repos/coord && ci-main-status coordinator && pr-body-check coordinator 1 && gh pr merge 1", origins=origins))
+        self.assertIn("merge-pr.sh", check("ci-main-status coordinator && pr-body-check coordinator 1 && gh pr merge 1", origins=origins))  # the hook cwd
+        self.assertIsNone(check("cd /repos/other && ci-main-status dotfiles && pr-body-check dotfiles 1 && gh pr merge 1", origins=origins))
+        self.assertIsNone(check("cd /repos/coord && ci-main-status coordinator && pr-body-check coordinator 1 && cd /repos/other && gh pr merge 1", origins=origins))
+        self.assertIsNone(check("ci-main-status x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=origins))  # -R decides, not the cwd
+        self.assertIsNone(check("cd /nowhere && ci-main-status x && pr-body-check x 1 && gh pr merge 1", origins=origins))
+        self.assertIsNone(check("cd $d && ci-main-status x && pr-body-check x 1 && gh pr merge 1", origins=origins))
 
     def test_a_real_checkout_whose_origin_is_the_coordinator(self):
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["git", "-C", tmp, "init", "-q"], check=True)
             subprocess.run(["git", "-C", tmp, "remote", "add", "origin", "https://github.com/cartwmic/coordinator.git"], check=True)
-            self.assertIn("merge-pr.sh", bash_rules.check("cd %s && ci-main-status coordinator && gh pr merge 1" % tmp,
+            self.assertIn("merge-pr.sh", bash_rules.check("cd %s && ci-main-status coordinator && pr-body-check coordinator 1 && gh pr merge 1" % tmp,
                                                         bash_rules.Context(profile="personal", env={}, cwd="/")))
             self.assertIsNone(bash_rules.origin_of(os.path.join(tmp, "missing")))
             self.assertIsNone(bash_rules.origin_of(None))

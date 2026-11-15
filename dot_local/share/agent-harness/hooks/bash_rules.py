@@ -7,11 +7,13 @@
   kube        (personal only)  kubectl, helm, k9s, kubectx on a context other than the homelab's: a context flag, `kubectl config
               use-context`, `kubectx X`, or no flag while the current context (--kubeconfig, an inline KUBECONFIG=, the hook's KUBECONFIG,
               else ~/.kube/config) is another. kubectl inside an ssh string is not inspected. No kubeconfig or no current-context: allowed.
-  merge       (personal only)  `gh pr merge` unless `ci-main-status` is joined to it by `&&` earlier in the same and-list (the refusal names
-              `ci-main-status --merge-gate <repo> && gh pr merge ...`: --merge-gate exits 0 for UNTESTED and 1 for RED, as playbook
-              fab9b713 allows an untested merge; a bare `ci-main-status` exits 2 for UNTESTED and blocks it); never for
-              cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh. merge-pr.sh, the playbook
-              CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process the hook never sees, so they pass.
+  merge       (personal only)  `gh pr merge` unless BOTH `ci-main-status` and `pr-body-check` are joined to it by `&&` earlier in the
+              same and-list (any order); the refusal names
+              `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> ...`: --merge-gate exits 0 for
+              UNTESTED and 1 for RED, as playbook fab9b713 allows an untested merge; a bare `ci-main-status` exits 2 for UNTESTED and
+              blocks it. Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
+              which runs both checks itself. The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
+              the hook never sees, so they pass.
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
 wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
@@ -38,10 +40,12 @@ HEREDOC = (
     "An unquoted heredoc with a backtick is refused in agent sessions: the shell runs the backticked text as a command. "
     "Quote the delimiter (`<<'EOF'`), or escape each backtick."
 )
+MERGE_CHECKS = ("ci-main-status", "pr-body-check")
 MERGE_BARE = (
-    "A bare `gh pr merge` is refused in agent sessions: it skips the red-main gate (playbook fab9b713). "
-    "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run `ci-main-status --merge-gate <repo> && gh pr merge ...` "
-    "(--merge-gate lets an untested tip merge and stops only red); "
+    "`gh pr merge` without both gates is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
+    "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
+    "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> ...` "
+    "(--merge-gate lets an untested tip merge and stops only red; pr-body-check enforces playbook rules ecd63156, 385acc43 and ccc6c94b); "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 MERGE_COORDINATOR = (
@@ -91,8 +95,8 @@ class Walk:
 
     def __init__(self, text, cwd=None):
         self.cmds = []    # Cmd: words from the command position (wrappers unwrapped), the assignments before it,
-        self.scans = []   # in a polling loop, under run-and-wake, after ci-main-status && , working directory
-        self._text(text, cwd, False, False, False, 0)
+        self.scans = []   # in a polling loop, under run-and-wake, the merge checks run earlier by && (a frozenset), working directory
+        self._text(text, cwd, False, False, frozenset(), 0)
 
     def _text(self, text, cwd, loop, waking, gated, depth):
         if depth > 8 or not text:
@@ -114,7 +118,7 @@ class Walk:
             if not words:
                 continue
             assigns = tuple(w for w in raw[:len(raw) - len(words)] if ASSIGN.match(w))
-            here = gated or self._and_listed(scan, index)
+            here = gated | self._and_listed(scan, index)
             polling = loop or any(loops)
             self._command(words, assigns, polling, waking, here, cwd, depth, scan, index)
             if _base(words[0]) == "cd":
@@ -123,14 +127,15 @@ class Walk:
 
     @staticmethod
     def _and_listed(scan, index):
-        """True when `ci-main-status` is earlier in this command's and-list, joined to it only by `&&`."""
+        """The merge checks (`ci-main-status`, `pr-body-check`) earlier in this command's and-list, joined to it only by `&&`."""
+        found = set()
         j = index
         while j > 0 and scan.joins[j].strip() == "&&":
             j -= 1
             earlier = _command_words(scan.commands[j])
-            if earlier and _base(earlier[0]) == "ci-main-status":
-                return True
-        return False
+            if earlier and _base(earlier[0]) in MERGE_CHECKS:
+                found.add(_base(earlier[0]))
+        return frozenset(found)
 
     def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
         self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd))
@@ -279,7 +284,7 @@ def merge_rule(walk, ctx):
         args = cmd.words[1:]
         if _base(cmd.words[0]) != "gh" or not any(a == "pr" and b == "merge" for a, b in zip(args, args[1:])):
             continue
-        if not cmd.gated:
+        if not set(MERGE_CHECKS) <= cmd.gated:
             return MERGE_BARE
         repo = _flag_value(args, "--repo")
         repo = _flag_value(args, "-R") if repo is None else repo
