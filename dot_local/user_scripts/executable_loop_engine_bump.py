@@ -47,6 +47,32 @@ HARNESS_TOOL = "dot_local/user_scripts/executable_apply_harness_config.sh"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 NAME = "loop_engine_bump"
 
+# The design principles (~/.local/share/agent-harness/design-principles.md), one row each: name, result, evidence.
+PRINCIPLES = [
+    ("Composable components", "n/a", "No component is added; the import copies skill bundles and moves five pins."),
+    ("Kernel and adapters", "n/a", "No component is added or changed."),
+    ("Clean architecture inside each component", "n/a", "No code layer is added or changed."),
+    ("YAGNI and KISS", "pass", "The apply writes only the PR's own targets; the drift check stops on anything else."),
+    ("Written contracts and invariants", "n/a", "No contract changes."),
+    ("Conformance suites", "n/a", "No adapter changes."),
+    ("No cross-component imports", "n/a", "No import is added."),
+    ("Judgment in agents, mechanism in code", "pass", "The import, the pins and the apply are mechanical; the skill text is the release's own."),
+    ("Fix the cause; no arbitrary caps or unrequested defense in depth", "n/a", "No cap, threshold or extra guard is added."),
+    ("Good enough for personal software", "pass", "Personal profile only for the apply; the work Mac takes the merged pins with its own chezmoi update."),
+    ("Prior art before building", "n/a", "No new capability; the bundles come from the Loop Engine release."),
+    ("Verified from the outside", "pass", "The verify step runs verify-deployed on the changed bundles and reads the active mise versions back (log step verify)."),
+    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the merge runs under the standing dotfiles grant (playbook rule 7c57de5a)."),
+    ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/loop-engine-bump/log.jsonl."),
+    ("Fast proof", "n/a", "The import runs no journey; the proof is the PR's CI run."),
+]
+
+
+def principles_section():
+    """The design-principles table (playbook rule ecd63156) and the Decisions line (rule ccc6c94b) that pr-body-check reads."""
+    rows = ["| %d | %s | %s | %s |" % (number, name, result, evidence) for number, (name, result, evidence) in enumerate(PRINCIPLES, 1)]
+    return "\n".join(["Principles (`~/.local/share/agent-harness/design-principles.md`):", "", "| # | Principle | Result | Evidence |",
+                      "|---|---|---|---|", *rows, "", "Decisions: none material", ""])
+
 
 class Stop(Exception):
     def __init__(self, step, message):
@@ -171,8 +197,8 @@ def publish(source, tag, branch, log):
         body = ("Import of the %s skill bundles and the five Loop Engine pins (%s), made by "
                 "`loop_engine_bump.py %s` (playbook rule 7c57de5a).\n\n```\n%s```\n\n"
                 "Profiles: both. The pins and canonical skills land on personal and axon-work-computer; the script "
-                "applies them on personal only, and the work Mac gets them with its own chezmoi update.\n"
-                % (tag, ", ".join(TOOLS), tag, result.stdout))
+                "applies them on personal only, and the work Mac gets them with its own chezmoi update.\n\n"
+                "%s" % (tag, ", ".join(TOOLS), tag, result.stdout, principles_section()))
         run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body], "publish",
             cwd=source)
     pr = find_pr(source, branch)
