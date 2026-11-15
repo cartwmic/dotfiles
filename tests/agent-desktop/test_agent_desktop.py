@@ -1,4 +1,6 @@
 """dot_local/bin/executable_agent-desktop: the exact argv each tool receives, the exit 69 path, the session lookup and the log.
+Also dot_local/share/agent-desktop/session.sh (the lookup agent-desktop, agent-chrome and dot_zshenv share), through the script and
+through a real `zsh -c` with dot_zshenv as ~/.zshenv.
 
 Fake hyprctl, wlrctl, wtype and grim are shell scripts on a hermetic PATH, so the real tools in /usr/bin (on an Omarchy box
 they exist and would act on the live desktop) are never reachable. Each fake appends one line per call: the tool name and
@@ -15,6 +17,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "dot_local/bin/executable_agent-desktop"
+SESSION_LIB = REPO / "dot_local/share/agent-desktop/session.sh"
+ZSHENV = REPO / "dot_zshenv"
+ZSH = shutil.which("zsh")
+LINUX = Path("/proc").is_dir()   # session.sh decides liveness from /proc/<pid>
 TOOLS = ("hyprctl", "wlrctl", "wtype", "grim")
 # Real tools the script and the fakes run. python3 is needed only by `windows`.
 REAL = ("cat", "date", "mkdir", "python3")
@@ -68,6 +74,23 @@ def make_bin(bin_dir, fakes, skip=()):
     return bin_dir
 
 
+def dead_pid():
+    """A pid that belonged to a process that has exited."""
+    p = subprocess.Popen(["true"])
+    p.wait()
+    return p.pid
+
+
+def make_instance(runtime, sig, pid, display="wayland-1", lock=True):
+    """One $XDG_RUNTIME_DIR/hypr/<sig>/ folder as Hyprland leaves it: a socket and a lock holding the pid and the display name.
+    The display socket itself is made too."""
+    make_socket(runtime / "hypr" / sig / ".socket.sock")
+    if lock:
+        (runtime / "hypr" / sig / "hyprland.lock").write_text(f"{pid}\n{display}\n")
+    if not (runtime / display).exists():
+        make_socket(runtime / display)
+
+
 def make_socket(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     s = socket.socket(socket.AF_UNIX)
@@ -88,6 +111,9 @@ class DesktopTest(unittest.TestCase):
         self.calls_file = self.tmp / "calls"
         self.env_file = self.tmp / "env"
         self.bin = make_bin(self.tmp / "bin", TOOLS)
+        lib = self.home / ".local/share/agent-desktop"
+        lib.mkdir(parents=True)
+        shutil.copy(SESSION_LIB, lib / "session.sh")
 
     def env(self, unset=(), **extra):
         e = {
@@ -287,16 +313,57 @@ class DesktopTest(unittest.TestCase):
                 self.assertEqual(self.calls(), [], "a tool ran before the missing one was reported")
 
     # session lookup: agent shells can lack WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE
+    def seen(self, **kw):
+        r = self.run_script("cursor", unset=("WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE"), **kw)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return self.env_file.read_text().splitlines()[-1]
+
+    @unittest.skipUnless(LINUX, "needs /proc")
     def test_wayland_and_hyprland_are_found_when_the_shell_has_neither(self):
-        make_socket(self.runtime / "wayland-1")
-        (self.runtime / "wayland-1.lock").write_text("")
-        make_socket(self.runtime / "hypr" / "sig_found" / ".socket.sock")
+        make_instance(self.runtime, "abc_1000_1", os.getpid())
+        self.assertEqual(self.seen(), "hyprctl HYPRLAND_INSTANCE_SIGNATURE=abc_1000_1 WAYLAND_DISPLAY=wayland-1")
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_a_stale_folder_that_sorts_first_is_passed_over_for_the_live_one(self):
+        # After a Hyprland restart the old folder stays. "aaa" sorts before "bbb", so a first-match lookup takes the dead one.
+        make_instance(self.runtime, "aaa_1000_1", dead_pid(), display="wayland-0")
+        make_instance(self.runtime, "bbb_2000_1", os.getpid())
+        self.assertEqual(self.seen(), "hyprctl HYPRLAND_INSTANCE_SIGNATURE=bbb_2000_1 WAYLAND_DISPLAY=wayland-1")
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_a_newer_stale_folder_does_not_beat_an_older_live_one(self):
+        make_instance(self.runtime, "aaa_1000_1", os.getpid())
+        make_instance(self.runtime, "bbb_2000_1", dead_pid(), display="wayland-2")
+        self.assertEqual(self.seen(), "hyprctl HYPRLAND_INSTANCE_SIGNATURE=aaa_1000_1 WAYLAND_DISPLAY=wayland-1")
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_of_two_live_instances_the_newest_start_wins_not_the_first_name(self):
+        make_instance(self.runtime, "zzz_1000_1", os.getpid(), display="wayland-0")
+        make_instance(self.runtime, "aaa_2000_1", os.getpid(), display="wayland-1")
+        self.assertEqual(self.seen(), "hyprctl HYPRLAND_INSTANCE_SIGNATURE=aaa_2000_1 WAYLAND_DISPLAY=wayland-1")
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_a_folder_with_a_socket_but_no_lock_is_not_live(self):
+        make_instance(self.runtime, "abc_1000_1", os.getpid(), lock=False)
+        self.assertEqual(self.seen(), "hyprctl HYPRLAND_INSTANCE_SIGNATURE=unset WAYLAND_DISPLAY=unset")
+
+    def test_no_session_at_all_sets_nothing_and_says_nothing(self):
+        self.assertEqual(self.seen(), "hyprctl HYPRLAND_INSTANCE_SIGNATURE=unset WAYLAND_DISPLAY=unset")
+        (self.runtime / "hypr").mkdir()   # the folder with no instance in it
         r = self.run_script("cursor", unset=("WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE"))
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+
+    @unittest.skipUnless(LINUX, "needs /proc")
+    def test_only_the_unset_variable_is_filled_in(self):
+        make_instance(self.runtime, "abc_1000_1", os.getpid())
+        r = self.run_script("cursor", unset=("HYPRLAND_INSTANCE_SIGNATURE",), WAYLAND_DISPLAY="wayland-9")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.env_file.read_text().splitlines(),
-                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=sig_found WAYLAND_DISPLAY=wayland-1"])
+                         ["hyprctl HYPRLAND_INSTANCE_SIGNATURE=abc_1000_1 WAYLAND_DISPLAY=wayland-9"])
 
+    @unittest.skipUnless(LINUX, "needs /proc")
     def test_a_set_session_is_left_alone(self):
+        make_instance(self.runtime, "abc_1000_1", os.getpid())
         r = self.run_script("cursor")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.env_file.read_text().splitlines(),
@@ -311,6 +378,73 @@ class DesktopTest(unittest.TestCase):
             "hyprctl dispatch hl.dsp.cursor.move({x=737,y=277}) ok",
             "click 737 277 left",
         ])
+
+
+@unittest.skipUnless(ZSH and LINUX, "needs zsh and /proc")
+class ZshenvTest(unittest.TestCase):
+    """The block in dot_zshenv, in a real non-interactive `zsh -c` (what T3, Claude Code and Codex start) with HOME holding
+    dot_zshenv as ~/.zshenv and session.sh where chezmoi puts it."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ad-zsh-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "home"
+        self.runtime = self.tmp / "runtime"
+        lib = self.home / ".local/share/agent-desktop"
+        lib.mkdir(parents=True)
+        self.runtime.mkdir()
+        shutil.copy(ZSHENV, self.home / ".zshenv")
+        shutil.copy(SESSION_LIB, lib / "session.sh")
+
+    def session(self, marker="T3CODE_THREAD_ID", **env):
+        e = {"HOME": str(self.home), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "XDG_RUNTIME_DIR": str(self.runtime)}
+        if marker:
+            e[marker] = "x"
+        e.update(env)
+        r = subprocess.run([ZSH, "-c", 'printf "%s %s" "${WAYLAND_DISPLAY-unset}" "${HYPRLAND_INSTANCE_SIGNATURE-unset}"'],
+                           env=e, capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.stderr, "")
+        return r.stdout
+
+    def test_an_agent_shell_gets_the_live_session_with_no_exports(self):
+        make_instance(self.runtime, "aaa_1000_1", dead_pid(), display="wayland-0")
+        make_instance(self.runtime, "bbb_2000_1", os.getpid())
+        self.assertEqual(self.session(), "wayland-1 bbb_2000_1")
+
+    def test_a_restart_is_followed_because_each_shell_looks_again(self):
+        make_instance(self.runtime, "aaa_1000_1", os.getpid())
+        self.assertEqual(self.session(), "wayland-1 aaa_1000_1")
+        shutil.rmtree(self.runtime / "hypr" / "aaa_1000_1")
+        make_instance(self.runtime, "bbb_2000_1", os.getpid())
+        self.assertEqual(self.session(), "wayland-1 bbb_2000_1")
+
+    def test_every_agent_marker_counts(self):
+        make_instance(self.runtime, "aaa_1000_1", os.getpid())
+        for marker in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_SANDBOX", "CODEX_THREAD_ID"):
+            with self.subTest(marker=marker):
+                self.assertEqual(self.session(marker=marker), "wayland-1 aaa_1000_1")
+
+    def test_a_shell_that_is_not_an_agent_is_left_alone(self):
+        make_instance(self.runtime, "aaa_1000_1", os.getpid())
+        self.assertEqual(self.session(marker=None), "unset unset")
+
+    def test_set_variables_are_kept(self):
+        make_instance(self.runtime, "aaa_1000_1", os.getpid())
+        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-9", HYPRLAND_INSTANCE_SIGNATURE="mine_1_1"), "wayland-9 mine_1_1")
+        self.assertEqual(self.session(WAYLAND_DISPLAY="wayland-9"), "wayland-9 aaa_1000_1")
+
+    def test_no_live_session_is_silent(self):
+        self.assertEqual(self.session(), "unset unset")                        # no hypr folder at all
+        (self.runtime / "hypr").mkdir()
+        self.assertEqual(self.session(), "unset unset")                        # an empty one
+        make_instance(self.runtime, "aaa_1000_1", dead_pid())
+        self.assertEqual(self.session(), "unset unset")                        # only a dead one
+
+    def test_a_host_without_session_sh_is_untouched(self):
+        # The work Mac and every non-personal profile: chezmoi does not deploy the file, and ~/.zshenv does nothing.
+        (self.home / ".local/share/agent-desktop/session.sh").unlink()
+        make_instance(self.runtime, "aaa_1000_1", os.getpid())
+        self.assertEqual(self.session(), "unset unset")
 
 
 if __name__ == "__main__":

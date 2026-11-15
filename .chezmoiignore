@@ -195,8 +195,10 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
-# Agent desktop helper (~/.local/bin/agent-desktop: screenshots, windows, focus, pointer, typing on the Omarchy desktop): personal Linux only. macOS is not Wayland, and the work profile has no Linux desktop.
+# Agent desktop helper (~/.local/bin/agent-desktop: screenshots, windows, focus, pointer, typing on the Omarchy desktop) and session.sh, the lookup of the live Wayland and Hyprland session that it, agent-chrome and ~/.zshenv share: personal Linux only. macOS is not Wayland, and the work profile has no Linux desktop.
 .local/bin/agent-desktop
+.local/share/agent-desktop
+.local/share/agent-desktop/**
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
@@ -443,6 +445,8 @@ Library/Preferences/pnpm/**
 .local/user_scripts/ssh_unlock_check_image.sh
 .local/bin/agent-chrome
 .local/bin/agent-desktop
+.local/share/agent-desktop
+.local/share/agent-desktop/**
 # Copies desktop agent sessions to the pod, so it has no use inside it (its timer is already left out with .config/systemd).
 .local/bin/agent-session-copy
 .local/bin/heavy-gate-watchdog
