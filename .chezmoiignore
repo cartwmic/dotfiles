@@ -146,6 +146,20 @@ Library/LaunchAgents/local.agent-events.plist
 77_agent_events_systemd.sh
 {{- end }}
 
+{{- $mistakes := includeTemplate "mistakes_report_config" . | fromJson }}
+{{- if or (ne .chezmoi.os "linux") (not $mistakes.enabled) }}
+# Weekly repeated-mistakes report (mistakes-report): Linux with chezmoi data mistakesReport.enabled, default true on personal only. Nothing is read on the work Mac.
+# A bad mistakesReport value fails this render. Disabled: chezmoi leaves the units alone; the load script below stops the timer and removes them.
+.config/systemd/user/mistakes-report.service
+.config/systemd/user/mistakes-report.timer
+.local/bin/mistakes-report
+.local/share/mistakes-report
+.local/share/mistakes-report/**
+{{- end }}
+{{- if or (ne .chezmoi.os "linux") (and (not $mistakes.enabled) (not (stat (joinPath (toString .chezmoi.destDir) ".config/systemd/user/mistakes-report.timer")))) }}
+78_mistakes_report_systemd.sh
+{{- end }}
+
 {{- if not (includeTemplate "agent_kit_config" . | fromJson).enabled }}
 # Pinned agent-kit install (the agent-traces CLI): chezmoi data agentKit.enabled, default true on personal only (docs/profiles.md). The wrapper and the
 # pin files deploy everywhere; without the setting there is no install, so the wrapper exits 3. A bad agentKit value fails this render.

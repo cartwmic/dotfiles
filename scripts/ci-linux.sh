@@ -56,6 +56,7 @@ python3 scripts/ci-par.py \
   tests/workstream-rank \
   tests/session-cost \
   tests/agent-events \
+  tests/mistakes-report \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \

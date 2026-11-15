@@ -1,0 +1,10 @@
+# Starts mistakes-report.service every Monday at 07:30 local time; Persistent runs it once at the next login or boot if the machine was off then.
+[Unit]
+Description=mistakes-report, weekly
+
+[Timer]
+OnCalendar=Mon *-*-* 07:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
