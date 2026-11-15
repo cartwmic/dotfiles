@@ -85,6 +85,7 @@ python3 scripts/ci-par.py \
   tests/deriving-readable-docs \
   tests/kelsey-intake \
   tests/git-credential \
+  tests/tmp-on-disk \
   tests/ci-par \
   tests/release-pins \
   tests/ci-main-status || status=1

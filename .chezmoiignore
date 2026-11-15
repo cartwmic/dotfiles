@@ -380,4 +380,6 @@ Library/Preferences/pnpm/**
 76_git_credential_linux.sh
 # The git author identity (personal Linux). macOS keeps its own setup; the work profile has no Linux machine and its identity is not in this source.
 77_git_identity_linux.sh
+# /tmp on the root disk (masks systemd's tmp.mount; personal Linux). The work profile is a Mac with no systemd, so it has no tmp.mount.
+87_tmp_on_disk_linux.sh
 {{- end }}
