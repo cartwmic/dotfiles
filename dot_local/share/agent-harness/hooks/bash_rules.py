@@ -1,4 +1,4 @@
-"""Four refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Five refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -15,6 +15,13 @@
               which runs both checks itself. The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
               the hook never sees, so they pass.
 
+  docker      (personal, Linux only)  `docker run`, `docker build`, `docker compose up` and their spellings (`docker container run`,
+              `docker image build`, `docker buildx build`, `docker builder build`, `docker-compose up`, global options before the
+              subcommand such as `docker -H x run` or `docker compose -f f.yml up`): this workstation runs no local Docker; the refusal
+              names kgate and a throwaway namespace on the homelab cluster (ledger grant 21). Read-only commands (`docker ps`, `images`,
+              `inspect`, `manifest inspect`, `compose ps`) pass, and so does anything after `kgate`. Other personal hosts (the Mac, which
+              has Docker Desktop for agents) are untouched, since Docker is provisioned there on purpose.
+
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
 wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
 in an ssh remote string, a kubeconfig path or `cd` target that holds a shell variable. The rules are pure functions on the text and a
@@ -23,6 +30,7 @@ Context; the file reads and the git call are the Context's `read_file` and `orig
 import os
 import re
 import subprocess
+import sys
 from collections import namedtuple
 
 from refuse_pattern_kill import ASSIGN, SHELLS, WRAPPERS, Scan, _base, _command_words, shell_script, unwrap
@@ -31,6 +39,11 @@ HOMELAB = "kubernetes-admin@kubernetes"
 MERGE_PR = "~/.local/share/coordinator-workspace/bin/merge-pr.sh"
 COORDINATOR = re.compile(r"cartwmic/coordinator(?:\.git)?(?![\w-])")
 KUBE_CONTEXT_FLAG = {"kubectl": "--context", "k9s": "--context", "helm": "--kube-context"}
+# docker: the options before the subcommand that take a value (`docker -H host run`), the same for `compose` (`compose -f f.yml up`), and
+# the (subcommand, ...) words that start a local container or image build.
+DOCKER_OPTIONS_WITH_VALUE = {"-H", "--host", "-c", "--context", "-l", "--log-level", "--config", "--tlscacert", "--tlscert", "--tlskey"}
+COMPOSE_OPTIONS_WITH_VALUE = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--parallel"}
+DOCKER_REFUSED = {("run",), ("build",), ("container", "run"), ("image", "build"), ("buildx", "build"), ("builder", "build"), ("compose", "up")}
 
 POLL = (
     "A sleep-poll loop is refused in agent sessions: it holds the pane while it waits. "
@@ -54,6 +67,13 @@ MERGE_COORDINATOR = (
 )
 
 
+DOCKER = (
+    "`%s` is refused in agent sessions: this workstation runs no local Docker. "
+    "Run the job on kgate (`run-and-wake -- kgate -- <cmd>`), or in a throwaway namespace on the homelab cluster under ledger grant 21 "
+    "(create the namespace, run the job there, delete the namespace)."
+)
+
+
 def kube_message(what, fix):
     return (
         "%s is refused in agent sessions: the personal homelab grant (playbook f90b9301) covers only the cluster with context `%s`. %s"
@@ -61,7 +81,7 @@ def kube_message(what, fix):
     )
 
 
-Context = namedtuple("Context", "tool profile env cwd read_file origin_of", defaults=(None, None, None, None, None, None))
+Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform", defaults=(None, None, None, None, None, None, None))
 
 
 def read_file(path):
@@ -295,10 +315,43 @@ def merge_rule(walk, ctx):
     return None
 
 
+def _docker_spelling(words):
+    """The refused docker command in words (`docker run`, `docker compose up`, ...), else None. Only the subcommand position counts."""
+    name = _base(words[0])
+    if name not in ("docker", "docker-compose"):
+        return None
+    subcommand, i = [], 1
+    while i < len(words) and len(subcommand) < 2:
+        word = words[i]
+        compose = name == "docker-compose" or (subcommand and subcommand[0] == "compose")
+        if word in DOCKER_OPTIONS_WITH_VALUE | (COMPOSE_OPTIONS_WITH_VALUE if compose else set()):
+            i += 2
+            continue
+        i += 1
+        if not word.startswith("-"):
+            subcommand.append(word)
+    if name == "docker-compose":
+        subcommand = ["compose"] + subcommand
+    for size in (1, 2):
+        if tuple(subcommand[:size]) in DOCKER_REFUSED:
+            return " ".join(["docker"] + subcommand[:size])
+    return None
+
+
+def docker_rule(walk, ctx):
+    if ctx.profile != "personal" or not (ctx.platform or sys.platform).startswith("linux"):
+        return None
+    for cmd in walk.cmds:
+        spelling = _docker_spelling(cmd.words)
+        if spelling:
+            return DOCKER % spelling
+    return None
+
+
 def check(text, ctx):
     """The refusal message for the command text, or None."""
     walk = Walk(text, ctx.cwd)
-    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule):
+    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, docker_rule):
         message = rule(walk, ctx)
         if message:
             return message
