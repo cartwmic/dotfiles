@@ -12,13 +12,13 @@
   plus the Loop Engine and lean-change skills for builders and leads, reviewing-prs and review-plans for reviewers, using-shartifacts
   for leads and the coordinator, and correcting-repeated-mistakes for builders, leads and the coordinator (playbook
   rule 3222c71d has the lead run it on a repeat or follow-on finding; builders and the coordinator may need to call it too), and hill-climb for
-  builders and leads (seats could use it before the 2026-11-13 re-apply (#389) turned it off). deriving-readable-docs (PRD, design and spec docs from a repo's tests; dotfiles #411, decision #1596) is kept for builders, leads and the coordinator. The coordinator seat had no attributed skill calls, so it takes the lead's list, without hill-climb.
+  builders and leads (seats could use it before the 2026-11-13 re-apply (#389) turned it off). deriving-readable-docs (PRD, design and spec docs from a repo's tests; dotfiles #411, decision #1597) is kept for builders, leads and the coordinator, with no-ai-slop, which its slop pass loads (decision #1598; tests/t3-hub SKILL_REQUIRES fails when a seat keeps the skill without it). The coordinator seat had no attributed skill calls, so it takes the lead's list, without hill-climb.
   Advisor, MCP servers and the compaction window are not set here: they belong to the T3 instance (modify_settings.json.tmpl) or to the
   launch arguments.
 */ -}}
 {{- $keeps := dict
-      "coordinator" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
-      "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "hill-climb" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
+      "coordinator" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "no-ai-slop" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
+      "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "hill-climb" "no-ai-slop" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
       "builder" (list "correcting-repeated-mistakes" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "designing-the-smallest-version" "no-ai-slop")
       "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider") -}}

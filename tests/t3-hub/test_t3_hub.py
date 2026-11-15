@@ -632,8 +632,8 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
              "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 # The skills each seat keeps (restated; the template holds the same lists and the reasons for them).
 KEEP = {
-    "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
     "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"designing-the-smallest-version", "no-ai-slop"},
     "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider"},
@@ -653,6 +653,19 @@ def fleet_env(profile):
         (skills / name / "SKILL.md").write_text("---\nname: %s\n---\n" % name)
     (skills / "synced").mkdir()  # a directory without a SKILL.md is not a skill
     return env
+
+
+# A skill whose procedure loads other skills. Every seat that keeps the skill must keep what it requires.
+SKILL_REQUIRES = {"deriving-readable-docs": ["no-ai-slop"]}
+
+
+class SkillRequiresTest(unittest.TestCase):
+    def test_a_seat_that_keeps_a_skill_keeps_what_it_requires(self):
+        missing = ["seat %s keeps %s but not %s it requires: add %s to the %s keep list in .chezmoitemplates/fleet_seat"
+                   % (seat, skill, need, need, seat)
+                   for seat, keep in sorted(KEEP.items()) for skill, needs in sorted(SKILL_REQUIRES.items()) if skill in keep
+                   for need in needs if need not in keep]
+        self.assertEqual(missing, [])
 
 
 class SeatInstanceTest(unittest.TestCase):
