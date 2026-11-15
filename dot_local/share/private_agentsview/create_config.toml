@@ -1,0 +1,10 @@
+# agentsview settings. Seeded once (create_): agentsview rewrites this file on its first run, adding auth_token and cursor_secret,
+# so chezmoi must not overwrite it afterwards. Edit the live file ~/.local/share/agentsview/config.toml, or delete it to reseed.
+[agents.claude]
+dirs = ["~/.claude/projects"]
+
+[agents.codex]
+dirs = ["~/.codex/sessions", "~/.codex/archived_sessions"]
+
+[agents.pi]
+dirs = ["~/.pi/agent/sessions"]

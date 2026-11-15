@@ -1,0 +1,11 @@
+# agentsview (github.com/kenn-io/agentsview): a local web page and search over Claude Code, Codex and Pi session folders.
+# Personal profile only (docs/profiles.md). Pinned exactly. The release has one archive per OS and arch (linux, darwin; amd64, arm64).
+# Run on demand with `agentsview serve`. No service is installed.
+[tools]
+"github:kenn-io/agentsview" = { version = "0.47.0", matching_regex = '^agentsview_[0-9.]+_(linux|darwin)_(amd64|arm64)\.tar\.gz$' }
+
+[env]
+# The data folder (sessions.db and config.toml) lives under ~/.local/share, not the default ~/.agentsview.
+AGENTSVIEW_DATA_DIR = "{{ env.HOME }}/.local/share/agentsview"
+# Anonymous daemon telemetry is off. The binary has no config-file key for it; this variable is its only switch.
+AGENTSVIEW_TELEMETRY_ENABLED = "0"
