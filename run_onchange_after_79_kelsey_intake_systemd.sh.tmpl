@@ -1,5 +1,5 @@
 #!/bin/sh
-# Load or reload the Kelsey intake timer (kelsey-intake.timer) when its units or its script change. Personal Linux only (.chezmoiignore).
+# Load or reload the Kelsey intake timer (kelsey-intake.timer) when its units change (the script is read afresh each run, so it needs no reload). Personal Linux only (.chezmoiignore).
 # The timer runs kelsey_intake.py every 15 minutes; it needs the board (~/.local/share/board) and the agent-kit install, which are personal too.
 # service: {{ include "dot_config/systemd/user/kelsey-intake.service" | sha256sum }}
 # timer: {{ include "dot_config/systemd/user/kelsey-intake.timer" | sha256sum }}

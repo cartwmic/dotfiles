@@ -65,6 +65,7 @@ def note_for(sid, doc):
     parts = [f"from Kelsey via her shartifacts page, submission {sid}: {clean(doc.get('text'))}"]
     if clean(doc.get("ask")):
         parts.append(f"she wants to know: {clean(doc['ask'])}")
+    parts.append(f"to answer, set status answered and answer on submissions/{sid} of page {PAGE_ID} (dot_local/share/kelsey-intake/README.md)")
     return "; ".join(parts)
 
 

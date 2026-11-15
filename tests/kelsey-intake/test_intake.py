@@ -42,7 +42,9 @@ class Fake(BaseHTTPRequestHandler):
     def do_POST(self):
         call = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["params"]["arguments"]
         if call["op"] == "query":
-            out = {"docs": [{"id": k, "data": v} for k, v in self.docs.items() if v["status"] == "new"]}
+            # The server applies only the filters the script sends (== on a field), like the real one: no hard-coded status check here.
+            keep = lambda v: all(v.get(f) == value for f, op, value in call.get("where") or [] if op == "==")
+            out = {"docs": [{"id": k, "data": v} for k, v in self.docs.items() if keep(v)]}
         else:
             self.docs[call["path"].split("/")[1]].update(call["data"])
             out = {"ok": True}
@@ -85,11 +87,24 @@ class IntakeTest(unittest.TestCase):
         self.assertIn("submission s1:", item["note"])
         self.assertIn("a link / and a note", item["note"])     # no ' | ' and no line break survive into a board note
         self.assertIn("she wants to know: worth it?", item["note"])
+        self.assertIn("to answer, set status answered and answer on submissions/s1 of page page", item["note"])   # how the answerer reaches her page
+        self.assertIn("kelsey-intake/README.md", item["note"])
         self.assertEqual(Fake.docs["s1"]["status"], "picked_up")
         self.assertEqual(Fake.docs["s1"]["board_ref"], "BD 100")
         self.assertIn("filed on the board as BD 100", r.stdout)
         self.assertEqual(self.run_script().returncode, 0)       # a second tick has nothing new
         self.assertEqual(len(self.board()), 1)
+
+    def test_only_new_submissions_are_filed_and_the_rest_are_left_alone(self):
+        Fake.docs["old1"] = {"text": "x", "ask": "", "status": "picked_up", "created": 1, "board_ref": "BD 5"}
+        Fake.docs["old2"] = {"text": "y", "ask": "", "status": "answered", "created": 2, "answer": "done"}
+        Fake.docs["s1"] = {"text": "z", "ask": "", "status": "new", "created": 3}
+        self.assertEqual(self.run_script().returncode, 0)
+        (item,) = self.board()
+        self.assertIn("submission s1:", item["note"])
+        self.assertEqual(Fake.docs["old2"]["status"], "answered")
+        self.assertEqual(Fake.docs["old1"]["status"], "picked_up")
+        self.assertEqual(Fake.docs["old1"]["board_ref"], "BD 5")
 
     def test_a_failed_board_add_leaves_the_submission_new_and_exits_1(self):
         Fake.docs["s1"] = {"text": "x", "ask": "", "status": "new", "created": 1}
