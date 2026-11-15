@@ -5,7 +5,8 @@ The G14 has PowerShell 5.1 only. These tests run under PowerShell 7 on Linux, so
     fixtures first, so a scanner that finds nothing cannot pass);
   * keep the files ASCII (5.1 reads a file with no byte-order mark as ANSI);
   * run install.ps1 against a stub release (stub curl.exe and tar.exe on PATH, a stub ScheduledTasks module): a fresh install,
-    a wrong checksum, a second run that downloads and changes nothing, and the task it registers.
+    a wrong checksum, a second run that downloads and changes nothing, and the task it registers (one long-lived worker: one
+    instance at a time, no time limit, started at logon, and a task of the old shape is registered again).
 The G14 itself is not touched here.
 Run: mise exec aqua:PowerShell/PowerShell@7.7.0 -- python3 -m unittest discover -s tests/agent-desktop -p test_windows_files.py
 """
@@ -227,7 +228,8 @@ class InstallTest(WindowsTestCase):
         r = box.install()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         new_calls = box.calls()[first_calls:]
-        self.assertEqual([c for c in new_calls if not c.startswith("reg query")], [], "a second run must not download, unpack, register or write anything")
+        quiet = [c for c in new_calls if not c.startswith(("reg query", "module Get-ScheduledTask"))]
+        self.assertEqual(quiet, [], "a second run must not download, unpack, register, end, start or write anything")
         for p in watched:
             self.assertEqual((p.read_bytes(), p.stat().st_mtime_ns), before[p], p.name)
         self.assertIn("Nothing changed", r.stdout)
@@ -256,9 +258,46 @@ class InstallTest(WindowsTestCase):
         self.assertIn("-NoProfile", action["Arguments"])
         self.assertEqual(str(task["Principal"]["LogonType"]), "Interactive", "run only when the user is logged on")
         self.assertEqual(task["Principal"]["UserId"], "G14\\michael")
-        self.assertFalse(task["HasTrigger"], "the task runs only when a request starts it")
+        self.assertTrue(task["HasTrigger"], "the worker starts at logon, so the first call finds it running")
+        self.assertEqual([t["Type"] for t in task["Triggers"]], ["LogOn"])
+        self.assertEqual(task["Triggers"][0]["UserId"], "G14\\michael")
         self.assertTrue(task["Settings"]["AllowStartIfOnBatteries"], "the laptop must run it on battery")
-        self.assertEqual(str(task["Settings"]["MultipleInstances"]), "Parallel")
+        self.assertEqual(str(task["Settings"]["MultipleInstances"]), "IgnoreNew", "one worker at a time")
+        self.assertEqual(str(task["Settings"]["ExecutionTimeLimit"]), "PT0S", "a worker that lives for the session has no time limit")
+
+    def test_a_fresh_install_starts_the_worker_so_the_first_call_is_fast(self):
+        self.fresh()
+        calls = [c for c in self.box.calls() if c.startswith("schtasks")]
+        self.assertEqual(calls, ["schtasks /End agent-desktop", "schtasks /Run agent-desktop"], "end any old worker, then start the new one")
+
+    def test_a_changed_script_restarts_the_worker(self):
+        self.fresh()
+        box = self.box
+        source = box.tmp / "windows-copy"
+        shutil.copytree(WINDOWS, source)
+        with open(source / "agent-desktop.ps1", "a") as f:
+            f.write("\n# a later version\n")
+        before = len([c for c in box.calls() if c.startswith("schtasks")])
+        box.install(source=source)
+        self.assertEqual([c for c in box.calls() if c.startswith("schtasks")][before:], ["schtasks /End agent-desktop", "schtasks /Run agent-desktop"])
+
+    def test_a_task_of_the_old_shape_is_registered_again(self):
+        # the first live run ran the task per call: parallel instances, a ten minute limit, no trigger. Same command line.
+        self.fresh()
+        task = self.box.task()
+        task["Settings"]["MultipleInstances"] = "Parallel"
+        task["Settings"]["ExecutionTimeLimit"] = "PT10M"
+        task["Triggers"] = []
+        task["HasTrigger"] = False
+        (self.box.state / "task.json").write_text(json.dumps(task))
+        registers = lambda: [c for c in self.box.calls() if c.startswith("Register-ScheduledTask")]
+        before = len(registers())
+        self.box.install()
+        self.assertEqual(len(registers()), before + 1, "the settings differ, so the task is registered again")
+        again = self.box.task()
+        self.assertEqual((str(again["Settings"]["MultipleInstances"]), str(again["Settings"]["ExecutionTimeLimit"]), len(again["Triggers"])), ("IgnoreNew", "PT0S", 1))
+        self.box.install()
+        self.assertEqual(len(registers()), before + 1, "and then left alone")
 
     def test_the_user_path_gets_the_bin_folder_once_and_keeps_existing_entries_and_their_kind(self):
         (self.box.state / "user-path.txt").write_text("%USERPROFILE%\\tools;C:\\Other")

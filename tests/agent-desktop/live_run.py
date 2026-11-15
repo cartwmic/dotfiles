@@ -548,15 +548,15 @@ def desktop_hooks(dev):
     """Per-device pieces the shared Mac/Windows rows need."""
     if dev.name == "mac-mini":
         return dict(
-            calc="Calculator", editor="TextEdit",
+            calc="Calculator", calc_app="Calculator", editor="TextEdit",
             calc_names={"clear": ["All Clear", "Clear", "AC"], "1": ["1"], "2": ["2"], "3": ["3"], "4": ["4"], "7": ["7"], "*": ["Multiply"], "=": ["Equals"]},
             n1_apps=[("Finder", ["--app", "Finder"], "Finder"), ("System Settings", ["--app", "System Settings"], "System Settings"), ("Calculator", ["--app", "Calculator"], "Calculator")],
             select_all=("a", ["cmd"]), erase="delete",
         )
     return dict(
-        calc="Calculator", editor="rad-proof-pad",
+        calc="Calculator", calc_app="CalculatorApp.exe", editor="rad-proof-pad",
         calc_names={"clear": ["Clear", "All Clear"], "1": ["One"], "2": ["Two"], "3": ["Three"], "4": ["Four"], "7": ["Seven"], "*": ["Multiply by", "Multiply"], "=": ["Equals"]},
-        n1_apps=[("Calculator", ["--app", "Calculator"], "Calculator"), ("proof pad", ["--app", "powershell.exe"], "rad-proof-pad"), ("Explorer", ["--app", "explorer.exe"], "This PC")],
+        n1_apps=[("Calculator", ["--app", "CalculatorApp.exe"], "Calculator"), ("proof pad", ["--app", "powershell.exe"], "rad-proof-pad"), ("Explorer", ["--app", "explorer.exe"], "This PC")],
         select_all=("a", ["ctrl"]), erase="Delete",
     )
 
@@ -568,9 +568,16 @@ $f = New-Object Windows.Forms.Form; $f.Text = 'rad-proof-pad'; $f.StartPosition 
 $t = New-Object Windows.Forms.TextBox; $t.Multiline = $true; $t.Dock = 'Fill'; $t.ShortcutsEnabled = $true; $t.AccessibleName = 'Proof text'
 $t.ContextMenuStrip = New-Object Windows.Forms.ContextMenuStrip   # empty: a right click shows no menu to dismiss
 $f.Controls.Add($t)
+# A WinForms TextBox ignores Ctrl+A (the Win32 edit control it wraps has no select-all key), unlike Notepad. The pad stands in for
+# an ordinary editor, so it selects all on Ctrl+A. It also logs every key it receives with its modifiers (keys.txt), so a failed
+# select-all can be told apart: the key tool never delivered Ctrl, or the pad did not act on it.
+$t.Add_KeyDown({ param($s, $e)
+    Add-Content -Path "$d\keys.txt" -Value ([string]$e.KeyData)
+    if ($e.Control -and $e.KeyCode -eq [Windows.Forms.Keys]::A) { $s.SelectAll(); $e.SuppressKeyPress = $true }
+})
 $t.Add_TextChanged({ [IO.File]::WriteAllText("$d\pad.txt", $t.Text) })
 $t.Add_MouseDown({ Add-Content -Path "$d\clicks.txt" -Value ("{0} {1},{2}" -f $_.Button, $_.X, $_.Y) })
-[IO.File]::WriteAllText("$d\pad.txt", ''); [IO.File]::WriteAllText("$d\clicks.txt", '')
+[IO.File]::WriteAllText("$d\pad.txt", ''); [IO.File]::WriteAllText("$d\clicks.txt", ''); [IO.File]::WriteAllText("$d\keys.txt", '')
 [IO.File]::WriteAllText("$d\pad.pid", [string]$PID)
 [Windows.Forms.Application]::Run($f)
 """
@@ -660,14 +667,27 @@ def desktop_rows(rec, dev):
             if nd:
                 rec.ui("New Document", "click", nd)
 
+    def open_explorer():
+        """Explorer shows 'This PC' in the desktop session. The driver must open it: nothing else does, and the tool's own `launch`
+        hangs on explorer (poc/g14.md)."""
+        if not has_window("This PC"):
+            dev.s1("Start-Process explorer.exe shell:MyComputerFolder")
+            wait_for("the This PC window in `windows`", lambda: has_window("This PC"), timeout=60)
+
+    def close_explorer():
+        """Quit only the This PC window (Stop-Process on explorer would kill the shell)."""
+        if win:
+            dev.s1("$sh = New-Object -ComObject Shell.Application; foreach ($w in @($sh.Windows())) { if ($w.LocationName -eq 'This PC') { $w.Quit() } }")
+
     def close_editor():
         if win:
+            close_explorer()
             dev.ps("$p = $env:LOCALAPPDATA + '\\agent-desktop\\proof\\pad.pid'; if (Test-Path $p) { Stop-Process -Id ([int](Get-Content $p)) -Force -ErrorAction SilentlyContinue }")
         else:
             dev.sh("pkill -x TextEdit; true")
 
     def calc_snapshot(label="calc snapshot", save=True):
-        r = snapshot_app(label, ["--app", hk["calc"]], "Calculator", save=save)
+        r = snapshot_app(label, ["--app", hk["calc_app"]], "Calculator", save=save)
         expect(r.exit == 0 and r.env and r.env.get("ok") is not False, "calculator snapshot failed (exit %d): %s" % (r.exit, r.out.strip()[:200]))
         return r.env
 
@@ -792,11 +812,19 @@ def desktop_rows(rec, dev):
         got = wait_for("the typed text in the editor", lambda: (lambda t: t if "hello agent-desktop" in t else None)(editor_text()), timeout=15)
         rec.note("text read back from the editor", got)
 
+    def pad_keys():
+        return dev.ps("Get-Content -Raw ($env:LOCALAPPDATA + '\\agent-desktop\\proof\\keys.txt')").out
+
     def j7(rec):
         ensure_apps(rec)
+        rec.ad("focus editor", "focus", hk["editor"])
+        wait_for("the editor in front", lambda: hk["editor"].lower() in foreground().lower(), timeout=20)
         key, mods = hk["select_all"]
         r = rec.ad("select all", "key", key, *mods)
         expect(r.exit == 0, "key %s %s exited %d: %s" % (key, " ".join(mods), r.exit, r.out.strip()[:200]))
+        if win:  # what the pad received, read from its own key log: tells "never delivered" from "delivered and not acted on"
+            seen = wait_for("the pad to log Ctrl+A", lambda: (lambda t: t if re.search(r"\bA, Control\b|\bControl, A\b", t) else None)(pad_keys()), timeout=15)
+            rec.note("keys the pad received so far (KeyData)", " | ".join(seen.split()))
         r = rec.ad("erase", "key", hk["erase"])
         expect(r.exit == 0, "key %s exited %d" % (hk["erase"], r.exit))
         wait_for("the editor to be empty after select-all and delete", lambda: (editor_text() == "") or None, timeout=15)
@@ -811,6 +839,8 @@ def desktop_rows(rec, dev):
     def n1(rec):
         seen = []
         ensure_apps(rec)
+        if win:
+            open_explorer()
         for label, extra, hint in hk["n1_apps"]:
             r = snapshot_app("snapshot " + label, extra, hint)
             expect(r.exit == 0 and r.env and r.env.get("ok") is not False, "snapshot of %s failed (exit %d): %s" % (label, r.exit, r.out.strip()[:200]))
@@ -912,7 +942,7 @@ G14_CLEAN_PS = r"""
 $ErrorActionPreference = 'Continue'
 foreach ($f in 'agent-desktop.ps1','agent-desktop.cmd') { Remove-Item (Join-Path $env:USERPROFILE ".local\bin\$f") -Force -ErrorAction SilentlyContinue }
 Remove-Item (Join-Path $env:USERPROFILE '.local\share\agent-desktop') -Recurse -Force -ErrorAction SilentlyContinue
-foreach ($line in @(schtasks /Query /FO CSV /NH 2>$null | Where-Object { $_ -match 'agent-desktop' })) { $n = ($line -split '","')[0].Trim('"'); schtasks /Delete /TN $n /F | Out-Null }
+foreach ($line in @(schtasks /Query /FO CSV /NH 2>$null | Where-Object { $_ -match 'agent-desktop' })) { $n = ($line -split '","')[0].Trim('"'); schtasks /End /TN $n | Out-Null; schtasks /Delete /TN $n /F | Out-Null }   # /End: a deleted task leaves its worker running
 'cleaned'
 """
 
@@ -991,6 +1021,40 @@ def g14_locked_check(rec, dev):
     return c
 
 
+# The G14 is locked again when the rows are done, the way it was found. Win+L through RustDesk did not lock it; a one-off
+# interactive task that runs LockWorkStation in the desktop session did (briefs/g14-lock.sh, the same steps). The proof is the
+# LogonUI.exe line of `tasklist`: LogonUI is the lock screen, and it must be in session 1, the desktop session.
+G14_LOCK_PS = r"""
+$a = New-ScheduledTaskAction -Execute 'rundll32.exe' -Argument 'user32.dll,LockWorkStation'
+$p = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName rad-lock-once -Action $a -Principal $p -Force | Out-Null
+Start-ScheduledTask -TaskName rad-lock-once
+Start-Sleep 4
+Unregister-ScheduledTask -TaskName rad-lock-once -Confirm:$false
+tasklist /FI 'IMAGENAME eq LogonUI.exe'
+"""
+
+
+def parse_lock_proof(output):
+    """(locked, session, detail) from the output of G14_LOCK_PS: locked only when a LogonUI.exe line sits in a session of 1 or more."""
+    m = re.search(r"LogonUI\.exe\s+\d+\s+\w+\s+(\d+)", output or "")
+    if not m:
+        return False, None, "no LogonUI.exe line: the screen is not locked"
+    session = int(m.group(1))
+    if session < 1:
+        return False, session, "LogonUI.exe is in session %d, not the desktop session" % session
+    return True, session, "LogonUI.exe is running in session %d" % session
+
+
+def g14_lock(rec, dev):
+    """Lock the G14 and save the proof as lock-after-rows.txt in the output folder. Returns True when it is locked in session 1."""
+    res = dev.ps(G14_LOCK_PS, timeout=120)
+    locked, session, detail = parse_lock_proof(res.out)
+    (rec.out / "lock-after-rows.txt").write_text("$ one-off interactive task rad-lock-once: rundll32.exe user32.dll,LockWorkStation, then tasklist (script in live_run.py G14_LOCK_PS)\nexit=%d\n---\n%s\n---\n%s\n" % (res.exit, res.out.strip(), ("locked: " if locked else "NOT LOCKED: ") + detail))
+    print("lock after rows: %s" % (("ok, " if locked else "FAILED, ") + detail))
+    return locked
+
+
 def g14_ui_via_task(rec, dev):
     """`ui` goes through the scheduled task: it works from the ssh shell (which cannot see the desktop) and the task's two
     sides each leave a log line with a run id."""
@@ -1039,7 +1103,8 @@ def plan_lines(device):
             lines.append("row %s %s" % (rid, title))
     if device == "g14":
         lines += ["check ui_via_task: `ui status` works from ssh and leaves at least two run-id log lines (both sides of the task)",
-                  "step settings_after: read the same settings; they must equal the first read"]
+                  "step settings_after: read the same settings; they must equal the first read",
+                  "step lock_after_rows: when the rows are done, pass or fail, lock the G14 (a one-off interactive task runs LockWorkStation) and save lock-after-rows.txt; LogonUI.exe must be in session 1"]
     lines.append("end: write record.json, then run check_record.py on it")
     return lines
 
@@ -1081,6 +1146,7 @@ def main(argv):
     install, settings_before, checks, rows = state.get("install"), state.get("settings_before"), state.get("checks", {}), []
     made_at = None
     path = None
+    lock_failed = False
     try:
         if device == "omarchy":
             rows_fns = omarchy_rows(rec, dev)
@@ -1161,9 +1227,17 @@ def main(argv):
         if device == "mac-mini":
             rec.sh("remove scratch copy", "rm -rf %s" % dev.scratch, save=False)
         elif device == "g14":
+            if a.phase in ("all", "rows") and not only:
+                try:
+                    lock_failed = not g14_lock(rec, dev)
+                except Exception as e:
+                    print("lock after rows: FAILED, %s: %s" % (type(e).__name__, e))
+                    lock_failed = True
             dev.ps("Remove-Item (Join-Path $env:USERPROFILE 'agent-desktop-proof') -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item ($env:LOCALAPPDATA + '\\agent-desktop\\proof') -Recurse -Force -ErrorAction SilentlyContinue")
     chk = subprocess.run([sys.executable, str(HERE / "check_record.py"), "--device", device, "--record", str(path)], capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     print((chk.stdout or chk.stderr).strip())
+    if lock_failed and chk.returncode == 0:
+        return 6
     return chk.returncode
 
 
