@@ -39,6 +39,9 @@
 # and apiKeyHelper (op_read_cached.sh printing the hub key). Neither ANTHROPIC_AUTH_TOKEN nor ANTHROPIC_API_KEY is set: either would
 # outrank apiKeyHelper. Off, or on any other profile, an apply removes env.ANTHROPIC_BASE_URL only when it equals the hub URL
 # and apiKeyHelper only when it equals ours, then prunes env if that emptied it; other env keys and a user's own helper stay.
+# Container mode (the agent host pod, docs/container-mode.md): the hub is always on (hub.enabled is not read) and is the in-cluster cliproxy: env.ANTHROPIC_BASE_URL is
+# container.cliproxyUrl (plain http, no /v1) and apiKeyHelper is `cat` of container.cliproxyKeyFile, so no op, no login file and no token variable. Claude Code runs the helper when it
+# calls the model, not at apply time. A pod has no ~/.claude/.credentials.json because nothing here writes one.
 # ROLLBACK: set hub.enabled = false (data in ~/.config/chezmoi/chezmoi.yaml), then apply ~/.claude/settings.json,
 # ~/.codex/config.toml and ~/.t3/userdata/settings.json. Deleting this block instead would leave the keys behind, so the switch stays.
 set -eu
@@ -74,7 +77,8 @@ T3_STATE={{ includeTemplate "shquote" $t3state }}
 T3_PRINTED={{ includeTemplate "shquote" $t3printed }}
 T3_MARKER='src/t3-hook/hook.ts'
 
-{{ if eq (includeTemplate "hub" .) "on" -}}
+{{- $container := includeTemplate "container" . | fromJson }}
+{{ if or $container.enabled (eq (includeTemplate "hub" .) "on") -}}
 HUB_WANT=true
 {{- else -}}
 HUB_WANT=false
@@ -84,8 +88,13 @@ HUB_WANT=false
 GUARD_COMMAND='g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'
 GUARD_MARKER='g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py";'
 
+{{ if $container.enabled -}}
+HUB_URL={{ includeTemplate "shquote" $container.cliproxyUrl }}
+HUB_HELPER={{ includeTemplate "shquote" (printf "cat %s" (includeTemplate "shquote" $container.cliproxyKeyFile)) }}
+{{- else -}}
 HUB_URL='https://cliproxy.internal.cartwmic.com'
 HUB_HELPER={{ includeTemplate "shquote" (printf "%s/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'" .chezmoi.homeDir) }}
+{{- end }}
 
 # T3 mode: set (install the printed entries), keep (leave the installed entries as they are) or off (remove them).
 T3_MODE=off

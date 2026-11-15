@@ -139,6 +139,10 @@ PREFIX='{{ $home }}/.t3/tools/codex/'
 
 input=$(cat; printf x)
 input=${input%x}
+{{ if (includeTemplate "container" . | fromJson).enabled -}}
+# Container mode: a fresh pod has no settings.json until T3 has run once, and the seat instances must be there before the first lead starts. An empty file is {}.
+[ -n "$(printf %s "$input" | tr -d '[:space:]')" ] || input='{}'
+{{ end -}}
 
 if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
   printf %s "$input"

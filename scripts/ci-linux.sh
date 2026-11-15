@@ -61,6 +61,7 @@ python3 scripts/ci-par.py \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \
+  tests/container-mode \
   tests/design-principles \
   tests/agent-kit \
   tests/sync-harness-skills \
