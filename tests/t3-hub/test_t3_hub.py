@@ -632,9 +632,9 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
              "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 # The skills each seat keeps (restated; the template holds the same lists and the reasons for them).
 KEEP = {
-    "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "herdr", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "herdr", "hill-climb", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "builder": {"correcting-repeated-mistakes", "hill-climb", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
+    "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"designing-the-smallest-version", "no-ai-slop"},
     "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider"},
 }
