@@ -20,7 +20,7 @@ SKIP_DIRS = {
 }
 TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "e2e", "cypress", "integration", "acceptance", "features"}
 JS_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"}
-CODE_EXT = JS_EXT | {".py", ".rs", ".go", ".rb", ".ex", ".exs", ".sh", ".bash", ".java", ".kt", ".cs", ".php"}
+CODE_EXT = JS_EXT | {".py", ".rs", ".go", ".rb", ".ex", ".exs", ".sh", ".bash", ".java", ".kt", ".cs", ".php", ".swift", ".c", ".cc", ".cpp", ".cxx"}
 JOURNEY_NAME = re.compile(r"(journey|e2e|acceptance|smoke)", re.I)
 MAX_BYTES = 2_000_000
 
@@ -83,13 +83,15 @@ RS_FN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)")
 
 
 def scan_rust(lines, rel, text):
-    out = []
+    out, seen = [], set()
     for i, line in enumerate(lines):
         if RS_ATTR.match(line):
             for j in range(i + 1, min(i + 8, len(lines))):
                 m = RS_FN.match(lines[j])
                 if m:
-                    out.append(point(m.group(1), "test", j + 1, "rust-test"))
+                    if j not in seen:  # stacked #[test_case(..)] lines name one fn: list it once
+                        seen.add(j)
+                        out.append(point(m.group(1), "test", j + 1, "rust-test"))
                     break
     return out
 
@@ -222,8 +224,107 @@ def scan_gherkin(lines, rel, text):
     return out
 
 
+JAVA_ATTR = re.compile(r"^\s*@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b")
+JAVA_FN = re.compile(r"(?:\bvoid|\bfun)\s+(?:`([^`]+)`|(\w+))\s*\(")
+CLASS_DECL = re.compile(r"^(\s*)(?:[\w@()]+\s+)*?(?:class|object)\s+(\w+)")
+
+
+def scan_junit(lines, rel, text):
+    stack, out, seen = Stack(), [], set()
+    for i, line in enumerate(lines):
+        m = CLASS_DECL.match(line)
+        if m:
+            stack.push(len(m.group(1)), m.group(2))
+        if JAVA_ATTR.match(line):
+            for j in range(i, min(i + 8, len(lines))):
+                m = JAVA_FN.search(lines[j])
+                if m:
+                    if j not in seen:
+                        seen.add(j)
+                        out.append(point(m.group(1) or m.group(2), "test", j + 1, "junit", stack.context(indent_of(lines[i]))))
+                    break
+    return out
+
+
+CS_ATTR = re.compile(r"^\s*\[\s*(Fact|Theory|Test|TestCase|TestMethod)\b")
+CS_FN = re.compile(r"\b(\w+)\s*(?:<[^>]*>)?\s*\(")
+CS_CLASS = re.compile(r"^(\s*)(?:[\w]+\s+)*?class\s+(\w+)")
+
+
+def scan_csharp(lines, rel, text):
+    stack, out, seen = Stack(), [], set()
+    for i, line in enumerate(lines):
+        m = CS_CLASS.match(line)
+        if m:
+            stack.push(len(m.group(1)), m.group(2))
+        m = CS_ATTR.match(line)
+        if not m:
+            continue
+        framework = {"Fact": "xunit", "Theory": "xunit", "Test": "nunit", "TestCase": "nunit", "TestMethod": "mstest"}[m.group(1)]
+        for j in range(i + 1, min(i + 8, len(lines))):
+            if lines[j].lstrip().startswith("["):
+                continue
+            f = CS_FN.search(lines[j])
+            if f:
+                if j not in seen:
+                    seen.add(j)
+                    out.append(point(f.group(1), "test", j + 1, framework, stack.context(indent_of(lines[i]))))
+                break
+    return out
+
+
+GTEST = re.compile(r"^\s*(TEST|TEST_F|TEST_P|TYPED_TEST|TYPED_TEST_P)\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)")
+CATCH = re.compile(r"""^\s*(?:TEST_CASE|SCENARIO)\s*\(\s*"((?:\\.|[^"\\])*)\"""")
+
+
+def scan_cpp(lines, rel, text):
+    out = []
+    for i, line in enumerate(lines, 1):
+        m = GTEST.match(line)
+        if m:
+            out.append(point("%s.%s" % (m.group(2), m.group(3)), "test", i, "googletest", m.group(2)))
+            continue
+        m = CATCH.match(line)
+        if m:
+            out.append(point(m.group(1), "test", i, "catch2"))
+    return out
+
+
+SWIFT_XC = re.compile(r"^\s*(?:override\s+|public\s+|private\s+)*func\s+(test\w*)\s*\(")
+SWIFT_CLASS = re.compile(r"^(\s*)(?:[\w]+\s+)*?(?:class|struct)\s+(\w+)")
+SWIFT_TESTING = re.compile(r"^\s*@Test\b")
+SWIFT_FN = re.compile(r"\bfunc\s+(\w+)\s*\(")
+
+
+def scan_swift(lines, rel, text):
+    xctest, testing = "XCTest" in text, "import Testing" in text
+    if not (xctest or testing):
+        return []
+    stack, out, seen = Stack(), [], set()
+    for i, line in enumerate(lines):
+        m = SWIFT_CLASS.match(line)
+        if m:
+            stack.push(len(m.group(1)), m.group(2))
+        m = SWIFT_XC.match(line) if xctest else None
+        if m and i not in seen:
+            seen.add(i)
+            out.append(point(m.group(1), "test", i + 1, "xctest", stack.context(indent_of(line))))
+            continue
+        if testing and SWIFT_TESTING.match(line):
+            for j in range(i, min(i + 4, len(lines))):
+                f = SWIFT_FN.search(lines[j])
+                if f:
+                    if j not in seen:
+                        seen.add(j)
+                        out.append(point(f.group(1), "test", j + 1, "swift-testing", stack.context(indent_of(lines[i]))))
+                    break
+    return out
+
+
 SCANNERS = {".py": scan_python, ".rs": scan_rust, ".go": scan_go, ".rb": scan_ruby, ".ex": scan_elixir,
-            ".exs": scan_elixir, ".sh": scan_shell, ".bash": scan_shell, ".bats": scan_shell, ".feature": scan_gherkin}
+            ".exs": scan_elixir, ".sh": scan_shell, ".bash": scan_shell, ".bats": scan_shell, ".feature": scan_gherkin,
+            ".java": scan_junit, ".kt": scan_junit, ".cs": scan_csharp, ".swift": scan_swift,
+            ".c": scan_cpp, ".cc": scan_cpp, ".cpp": scan_cpp, ".cxx": scan_cpp, ".h": scan_cpp, ".hpp": scan_cpp}
 SCANNERS.update({ext: scan_js for ext in JS_EXT})
 
 

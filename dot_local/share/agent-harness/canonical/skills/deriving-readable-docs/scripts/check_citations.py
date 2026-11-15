@@ -3,9 +3,11 @@
 
 usage: check_citations.py <doc.md> <repo>
 
-A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; several may share one
-backtick span, separated by commas or semicolons). Fenced code blocks are skipped. A backticked token that
-is not shaped like path:line (a URL, a clock time, `host:8080`) is ignored.
+A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
+read; several may share one backtick span, separated by commas or semicolons; one inside a span with other
+words is read too if its path has a slash or an extension). Fenced code blocks are skipped. A URL, a clock
+time, an IPv4 address or `host.com:8080` is ignored. A whole-span `Name:5` with no dot or slash is checked as a
+file, so write a port or a key such as `status:200` without backticks.
 Prints the number checked and each bad citation as `doc:line: citation: reason`.
 Exit 0: all good. 1: at least one bad citation. 2: usage error, or no citations at all (an uncited doc is not checked).
 Stdlib only.
@@ -15,11 +17,29 @@ import re
 import sys
 
 SPAN = re.compile(r"`([^`\n]+)`")
-PART = re.compile(r"^([^\s:`]+):(\d+)(?:-(\d+))?$")
+PART = re.compile(r"^([^\s:`]+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$")
+# A citation-shaped token inside a span that also holds other words, such as `see src/a.rs:2`.
+EMBEDDED = re.compile(r"(?<![\w/.:@+-])([\w.@+/-]+)\s*:\s*(\d+)(?:-(\d+))?")
 HOST_SUFFIXES = {"com", "org", "net", "io", "dev", "app", "internal", "local", "lan", "home"}
+IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
 
-def candidates(text):
+def is_path(repo, path, strict):
+    """Should this token be checked as a file citation? Skip clock times, hosts and ports. A whole-span
+    token such as `Makefile:5` is checked even with no dot or slash, so a missing file is reported."""
+    if os.path.exists(os.path.join(repo, path)):
+        return True
+    if path == "localhost" or IPV4.match(path):
+        return False
+    if "/" in path:
+        return True
+    ext = path.rsplit(".", 1)
+    if len(ext) == 2:
+        return ext[1].lower() not in HOST_SUFFIXES
+    return strict and path[0].isalpha()
+
+
+def candidates(text, repo):
     """Yield (doc_line_no, path, start, end) for each citation-shaped token."""
     fenced = False
     for n, line in enumerate(text.splitlines(), 1):
@@ -31,23 +51,16 @@ def candidates(text):
         for span in SPAN.findall(line):
             parts = [p.strip() for p in re.split(r"[;,]\s*", span.strip()) if p.strip()]
             matches = [PART.match(p) for p in parts]
-            if not parts or not all(matches):
-                continue
-            for m in matches:
+            if parts and all(matches):
+                found, strict = matches, True
+            else:
+                found, strict = list(EMBEDDED.finditer(span)), False
+            for m in found:
+                if not is_path(repo, m.group(1), strict):
+                    continue
                 start = int(m.group(2))
                 end = int(m.group(3)) if m.group(3) else start
                 yield n, m.group(1), start, end
-
-
-def looks_like_path(repo, path):
-    if os.path.exists(os.path.join(repo, path)):
-        return True
-    if "/" in path:
-        return True
-    base = path.rsplit(".", 1)
-    if len(base) == 2 and base[1].lower() in HOST_SUFFIXES:
-        return False  # host.example.com:8080
-    return "." in path
 
 
 def line_count(full):
@@ -60,9 +73,7 @@ def check(doc_text, repo):
     """Return (checked, bad) where bad is a list of (doc_line, citation, reason)."""
     repo = os.path.realpath(repo)
     checked, bad = 0, []
-    for n, path, start, end in candidates(doc_text):
-        if not looks_like_path(repo, path):
-            continue
+    for n, path, start, end in candidates(doc_text, repo):
         checked += 1
         cite = "%s:%d%s" % (path, start, "-%d" % end if end != start else "")
         full = os.path.realpath(os.path.join(repo, path))

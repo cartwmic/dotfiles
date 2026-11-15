@@ -21,6 +21,11 @@ FILES = {
     "scripts/ship-journey.sh": "#!/bin/sh\n# Ships a build end to end.\ntrue\n",
     "node_modules/x/a.test.js": "it('vendored', () => {});\n",
     "target/debug/t.rs": "#[test]\nfn built() {}\n",
+    "src/many.rs": "#[test_case(1)]\n#[test_case(2)]\nfn param(x: i32) {}\n",
+    "src/test/java/CartTest.java": "class CartTest {\n  @Test\n  void adds() {}\n  @ParameterizedTest\n  @ValueSource(ints = 1)\n  public void many(int x) {}\n  @Test void inline() {}\n  @TestInstance void nope() {}\n}\n",
+    "Pay.Tests/PayTests.cs": "public class PayTests {\n  [Fact]\n  public void Charges() {}\n  [Theory]\n  [InlineData(1)]\n  public async Task Refunds(int x) {}\n  [Test]\n  public void NUnitStyle() {}\n}\n",
+    "cpp/cart_test.cc": "TEST(Cart, AddsItem) {}\nTEST_F(Fix, Works) {}\nTEST_CASE(\"catch case\") {}\n",
+    "Tests/CartTests.swift": "import XCTest\nclass CartTests: XCTestCase {\n    func testAdd() {}\n    func helper() {}\n}\n",
     "README.md": "# not code\n",
 }
 
@@ -81,6 +86,25 @@ class HarvestTest(unittest.TestCase):
     def test_rust_attribute_variants_report_the_fn_line(self):
         pts = [(p["name"], p["line"]) for p in self.points if p["file"] == "src/lib.rs"]
         self.assertEqual(pts, [("plain", 2), ("with_runtime", 5), ("ignored", 9)])
+
+    def test_stacked_rust_test_case_lines_list_the_fn_once(self):
+        self.assertEqual([(p["name"], p["line"]) for p in self.points if p["file"] == "src/many.rs"], [("param", 3)])
+
+    def test_junit(self):
+        pts = [(p["name"], p["line"], p["context"], p["framework"]) for p in self.points if p["file"].endswith("CartTest.java")]
+        self.assertEqual(pts, [("adds", 3, "CartTest", "junit"), ("many", 6, "CartTest", "junit"), ("inline", 7, "CartTest", "junit")])
+
+    def test_csharp_xunit_and_nunit(self):
+        pts = [(p["name"], p["line"], p["framework"]) for p in self.points if p["file"].endswith("PayTests.cs")]
+        self.assertEqual(pts, [("Charges", 3, "xunit"), ("Refunds", 6, "xunit"), ("NUnitStyle", 8, "nunit")])
+
+    def test_googletest_and_catch2(self):
+        pts = [(p["name"], p["line"], p["framework"]) for p in self.points if p["file"] == "cpp/cart_test.cc"]
+        self.assertEqual(pts, [("Cart.AddsItem", 1, "googletest"), ("Fix.Works", 2, "googletest"), ("catch case", 3, "catch2")])
+
+    def test_swift_xctest(self):
+        pts = [(p["name"], p["line"], p["context"]) for p in self.points if p["file"].endswith("CartTests.swift")]
+        self.assertEqual(pts, [("testAdd", 3, "CartTests")])
 
     def test_go(self):
         self.assertEqual(self.names("pkg/a_test.go"), ["TestThing"])
@@ -163,6 +187,29 @@ class CitationTest(unittest.TestCase):
         code, out = check("`src/a.rs:1, src/gone.rs:2`\n", REPO)
         self.assertEqual(code, 1)
         self.assertIn("checked 2 citations, 1 bad", out)
+
+    def test_dotless_missing_file_and_space_after_colon_are_not_skipped(self):
+        code, out = check("Build with `Makefile:5`, then `src/a.rs: 2`, and `src/gone.rs: 1`.\n", {"src/a.rs": "one\ntwo\n"})
+        self.assertEqual(code, 1)
+        self.assertIn("checked 3 citations, 2 bad", out)
+        self.assertIn("Makefile:5: no such file", out)
+        self.assertIn("src/gone.rs:1: no such file", out)
+
+    def test_citation_inside_a_span_with_other_words_is_checked(self):
+        code, out = check("`see src/a.rs:9 for it`\n", REPO)
+        self.assertEqual(code, 1)
+        self.assertIn("src/a.rs:9: line out of range", out)
+
+    def test_every_citation_in_the_doc_is_counted(self):
+        doc = "`src/a.rs:1` `Makefile:2` `src/a.rs: 3` `see src/a.rs:2 x` `src/a.rs:1-3`\n"
+        code, out = check(doc, REPO)
+        self.assertEqual(code, 0)
+        self.assertIn("checked 5 citations, 0 bad", out)
+
+    def test_ipv4_and_timestamps_are_not_citations(self):
+        code, out = check("At `127.0.0.1:8080` and `2026-11-15T03:04:17`, see `src/a.rs:1`.\n", REPO)
+        self.assertEqual(code, 0)
+        self.assertIn("checked 1 citations", out)
 
     def test_a_doc_with_no_citations_fails(self):
         code, out = check("Plain prose, nothing to check.\n", REPO)
