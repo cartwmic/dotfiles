@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""video-rename: rename numbered video files to their titles, looked up on a website you configure.
+
+usage: video-rename FOLDER                 dry run: print old -> new for each file, change nothing
+       video-rename FOLDER --apply         rename, and write an undo log
+       video-rename --undo LOG             reverse an earlier --apply
+options: --config FILE (default ~/.config/video-rename/config.toml)
+         --delay SECONDS (wait between requests; overrides delay_seconds in the config)
+
+The site is never named here. url_template, how to read the title and the other settings live in your
+config file (docs/video-rename.example.toml shows every key). Only files in FOLDER itself are looked at,
+not folders inside it. Python standard library only (tomllib needs Python 3.11 or newer).
+"""
+import argparse
+import datetime
+import html
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".ts", ".mpg", ".mpeg"}
+DEFAULT_CONFIG = "~/.config/video-rename/config.toml"
+LOG_DIR = "~/.local/state/video-rename"
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+MAX_NAME_BYTES = 255
+HTML_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+class Error(Exception):
+    """A problem to report in one line, without a traceback."""
+
+
+# ---- pure: ids, titles, names -------------------------------------------------------------------
+
+def find_id(stem, id_regex):
+    """The id in a file stem, or None when the file is not a numbered one (so already renamed)."""
+    m = id_regex.search(stem)
+    if not m:
+        return None
+    return m.group(1) if id_regex.groups else m.group(0)
+
+
+def json_field(data, path):
+    """Follow a dotted path such as "data.title" or "items.0.name" through parsed JSON."""
+    for part in path.split("."):
+        if isinstance(data, list):
+            data = data[int(part)]
+        else:
+            data = data[part]
+    return data
+
+
+def extract_title(body, cfg):
+    """The title in a response body, cleaned for use in a file name, or None when the body has none."""
+    source = cfg["title_from"]
+    if source == "html":
+        m = HTML_TITLE.search(body)
+        raw = html.unescape(m.group(1)) if m else None
+    elif source == "regex":
+        m = cfg["title_regex"].search(body)
+        raw = (m.group(1) if cfg["title_regex"].groups else m.group(0)) if m else None
+    else:
+        try:
+            raw = json_field(json.loads(body), cfg["title_json_path"])
+        except (ValueError, KeyError, IndexError, TypeError):
+            return None
+        raw = raw if isinstance(raw, str) else None
+    if raw is None:
+        return None
+    for pattern in cfg["strip"]:
+        raw = pattern.sub("", raw)
+    return safe_title(raw) or None
+
+
+def safe_title(title):
+    """A title that is a valid macOS file name part: no / or :, no control characters, one space between words."""
+    title = title.replace(":", " -")
+    title = re.sub(r"[/\x00-\x1f\x7f]", "-", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title.lstrip(".").rstrip(". ")
+
+
+def fit_name(title, ext):
+    """title + ext cut to 255 bytes of UTF-8 (the file name limit), cutting the title only."""
+    room = MAX_NAME_BYTES - len(ext.encode())
+    cut = title.encode()[:room].decode(errors="ignore").rstrip(". ")
+    return cut + ext
+
+
+def unique_name(title, ext, taken):
+    """title+ext, or title (2)+ext, (3)... the first one not in `taken` (compared case-insensitively, as macOS does)."""
+    name = fit_name(title, ext)
+    n = 2
+    while name.lower() in taken:
+        name = fit_name(f"{title} ({n})", ext)
+        n += 1
+    return name
+
+
+# ---- adapters: config, network, disk ------------------------------------------------------------
+
+def load_config(path):
+    import tomllib  # Python 3.11+
+    path = os.path.expanduser(path)
+    try:
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+    except FileNotFoundError:
+        raise Error(f"no config at {path}; copy docs/video-rename.example.toml there and fill it in (see the README)")
+    except tomllib.TOMLDecodeError as e:
+        raise Error(f"config {path} is not valid TOML: {e}")
+
+    def regex(key, default=None):
+        try:
+            return re.compile(raw.get(key, default))
+        except (re.error, TypeError) as e:
+            raise Error(f"config {key}: {e}")
+
+    template = raw.get("url_template")
+    if not isinstance(template, str) or "{id}" not in template:
+        raise Error('config url_template must be a string containing "{id}"')
+    cfg = {
+        "url_template": template,
+        "id_regex": regex("id_regex", r"^[0-9]+$"),
+        "title_from": raw.get("title_from", "html"),
+        "strip": [regex_str(p) for p in raw.get("strip", [])],
+        "delay": float(raw.get("delay_seconds", 1.0)),
+        "headers": read_headers(raw.get("headers_file")),
+    }
+    if cfg["title_from"] not in ("html", "regex", "json"):
+        raise Error('config title_from must be "html", "regex" or "json"')
+    if cfg["title_from"] == "regex":
+        cfg["title_regex"] = regex("title_regex")
+    if cfg["title_from"] == "json":
+        if not isinstance(raw.get("title_json_path"), str):
+            raise Error('config title_json_path is needed when title_from = "json"')
+        cfg["title_json_path"] = raw["title_json_path"]
+    return cfg
+
+
+def regex_str(pattern):
+    try:
+        return re.compile(pattern)
+    except (re.error, TypeError) as e:
+        raise Error(f"config strip pattern {pattern!r}: {e}")
+
+
+def read_headers(path):
+    """Extra request headers from a file of `Name: value` lines (blank lines and # comments ignored)."""
+    headers = {"User-Agent": USER_AGENT}
+    if not path:
+        return headers
+    try:
+        with open(os.path.expanduser(path)) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        raise Error(f"config headers_file: {e}")
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            name, sep, value = line.partition(":")
+            if not sep:
+                raise Error(f"headers_file line has no colon: {line!r}")
+            headers[name.strip()] = value.strip()
+    return headers
+
+
+def fetch(url, headers):
+    """The response body as text. Raises Error with a short reason on any failure."""
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+            charset = resp.headers.get_content_charset() or "utf-8"
+    except urllib.error.HTTPError as e:
+        raise Error(f"HTTP {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        raise Error(f"request failed: {getattr(e, 'reason', e)}")
+    return data.decode(charset, errors="replace")
+
+
+# ---- use cases ----------------------------------------------------------------------------------
+
+def plan(folder, cfg, delay):
+    """Look up each numbered video in `folder`. Returns (renames, skipped, already) where renames is a list of (old_path, new_path, id)."""
+    entries = sorted(e for e in os.listdir(folder) if os.path.isfile(os.path.join(folder, e)))
+    taken = {e.lower() for e in entries}
+    renames, skipped, already = [], [], 0
+    first = True
+    for entry in entries:
+        stem, ext = os.path.splitext(entry)
+        if ext.lower() not in VIDEO_EXTENSIONS:
+            continue
+        vid = find_id(stem, cfg["id_regex"])
+        if vid is None:
+            already += 1
+            continue
+        if not first and delay > 0:
+            time.sleep(delay)
+        first = False
+        try:
+            title = extract_title(fetch(cfg["url_template"].format(id=urllib.parse.quote(vid, safe="")), cfg["headers"]), cfg)
+            if title is None:
+                raise Error("no title found in the response")
+        except Error as e:
+            skipped.append((entry, str(e)))
+            continue
+        name = unique_name(title, ext, taken)
+        taken.discard(entry.lower())
+        taken.add(name.lower())
+        renames.append((os.path.join(folder, entry), os.path.join(folder, name), vid))
+    return renames, skipped, already
+
+
+def apply_renames(renames, folder, log_path):
+    """Rename each file, recording it in the undo log (one JSON line, flushed) before moving on."""
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "x") as log:
+        log.write(json.dumps({"event": "start", "at": now(), "folder": folder}) + "\n")
+        log.flush()
+        for old, new, vid in renames:
+            if os.path.lexists(new) and old.lower() != new.lower():
+                raise Error(f"refusing to overwrite {new}")  # planned names avoid this; the disk changed since
+            os.rename(old, new)
+            log.write(json.dumps({"event": "rename", "at": now(), "id": vid, "from": old, "to": new}) + "\n")
+            log.flush()
+
+
+def undo(log_path):
+    """Reverse an apply log, newest rename first. Skips (and reports) anything that moved or would be overwritten."""
+    try:
+        with open(os.path.expanduser(log_path)) as f:
+            entries = [json.loads(line) for line in f if line.strip()]
+    except (OSError, ValueError) as e:
+        raise Error(f"cannot read undo log {log_path}: {e}")
+    restored = skipped = 0
+    for entry in reversed([e for e in entries if e.get("event") == "rename"]):
+        old, new = entry["from"], entry["to"]
+        if not os.path.lexists(new):
+            print(f"skip   {new}: not there any more")
+            skipped += 1
+        elif os.path.lexists(old):
+            print(f"skip   {new}: {old} already exists")
+            skipped += 1
+        else:
+            os.rename(new, old)
+            print(f"undone {new} -> {old}")
+            restored += 1
+    print(f"{restored} restored, {skipped} skipped")
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("folder", nargs="?")
+    ap.add_argument("--apply", action="store_true", help="rename for real (default is a dry run)")
+    ap.add_argument("--undo", metavar="LOG", help="reverse the renames in an undo log")
+    ap.add_argument("--config", default=DEFAULT_CONFIG)
+    ap.add_argument("--delay", type=float, help="seconds to wait between requests")
+    args = ap.parse_args(argv)
+    try:
+        if args.undo:
+            if args.folder or args.apply:
+                raise Error("--undo takes only a log file")
+            return undo(args.undo)
+        if not args.folder:
+            ap.error("FOLDER is required")
+        folder = os.path.abspath(os.path.expanduser(args.folder))
+        if not os.path.isdir(folder):
+            raise Error(f"{folder} is not a folder")
+        cfg = load_config(args.config)
+        delay = cfg["delay"] if args.delay is None else args.delay
+        renames, skipped, already = plan(folder, cfg, delay)
+        log_path = os.path.join(os.path.expanduser(LOG_DIR), f"undo-{now().replace(':', '')}.jsonl")
+        for old, new, _ in renames:
+            print(f"{os.path.basename(old)} -> {os.path.basename(new)}")
+        if args.apply and renames:
+            apply_renames(renames, folder, log_path)
+        if skipped:
+            print(f"\nno title for {len(skipped)} file(s), left as they are:")
+            for entry, why in skipped:
+                print(f"  {entry}: {why}")
+        verb = "renamed" if args.apply else "would rename"
+        print(f"\n{verb} {len(renames)}, {len(skipped)} without a title, {already} already named")
+        if args.apply and renames:
+            print(f"undo log: {log_path}  (undo with: video-rename --undo {log_path})")
+        elif not args.apply and renames:
+            print("dry run; add --apply to rename")
+    except Error as e:
+        print(f"video-rename: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

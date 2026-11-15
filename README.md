@@ -753,6 +753,34 @@ Known limits: when a script template does not render, `chezmoi status` fails, so
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 
+## Renaming numbered videos (`video-rename`)
+
+Personal Mac only. The work profile and Linux do not get it: it is a personal media task on that one machine.
+
+Some of your video files are named with a number (`12345.mp4`), one per video on a website. `video-rename` looks each number up on that website and renames the file to the video's title. It never names the website: you describe it in a config file that stays on your Mac (`~/.config/video-rename/config.toml`, never committed; chezmoi is told to leave that folder alone).
+
+### Fill in the config
+
+1. Copy the example: `mkdir -p ~/.config/video-rename && cp ~/.local/share/chezmoi/docs/video-rename.example.toml ~/.config/video-rename/config.toml`, then open it.
+2. Open one of the videos in your browser. Copy its address from the address bar and replace the number in it with `{id}`. That is `url_template`. For example, `https://example.invalid/video/12345` becomes `https://example.invalid/video/{id}`.
+3. Find where the title shows, and set `title_from`:
+   - **The browser tab's name is the title** (the usual case). Use `"html"`, the default, and leave the rest.
+   - **The title is in the page text but the tab says something else.** Right-click the title on the page, choose Inspect, and look at the line around it, for example `<h1 class="video-title">Some Title</h1>`. Use `"regex"` and write `title_regex = '<h1 class="video-title">(.*?)</h1>'`. The brackets mark the part to keep.
+   - **The address gives you a data page (JSON) rather than a normal page.** Open it in the browser; you will see `{ "data": { "title": "Some Title" } }`. Use `"json"` and write the route to the title: `title_json_path = "data.title"`. A number steps into a list: `items.0.name`.
+4. Cut site boilerplate. If tab names look like `Some Title | Example Site`, add `strip = ["\\s*\\|\\s*Example Site$"]` (a regular expression for what to remove; it is removed from every title).
+5. If the site only shows videos when you are signed in, copy the `Cookie: ...` request header from your browser's developer tools (Network tab, click the page request) into a text file, one `Name: value` line per header, and set `headers_file` to it. Keep that file out of git.
+6. Only if your file names are not plain numbers (say `video-12345.mp4`): set `id_regex = "^video-([0-9]+)$"`, with brackets around the number.
+
+### Use it
+
+- `video-rename ~/Movies/folder` is a **dry run**: it prints `old -> new` for every file and changes nothing. Look at the list first.
+- `video-rename ~/Movies/folder --apply` renames the files and writes an undo log in `~/.local/state/video-rename/`. The last line it prints is the log's path.
+- `video-rename --undo ~/.local/state/video-rename/undo-<time>.jsonl` puts every name back. It leaves alone a file that is gone or whose old name has been taken since.
+
+What it does with edge cases: it never overwrites a file (a clash gets ` (2)`, ` (3)`); `/` and `:` in a title are replaced so macOS accepts the name, and the extension is kept; a file whose title cannot be found is listed at the end and left as it is; files that no longer have a numeric name (already renamed) are skipped, so you can run it again any time on the same folder as new videos arrive. It looks at the files in the folder itself, not in folders inside it. `--delay SECONDS` (or `delay_seconds` in the config) sets the wait between requests, 1 second by default. It needs Python 3.11 or newer, which the mise setup provides.
+
+Tests: `python3 -m unittest discover -s tests/video-rename -v` (a local fake web server and a temp folder of fake files; no real site is involved).
+
 ## Docs map
 
 Start here for machine setup and user workflows. For work in this source tree,
