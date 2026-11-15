@@ -242,7 +242,7 @@ def gates(source, pr, log):
     """The merge gates the playbook names. A red main stops the merge, and so does a PR body that fails the body check."""
     main = run(["ci-main-status", "--merge-gate", "dotfiles", "--pr", str(pr["number"])], "gates", cwd=source, check=False)
     if main.returncode != 0:
-        raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, (main.stdout or main.stderr).strip()))
+        raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, "\n".join(s for s in (main.stdout.strip(), main.stderr.strip()) if s)))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
         raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, (body.stdout or body.stderr).strip()))

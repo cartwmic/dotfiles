@@ -95,6 +95,7 @@ FAKE_GATE = r'''#!/bin/sh
 # A scripted merge gate: logs its call, and refuses when FAKE_GATE_REFUSE names it.
 echo "$(basename "$0") $*" >> "$FAKE_CALL_LOG"
 if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
+  echo "$(basename "$0"): RED on stdout"
   echo "$(basename "$0"): refused by the test" >&2
   exit 1
 fi
@@ -284,9 +285,14 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertFalse(any(c.startswith("gh pr merge") for c in self.calls()))
         self.assert_nothing_applied()
         self.assertEqual(self.prs()[0]["state"], "OPEN")
+        return result
 
     def test_a_red_main_stops_before_the_merge_and_applies_nothing(self):
         self.refused_gate("ci-main-status")
+
+    def test_the_stop_message_shows_the_gates_stdout_and_its_refusal_reason(self):
+        result = self.refused_gate("ci-main-status")
+        self.assertIn("ci-main-status: RED on stdout\nci-main-status: refused by the test", result.stderr)
 
     def test_a_pr_body_that_fails_the_body_check_stops_before_the_merge_and_applies_nothing(self):
         self.refused_gate("pr-body-check")

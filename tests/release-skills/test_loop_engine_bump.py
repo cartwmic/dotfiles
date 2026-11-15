@@ -104,6 +104,7 @@ FAKE_GATE = r'''#!/bin/sh
 # A scripted merge gate: logs its call to FAKE_CALL_LOG, and refuses when FAKE_GATE_REFUSE names it.
 echo "$(basename "$0") $*" >> "$FAKE_CALL_LOG"
 if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
+    echo "$(basename "$0"): RED on stdout"
     echo "refused by the fake $(basename "$0")" >&2
     exit 1
 fi
@@ -436,6 +437,7 @@ class BumpTests(Fixture):
         self.refuse = "ci-main-status"
         result = self.bump()
         self.assert_stopped(result, "gates", "ci-main-status --merge-gate dotfiles --pr 100 exited 1")
+        self.assertIn("ci-main-status: RED on stdout\nrefused by the fake ci-main-status", result.stderr, "stdout and the refusal reason from stderr both show")
         self.assertEqual(self.gh_calls("merge"), [])
         self.assertEqual(self.load()["prs"][0]["state"], "OPEN")
         self.assert_nothing_applied()
