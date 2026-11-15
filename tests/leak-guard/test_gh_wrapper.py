@@ -1038,9 +1038,46 @@ class WrapperLog(WrapperBase):
         self.assertEqual(stat.S_IMODE((d / "log.jsonl").stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o700)
 
+class WrapperHelpValue(Decisions):
+    """`--help=false` is not help (gh's flag library parses a boolean flag's value with strconv.ParseBool), so the command still sends its text."""
+    TRUE = ("true", "TRUE", "True", "t", "T", "1")
+    NOT_TRUE = ("false", "FALSE", "False", "f", "F", "0", "no", "")      # the first six are false; "no" and "" gh rejects as invalid, and neither is help here
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_help_with_a_value_that_is_not_true_does_not_hide_the_text_in_any_position(self):
+        for value in self.NOT_TRUE:
+            for flag in ("--help=" + value, "-h=" + value):
+                for args in (["pr", flag, "comment", "3", "-b", PLANTED], ["pr", "comment", "3", flag, "-b", PLANTED], ["pr", "-R", GUARDED, flag, "comment", "3", "-b", PLANTED],
+                             ["issue", "comment", "3", "-b", PLANTED, flag]):
+                    with self.subTest(args):
+                        if flag.startswith("-h=") and args.index("comment") > 1:
+                            continue          # `gh pr -h=x comment` is a group flag the table does not list: refused as before
+                        result = outcome(self, *args)
+                        self.assertEqual(result[:2], ("ok", args[0] + " comment"), result)
+                        self.assertEqual(result[2]["body"], PLANTED)
+
+    def test_help_with_no_value_or_a_true_value_is_still_help(self):
+        for flag in ["--help", "-h"] + ["--help=" + v for v in self.TRUE] + ["-h=" + v for v in self.TRUE]:
+            for args in (["pr", "comment", "3", flag, "-b", PLANTED], ["issue", "comment", "3", "-b", PLANTED, flag]):
+                with self.subTest(args):
+                    self.assertEqual(self.decide(*args, repo=GUARDED), ("", None))
+        for flag in ["--help", "--help=true", "--help=1"]:
+            with self.subTest(flag):
+                self.assertEqual(self.decide("pr", flag, "comment", "3", "-b", PLANTED, repo=GUARDED), ("", None))
+
+    def test_gh_api_with_help_false_is_still_checked(self):
+        ep = "repos/%s/issues/1/comments" % GUARDED
+        name, texts = self.decide("api", ep, "-f", "body=" + PLANTED, "--help=false", repo="someone/other")
+        self.assertEqual(name, "api")
+        self.assertEqual(self.decide("api", ep, "-f", "body=" + PLANTED, "--help=true", repo="someone/other"), ("", None))
+
+    def test_end_to_end_help_false_is_checked_and_help_true_runs_untouched(self):
+        for args in (["pr", "--help=false", "comment", "3", "-b", PLANTED, "-R", GUARDED], ["pr", "comment", "3", "--help=false", "-b", PLANTED, "-R", GUARDED]):
+            with self.subTest(args):
+                self.reset()
+                self.assertBlocked(self.gh(*args, cwd=self.other_cwd), "term 1")
+        self.reset()
+        args = ["pr", "comment", "3", "--help=true", "-b", PLANTED, "-R", GUARDED]
+        self.assertRan(self.gh(*args, cwd=self.other_cwd), *args)
 
 
 class WrapperRemoteSpellings(WrapperBase):
@@ -1108,3 +1145,7 @@ class WrapperLocalOnly(WrapperBase):
                 self.assertIsNone(self.real_calls()[0]["prompt_disabled"])
         self.reset()
         self.assertBlocked(self.gh("repo", "edit", "--description", "x"), "gh repo edit")          # other repo writes are still refused
+
+
+if __name__ == "__main__":
+    unittest.main()
