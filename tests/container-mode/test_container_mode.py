@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "aqua:1password/cli"}
-SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_install.sh"}
+SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
 LEFT_OUT = [".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
@@ -65,12 +65,11 @@ class ContainerHome(Scratch):
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", self.settings["env"])
         self.assertFalse((self.home / ".claude/.credentials.json").exists())
 
-    def test_only_the_three_run_scripts_stay_and_none_runs_on_every_apply(self):   # c6: plain `chezmoi verify` has no always-pending script
+    def test_only_the_five_run_scripts_stay_and_none_runs_on_every_apply(self):   # c6: plain `chezmoi verify` has no always-pending script
         scripts = {p for p in self.managed if p[:2].isdigit() and p.endswith(".sh") and "/" not in p}
         self.assertEqual(scripts, SCRIPTS)
-        for script in (ROOT / "run_onchange_after_05_container_tools.sh.tmpl", ROOT / "run_onchange_after_20_apply_harness_config.sh.tmpl",
-                       ROOT / "run_onchange_after_65_agent_kit_install.sh.tmpl"):
-            self.assertTrue(script.exists(), script)   # run_onchange: recorded after the first success, so verify is clean after it
+        for name in SCRIPTS:   # run_onchange: recorded after the first success, so `chezmoi verify` is clean after it
+            self.assertTrue(list(ROOT.glob("run_onchange_after_" + name.removesuffix(".sh") + ".sh*")), name)
 
     def test_desktop_systemd_launchd_and_unused_tool_files_are_left_out(self):
         for left in LEFT_OUT:
@@ -80,7 +79,7 @@ class ContainerHome(Scratch):
         r = chezmoi(self.config, self.home, "verify", "--exclude=scripts,externals")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
         status = chezmoi(self.config, self.home, "status", "--exclude=externals").stdout.split("\n")
-        self.assertEqual({line.split()[-1] for line in status if line}, SCRIPTS)   # exactly the three scripts are still to run
+        self.assertEqual({line.split()[-1] for line in status if line}, SCRIPTS)   # exactly the kept scripts are still to run
 
     def test_the_four_seat_instances_exist_on_a_pod_where_t3_has_not_written_its_settings_yet(self):   # playbook 05f37568
         instances = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
