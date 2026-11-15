@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command, then run the four checks of bash_rules.py (sleep-poll, heredoc, kube context, merge).
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the five checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, local docker).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
   Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
@@ -421,7 +421,7 @@ def load_profile(env, directory):
 
 
 def bash_rules_message(command, raw):
-    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge), else None. Any error allows the command."""
+    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, local docker), else None. Any error allows the command."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path:

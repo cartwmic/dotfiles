@@ -1,4 +1,4 @@
-"""The four bash_rules checks (sleep-poll, heredoc, kube context, merge): what each refuses and what it lets through.
+"""The five bash_rules checks (sleep-poll, heredoc, kube context, merge, local docker): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -30,8 +30,8 @@ def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, orig
                               origin_of=lambda directory: origins.get(directory))
 
 
-def check(text, **kw):
-    return bash_rules.check(text, ctx(**kw))
+def check(text, platform="linux", **kw):
+    return bash_rules.check(text, bash_rules.Context(**dict(ctx(**kw)._asdict(), platform=platform)))
 
 
 class Poll(unittest.TestCase):
@@ -287,6 +287,71 @@ class Merge(unittest.TestCase):
             self.assertIsNone(check("gh pr merge 12", profile=profile))
 
 
+class Docker(unittest.TestCase):
+    REFUSED = [
+        ("docker run --rm alpine true", "docker run"),
+        ("docker build -t x .", "docker build"),
+        ("docker compose up -d", "docker compose up"),
+        ("docker container run alpine", "docker container run"),
+        ("docker image build .", "docker image build"),
+        ("docker buildx build --push .", "docker buildx build"),
+        ("docker builder build .", "docker builder build"),
+        ("docker-compose up", "docker compose up"),
+        ("docker-compose -f x.yml up -d", "docker compose up"),
+        ("docker compose -f x.yml -p demo up", "docker compose up"),
+        ("docker --context other run alpine", "docker run"),
+        ("docker -H ssh://host build .", "docker build"),
+        ("sudo docker run alpine", "docker run"),
+        ("sudo -u root docker build .", "docker build"),
+        ("env A=1 docker run alpine", "docker run"),
+        ("timeout 200 docker run --rm alpine true", "docker run"),
+        ("bash -c 'docker run alpine'", "docker run"),
+        ("sh -lc \"cd /x && docker build .\"", "docker build"),
+        ("cd /x && docker compose up", "docker compose up"),
+        ("echo hi; docker run alpine", "docker run"),
+        ("true || docker build .", "docker build"),
+        ("which docker && docker run alpine | tail -3", "docker run"),
+        ("x=$(docker run alpine)", "docker run"),
+        ("find . -name x -exec docker build . \\;", "docker build"),
+        ("run-and-wake -- docker build .", "docker build"),
+    ]
+    ALLOWED = [
+        "docker ps", "docker ps -a --filter name=run", "docker images", "docker image ls", "docker inspect build",
+        "docker manifest inspect ghcr.io/x/y@sha256:abc", "docker compose ps", "docker compose logs run", "docker compose down",
+        "docker buildx ls", "docker buildx imagetools inspect x", "docker rmi x", "docker logs run", "docker version", "docker info",
+        "docker-compose ps", "echo docker run", "grep 'docker run' notes.md", "git commit -m 'no docker build here'",
+        "cat Dockerfile.build", "dockerd --version", "podman ps",
+        "kgate -- docker build .", "run-and-wake -- kgate -- docker run alpine true", "kgate --cpu 4 -- sh -c 'docker build .'",
+        "ssh kgate-host docker run alpine",
+    ]
+
+    def test_refused_with_the_fix_named(self):
+        for text, spelling in self.REFUSED:
+            with self.subTest(text=text):
+                message = check(text) or ""
+                self.assertIn("`%s` is refused in agent sessions" % spelling, message)
+                self.assertIn("kgate", message)
+                self.assertIn("throwaway namespace on the homelab cluster", message)
+
+    def test_allowed(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_only_personal_linux_runs_it(self):
+        text = "docker run alpine true"
+        for profile, platform, want in [("personal", "linux", True), ("personal", "darwin", False), ("axon-work-computer", "linux", False),
+                                        ("axon-work-computer", "darwin", False), (None, "linux", False)]:
+            with self.subTest(profile=profile, platform=platform):
+                self.assertEqual(bool(check(text, profile=profile, platform=platform)), want)
+
+    def test_the_hosts_own_platform_is_used_when_the_context_has_none(self):
+        with mock.patch.object(bash_rules.sys, "platform", "darwin"):
+            self.assertIsNone(bash_rules.check("docker run alpine", ctx()))
+        with mock.patch.object(bash_rules.sys, "platform", "linux"):
+            self.assertTrue(bash_rules.check("docker run alpine", ctx()))
+
+
 class Hook(unittest.TestCase):
     """The real script, copied beside a `profile` file in a temp dir."""
 
@@ -348,7 +413,8 @@ class Hook(unittest.TestCase):
 
     def test_every_refusal_carries_the_phrase_the_pi_extension_looks_for(self):
         for command, profile in [("until ok; do sleep 1; done", None), ("cat <<EOF\n`x`\nEOF", None), ("gh pr merge 1", "personal"),
-                                 ("kubectl --context a get no", "personal"), ("pkill x", None)]:
+                                 ("kubectl --context a get no", "personal"), ("pkill x", None)] + (
+                [("docker build .", "personal")] if sys.platform.startswith("linux") else []):
             with self.subTest(command=command):
                 run = self.run_hook(command, profile=profile)
                 self.assertEqual(run.returncode, 2)
@@ -369,6 +435,28 @@ class Hook(unittest.TestCase):
         self.assertEqual(self.run_hook("pkill x", hooks=broken).returncode, 2)  # the old check still works
         (broken / "bash_rules.py").unlink()  # a missing sibling allows too
         self.assertEqual(self.run_hook("until ok; do sleep 1; done", hooks=broken).returncode, 0)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the docker rule runs on Linux only")
+    def test_the_reviewers_real_docker_runs_are_refused_through_the_real_script(self):
+        """Homelab#288 round 2: the reviewer ran the pinned Yamtrack image with `docker run` (recorded tool calls in fixtures/)."""
+        for name in ("docker-run-yamtrack-reviewer-1.json", "docker-run-yamtrack-reviewer-2.json"):
+            payload = json.loads((Path(__file__).parent / "fixtures" / name).read_text())
+            env = dict(os.environ, AGENT_HARNESS_PROFILE="personal")
+            with self.subTest(fixture=name):
+                run = subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                                     capture_output=True, text=True, env=env, timeout=30)
+                self.assertEqual(run.returncode, 2)
+                self.assertIn("`docker run` is refused in agent sessions", run.stderr)
+                self.assertIn("kgate", run.stderr)
+                self.assertIn("throwaway namespace", run.stderr)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the docker rule runs on Linux only")
+    def test_docker_is_left_alone_on_the_work_profile_and_with_no_profile(self):
+        self.set_profile_file(None)
+        self.assertEqual(self.run_hook("docker run alpine", profile="personal").returncode, 2)
+        self.assertEqual(self.run_hook("docker run alpine", profile="axon-work-computer").returncode, 0)
+        self.assertEqual(self.run_hook("docker run alpine").returncode, 0)
+        self.assertEqual(self.run_hook("docker ps", profile="personal").returncode, 0)
 
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()
