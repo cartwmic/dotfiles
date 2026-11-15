@@ -81,6 +81,7 @@ python3 scripts/ci-par.py \
   tests/agent-desktop \
   tests/hill-climb \
   tests/deriving-readable-docs \
+  tests/kelsey-intake \
   tests/git-credential \
   tests/ci-par \
   tests/release-pins \
