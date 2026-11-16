@@ -4,6 +4,8 @@ The G14 has PowerShell 5.1 only. These tests run under PowerShell 7 on Linux, so
   * parse every file and walk its syntax tree and tokens for forms only PowerShell 7 knows (the scanner is proven on planted
     fixtures first, so a scanner that finds nothing cannot pass);
   * keep the files ASCII (5.1 reads a file with no byte-order mark as ANSI);
+  * compile the compiled client (agent-desktop-client.cs) as C# 5, the compiler that ships with Windows, and keep its list of key
+    and modifier names the same as the worker's;
   * run install.ps1 against a stub release (stub curl.exe and tar.exe on PATH, a stub ScheduledTasks module): a fresh install,
     a wrong checksum, a second run that downloads and changes nothing, and the task it registers (one long-lived worker: one
     instance at a time, no time limit, started at logon, and a task of the old shape is registered again).
@@ -23,7 +25,7 @@ import windows_testlib as wt
 from windows_testlib import ASSET, RELEASE, VERSION, WINDOWS, Sandbox, WindowsTestCase, pwsh
 
 PS1 = ("install.ps1", "agent-desktop.ps1")
-FILES = PS1 + ("agent-desktop.cmd",)
+FILES = PS1 + ("agent-desktop.cmd", "agent-desktop-client.cs")
 
 # Walks a script's syntax tree and prints one JSON list of findings: PowerShell-7-only syntax and members.
 SCANNER = r'''
@@ -115,7 +117,7 @@ class FilesTest(WindowsTestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmpdir, True)
 
-    def test_the_three_files_exist(self):
+    def test_the_files_exist(self):
         for name in FILES:
             self.assertTrue((WINDOWS / name).is_file(), "windows/%s must exist" % name)
 
@@ -151,6 +153,18 @@ class FilesTest(WindowsTestCase):
         self.assertRegex(text, r"exit /b %ERRORLEVEL%")
         self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"), "cmd.exe wants CRLF line ends")
 
+    def test_the_compiled_client_knows_the_same_key_and_modifier_names_as_the_worker(self):
+        ps = (WINDOWS / "agent-desktop.ps1").read_text()
+        cs = (WINDOWS / "agent-desktop-client.cs").read_text()
+        def ps_names(table):
+            body = re.search(r"\$script:%s = @\{(.*?)\n\}" % table, ps, re.S).group(1)
+            return set(re.findall(r"'([a-z0-9]+)'\s*=", body))
+        def cs_names(array):
+            body = re.search(r"%s = \{(.*?)\};" % array, cs, re.S).group(1)
+            return set(re.findall(r'"([a-z0-9]+)"', body))
+        self.assertEqual(cs_names("KeyNames"), ps_names("KeyCodes"), "key names: client (C#) and worker (PowerShell) differ")
+        self.assertEqual(cs_names("ModNames"), ps_names("ModCodes"), "modifier names: client (C#) and worker (PowerShell) differ")
+
     def test_the_scripts_change_no_login_pin_sleep_power_or_remote_desktop_setting(self):
         banned = ("powercfg", "rustdesk", "bcdedit", "setx", "Set-ItemProperty", "New-ItemProperty",
                   "HKLM:", "Winlogon", "InactivityTimeout", "ScreenSaver", "Set-LocalUser", "net user")
@@ -180,6 +194,19 @@ Add-Type -TypeDefinition ([IO.File]::ReadAllText($Code)) -CompilerOptions '-lang
             r = subprocess.run([pwsh(), "-NoProfile", "-File", str(probe), str(code)], capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.strip(), "40", "INPUT must be 40 bytes on 64-bit Windows, or SendInput rejects every event")
+
+
+    def test_the_compiled_client_compiles_as_csharp_5(self):
+        """csc.exe on the G14 is C# 5. Roslyn here is told to accept C# 5 only, so a newer form in the client fails this test."""
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "probe.ps1"
+            probe.write_text("""param([string]$Code)
+Add-Type -TypeDefinition ([IO.File]::ReadAllText($Code)) -CompilerOptions '-langversion:5'
+[AgentDesktopClient].GetMethod('Run').Name
+""")
+            r = subprocess.run([pwsh(), "-NoProfile", "-File", str(probe), str(WINDOWS / "agent-desktop-client.cs")], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.strip(), "Run")
 
 
 class InstallTest(WindowsTestCase):
@@ -223,7 +250,7 @@ class InstallTest(WindowsTestCase):
         self.fresh()
         box = self.box
         first_calls = len(box.calls())
-        watched = [box.bin / "agent-desktop.ps1", box.bin / "agent-desktop.cmd", box.vercel / "agent-desktop.exe"]
+        watched = [box.bin / "agent-desktop.ps1", box.bin / "agent-desktop.cmd", box.bin / "agent-desktop.exe", box.vercel / "agent-desktop.exe"]
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in watched}
         r = box.install()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -298,6 +325,48 @@ class InstallTest(WindowsTestCase):
         self.assertEqual((str(again["Settings"]["MultipleInstances"]), str(again["Settings"]["ExecutionTimeLimit"]), len(again["Triggers"])), ("IgnoreNew", "PT0S", 1))
         self.box.install()
         self.assertEqual(len(registers()), before + 1, "and then left alone")
+
+    def csc_calls(self):
+        return [c for c in self.box.calls() if c.startswith("csc ")]
+
+    def test_a_fresh_install_builds_the_client_exe_from_the_source_with_the_windows_compiler(self):
+        self.fresh()
+        exe = self.box.bin / "agent-desktop.exe"
+        self.assertTrue(exe.is_file(), "agent-desktop.exe must be in the bin folder")
+        self.assertIn((WINDOWS / "agent-desktop-client.cs").read_text(), exe.read_text(), "built from the repo's source")
+        calls = self.csc_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("/target:exe", calls[0])
+        self.assertEqual([p.name for p in self.box.bin.iterdir() if p.name.endswith(".new")], [], "no half-built file may stay")
+
+    def test_the_client_is_built_again_only_when_its_source_changed(self):
+        self.fresh()
+        box = self.box
+        box.install()
+        self.assertEqual(len(self.csc_calls()), 1, "an unchanged source is not compiled again")
+        source = box.tmp / "windows-copy"
+        shutil.copytree(WINDOWS, source)
+        with open(source / "agent-desktop-client.cs", "a") as f:
+            f.write("\n// a later version\n")
+        r = box.install(source=source)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.csc_calls()), 2)
+        self.assertIn("// a later version", (box.bin / "agent-desktop.exe").read_text())
+        self.assertIn("agent-desktop.exe built", r.stdout)
+
+    def test_a_compiler_error_fails_the_install_with_its_message_and_leaves_no_exe(self):
+        r = self.box.install(AD_STUB_CSC_FAIL="1")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("C# compiler failed", r.stderr)
+        self.assertIn("CS1002", r.stderr, "the compiler's own message is shown")
+        self.assertFalse((self.box.bin / "agent-desktop.exe").exists())
+        self.assertFalse((self.box.bin / "agent-desktop.exe.new").exists())
+
+    def test_a_missing_compiler_exits_69_and_says_where_it_looked(self):
+        missing = self.box.tmp / "no-such-csc.exe"
+        r = self.box.install(AGENT_DESKTOP_CSC=str(missing))
+        self.assertEqual(r.returncode, 69, r.stdout + r.stderr)
+        self.assertIn(str(missing), r.stderr)
 
     def test_the_user_path_gets_the_bin_folder_once_and_keeps_existing_entries_and_their_kind(self):
         (self.box.state / "user-path.txt").write_text("%USERPROFILE%\\tools;C:\\Other")

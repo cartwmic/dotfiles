@@ -4,7 +4,9 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1
 #
 # It
-#   1. copies agent-desktop.ps1 and agent-desktop.cmd (the files next to this one) into %USERPROFILE%\.local\bin;
+#   1. copies agent-desktop.ps1 and agent-desktop.cmd (the files next to this one) into %USERPROFILE%\.local\bin, and builds
+#      agent-desktop-client.cs into agent-desktop.exe there with the C# compiler that ships with Windows (csc.exe). The exe is the
+#      command agents run: it starts in 30 ms where powershell.exe takes 270. The .cmd and the .ps1 stay as the fallback;
 #   2. downloads Vercel's agent-desktop v1.3.1 (x86_64-pc-windows-msvc), checks it against the release's checksums.txt and
 #      unpacks agent-desktop.exe into %USERPROFILE%\.local\share\agent-desktop\vercel\;
 #   3. registers the scheduled task "agent-desktop", set to run only when the user is logged on, so it runs inside the desktop
@@ -14,7 +16,8 @@
 #   4. adds %USERPROFILE%\.local\bin to the user PATH when it is not there.
 # A second run changes nothing, downloads nothing and says so. It touches no sign-in, PIN, sleep, power or remote-desktop setting.
 #
-# Exit: 0 ok; 1 failed (a bad checksum leaves no tool behind); 69 curl.exe or tar.exe is missing.
+# Exit: 0 ok; 1 failed (a bad checksum leaves no tool behind; the C# compiler failed); 69 curl.exe, tar.exe or csc.exe is missing.
+# Setting: AGENT_DESKTOP_CSC, the path of the C# compiler to use (a test sets it; the default is the one beside the .NET runtime).
 $ErrorActionPreference = 'Stop'
 
 $script:Name = 'install.ps1'
@@ -57,6 +60,46 @@ foreach ($file in 'agent-desktop.ps1', 'agent-desktop.cmd') {
         $changed.Add("$file $state")
     }
     Write-Info "$file ${state}: $target"
+}
+
+# ---- 1b. the compiled client -----------------------------------------------------------------------------------------------
+# Built again only when its source changed: a sidecar file holds the SHA-256 of the source the exe was built from.
+$clientSource = Join-Path $here 'agent-desktop-client.cs'
+$clientExe = Join-Path $binDir 'agent-desktop.exe'
+$clientStamp = Join-Path $binDir 'agent-desktop.exe.source-sha256'
+if (-not (Test-Path -LiteralPath $clientSource -PathType Leaf)) { Exit-Fail 1 "$clientSource is missing; run this script from a full copy of the windows folder" }
+$sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $clientSource).Hash
+$built = (Test-Path -LiteralPath $clientExe -PathType Leaf) -and (Test-Path -LiteralPath $clientStamp -PathType Leaf) -and ([IO.File]::ReadAllText($clientStamp).Trim() -eq $sourceHash)
+if ($built) {
+    Write-Info "agent-desktop.exe unchanged: $clientExe"
+} else {
+    $csc = $env:AGENT_DESKTOP_CSC
+    if (-not $csc) { $csc = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe' }
+    if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { Exit-Fail 69 "the C# compiler is not at $csc (it ships with Windows, in the .NET Framework folder)" }
+    $tmpExe = $clientExe + '.new'
+    Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+    $psiC = New-Object Diagnostics.ProcessStartInfo $csc
+    $psiC.Arguments = '/nologo /optimize+ /target:exe "/out:' + $tmpExe + '" "' + $clientSource + '"'
+    $psiC.UseShellExecute = $false
+    $psiC.CreateNoWindow = $true
+    $psiC.RedirectStandardOutput = $true
+    $psiC.RedirectStandardError = $true
+    $procC = [Diagnostics.Process]::Start($psiC)
+    $outC = $procC.StandardOutput.ReadToEndAsync()
+    $errC = $procC.StandardError.ReadToEndAsync()
+    $procC.WaitForExit()
+    if ($procC.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $tmpExe -PathType Leaf)) {
+        Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+        Exit-Fail 1 ("the C# compiler failed (exit $($procC.ExitCode)) on ${clientSource}: " + ($outC.Result + $errC.Result).Trim())
+    }
+    try { Move-Item -LiteralPath $tmpExe -Destination $clientExe -Force }
+    catch {
+        Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+        Exit-Fail 1 "could not replace $clientExe (a call may be running; run this again): $($_.Exception.Message)"
+    }
+    [IO.File]::WriteAllText($clientStamp, $sourceHash)
+    $changed.Add('agent-desktop.exe built')
+    Write-Info "agent-desktop.exe built: $clientExe"
 }
 
 # ---- 2. Vercel's tool -----------------------------------------------------------------------------------------------------

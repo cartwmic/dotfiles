@@ -342,11 +342,11 @@ class G14(Device):
             "[IO.File]::WriteAllBytes(\"$d\\job.ps1\", [Convert]::FromBase64String('%s'))\n"
             "[IO.File]::WriteAllBytes(\"$d\\runner.ps1\", [Convert]::FromBase64String('%s'))\n"
             "Remove-Item \"$d\\done.txt\",\"$d\\out.txt\" -ErrorAction SilentlyContinue\n"
-            "schtasks /Create /TN rad-proof-job /TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $d\\runner.ps1\" /SC ONCE /ST 00:00 /RU $env:USERNAME /IT /F | Out-Null\n"
-            "schtasks /Run /TN rad-proof-job | Out-Null\n"
+            "schtasks /Create /TN rad-proof-job /TR \"powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $d\\runner.ps1\" /SC ONCE /ST 00:00 /RU $env:USERNAME /IT /F 2>$null | Out-Null\n"
+            "schtasks /Run /TN rad-proof-job 2>$null | Out-Null\n"
             "$end = (Get-Date).AddSeconds(%d); while (-not (Test-Path \"$d\\done.txt\") -and (Get-Date) -lt $end) { Start-Sleep -Milliseconds 150 }\n"
             "if (Test-Path \"$d\\done.txt\") { Get-Content \"$d\\out.txt\" -Raw } else { 'TIMEOUT waiting for the desktop-session task' }\n"
-            "schtasks /Delete /TN rad-proof-job /F | Out-Null\n"
+            "schtasks /Delete /TN rad-proof-job /F 2>$null | Out-Null\n"
         ) % (job, runner, timeout)
         return self.ps(wrapper, timeout=timeout + 40)
 
@@ -948,6 +948,9 @@ def desktop_rows(rec, dev):
             rec.ui("timed click", "click", ref)
             times.append((time.perf_counter() - t) * 1000 - overhead)
         rec.note("timings (ssh round trip subtracted)", "snapshot_ms=%d click_ms=%s ssh_overhead_ms=%d" % (snap, ",".join(str(int(x)) for x in times), overhead))
+        if win:   # where the time went, as the worker logged it for these calls: wait for the worker to pick the request up, then the action
+            r = dev.ps("Get-Content (Join-Path $env:LOCALAPPDATA 'agent-desktop\\agent-desktop.log') | Where-Object { $_ -match ' worker (timing|started)' } | Select-Object -Last 8", timeout=60)
+            rec.note("worker side times (ms) of the last calls", r.out.strip())
         expect(snap < 3000, "snapshot took %d ms (limit 3000)" % snap)
         expect(statistics.median(times) < 1000, "click median %d ms (limit 1000)" % statistics.median(times))
 
@@ -986,7 +989,7 @@ def install_mac(rec, dev):
 G14_STATE_PS = r"""
 $o = [ordered]@{}
 $b = Join-Path $env:USERPROFILE '.local\bin'
-foreach ($f in 'agent-desktop.ps1','agent-desktop.cmd') { $p = Join-Path $b $f; $o[$f] = if (Test-Path $p) { (Get-FileHash $p).Hash } else { 'absent' } }
+foreach ($f in 'agent-desktop.ps1','agent-desktop.cmd','agent-desktop.exe') { $p = Join-Path $b $f; $o[$f] = if (Test-Path $p) { (Get-FileHash $p).Hash } else { 'absent' } }
 $v = Join-Path $env:USERPROFILE '.local\share\agent-desktop\vercel\agent-desktop.exe'
 $o['vercel'] = if (Test-Path $v) { (Get-FileHash $v).Hash } else { 'absent' }
 $o['path'] = [Environment]::GetEnvironmentVariable('Path','User')
@@ -997,7 +1000,7 @@ $o | ConvertTo-Json -Compress
 
 G14_CLEAN_PS = r"""
 $ErrorActionPreference = 'Continue'
-foreach ($f in 'agent-desktop.ps1','agent-desktop.cmd') { Remove-Item (Join-Path $env:USERPROFILE ".local\bin\$f") -Force -ErrorAction SilentlyContinue }
+foreach ($f in 'agent-desktop.ps1','agent-desktop.cmd','agent-desktop.exe','agent-desktop.exe.source-sha256') { Remove-Item (Join-Path $env:USERPROFILE ".local\bin\$f") -Force -ErrorAction SilentlyContinue }
 Remove-Item (Join-Path $env:USERPROFILE '.local\share\agent-desktop') -Recurse -Force -ErrorAction SilentlyContinue
 foreach ($line in @(schtasks /Query /FO CSV /NH 2>$null | Where-Object { $_ -match 'agent-desktop' })) { $n = ($line -split '","')[0].Trim('"'); schtasks /End /TN $n | Out-Null; schtasks /Delete /TN $n /F | Out-Null }   # /End: a deleted task leaves its worker running
 'cleaned'
