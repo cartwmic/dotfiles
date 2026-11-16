@@ -22,6 +22,8 @@
       "builder" (list "correcting-repeated-mistakes" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "designing-the-smallest-version" "no-ai-slop")
       "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine") -}}
+{{- /* The seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs (SkillRequiresTest). */ -}}
+{{- range $seat := list "lead" "builder" -}}{{- $_ := set $keeps $seat (concat (get $keeps $seat) (list "reviewing-prs" "triaging-automated-review")) -}}{{- end -}}
 {{- if not (hasKey $keeps .seat) -}}{{ fail (printf "fleet_seat: unknown seat %q" .seat) }}{{- end -}}
 {{- $keep := get $keeps .seat -}}
 {{- $off := dict -}}

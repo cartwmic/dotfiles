@@ -173,8 +173,10 @@ PY
 }
 
 # Link skills from a single source directory into dest_root.
-# Only replaces existing symlinks if they point into the same source tree,
-# so canonical skills (linked first) win over external ones on name collisions.
+# Replaces an existing symlink if it points into the same source tree. Canonical skills (linked
+# first) also replace a link into the external skills root, so they win a name collision on an
+# install that linked the external copy before the canonical one existed. Links to any other
+# source and real directories are left alone.
 _link_skills_from() {
   source_root="$1"
   dest_root="$2"
@@ -200,6 +202,14 @@ _link_skills_from() {
       case "$current_target" in
         "$source_root"/*)
           rm -f "$dest_path"
+          ;;
+        "$EXTERNAL_ROOT"/*)
+          if [ "$source_root" != "$SKILLS_ROOT" ]; then
+            log "Skill $skill_name already linked from another source, skipping"
+            continue
+          fi
+          rm -f "$dest_path"
+          log "Skill $skill_name: canonical replaces the external link $current_target"
           ;;
         *)
           log "Skill $skill_name already linked from another source, skipping"

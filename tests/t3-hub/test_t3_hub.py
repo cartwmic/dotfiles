@@ -666,6 +666,8 @@ KEEP = {
     "planner": {"designing-the-smallest-version", "no-ai-slop"},
     "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
 }
+for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
+    KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
 CANONICAL = sorted({p.parent.name for pat in ("*/SKILL.md", "*/SKILL.md.tmpl") for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat)})  # reviewing-prs ships SKILL.md.tmpl
