@@ -61,6 +61,11 @@ OWNERSHIP = (
     "Ownership. A codebase you work in is yours: what it's for and how it's built are your call, and you'll keep "
     "building on it. Merge duplicate code and fix bugs you find nearby. The escalation rules below still hold."
 )
+SCHEDULE_HEADING = "## Scheduled work"
+SCHEDULE_RULE = (
+    "A schedule is agent work if a run starts or messages a model. Agent work on a clock is a kit job in the "
+    "coordinator (`coordinator jobs`), and I approve it first unless it is a one-off less than 24 hours out."
+)
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
@@ -130,6 +135,15 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(text.count("| Browser work |"), 1)
                     self.assertEqual(text.count(BROWSER[profile]), 1)
                     self.assertEqual(("Terra" in text), profile == "personal")
+
+    def test_scheduling_rule_is_personal_only(self):
+        for name, template in TEMPLATES.items():
+            for profile in ("personal", "axon-work-computer", "termux"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    self.assertEqual(text.count(SCHEDULE_HEADING), int(profile == "personal"))
+                    self.assertEqual(text.count(SCHEDULE_RULE), int(profile == "personal"))
+                    self.assertEqual("coordinator schedules check" in text, profile == "personal")
 
 
 if __name__ == "__main__":
