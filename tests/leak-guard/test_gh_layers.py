@@ -15,6 +15,7 @@ from test_gh_wrapper import GUARDED, LIB, PLANTED, WrapperBase, load_wrapper
 
 sys.path.insert(0, str(LIB))
 import gh_classify as C      # noqa: E402
+import gh_layers as G      # noqa: E402
 
 RECORD = '''
 import json, os
@@ -102,6 +103,8 @@ class Layers(WrapperBase):
     def setUp(self):
         super().setUp()
         self.lib = self.tmp / "lib"
+        for name in G.LAYERS:      # these tests drive the seam with fake layers; each real layer has its own test file
+            (self.lib / (name + ".py")).unlink(missing_ok=True)
 
     def layer(self, name, source):
         (self.lib / (name + ".py")).write_text(source)
