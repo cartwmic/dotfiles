@@ -38,6 +38,10 @@ FIZZY = {"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}
 # Reviewer seat only (audit-1116 proposal 2.2): 5-minute prompt cache writes, and no T3 idle compaction (a 5-minute cache would make it fire about 3 minutes after a run). Restated here on purpose.
 FIVE_MIN = {"name": "FORCE_PROMPT_CACHING_5M", "sensitive": False, "value": "1"}
 FIZZY_IDS = ("claudeAgent", "coordinator", "claude-hub") + SEATS  # every Claude instance the template owns or finds
+# The builder, planner and reviewer seats load their user instructions from ~/.claude/fleet/worker (the same text without the hindsight guide, plus the skill that holds it)
+# instead of ~/.claude/CLAUDE.md. The instance adds the folder and the variable that makes Claude Code read CLAUDE.md from an added folder; the seat file excludes CLAUDE.md.
+WORKER_SEATS = ("builder", "planner", "reviewer")
+WORKER_ENV = {"name": "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "sensitive": False, "value": "1"}
 
 
 def seat_instances(home):
@@ -45,13 +49,16 @@ def seat_instances(home):
     out = {}
     for sid, window, advisor in SEAT_TABLE:
         fleet = "%s/.claude/fleet" % home
+        worker = sid.split("-", 1)[1] in WORKER_SEATS
         inst = {"config": {"autoCompactWindow": window,
-                           "launchArgs": "--settings %s/%s.json --strict-mcp-config --mcp-config %s/mcp.json" % (fleet, sid, fleet)},
+                           "launchArgs": "--settings %s/%s.json %s--strict-mcp-config --mcp-config %s/mcp.json" % (fleet, sid, "--add-dir %s/worker " % fleet if worker else "", fleet)},
                 "displayName": "Claude (%s)" % sid.split("-", 1)[1], "driver": "claudeAgent", "enabled": True}
         inst["environment"] = ([] if advisor else [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}]) + [FIZZY]
         if sid == "seat-reviewer":
             inst["environment"].append(FIVE_MIN)
             inst["config"] = {"autoCompactWindow": window, "idleCompaction": "off", "launchArgs": inst["config"]["launchArgs"]}  # alphabetical: idleCompaction sits before launchArgs
+        if worker:
+            inst["environment"].append(WORKER_ENV)
         out[sid] = inst
     return out
 
@@ -820,7 +827,7 @@ class FizzyGroveTest(unittest.TestCase):
         script, _ = self.script()
         inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
         self.assertEqual([e["name"] for e in inst["seat-lead"]["environment"]], ["CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "CLAUDE_CODE_FIZZY_GROVE"])
-        self.assertEqual([e["name"] for e in inst["seat-builder"]["environment"]], ["CLAUDE_CODE_FIZZY_GROVE"])
+        self.assertEqual([e["name"] for e in inst["seat-builder"]["environment"]], ["CLAUDE_CODE_FIZZY_GROVE", "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"])
 
     def test_a_wrong_value_is_replaced_in_place_and_a_second_apply_changes_nothing(self):
         script, _ = self.script()
@@ -852,7 +859,8 @@ class FleetFilesTest(unittest.TestCase):
                 for seat, keep in KEEP.items():
                     f = self.render(env, "seat-%s.json" % seat)
                     # the builder seat also carries its Stop hook (tests/stop-running-jobs)
-                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat == "builder" else set()), (profile, seat))
+                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat == "builder" else set())
+                                     | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set()), (profile, seat))
                     self.assertEqual(f["permissions"], {"deny": ["Artifact"]})
                     self.assertIs(f["syncClaudeAiSkills"], False)
                     self.assertIs(f["disableBundledSkills"], True)
@@ -903,7 +911,8 @@ class FleetFilesTest(unittest.TestCase):
                 env.close()
 
     def test_fleet_files_and_reader_deploy_on_both_profiles(self):
-        want = {".claude/agents/reader.md", ".claude/fleet/mcp.json", *(".claude/fleet/seat-%s.json" % s for s in KEEP)}
+        want = {".claude/agents/reader.md", ".claude/fleet/mcp.json", *(".claude/fleet/seat-%s.json" % s for s in KEEP),
+                ".claude/fleet/worker/CLAUDE.md", ".claude/fleet/worker/.claude/skills/hindsight-memory/SKILL.md"}
         for profile in ("personal", "axon-work-computer"):
             env = fleet_env(profile)
             try:
@@ -925,3 +934,106 @@ class FleetFilesTest(unittest.TestCase):
         self.assertIn("Wait for CI with `gh run watch <id> --exit-status` and for long jobs with `run-and-wake`. Never poll by hand in a loop.", text)
         self.assertIn("Builders read the files they edit and reviewers the diffs they judge.", text)
         self.assertIn("Advisor tool. If you have it, call it once, early, before you commit to an approach. This replaces the tool's own advice to call it again before declaring done", text)
+
+
+class WorkerInstructionsTest(unittest.TestCase):
+    """Builder, planner and reviewer sessions start without the hindsight memory guide; the skill that holds it loads when they use the memory tools.
+
+    Three pieces must stay together, or a worker loses all its user instructions and a "no guide" check still passes: the seat file excludes ~/.claude/CLAUDE.md,
+    the T3 instance adds the worker folder, and the T3 instance sets the variable that makes Claude Code read CLAUDE.md from an added folder."""
+
+    GUIDE = REPO / "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md"
+
+    def worker_file(self, env):
+        return env.chezmoi("cat", str(env.home / ".claude/fleet/worker/CLAUDE.md"))
+
+    def full_file(self, env):
+        return env.chezmoi("cat", str(env.home / ".claude/CLAUDE.md"))
+
+    def test_the_worker_file_is_the_full_file_minus_exactly_the_guide(self):
+        guide = self.GUIDE.read_text()
+        for profile in ("personal", "axon-work-computer"):
+            env = fleet_env(profile)
+            try:
+                full, worker = self.full_file(env), self.worker_file(env)
+                self.assertEqual(full.count(guide), 1, profile)
+                self.assertEqual(full.replace(guide, "", 1), worker, profile)
+                self.assertNotIn("Memory: `hindsight` MCP server", worker)
+                self.assertIn("## Working style", worker)  # the rest of the instructions is still there
+            finally:
+                env.close()
+
+    def test_the_default_file_still_carries_the_guide_and_matches_the_other_harnesses(self):
+        guide = self.GUIDE.read_text()
+        env = fleet_env("personal")
+        try:
+            self.assertIn(guide, self.full_file(env))
+            self.assertIn(guide, env.chezmoi("cat", str(env.home / ".codex/AGENTS.md")))
+        finally:
+            env.close()
+
+    def test_the_skill_holds_the_guide_as_written(self):
+        guide = self.GUIDE.read_text()
+        for profile in ("personal", "axon-work-computer"):
+            env = fleet_env(profile)
+            try:
+                skill = env.chezmoi("cat", str(env.home / ".claude/fleet/worker/.claude/skills/hindsight-memory/SKILL.md"))
+                front, body = skill.split("---\n", 2)[1:]
+                self.assertEqual(body.lstrip("\n"), guide, profile)
+                meta = dict(l.split(": ", 1) for l in front.strip().splitlines())
+                self.assertEqual(meta["name"], "hindsight-memory")
+                for tool in ("recall", "reflect", "retain", "sync_retain"):
+                    self.assertIn(tool, meta["description"])
+            finally:
+                env.close()
+
+    def test_the_skill_is_not_a_canonical_skill(self):
+        """A canonical skill is linked into Codex, Pi, ~/.agents and the default Claude instance; this one is only for the worker seats."""
+        self.assertNotIn("hindsight-memory", CANONICAL)
+        for harness in ("dot_codex", "dot_pi"):
+            self.assertEqual(list((REPO / harness).rglob("hindsight-memory")), [], harness)
+
+    def settings_and_seat_files(self):
+        """The rendered settings script's seat instances and the seat files, from one throwaway home so the paths agree."""
+        env = fleet_env("personal")
+        try:
+            script = env.chezmoi("execute-template", "--override-data", json.dumps({"chezmoi": {"os": "linux"}}),
+                                 stdin=(REPO / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text())
+            inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
+            seats = {seat: json.loads(env.render("dot_claude/fleet/seat-%s.json.tmpl" % seat)) for seat in KEEP}
+            return str(env.home), inst, seats
+        finally:
+            env.close()
+
+    def test_exclude_folder_and_variable_come_together_on_the_worker_seats_only(self):
+        home, inst, seats = self.settings_and_seat_files()
+        for seat, f in seats.items():
+            has_exclude = f.get("claudeMdExcludes") == ["%s/.claude/CLAUDE.md" % home]
+            self.assertEqual("claudeMdExcludes" in f, has_exclude, seat)  # no other value
+            if seat == "coordinator":  # owned by the coordinator repo: no instance here, and its seat file keeps loading the full file
+                self.assertFalse(has_exclude)
+                continue
+            i = inst["seat-%s" % seat]
+            has_dir = ("--add-dir %s/.claude/fleet/worker " % home) in i["config"]["launchArgs"]
+            has_var = WORKER_ENV in i["environment"]
+            self.assertEqual((has_exclude, has_dir, has_var), (seat in WORKER_SEATS,) * 3, seat)
+            if seat in WORKER_SEATS:  # --add-dir takes several values, so a flag must follow it
+                self.assertLess(i["config"]["launchArgs"].index("--add-dir"), i["config"]["launchArgs"].index("--strict-mcp-config"))
+
+    def test_the_lead_and_the_default_instances_are_unchanged(self):
+        _, inst, _ = self.settings_and_seat_files()
+        self.assertNotIn("--add-dir", inst["seat-lead"]["config"]["launchArgs"])
+        self.assertNotIn(WORKER_ENV, inst["seat-lead"]["environment"])
+        for i in ("claudeAgent", "coordinator"):
+            self.assertNotIn(WORKER_ENV, inst[i].get("environment", []), i)
+            self.assertNotIn("--add-dir", inst[i]["config"].get("launchArgs", ""), i)
+
+    def test_the_worker_files_deploy_on_both_profiles(self):
+        for profile in ("personal", "axon-work-computer"):
+            env = fleet_env(profile)
+            try:
+                managed = set(env.chezmoi("managed", "--include=files").split())
+                self.assertTrue({".claude/fleet/worker/CLAUDE.md", ".claude/fleet/worker/.claude/skills/hindsight-memory/SKILL.md"} <= managed, profile)
+            finally:
+                env.close()
+
