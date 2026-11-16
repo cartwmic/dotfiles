@@ -1,0 +1,32 @@
+{{- /* container: the container-mode settings as JSON {"enabled", "cliproxyUrl", "cliproxyKeyFile"}. Container mode is the agent host pod (cartwmic-homelab-v2,
+k8s/agent-host): a personal Linux home with no desktop, no systemd and no launchd (docs/container-mode.md). Local chezmoi data container:
+  enabled          true or false. Default false.
+  cliproxyUrl      the cliproxy address Claude Code calls, no /v1. Default http://cliproxyapi.cliproxyapi.svc.cluster.local (the in-cluster service, port 80).
+  cliproxyKeyFile  a file whose content is the cliproxy key; Claude Code reads it when it calls the model. Default /run/secrets/cliproxy/api-key.
+Used by .chezmoiignore, modify_settings.json.tmpl and the container mise file. Enabled on any profile but personal or any OS but Linux, an unknown key, or a bad value fails the whole
+render, so a typo applies nothing. */ -}}
+{{- $raw := dig "container" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "container must be a map with enabled, cliproxyUrl and cliproxyKeyFile, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if not (has $k (list "enabled" "cliproxyUrl" "cliproxyKeyFile")) -}}
+{{-     fail (printf "container.%s is not a setting (enabled, cliproxyUrl, cliproxyKeyFile)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $on := printf "%v" (get $raw "enabled" | default false) -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "container.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- $url := get $raw "cliproxyUrl" | default "http://cliproxyapi.cliproxyapi.svc.cluster.local" | toString -}}
+{{- $key := get $raw "cliproxyKeyFile" | default "/run/secrets/cliproxy/api-key" | toString -}}
+{{- if eq $on "true" -}}
+{{-   if ne (printf "%v" (dig "profile" "" .)) "personal" -}}
+{{-     fail (printf "container.enabled needs profile personal, got %q (the work Mac runs its coordinator itself)" (printf "%v" (dig "profile" "" .))) -}}
+{{-   end -}}
+{{-   if ne .chezmoi.os "linux" -}}{{- fail (printf "container.enabled needs Linux, got %q" .chezmoi.os) -}}{{- end -}}
+{{-   if not (hasPrefix "http://" $url) -}}{{- fail (printf "container.cliproxyUrl must start with http://, got %q" $url) -}}{{- end -}}
+{{-   if hasSuffix "/" $url -}}{{- fail (printf "container.cliproxyUrl must not end with /, got %q" $url) -}}{{- end -}}
+{{-   if not (hasPrefix "/" $key) -}}{{- fail (printf "container.cliproxyKeyFile must be an absolute path, got %q" $key) -}}{{- end -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") "cliproxyUrl" $url "cliproxyKeyFile" $key | toJson -}}

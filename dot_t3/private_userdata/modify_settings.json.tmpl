@@ -1,5 +1,5 @@
 #!/bin/sh
-# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the four seat-* instances, pi and pi-lead below).
+# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the four seat-* instances, pi and pi-lead below; container mode owns only the four seat-* instances).
 # The hub pair (claude-hub, codex-hub, data switch t3Hub.enabled) is personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # The hub as the default (data switch hub.enabled, below) applies on the personal profile on macOS and Linux. Personal Linux also owns two more instances, pi and pi-lead (see "pi" and "pi-lead" below).
 # Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
@@ -113,7 +113,8 @@ set -eu
 {{- if eq $hub "on" }}
 {{- $want = set (set $want "claude-hub" $claude) "codex-hub" $codex }}
 {{- end }}
-{{- if eq .chezmoi.os "linux" }}
+{{- /* Container mode: Pi is not in the pod's tool set (docs/container-mode.md), so pi and pi-lead are not owned there. */}}
+{{- if and (eq .chezmoi.os "linux") (not (includeTemplate "container" . | fromJson).enabled) }}
 {{- $want = set $want "pi" (dict "driver" "pi" "enabled" true) }}
 {{- $want = set $want "pi-lead" (dict "driver" "pi" "displayName" "Pi (lead)" "enabled" true "config" (dict "binaryPath" (printf "%s/.local/user_scripts/pi_lead.sh" $home))) }}
 {{- $owned = append (append $owned "pi") "pi-lead" }}
@@ -139,6 +140,10 @@ PREFIX='{{ $home }}/.t3/tools/codex/'
 
 input=$(cat; printf x)
 input=${input%x}
+{{ if (includeTemplate "container" . | fromJson).enabled -}}
+# Container mode: a fresh pod has no settings.json until T3 has run once, and the seat instances must be there before the first lead starts. An empty file is {}.
+[ -n "$(printf %s "$input" | tr -d '[:space:]')" ] || input='{}'
+{{ end -}}
 
 if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
   printf %s "$input"

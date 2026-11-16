@@ -132,23 +132,30 @@ class LauncherTest(unittest.TestCase):
                                            "--ozone-platform=wayland", "about:blank"])
         self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": "wayland-7"}])   # a set WAYLAND_DISPLAY is left alone
 
-    def test_linux_without_wayland_display_uses_the_first_wayland_socket_in_xdg_runtime_dir(self):
-        import socket
+    @unittest.skipUnless(Path("/proc").is_dir(), "session.sh decides liveness from /proc")
+    def test_linux_without_wayland_display_uses_the_live_hyprland_instances_display(self):
+        import shutil, socket
+        lib = self.home / ".local/share/agent-desktop"
+        lib.mkdir(parents=True)
+        shutil.copy(ROOT / "dot_local/share/agent-desktop/session.sh", lib / "session.sh")
         runtime = self.root / "run"
-        runtime.mkdir()
+        (runtime / "hypr" / "aaa_2000_1").mkdir(parents=True)
         socks = []
-        for name in ("wayland-1", "wayland-2"):
+        for name in ("wayland-1", "wayland-2"):   # wayland-1 would be the first-match answer; the live instance owns wayland-2
             sock = socket.socket(socket.AF_UNIX)
             sock.bind(str(runtime / name))
             socks.append(sock)
-        (runtime / "wayland-1.lock").write_text("")   # the compositor's lock file is not a socket
+        (runtime / "hypr" / "aaa_2000_1" / "hyprland.lock").write_text("%d\nwayland-2\n" % os.getpid())
+        sock = socket.socket(socket.AF_UNIX)
+        sock.bind(str(runtime / "hypr" / "aaa_2000_1" / ".socket.sock"))
+        socks.append(sock)
         try:
             r = self.run_script(self.fake(), AGENT_CHROME_OS="Linux", XDG_RUNTIME_DIR=str(runtime))
         finally:
             for sock in socks:
                 sock.close()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": "wayland-1"}])
+        self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": "wayland-2"}])
 
     def test_linux_without_any_socket_still_starts_chrome_and_leaves_wayland_display_unset(self):
         runtime = self.root / "run"

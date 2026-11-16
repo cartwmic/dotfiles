@@ -1,4 +1,4 @@
-"""Five refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Six refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -14,6 +14,18 @@
               blocks it. Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
               which runs both checks itself. The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
               the hook never sees, so they pass.
+
+  pr-body     (personal only)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
+              and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
+              `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
+              `pr-body-check --body-file F && gh pr create ... --body-file F`, so a Result cell such as `partial` fails when the body is
+              written, not at merge. `gh pr edit` with no body flag (title, labels, reviewers) passes. No repo is exempt: unlike the merge
+              rule, nothing else runs this check at create time.
+              The body file must also be a mktemp name, so another session cannot overwrite it (2026-11-15: a shared /tmp/pr-body.md put
+              one PR's body on another): `F=$(mktemp /tmp/pr-N-body.XXXXXX)` earlier in the same command and `--body-file "$F"`, or the
+              literal name mktemp made (last dot-part 6+ letters and digits with a digit or capital). A fixed name is refused for create and
+              edit; for `gh pr edit N` the name must also contain N. A `$VAR` the command does not assign from mktemp is refused. A name
+              is checked even when the chain is right; when both are wrong the refusal gives both fixes.
 
   docker      (personal, Linux only)  `docker run`, `docker build`, `docker compose up` and their spellings (`docker container run`,
               `docker image build`, `docker buildx build`, `docker builder build`, `docker-compose up`, global options before the
@@ -54,6 +66,7 @@ HEREDOC = (
     "Quote the delimiter (`<<'EOF'`), or escape each backtick."
 )
 MERGE_CHECKS = ("ci-main-status", "pr-body-check")
+BODY_FILE = "pr-body-check --body-file "  # prefix of the gated entry that names a file the body check already read
 MERGE_BARE = (
     "`gh pr merge` without both gates is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
@@ -61,6 +74,23 @@ MERGE_BARE = (
     "(--merge-gate lets an untested tip merge and stops only red; pr-body-check enforces playbook rules ecd63156, 385acc43 and ccc6c94b); "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
+PR_BODY = (
+    "`gh pr %s` without a checked body file is refused in agent sessions: a design-principles Result cell such as `partial` is otherwise found "
+    "only when `gh pr merge` runs. Run `pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both); "
+    "a Result cell must start with pass, fail or n/a."
+)
+PR_BODY_VERBS = ("create", "new", "edit")  # `gh pr new` is an alias of `gh pr create`
+PR_BODY_FILE = (
+    "The body file %s is refused in agent sessions: %s. Make the body file with `F=$(mktemp /tmp/pr-%s-body.XXXXXX)` in the same command "
+    "and pass `--body-file \"$F\"`; a fixed name like /tmp/pr-body.md can be overwritten by another session."
+)
+# What counts as a mktemp name: a template (`VAR=$(mktemp TEMPLATE)` earlier in the same command text, `--body-file "$VAR"`) whose last part
+# ends in MKTEMP_MIN_X or more X, or a literal name whose last dot-part is MKTEMP_MIN_X or more letters and digits with a digit or an
+# uppercase letter (what mktemp made in an earlier call; `.markdown` and `.md` do not match). mktemp options that take a value are skipped
+# to find the template; a bare `mktemp` has the template tmp.XXXXXXXXXX.
+MKTEMP_VALUE_OPTIONS = {"-p", "--tmpdir", "--suffix"}
+MKTEMP_MIN_X = 6
+MKTEMP_LITERAL = re.compile(r"\.(?=[A-Za-z0-9]*[0-9A-Z])[A-Za-z0-9]{%d,}$" % 6)
 MERGE_COORDINATOR = (
     "`gh pr merge` on cartwmic/coordinator is refused in agent sessions: " + MERGE_PR + " also runs the red-main gate and the decisions check. "
     "Use `" + MERGE_PR + " PR`."
@@ -116,6 +146,7 @@ class Walk:
     def __init__(self, text, cwd=None):
         self.cmds = []    # Cmd: words from the command position (wrappers unwrapped), the assignments before it,
         self.scans = []   # in a polling loop, under run-and-wake, the merge checks run earlier by && (a frozenset), working directory
+        self.mktemps = {}  # variable name -> the mktemp template of the last `VAR=$(mktemp TEMPLATE)` in the text (nested texts included)
         self._text(text, cwd, False, False, frozenset(), 0)
 
     def _text(self, text, cwd, loop, waking, gated, depth):
@@ -123,6 +154,11 @@ class Walk:
             return
         scan = Scan(text)
         self.scans.append(scan)
+        code = text
+        for _quoted, body in scan.documents:  # a heredoc body is data (a PR body may quote the fix line), not an assignment
+            code = code.replace(body, "")
+        for name, args in MKTEMP_ASSIGN.findall(code):
+            self.mktemps[name] = _mktemp_template(args)
         for inner in scan.nested:
             self._text(inner, cwd, loop, waking, gated, depth + 1)
         loops = []  # one entry per open while/until/for: True when it polls (not a `while read` and not a `for`)
@@ -147,7 +183,8 @@ class Walk:
 
     @staticmethod
     def _and_listed(scan, index):
-        """The merge checks (`ci-main-status`, `pr-body-check`) earlier in this command's and-list, joined to it only by `&&`."""
+        """The merge checks (`ci-main-status`, `pr-body-check`) earlier in this command's and-list, joined to it only by `&&`, and for each
+        `pr-body-check --body-file F` the entry BODY_FILE + F."""
         found = set()
         j = index
         while j > 0 and scan.joins[j].strip() == "&&":
@@ -155,6 +192,10 @@ class Walk:
             earlier = _command_words(scan.commands[j])
             if earlier and _base(earlier[0]) in MERGE_CHECKS:
                 found.add(_base(earlier[0]))
+                if _base(earlier[0]) == "pr-body-check":
+                    body_file = _flag_value(earlier[1:], "--body-file")
+                    if body_file is not None:
+                        found.add(BODY_FILE + body_file)
         return frozenset(found)
 
     def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
@@ -184,6 +225,23 @@ class Walk:
                 self._text(scan.bodies[index], cwd, loop, waking, gated, depth + 1)
         if name == "eval":
             self._text(" ".join(rest), cwd, loop, waking, gated, depth + 1)
+
+
+MKTEMP_ASSIGN = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=[\"']?(?:\$\(|`)\s*mktemp\b([^)`]*)")
+
+
+def _mktemp_template(args):
+    """The template word of `mktemp ARGS` (its options skipped), else the default `tmp.XXXXXXXXXX`."""
+    words = args.replace('"', " ").replace("'", " ").split()
+    i = 0
+    while i < len(words):
+        if words[i] in MKTEMP_VALUE_OPTIONS:
+            i += 2
+        elif words[i].startswith("-"):
+            i += 1
+        else:
+            return words[i]
+    return "tmp.XXXXXXXXXX"
 
 
 def _resolve(target, cwd):
@@ -315,6 +373,67 @@ def merge_rule(walk, ctx):
     return None
 
 
+PR_EDIT_VALUE_FLAGS = {"-R", "--repo", "-b", "--body", "-F", "--body-file", "-t", "--title", "-B", "--base", "-a", "--add-assignee",
+                       "--add-label", "--add-project", "--add-reviewer", "--remove-assignee", "--remove-label", "--remove-project",
+                       "--remove-reviewer", "-m", "--milestone"}
+
+
+def _pr_number(args):
+    """The PR number `gh pr edit` names (a number, or a .../pull/N URL), else None (a branch name, or none)."""
+    rest = args[args.index("edit") + 1:]
+    i = 0
+    while i < len(rest):
+        if rest[i] in PR_EDIT_VALUE_FLAGS:
+            i += 2
+        elif rest[i].startswith("-"):
+            i += 1
+        else:
+            found = re.fullmatch(r"\d+|.*/pull/(\d+)/?", rest[i])
+            return (found.group(1) or found.group(0)) if found else None
+    return None
+
+
+def _body_file_problem(body_file, verb, number, mktemps):
+    """Why the body file's name is refused (a fixed name, a mktemp name without the PR number), else None."""
+    var = re.fullmatch(r"\$(\w+)|\$\{(\w+)\}", body_file)
+    template = mktemps.get(var.group(1) or var.group(2)) if var else None
+    if var and template is None:
+        return PR_BODY_FILE % ("`%s`" % body_file, "its name is not known here (no `%s=$(mktemp ...)` in this command)" % (var.group(1) or var.group(2)), number or "N")
+    name = os.path.basename(template if var else body_file)
+    shaped = re.search("X{%d,}$" % MKTEMP_MIN_X, name) if var else MKTEMP_LITERAL.search(name)
+    if not shaped:
+        return PR_BODY_FILE % ("`%s`" % body_file, "it is a fixed name or not made by mktemp, so another session can overwrite it", number or "N")
+    if verb == "edit" and number and not re.search(r"(?<!\d)%s(?!\d)" % number, name):
+        return PR_BODY_FILE % ("`%s`" % body_file, "its name `%s` does not contain PR number %s" % (name, number), number)
+    return None
+
+
+def pr_body_rule(walk, ctx):
+    if ctx.profile != "personal":
+        return None
+    for cmd in walk.cmds:
+        args = cmd.words[1:]
+        verb = next((b for a, b in zip(args, args[1:]) if a == "pr" and b in PR_BODY_VERBS), None)
+        if _base(cmd.words[0]) != "gh" or verb is None:
+            continue
+        verb = "create" if verb == "new" else verb
+        body_file = _flag_value(args, "--body-file")
+        body_file = _flag_value(args, "-F") if body_file is None else body_file
+        sets_body = body_file is not None or _flag_value(args, "--body") is not None or _flag_value(args, "-b") is not None
+        if verb == "edit" and not sets_body:
+            continue  # a title, label or reviewer change carries no body
+        if body_file is None or body_file == "-":
+            return PR_BODY % (verb, verb)
+        number = _pr_number(args) if verb == "edit" else None
+        problems = [_body_file_problem(body_file, verb, number, walk.mktemps)]
+        if BODY_FILE + body_file not in cmd.gated:
+            problems.append(PR_BODY % (verb, verb))
+        problems = [p for p in problems if p]
+        if problems:
+            return " ".join(problems)
+    return None
+
+
 def _docker_spelling(words):
     """The refused docker command in words (`docker run`, `docker compose up`, ...), else None. Only the subcommand position counts."""
     name = _base(words[0])
@@ -351,7 +470,7 @@ def docker_rule(walk, ctx):
 def check(text, ctx):
     """The refusal message for the command text, or None."""
     walk = Walk(text, ctx.cwd)
-    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, docker_rule):
+    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule):
         message = rule(walk, ctx)
         if message:
             return message

@@ -11,12 +11,19 @@
 # trailing comment never causes a duplicate to be appended.
 #
 # The key is appended on every OS, Linux included (Michael, ask 845: "Add it").
+# agentHost.podTunnelKey (personal profile only, local data, default empty; .chezmoitemplates/agent_host_config): when set, one more line is
+# appended: restrict,port-forwarding,permitopen="127.0.0.1:3773" <pod public key>. That is the agent-host pod's ssh tunnel to omarchy's T3
+# (127.0.0.1:3773) and nothing else: no shell, no other port. It is matched as a whole line, so a line another tool wrote for the same key
+# (such as a temporary one) is left alone. Removing the data key does not remove the line; delete it from authorized_keys by hand.
+# The work profile has no such line: the agent host belongs to the personal homelab and its pod never connects to the work Mac.
+#
 # The file is a .tmpl only because it was one while the Linux append waited on his answer.
 
 set -eu
 
 KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIe/9P7N9fERnMuJZoaiKQToUkAie/ktc6xz1QoNp5uH cartwmic@chezmoi'
 BLOB='AAAAC3NzaC1lZDI1NTE5AAAAIIe/9P7N9fERnMuJZoaiKQToUkAie/ktc6xz1QoNp5uH'
+POD_KEY={{ includeTemplate "shquote" (includeTemplate "agent_host_config" . | fromJson).podTunnelKey }}
 
 # Read stdin, preserving any trailing newlines via a sentinel.
 existing=$(cat; printf x)
@@ -25,13 +32,27 @@ existing=${existing%x}
 # Pass the existing content through verbatim.
 printf '%s' "$existing"
 
+# Output so far ends with a newline (or is empty) unless the file was passed through as is and does not end with one.
+ends_nl=1
+case "$existing" in
+	"") : ;;
+	*'
+') : ;;
+	*) ends_nl=0 ;;
+esac
+
 # Append our key only if the blob is absent.
 if ! printf '%s' "$existing" | grep -qF "$BLOB"; then
-	case "$existing" in
-		"") : ;;            # empty file, no separator needed
-		*'
-') : ;;                  # already ends with a newline
-		*) printf '\n' ;;   # ensure key starts on its own line
-	esac
+	[ "$ends_nl" = 1 ] || printf '\n'   # ensure key starts on its own line
 	printf '%s\n' "$KEY"
+	ends_nl=1
+fi
+
+# The pod's tunnel key: one exact line, only when the data key is set.
+if [ -n "$POD_KEY" ]; then
+	POD_LINE="restrict,port-forwarding,permitopen=\"127.0.0.1:3773\" $POD_KEY"
+	if ! printf '%s\n' "$existing" | grep -qxF "$POD_LINE"; then
+		[ "$ends_nl" = 1 ] || printf '\n'
+		printf '%s\n' "$POD_LINE"
+	fi
 fi

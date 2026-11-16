@@ -61,6 +61,7 @@ python3 scripts/ci-par.py \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \
+  tests/container-mode \
   tests/design-principles \
   tests/agent-kit \
   tests/sync-harness-skills \
@@ -75,6 +76,7 @@ python3 scripts/ci-par.py \
   tests/axon-playbook \
   tests/spotlight-workshop \
   tests/t3-hook \
+  tests/agent-host \
   tests/t3-hub \
   tests/pi-lead \
   tests/hub \

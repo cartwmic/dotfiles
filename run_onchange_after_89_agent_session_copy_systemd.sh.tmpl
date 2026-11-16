@@ -1,0 +1,39 @@
+#!/bin/sh
+# Enable or disable the agent-session-copy timer when its units or its setting change. Linux only (personal profile; .chezmoiignore). The timer runs
+# agent-session-copy every 30 minutes (the copy of desktop sessions to the agent-host pod, for Retro). It is shipped DISABLED: it is enabled only
+# while chezmoi data agentHost.sessionCopy is true, which is flipped at the cutover, once the pod in namespace agent-host exists. Off, the units stay
+# installed (so a manual `systemctl --user start agent-session-copy.service` or `agent-session-copy` still works) and the timer is stopped.
+# service: {{ include "dot_config/systemd/user/agent-session-copy.service" | sha256sum }}
+# timer: {{ include "dot_config/systemd/user/agent-session-copy.timer" | sha256sum }}
+# setting: {{ (includeTemplate "agent_host_config" . | fromJson).sessionCopy }}
+#
+# Fails (and so fails the apply) when systemd does not end up in the wanted state: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into: a notice and a clean exit.
+set -eu
+log() { printf '[agent_session_copy_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; agent-session-copy.timer not changed"
+  exit 0
+fi
+dir="$HOME/.config/systemd/user"
+if [ ! -f "$dir/agent-session-copy.service" ] || [ ! -f "$dir/agent-session-copy.timer" ]; then
+  log ERROR "$dir/agent-session-copy.service or agent-session-copy.timer is not installed; apply them too, then apply again"
+  exit 1
+fi
+systemctl --user daemon-reload
+{{- if (includeTemplate "agent_host_config" . | fromJson).sessionCopy }}
+systemctl --user enable agent-session-copy.timer >/dev/null 2>&1 || { log ERROR "could not enable agent-session-copy.timer"; exit 1; }
+systemctl --user restart agent-session-copy.timer || { log ERROR "could not start agent-session-copy.timer; see: journalctl --user -u agent-session-copy.timer"; exit 1; }
+systemctl --user is-active --quiet agent-session-copy.timer || { log ERROR "agent-session-copy.timer is not active after the restart"; exit 1; }
+log INFO "loaded agent-session-copy.timer (every 30 minutes; journalctl --user -u agent-session-copy)"
+{{- else }}
+# agentHost.sessionCopy is false: stop the timer and leave the units installed.
+systemctl --user disable --now agent-session-copy.timer >/dev/null 2>&1 || :
+if systemctl --user is-active --quiet agent-session-copy.timer; then
+  log ERROR "could not stop agent-session-copy.timer; try: systemctl --user disable --now agent-session-copy.timer, then chezmoi apply again"
+  exit 1
+fi
+log INFO "agentHost.sessionCopy is false: agent-session-copy.timer is stopped (units stay installed)"
+{{- end }}

@@ -1,0 +1,17 @@
+# Sends the wakes a host restart left undelivered (docs/run-and-wake.md, "A host restart"). A reboot kills every run-and-wake job and stops the T3 server in the same
+# shutdown, so the one wake each watcher tries then finds no server. At login, once T3 is up (run-and-wake waits for it, up to 10 minutes), `run-and-wake --recover`
+# tells each thread whose job a restart cut off that the job did NOT finish. Idempotent: a job with a delivered wake is skipped, so a second start sends nothing.
+# After= orders it behind t3code.service (which T3 writes itself); it does not need it, so a host without that unit just waits and then fails visibly:
+# systemctl --user status run-and-wake-recover, journalctl --user -u run-and-wake-recover.
+[Unit]
+Description=run-and-wake: send the wakes a host restart left undelivered
+After=t3code.service
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.t3/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/run-and-wake --recover
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,84 @@
+#!/bin/sh
+# agent-session-copy: copy new and changed agent session files (Claude Code and Pi) from this desktop into the live agent-host pod, so Retro
+# (the lead that reviews how agents worked) can read the sessions that still run here. Started every 30 minutes by agent-session-copy.timer
+# (~/.config/systemd/user), which is shipped disabled until the pod exists (agentHost.sessionCopy, docs/profiles.md). Personal Linux only.
+#
+#   agent-session-copy [--dry-run]
+#
+# What moves (only *.jsonl transcripts; rsync sends a file again when its size or mtime changed, nothing else):
+#   ~/.claude/projects      -> <pod>:/home/agent/desktop-sessions/claude/
+#   ~/.pi/agent/sessions    -> <pod>:/home/agent/desktop-sessions/pi/
+# How: rsync over `kubectl exec` through lane M's scripts/agent-host/kubectl.sh (admin kubeconfig fetched at run time, ledger grant #21).
+# Nothing on the desktop is changed or deleted, and nothing in the pod is deleted: a session removed here stays in the pod.
+# The first run sends everything (about 13 GB); later runs send what changed since.
+#
+# Settings (environment; the defaults are the live pod):
+#   AGENT_SESSION_COPY_NAMESPACE  agent-host        AGENT_SESSION_COPY_TARGET     deploy/agent-host
+#   AGENT_SESSION_COPY_CONTAINER  t3                AGENT_SESSION_COPY_DEST       /home/agent/desktop-sessions
+#   AGENT_SESSION_COPY_KUBECTL    ~/git/cartwmic-homelab-v2/scripts/agent-host/kubectl.sh
+#   AGENT_SESSION_COPY_CLAUDE_SRC ~/.claude/projects   AGENT_SESSION_COPY_PI_SRC     ~/.pi/agent/sessions
+# Reproduce: install rsync, check out the homelab repo at the path above, and apply the dotfiles with agentHost.sessionCopy true.
+# Exit: 0 copied (or nothing to copy), 69 pod unreachable, other rsync's own code. Log lines: [agent-session-copy] LEVEL: message.
+set -eu
+
+log() { printf '[agent-session-copy] %s: %s\n' "$1" "$2"; }
+
+dry=""
+case "${1:-}" in
+  "") ;;
+  --dry-run) dry="--dry-run" ;;
+  *) echo "usage: agent-session-copy [--dry-run]" >&2; exit 64 ;;
+esac
+
+NS=${AGENT_SESSION_COPY_NAMESPACE:-agent-host}
+TARGET=${AGENT_SESSION_COPY_TARGET:-deploy/agent-host}
+CONTAINER=${AGENT_SESSION_COPY_CONTAINER:-t3}
+DEST=${AGENT_SESSION_COPY_DEST:-/home/agent/desktop-sessions}
+KUBECTL=${AGENT_SESSION_COPY_KUBECTL:-${HOME:?HOME is not set}/git/cartwmic-homelab-v2/scripts/agent-host/kubectl.sh}
+CLAUDE_SRC=${AGENT_SESSION_COPY_CLAUDE_SRC:-$HOME/.claude/projects}
+PI_SRC=${AGENT_SESSION_COPY_PI_SRC:-$HOME/.pi/agent/sessions}
+
+command -v rsync >/dev/null 2>&1 || { log ERROR "rsync is not installed here"; exit 1; }
+[ -r "$KUBECTL" ] || { log ERROR "$KUBECTL not found (the homelab repo's scripts/agent-host/kubectl.sh)"; exit 1; }
+
+# One run at a time: a slow first copy must not overlap the next timer tick.
+lock="${XDG_RUNTIME_DIR:-/tmp}/agent-session-copy.lock"
+exec 9>"$lock"
+if ! flock -n 9; then log INFO "another copy is running; skipping this one"; exit 0; fi
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/agent-session-copy.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM HUP
+
+# rsync's remote shell: drop the host argument rsync passes first and run the rest in the pod's container.
+cat >"$work/rsh" <<RSH
+#!/bin/sh
+shift
+exec sh '$KUBECTL' -n '$NS' exec -i '$TARGET' -c '$CONTAINER' -- "\$@"
+RSH
+chmod 700 "$work/rsh"
+
+pod() { sh "$KUBECTL" -n "$NS" exec -i "$TARGET" -c "$CONTAINER" -- "$@"; }
+
+if ! pod mkdir -p "$DEST/claude" "$DEST/pi" </dev/null >"$work/mkdir.log" 2>&1; then
+  log ERROR "cannot reach $TARGET (container $CONTAINER) in namespace $NS: $(tr '\n' ' ' <"$work/mkdir.log" | cut -c1-300)"
+  exit 69
+fi
+
+copy() { # name source
+  name=$1 src=$2
+  if [ ! -d "$src" ]; then log INFO "$name: $src does not exist here; skipped"; return 0; fi
+  # --out-format lists only files actually sent. -rt: recurse, keep mtimes (so the next run sees "unchanged"); perms/owner are the pod's.
+  # --partial: a cut connection resumes; --timeout: a stalled link fails the run instead of hanging the timer.
+  if ! rsync -rt --no-perms --no-owner --no-group --partial --timeout=300 $dry \
+        --include='*/' --include='*.jsonl' --exclude='*' --prune-empty-dirs \
+        --out-format='%n' -e "$work/rsh" "$src/" "pod:$DEST/$name/" >"$work/$name.sent"; then
+    log ERROR "$name: rsync from $src failed"
+    return 1
+  fi
+  log INFO "$name: $(grep -c '\.jsonl$' "$work/$name.sent" || true) file(s) ${dry:+would be }sent from $src to $DEST/$name/"
+}
+
+status=0
+copy claude "$CLAUDE_SRC" || status=1
+copy pi "$PI_SRC" || status=1
+exit "$status"
