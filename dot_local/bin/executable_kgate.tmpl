@@ -35,6 +35,7 @@ Contract
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
 {{ end }}  Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
+- The pod is deleted on every path (CMD's exit, 69, an interrupt). A failed delete is retried for up to 60 s; the record's `cleanup` says whether it was confirmed and `cleanup_attempts` how many tries it took.
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
   there is one); the full output is in <id>.log beside it.
 
@@ -142,6 +143,9 @@ USAGE = 64
 NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the whole scheduling deadline. Nothing else in kgate uses 75.
 SCHED_WAIT_S = 600  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
 CANCELLED = "cancelled by kgate cancel"
+CLEANUP_RETRY_S = 60       # how long a client that gave up on a pod keeps trying to delete it (an API timeout or a lost ssh is transient); under `kgate cancel`'s default --wait of 120
+CLEANUP_ATTEMPT_S = 30     # one delete attempt is cut off here, so a hung ssh or kubectl cannot outlast CLEANUP_RETRY_S
+CLEANUP_FIRST_DELAY, CLEANUP_MAX_DELAY = 2, 15   # seconds between delete attempts: 2, 4, 8, 15, 15, ...
 JOB_ID = r"kgate-[0-9]+-[0-9]+"
 TOKEN_FILE = os.path.expanduser("~/.config/agent-harness/op-service-token")
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
@@ -980,8 +984,8 @@ class Cluster:
     def argv(self, kargs):
         return self.ssh + ["sudo kubectl --kubeconfig /etc/kubernetes/admin.conf -n %s %s" % (NAMESPACE, shlex.join(kargs))]
 
-    def run(self, kargs, stdin=b""):
-        return subprocess.run(self.argv(kargs), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def run(self, kargs, stdin=b"", timeout=None):
+        return subprocess.run(self.argv(kargs), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
 
     def popen(self, kargs, stdin, stdout):
         return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
@@ -1018,8 +1022,8 @@ class KubectlCluster(Cluster):
     def argv(self, kargs):
         return ["kubectl", "--kubeconfig", self.cfg["kubeconfig"], "--context", self.cfg["context"], "-n", self.cfg["namespace"], *kargs]
 
-    def run(self, kargs, stdin=b""):
-        return subprocess.run(self.argv(kargs), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def run(self, kargs, stdin=b"", timeout=None):
+        return subprocess.run(self.argv(kargs), input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
 
     def popen(self, kargs, stdin, stdout):
         return subprocess.Popen(self.argv(kargs), stdin=stdin, stdout=stdout, stderr=subprocess.STDOUT)
@@ -1152,9 +1156,30 @@ def check_reachable(cluster):
     cluster.check()
 
 
-def delete_job_objects(cluster, job_id):
-    """Delete one job's pod and the Secrets it created (none on a kubectl cluster). Returns the kubectl result."""
-    return cluster.run(["delete", *cluster.object_names(job_id), "--ignore-not-found", "--grace-period=0", "--wait=true"])
+def delete_job_objects(cluster, job_id, timeout=None):
+    """Delete one job's pod and the Secrets it created (none on a kubectl cluster). Returns the kubectl result; an attempt cut off by `timeout` is a failed one."""
+    argv = ["delete", *cluster.object_names(job_id), "--ignore-not-found", "--grace-period=0", "--wait=true"]
+    if timeout is None:
+        return cluster.run(argv)
+    try:
+        return cluster.run(argv, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, b"", b"the delete did not answer within %ds" % timeout)
+
+
+def delete_until_gone(cluster, job_id):
+    """Delete one job's pod and Secrets, and try again while the delete fails (an etcd timeout or a dropped ssh does not last), for at most CLEANUP_RETRY_S.
+    A repeat is safe: the delete ignores what is already gone. Returns (the last kubectl result, the number of attempts)."""
+    t_end = time.time() + CLEANUP_RETRY_S
+    delay, attempts = CLEANUP_FIRST_DELAY, 0
+    while True:
+        attempts += 1
+        left = t_end - time.time()
+        done = delete_job_objects(cluster, job_id, timeout=max(1, min(CLEANUP_ATTEMPT_S, left)))
+        if done.returncode == 0 or time.time() + delay >= t_end:
+            return done, attempts
+        time.sleep(delay)
+        delay = min(delay * 2, CLEANUP_MAX_DELAY)
 
 
 SKELETON = """# kgate cluster file for %(name)s: a Kubernetes cluster reached through local kubectl. Fill in what the cluster needs; kgate never reads the current context.
@@ -1298,6 +1323,7 @@ class Job:
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
         self.receipt_refused = False
+        self.create_tried = False   # set before the first create: a create that errored may still have made the pod
         self.t_pod = time.time()
         self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
         self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
@@ -1464,6 +1490,7 @@ class Job:
     def create_pod(self, manifests, deadline):
         """Create the pod. On a kubectl cluster a ResourceQuota refusal is waited out (backoff) until the deadline; any other refusal is fatal."""
         body = json.dumps(manifests).encode()
+        self.create_tried = True
         delay, waited_from, last_msg = QUOTA_FIRST_DELAY, None, None
         base = self.rec.get("quota_wait_s") or 0
         while True:
@@ -1621,7 +1648,10 @@ class Job:
             return
         if not self.cluster.configured():  # no cluster address or kubeconfig: nothing was created, and an attempt would only add noise to the exit-69 message
             return
-        done = delete_job_objects(self.cluster, self.pod)
+        if self.create_tried:   # a pod may exist: keep trying until the delete is confirmed or the time is up
+            done, self.rec["cleanup_attempts"] = delete_until_gone(self.cluster, self.pod)
+        else:   # nothing was created (the cluster was unreachable, or a refusal came first): one attempt, as before
+            done = delete_job_objects(self.cluster, self.pod)
         self.rec["cleanup"] = done.returncode == 0
         if done.returncode != 0:
             self.note("cleanup not confirmed for %s: %s" % (self.pod, done.stderr.decode(errors="replace").strip()[:200]))
