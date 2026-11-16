@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command, then run the five checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, local docker).
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the seven checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
   Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
@@ -59,11 +59,16 @@ class Scan:
         self.text = text
         self.commands = []   # list of word lists
         self.nested = []     # texts of $( ), backticks, <( ), >( ) to scan on their own
+        self.nested_at = []  # for each nested text, the index of the command it sits in (len(commands) when that command is last)
         self.heredocs = []   # (delimiter, strip_tabs, index of the command that owns it, delimiter was quoted)
         self.bodies = {}     # command index -> heredoc body text
         self.documents = []  # (delimiter was quoted, body text) of every heredoc, in order
         self.joins = []      # for each command, the operators between it and the one before (`&&`, `;`, `|`, ...)
         self._run()
+
+    def _nest(self, inner):
+        self.nested.append(inner)
+        self.nested_at.append(len(self.commands))
 
     def _balanced(self, i, open_c, close_c):
         """Index just past the close that matches an open at i-1, honouring quotes; returns (inner_text, next_index)."""
@@ -138,11 +143,11 @@ class Scan:
                         i += 2
                     elif t[i] == "$" and t[i + 1:i + 2] == "(":
                         inner, i = self._balanced(i + 2, "(", ")")
-                        self.nested.append(inner)
+                        self._nest(inner)
                     elif t[i] == "`":
                         k = t.find("`", i + 1)
                         k = n if k < 0 else k
-                        self.nested.append(t[i + 1:k])
+                        self._nest(t[i + 1:k])
                         i = k + 1
                     else:
                         cur.append(t[i])
@@ -151,21 +156,21 @@ class Scan:
                 continue
             if c == "$" and t[i + 1:i + 2] == "(":
                 inner, i = self._balanced(i + 2, "(", ")")
-                self.nested.append(inner)
+                self._nest(inner)
                 cur.append("$(...)")
                 in_word = True
                 continue
             if c == "`":
                 k = t.find("`", i + 1)
                 k = n if k < 0 else k
-                self.nested.append(t[i + 1:k])
+                self._nest(t[i + 1:k])
                 cur.append("`...`")
                 in_word = True
                 i = k + 1
                 continue
             if c in "<>" and t[i + 1:i + 2] == "(":
                 inner, i = self._balanced(i + 2, "(", ")")
-                self.nested.append(inner)
+                self._nest(inner)
                 cur.append("<(...)")
                 in_word = True
                 continue
@@ -421,7 +426,7 @@ def load_profile(env, directory):
 
 
 def bash_rules_message(command, raw):
-    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, local docker), else None. Any error allows the command."""
+    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, PR body, local docker, live-checkout git), else None. Any error allows the command."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path:

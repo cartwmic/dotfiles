@@ -1,4 +1,4 @@
-"""Six refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Seven refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -33,10 +33,18 @@
               names kgate and a throwaway namespace on the homelab cluster (ledger grant 21). Read-only commands (`docker ps`, `images`,
               `inspect`, `manifest inspect`, `compose ps`) pass, and so does anything after `kgate`. Other personal hosts (the Mac, which
               has Docker Desktop for agents) are untouched, since Docker is provisioned there on purpose.
+  live git    (both profiles)  git that changes the working tree, index, HEAD or a branch of the live coordinator checkout, ~/git/coordinator,
+              which the coordinator daemon runs from (2026-11-11: a reviewer checked out PR #438 there and the daemon restarted onto PR code;
+              2026-11-16: a builder ran `git merge origin/main` there). Refused: merge, pull, reset, checkout, switch, restore, commit, rebase,
+              cherry-pick, revert, stash, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames).
+              Allowed there: `merge --ff-only <sha>` (the deploy; 7 to 40 hex, never a ref), `reset --keep <sha>` (the rollback in
+              docs/deploy.md), fetch, `stash list|show`, worktree add/remove/prune, every read-only git. The place is the command's directory
+              (the session's, a `cd` or `pushd`, each `-C`) or a `--git-dir`, `--work-tree`, GIT_DIR, GIT_WORK_TREE; `~`, `$HOME` and `${HOME}`
+              are the Context's HOME. The refusal names `git worktree add ~/tmp-home/<name> origin/main`.
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
 wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
-in an ssh remote string, a kubeconfig path or `cd` target that holds a shell variable. The rules are pure functions on the text and a
+in an ssh remote string, a kubeconfig path or `cd` target that holds a shell variable (`$HOME` aside), a `cd` in `( )` (it counts for the commands after the `)`). The rules are pure functions on the text and a
 Context; the file reads and the git call are the Context's `read_file` and `origin_of`. The caller treats any exception as "allow".
 """
 import os
@@ -56,6 +64,16 @@ KUBE_CONTEXT_FLAG = {"kubectl": "--context", "k9s": "--context", "helm": "--kube
 DOCKER_OPTIONS_WITH_VALUE = {"-H", "--host", "-c", "--context", "-l", "--log-level", "--config", "--tlscacert", "--tlscert", "--tlskey"}
 COMPOSE_OPTIONS_WITH_VALUE = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--parallel"}
 DOCKER_REFUSED = {("run",), ("build",), ("container", "run"), ("image", "build"), ("buildx", "build"), ("builder", "build"), ("compose", "up")}
+
+LIVE_CHECKOUT = "git/coordinator"  # under $HOME on both profiles: the checkout the coordinator daemon runs from
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}  # options before the subcommand
+GIT_ALWAYS_REFUSED = {"pull", "reset", "checkout", "switch", "restore", "commit", "rebase", "cherry-pick", "revert", "clean", "am", "apply",
+                      "add", "rm", "mv", "update-ref", "symbolic-ref", "read-tree"}
+GIT_MERGE_FLAGS = {"--ff-only", "-q", "--quiet", "-v", "--verbose", "--stat", "--no-stat", "-n"}  # a fast-forward to a sha takes nothing else
+GIT_BRANCH_CHANGES = {"-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy", "-f", "--force", "-u", "--set-upstream-to",
+                      "--unset-upstream", "--edit-description"}
+GIT_BRANCH_LISTS = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
+SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 
 POLL = (
     "A sleep-poll loop is refused in agent sessions: it holds the pane while it waits. "
@@ -94,6 +112,15 @@ MKTEMP_LITERAL = re.compile(r"\.(?=[A-Za-z0-9]*[0-9A-Z])[A-Za-z0-9]{%d,}$" % 6)
 MERGE_COORDINATOR = (
     "`gh pr merge` on cartwmic/coordinator is refused in agent sessions: " + MERGE_PR + " also runs the red-main gate and the decisions check. "
     "Use `" + MERGE_PR + " PR`."
+)
+
+
+GIT_LIVE = (
+    "`%s` in the live coordinator checkout (~/git/coordinator) is refused in agent sessions: the daemon runs from that checkout, and a "
+    "change to its working tree, index, HEAD or a branch changes the code it runs. "
+    "Use a git worktree (git worktree add ~/tmp-home/<name> origin/main); the live checkout runs the daemon; only fetch and the deploy's "
+    "`git merge --ff-only <sha>` are allowed there (and the rollback `git reset --keep <sha>`). "
+    "See coordinator AGENTS.md, \"The live checkout\" (docs/deploy.md#the-live-checkout)."
 )
 
 
@@ -143,7 +170,8 @@ Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd")
 class Walk:
     """Every simple command in the text, nested texts included, with the context each one runs in, and every Scan made on the way."""
 
-    def __init__(self, text, cwd=None):
+    def __init__(self, text, cwd=None, home=None):
+        self.home = home or os.path.expanduser("~")  # what `~`, `$HOME` and `${HOME}` mean in a `cd` or `git -C` target
         self.cmds = []    # Cmd: words from the command position (wrappers unwrapped), the assignments before it,
         self.scans = []   # in a polling loop, under run-and-wake, the merge checks run earlier by && (a frozenset), working directory
         self.mktemps = {}  # variable name -> the mktemp template of the last `VAR=$(mktemp TEMPLATE)` in the text (nested texts included)
@@ -159,10 +187,9 @@ class Walk:
             code = code.replace(body, "")
         for name, args in MKTEMP_ASSIGN.findall(code):
             self.mktemps[name] = _mktemp_template(args)
-        for inner in scan.nested:
-            self._text(inner, cwd, loop, waking, gated, depth + 1)
         loops = []  # one entry per open while/until/for: True when it polls (not a `while read` and not a `for`)
         for index, raw in enumerate(scan.commands):
+            self._nested(scan, lambda at, index=index: at == index, cwd, loop, waking, gated, depth)  # the cwd this command runs in
             words = _command_words(raw)
             for word in raw[:len(raw) - len(words)]:
                 if word in ("while", "until"):
@@ -177,9 +204,16 @@ class Walk:
             here = gated | self._and_listed(scan, index)
             polling = loop or any(loops)
             self._command(words, assigns, polling, waking, here, cwd, depth, scan, index)
-            if _base(words[0]) == "cd":
+            if _base(words[0]) in ("cd", "pushd"):
                 target = next((w for w in words[1:] if w != "--" and not w.startswith("-")), None)
-                cwd = _resolve(target, cwd)
+                cwd = _resolve(target, cwd, self.home)
+        self._nested(scan, lambda at: at >= len(scan.commands), cwd, loop, waking, gated, depth)
+
+    def _nested(self, scan, wanted, cwd, loop, waking, gated, depth):
+        """Scan the $( ) texts whose command index passes `wanted`, in the directory the command around them runs in."""
+        for at, inner in zip(scan.nested_at, scan.nested):
+            if wanted(at):
+                self._text(inner, cwd, loop, waking, gated, depth + 1)
 
     @staticmethod
     def _and_listed(scan, index):
@@ -244,11 +278,19 @@ def _mktemp_template(args):
     return "tmp.XXXXXXXXXX"
 
 
-def _resolve(target, cwd):
-    """The directory a `cd` goes to, or None when it cannot be known here (a variable, `-`, no argument)."""
-    if not target or target == "-" or "$" in target or "`" in target:
+def _resolve(target, cwd, home):
+    """The directory a `cd` goes to, or None when it cannot be known here (a variable other than $HOME, `-`, no argument)."""
+    if not target or target == "-":
         return None
-    target = os.path.expanduser(target)
+    for form in ("${HOME}", "$HOME"):
+        if target == form or target.startswith(form + "/"):
+            target = home + target[len(form):]
+    if target == "~" or target.startswith("~/"):
+        target = home + target[1:]
+    elif target.startswith("~"):
+        target = os.path.expanduser(target)
+    if "$" in target or "`" in target:
+        return None
     return target if os.path.isabs(target) or not cwd else os.path.join(cwd, target)
 
 
@@ -467,10 +509,77 @@ def docker_rule(walk, ctx):
     return None
 
 
+def _git_parts(words):
+    """(options before the subcommand as (name, value) pairs, subcommand or None, the words after it) of a git command."""
+    opts, i = [], 1
+    while i < len(words) and words[i].startswith("-"):
+        name, equals, value = words[i].partition("=")
+        if words[i] in GIT_VALUE_OPTIONS:
+            opts.append((words[i], words[i + 1] if i + 1 < len(words) else None))
+            i += 2
+            continue
+        if equals and name in GIT_VALUE_OPTIONS:
+            opts.append((name, value))
+        i += 1
+    return opts, (words[i] if i < len(words) else None), words[i + 1:]
+
+
+def _git_change(sub, args):
+    """The spelling (`git merge`) of a git command that changes the working tree, index, HEAD or a branch, else None."""
+    flags = [a for a in args if a.startswith("-")]
+    plain = [a for a in args if not a.startswith("-")]
+    if sub == "merge":
+        deploy = "--ff-only" in flags and set(flags) <= GIT_MERGE_FLAGS and len(plain) == 1 and SHA.fullmatch(plain[0])
+        return None if deploy else "git merge"
+    if sub == "reset":
+        rollback = flags == ["--keep"] and len(plain) == 1 and SHA.fullmatch(plain[0])  # docs/deploy.md: a failed install
+        return None if rollback else "git reset"
+    if sub == "stash":
+        return None if plain[:1] in (["list"], ["show"]) else "git stash"
+    if sub == "branch":
+        listing = bool(set(flags) & GIT_BRANCH_LISTS)
+        return "git branch" if set(flags) & GIT_BRANCH_CHANGES or (plain and not listing) else None
+    return "git " + sub if sub in GIT_ALWAYS_REFUSED else None
+
+
+def _in_live_checkout(path, home):
+    root = os.path.normpath(os.path.join(home, LIVE_CHECKOUT))
+    path = os.path.normpath(path)
+    return path == root or path.startswith(root + os.sep)
+
+
+def _git_places(cmd, opts, home):
+    """The directories a git command works in: where it runs (after each `-C`), a `--work-tree`, a `--git-dir`, GIT_DIR, GIT_WORK_TREE."""
+    here = cmd.cwd
+    places = [here]
+    for name, value in opts:
+        if name == "-C":
+            here = _resolve(value, here, home)
+            places = [here] + places[1:]
+        elif name in ("--git-dir", "--work-tree"):
+            places.append(_resolve(value, here, home))
+    for word in cmd.assigns:
+        name, _, value = word.partition("=")
+        if name in ("GIT_DIR", "GIT_WORK_TREE"):
+            places.append(_resolve(value, here, home))
+    return [p for p in places if p]
+
+
+def live_git_rule(walk, ctx):
+    for cmd in walk.cmds:
+        if _base(cmd.words[0]) != "git":
+            continue
+        opts, sub, args = _git_parts(cmd.words)
+        spelling = _git_change(sub, args) if sub else None
+        if spelling and any(_in_live_checkout(p, walk.home) for p in _git_places(cmd, opts, walk.home)):
+            return GIT_LIVE % spelling
+    return None
+
+
 def check(text, ctx):
     """The refusal message for the command text, or None."""
-    walk = Walk(text, ctx.cwd)
-    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule):
+    walk = Walk(text, ctx.cwd, (ctx.env or {}).get("HOME"))
+    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, live_git_rule):
         message = rule(walk, ctx)
         if message:
             return message
