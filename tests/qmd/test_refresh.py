@@ -31,6 +31,8 @@ fi
 echo "$cmd ctx=${QMD_EMBED_CONTEXT_SIZE:-unset}" >> "$FAKE/ctx"
 if [ "${FAKE_QMD_SLEEP:-}" = "$cmd" ]; then
   [ -z "${FAKE_QMD_DEAF:-}" ] || trap '' TERM
+  # an orphan: a TERM-deaf process whose parent has exited (reparented to init), so it is in no process tree under the wrapper
+  [ -z "${FAKE_QMD_ORPHAN:-}" ] || ( ( trap '' TERM; exec sh -c 'echo $$ > "$FAKE/orphan.pid.tmp"; mv "$FAKE/orphan.pid.tmp" "$FAKE/orphan.pid"; exec sleep 60' ) & )
   echo $$ > "$FAKE/qmd.pid.tmp"; mv "$FAKE/qmd.pid.tmp" "$FAKE/qmd.pid"
   sleep ${FAKE_QMD_SECS:-60} &
   wait
@@ -631,6 +633,19 @@ class SignalTest(Base):
                 for n in ("calls", "qmd.pid"):
                     (self.e.fake / n).unlink(missing_ok=True)
                 self.e.stamp.unlink(missing_ok=True)
+
+    def test_an_orphaned_job_process_is_stopped_too(self):
+        """A process of the job whose parent exited is no longer under the wrapper in the process tree; it must still be stopped.
+        This is what the startup race left behind (a process forked while the signal arrived): a TERM-deaf job process holding the pipes."""
+        p = self.e.popen(FAKE_QMD_SLEEP="update", FAKE_QMD_ORPHAN="1")
+        self.assertTrue(until((self.e.fake / "orphan.pid").exists), "the orphan never started")
+        opid = int((self.e.fake / "orphan.pid").read_text())
+        self.assertTrue(alive(opid))
+        p.send_signal(signal.SIGTERM)
+        p.communicate(timeout=30)
+        self.assertEqual(p.returncode, 143)
+        self.assertTrue(until(lambda: not alive(opid), 5), "the orphaned job process survived")
+        self.assertEqual(self.e.run(), 0, "the lock is free again")
 
     def test_signal_while_still_waiting_for_the_gate(self):
         p = self.e.popen(FAKE_GATE_SLEEP="60")

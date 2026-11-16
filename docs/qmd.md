@@ -103,7 +103,7 @@ Both keys are optional; the defaults are `true` and `60`. Change a value and run
 or, when disabled, removes the plist and loads nothing. If launchd does not end up as the setting asks (the unload or load fails;
 loading needs a GUI login session, so an apply over ssh alone fails here), the script fails the apply and chezmoi runs it again on the
 next apply. Any other value (`5`, `90.5`, `hourly`, `enabled: "yes"`) fails the render,
-so a typo applies nothing rather than scheduling something else. A bootout stops a run in progress (qmd-refresh stops its job tree
+so a typo applies nothing rather than scheduling something else. A bootout stops a run in progress (qmd-refresh stops its job, all its processes,
 on TERM); the next run starts one interval after the load.
 
 | Piece | Does |
