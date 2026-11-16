@@ -2,6 +2,7 @@
 """The triaging-automated-review skill: valid front matter, the local-overlay step, and no employer content.
 Run: python3 -I -m unittest discover -s tests/triaging-automated-review -v
 """
+import os
 import re
 import unittest
 from pathlib import Path
@@ -21,6 +22,60 @@ FORBIDDEN_PATTERNS = (
     (r"\bbin/[\w.-]+", "a script path"),
     (r"[\"'`]/[a-z]+\b", "a slash command"),
 )
+
+
+# The skill must not share a sentence, or a run of words, with the file named by SKILL_NO_COPY_FROM (a read-only
+# source it was written from). The test is skipped when the variable is unset; it never prints the source's text.
+NO_COPY_ENV = "SKILL_NO_COPY_FROM"
+MIN_SENTENCE_CHARS = 25
+SHARED_RUN_WORDS = 8
+
+
+def prose_pieces(text):
+    """The sentences of a Markdown file as (first line number, normalised text), code blocks and front matter keys left out."""
+    pieces, para, start, fenced = [], [], 0, False
+
+    def flush():
+        nonlocal para
+        if para:
+            joined = " ".join(para)
+            for sentence in re.split(r"(?<=[.!?])\s+", joined):
+                words = re.sub(r"[*`_]", "", sentence).lower().split()
+                norm = " ".join(w.strip("\"'(),;:") for w in words)
+                if len(norm) >= MIN_SENTENCE_CHARS:
+                    pieces.append((start, norm))
+        para = []
+
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("```"):
+            flush()
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if not line.strip() or re.match(r"\s*(?:[-*]|\d+\.)\s", line) or line.startswith("#"):
+            flush()
+            if not line.strip() or line.startswith("#"):
+                continue
+        if not para:
+            start = number
+        para.append(re.sub(r"^\s*(?:[-*]|\d+\.)\s", "", line).strip())
+    flush()
+    return pieces
+
+
+def word_runs(norm, size):
+    words = norm.split()
+    return {" ".join(words[i:i + size]) for i in range(len(words) - size + 1)}
+
+
+def copied_lines(skill_text, source_text):
+    """Line numbers in the skill with a sentence equal to one in the source, or sharing a run of SHARED_RUN_WORDS words."""
+    source = prose_pieces(source_text)
+    sentences = {norm for _, norm in source}
+    runs = set().union(*(word_runs(norm, SHARED_RUN_WORDS) for _, norm in source)) if source else set()
+    return sorted({line for line, norm in prose_pieces(skill_text)
+                   if norm in sentences or word_runs(norm, SHARED_RUN_WORDS) & runs})
 
 
 def parts():
@@ -85,6 +140,17 @@ class SkillTest(unittest.TestCase):
                      if re.match(r"\d\. \*\*", line)]
         self.assertEqual(len(sentences), 4)
         self.assertEqual([s for s in sentences if s and s in flat], [])
+
+    @unittest.skipUnless(os.environ.get(NO_COPY_ENV), "set %s to a file to check the skill shares no sentence with it" % NO_COPY_ENV)
+    def test_shares_no_sentence_with_the_named_source(self):
+        found = copied_lines(SKILL.read_text(), Path(os.environ[NO_COPY_ENV]).read_text())
+        self.assertEqual(found, [], "SKILL.md lines that share a sentence or a %d-word run with the source: %s" % (SHARED_RUN_WORDS, found))
+
+    def test_the_copy_check_catches_a_copied_sentence_and_a_copied_run(self):
+        source = "The agent reads every open thread before it decides anything about the pull request.\n\nA second sentence stays apart here."
+        skill = "# T\n\nSomething else entirely, written fresh and long enough to count as a sentence.\n\n- The agent reads every open thread before it decides anything about the pull request.\n- Then it says: reads every open thread before it decides anything, and moves on.\n- Wholly different words appear on this particular list line, nothing shared.\n"
+        self.assertEqual(copied_lines(skill, source), [5, 6])
+        self.assertEqual(copied_lines("```\nthe agent reads every open thread before it decides anything about the pull request\n```\n", source), [])  # code is exempt
 
     def test_has_no_work_profile_content(self):
         text = SKILL.read_text()
