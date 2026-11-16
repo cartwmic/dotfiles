@@ -150,16 +150,15 @@ Library/LaunchAgents/local.agent-events.plist
 
 {{- $mistakes := includeTemplate "mistakes_report_config" . | fromJson }}
 {{- if or (ne .chezmoi.os "linux") (not $mistakes.enabled) }}
-# Weekly repeated-mistakes report (mistakes-report): Linux with chezmoi data mistakesReport.enabled, default true on personal only. Nothing is read on the work Mac.
-# A bad mistakesReport value fails this render. Disabled: chezmoi leaves the units alone; the load script below stops the timer and removes them.
-.config/systemd/user/mistakes-report.service
-.config/systemd/user/mistakes-report.timer
+# Repeated-mistakes report (mistakes-report): Linux with chezmoi data mistakesReport.enabled, default true on personal only. Nothing is read on the work Mac.
+# The coordinator's Retro lead keeper runs the command weekly (schedule mistakes-weekly); there is no timer. A bad mistakesReport value fails this render.
 .local/bin/mistakes-report
 .local/share/mistakes-report
 .local/share/mistakes-report/**
 {{- end }}
-{{- if or (ne .chezmoi.os "linux") (and (not $mistakes.enabled) (not (stat (joinPath (toString .chezmoi.destDir) ".config/systemd/user/mistakes-report.timer")))) }}
-78_mistakes_report_systemd.sh
+{{- if or (ne .chezmoi.os "linux") (not (stat (joinPath (toString .chezmoi.destDir) ".config/systemd/user/mistakes-report.timer"))) }}
+# Retires the old weekly timer (2026-11-16): runs only on a Linux host that still has mistakes-report.timer; it removes the timer, so later applies skip it.
+78_retire_mistakes_report_timer.sh
 {{- end }}
 
 {{- if not (includeTemplate "agent_kit_config" . | fromJson).enabled }}

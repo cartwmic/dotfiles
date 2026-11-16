@@ -1,9 +1,9 @@
-"""The weekly mistakes-report's chezmoi gate (data mistakesReport.enabled, default on only on personal Linux), its units and its load script.
+"""The mistakes-report's chezmoi gate (data mistakesReport.enabled, default on only on personal Linux) and the script that retires its old timer.
 
-.chezmoiignore is rendered from the real source with the profile and OS overridden; the load script runs against a fake systemctl.
-Nothing here touches the real systemd. Run: python3 -m unittest discover -s tests/mistakes-report
+The Retro lead keeper runs the command weekly, so the systemd timer and service are gone from the source. .chezmoiignore is rendered from the
+real source with the profile and OS overridden; the retire script runs against a fake systemctl. Nothing here touches the real systemd.
+Run: python3 -m unittest discover -s tests/mistakes-report
 """
-import configparser
 import json
 import os
 import shutil
@@ -15,11 +15,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 IGNORE = REPO / ".chezmoiignore"
 CONFIG = REPO / ".chezmoitemplates/mistakes_report_config"
-LOADER = REPO / "run_onchange_after_78_mistakes_report_systemd.sh.tmpl"
-SERVICE = REPO / "dot_config/systemd/user/mistakes-report.service"
-TIMER = REPO / "dot_config/systemd/user/mistakes-report.timer"
-PATHS = (".config/systemd/user/mistakes-report.service", ".config/systemd/user/mistakes-report.timer", "78_mistakes_report_systemd.sh",
-         ".local/bin/mistakes-report", ".local/share/mistakes-report")
+RETIRE = REPO / "run_onchange_after_78_retire_mistakes_report_timer.sh"
+RETIRE_DEST = "78_retire_mistakes_report_timer.sh"
+UNITS = ("mistakes-report.service", "mistakes-report.timer")
+PATHS = (".local/bin/mistakes-report", ".local/share/mistakes-report")
 
 
 def render(path, profile="personal", os_name="linux", data=None, installed=False):
@@ -43,9 +42,20 @@ def ignored(**kw):
     return {line.strip() for line in r.stdout.splitlines() if line.strip() and not line.startswith("#")}
 
 
+class SourceTest(unittest.TestCase):
+    def test_the_timer_and_service_are_gone_from_the_source(self):
+        for name in UNITS:
+            self.assertFalse((REPO / "dot_config/systemd/user" / name).exists(), name)
+        self.assertFalse((REPO / "run_onchange_after_78_mistakes_report_systemd.sh.tmpl").exists())
+
+    def test_the_command_the_keeper_calls_is_still_in_the_source(self):
+        self.assertTrue((REPO / "dot_local/bin/executable_mistakes-report").exists())
+        self.assertTrue((REPO / "dot_local/share/mistakes-report/mistakes_report.py").exists())
+
+
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
 class GateTest(unittest.TestCase):
-    def test_personal_linux_gets_every_piece(self):
+    def test_personal_linux_gets_the_command_and_its_code(self):
         ig = ignored()
         for p in PATHS:
             self.assertNotIn(p, ig)
@@ -58,104 +68,76 @@ class GateTest(unittest.TestCase):
 
     def test_other_systems_get_none(self):
         for profile, os_name in (("personal", "darwin"), ("axon-work-computer", "darwin"), ("termux", "android")):
-            for p in PATHS:
-                self.assertIn(p, ignored(profile=profile, os_name=os_name), (profile, os_name))
+            ig = ignored(profile=profile, os_name=os_name, installed=True)
+            for p in PATHS + (RETIRE_DEST,):
+                self.assertIn(p, ig, (profile, os_name))
 
-    def test_turned_off_with_the_timer_installed_keeps_only_the_unload_script(self):
-        ig = ignored(data={"enabled": False}, installed=True)
-        for p in PATHS:
-            if p == "78_mistakes_report_systemd.sh":
-                self.assertNotIn(p, ig)
-            else:
-                self.assertIn(p, ig)
-
-    def test_turned_off_with_nothing_installed_manages_nothing(self):
+    def test_turned_off_stops_managing_the_command(self):
         for p in PATHS:
             self.assertIn(p, ignored(data={"enabled": False}))
 
+    def test_the_retire_script_runs_only_where_the_old_timer_is_still_installed(self):
+        self.assertNotIn(RETIRE_DEST, ignored(installed=True))
+        self.assertNotIn(RETIRE_DEST, ignored(profile="axon-work-computer", installed=True))
+        self.assertIn(RETIRE_DEST, ignored(installed=False))
+        self.assertIn(RETIRE_DEST, ignored(profile="axon-work-computer", installed=False))
+
     def test_a_bad_setting_fails_the_render(self):
         for data in ({"enabeld": True}, {"enabled": "yes"}, {"enabled": None}, "on"):
-            for path in (CONFIG, IGNORE, LOADER):
+            for path in (CONFIG, IGNORE):
                 self.assertNotEqual(render(path, data=data).returncode, 0, (path.name, data))
 
 
-class UnitTest(unittest.TestCase):
-    def test_the_timer_runs_weekly_and_catches_up(self):
-        p = configparser.ConfigParser(interpolation=None)
-        p.optionxform = str
-        p.read_string(TIMER.read_text())
-        self.assertEqual(p["Timer"]["OnCalendar"], "Mon *-*-* 07:30:00")
-        self.assertEqual(p["Timer"]["Persistent"], "true")
-        self.assertEqual(p["Install"]["WantedBy"], "timers.target")
-
-    def test_the_service_runs_the_command_with_a_path_that_finds_claude(self):
-        text = SERVICE.read_text()
-        self.assertIn("ExecStart=%h/.local/bin/mistakes-report", text)
-        self.assertIn("command-wrappers/bin", text)
-
-    @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
-    def test_systemd_accepts_the_units(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            for src in (SERVICE, TIMER):
-                shutil.copy(src, Path(tmp) / src.name)
-            r = subprocess.run(["systemd-analyze", "verify", "--user", str(Path(tmp) / "mistakes-report.service"), str(Path(tmp) / "mistakes-report.timer")],
-                               capture_output=True, text=True, timeout=60, cwd=tmp)
-        bad = [l for l in r.stderr.splitlines() if "mistakes-report" in l and "mistakes-report " not in l.split("Command")[0] and "not executable" not in l and "No such file" not in l]
-        self.assertEqual(bad, [], r.stderr)
-
-
-@unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
-class LoaderTest(unittest.TestCase):
-    def run_loader(self, installed=True, active=True, data=None, wsl=False):
-        r = render(LOADER, data=data)
-        self.assertEqual(r.returncode, 0, r.stderr)
+class RetireTest(unittest.TestCase):
+    def run_retire(self, installed=True, active=False, wsl=False, systemd=True):
         with tempfile.TemporaryDirectory() as tmp:
             home, bin_ = Path(tmp) / "home", Path(tmp) / "bin"
             (home / ".config/systemd/user").mkdir(parents=True)
             bin_.mkdir()
             if installed:
-                for n in ("mistakes-report.service", "mistakes-report.timer"):
+                for n in UNITS:
                     (home / ".config/systemd/user" / n).write_text("")
             log = Path(tmp) / "calls"
-            (bin_ / "systemctl").write_text('#!/bin/sh\necho "$*" >> "%s"\n[ "$2" = is-active ] && [ "%s" = no ] && exit 3\nexit 0\n' % (log, "yes" if active else "no"))
+            (bin_ / "systemctl").write_text('#!/bin/sh\necho "$*" >> "%s"\n[ "$2" = show-environment ] && [ "%s" = no ] && exit 1\n[ "$2" = is-active ] && [ "%s" = no ] && exit 3\nexit 0\n'
+                                            % (log, "yes" if systemd else "no", "yes" if active else "no"))
             (bin_ / "systemctl").chmod(0o755)
-            script = Path(tmp) / "load.sh"
-            script.write_text(r.stdout)
             marker = Path(tmp) / "wsl"
             if wsl:
                 marker.write_text("")
-            p = subprocess.run(["sh", str(script)], capture_output=True, text=True,
+            p = subprocess.run(["sh", str(RETIRE)], capture_output=True, text=True,
                                env={"HOME": str(home), "PATH": "%s:/usr/bin:/bin" % bin_, "MISTAKES_REPORT_WSL_MARKER": str(marker)})
             self.units = sorted(x.name for x in (home / ".config/systemd/user").iterdir())
             return p, log.read_text().splitlines() if log.exists() else []
 
-    def test_it_enables_and_restarts_the_timer(self):
-        p, calls = self.run_loader()
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual([c for c in calls if "mistakes-report.timer" in c],
-                         ["--user enable mistakes-report.timer", "--user restart mistakes-report.timer", "--user is-active --quiet mistakes-report.timer"])
-
-    def test_turned_off_it_stops_the_timer_and_removes_both_units(self):
-        p, calls = self.run_loader(data={"enabled": False}, active=False)
+    def test_it_stops_and_disables_the_timer_removes_both_units_and_reloads(self):
+        p, calls = self.run_retire()
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.units, [])
-        self.assertIn("--user disable --now mistakes-report.timer", calls)
-        self.assertNotIn("--user enable mistakes-report.timer", calls)
+        self.assertEqual([c for c in calls if "show-environment" not in c],
+                         ["--user disable --now mistakes-report.timer", "--user is-active --quiet mistakes-report.timer", "--user daemon-reload"])
 
-    def test_turned_off_it_fails_and_keeps_the_units_when_the_timer_will_not_stop(self):
-        p, _ = self.run_loader(data={"enabled": False}, active=True)
+    def test_it_is_idempotent_when_the_units_are_already_gone(self):
+        p, calls = self.run_retire(installed=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.units, [])
+
+    def test_it_fails_and_keeps_the_units_when_the_timer_will_not_stop(self):
+        p, calls = self.run_retire(active=True)
         self.assertEqual(p.returncode, 1)
-        self.assertEqual(self.units, ["mistakes-report.service", "mistakes-report.timer"])
+        self.assertIn("could not stop mistakes-report.timer", p.stdout)
+        self.assertEqual(self.units, list(UNITS))
+        self.assertNotIn("--user daemon-reload", calls)
 
     def test_wsl_is_left_alone(self):
-        for data in (None, {"enabled": False}):
-            p, calls = self.run_loader(data=data, wsl=True)
-            self.assertEqual((p.returncode, calls), (0, []))
-            self.assertEqual(self.units, ["mistakes-report.service", "mistakes-report.timer"])
+        p, calls = self.run_retire(wsl=True)
+        self.assertEqual((p.returncode, calls), (0, []))
+        self.assertEqual(self.units, list(UNITS))
 
-    def test_it_fails_when_the_units_are_not_installed_or_the_timer_is_not_active(self):
-        self.assertEqual(self.run_loader(installed=False)[0].returncode, 1)
-        self.assertEqual(self.run_loader(active=False)[0].returncode, 1)
+    def test_a_host_with_no_systemd_user_manager_is_a_clean_notice(self):
+        p, calls = self.run_retire(systemd=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.units, list(UNITS))
+        self.assertNotIn("--user disable --now mistakes-report.timer", calls)
 
 
 if __name__ == "__main__":

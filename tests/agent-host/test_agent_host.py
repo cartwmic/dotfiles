@@ -15,10 +15,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-UNITS = {".config/systemd/user/%s.%s" % (n, k) for n in ("session-cost", "mistakes-report", "agent-events") for k in ("service", "timer")}
-LOADERS = {"77": "run_onchange_after_77_agent_events_systemd.sh.tmpl", "78": "run_onchange_after_78_mistakes_report_systemd.sh.tmpl",
-           "86": "run_onchange_after_86_session_cost_systemd.sh.tmpl"}
-TIMERS = {"77": "agent-events", "78": "mistakes-report", "86": "session-cost"}
+UNITS = {".config/systemd/user/%s.%s" % (n, k) for n in ("session-cost", "agent-events") for k in ("service", "timer")}
+LOADERS = {"77": "run_onchange_after_77_agent_events_systemd.sh.tmpl", "86": "run_onchange_after_86_session_cost_systemd.sh.tmpl"}
+TIMERS = {"77": "agent-events", "86": "session-cost"}
+MISTAKES = {".local/bin/mistakes-report", ".local/share/mistakes-report/README.md", ".local/share/mistakes-report/classes.json", ".local/share/mistakes-report/mistakes_report.py"}   # no timer; the Retro keeper runs it
 
 
 def chezmoi(profile, verb, *args, data=None, stdin=None):
@@ -72,7 +72,7 @@ class AgentHostSwitchTest(unittest.TestCase):
                 **{"load_hookonly_" + k: pool.submit(loader, "personal", k, {"agentHost": {"removeCoordinatorHook": True}}) for k in LOADERS})
             cls.got = {k: v.result() for k, v in jobs.items()}
 
-    def test_default_installs_the_three_timers(self):
+    def test_default_installs_the_two_timers(self):
         self.assertLessEqual(UNITS, self.got["default"])
         self.assertEqual(self.got["default"], self.got["off"])  # explicit false is the same as no key
 
@@ -83,7 +83,7 @@ class AgentHostSwitchTest(unittest.TestCase):
             self.assertIn("systemctl --user restart %s.timer" % name, s)
             self.assertNotIn("disable --now", s)
 
-    def test_switch_on_stops_and_removes_all_three_timers(self):
+    def test_switch_on_stops_and_removes_both_timers(self):
         self.assertEqual(UNITS & self.got["on"], set())
         for k, name in TIMERS.items():
             s = self.got["load_on_" + k]
@@ -91,11 +91,11 @@ class AgentHostSwitchTest(unittest.TestCase):
             self.assertIn('rm -f "$dir/%s.service" "$dir/%s.timer"' % (name, name), s)
             self.assertNotIn("restart %s.timer" % name, s)
 
-    def test_switch_on_wins_over_the_three_own_enabled_settings(self):
+    def test_switch_on_wins_over_the_two_own_enabled_settings(self):
         self.assertEqual(UNITS & self.got["forced"], set())
 
-    def test_switch_on_drops_only_the_three_timers_their_commands_code_and_loaders(self):
-        related = ("session-cost", "token-efficiency", "mistakes-report", "agent-events", "77_agent_events", "78_mistakes", "86_session_cost")
+    def test_switch_on_drops_only_the_two_timers_their_commands_code_and_loaders(self):
+        related = ("session-cost", "token-efficiency", "agent-events", "77_agent_events", "86_session_cost")
         dropped = self.got["default"] - self.got["on"]
         self.assertLessEqual(UNITS, dropped)
         self.assertEqual({p for p in dropped if not any(w in p for w in related)}, set())
@@ -105,6 +105,10 @@ class AgentHostSwitchTest(unittest.TestCase):
         self.assertEqual(self.got["hook_only"], self.got["default"])
         for k in LOADERS:
             self.assertEqual(self.got["load_hookonly_" + k], self.got["load_default_" + k])
+
+    def test_switch_on_leaves_the_mistakes_report_command_managed(self):
+        self.assertLessEqual(MISTAKES, self.got["default"])
+        self.assertLessEqual(MISTAKES, self.got["on"])
 
     def test_work_profile_manages_none_of_the_units(self):
         self.assertEqual(UNITS & self.got["work"], set())
