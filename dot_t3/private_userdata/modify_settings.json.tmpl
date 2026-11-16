@@ -31,6 +31,8 @@
 #               Off removes the source if its kind, label and url are ours (the key is not compared: T3 may have replaced it).
 #               Shape: pingdotgg/t3code packages/contracts/src/settings.ts (UsageLimitSourceConfig) and
 #               docs/user/usage.md "Connect a CLIProxyAPI hub".
+# linkedEnvironmentsEnabled (container mode only): true. T3's Settings -> Labs "Linked environments" switch; a peer's `t3 environment link` to the pod's T3 fails while it is off
+#   (the coordinator on omarchy reaches the pod this way). Set on every apply, so a fresh pod has it before anyone opens T3. The work profile has no agent host and no T3 settings file here.
 # worktreesDirectory: new T3 worktrees go to <dir>/<repo>/<branch> on the Workshop SSD (/Volumes/Workshop exists only on the personal Mac,
 #   and this file is personal macOS only). It affects new worktrees only: T3 keeps managing the ones under ~/.t3/worktrees where they
 #   are, and nothing here moves them. Workshop unmounted: /Volumes is root-owned, so `git worktree add` fails with an error; there is
@@ -198,7 +200,10 @@ out=$(printf %s "$input" | MGMT_KEY=$MGMT_KEY jq --argjson want "$WANT" --argjso
     def setEnvVars: reduce ($envvars | keys[]) as $id (.; if (.providerInstances[$id]? | type) == "object" then
         .providerInstances[$id] |= reduce $envvars[$id][] as $e (.; .environment = upsertEnv($e)) else . end);
     setCompact | setIdle | setEnvVars
-  | .worktreesDirectory = $worktrees')
+  | .worktreesDirectory = $worktrees
+{{- if (includeTemplate "container" . | fromJson).enabled }}
+  | .linkedEnvironmentsEnabled = true
+{{- end }}')
 # T3 writes the file in its own key order and the merge emits the template's order for the owned instances, so the bytes would differ on every
 # apply with nothing to change. When the merged result equals the input as data (jq -S sorts object keys; arrays keep their order), print the input as it is.
 sorted_in=$(printf %s "$input" | jq -S .)

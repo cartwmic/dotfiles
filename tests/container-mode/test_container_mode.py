@@ -95,6 +95,9 @@ class ContainerHome(Scratch):
             self.assertIn("--settings %s/.claude/fleet/seat-%s.json" % (self.home, seat), instances["seat-" + seat]["config"]["launchArgs"])
             self.assertTrue((self.home / ".claude/fleet" / ("seat-%s.json" % seat)).exists())
 
+    def test_linked_environments_is_on_in_a_fresh_pods_t3_settings_with_no_script_run(self):   # a peer's `t3 environment link` fails while it is off
+        self.assertIs(json.loads((self.home / ".t3/userdata/settings.json").read_text())["linkedEnvironmentsEnabled"], True)
+
     def test_hook_entries_are_installed_when_node_is_there(self):
         self.assertEqual([g["matcher"] for g in self.settings["hooks"]["PreToolUse"] if "hook.ts" in json.dumps(g)], ["^AskUserQuestion$"])
 
@@ -124,6 +127,34 @@ class FirstApplyHasNoNode(unittest.TestCase):
         second = chezmoi(config, home, "apply", "--exclude=scripts,externals", path="%s:%s" % (bare, node_dir))
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("hook.ts", (home / ".claude/settings.json").read_text())
+
+
+class T3SettingsMerge(unittest.TestCase):
+    """The T3 settings file is merge-managed: what T3 wrote stays, and linkedEnvironmentsEnabled is turned on whatever T3 or someone set."""
+    def cat(self, config, home):
+        r = chezmoi(config, home, "cat", str(home / ".t3/userdata/settings.json"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def setup_home(self, extra, live):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        config, home = tmp / "chezmoi.yaml", tmp / "home"
+        config.write_text("data:\n  profile: personal\n" + extra)
+        (home / ".t3/userdata").mkdir(parents=True)
+        (home / ".t3/userdata/settings.json").write_text(json.dumps(live))
+        return config, home
+
+    def test_t3s_own_keys_stay_and_a_switched_off_setting_is_turned_back_on(self):
+        config, home = self.setup_home("  container:\n    enabled: true\n", {"linkedEnvironmentsEnabled": False, "compactIdleThreads": True, "usageLimitSources": {"x": {"kind": "cliproxy"}}})
+        out = self.cat(config, home)
+        self.assertIs(out["linkedEnvironmentsEnabled"], True)
+        self.assertIs(out["compactIdleThreads"], True)
+        self.assertEqual(out["usageLimitSources"]["x"], {"kind": "cliproxy"})
+
+    def test_outside_container_mode_the_key_is_not_added(self):
+        config, home = self.setup_home("", {"compactIdleThreads": True})
+        self.assertNotIn("linkedEnvironmentsEnabled", self.cat(config, home))
 
 
 class LeanMiseSet(Scratch):
