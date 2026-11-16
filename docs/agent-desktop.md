@@ -149,7 +149,7 @@ The work profile gives a work Mac the same setup as any Mac: the `66` step runs 
 
 On the work profile, a blocked GitHub download makes the `66` step exit 1 and stops the apply there; steps 70 and later wait for the next apply.
 
-No agent installs, applies, grants a permission or runs a check on the work Mac without Michael. Each such action is its own ask to him, and a yes covers only the action it names. No keyboard or mouse input goes through the KVM without his OK for each test. Michael takes the merged dotfiles there with his own `chezmoi update`. The permissions in the Mac section are his to set. After that, each step (the read-only check of the Mac's limits, the permissions, the run of the eight actions and `ui` with saved output and screenshots) is its own ask.
+No agent installs, applies, grants a permission or runs a check on the work Mac without Michael. Each such action is its own ask to him, and a yes covers only the action it names. No keyboard or mouse input goes through the KVM without his OK for each test. Michael takes the merged dotfiles there with his own `chezmoi update`. The permissions in the Mac section are his to set. After that, each step (the read-only check of the Mac's limits, the permissions, the run of the eight actions and `ui` with saved output and screenshots) is its own ask. That run is `live_run.py work-mac` (see "Repeating a live run").
 
 ### What the read-only check found (2026-11-15)
 
@@ -171,9 +171,13 @@ The live proof runs the 14 checks through the real path on one computer and save
 python3 tests/agent-desktop/live_run.py DEVICE [--out DIR] [--dry-run] [--only J2,J8] [--phase all|prepare|rows] [--unlock-timeout SECS]
 ```
 
-`DEVICE` is `omarchy` (this machine), `mac-mini` (over ssh) or `g14` (over ssh through the Mac mini). `--dry-run` prints the plan and the preconditions and changes nothing. `--only` runs just the named rows and writes `record.partial.json`. `--phase` applies to the G14: `prepare` installs, installs again, reads settings and checks the locked screen (the G14 must be locked); `rows` waits for the unlock, runs the rows and writes the record (the G14 must be unlocked). Output goes under `--out`: each command's output as a text file, each screenshot as a PNG, and `record.json`. At the end the driver runs `tests/agent-desktop/check_record.py` on the record and exits with its status.
+`DEVICE` is `omarchy` (this machine), `mac-mini` (over ssh), `work-mac` (the Mac you start it on: no ssh, no copy) or `g14` (over ssh through the Mac mini). `--dry-run` prints the plan and the preconditions and changes nothing. `--only` runs just the named rows and writes `record.partial.json`. `--phase` applies to the G14: `prepare` installs, installs again, reads settings and checks the locked screen (the G14 must be locked); `rows` waits for the unlock, runs the rows and writes the record (the G14 must be unlocked). Output goes under `--out`: each command's output as a text file, each screenshot as a PNG, and `record.json`. At the end the driver runs `tests/agent-desktop/check_record.py` on the record and exits with its status.
 
 For `mac-mini`, the driver copies the working tree to the Mac mini and runs the install there from the copy, which is the `--source <copy>` form of the reproduce command above. The Mac needs the permissions from "Mac mini permissions (host change)" first.
+
+For `work-mac`, the driver runs on the Mac it is started on. It copies nothing and uses no ssh: it removes the installed script and the Vercel folder, renders the `66` step from the working tree and runs it (the work profile leaves out the kitty helper), then runs the same 14 checks in place. `check_record.py --device work-mac` judges the record like a Mac: the same rows must pass as for the Mac mini, against the same source files. Start it from a terminal that holds Screen Recording and Accessibility (see "Work Mac"). Because it installs on that Mac, it is Michael's run, or one he has agreed to (see "Work Mac"). On a machine that is not a Mac, `--dry-run` prints the plan and shows the Mac precondition as `MISSING`, and a real run stops with exit 3 before it does anything.
+
+How the checks read the Mac: the Calculator display is read from a `ui snapshot` taken without `-i` (with `-i` the display text is left out) and only from its static text, so a button named `7` is never the display; the app in front is read from the system (`NSWorkspace`, the frontmost application), not from `ui list-windows` `is_focused`; and a click or key is sent only after the system reports the target app in front, because `focus` asks the app to come forward and returns at once.
 
 ## Where the checks live
 
