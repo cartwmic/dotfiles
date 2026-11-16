@@ -3,18 +3,32 @@
 
 usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward)
        ci-main-status [--tip | --merge-gate] --all
-       ci-main-status --merge-gate dotfiles --pr N     (the pin-fix exception, below)
+       ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
 
---pr N (only with --merge-gate dotfiles) is for the PR that fixes a red main: a red main passes the gate only when all
-three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or Loop Engine release
-turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's package.json and
-package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills tree). (3) PR N's own
-pull_request run succeeded and passed that step. Then the RED lines print as usual, followed by one "merge-gate:" line, and the
-exit is 0. Anything else exits 1 with the same stdout as without --pr; the reason goes to stderr. Without --pr nothing changes.
+--pr N (only with --merge-gate and one REPO) is for the PR that fixes a red main (fab9b713 lets the revert or fix merge into
+a red main). Without --pr nothing changes. With it, a red main passes only under the rule for that repo; then the RED lines print as
+usual, followed by one "merge-gate:" line, and the exit is 0. Anything else exits 1 with the same stdout as without --pr; the
+reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's journal) is always refused.
+
+  Every repo: PR N passes when its own full-suite run on its exact head tree succeeded. That is a run of the same
+  workflow whose failure made main red, on PR N's head commit or on a commit with the same tree. It counts only when every job
+  that did not pass in main's red run ran in it and passed, and so did each step that failed there. A job or step that was
+  skipped does not count: agent-kit's unit.yml skips `npm test` and the node-floor job on pull_request events, so a
+  pull_request run is not a full-suite run and a workflow_dispatch run on the branch is. Runs are read newest first: one that
+  skipped a red job or step is passed over, and the first one that ran them decides (a failed one refuses). The "merge-gate:"
+  line names the run (id and URL). No such run, a failed one, a run still going with its steps listed, a run on another tree or one that skipped a red job refuses.
+
+  dotfiles tries one more rule first (the pin fix), and falls back to the rule above when it does not apply: a red main passes
+  as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
+  Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
+  package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
+  tree). (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
+  so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
 `ci-main-status ... && pr-body-check ... && gh pr merge`.
 
@@ -31,13 +45,23 @@ are conclusive; cancelled, skipped and still-running runs are not, and a run sti
 A red run whose rerun (gh run rerun) is going holds its commit red until the rerun ends. Start and created
 times are never read.
 
+A failed attempt is untested, not red, when the only jobs in it that did not pass or skip were cancelled because no runner
+picked them up (GitHub's annotation on the job's check run: "The job was not acquired by Runner of type hosted even after
+multiple attempts"). No test ran, so it is never green and never red. Any real failure, a timeout after the job started and any
+other cancel in the attempt keeps it red. Like a cancelled attempt it is not conclusive: an earlier or newer conclusive
+attempt of the run, or a conclusive run of the same commit, decides the commit instead. A commit left with only such an
+attempt is treated like a flake ruling: the line reads "UNTESTED  run N on SHA: job J untested, no runner picked it up. Not a pass.",
+and it exits 2 in plain mode and with --tip, 0 with --merge-gate. A red commit below it stays red. The jobs of a failed
+run are read only for the commits the walk reaches.
+
 Exit codes:
   0  green: the newest conclusive commit passed (it may be followed by untested commits while a run is going).
      With --tip: main's tip itself passed.
   1  red: the newest conclusive commit failed. Also any state it cannot read (gh or git error, bad journal, a run on
      a commit that is not on main's first-parent line).
   2  untested: main has commits no conclusive run tested and no run is going (start one), or there is no
-     conclusive run at all. The message says whether a run is going. With --tip, also a green commit below
+     conclusive run at all, or a run left a job untested because no runner picked it up (above). The message says
+     whether a run is going. With --tip, also a green commit below
      untested commits while a run is going: the tip is not tested yet, so wait.
 Under --tip the GREEN line ends with the full 40-char tip sha ("tip <sha>"). A deploy pulls that sha
 (git merge --ff-only <sha>), because main can move between the check and the pull.
@@ -55,6 +79,7 @@ a flake, with "issue") is not red and not tested: plain mode and --tip both exit
 The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green,
 or once every commit with a verdict has been reached. WALK_CAP is a backstop.
 """
+import itertools
 import json
 import os
 import subprocess
@@ -78,8 +103,11 @@ LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-jour
 RUN_EVENTS = ("push", "workflow_dispatch")
 RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,url"
 RUN_LIMIT = 100
+NO_RUNNER = "was not acquired by Runner"   # the annotation GitHub puts on a job it cancelled because no runner picked it up
+UNPROVEN = ("flake", "untested")   # verdicts that are not red and not tested
 # The pin-fix exception. The step name and the file lists are copies: the step is in .github/workflows/ci.yml, the files are
 # agent_kit_bump.py (KIT, PIN_FILES) and loop_engine_bump.py (MISE_CONFIG, SKILLS); tests/ci-main-status checks that they match.
+PIN_FIX, RED_FIX = "the pin fix", "a fix"   # what --pr says it is not, in a refusal
 PINS_STEP = "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release"
 AGENT_KIT_PIN_FILES = {"dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json"}
 LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
@@ -92,8 +120,9 @@ class Unreadable(Exception):
 
 
 class Record:
-    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None, run_id=None, attempt=None):
-        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass", "fail" or (journal) "flake"
+    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None, run_id=None, attempt=None, unrun=()):
+        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass", "fail", "untested" (GitHub) or (journal) "flake"
+        self.unrun = list(unrun)   # "untested": the names of the jobs no runner picked up
         self.rerun_going = rerun_going   # the verdict is an earlier attempt, and a rerun of its run is going
         self.tree, self.line, self.issue = tree, line, issue   # journal only: the tip's tree, its line number, a flake's issue
         self.run_id, self.attempt = run_id, attempt   # GitHub only: the run and the attempt that gave the verdict
@@ -120,42 +149,100 @@ def main_tip(repo):
     return gh(["api", f"repos/{repo}/branches/main"])["commit"]["sha"]
 
 
-def run_verdict(repo, r):
-    """A run's verdict as (conclusion, attempt), or None if no attempt of it has concluded.
+def unrun_jobs(repo, run_id, attempt):
+    """The names of the jobs a failed attempt never ran because no runner picked them up, or [] when it failed for any other reason.
 
-    A rerun (gh run rerun) keeps the run id, so its newest attempt can be running or cancelled. Then the verdict
-    is the newest earlier attempt that concluded, read from the attempts API.
+    The attempt is untested only when every job in it that did not pass or skip was cancelled with GitHub's no-runner
+    annotation. A failed job, a timeout, or a cancel with any other annotation keeps it a failure.
+    """
+    jobs = gh(["run", "view", str(run_id), "-R", repo, "--attempt", str(attempt), "--json", "jobs"])["jobs"]
+    bad = not_ok(jobs)
+    if not bad or any(j["conclusion"] != "cancelled" for j in bad):
+        return []
+    for j in bad:
+        notes = gh(["api", f"repos/{repo}/check-runs/{j['databaseId']}/annotations"])
+        if not any(NO_RUNNER in n["message"] for n in notes):
+            return []
+    return [j["name"] for j in bad]
+
+
+def settle(repo, run_id, conclusion, attempt):
+    """One concluded attempt as (verdict, attempt, unrun job names): its conclusion, or "untested" for a failure no runner caused."""
+    unrun = unrun_jobs(repo, run_id, attempt) if conclusion == "failure" else []
+    return ("untested", attempt, unrun) if unrun else (conclusion, attempt, [])
+
+
+def concluded_attempts(repo, r):
+    """The attempts of run `r` that concluded with success or failure, as (conclusion, attempt), newest first, read as asked.
+
+    A rerun (gh run rerun) keeps the run id, so its newest attempt can be running or cancelled. Then the earlier
+    attempts are read, one at a time, from the attempts API.
     """
     if r["status"] == "completed" and r["conclusion"] in ("success", "failure"):
-        return r["conclusion"], r["attempt"]
+        yield r["conclusion"], r["attempt"]
     for n in range(r["attempt"] - 1, 0, -1):
         conclusion = gh(["api", f"repos/{repo}/actions/runs/{r['databaseId']}/attempts/{n}"]).get("conclusion")
         if conclusion in ("success", "failure"):
-            return conclusion, n
-    return None
+            yield conclusion, n
+
+
+def run_verdict(repo, r, attempts):
+    """A run's verdict as (verdict, attempt, unrun job names). `attempts` is its concluded_attempts, at least one left.
+
+    The newest attempt that concluded. An attempt left untested by a job no runner picked up is not conclusive,
+    like a cancelled one: a conclusive attempt of the run wins, and without one the newest untested attempt is the verdict.
+    """
+    untested = None
+    for conclusion, n in attempts:
+        found = settle(repo, r["databaseId"], conclusion, n)
+        if found[0] != "untested":
+            return found
+        untested = untested or found
+    return untested
 
 
 def run_record(r, found):
-    conclusion, attempt = found
+    verdict, attempt, unrun = found
     label = f"run {r['databaseId']}" + ("" if attempt == r["attempt"] else f" attempt {attempt}")
-    return Record(r["headSha"], "pass" if conclusion == "success" else "fail", label,
-                  rerun_going=r["status"] != "completed", run_id=r["databaseId"], attempt=attempt)
+    return Record(r["headSha"], {"success": "pass", "failure": "fail", "untested": "untested"}[verdict], label,
+                  rerun_going=r["status"] != "completed", run_id=r["databaseId"], attempt=attempt, unrun=unrun)
 
 
-def commit_verdict(repo, runs):
-    """One commit's verdict. runs: its full-workflow runs, highest run id first.
+class CommitVerdicts:
+    """{sha: Record} for the commits that have a run with a concluded attempt, read as the walk reaches them.
 
-    The first run with a conclusive verdict counts, except that a red run whose rerun is going holds the commit red.
+    A failed run's jobs (to tell a failure from a job no runner picked up) are fetched only for the commits the walk
+    reaches, not for every failed run gh listed.
     """
-    records = []
-    for r in runs:
-        found = run_verdict(repo, r)
-        if found:
-            records.append(run_record(r, found))
-    for rec in records:
-        if rec.verdict == "fail" and rec.rerun_going:
-            return rec
-    return records[0] if records else None
+
+    def __init__(self, repo, by_sha):
+        self.repo = repo
+        self.by_sha = by_sha   # {sha: [(run, its concluded_attempts with the first one peeked), ...]}, highest run id first
+        self.records = {}      # {run id: Record}
+
+    def __iter__(self):
+        return iter(self.by_sha)
+
+    def get(self, sha):
+        return self[sha] if sha in self.by_sha else None
+
+    def record(self, r, attempts):
+        if r["databaseId"] not in self.records:
+            self.records[r["databaseId"]] = run_record(r, run_verdict(self.repo, r, attempts))
+        return self.records[r["databaseId"]]
+
+    def __getitem__(self, sha):
+        """One commit's verdict.
+
+        The first run with a conclusive verdict counts, except that a red run whose rerun is going holds the commit red.
+        A run left untested counts only when no run of the commit is conclusive.
+        """
+        runs = self.by_sha[sha]
+        for r, attempts in runs:
+            if r["status"] != "completed" and self.record(r, attempts).verdict == "fail":
+                return self.records[r["databaseId"]]
+        records = [self.record(r, attempts) for r, attempts in runs]
+        return next((rec for rec in records if rec.verdict != "untested"), records[0])
 
 
 def github_verdicts(spec):
@@ -166,13 +253,11 @@ def github_verdicts(spec):
     going = any(r["status"] != "completed" for r in runs)
     by_sha = {}
     for r in sorted(runs, key=lambda r: r["databaseId"], reverse=True):   # run ids order runs of one commit
-        by_sha.setdefault(r["headSha"], []).append(r)
-    verdicts = {}
-    for sha, runs_of_commit in by_sha.items():
-        rec = commit_verdict(spec["github"], runs_of_commit)
-        if rec:
-            verdicts[sha] = rec
-    return verdicts, going
+        attempts = concluded_attempts(spec["github"], r)
+        first = next(attempts, None)   # a run with no concluded attempt gives its commit no verdict
+        if first:
+            by_sha.setdefault(r["headSha"], []).append((r, itertools.chain([first], attempts)))
+    return CommitVerdicts(spec["github"], by_sha), going
 
 
 def journal_verdicts():
@@ -286,41 +371,126 @@ def only_pins_step_failed(jobs):
 
 
 def pin_fix_reason(spec, red, pr):
-    """Why PR `pr` may merge into a red main, or None. Prints the reason it may not to stderr. A gh failure is a refusal, not an error."""
+    """Why PR `pr` may merge into a red dotfiles main as the pin fix, or None. Prints the reason it may not to stderr. A gh failure is a refusal, not an error."""
     repo = spec["github"]
     try:
-        if red.run_id is None:
-            return refuse(pr, "the red verdict is not a GitHub run")
         jobs = gh(["run", "view", str(red.run_id), "-R", repo, "--attempt", str(red.attempt), "--json", "jobs"])["jobs"]
         if not only_pins_step_failed(jobs):
-            return refuse(pr, f"{red.label} failed on more than the release-pins step")
+            return refuse(pr, f"{red.label} failed on more than the release-pins step", PIN_FIX)
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "files,headRefOid,changedFiles"])
         names = [f["path"] for f in pull["files"]]
         if pull["changedFiles"] != len(names):   # gh lists a PR's files in pages and may return only the first
-            return refuse(pr, f"gh listed {len(names)} of its {pull['changedFiles']} changed files")
+            return refuse(pr, f"gh listed {len(names)} of its {pull['changedFiles']} changed files", PIN_FIX)
         if not pin_files_only(names):
-            return refuse(pr, f"its diff is not exactly the pin files: {', '.join(names) or 'nothing'}")
+            return refuse(pr, f"its diff is not exactly the pin files: {', '.join(names) or 'nothing'}", PIN_FIX)
         head = pull["headRefOid"]
         own = [r for r in gh(["run", "list", "-R", repo, "--workflow", spec["workflow"], "--commit", head, "--event", "pull_request",
                               "--limit", "20", "--json", "databaseId,headSha,status,conclusion"]) if r["headSha"] == head]
         if not own:
-            return refuse(pr, f"no pull_request run of {head[:7]}")
+            return refuse(pr, f"no pull_request run of {head[:7]}", PIN_FIX)
         newest = max(own, key=lambda r: r["databaseId"])   # run ids order runs of one commit
         if newest["status"] != "completed" or newest["conclusion"] != "success":
-            return refuse(pr, f"its own run {newest['databaseId']} is {newest['conclusion'] or newest['status']}, not success")
+            return refuse(pr, f"its own run {newest['databaseId']} is {newest['conclusion'] or newest['status']}, not success", PIN_FIX)
         own_jobs = gh(["run", "view", str(newest["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]
         steps = [s for j in own_jobs for s in j["steps"] if s["name"].startswith(PINS_STEP)]
         if len(steps) != 1 or steps[0]["conclusion"] != "success":
-            return refuse(pr, f"its own run {newest['databaseId']} did not pass the release-pins step")
+            return refuse(pr, f"its own run {newest['databaseId']} did not pass the release-pins step", PIN_FIX)
         return (f"  merge-gate: PR #{pr} is the pin fix for this red: only the release-pins step failed, the PR changes only the pin files, "
                 f"and its own run {newest['databaseId']} passed that step. Allowed.")
+    except (Unreadable, KeyError, TypeError) as e:
+        return refuse(pr, f"could not read it ({e})", PIN_FIX)
+
+
+def refuse(pr, why, kind=RED_FIX):
+    print(f"ci-main-status: --pr {pr} is not {kind} for this red: {why}", file=sys.stderr)
+    return None
+
+
+def red_jobs(repo, red):
+    """The jobs of main's red attempt that did not pass or skip, as {job name: names of its steps that did not pass or skip}."""
+    jobs = gh(["run", "view", str(red.run_id), "-R", repo, "--attempt", str(red.attempt), "--json", "jobs"])["jobs"]
+    return {j["name"]: [s["name"] for s in not_ok(j["steps"])] for j in not_ok(jobs)}
+
+
+def judge_run(repo, run, wanted):
+    """How one run on the PR's tree answers main's red: ("skipped", why), ("bad", why) or ("good", None).
+
+    skipped: the run did not run a job or step that failed in main (a pull_request run that skips the full suite), so it says nothing.
+    bad: it ran them and they did not all pass, or it did not succeed, or it is still going with its red jobs and steps listed.
+    A run still going whose red job has no steps listed yet (queued, nothing started) is read as skipped: it has run nothing, so it
+    says nothing, and the next older run on the same tree decides. It does not refuse. Once its steps are listed it is "bad".
+    """
+    jobs = {j["name"]: j for j in gh(["run", "view", str(run["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]}
+    for name, step_names in wanted.items():
+        job = jobs.get(name)
+        if job is None or job["conclusion"] == "skipped":
+            return "skipped", f"run {run['databaseId']} skipped job {name}"
+        steps = {s["name"]: s for s in job["steps"]}
+        for step in step_names:
+            if step not in steps or steps[step]["conclusion"] == "skipped":
+                return "skipped", f"run {run['databaseId']} skipped step \"{step}\" in job {name}"
+    if run["status"] != "completed":
+        return "bad", f"run {run['databaseId']} is {run['status']}, not success"
+    for name, step_names in wanted.items():
+        if jobs[name]["conclusion"] != "success" or any(s["conclusion"] != "success" for s in jobs[name]["steps"] if s["name"] in step_names):
+            return "bad", f"run {run['databaseId']} did not pass {name}"
+    if run["conclusion"] != "success":
+        return "bad", f"run {run['databaseId']} is {run['conclusion']}, not success"
+    return "good", None
+
+
+def red_fix_reason(spec, red, pr):
+    """Why PR `pr` may merge into a red main, or None: its own full-suite run on its head tree passed what failed in main.
+
+    The runs are those of the same workflow on the PR's head commit or on a commit with its tree, newest first. One that skipped a
+    job or step that failed in main is passed over; the first one that ran them all decides. Prints why not to stderr. A gh failure
+    is a refusal, not an error.
+    """
+    repo = spec["github"]
+    try:
+        wanted = red_jobs(repo, red)
+        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName"])
+        head = pull["headRefOid"]
+        tree = tree_of(repo, head)
+        listing = ["run", "list", "-R", repo, "--workflow", spec["workflow"], "--limit", "100", "--json", RUN_FIELDS]
+        runs = {r["databaseId"]: r for r in gh(listing + ["--commit", head]) + gh(listing + ["--branch", pull["headRefName"]])}
+        passed_over = []
+        for run in sorted(runs.values(), key=lambda r: r["databaseId"], reverse=True):   # run ids order runs of one workflow
+            if run["headSha"] != head and tree_of(repo, run["headSha"]) != tree:
+                continue
+            verdict, why = judge_run(repo, run, wanted)
+            if verdict == "bad":
+                return refuse(pr, why)
+            if verdict == "good":
+                same = "" if run["headSha"] == head else f", same tree as its head {head[:7]}"
+                return (f"  merge-gate: PR #{pr} passed as a red-main fix: its own full-suite run {run['databaseId']} ({run['url']}) "
+                        f"on {run['headSha'][:7]}{same} succeeded, and ran and passed every job and step that failed in {red.label} "
+                        f"({', '.join(wanted)}). Allowed.")
+            passed_over.append(why)
+        return refuse(pr, "no full-suite run of its head tree" + (": " + "; ".join(passed_over) if passed_over
+                                                                     else f": no {spec['workflow']} run of {head[:7]} or of a commit with its tree"))
     except (Unreadable, KeyError, TypeError) as e:
         return refuse(pr, f"could not read it ({e})")
 
 
-def refuse(pr, why):
-    print(f"ci-main-status: --pr {pr} is not the pin fix for this red: {why}", file=sys.stderr)
-    return None
+def tree_of(repo, sha):
+    return gh(["api", f"repos/{repo}/commits/{sha}"])["commit"]["tree"]["sha"]
+
+
+def fix_reason(name, spec, red, pr):
+    """The "merge-gate:" line for PR `pr` as the fix for a red main, or None (the refusal went to stderr)."""
+    if red.run_id is None:
+        return refuse(pr, "the red verdict is not a GitHub run")
+    if name == "dotfiles":   # the pin rule first (its own checks), then the rule every other repo gets
+        return pin_fix_reason(spec, red, pr) or red_fix_reason(spec, red, pr)
+    return red_fix_reason(spec, red, pr)
+
+
+def untested_line(name, sha, rec):
+    """The UNTESTED line for a commit whose run left jobs untested because no runner picked them up."""
+    one = len(rec.unrun) == 1
+    return (f"{name}: UNTESTED  {rec.label} on {sha[:7]}: {'job' if one else 'jobs'} {', '.join(rec.unrun)} untested, "
+            f"no runner picked {'it' if one else 'them'} up. Not a pass.")
 
 
 def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, spec=None, pr=None):
@@ -330,13 +500,16 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
     """
     tip = main_tip(repo)
     walked = first_parent_walk(repo, tip, verdicts, trees)
-    hits = [i for i, (_, _, rec) in enumerate(walked) if rec and rec.verdict != "flake"]
-    flakes = [w for w in walked[:hits[0] if hits else len(walked)] if w[2] and w[2].verdict == "flake"]
-    if flakes and not (hits and walked[hits[0]][2].verdict == "fail"):
-        # A flake ruling is not red and not tested (ask #854: a deploy needs a pass on the tip).
-        sha, _, flake = flakes[0]
-        issue = f" (issue {flake.issue})" if flake.issue else ""
-        lines = [f"{name}: UNTESTED  {flake.label} ruled {sha[:7]} a flake{issue}; a flake is not a pass."]
+    hits = [i for i, (_, _, rec) in enumerate(walked) if rec and rec.verdict not in UNPROVEN]
+    unproven = [w for w in walked[:hits[0] if hits else len(walked)] if w[2] and w[2].verdict in UNPROVEN]
+    if unproven and not (hits and walked[hits[0]][2].verdict == "fail"):
+        # A flake ruling, or a job no runner picked up, is not red and not tested (ask #854: a deploy needs a pass on the tip).
+        sha, _, rec = unproven[0]
+        if rec.verdict == "untested":
+            lines = [untested_line(name, sha, rec)]
+        else:
+            issue = f" (issue {rec.issue})" if rec.issue else ""
+            lines = [f"{name}: UNTESTED  {rec.label} ruled {sha[:7]} a flake{issue}; a flake is not a pass."]
         lines.append("  A run is going; wait for it." if going else "  No run is going. Start a run.")
         return 2, lines
     if not hits:
@@ -352,7 +525,7 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
         lines = [f"{name}: RED  {newest.label} failed on {sha[:7]}{note}"]
 
         def red():
-            allowed = pin_fix_reason(spec, newest, pr) if pr is not None else None
+            allowed = fix_reason(name, spec, newest, pr) if pr is not None else None
             return (0, lines + [allowed]) if allowed else (1, lines)
 
         greens = [j for j in hits if walked[j][2].verdict == "pass"]
@@ -416,8 +589,8 @@ def main(argv):
         value = argv[k + 1] if k + 1 < len(argv) else ""
         pr = int(value) if value.isdigit() and int(value) > 0 else 0
         del argv[k:k + 2]
-        if not pr or not merge_gate or tip_only or argv != ["dotfiles"]:
-            argv = []   # --pr needs a PR number, --merge-gate and the dotfiles repo alone: usage error
+        if not pr or not merge_gate or tip_only or len(argv) != 1 or argv[0] not in REPOS:
+            argv = []   # --pr needs a PR number, --merge-gate and one repo (not --all): usage error
     if tip_only and merge_gate:
         argv = []   # the two flags disagree about UNTESTED: usage error
     if argv == ["--all"]:
@@ -425,7 +598,7 @@ def main(argv):
     elif len(argv) == 1 and argv[0] in REPOS:
         names = argv
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate dotfiles --pr N", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0

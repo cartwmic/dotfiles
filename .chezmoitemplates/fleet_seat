@@ -40,4 +40,13 @@
 {{-     if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
 {{-   end -}}
 {{- end -}}
-{{- dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" true "skillOverrides" $off | toPrettyJson }}
+{{- $seatFile := dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" true "skillOverrides" $off -}}
+{{- /* Builder, planner and reviewer only: ~/.claude/CLAUDE.md (with the hindsight memory guide) is not loaded; the same text without the guide comes from the worker folder (claudeMdExcludes only skips this one file). The T3 instance adds --add-dir and CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 (modify_settings.json.tmpl) and tests/t3-hub keeps the three halves together: an exclude without them would leave the seat with no user instructions at all. */ -}}
+{{- if has .seat (list "builder" "planner" "reviewer") -}}
+{{-   $_ := set $seatFile "claudeMdExcludes" (list (joinPath .ctx.chezmoi.homeDir ".claude" "CLAUDE.md")) -}}
+{{- end -}}
+{{- /* Builder only: a Stop hook that refuses to stop while a run-and-wake or kgate job this thread started still runs (hooks/stop_running_jobs.py; Retro proposal 12, playbook rule 19e13f7b). It fails open: a missing script or python3 allows the stop. */ -}}
+{{- if eq .seat "builder" -}}
+{{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" `g="$HOME/.local/share/agent-harness/hooks/stop_running_jobs.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0`))))) -}}
+{{- end -}}
+{{- $seatFile | toPrettyJson }}

@@ -2,8 +2,8 @@
 {"removeCoordinatorHook", "disableTimers", "sessionCopy", "podTunnelKey"}. Local chezmoi data agentHost (docs/profiles.md, "Local data keys"):
   removeCoordinatorHook  true or false. Default false. true takes the coordinator's T3 hook entries out of ~/.claude/settings.json
                          (dot_claude/modify_settings.json.tmpl): no hook file is looked for and hook.ts is not run. It changes that one file.
-  disableTimers          true or false. Default false. true makes the session-cost, mistakes-report and agent-events timers behave as their own
-                         enabled setting being false: the loader stops each timer and removes its two units. It wins over those three settings.
+  disableTimers          true or false. Default false. true makes the session-cost and agent-events timers behave as their own
+                         enabled setting being false: the loader stops each timer and removes its two units. It wins over those two settings.
                          Setting it back to false installs and starts them again (their own settings apply as before).
   sessionCopy            true or false. Default false. true enables agent-session-copy.timer (every 30 minutes: new and changed Claude Code and Pi
                          session files go from this desktop into the agent-host pod, for Retro; run_onchange_after_89_agent_session_copy_systemd.sh.tmpl).
@@ -13,7 +13,7 @@
                          restrict,port-forwarding,permitopen="127.0.0.1:3773" <key>   (the pod's tunnel to omarchy's T3, and nothing else).
                          A public key, so it is local data, not a secret; it is not committed because the pod makes its own key.
 Personal profile only: it changes omarchy, the personal desktop. Any switch true, or a podTunnelKey, on any other profile fails the render, so a
-copied data file can never change the work Mac. Used by the Claude settings template and the three *_config templates. Any other key
+copied data file can never change the work Mac. Used by the Claude settings template and the session-cost and agent-events *_config templates. Any other key
 or value fails the whole render, so a typo applies nothing. Default (both switches false, no key) leaves every render byte-for-byte what it was. */ -}}
 {{- $raw := dig "agentHost" dict . -}}
 {{- if not (kindIs "map" $raw) -}}

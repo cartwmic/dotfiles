@@ -38,6 +38,7 @@ class RulesTest(unittest.TestCase):
     def test_the_reason_names_the_alternatives(self):
         r = subprocess.run([CODEX, "execpolicy", "check", "--rules", str(RULES), "--", "pkill", "-f", "x"], capture_output=True, text=True, timeout=60)
         reason = json.loads(r.stdout)["matchedRules"][0]["prefixRuleMatch"]["justification"]
+        self.assertIn("kill-mine", reason)
         self.assertIn("exact PID", reason)
         self.assertIn("kgate cancel <id>", reason)
 

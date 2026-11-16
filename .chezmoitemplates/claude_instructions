@@ -1,0 +1,25 @@
+{{- /*
+  The Claude Code user instructions. Call:
+    {{ includeTemplate "claude_instructions" (dict "ctx" . "guide" true) }}
+  dot_claude/CLAUDE.md.tmpl calls it with guide true: ~/.claude/CLAUDE.md, for Michael's own sessions, leads, the coordinator and the default instance.
+  dot_claude/fleet/worker/CLAUDE.md.tmpl calls it with guide false: the same text minus the hindsight memory guide, for the builder, planner and
+  reviewer seats. Those seats exclude ~/.claude/CLAUDE.md (claudeMdExcludes, .chezmoitemplates/fleet_seat) and load the worker folder as an extra
+  directory, which also holds the skill that carries the guide (dot_claude/fleet/worker/dot_claude/skills/hindsight-memory). With guide false the
+  output is the guide-true output minus exactly the guide's bytes (tests/t3-hub WorkerInstructionsTest).
+*/ -}}
+# User-level instructions for Claude Code
+
+These apply across every project. Project-level `CLAUDE.md` files override
+or extend these as usual.
+
+{{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
+{{ if .guide }}{{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" }}{{ end -}}
+{{ if eq .ctx.profile "axon-work-computer" }}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl" .ctx -}}
+{{ end -}}
+{{ if eq .ctx.profile "axon-work-computer" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" -}}
+{{ end -}}
+{{ if eq .ctx.profile "personal" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-personal.md" -}}
+{{ end -}}

@@ -38,11 +38,16 @@ GH_FAKE = textwrap.dedent('''\
             rows = [r for r in rows if r["headSha"] == args[args.index("--commit") + 1]]
         if "--event" in args:
             rows = [r for r in rows if r["event"] == args[args.index("--event") + 1]]
+        if "--branch" in args:   # a row with no headBranch is a run on main
+            rows = [r for r in rows if r.get("headBranch", "main") == args[args.index("--branch") + 1]]
         print(json.dumps(rows))
     elif args[:2] == ["run", "view"]:
-        jobs = fixture.get("jobs", {}).get(args[2])
+        attempt = args[args.index("--attempt") + 1] if "--attempt" in args else None
+        jobs = fixture.get("jobs", {}).get(args[2] + "/" + str(attempt))   # a jobs fixture for one attempt, else for the run
         if jobs is None:
-            fail("fake gh: no jobs fixture for run " + args[2])
+            jobs = fixture.get("jobs", {}).get(args[2])
+        if jobs is None:   # a run with no jobs fixture failed in a real job
+            jobs = [{"databaseId": 1, "name": "tests", "conclusion": "failure", "steps": []}]
         print(json.dumps({"jobs": jobs}))
     elif args[:2] == ["pr", "view"]:
         if args[args.index("-R") + 1] in fixture.get("fail_pr", []):
@@ -73,6 +78,11 @@ GH_FAKE = textwrap.dedent('''\
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
             subject = git(src, "log", "-1", "--format=%s", sha).strip()
             print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}}}))
+        elif "/check-runs/" in path:
+            notes = fixture.get("annotations", {}).get(path.split("/check-runs/")[1].split("/")[0])
+            if notes is None:
+                fail("HTTP 404: no annotations fixture for " + path)
+            print(json.dumps(notes))
         elif "/actions/runs/" in path:
             run_id, n = path.split("/actions/runs/")[1].split("/attempts/")
             attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
@@ -98,14 +108,14 @@ def commit(path, msg):
     return git(path, "rev-parse", "HEAD")
 
 
-def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None):
+def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None, branch="main"):
     """One gh run list row. Newer runs have a larger age. A rerun keeps its created time; its started time
     (started_age, default age) is when the latest attempt started."""
     started = age if started_age is None else started_age
     return {"databaseId": run_id, "event": event, "headSha": sha, "status": status,
             "conclusion": conclusion if status == "completed" else "", "attempt": attempt,
             "createdAt": f"2026-11-11T10:{age:02d}:00Z", "startedAt": f"2026-11-11T10:{started:02d}:00Z",
-            "url": ""}
+            "headBranch": branch, "url": f"https://example.invalid/runs/{run_id}"}
 
 
 class Fixture(unittest.TestCase):
@@ -127,6 +137,7 @@ class Fixture(unittest.TestCase):
         self.failing = []
         self.attempts = {}                           # run id -> {attempt number -> attempts API row}
         self.jobs = {}                               # run id -> the jobs `gh run view --json jobs` returns
+        self.annotations = {}                        # job id (str) -> the check run's annotations
         self.prs = {}                                # PR number -> `gh pr view --json files,headRefOid`
         self.failing_pr = []                         # repos whose `gh pr view` fails
         self.journal = t / "journal.jsonl"           # absent unless a test writes it
@@ -148,7 +159,7 @@ class Fixture(unittest.TestCase):
                                             "cartwmic/alert-steward")}
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
             {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts,
-             "jobs": self.jobs, "prs": self.prs, "fail_pr": self.failing_pr}))
+             "jobs": self.jobs, "annotations": self.annotations, "prs": self.prs, "fail_pr": self.failing_pr}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -533,6 +544,9 @@ def steps(**conclusions):
             {"name": "Linux checks: scripts/ci-linux.sh", "conclusion": conclusions.get("linux", "success")}]
 
 
+NO_HEAD_RUN = run(3, "f" * 40, "success", event="pull_request", age=7)   # a run, but not of the PR head or of a commit with its tree
+
+
 class PinFixException(Fixture):
     """--merge-gate dotfiles --pr N: the fix PR for a red release-pins step may merge into that red main (issue 429).
 
@@ -541,18 +555,23 @@ class PinFixException(Fixture):
 
     def setUp(self):
         super().setUp()
+        git(self.src, "switch", "-q", "-c", "fix", self.c3)   # a real head, so the general rule the gate falls back to can read it
+        (self.src / "pins.txt").write_text("pins\n")
+        git(self.src, "add", "pins.txt")
+        self.head = commit(self.src, "the pin fix")
+        git(self.src, "switch", "-q", "main")
         self.set_world()
 
     def set_world(self, red_steps=None, red_extra_jobs=(), files=KIT_FILES, own_run=None, own_steps=None):
         """Run 2 on main's tip c3 is red; PR 7's head has its own pull_request run 3."""
-        own_run = own_run or run(3, PR_HEAD, "success", event="pull_request", age=7)
+        own_run = own_run or run(3, self.head, "success", event="pull_request", age=7, branch="fix")
         self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1), own_run])
         red_steps = red_steps or steps(pins="failure", linux="skipped")
         self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": red_steps},
                            {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
                      str(own_run["databaseId"]): [{"name": "tests", "conclusion": "success", "steps": own_steps or steps()},
                                                   {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
-        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": PR_HEAD}}
+        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": self.head, "headRefName": "fix"}}
 
     def gate(self, *extra):
         self.write_fixture()
@@ -579,7 +598,7 @@ class PinFixException(Fixture):
         self.assertEqual(err, "")
         calls = self.log.read_text().splitlines()
         self.assertIn("run view 2 -R cartwmic/dotfiles --attempt 1 --json jobs", calls, "the red run's own attempt is the one read")
-        self.assertTrue(any(c.startswith("run list") and f"--commit {PR_HEAD}" in c and "--event pull_request" in c for c in calls))
+        self.assertTrue(any(c.startswith("run list") and f"--commit {self.head}" in c and "--event pull_request" in c for c in calls))
 
     def test_pass_case_for_a_loop_engine_bump_the_mise_config_and_skills(self):
         self.set_world(files=LE_FILES)
@@ -590,15 +609,15 @@ class PinFixException(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("RED", out)
         self.assertNotIn("merge-gate:", out)
-        self.assertFalse([c for c in self.log.read_text().splitlines() if c.startswith(("pr view", "run view"))],
-                         "without --pr nothing about a PR or a run's steps is read")
+        self.assertFalse([c for c in self.log.read_text().splitlines() if c.startswith("pr view")],
+                         "without --pr nothing about a PR is read")
 
     def test_another_step_failed_in_the_red_run_stays_red(self):
-        self.set_world(red_steps=steps(other="failure", pins="skipped"))
+        self.set_world(red_steps=steps(other="failure", pins="skipped"), own_run=NO_HEAD_RUN)
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_the_pins_step_and_another_step_failed_stays_red(self):
-        self.set_world(red_steps=steps(pins="failure", linux="failure"))
+        self.set_world(red_steps=steps(pins="failure", linux="failure"), own_run=NO_HEAD_RUN)
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_another_job_failed_in_the_red_run_stays_red(self):
@@ -610,36 +629,36 @@ class PinFixException(Fixture):
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_an_extra_file_in_the_diff_stays_red(self):
-        self.set_world(files=KIT_FILES + ["README.md"])
+        self.set_world(files=KIT_FILES + ["README.md"], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files: " + ", ".join(KIT_FILES + ["README.md"]))
 
     def test_a_file_list_shorter_than_the_changed_file_count_stays_red(self):
-        self.set_world()
+        self.set_world(own_run=NO_HEAD_RUN)
         self.prs["7"]["changedFiles"] = 150   # gh returned the pin files but not the other 148
         self.assert_stays_red("gh listed 2 of its 150 changed files")
 
     def test_half_the_agent_kit_pin_files_stays_red(self):
-        self.set_world(files=KIT_FILES[:1])
+        self.set_world(files=KIT_FILES[:1], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files")
 
     def test_loop_engine_skills_without_the_mise_config_stays_red(self):
-        self.set_world(files=LE_FILES[1:])
+        self.set_world(files=LE_FILES[1:], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files")
 
     def test_a_loop_engine_diff_with_a_file_outside_the_skills_stays_red(self):
-        self.set_world(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"])
+        self.set_world(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files")
 
     def test_the_prs_own_run_failing_the_pins_step_stays_red(self):
-        self.set_world(own_run=run(3, PR_HEAD, "failure", event="pull_request", age=7), own_steps=steps(pins="failure", linux="skipped"))
+        self.set_world(own_run=run(3, self.head, "failure", event="pull_request", age=7), own_steps=steps(pins="failure", linux="skipped"))
         self.assert_stays_red("its own run 3 is failure, not success")
 
     def test_the_prs_own_run_passing_the_step_but_failing_the_run_stays_red(self):
-        self.set_world(own_run=run(3, PR_HEAD, "failure", event="pull_request", age=7), own_steps=steps(linux="failure"))
+        self.set_world(own_run=run(3, self.head, "failure", event="pull_request", age=7), own_steps=steps(linux="failure"))
         self.assert_stays_red("its own run 3 is failure, not success")
 
     def test_the_prs_own_run_not_finished_stays_red(self):
-        self.set_world(own_run=run(3, PR_HEAD, status="in_progress", event="pull_request", age=7))
+        self.set_world(own_run=run(3, self.head, status="in_progress", event="pull_request", age=7))
         self.assert_stays_red("its own run 3 is in_progress, not success")
 
     def test_the_prs_own_run_without_the_pins_step_stays_red(self):
@@ -648,11 +667,32 @@ class PinFixException(Fixture):
 
     def test_a_run_on_another_commit_is_not_the_prs_own_run(self):
         self.set_world(own_run=run(3, "f" * 40, "success", event="pull_request", age=7))
-        self.assert_stays_red("no pull_request run of 81b6301")
+        self.assert_stays_red(f"no pull_request run of {self.head[:7]}")
 
-    def test_a_push_run_on_the_pr_head_is_not_the_prs_own_run(self):
-        self.set_world(own_run=run(3, PR_HEAD, "success", event="push", age=7))
-        self.assert_stays_red("no pull_request run of 81b6301")
+    def test_a_push_run_on_the_pr_head_is_not_the_prs_own_run_for_the_pin_rule_but_the_general_rule_takes_it(self):
+        self.set_world(own_run=run(3, self.head, "success", event="push", age=7))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("passed as a red-main fix", out)           # the general rule: any run of the workflow on the head
+        self.assertIn(f"no pull_request run of {self.head[:7]}", err)   # the pin rule said no first
+        self.assertNotIn("pin fix", out)
+
+    def test_every_pin_refusal_above_falls_through_to_the_general_rule_when_the_head_has_a_green_full_run(self):
+        """The refusals above hold only because those worlds give the head no run (NO_HEAD_RUN). With a green run on the head that ran
+        and passed what failed in main, the general rule passes the PR: the pin rule is an extra path, not a limit."""
+        worlds = {"another step failed": dict(red_steps=steps(other="failure", pins="skipped")),
+                  "pins step and another step failed": dict(red_steps=steps(pins="failure", linux="failure")),
+                  "extra file in the diff": dict(files=KIT_FILES + ["README.md"]),
+                  "half the agent-kit pin files": dict(files=KIT_FILES[:1]),
+                  "loop-engine skills without the mise config": dict(files=LE_FILES[1:]),
+                  "loop-engine diff with a file outside the skills": dict(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"])}
+        for label, kwargs in worlds.items():
+            with self.subTest(label):
+                self.set_world(**kwargs)
+                rc, out, err = self.gate("--pr", "7")
+                self.assertEqual(rc, 0, out + err)
+                self.assertIn("passed as a red-main fix: its own full-suite run 3", out)
+                self.assertNotIn("pin fix", out)
 
     def test_a_gh_failure_in_the_check_stays_red_with_the_same_stdout(self):
         self.set_world()
@@ -668,12 +708,417 @@ class PinFixException(Fixture):
         script = [sys.executable, str(SCRIPT)]
         for args in (["--merge-gate", "dotfiles", "--pr"], ["--merge-gate", "dotfiles", "--pr", "x"], ["--merge-gate", "dotfiles", "--pr", "0"],
                      ["dotfiles", "--pr", "7"], ["--tip", "--merge-gate", "dotfiles", "--pr", "7"], ["--merge-gate", "--all", "--pr", "7"],
-                     ["--merge-gate", "loop-engine", "--pr", "7"], ["--merge-gate", "dotfiles", "--pr", "7", "--pr", "8"],
+                     ["--merge-gate", "no-such-repo", "--pr", "7"], ["--merge-gate", "dotfiles", "--pr", "7", "--pr", "8"],
                      ["--merge-gate", "dotfiles", "--pr=7"]):
             with self.subTest(args=args):
                 r = subprocess.run(script + args, capture_output=True, text=True, env=self.env, timeout=120)
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertIn("usage", r.stderr)
+
+
+UNIT_STEP = "unit tests (not on pull requests)"
+FLOOR_STEP = "Run npx vitest run"
+
+
+def red_unit_jobs():
+    """main's red run: both jobs failed, the unit job in its full-suite step, node-floor in vitest."""
+    return [{"databaseId": 11, "name": "unit", "conclusion": "failure", "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": UNIT_STEP, "conclusion": "failure"},
+                {"name": "Run npm run build", "conclusion": "skipped"}]},
+            {"databaseId": 12, "name": "node-floor", "conclusion": "failure", "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": FLOOR_STEP, "conclusion": "failure"}]}]
+
+
+def full_suite_jobs(unit="success", floor="success", unit_step="success"):
+    """A run that ran the whole suite: workflow_dispatch on a branch."""
+    return [{"databaseId": 21, "name": "unit", "conclusion": unit, "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": UNIT_STEP, "conclusion": unit_step}]},
+            {"databaseId": 22, "name": "node-floor", "conclusion": floor,
+             "steps": [] if floor == "skipped" else [{"name": FLOOR_STEP, "conclusion": "success" if floor == "success" else floor}]}]
+
+
+def pull_request_jobs():
+    """What unit.yml does on a pull_request: the job runs, its full-suite step and node-floor are skipped."""
+    return full_suite_jobs(floor="skipped", unit_step="skipped")
+
+
+class RedMainFix(Fixture):
+    """--merge-gate REPO --pr N: a red main passes when PR N's own full-suite run on its head tree passed.
+
+    The shape is agent-kit on 2026-11-16: unit.yml fails main in `unit` and `node-floor`; the PR's pull_request run skips both
+    (so it proves nothing) and its workflow_dispatch run is the full suite.
+    """
+    WF = "cartwmic/agent-kit|unit.yml"
+
+    def setUp(self):
+        super().setUp()
+        git(self.src, "switch", "-q", "-c", "fix", self.c3)
+        (self.src / "f.txt").write_text("fix\n")
+        git(self.src, "add", "f.txt")
+        self.head = commit(self.src, "the fix")
+        git(self.src, "switch", "-q", "main")
+        self.world()
+
+    def world(self, *head_runs, jobs_of=None):
+        """Main's tip c3 is red (run 2); PR 7's branch `fix` is at self.head. head_runs are (run row, its jobs) pairs."""
+        rows = [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]
+        self.jobs = {"2": red_unit_jobs()}
+        for row, jobs in head_runs:
+            rows.append(row)
+            self.jobs[str(row["databaseId"])] = jobs
+        self.runs = {self.WF: rows}
+        self.prs = {"7": {"headRefOid": self.head, "headRefName": "fix"}}
+
+    def dispatch(self, run_id, conclusion="success", sha=None, **jobs):
+        return run(run_id, sha or self.head, conclusion, event="workflow_dispatch", age=run_id, branch="fix"), full_suite_jobs(**jobs)
+
+    def pull_request(self, run_id, sha=None, conclusion="success"):
+        return run(run_id, sha or self.head, conclusion, event="pull_request", age=run_id, branch="fix"), pull_request_jobs()
+
+    def gate(self, *extra, repo="agent-kit"):
+        self.write_fixture()
+        r = subprocess.run([sys.executable, str(SCRIPT), "--merge-gate", repo, *extra], capture_output=True, text=True,
+                           env=self.env, timeout=120)
+        return r.returncode, r.stdout, r.stderr
+
+    def assert_stays_red(self, why):
+        """The same exit code and stdout as the gate without --pr; the reason goes to stderr."""
+        rc0, out0, _ = self.gate()
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertIn(why, err)
+
+    def test_a_green_full_suite_run_on_the_head_passes_and_the_line_names_the_run(self):
+        self.world(self.dispatch(4))
+        rc0, out0, _ = self.gate()
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(out.startswith(out0), "the RED lines print as before:\n" + out)
+        line = [l for l in out.splitlines() if "merge-gate:" in l]
+        self.assertEqual(len(line), 1, out)
+        for text in ("passed as a red-main fix", "run 4 (https://example.invalid/runs/4)", "run 2"):
+            self.assertIn(text, line[0])
+        self.assertEqual(err, "")
+
+    def test_a_newer_pull_request_run_that_skipped_the_suite_does_not_hide_the_full_suite_run(self):
+        self.world(self.dispatch(4), self.pull_request(5))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("run 4 (", out)
+        self.assertNotIn("run 5", out.split("merge-gate:")[1])
+
+    def test_no_run_on_the_head_stays_red(self):
+        self.world()
+        self.assert_stays_red("no unit.yml run of")
+
+    def test_only_a_pull_request_run_that_skipped_the_suite_stays_red(self):
+        self.world(self.pull_request(5))
+        self.assert_stays_red(f'run 5 skipped step "{UNIT_STEP}" in job unit')
+
+    def test_a_job_that_passed_with_its_failing_step_skipped_stays_red(self):
+        self.jobs = {}
+        self.world(self.dispatch(4, unit_step="skipped"))
+        self.jobs["2"] = red_unit_jobs()[:1]   # only `unit` failed in main
+        self.assert_stays_red(f'run 4 skipped step "{UNIT_STEP}" in job unit')
+
+    def test_a_failed_full_suite_run_stays_red(self):
+        self.world(self.dispatch(4, "failure", unit="failure", unit_step="failure"))
+        self.assert_stays_red("run 4 did not pass unit")
+
+    def test_a_run_that_skipped_the_job_that_failed_in_main_stays_red(self):
+        self.world(self.dispatch(4, floor="skipped"))
+        self.assert_stays_red("run 4 skipped job node-floor")
+
+    def test_a_failed_run_is_not_hidden_by_an_older_passing_one(self):
+        self.world(self.dispatch(4), self.dispatch(6, "failure", floor="failure"))
+        self.assert_stays_red("run 6 did not pass node-floor")
+
+    def test_a_full_suite_run_still_going_stays_red(self):
+        row, jobs = self.dispatch(4)
+        row.update(status="in_progress", conclusion="")
+        self.world((row, jobs))
+        self.assert_stays_red("run 4 is in_progress, not success")
+
+    def test_a_run_on_a_commit_with_another_tree_stays_red(self):
+        git(self.src, "switch", "-q", "fix")
+        (self.src / "f.txt").write_text("another\n")
+        git(self.src, "add", "f.txt")
+        other = commit(self.src, "later change")   # no --amend: the PR head stays self.head
+        git(self.src, "switch", "-q", "main")
+        self.world(self.dispatch(4, sha=other))
+        self.assert_stays_red("no unit.yml run of")
+
+    def test_a_run_on_another_commit_with_the_same_tree_counts(self):
+        git(self.src, "switch", "-q", "fix")
+        again = commit(self.src, "same tree, new commit")   # an empty commit: the tree is the head's
+        git(self.src, "switch", "-q", "main")
+        self.world(self.dispatch(4, sha=again))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("same tree as its head", out)
+
+    def test_the_coordinator_journal_is_not_a_github_run_and_stays_red(self):
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "fail"}) + "\n")
+        rc0, out0, _ = self.gate(repo="coordinator")
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7", repo="coordinator")
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertIn("the red verdict is not a GitHub run", err)
+
+    def test_a_gh_failure_in_the_check_stays_red(self):
+        self.world(self.dispatch(4))
+        self.failing_pr = ["cartwmic/agent-kit"]
+        self.write_fixture()
+        self.assert_stays_red("could not read it")
+
+    def test_a_green_main_with_pr_prints_what_it_prints_without_it(self):
+        self.runs = {self.WF: [run(1, self.c3, "success")]}
+        self.assertEqual(self.gate("--pr", "7")[:2], self.gate()[:2])
+
+    def test_a_run_still_queued_with_no_steps_listed_is_passed_over_and_an_older_green_run_decides(self):
+        """Documented behaviour (review note n1): nothing has run yet, so it says nothing; it does not refuse."""
+        queued = run(6, self.head, status="queued", event="workflow_dispatch", age=6, branch="fix")
+        self.world(self.dispatch(4), (queued, [{"databaseId": 31, "name": "unit", "conclusion": "", "steps": []}]))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("run 4 (", out)
+
+    def test_a_queued_run_with_no_steps_listed_and_no_older_green_run_stays_red(self):
+        queued = run(6, self.head, status="queued", event="workflow_dispatch", age=6, branch="fix")
+        self.world((queued, [{"databaseId": 31, "name": "unit", "conclusion": "", "steps": []}]))
+        self.assert_stays_red("no full-suite run of its head tree: run 6 skipped step")
+
+    def test_a_pull_request_run_still_going_whose_red_job_is_listed_as_skipped_is_passed_over(self):
+        row, jobs = self.pull_request(5)
+        row.update(status="in_progress", conclusion="")
+        self.world(self.dispatch(4), (row, jobs))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("run 4 (", out)
+
+    def dotfiles_world(self, *head_runs, red_step="Linux checks: scripts/ci-linux.sh"):
+        """Main's tip c3 is red in dotfiles' `tests` job on a step that is not the release-pins step. PR 7's diff is not the pin files."""
+        rows = [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]
+        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": [
+            {"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": "failure"}]}]}
+        for row, conclusion in head_runs:
+            rows.append(row)
+            self.jobs[str(row["databaseId"])] = [{"name": "tests", "conclusion": conclusion, "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": conclusion}]}]
+        self.runs = {"cartwmic/dotfiles|ci.yml": rows}
+        self.prs = {"7": {"files": [{"path": "dot_local/bin/executable_ci-main-status"}], "changedFiles": 1,
+                          "headRefOid": self.head, "headRefName": "fix"}}
+
+    def test_dotfiles_red_on_another_step_passes_on_a_green_full_head_run_of_the_same_tree(self):
+        self.dotfiles_world((run(3, self.head, "success", event="pull_request", age=7, branch="fix"), "success"))
+        rc0, out0, _ = self.gate(repo="dotfiles")
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(out.startswith(out0), out)
+        self.assertIn("passed as a red-main fix: its own full-suite run 3", out)
+        self.assertNotIn("pin fix", out)
+        self.assertIn("failed on more than the release-pins step", err)   # the pin rule said no first
+
+    def test_dotfiles_red_on_another_step_stays_red_with_no_head_run(self):
+        self.dotfiles_world()
+        rc0, out0, _ = self.gate(repo="dotfiles")
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertEqual(rc, 1)
+        self.assertIn("failed on more than the release-pins step", err)
+        self.assertIn("no ci.yml run of", err)
+
+    def test_dotfiles_red_on_another_step_stays_red_when_the_head_run_failed_that_step(self):
+        self.dotfiles_world((run(3, self.head, "failure", event="pull_request", age=7, branch="fix"), "failure"))
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("run 3 did not pass tests", err)
+
+    def test_dotfiles_pin_fix_still_gets_the_pin_line_not_the_general_one(self):
+        """The pin rule runs first: a pin fix is named as one even though its own run would also satisfy the general rule."""
+        pins = PINS_STEP_FULL
+        self.dotfiles_world((run(3, self.head, "success", event="pull_request", age=7, branch="fix"), "success"), red_step=pins)
+        self.prs["7"]["files"] = [{"path": f} for f in KIT_FILES]
+        self.prs["7"]["changedFiles"] = len(KIT_FILES)
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("is the pin fix for this red", out)
+        self.assertEqual(err, "")
+
+
+NOT_ACQUIRED = "The job was not acquired by Runner of type hosted even after multiple attempts"
+CAPACITY = "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."
+
+
+def note(message, level="failure"):
+    """One check-run annotation, with the fields GitHub returns."""
+    return {"path": ".github", "start_line": 1, "end_line": 1, "annotation_level": level, "title": "", "message": message, "raw_details": ""}
+
+
+NO_RUNNER_NOTES = [note(NOT_ACQUIRED), note(CAPACITY, "notice"), note(CAPACITY, "notice"), note(CAPACITY, "notice")]   # the real payload
+TIMEOUT_NOTES = [note("The job running on runner GitHub Actions 7 has exceeded the maximum execution time of 30 minutes.")]
+ORDINARY_CANCEL_NOTES = [note("The operation was canceled.")]
+MISE_JOB = 22   # the macOS job's id in these fixtures
+
+
+def jobs(mise, tests="success"):
+    """The two jobs of a run. `mise` is the macOS job's conclusion; it never ran when it was cancelled for want of a runner."""
+    return [{"databaseId": 11, "name": "tests", "conclusion": tests, "steps": [{"name": "Set up job", "conclusion": "success"}]},
+            {"databaseId": MISE_JOB, "name": "mise-tests", "conclusion": mise, "steps": []}]
+
+
+class NoRunnerCancel(Fixture):
+    """A job cancelled because no runner picked it up is untested: never green, never red. Every other failure stays red."""
+
+    def world(self, runs, jobs_of=None, notes=NO_RUNNER_NOTES, attempts=None):
+        self.dotfiles_runs(runs)
+        self.jobs = jobs_of if jobs_of is not None else {str(runs[0]["databaseId"]): jobs("cancelled")}
+        self.annotations = {str(MISE_JOB): notes}
+        self.attempts = attempts or {}
+
+    def test_a_job_no_runner_picked_up_is_untested_with_its_name_and_reason(self):
+        self.world([run(1, self.c3, "failure")])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("dotfiles: UNTESTED  run 1 on", out)
+        self.assertIn("job mise-tests untested, no runner picked it up", out)
+        self.assertIn("Not a pass", out)
+        self.assertNotIn("RED", out)
+        self.assertNotIn("GREEN", out)
+
+    def test_it_is_untested_even_when_the_other_job_passed_and_an_older_commit_is_green(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)], {"2": jobs("cancelled")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("UNTESTED  run 2 on", out)
+        self.assertNotIn("GREEN", out)
+
+    def test_merge_gate_lets_it_through_and_tip_does_not(self):
+        self.world([run(1, self.c3, "failure")])
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("job mise-tests untested", out)
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("job mise-tests untested", out)
+
+    def test_a_run_going_is_told_to_wait(self):
+        self.world([run(1, self.c3, "failure"), run(2, self.c3, status="queued", age=5)], {"1": jobs("cancelled")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("A run is going; wait for it.", out)
+
+    def test_a_real_failure_next_to_the_no_runner_cancel_is_red(self):
+        self.world([run(1, self.c3, "failure")], {"1": jobs("cancelled", tests="failure")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+        self.assertNotIn("UNTESTED", out)
+
+    def test_a_failed_job_alone_is_red(self):
+        self.world([run(1, self.c3, "failure")], {"1": jobs("success", tests="failure")})
+        self.assertEqual(self.status("dotfiles")[0], 1)
+
+    def test_a_timeout_after_the_job_started_is_red(self):
+        self.world([run(1, self.c3, "failure")], notes=TIMEOUT_NOTES)
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_a_timed_out_job_is_red(self):
+        self.world([run(1, self.c3, "failure")], {"1": jobs("timed_out")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_an_ordinary_cancel_is_red(self):
+        self.world([run(1, self.c3, "failure")], notes=ORDINARY_CANCEL_NOTES)
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_a_cancel_with_no_annotation_is_red(self):
+        self.world([run(1, self.c3, "failure")], notes=[])
+        self.assertEqual(self.status("dotfiles")[0], 1)
+
+    def test_one_no_runner_cancel_does_not_excuse_another_cancel(self):
+        both = jobs("cancelled")
+        both[0]["conclusion"] = "cancelled"
+        self.world([run(1, self.c3, "failure")], {"1": both})
+        self.annotations["11"] = ORDINARY_CANCEL_NOTES
+        self.assertEqual(self.status("dotfiles")[0], 1)
+
+    def test_two_jobs_no_runner_picked_up_are_both_named(self):
+        both = jobs("cancelled")
+        both[0]["conclusion"] = "cancelled"
+        self.world([run(1, self.c3, "failure")], {"1": both})
+        self.annotations["11"] = NO_RUNNER_NOTES
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("jobs tests, mise-tests untested, no runner picked them up", out)
+
+    def test_untested_above_a_red_commit_leaves_it_red(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c2, "failure", age=1)], {"2": jobs("cancelled"), "1": jobs("success", tests="failure")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1", out)
+
+    def test_a_rerun_that_passed_is_green(self):
+        self.world([run(1, self.c3, "success", attempt=2)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN", out)
+
+    def test_an_earlier_real_failure_is_not_hidden_by_a_no_runner_rerun(self):
+        # Attempt 1 failed for real; the rerun never got a runner. The failure still stands.
+        self.world([run(1, self.c3, "failure", attempt=2)],
+                   {"1/2": jobs("cancelled"), "1/1": jobs("success", tests="failure")}, attempts={"1": {"1": {"conclusion": "failure"}}})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1 attempt 1", out)
+
+    def test_an_earlier_pass_is_not_hidden_by_a_no_runner_rerun(self):
+        self.world([run(1, self.c3, "failure", attempt=2)], {"1/2": jobs("cancelled")}, attempts={"1": {"1": {"conclusion": "success"}}})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 1 attempt 1", out)
+
+    def test_a_no_runner_attempt_with_a_rerun_going_is_not_red(self):
+        self.world([run(1, self.c3, status="in_progress", attempt=2)], {"1/1": jobs("cancelled")}, attempts={"1": {"1": {"conclusion": "failure"}}})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("UNTESTED  run 1 attempt 1", out)
+        self.assertIn("A run is going; wait for it.", out)
+
+    def test_a_real_pass_at_the_commit_wins_over_a_newer_no_runner_run(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c3, "success", age=1)], {"2": jobs("cancelled")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 1", out)
+
+    def test_a_real_failure_at_the_commit_wins_over_a_newer_no_runner_run(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c3, "failure", age=1)],
+                   {"2": jobs("cancelled"), "1": jobs("success", tests="failure")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1", out)
+
+    def test_the_jobs_of_a_failed_run_below_the_first_pass_are_not_read(self):
+        self.world([run(2, self.c3, "success", age=5), run(1, self.c2, "failure", age=1)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([c for c in self.log.read_text().splitlines() if c.startswith("run view") or "/check-runs/" in c], [])
+
+    def test_an_annotation_that_cannot_be_read_is_an_error_not_untested(self):
+        self.world([run(1, self.c3, "failure")])
+        self.annotations = {}
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR  cannot read state", out)
+        self.assertNotIn("UNTESTED", out)
 
 
 class PinFixCopiesMatchTheirSources(unittest.TestCase):

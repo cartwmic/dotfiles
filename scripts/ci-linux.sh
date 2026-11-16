@@ -71,6 +71,7 @@ python3 scripts/ci-par.py \
   tests/dotfiles-update \
   tests/agent-kill-guard \
   tests/config-show \
+  tests/stop-running-jobs \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
   tests/shx \
@@ -91,7 +92,6 @@ python3 scripts/ci-par.py \
   tests/hill-climb \
   tests/deriving-readable-docs \
   tests/triaging-automated-review \
-  tests/kelsey-intake \
   tests/git-credential \
   tests/tmp-on-disk \
   tests/initramfs-ssh-unlock \

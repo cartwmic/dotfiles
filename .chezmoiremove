@@ -9,6 +9,14 @@
 # never had the unit. Prune once the personal machines have applied.
 .local/share/instances/systemd/retrod.service
 
+# Retired 2026-11-16: Kelsey's old request intake (the pickup script, its timer units and the page's source copy). Her requests now go
+# through the homelab bot in Discord #homelab. Source deletion alone leaves the deployed copies on disk. Personal Linux only: the work
+# profile never had them. The live directory holds no state, only the copied page and README. Prune once personal has applied.
+.local/user_scripts/kelsey_intake.py
+.local/share/kelsey-intake
+.config/systemd/user/kelsey-intake.service
+.config/systemd/user/kelsey-intake.timer
+
 {{ end -}}
 # Retired 2026-11-13: viz, the homelab page host, and its tools; agents publish charts, diagrams and pictures on shartifacts.
 # Source deletion alone leaves the deployed CLI, its code, its machine file and the skill. apply_harness_config.sh then prunes
