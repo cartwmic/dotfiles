@@ -156,7 +156,6 @@ class RunAndWake(unittest.TestCase):
         self.path = env["PATH"]
         self.env = {**env, "PATH": f"{self.systemd_off}:{self.bin}:{self.path}", "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
                     "HERDR_PANE_ID": PANE, "PI_SESSION_FILE": SESSION, "HOME": str(self.op_home),
-                    "KGATE_STATE": str(root / "kgate-state"),  # never the real kgate log
                     "RUN_AND_WAKE_COALESCE": "0"}  # the merge window is off unless a test turns it on, so a lone wake goes out at once
         self.show(PANE, SESSION)
 
@@ -928,7 +927,8 @@ class RunAndWake(unittest.TestCase):
 
     # --- wakes that say nothing new: dropped (waited, cancelled) or merged (a burst) ---
     def wait_for(self, job, timeout=20):
-        return subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env=self.env, cwd=self.root, text=True, capture_output=True, timeout=timeout)
+        """`--wait` run from the session the T3 jobs were started in (the owner)."""
+        return subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.t3_env()}, cwd=self.root, text=True, capture_output=True, timeout=timeout)
 
     def final_records(self, job, event, timeout=20):
         """The job's records once one of `event` is in the log."""
@@ -955,7 +955,7 @@ class RunAndWake(unittest.TestCase):
     def test_a_waiter_that_died_does_not_hide_the_wake(self):
         cmd, release = self.held_job()
         job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
-        waiter = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=self.env, cwd=self.root, stdout=subprocess.DEVNULL)
+        waiter = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.t3_env()}, cwd=self.root, stdout=subprocess.DEVNULL)
         lock = self.state / f"run-and-wake/jobs/{job}.wait"
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not lock.exists():
@@ -979,7 +979,7 @@ class RunAndWake(unittest.TestCase):
         cmd, _ = self.held_job()
         result = self.launch("--", *cmd, env=self.t3_env())
         job = self.job_id(result)
-        waiter = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=self.env, cwd=self.root, text=True, stdout=subprocess.PIPE)
+        waiter = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.t3_env()}, cwd=self.root, text=True, stdout=subprocess.PIPE)
         time.sleep(0.5)
         os.kill(int(result.stdout.split(", pid ")[1].split(",")[0]), signal.SIGTERM)
         out = waiter.communicate(timeout=10)[0]
@@ -1003,7 +1003,7 @@ class RunAndWake(unittest.TestCase):
 
     def test_a_job_the_session_cancelled_itself_sends_no_wake(self):
         line = '{"id": "kgate-1-1", "job": "%s", "exit": 143, "reason": "cancelled by kgate cancel", "cancelled": true}'
-        cmd = f'mkdir -p "$KGATE_STATE"; printf \'{line}\\n\' "$RUN_AND_WAKE_JOB" >> "$KGATE_STATE/log.jsonl"; exit 143'
+        cmd = f'mkdir -p "$XDG_STATE_HOME/kgate"; printf \'{line}\\n\' "$RUN_AND_WAKE_JOB" >> "$XDG_STATE_HOME/kgate/log.jsonl"; exit 143'
         job = self.job_id(self.launch("--", "sh", "-c", cmd, env=self.t3_env()))
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "skip")
@@ -1014,14 +1014,14 @@ class RunAndWake(unittest.TestCase):
     def test_a_kgate_run_that_ended_on_its_own_still_wakes_and_so_does_a_cancel_of_another_job(self):
         ended = '{"id": "kgate-1-1", "job": "%s", "exit": 1, "cancelled": false}'
         other = '{"id": "kgate-2-2", "job": "20261116T000000Z-other0", "exit": 143, "cancelled": true}'
-        cmd = f'mkdir -p "$KGATE_STATE"; printf \'{ended}\\n{other}\\n\' "$RUN_AND_WAKE_JOB" >> "$KGATE_STATE/log.jsonl"; exit 1'
+        cmd = f'mkdir -p "$XDG_STATE_HOME/kgate"; printf \'{ended}\\n{other}\\n\' "$RUN_AND_WAKE_JOB" >> "$XDG_STATE_HOME/kgate/log.jsonl"; exit 1'
         job = self.job_id(self.launch("--", "sh", "-c", cmd, env=self.t3_env()))
         self.assertReplay(self.replay(job), "start", "end", "wake")
         self.assertEqual(len(self.t3_sends()), 1)
 
     def test_a_cancel_is_dropped_for_a_pane_too(self):
         line = '{"id": "kgate-1-1", "job": "%s", "exit": 143, "cancelled": true}'
-        cmd = f'mkdir -p "$KGATE_STATE"; printf \'{line}\\n\' "$RUN_AND_WAKE_JOB" >> "$KGATE_STATE/log.jsonl"; exit 143'
+        cmd = f'mkdir -p "$XDG_STATE_HOME/kgate"; printf \'{line}\\n\' "$RUN_AND_WAKE_JOB" >> "$XDG_STATE_HOME/kgate/log.jsonl"; exit 143'
         job = self.job_id(self.launch("--", "sh", "-c", cmd))
         self.assertReplay(self.replay(job), "start", "end", "skip")
         self.assertEqual(self.prompts(), [])
@@ -1130,6 +1130,38 @@ class RunAndWake(unittest.TestCase):
                     if old is not None:
                         os.environ["RUN_AND_WAKE_COALESCE"] = old
         self.assertEqual(mod.wait_command("20261116T000000Z-abc123"), "run-and-wake --wait 20261116T000000Z-abc123")
+
+    def test_a_wait_from_another_thread_prints_the_result_and_leaves_the_owners_wake(self):
+        cmd, release = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env(T3CODE_THREAD_ID="builder-thread")))
+        other = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.t3_env(T3CODE_THREAD_ID="lead-thread")},
+                                 cwd=self.root, text=True, stdout=subprocess.PIPE)
+        time.sleep(0.5)
+        release.write_text("")
+        out = other.communicate(timeout=10)[0]
+        self.assertEqual(other.returncode, 0)
+        self.assertIn(f"[run-and-wake k:{job}] job finished: exit 0", out, "the lead gets the result printed")
+        records = self.final_records(job, "read")
+        self.assertEqual([r["event"] for r in records], ["start", "end", "wake", "read"])
+        sends = self.t3_sends()
+        self.assertEqual([s["argv"][2] for s in sends], ["builder-thread"], "the thread that started the job is still woken")
+        self.assertEqual([r["owner"] for r in self.records_of(job) if r["event"] == "read"], [False])
+        self.assertFalse((self.state / f"run-and-wake/jobs/{job}.read").exists(), "a stranger leaves no marker")
+
+    def test_a_wait_from_the_owners_own_pane_drops_the_pane_wake_and_another_pane_does_not(self):
+        cmd, release = self.held_job()
+        job = self.job_id(self.launch("--", *cmd))  # started from PANE / SESSION
+        stranger = {**self.env, "HERDR_PANE_ID": "w9:p9", "PI_SESSION_FILE": "/sessions/other.jsonl"}
+        mine = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=self.env, cwd=self.root, text=True, stdout=subprocess.PIPE)
+        other = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=stranger, cwd=self.root, text=True, stdout=subprocess.PIPE)
+        time.sleep(0.5)
+        release.write_text("")
+        mine.communicate(timeout=10)
+        other.communicate(timeout=10)
+        records = self.final_records(job, "skip")
+        self.assertEqual(next(r for r in records if r["event"] == "skip")["reason"], "waited")
+        self.assertEqual(self.prompts(), [], "the owner's own wait stood in for the wake")
+        self.assertEqual(sorted(r["owner"] for r in self.records_of(job) if r["event"] == "read"), [False, True])
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):

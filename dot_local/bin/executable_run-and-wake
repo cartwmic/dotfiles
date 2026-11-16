@@ -4,7 +4,7 @@
 Usage: run-and-wake [--] CMD [ARGS...]
        run-and-wake -- heavy-gate --wait 7200 -- CMD...
        run-and-wake --recover      (send the wakes a host restart left undelivered; run by run-and-wake-recover.service)
-       run-and-wake --wait JOB     (block until JOB ends, print its result line, exit with its status; the wake for JOB is then dropped)
+       run-and-wake --wait JOB     (block until JOB ends, print its result line, exit with its status; when run by the session that started JOB, the wake for JOB is then dropped)
 
 Contract (docs/run-and-wake.md):
 - Returns at once. Prints the job id, the job's pid and its output file.
@@ -30,7 +30,7 @@ Contract (docs/run-and-wake.md):
   Pi sets HERDR_PANE_ID and PI_SESSION_FILE on every bash call, so that pair names the actual caller, while
   T3CODE_THREAD_ID may only be inherited from the app that launched the shell.
 - A wake that would say nothing new is not sent, and each drop is a `skip` record with its reason:
-    waited     a `run-and-wake --wait JOB` is blocked on the job (or already printed its result): the waiter delivers the result, so a second message would be a duplicate
+    waited     a `run-and-wake --wait JOB` run by the session the wake is for (same T3 thread, or same pane and Pi session) is blocked on the job or already printed its result, so a second message would be a duplicate. A wait from any other session just prints; the owner's wake is still sent
     cancelled  the session stopped the job itself with `kgate cancel` (kgate's end line has "cancelled": true); `kgate cancel` already printed the end line to its caller
   Every other end, success or failure, still wakes.
 - A T3 thread's wakes for jobs that end within RUN_AND_WAKE_COALESCE seconds (default 10; 0 turns it off) of each other are sent as one message, one line per job,
@@ -58,7 +58,7 @@ Contract (docs/run-and-wake.md):
     blocked {}                      (pane showed a dialog; waiting)
     wake   {target: herdr|t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), merged_with? (the other jobs in the same message), session_after?}
            (session_after: the pane showed another session right after the send; herdr cannot make the send conditional)
-    read   {}                       (a `run-and-wake --wait` printed the job's result)
+    read   {owner}                  (a `run-and-wake --wait` printed the job's result; owner: true when it ran in the session the wake is for)
     skip   {reason, detail?}
 """
 import fcntl
@@ -259,7 +259,7 @@ def wake_thread(job, thread, text, stopped):
 # --- wakes that would say nothing new: dropped, or merged ---
 
 def kgate_log():
-    return os.path.join(os.environ.get("KGATE_STATE") or os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate"), "log.jsonl")
+    return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate", "log.jsonl")  # the path kgate writes
 
 
 def kgate_cancelled(job):
@@ -281,6 +281,17 @@ def kgate_cancelled(job):
             if isinstance(r, dict) and r.get("job") == job and r.get("cancelled") is True:
                 return True
     return False
+
+
+def owner_of(thread, pane, session):
+    """Who a job's wake is for: the pane with its Pi session when both are set, else the T3 thread. The same rule main() uses to pick the wake target."""
+    return ("pane", pane, session) if pane and session else ("t3", thread) if thread else None
+
+
+def caller():
+    """The session this process runs in, as owner_of names it."""
+    pane, session = os.environ.get("HERDR_PANE_ID") or None, os.environ.get("PI_SESSION_FILE") or None
+    return owner_of(None if pane and session else os.environ.get("T3CODE_THREAD_ID") or None, pane, session)
 
 
 def wait_file(job):
@@ -372,10 +383,12 @@ def deliver(job, pane, session, thread, text, stopped):
         record(job, "skip", reason="waited", detail="a run-and-wake --wait delivered the result")
     elif not thread:
         wake(job, pane, session, text)
-    elif stopped or coalesce_window() <= 0:
-        wake_thread(job, thread, text, stopped)
     else:
-        wake_thread_merged(job, thread, text, coalesce_window())
+        window = coalesce_window()
+        if stopped or window <= 0:
+            wake_thread(job, thread, text, stopped)
+        else:
+            wake_thread_merged(job, thread, text, window)
 
 
 def wake(job, pane, session, text):
@@ -663,8 +676,12 @@ def wait_for(job):
         say("ERROR", f"no job {job} in {LOG}")
         return 64
     os.makedirs(os.path.join(STATE, "jobs"), exist_ok=True)
-    guard = open(wait_file(job), "a")
-    fcntl.flock(guard, fcntl.LOCK_SH)  # held until this process exits
+    me = caller()
+    mine = me is not None and me == owner_of(start.get("thread"), start.get("pane"), start.get("session"))  # only the session the wake is for can stand in for it
+    guard = None
+    if mine:
+        guard = open(wait_file(job), "a")
+        fcntl.flock(guard, fcntl.LOCK_SH)  # held until this process exits
     offset, gone = 0, 0
     while True:
         end, offset = end_of(job, offset)
@@ -678,9 +695,10 @@ def wait_for(job):
             print(f"[{NAME} k:{job}] job has no end record and its process is gone: the watcher died. Treat it as not finished. Output: {start['output']}", flush=True)
             return 1
         time.sleep(1)
-    with open(read_marker(job), "w"):
-        pass
-    record(job, "read")
+    if mine:
+        with open(read_marker(job), "w"):
+            pass
+    record(job, "read", owner=mine)
     status = f"could not start ({end['error']})" if end.get("error") else status_of(end)
     print(message(job, status, end.get("duration_s") or 0, start["cmd"], start["output"]), flush=True)
     if end.get("exit") is not None:
