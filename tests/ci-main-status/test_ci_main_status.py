@@ -698,6 +698,7 @@ class AllAndHomelab(Fixture):
         self.assertIn("agent-kit: UNTESTED", out)
         self.assertIn("coordinator: GREEN", out)
         self.assertIn("homelab: n/a", out)
+        self.assertIn("amazon-itemizer: n/a", out)
 
     def test_all_untested_without_red_exits_2(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")],
@@ -715,6 +716,13 @@ class AllAndHomelab(Fixture):
         calls = self.log.read_text() if self.log.exists() else ""
         self.assertEqual(calls, "", "homelab must not call gh")
 
+    def test_amazon_itemizer_merge_gate_is_0_and_makes_no_gh_call(self):
+        rc, out = self.status("--merge-gate", "amazon-itemizer")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("amazon-itemizer: n/a", out)
+        calls = self.log.read_text() if self.log.exists() else ""
+        self.assertEqual(calls, "", "amazon-itemizer must not call gh")
+
     def test_missing_gh_is_one_error_line_per_repo_and_all_keeps_going(self):
         empty = Path(self.tmp.name) / "empty"
         empty.mkdir()
@@ -724,6 +732,7 @@ class AllAndHomelab(Fixture):
         for name in ("dotfiles", "loop-engine", "agent-kit", "coordinator"):
             self.assertIn(f"{name}: ERROR  cannot read state: gh could not start", out)
         self.assertIn("homelab: n/a", out)
+        self.assertIn("amazon-itemizer: n/a", out)
         self.assertNotIn("Traceback", out)
 
 
