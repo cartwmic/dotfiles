@@ -820,20 +820,30 @@ def trim_cache(root, cap, lock):
     return gone, freed, None
 
 
-def hold_cache(root, cap, say):
-    """Trim the node cache if this node is idle, then hold the shared lock for the life of the job. Returns the open fd (keep it open) or None when there is no cache.
-    A trim that fails is noted and never fails the job."""
-    if not os.path.isdir(root):
-        return None
-    fd = os.open(os.path.join(root, CACHE_LOCK), os.O_RDWR | os.O_CREAT, 0o666)
+def trim_idle(root, cap, fd, say):
+    """trim_cache, with what it did said and a failure noted: a trim never fails a job."""
     try:
-        gone, freed, skipped = trim_cache(root, cap, fd)
+        gone, freed, _ = trim_cache(root, cap, fd)
         if gone:
             say("kgate: cache over %d MiB: removed the %d least recently used entries (%d MiB)\n" % (cap >> 20, gone, freed >> 20))
     except OSError as e:
         say("kgate: cache not trimmed: %s\n" % e)
+
+
+def hold_cache(root, cap, say):
+    """Trim the node cache if this node is idle, then hold the shared lock for the life of the job. Returns the open fd (keep it open) or None when there is no cache."""
+    if not os.path.isdir(root):
+        return None
+    fd = os.open(os.path.join(root, CACHE_LOCK), os.O_RDWR | os.O_CREAT, 0o666)
+    trim_idle(root, cap, fd, say)
     fcntl.flock(fd, fcntl.LOCK_SH)
     return fd
+
+
+def release_cache(root, cap, fd, say):
+    """The job is done: let go of the shared lock and trim if this was the last job on the node, so a node that is always busy is still trimmed when its jobs drain."""
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    trim_idle(root, cap, fd, say)
 
 
 def prepare_user(job, euid=None, chown=os.lchown, root=""):
@@ -866,7 +876,8 @@ def pod_main(jobfile):
         out("kgate: hash MISMATCH expected=%s found=%s\n" % (job["tree"], found))
         return 70
     out("kgate: hash ok %s\n" % found)
-    cache_lock = hold_cache(job["cache"]["root"], job["cache"]["cap"], out) if job.get("cache") else None   # noqa: F841 (held until the pod ends)
+    cache = job.get("cache")
+    cache_lock = hold_cache(cache["root"], cache["cap"], out) if cache else None
     as_user, env_user = prepare_user(job)
     env = {**os.environ, **env_user}
     for name, (version, cmd) in job["tools"].items():
@@ -890,6 +901,8 @@ def pod_main(jobfile):
     peak, source = meter.stop()
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
+    if cache_lock is not None:
+        release_cache(cache["root"], cache["cap"], cache_lock, out)   # after the end marker: the result is already known
     return code if code >= 0 else 128 - code
 
 
@@ -1896,14 +1909,26 @@ class Job:
         return code
 
     def evicted(self):
-        """The kubelet's message when the pod's own status says the node evicted it, else None (also when the pod cannot be read)."""
+        """The kubelet's message when the node evicted the pod, else None. The pod's own status first (phase Failed, reason Evicted). On the 2026-11-16 live run the pod was
+        still `Running` for a moment after its container was killed, then `Running` with a deletionTimestamp, then `NotFound`, all within about a second; the kubelet's
+        `Evicted` event for the pod name (emitted before it kills the container, and kept after the pod is gone) was there throughout. So the event is the fallback, and it
+        counts whatever the pod looks like: only the kubelet gives this reason on the homelab, and a pod name is never reused."""
         got = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
-        if got.returncode != 0:
+        if got.returncode == 0:
+            try:
+                message = evicted_message(json.loads(got.stdout).get("status") or {})
+            except (ValueError, AttributeError):
+                message = None
+            if message:
+                return message
+        events = self.cluster.run(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + self.pod, "-o", "json"])
+        if events.returncode != 0:
             return None
         try:
-            return evicted_message(json.loads(got.stdout).get("status") or {})
-        except (ValueError, AttributeError):
+            items = json.loads(events.stdout).get("items") or []
+        except ValueError:
             return None
+        return next((" ".join((e.get("message") or "no message").split()) for e in items if e.get("reason") == "Evicted"), None)
 
     def eviction(self):
         """Why the cluster took this job's pod away, or None when nothing says it did. The pod's own status first (an evicted pod can stay as Failed, and a

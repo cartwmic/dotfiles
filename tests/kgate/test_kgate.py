@@ -402,6 +402,19 @@ class NodeCache(unittest.TestCase):
         self.assertEqual(K.trim_cache(str(self.root), 1, self.lock())[2], "another job is running on this node", "the job's lock is held")
         self.assertTrue(b.exists())
 
+    def test_the_last_job_to_finish_trims_and_one_that_is_not_last_does_not(self):
+        a, b = self.entry("u1000/home/a", 3000), self.entry("u1000/home/b", 10)
+        mine, other = K.hold_cache(str(self.root), 10 ** 9, lambda _: None), os.open(str(self.root / K.CACHE_LOCK), os.O_RDWR)
+        self.addCleanup(os.close, other)
+        fcntl.flock(other, fcntl.LOCK_SH)   # a second job is running
+        said = []
+        K.release_cache(str(self.root), self.size(b), mine, said.append)
+        self.assertEqual((a.exists(), b.exists(), said), (True, True, []), "another job still runs: nothing removed")
+        mine = K.hold_cache(str(self.root), 10 ** 9, lambda _: None)
+        fcntl.flock(other, fcntl.LOCK_UN)   # the other job is done: this is the last one
+        K.release_cache(str(self.root), self.size(b), mine, said.append)
+        self.assertEqual((a.exists(), b.exists(), len(said)), (False, True, 1))
+
     def test_no_cache_folder_is_no_trim(self):
         self.assertIsNone(K.hold_cache(str(self.tmp / "none"), 1, lambda _: None))
 
@@ -513,6 +526,15 @@ if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL"):   # the API server times out on every read of the pod
     sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
+if a[:2] == ["get", "events"]:   # the kubelet's Evicted event for a pod that died (FAKE_EVICT_EVENT) outlives the pod
+    items = [{"reason": "Killing", "message": "Stopping container job"}] if os.environ.get("FAKE_EVICT_EVENT") and os.path.exists(os.path.join(fake, "died")) else []   # "-": the pod is gone and no event says why
+    if items and os.environ["FAKE_EVICT_EVENT"] != "-":
+        items.insert(0, {"reason": "Evicted", "message": os.environ["FAKE_EVICT_EVENT"]})
+    print(json.dumps({"items": items})); sys.exit(0)
+if a[:2] == ["get", "pod"] and os.environ.get("FAKE_EVICT_EVENT") and os.path.exists(os.path.join(fake, "died")):   # the kubelet is deleting the evicted pod, or it is already gone
+    if os.environ.get("FAKE_EVICT_GONE"):
+        sys.stderr.write('Error from server (NotFound): pods "%s" not found\n' % a[2]); sys.exit(1)
+    print(json.dumps({"metadata": {"deletionTimestamp": "2026-11-16T12:00:00Z"}, "status": {"phase": "Running"}})); sys.exit(0)
 if a[:2] == ["get", "pod"] and os.environ.get("FAKE_EVICT") and (scenario == "evicted" or os.path.exists(os.path.join(fake, "died"))):
     # the node evicted the pod: it stays as Failed/Evicted with the kubelet's message (FAKE_POD=evicted: before it ran; else after the exec connection died)
     print(json.dumps({"spec": {"nodeName": "fake-node"}, "status": {"phase": "Failed", "reason": "Evicted", "message": os.environ["FAKE_EVICT"]}})); sys.exit(0)
@@ -964,6 +986,27 @@ class Black(unittest.TestCase):
         last_read = max(n for n, k in enumerate(kube) if k[:2] == ["get", "pod"])
         first_delete = min(n for n, k in enumerate(kube) if k[0] == "delete" and any(x.startswith("pod/") for x in k))
         self.assertLess(last_read, first_delete, "the status is read before the pod is deleted")
+
+    def test_an_evicted_pod_that_is_already_gone_is_read_from_the_kubelets_event(self):
+        # the live run of 2026-11-16: the pod was NotFound by the time kgate looked, but the kubelet's Evicted event was still there
+        why = "Pod ephemeral local storage usage exceeds the total limit of containers 512Mi."
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1", "FAKE_EVICT_EVENT": why})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("kgate: evicted: " + why + "; exit 69", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"]), (69, "evicted: " + why))
+
+    def test_an_evicted_pod_already_deleted_is_read_from_the_event_too(self):
+        why = "Pod ephemeral local storage usage exceeds the total limit of containers 512Mi."
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1", "FAKE_EVICT_EVENT": why, "FAKE_EVICT_GONE": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("kgate: evicted: " + why + "; exit 69", done.stdout)
+
+    def test_a_pod_that_is_gone_with_no_evicted_event_is_still_a_lost_pod(self):
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1", "FAKE_EVICT_EVENT": "-"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("lost the pod before CMD finished", done.stdout)
+        self.assertNotIn("evicted:", done.stdout)
 
     def test_a_pod_the_node_evicted_before_it_ran_is_69_and_says_evicted(self):
         done = self.kgate("--", "true", env={"FAKE_POD": "evicted", "FAKE_EVICT": self.EVICTION})
