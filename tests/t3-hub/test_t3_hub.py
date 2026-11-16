@@ -915,6 +915,6 @@ class FleetFilesTest(unittest.TestCase):
         text = (REPO / "dot_local/share/agent-harness/canonical/instructions/AGENTS.md").read_text()
         self.assertIn("Leads and the coordinator do not read files to find or understand something: in Claude Code they ask the `reader` helper", text)
         self.assertIn("in another harness they use its cheapest read-only helper, or read directly if it has none", text)
-        self.assertIn("Wait for CI with `gh run watch <id> --exit-status` and for long jobs with `run-and-wake`. Never poll by hand in a loop.", text)
+        self.assertIn("Wait for CI with `gh run watch <id> --exit-status --interval 60` (the default 3 s poll costs ~3,300 API calls an hour) and for long jobs with `run-and-wake`. Never poll by hand in a loop.", text)
         self.assertIn("Builders read the files they edit and reviewers the diffs they judge.", text)
         self.assertIn("Advisor tool. If you have it, call it once, early, before you commit to an approach. This replaces the tool's own advice to call it again before declaring done", text)
