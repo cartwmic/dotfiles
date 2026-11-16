@@ -74,7 +74,7 @@ When GitHub's runners fail twice the same infrastructure way, the same check run
 run-and-wake -- kgate --cpu 4 --mem 4Gi --mem-limit 6Gi --wait 1800 -- env CI_PAR_JOBS=4 scripts/ci-linux.sh
 ```
 
-`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ. When you merge on kgate's green run, say so in the PR: the two failed GitHub runs, the kgate job id and log path, the head it ran, and the counts comparison; then merge with `--admin`.
+`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and, unless the profile sets `cpu_limit`, no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ. When you merge on kgate's green run, say so in the PR: the two failed GitHub runs, the kgate job id and log path, the head it ran, and the counts comparison; then merge with `--admin`.
 
 **The one exception (CI-plan lead's decision under #849=A).** kgate runs the same `tests` check except `RestartJourneyTest` in `tests/agent-browser/test_login_unit.py`. It starts the real `agent-chrome.service` unit under the user systemd manager and restarts it ten times, and a pod has no user manager (and no `ss`). It skips there: one extra skipped test in `tests/agent-browser`.
 
@@ -132,7 +132,9 @@ Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch,
 
 ## Priority
 
-Every homelab pod runs in the `kgate` PriorityClass (`PRIORITY_CLASS` in the client; the class is in the homelab repo, `k8s/kgate/priorityclass.yaml`: value -100, `preemptionPolicy: Never`, not the global default). It is below every app and system pod, so an app pod that cannot be placed may preempt a running job, and a job's pod is evicted first under node pressure. A preempted job ends like any lost pod: exit 69, `lost the pod before CMD finished; the result is unknown and the job is not rerun`, and the cluster's `Preempted` event on the pod says why. A job pod never preempts anything. The class changes scheduling, preemption and eviction order only: it does **not** change a pod's CPU share at run time, and jobs still have no CPU limit. A second cluster's pods (`cluster = "<name>"`) set no class; that cluster's own policy decides.
+Every homelab pod runs in the `kgate` PriorityClass (`PRIORITY_CLASS` in the client; the class is in the homelab repo, `k8s/kgate/priorityclass.yaml`: value -100, `preemptionPolicy: Never`, not the global default). It is below every app and system pod, so an app pod that cannot be placed may preempt a running job, and a job's pod is evicted first under node pressure. A preempted job ends like any lost pod: exit 69, `lost the pod before CMD finished; the result is unknown and the job is not rerun`, and the cluster's `Preempted` event on the pod says why. A job pod never preempts anything. The class changes scheduling, preemption and eviction order only: it does **not** change a pod's CPU share at run time, and jobs still have no CPU limit unless the profile sets `cpu_limit`. A second cluster's pods (`cluster = "<name>"`) set no class; that cluster's own policy decides.
+
+A profile may opt in to a second class, `priority_class = "kgate-first"` (the default, and the only other accepted value, is `kgate`; homelab only, a profile for a kubectl cluster that sets the key is refused). `kgate-first` is value -50 (homelab repo, `k8s/kgate/priorityclass-first.yaml`, `preemptionPolicy: Never`): the scheduler places the pod ahead of waiting `kgate` pods, and it still never evicts a running job or outranks an app or system pod. Any other value is refused with `profile priority_class must be kgate or kgate-first` (exit 69, no pod). Apply order is the same: the homelab repo first (the class must exist), then this client.
 
 The class must exist before a client that names it runs: a pod that names a missing class is refused at creation (`no PriorityClass with name kgate was found`), so every job exits 69 with that message. Apply the homelab repo first.
 
@@ -209,7 +211,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `cluster` | `homelab`, or the name of the cluster file |
 | `cache` | kubectl clusters only: `pvc`, `fallback` or `none` (see "The cache claim") |
 | `services`, `pod_start_s`, `service_ready_s`, `service_peak_bytes` | kubectl clusters with a sidecar only: the services, seconds until the pod ran, seconds until the sidecar's startup probe passed, and the sidecar's peak memory |
-| `cpu_limit`, `quota_wait_s` | kubectl clusters only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
+| `cpu_limit`, `quota_wait_s` | kubectl clusters only (a homelab profile's `cpu_limit` is not recorded): the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
 | `repo`, `cwd`, `head` | repo name (the last part of the `origin` remote's URL without `.git`, so a clone in any folder logs its repo's name; the folder that holds `.git` when there is no origin), working directory, Mac HEAD |
@@ -337,7 +339,8 @@ cluster = "homelab"                              # optional: "homelab" (default)
 cache_pvc = "my-cache"                           # kubectl clusters only: mount this claim at /cache instead of an emptyDir
 ephemeral_storage = "20Gi"                       # the pod's ephemeral-storage request (disk its writable layer and /out use). Homelab default 4Gi. A kubectl cluster: the request and the limit, default 10Gi
 ephemeral_storage_limit = "20Gi"                 # homelab only, optional: the limit (the kubelet evicts a pod that writes past it); default 12Gi, or the request when that is larger
-cpu_limit = 8                                    # kubectl clusters only: the CPU limit and build parallelism; default cpu
+cpu_limit = 8                                    # optional, whole number, at least cpu. A kubectl cluster: the CPU limit and build parallelism, default cpu. The homelab: sets the pod's CPU limit (default none); build parallelism still follows cpu
+priority_class = "kgate-first"                   # homelab only, optional: "kgate" (default) or "kgate-first" (ahead of waiting kgate pods; see Priority)
 local_hostnames = ["db"]                         # kubectl clusters only: names that resolve to 127.0.0.1 in the pod
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
 

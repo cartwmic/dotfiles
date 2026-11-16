@@ -19,7 +19,8 @@ Contract
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
 - Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
-  memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), the exact tool
+  memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), cpu_limit (optional, at least cpu; the pod's CPU limit, default none),
+  priority_class (homelab, optional: kgate or kgate-first), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line, or a CMD element that names a local file outside the worktree (the pod would not have it; nothing is submitted). 69 when the job could not
@@ -99,6 +100,9 @@ OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 # The homelab pod's PriorityClass (homelab repo `k8s/kgate/priorityclass.yaml`, value -100, preemptionPolicy Never): below every app and system pod, so a pending app pod
 # may preempt a job and a kgate pod never preempts anything. It orders scheduling, preemption and eviction only; it gives a pod no CPU share at run time.
 PRIORITY_CLASS = "kgate"
+# A profile may ask for `kgate-first` (homelab `k8s/kgate/priorityclass-first.yaml`, value -50, preemptionPolicy Never): the scheduler places the pod ahead of waiting `kgate` pods.
+# It never evicts a running job. Opt-in per profile (coordinator decision #2874); the default stays PRIORITY_CLASS.
+PRIORITY_CLASSES = (PRIORITY_CLASS, "kgate-first")
 # The G14 runs the same gate about twice as fast (unit gate median 237 s against about 500 s on the agents) and was Ready 100% of
 # the last 20 days, so jobs go there first. If it is down, NotReady or full, the preference does not apply and the pod goes to an
 # agent. A pinned --node ignores it, and a profile with prefer_nodes = false (the coordinator journeys) leaves it out. 2026-11-08, Michael,
@@ -240,7 +244,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -279,9 +283,15 @@ def parse_profile(text):
             raise Unavailable("profile ephemeral_storage_limit must look like 20Gi, got %r" % (ephemeral_limit,))
         if mem_bytes(ephemeral_limit) < mem_bytes(ephemeral or EPHEMERAL_DEFAULT):
             raise Unavailable("profile ephemeral_storage_limit must be at least ephemeral_storage, got ephemeral_storage_limit=%r and ephemeral_storage=%r" % (ephemeral_limit, ephemeral or EPHEMERAL_DEFAULT))
-    cpu_limit = raw.get("cpu_limit")
-    if cpu_limit is not None and (cluster == "homelab" or not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
-        raise Unavailable("profile cpu_limit" + away + " and must be a whole number of at least 1, got %r" % (cpu_limit,))
+    cpu_limit = raw.get("cpu_limit")   # at least `cpu` is checked in settings(), where cpu is known
+    if cpu_limit is not None and (not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
+        raise Unavailable("profile cpu_limit must be a whole number of at least 1, got %r" % (cpu_limit,))
+    priority_class = raw.get("priority_class")
+    if priority_class is not None:
+        if cluster != "homelab":
+            raise Unavailable("profile priority_class is for the homelab only (a kubectl cluster's own policy decides its pods' class)")
+        if priority_class not in PRIORITY_CLASSES:
+            raise Unavailable("profile priority_class must be %s, got %r" % (" or ".join(PRIORITY_CLASSES), priority_class))
     cache_pvc = raw.get("cache_pvc")
     if cache_pvc is not None and (cluster == "homelab" or not isinstance(cache_pvc, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", cache_pvc)):
         raise Unavailable("profile cache_pvc" + away + " and must be a claim name like my-cache, got %r" % (cache_pvc,))
@@ -313,7 +323,7 @@ def parse_profile(text):
     github_ci = parse_github_ci(raw.get("github_ci"))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
-            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc,
+            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "priority_class": priority_class, "cache_pvc": cache_pvc,
             "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
 
@@ -444,9 +454,16 @@ def version_found(text, expected):
     return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None):
+def check_cpu_limit(prof, cpu):
+    """A profile's cpu_limit (a pod's CPU limit) may not be below the request."""
+    if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
+        raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
+
+
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None):
     """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request;
-    `ephemeral_limit` is the limit (the kubelet evicts a pod that writes past it); unset, it is EPHEMERAL_LIMIT_DEFAULT, or the request when that is larger."""
+    `ephemeral_limit` is the limit (the kubelet evicts a pod that writes past it); unset, it is EPHEMERAL_LIMIT_DEFAULT, or the request when that is larger.
+    `priority_class` is the pod's PriorityClass; `cpu_limit` is the CPU limit, unset by default (no CPU limit)."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
     if secret_env:
@@ -465,6 +482,8 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu}]
     limits = {"memory": memory_limit or memory}
     limits["ephemeral-storage"] = ephemeral_limit or max(EPHEMERAL_LIMIT_DEFAULT, ephemeral, key=mem_bytes)
+    if cpu_limit is not None:
+        limits["cpu"] = str(cpu_limit)
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
                  "command": ["tini", "--", "sleep", "infinity"], "env": env,
                  "resources": {"requests": {"cpu": str(cpu), "memory": memory, "ephemeral-storage": ephemeral}, "limits": limits},
@@ -476,7 +495,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
              {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(NEVER_NODES)}]
     if node:
         match = [match[0], {"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]
-    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S, "priorityClassName": PRIORITY_CLASS,
+    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S, "priorityClassName": priority_class,
            "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
                "nodeSelectorTerms": [{"matchExpressions": match}]},
                "preferredDuringSchedulingIgnoredDuringExecution": (
@@ -1533,7 +1552,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "ephemeral_storage_limit": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
+                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -1556,6 +1575,8 @@ class Job:
         check_settings(image, cpu, mem, mem_limit)
         if self.kcfg:
             self.use_kubectl(image, prof, cpu)
+        else:
+            check_cpu_limit(prof, cpu)
         if prof["services"] and not self.kcfg:     # a kubectl cluster offers SERVICES (checked when the profile is read); the homelab offers none
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node in NEVER_NODES:
@@ -1601,8 +1622,7 @@ class Job:
                 raise Unavailable("image_volumes path %s is where the pod keeps the cache, /out, the shipped tree or the system; use another directory" % v["path"])
         if int(prof["user"].split(":")[0]) == 0:
             raise Unavailable("a pod on cluster %s runs as non-root; the profile user is %s" % (name, prof["user"]))
-        if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
-            raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
+        check_cpu_limit(prof, cpu)
         self.rec["quota_wait_s"] = 0
         self.rec["attempts"] = 1
         self.rec["cpu_limit"] = prof["cpu_limit"] or cpu  # the effective limit, which the pod's build parallelism follows
@@ -1879,7 +1899,8 @@ class Job:
             self.rec["cache"] = "pvc" if prof["cache_pvc"] else "none"
         else:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"],
-                                      ephemeral=prof["ephemeral_storage"] or EPHEMERAL_DEFAULT, ephemeral_limit=prof["ephemeral_storage_limit"])
+                                      ephemeral=prof["ephemeral_storage"] or EPHEMERAL_DEFAULT, ephemeral_limit=prof["ephemeral_storage_limit"],
+                                      priority_class=prof["priority_class"] or PRIORITY_CLASS, cpu_limit=prof["cpu_limit"])
         del secret_env, pull
         while True:
             try:
