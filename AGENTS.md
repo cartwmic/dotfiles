@@ -216,8 +216,10 @@ the work needs is agent work (playbook c04b6a19). After a dotfiles PR merges
 under ledger grant 32 (reviewer PASS and green `tests` check first, and run
 `ci-main-status dotfiles` before the merge), apply only that PR's own targets:
 show the diff first, stop on any other drift, and confirm the diff is empty
-after. Removing persistent user state still needs the owner, because deleting
-data is reserved (playbook c04b6a19). On `axon-work-computer` and any other
+after. Still ask the owner before a one-way door (force-push, history rewrite
+or anything else hard to undo), a purchase (hardware, subscriptions, paid
+services) or removing persistent user state: those stay reserved (playbook
+c04b6a19, 4b79e75c). On `axon-work-computer` and any other
 profile, ask before a live apply, commit, push, restart or merge: no grant
 covers a merge or deploy on a work machine (playbook 7cd71e55), and do not
 apply on the work Mac without the owner's confirmation for that action
@@ -276,7 +278,8 @@ Done means all of the following that apply:
   pending with a reason; do not describe unverified behavior as done. For ignored
   source-only docs, confirm they remain ignored; there is no live target to preview.
 - On the personal Mac (the homelab path is personal only; a machine with its own cluster files uses `kgate` for a second cluster, see `docs/kgate.md`), the heavy suites, `tests/heavy-gate` (about 9 minutes) and `tests/workstream-rank`, run on the cluster, not on this Mac: `run-and-wake -- kgate -- sh -c 'export PYTHONDONTWRITEBYTECODE=1; python3 -m unittest discover -s tests/heavy-gate && python3 -m unittest discover -s tests/workstream-rank'` (profile `kgate.toml`, moved there 2026-11-05 after a parity run matched; contract in `docs/kgate.md`). Undo: run the same commands under `heavy-gate --wait 7200 --` on the Mac. Other suites run directly.
-- A real `chezmoi apply` ran only with explicit user approval. If verification
+- A real `chezmoi apply` ran only with explicit user approval (on `personal`,
+  ledger grant 32 is that approval for a merged PR's own targets). If verification
   requires materializing and approval is absent, name that check as pending.
 - Commit and push only what your brief or owner asked for (playbook a1ffc2e3;
   the profile rule above applies on `axon-work-computer`).
