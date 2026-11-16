@@ -1333,6 +1333,7 @@ class Job:
         self.kcfg = None
         self.receipt_refused = False
         self.create_tried = False   # set before the first create: a create that errored may still have made the pod
+        self.pod_left = False       # a pod may exist: set with create_tried, cleared only when its delete is confirmed. The registry entry stays while it is set.
         self.t_pod = time.time()
         self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
         self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
@@ -1389,7 +1390,10 @@ class Job:
                                        "node": self.rec["node"], "cluster": self.cluster.name, "pod": self.pod})
 
     def unregister(self):
-        forget(self.entry, self.cancel_marker)
+        """Drop this job's registry entry, unless its pod may still be there: the entry is how a later client (or `kgate cancel`) finds a pod this client could
+        not delete, so it goes only once the delete is confirmed (or no pod was ever created)."""
+        if not self.pod_left:
+            forget(self.entry, self.cancel_marker)
 
     # -- steps
 
@@ -1505,7 +1509,7 @@ class Job:
     def create_pod(self, manifests, deadline):
         """Create the pod. On a kubectl cluster a ResourceQuota refusal is waited out (backoff) until the deadline; any other refusal is fatal."""
         body = json.dumps(manifests).encode()
-        self.create_tried = True
+        self.create_tried = self.pod_left = True
         delay, waited_from, last_msg = QUOTA_FIRST_DELAY, None, None
         base = self.rec.get("quota_wait_s") or 0
         while True:
@@ -1668,7 +1672,9 @@ class Job:
         else:   # nothing was created (the cluster was unreachable, or a refusal came first): one attempt, as before
             done = delete_job_objects(self.cluster, self.pod)
         self.rec["cleanup"] = done.returncode == 0
-        if done.returncode != 0:
+        if done.returncode == 0:
+            self.pod_left = False
+        else:
             self.note("cleanup not confirmed for %s: %s" % (self.pod, done.stderr.decode(errors="replace").strip()[:200]))
 
     # -- the whole job
@@ -1951,7 +1957,7 @@ def orphan_delete(cluster, e, timeout=None):
 
 
 def write_orphan_end(state, e, cluster, reason, done, **more):
-    """Write the end line of a job whose client is gone (exit 143), and drop its registry entry."""
+    """Write the end line of a job whose client is gone (exit 143), and drop its registry entry once its delete is confirmed (an unconfirmed one keeps it, so the next client retries)."""
     t0 = int(e["id"].split("-")[1])
     now = time.time()
     rec = {"id": e["id"], "job": e.get("job"), "start": utc(t0), "end": utc(now), "duration_s": round(now - t0, 3), "cwd": e.get("cwd"),
@@ -1959,12 +1965,14 @@ def write_orphan_end(state, e, cluster, reason, done, **more):
            "cleanup": done.returncode == 0, "cancelled": True, **more}
     with open(os.path.join(state, "log.jsonl"), "a") as f:
         f.write(json.dumps(rec) + "\n")
-    forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
+    if done.returncode == 0:
+        forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
     return rec
 
 
-def cancel_orphan(state, e):
-    """The client is gone and wrote no end line: delete exactly this job's pod and Secrets, and write the end line."""
+def cancel_orphan(state, e, ended=None):
+    """The client is gone: delete exactly this job's pod and Secrets, and write the end line. `ended` is the end line its client wrote when it could not confirm
+    its own delete: that line stays the job's record, and the entry goes once this delete is confirmed."""
     name = e.get("cluster") or "homelab"
     try:
         cluster = Cluster(HOSTS, KEY) if name == "homelab" else KubectlCluster(load_cluster(name))
@@ -1977,6 +1985,13 @@ def cancel_orphan(state, e):
         print("kgate cancel: " + problem, file=sys.stderr)
         return UNAVAILABLE
     pod = e.get("pod") or e["id"]
+    if ended:
+        if done.returncode == 0:
+            forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
+        else:
+            print("kgate cancel: delete not confirmed: %s (delete pod/%s secret/%s-env secret/%s-pull by hand)"
+                  % (done.stderr.decode(errors="replace").strip()[:200], pod, pod, pod), file=sys.stderr)
+        return report_end(ended)
     rec = write_orphan_end(state, e, cluster, CANCELLED + " (client already gone)", done)
     if done.returncode != 0:
         print("kgate cancel: delete not confirmed: %s (delete pod/%s secret/%s-env secret/%s-pull by hand)"
@@ -2006,7 +2021,8 @@ def reap_gone(state, cluster, me, note):
                 continue    # another client is ending this one
             if not os.path.exists(entry):
                 continue    # it was ended while this client waited for the lock
-            if end_line(state, e["id"])[0]:     # it ended; only its entry was left behind
+            ended = end_line(state, e["id"])[0]
+            if ended and ended.get("cleanup") is not False:     # it ended; only its entry was left behind
                 forget(entry, os.path.join(state, "active", e["id"] + ".cancel"))
                 continue
             why = "its client (pid %d) is gone" % e["pid"]
@@ -2016,6 +2032,10 @@ def reap_gone(state, cluster, me, note):
                 done, problem = None, "%s: %s" % (type(err).__name__, err)
             if problem or done.returncode != 0:
                 note("could not end %s (%s): %s; left for the next kgate job" % (e["id"], why, problem or done.stderr.decode(errors="replace").strip()[:200]))
+                continue
+            if ended:   # its client wrote the end line but could not confirm its delete: the line stays, the delete is now done
+                forget(entry, os.path.join(state, "active", e["id"] + ".cancel"))
+                note("ended %s: its client ended without confirming the pod delete; pod deleted" % e["id"])
                 continue
             write_orphan_end(state, e, cluster, "ended by kgate: " + why, done, reaped_by=me)
             note("ended %s: %s; pod deleted, exit 143" % (e["id"], why))
@@ -2076,12 +2096,12 @@ def cancel_main(argv):
         return USAGE
     e = hits[0]
     rec, _ = end_line(state, e["id"])
-    if rec:  # it ended; only its registry entry was left behind
+    if rec and rec.get("cleanup") is not False:  # it ended; only its registry entry was left behind
         forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
         return report_end(rec)
     if proc_identity(e["pid"]) == (e.get("start"), e.get("proc_cmd")):
         return cancel_live(state, e, o.wait)
-    return cancel_orphan(state, e)
+    return cancel_orphan(state, e, rec)
 
 
 def main(argv):
@@ -2111,8 +2131,13 @@ def main(argv):
     job = Job(opts)
 
     def interrupted(signum, _frame):
+        # The first interrupt ends the job; the cleanup it starts must run to its end. A stop that signals the whole process group reaches this client twice
+        # (the group's signal, and run-and-wake forwarding it), and a second KeyboardInterrupt inside cleanup() left the pod on the cluster (dotfiles#481).
+        for each in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(each, signal.SIG_IGN)
         raise KeyboardInterrupt(signal.Signals(signum).name, signum)
     signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     try:
         code, reason, started = UNAVAILABLE, None, False
         try:
@@ -2145,6 +2170,8 @@ def main(argv):
                 job.cleanup()
             except Exception as e:
                 job.note("cleanup failed: %s" % e)
+                if job.pod_left:
+                    job.rec["cleanup"] = False
         job.finish(code, reason)
         return code
     finally:
