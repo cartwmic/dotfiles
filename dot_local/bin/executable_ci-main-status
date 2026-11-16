@@ -3,18 +3,32 @@
 
 usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward)
        ci-main-status [--tip | --merge-gate] --all
-       ci-main-status --merge-gate dotfiles --pr N     (the pin-fix exception, below)
+       ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
 
---pr N (only with --merge-gate dotfiles) is for the PR that fixes a red main: a red main passes the gate only when all
-three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or Loop Engine release
-turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's package.json and
-package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills tree). (3) PR N's own
-pull_request run succeeded and passed that step. Then the RED lines print as usual, followed by one "merge-gate:" line, and the
-exit is 0. Anything else exits 1 with the same stdout as without --pr; the reason goes to stderr. Without --pr nothing changes.
+--pr N (only with --merge-gate and one REPO) is for the PR that fixes a red main (fab9b713 lets the revert or fix merge into
+a red main). Without --pr nothing changes. With it, a red main passes only under the rule for that repo; then the RED lines print as
+usual, followed by one "merge-gate:" line, and the exit is 0. Anything else exits 1 with the same stdout as without --pr; the
+reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's journal) is always refused.
+
+  Every repo: PR N passes when its own full-suite run on its exact head tree succeeded. That is a run of the same
+  workflow whose failure made main red, on PR N's head commit or on a commit with the same tree. It counts only when every job
+  that did not pass in main's red run ran in it and passed, and so did each step that failed there. A job or step that was
+  skipped does not count: agent-kit's unit.yml skips `npm test` and the node-floor job on pull_request events, so a
+  pull_request run is not a full-suite run and a workflow_dispatch run on the branch is. Runs are read newest first: one that
+  skipped a red job or step is passed over, and the first one that ran them decides (a failed one refuses). The "merge-gate:"
+  line names the run (id and URL). No such run, a failed one, a run still going with its steps listed, a run on another tree or one that skipped a red job refuses.
+
+  dotfiles tries one more rule first (the pin fix), and falls back to the rule above when it does not apply: a red main passes
+  as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
+  Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
+  package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
+  tree). (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
+  so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
 `ci-main-status ... && pr-body-check ... && gh pr merge`.
 
@@ -93,6 +107,7 @@ NO_RUNNER = "was not acquired by Runner"   # the annotation GitHub puts on a job
 UNPROVEN = ("flake", "untested")   # verdicts that are not red and not tested
 # The pin-fix exception. The step name and the file lists are copies: the step is in .github/workflows/ci.yml, the files are
 # agent_kit_bump.py (KIT, PIN_FILES) and loop_engine_bump.py (MISE_CONFIG, SKILLS); tests/ci-main-status checks that they match.
+PIN_FIX, RED_FIX = "the pin fix", "a fix"   # what --pr says it is not, in a refusal
 PINS_STEP = "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release"
 AGENT_KIT_PIN_FILES = {"dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json"}
 LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
@@ -356,41 +371,119 @@ def only_pins_step_failed(jobs):
 
 
 def pin_fix_reason(spec, red, pr):
-    """Why PR `pr` may merge into a red main, or None. Prints the reason it may not to stderr. A gh failure is a refusal, not an error."""
+    """Why PR `pr` may merge into a red dotfiles main as the pin fix, or None. Prints the reason it may not to stderr. A gh failure is a refusal, not an error."""
     repo = spec["github"]
     try:
-        if red.run_id is None:
-            return refuse(pr, "the red verdict is not a GitHub run")
         jobs = gh(["run", "view", str(red.run_id), "-R", repo, "--attempt", str(red.attempt), "--json", "jobs"])["jobs"]
         if not only_pins_step_failed(jobs):
-            return refuse(pr, f"{red.label} failed on more than the release-pins step")
+            return refuse(pr, f"{red.label} failed on more than the release-pins step", PIN_FIX)
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "files,headRefOid,changedFiles"])
         names = [f["path"] for f in pull["files"]]
         if pull["changedFiles"] != len(names):   # gh lists a PR's files in pages and may return only the first
-            return refuse(pr, f"gh listed {len(names)} of its {pull['changedFiles']} changed files")
+            return refuse(pr, f"gh listed {len(names)} of its {pull['changedFiles']} changed files", PIN_FIX)
         if not pin_files_only(names):
-            return refuse(pr, f"its diff is not exactly the pin files: {', '.join(names) or 'nothing'}")
+            return refuse(pr, f"its diff is not exactly the pin files: {', '.join(names) or 'nothing'}", PIN_FIX)
         head = pull["headRefOid"]
         own = [r for r in gh(["run", "list", "-R", repo, "--workflow", spec["workflow"], "--commit", head, "--event", "pull_request",
                               "--limit", "20", "--json", "databaseId,headSha,status,conclusion"]) if r["headSha"] == head]
         if not own:
-            return refuse(pr, f"no pull_request run of {head[:7]}")
+            return refuse(pr, f"no pull_request run of {head[:7]}", PIN_FIX)
         newest = max(own, key=lambda r: r["databaseId"])   # run ids order runs of one commit
         if newest["status"] != "completed" or newest["conclusion"] != "success":
-            return refuse(pr, f"its own run {newest['databaseId']} is {newest['conclusion'] or newest['status']}, not success")
+            return refuse(pr, f"its own run {newest['databaseId']} is {newest['conclusion'] or newest['status']}, not success", PIN_FIX)
         own_jobs = gh(["run", "view", str(newest["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]
         steps = [s for j in own_jobs for s in j["steps"] if s["name"].startswith(PINS_STEP)]
         if len(steps) != 1 or steps[0]["conclusion"] != "success":
-            return refuse(pr, f"its own run {newest['databaseId']} did not pass the release-pins step")
+            return refuse(pr, f"its own run {newest['databaseId']} did not pass the release-pins step", PIN_FIX)
         return (f"  merge-gate: PR #{pr} is the pin fix for this red: only the release-pins step failed, the PR changes only the pin files, "
                 f"and its own run {newest['databaseId']} passed that step. Allowed.")
+    except (Unreadable, KeyError, TypeError) as e:
+        return refuse(pr, f"could not read it ({e})", PIN_FIX)
+
+
+def refuse(pr, why, kind=RED_FIX):
+    print(f"ci-main-status: --pr {pr} is not {kind} for this red: {why}", file=sys.stderr)
+    return None
+
+
+def red_jobs(repo, red):
+    """The jobs of main's red attempt that did not pass or skip, as {job name: names of its steps that did not pass or skip}."""
+    jobs = gh(["run", "view", str(red.run_id), "-R", repo, "--attempt", str(red.attempt), "--json", "jobs"])["jobs"]
+    return {j["name"]: [s["name"] for s in not_ok(j["steps"])] for j in not_ok(jobs)}
+
+
+def judge_run(repo, run, wanted):
+    """How one run on the PR's tree answers main's red: ("skipped", why), ("bad", why) or ("good", None).
+
+    skipped: the run did not run a job or step that failed in main (a pull_request run that skips the full suite), so it says nothing.
+    bad: it ran them and they did not all pass, or it did not succeed, or it is still going with its red jobs and steps listed.
+    A run still going whose red job has no steps listed yet (queued, nothing started) is read as skipped: it has run nothing, so it
+    says nothing, and the next older run on the same tree decides. It does not refuse. Once its steps are listed it is "bad".
+    """
+    jobs = {j["name"]: j for j in gh(["run", "view", str(run["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]}
+    for name, step_names in wanted.items():
+        job = jobs.get(name)
+        if job is None or job["conclusion"] == "skipped":
+            return "skipped", f"run {run['databaseId']} skipped job {name}"
+        steps = {s["name"]: s for s in job["steps"]}
+        for step in step_names:
+            if step not in steps or steps[step]["conclusion"] == "skipped":
+                return "skipped", f"run {run['databaseId']} skipped step \"{step}\" in job {name}"
+    if run["status"] != "completed":
+        return "bad", f"run {run['databaseId']} is {run['status']}, not success"
+    for name, step_names in wanted.items():
+        if jobs[name]["conclusion"] != "success" or any(s["conclusion"] != "success" for s in jobs[name]["steps"] if s["name"] in step_names):
+            return "bad", f"run {run['databaseId']} did not pass {name}"
+    if run["conclusion"] != "success":
+        return "bad", f"run {run['databaseId']} is {run['conclusion']}, not success"
+    return "good", None
+
+
+def red_fix_reason(spec, red, pr):
+    """Why PR `pr` may merge into a red main, or None: its own full-suite run on its head tree passed what failed in main.
+
+    The runs are those of the same workflow on the PR's head commit or on a commit with its tree, newest first. One that skipped a
+    job or step that failed in main is passed over; the first one that ran them all decides. Prints why not to stderr. A gh failure
+    is a refusal, not an error.
+    """
+    repo = spec["github"]
+    try:
+        wanted = red_jobs(repo, red)
+        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName"])
+        head = pull["headRefOid"]
+        tree = tree_of(repo, head)
+        listing = ["run", "list", "-R", repo, "--workflow", spec["workflow"], "--limit", "100", "--json", RUN_FIELDS]
+        runs = {r["databaseId"]: r for r in gh(listing + ["--commit", head]) + gh(listing + ["--branch", pull["headRefName"]])}
+        passed_over = []
+        for run in sorted(runs.values(), key=lambda r: r["databaseId"], reverse=True):   # run ids order runs of one workflow
+            if run["headSha"] != head and tree_of(repo, run["headSha"]) != tree:
+                continue
+            verdict, why = judge_run(repo, run, wanted)
+            if verdict == "bad":
+                return refuse(pr, why)
+            if verdict == "good":
+                same = "" if run["headSha"] == head else f", same tree as its head {head[:7]}"
+                return (f"  merge-gate: PR #{pr} passed as a red-main fix: its own full-suite run {run['databaseId']} ({run['url']}) "
+                        f"on {run['headSha'][:7]}{same} succeeded, and ran and passed every job and step that failed in {red.label} "
+                        f"({', '.join(wanted)}). Allowed.")
+            passed_over.append(why)
+        return refuse(pr, "no full-suite run of its head tree" + (": " + "; ".join(passed_over) if passed_over
+                                                                     else f": no {spec['workflow']} run of {head[:7]} or of a commit with its tree"))
     except (Unreadable, KeyError, TypeError) as e:
         return refuse(pr, f"could not read it ({e})")
 
 
-def refuse(pr, why):
-    print(f"ci-main-status: --pr {pr} is not the pin fix for this red: {why}", file=sys.stderr)
-    return None
+def tree_of(repo, sha):
+    return gh(["api", f"repos/{repo}/commits/{sha}"])["commit"]["tree"]["sha"]
+
+
+def fix_reason(name, spec, red, pr):
+    """The "merge-gate:" line for PR `pr` as the fix for a red main, or None (the refusal went to stderr)."""
+    if red.run_id is None:
+        return refuse(pr, "the red verdict is not a GitHub run")
+    if name == "dotfiles":   # the pin rule first (its own checks), then the rule every other repo gets
+        return pin_fix_reason(spec, red, pr) or red_fix_reason(spec, red, pr)
+    return red_fix_reason(spec, red, pr)
 
 
 def untested_line(name, sha, rec):
@@ -432,7 +525,7 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
         lines = [f"{name}: RED  {newest.label} failed on {sha[:7]}{note}"]
 
         def red():
-            allowed = pin_fix_reason(spec, newest, pr) if pr is not None else None
+            allowed = fix_reason(name, spec, newest, pr) if pr is not None else None
             return (0, lines + [allowed]) if allowed else (1, lines)
 
         greens = [j for j in hits if walked[j][2].verdict == "pass"]
@@ -496,8 +589,8 @@ def main(argv):
         value = argv[k + 1] if k + 1 < len(argv) else ""
         pr = int(value) if value.isdigit() and int(value) > 0 else 0
         del argv[k:k + 2]
-        if not pr or not merge_gate or tip_only or argv != ["dotfiles"]:
-            argv = []   # --pr needs a PR number, --merge-gate and the dotfiles repo alone: usage error
+        if not pr or not merge_gate or tip_only or len(argv) != 1 or argv[0] not in REPOS:
+            argv = []   # --pr needs a PR number, --merge-gate and one repo (not --all): usage error
     if tip_only and merge_gate:
         argv = []   # the two flags disagree about UNTESTED: usage error
     if argv == ["--all"]:
@@ -505,7 +598,7 @@ def main(argv):
     elif len(argv) == 1 and argv[0] in REPOS:
         names = argv
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate dotfiles --pr N", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0

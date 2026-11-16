@@ -73,6 +73,9 @@
 #               thread over 200K tokens would be compacted then, a wasted re-read of a thread nobody returns to. The reviewer instance therefore
 #               sets its own `config.idleCompaction` to "off" (T3's per-instance "Compact idle threads: Never"); the reviewer still auto-compacts at
 #               its window. A running session keeps the environment it started with, so this reaches new sessions only.
+#               seat-builder, seat-planner and seat-reviewer also get `--add-dir <home>/.claude/fleet/worker` (before --strict-mcp-config: --add-dir takes several values) and the
+#               environment variable CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1. Their seat file excludes ~/.claude/CLAUDE.md; the worker folder holds the same instructions
+#               without the hindsight guide, plus the skill that carries the guide (docs/profiles.md "Agent seat instances"). The lead, coordinator and default instances are unchanged.
 #               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
 #               is deployed for it to point at.
 # CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and the four seats; an `environment` entry, merged by name so other entries stay):
@@ -120,6 +123,11 @@ set -eu
 {{-   if not $seat.advisor }}{{ $_ := set $inst "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy) }}{{ end }}
 {{- /* Reviewer seat only: 5-minute prompt cache writes and no idle compaction (see the seat-reviewer note in the header). */}}
 {{-   if hasKey $seat "cache5m" }}{{ $_ := set $inst "environment" (append (get $inst "environment") (dict "name" "FORCE_PROMPT_CACHING_5M" "value" "1" "sensitive" false)) }}{{ $_ := set (get $inst "config") "idleCompaction" "off" }}{{ end }}
+{{- /* Builder, planner and reviewer: the instructions come from the worker folder, not ~/.claude/CLAUDE.md (excluded in the seat file by fleet_seat). Both pieces are needed: --add-dir adds the folder, the variable makes Claude Code read CLAUDE.md from an added folder. --add-dir takes several values, so it goes before another flag. */}}
+{{-   if has $seat.id (list "builder" "planner" "reviewer") }}
+{{-     $_ := set $inst.config "launchArgs" (replace " --strict-mcp-config" (printf " --add-dir %s/worker --strict-mcp-config" $fleet) $inst.config.launchArgs) }}
+{{-     $_ := set $inst "environment" (append $inst.environment (dict "name" "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" "value" "1" "sensitive" false)) }}
+{{-   end }}
 {{-   $want = set $want (printf "seat-%s" $seat.id) $inst }}
 {{-   $owned = append $owned (printf "seat-%s" $seat.id) }}
 {{- end }}

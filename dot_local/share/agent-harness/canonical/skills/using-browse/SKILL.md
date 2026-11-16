@@ -1,0 +1,43 @@
+---
+name: using-browse
+description: Use for any task in a web page, as Michael: open or read a site, sign in, fill a form, click, scrape, download a file, pass a 1Password or passkey prompt, or check how a page looks. Browse (the browse MCP server) is the default browser tool; agent-desktop handles what is outside the page. Use it without being told to; do not start another browser or browser tool.
+---
+
+# Using Browse
+
+Browse (`browse` MCP server) drives the agent Chrome (the one at 127.0.0.1:9333, profile ~/.local/share/agent-chrome-profile). Use it by default. Do not
+start another browser or tool. Personal accounts only; never the work Mac.
+
+## Start
+1. Call the `status` tool. It lists connected browsers, pairing, tabs, and `nextStep` if something is missing. If no browser is connected: check `systemctl --user status agent-chrome`
+   (or run `agent-chrome`), then pairing (agent-harness README, "Agent browser" > "Pair Browse"). Do not ask Michael until you have tried that.
+2. Open a page: `execute` with `await page.goto("https://...")`. The result starts with `tab: <id>`.
+
+## The tab is the handle
+- Pass that id as `tab` to every later `execute` (and `tabs`). Without `tab`, `page.goto` opens a new tab.
+- You only see tabs you opened (and tabs Michael lent). Idle agent tabs close after 10 minutes, so a saved id can go stale: call `tabs` (list) before reusing one; reopen if it is gone.
+- Close tabs you opened when you are done (`page.close()` or `tabs` close). Never close a tab you did not open. A tab Michael lent is given back, not closed.
+
+## Read and act
+- `snapshot()` returns a compact outline with refs (`e12`). Act on a ref: `await ref("e12").click()`, `.fill("text")`. Prefer snapshot plus ref to guessing selectors; take a new snapshot after the page changes (`snapshot({ diff: true })`).
+- `return await page.screenshot()` to look at the page when text is not enough.
+- Browse does not clear cookies or storage and refuses other extensions' pages and `file:` URLs. A bot check or captcha is reported to you: do not retry-loop it.
+- `handoff()` and `demonstrate()` ask Michael to act. Do not use them until you have tried the 1Password extension, his Beeper and Gmail for login codes, and screen control (below).
+
+## Downloads
+Browse has no download tool. Use `agent-download`:
+1. `mark=$(agent-download mark)` before the click.
+2. Click the download in the page with Browse. The click can take up to about 15 seconds to return; that is normal.
+3. `path=$(agent-download wait --mark "$mark")` prints the file's path (exit 1 if nothing arrives in 60 s: `--timeout N` changes it). Use that path; do not guess a file name, and `rm` the file when you are done with it.
+
+## Outside the page: `agent-desktop`
+Browse cannot see the 1Password popup, passkey prompts or browser dialogs. Use the screen tool (docs/agent-desktop.md):
+1. Make the page's tab the active one and the Chrome window the keyboard-active one: `agent-chrome focus <part of the page URL>`, then `agent-desktop focus google-chrome`
+   (a floating 1Password desktop window can sit on top; the second command fixes that).
+2. Open the 1Password popup: `agent-desktop key x ctrl shift`. Wait about 2 seconds, then `agent-desktop shot /tmp/x.png` and read the image. Escape closes the popup: `agent-desktop key Escape`.
+3. Pick the entry for that exact host; confirm with `agent-desktop key Return`. Then return to Browse and `snapshot` to confirm you are signed in.
+Keep screen input short: every agent on the desktop shares it. Do not leave a popup open. If a code is needed (email, text), read it from Gmail or Beeper; do not ask Michael first.
+
+## 1Password rules
+- 1Password personal account only. Never print or log a password, code or token.
+- Every login you add or edit in 1Password fills only on its exact host (the full subdomain it was made for: "only fill on this exact domain"), not the parent domain. Fix an existing agent-made login the same way when you touch it.
