@@ -64,6 +64,8 @@ The task gives the round number.
 
 ## 7. Return
 
+If the item's own packet (for example a Loop Engine lean-change review packet) states a return shape, that packet's shape wins over this brief's; return exactly what the packet asks for.
+
 Write two files in the output folder your task names. If it names none, use a scratch folder outside the repo checkout:
 
 - `findings.json`, in the shape `~/.local/share/agent-harness/findings-contract.md` defines (the fields and rules are there). Set `brief_sha256` to the sha256 of this file's bytes. Include notes as findings with severity `note`.
