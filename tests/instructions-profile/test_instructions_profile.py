@@ -1,6 +1,6 @@
 """Render the three harness instruction templates for each profile with the real chezmoi.
 
-The ownership and escalation paragraphs are in every render, ownership directly before escalation. profile-work.md is included only for axon-work-computer and
+The subagents, ownership and escalation paragraphs are in every render, ownership directly before escalation. profile-work.md is included only for axon-work-computer and
 profile-personal.md only for personal; termux gets neither. Skipped when chezmoi is not installed.
 
     python3 -m unittest discover -s tests/instructions-profile -v
@@ -34,14 +34,28 @@ BROWSER = {
     "personal": "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
     "axon-work-computer": "| Browser work | Sonnet 5.5 high |",
 }
+SUBAGENTS = (
+    "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
+    "when you will use subagents and which models they will use; if that is not clear, ask again, and do not guess. "
+    "In a seat session (coordinator, lead, planner, builder or reviewer: its brief's first line names the seat), do "
+    "not ask me which subagents or models to use: the seat table decides, and the brief says the rest."
+)
 ESCALATION = (
     "Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: "
     "library choices, naming, style, reversible implementation details. Escalate only what materially matters: "
-    "one-way doors, security or privacy, spending, deleting data, behaviour other people will see, and taste or "
-    "product calls only I can make. Escalate up the chain, not around it: a worker goes to its lead, a lead to the "
-    "coordinator, the coordinator to me. Each level settles what it can before passing anything up. If running "
-    "something could answer the question, run it instead. When you do ask: one question at a time, with your "
-    "recommendation, using your harness's question tool. No is an acceptable answer."
+    "one-way doors, security or privacy, buying things (hardware, subscriptions, paid services), deleting data, "
+    "behaviour other people will see, and taste or product calls only I can make. Never ask me about spend on agent "
+    "work: report it. Escalate up the chain, not around it: a worker goes to its lead, a lead to the coordinator, the "
+    "coordinator to me. Each level settles what it can before passing anything up. If running something could answer "
+    "the question, run it instead. When you do ask: one question at a time, with your recommendation. The "
+    "coordinator, and any session I open myself, ask me directly with your harness's question tool. A lead, planner, "
+    "builder or reviewer session does not ask me directly: a worker goes to its lead, and a lead records the decision "
+    "with `ledger open` and stops, so the coordinator asks me. No is an acceptable answer."
+)
+OLD_LINES = (
+    "At the start of a session, confirm with the user when you will use subagents",
+    "using your harness's question tool. No is an acceptable answer.",
+    "security or privacy, spending, deleting data",
 )
 OWNERSHIP = (
     "Ownership. A codebase you work in is yours: what it's for and how it's built are your call, and you'll keep "
@@ -73,6 +87,7 @@ class InstructionProfileTests(unittest.TestCase):
         self.assertIn(PERSONAL, (INSTR / "profile-personal.md").read_text())
         self.assertIn(ESCALATION, (INSTR / "AGENTS.md").read_text())
         self.assertIn(OWNERSHIP, (INSTR / "AGENTS.md").read_text())
+        self.assertIn(SUBAGENTS, (INSTR / "AGENTS.md").read_text())
 
     def test_every_harness_and_profile(self):
         for name, template in TEMPLATES.items():
@@ -85,6 +100,9 @@ class InstructionProfileTests(unittest.TestCase):
                     text = render(template, profile)
                     self.assertEqual(text.count(ESCALATION), 1)
                     self.assertEqual(text.count(OWNERSHIP), 1)
+                    self.assertEqual(text.count(SUBAGENTS), 1)
+                    for old in OLD_LINES:
+                        self.assertNotIn(old, text)
                     self.assertIn(OWNERSHIP + "\n\n" + ESCALATION, text)
                     self.assertNotIn("Decisions and doors", text)
                     self.assertNotIn("Walk through two-way doors", text)
