@@ -41,7 +41,7 @@ FIZZY_IDS = ("claudeAgent", "coordinator", "claude-hub") + SEATS  # every Claude
 
 
 def seat_instances(home):
-    """The four seat instances as the script writes them (key order is the template's: config, displayName, driver, enabled, environment)."""
+    """The four seat instances as the script writes them (key order is the template's: config, displayName, driver, enabled, environment; inside config the keys are alphabetical, because chezmoi's toJson sorts a dict)."""
     out = {}
     for sid, window, advisor in SEAT_TABLE:
         fleet = "%s/.claude/fleet" % home
@@ -51,7 +51,7 @@ def seat_instances(home):
         inst["environment"] = ([] if advisor else [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}]) + [FIZZY]
         if sid == "seat-reviewer":
             inst["environment"].append(FIVE_MIN)
-            inst["config"]["idleCompaction"] = "off"
+            inst["config"] = {"autoCompactWindow": window, "idleCompaction": "off", "launchArgs": inst["config"]["launchArgs"]}  # alphabetical: idleCompaction sits before launchArgs
         out[sid] = inst
     return out
 
@@ -503,8 +503,8 @@ class LinuxSettingsTest(unittest.TestCase):
     The chezmoi OS is overridden to linux, so this runs the same on the Mac's CI job.
     """
 
-    def render(self, chezmoi_os="linux"):
-        env = Env(codex_active=False)
+    def render(self, chezmoi_os="linux", enabled=True):
+        env = Env(codex_active=False, enabled=enabled)
         try:
             data = json.dumps({"chezmoi": {"os": chezmoi_os}})
             home = str(env.home)
@@ -721,8 +721,8 @@ class SkillRequiresTest(unittest.TestCase):
 class SeatInstanceTest(unittest.TestCase):
     """The four seat instances in the settings script, on personal Linux and on the Mac."""
 
-    def script(self, chezmoi_os):
-        return LinuxSettingsTest().render(chezmoi_os)
+    def script(self, chezmoi_os, enabled=True):
+        return LinuxSettingsTest().render(chezmoi_os, enabled)
 
     def test_instances_are_written_exactly_on_both_oses(self):
         for os_name in ("linux", "darwin"):
@@ -730,6 +730,13 @@ class SeatInstanceTest(unittest.TestCase):
             inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
             for sid, expect in seat_instances(home).items():
                 self.assertEqual(inst[sid], expect, (os_name, sid))
+
+    def test_switch_off_text_is_exactly_the_seated_settings(self):
+        """The byte-for-byte text of the Mac's file once the hub switch is off (what ApplyPathTest checks, but that one runs on macOS only): the seats stay, and their config keys come out alphabetical."""
+        script, home = self.script("darwin", enabled=False)
+        out = run_script(script, SETTLED)
+        self.assertEqual(json.loads(out), json.loads(seated(home)))
+        self.assertEqual(out.rstrip("\n"), seated(home).rstrip("\n"))
 
     def test_windows_and_advisor(self):
         script, _ = self.script("linux")
