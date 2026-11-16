@@ -205,9 +205,13 @@ class RelayTest(Base):
         # a second helper starts after the first has its pid file and before it has made its FIFO
         self.relay_cmd("stop")
         fake = self.tmp / "agent-desktop-relay"  # a live process with the helper's name and no FIFO
-        shutil.copy(shutil.which("sleep"), fake)
-        other = subprocess.Popen([str(fake), "30"])
+        # a script, not a copy of the sleep binary: a multi-call coreutils (Ubuntu 26.04) exits when run under another name
+        fake.write_text("#!/bin/sh\nwhile :; do sleep 1; done\n")
+        fake.chmod(0o755)
+        other = subprocess.Popen([str(fake)])
+        self.addCleanup(other.wait)
         self.addCleanup(other.kill)
+        self.assertIsNone(other.poll())
         (self.state / "relay").mkdir(parents=True, exist_ok=True)
         (self.state / "relay/pid").write_text("%d\n" % other.pid)
         r = self.relay_cmd("serve", timeout=10)
