@@ -158,6 +158,21 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
         self.assertIsNone(K.parse_profile(self.GOOD)["memory_limit"])
         self.assertEqual(K.parse_profile('memory = "1Gi"\nmemory_limit = "2Gi"')["memory_limit"], "2Gi")
 
+    def test_homelab_ephemeral_storage_and_its_limit_parse(self):
+        p = K.parse_profile('ephemeral_storage = "8Gi"\nephemeral_storage_limit = "12Gi"')
+        self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), ("8Gi", "12Gi"))
+        p = K.parse_profile("")
+        self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), (None, None))
+        K.parse_profile('ephemeral_storage_limit = "3Gi"')   # equal to the default request is allowed
+
+    def test_bad_homelab_ephemeral_storage_is_refused(self):
+        for bad in ('ephemeral_storage = "20G"', 'ephemeral_storage = 20', 'ephemeral_storage_limit = "20G"', 'ephemeral_storage_limit = 1',
+                    'ephemeral_storage_limit = "2Gi"',                                  # below the default request
+                    'ephemeral_storage = "8Gi"\nephemeral_storage_limit = "4Gi"',       # below the request
+                    'cluster = "example"\nephemeral_storage_limit = "20Gi"'):           # a kubectl cluster's limit is its request
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
     def test_memory_limit_must_be_at_least_the_request(self):
         K.check_settings(DIGEST, 2, "256Mi", "512Mi")
         K.check_settings(DIGEST, 2, "1Gi", "1024Mi")  # equal is the old behaviour
@@ -177,16 +192,18 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
 
 class PodSpec(unittest.TestCase):
     def pod(self, **kw):
-        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None, prefer_nodes=True)
+        args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None, prefer_nodes=True,
+                    ephemeral=K.EPHEMERAL_DEFAULT, ephemeral_limit=None)
         args.update(kw)
         items = K.pod_manifests(args["job"], args["image"], args["cpu"], args["memory"], args["node"], args["secret_env"], args["pull"],
-                                memory_limit=args["memory_limit"], prefer_nodes=args["prefer_nodes"])["items"]
+                                memory_limit=args["memory_limit"], prefer_nodes=args["prefer_nodes"], ephemeral=args["ephemeral"],
+                                ephemeral_limit=args["ephemeral_limit"])["items"]
         return items[-1], items[:-1]
 
     def test_limits_and_jobs_follow_the_request(self):
         pod, _ = self.pod()
         c = pod["spec"]["containers"][0]
-        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "6Gi"})
+        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "6Gi", "ephemeral-storage": "3Gi"})
         self.assertEqual(c["resources"]["limits"], {"memory": "6Gi"})
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"]), ("3", "3", "-j3"))
@@ -196,15 +213,28 @@ class PodSpec(unittest.TestCase):
     def test_request_and_limit_render_separately(self):
         pod, _ = self.pod(memory="256Mi", memory_limit="512Mi")
         c = pod["spec"]["containers"][0]
-        self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
+        self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "512Mi"}})
+
+    def test_the_pod_asks_for_ephemeral_storage_and_a_profile_can_change_it(self):
+        # dotfiles#484: a pod with no request is the first one the kubelet evicts when the node is short on disk, and the scheduler cannot keep it off a full node.
+        self.assertEqual(K.EPHEMERAL_DEFAULT, "3Gi")
+        pod, _ = self.pod()
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["ephemeral-storage"], "3Gi")
+        self.assertNotIn("ephemeral-storage", pod["spec"]["containers"][0]["resources"]["limits"], "a request only: no limit unless the profile sets one")
+        pod, _ = self.pod(ephemeral="8Gi")
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["ephemeral-storage"], "8Gi")
+
+    def test_an_ephemeral_storage_limit_is_rendered_when_set(self):
+        pod, _ = self.pod(ephemeral="1Gi", ephemeral_limit="2Gi")
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"], {"memory": "6Gi", "ephemeral-storage": "2Gi"})
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), and 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "3Gi", dotfiles#484)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "f0456d86950e4e100ee17d76ed68e4bac3f4f383c039555428ed65608d7bf352"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "0133381d0690b00ebb4ca94dd44900242d8744a2e155d2fd0db7fa57521d44f0"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "7e7573c726bbfd4a8a5cacdfe112cbddbae059fabc3f942b814be5025de66b29"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "06bd400ee9ef5c300ca7af6e0617c9bc74acb582578881569bd6b1a16201c077"),
+             "5840560644b4ffdb28880396e79c9a710aa21b73f75a435af94c9fd3c9d06e3b"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "951ead9a44f4fee97d862955b04d78396fa15db1ec17407599b24390d36af550"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -373,6 +403,9 @@ if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL"):   # the API server times out on every read of the pod
     sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
+if a[:2] == ["get", "pod"] and os.environ.get("FAKE_EVICT") and (scenario == "evicted" or os.path.exists(os.path.join(fake, "died"))):
+    # the node evicted the pod: it stays as Failed/Evicted with the kubelet's message (FAKE_POD=evicted: before it ran; else after the exec connection died)
+    print(json.dumps({"spec": {"nodeName": "fake-node"}, "status": {"phase": "Failed", "reason": "Evicted", "message": os.environ["FAKE_EVICT"]}})); sys.exit(0)
 if a[:2] == ["get", "pod"]:
     if scenario == "ready":
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
@@ -402,7 +435,7 @@ if a[0] == "exec" and "-i" in a:
     for line in iter(proc.stdout.readline, b""):
         sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
         if os.environ.get("FAKE_DIE") and b"]: running" in line:
-            proc.kill(); sys.stderr.write("error: lost connection to pod\n"); sys.exit(255)
+            proc.kill(); open(os.path.join(fake, "died"), "w").write("x"); sys.stderr.write("error: lost connection to pod\n"); sys.exit(255)
     sys.exit(proc.wait())
 if a[0] == "exec":
     out = os.path.join(fake, "out")
@@ -804,6 +837,44 @@ class Black(unittest.TestCase):
         self.assertEqual((rec["exit"], rec["ran"]), (69, True))
         self.assertEqual(sum(1 for c in self.calls() if c.get("kubectl", [""])[0] == "exec" and "-i" in c["kubectl"]), 1)  # one exec: no rerun
 
+    EVICTION = ("The node was low on resource: ephemeral-storage. Threshold quantity: 17.7Gi, available: 17.0Gi. "
+                "Container job was using 1.15Gi, request is 0, has larger consumption of ephemeral-storage.")
+
+    def test_a_pod_the_node_evicted_while_running_is_69_and_says_evicted(self):
+        # dotfiles#484: the job read as a lost pod, with no word of why. The kubelet's message is on the Failed pod, read before the pod is deleted.
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1", "FAKE_EVICT": self.EVICTION})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("kgate: evicted: " + self.EVICTION + "; exit 69", done.stdout)
+        self.assertNotIn("lost the pod before CMD finished", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"], rec["cleanup"]), (69, "evicted: " + self.EVICTION, True, True))
+        self.assertEqual(sum(1 for c in self.calls() if c.get("kubectl", [""])[0] == "exec" and "-i" in c["kubectl"]), 1)  # one exec: no rerun
+        self.assertEqual(sum(1 for c in self.calls() if "manifest" in c), 1, "one pod created: no retry")
+        kube = [c["kubectl"] for c in self.calls() if "kubectl" in c]
+        last_read = max(n for n, k in enumerate(kube) if k[:2] == ["get", "pod"])
+        first_delete = min(n for n, k in enumerate(kube) if k[0] == "delete" and any(x.startswith("pod/") for x in k))
+        self.assertLess(last_read, first_delete, "the status is read before the pod is deleted")
+
+    def test_a_pod_the_node_evicted_before_it_ran_is_69_and_says_evicted(self):
+        done = self.kgate("--", "true", env={"FAKE_POD": "evicted", "FAKE_EVICT": self.EVICTION})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("kgate: evicted: " + self.EVICTION + "; exit 69", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"]), (69, "evicted: " + self.EVICTION, False))
+
+    def test_the_pod_carries_the_ephemeral_storage_request_and_a_profile_limit(self):
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["resources"]
+        self.assertEqual(res["requests"]["ephemeral-storage"], "3Gi")
+        self.assertNotIn("ephemeral-storage", res["limits"])
+        self.profile(extra='ephemeral_storage = "6Gi"\nephemeral_storage_limit = "7Gi"')
+        (self.fake / "calls.jsonl").unlink()
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["resources"]
+        self.assertEqual((res["requests"]["ephemeral-storage"], res["limits"]["ephemeral-storage"]), ("6Gi", "7Gi"))
+
     def test_a_command_that_prints_marker_lines_cannot_fake_the_outcome(self):
         done = self.kgate("--", "sh", "-c", "echo 'kgate: hash MISMATCH expected=a found=b'; echo 'kgate: end 1 exit 9'")
         self.assertEqual(done.returncode, 0, done.stdout)
@@ -1076,7 +1147,7 @@ class Black(unittest.TestCase):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
         c = manifest["items"][-1]["spec"]["containers"][0]
         self.assertEqual(c["resources"]["limits"], {"memory": "2Gi"})
-        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi"})
+        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi", "ephemeral-storage": "3Gi"})
 
     def pod_resources(self):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
@@ -1086,7 +1157,7 @@ class Black(unittest.TestCase):
         self.profile(memory="256Mi", extra='memory_limit = "512Mi"')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "512Mi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("256Mi", "512Mi"))
         self.assertIn("256Mi memory request, 512Mi limit", done.stdout)
@@ -1094,7 +1165,7 @@ class Black(unittest.TestCase):
     def test_without_memory_limit_the_limit_is_the_request(self):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi"}, "limits": {"memory": "1Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "1Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("1Gi", "1Gi"))
         self.assertIn("1Gi memory request\n", done.stdout)
@@ -1119,7 +1190,7 @@ class Black(unittest.TestCase):
     def test_mem_sets_the_request_and_the_profile_limit_stays(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
         self.assertEqual(self.kgate("--mem", "512Mi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi"}, "limits": {"memory": "2Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "2Gi"}})
 
     def test_mem_above_the_profile_limit_is_refused(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
@@ -1130,7 +1201,7 @@ class Black(unittest.TestCase):
 
     def test_mem_limit_flag_sets_the_limit(self):
         self.assertEqual(self.kgate("--mem-limit", "3Gi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi"}, "limits": {"memory": "3Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "3Gi"}})
 
     def test_mem_limit_flag_below_the_request_is_refused(self):
         done = self.kgate("--mem-limit", "512Mi", "--", "true")
@@ -1810,7 +1881,7 @@ class KubectlProfile(unittest.TestCase):
                 K.parse_profile(bad)
 
     def test_bad_cluster_or_ephemeral_storage_is_refused(self):
-        for bad in ('cluster = "a/b"', 'cluster = ""', 'cluster = 1', 'ephemeral_storage = "1Gi"', 'cluster = "example"\nephemeral_storage = "20G"', 'cluster = "example"\nephemeral_storage = 20'):
+        for bad in ('cluster = "a/b"', 'cluster = ""', 'cluster = 1', 'cluster = "example"\nephemeral_storage = "20G"', 'cluster = "example"\nephemeral_storage = 20'):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
@@ -1917,7 +1988,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "f0456d86950e4e100ee17d76ed68e4bac3f4f383c039555428ed65608d7bf352"  # the same pin as test_default_render_is_byte_identical
+        want = "0133381d0690b00ebb4ca94dd44900242d8744a2e155d2fd0db7fa57521d44f0"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 

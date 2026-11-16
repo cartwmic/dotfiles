@@ -19,13 +19,13 @@ Contract
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
 - Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
-  memory_limit (optional: the limit, default equal to memory), the exact tool
+  memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 3Gi; ephemeral_storage_limit optional), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line, or a CMD element that names a local file outside the worktree (the pod would not have it; nothing is submitted). 69 when the job could not
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
-  after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. kgate NEVER runs CMD on this Mac and never
+  after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. An evicted homelab pod is 69 with the reason `evicted: <the kubelet's message>`, read from the pod's status before it is deleted. kgate NEVER runs CMD on this Mac and never
   reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
 {{ if eq .profile "personal" -}}
 - 1Password reads (profile secrets and the pull token) call `op` by name. When `op` is the op shim and a Connect token is set, the shim sends them to the homelab Connect server; otherwise they use the service-account token: OP_SERVICE_ACCOUNT_TOKEN, else
@@ -210,6 +210,9 @@ def tree_hash(root, files):
 # ---------------------------------------------------------------- pure: profile, versions, pod spec
 
 MEM_SIZE = r"[1-9][0-9]*(Mi|Gi)"
+# The homelab pod's ephemeral-storage request when the profile sets none. Without a request the scheduler cannot keep a pod off a node that is short on disk, and
+# under disk pressure the kubelet evicts pods that use more than they asked for, first (dotfiles#484). Sized from the live per-pod use in docs/kgate.md.
+EPHEMERAL_DEFAULT = "3Gi"
 
 
 def parse_profile(text):
@@ -218,7 +221,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "cpu_limit", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -247,8 +250,16 @@ def parse_profile(text):
         raise Unavailable("profile cluster must be \"homelab\" or the name of a cluster file (letters, digits, . _ -), got %r" % (cluster,))
     away = " is for a profile with cluster = \"<name>\" (a kubectl cluster) only"
     ephemeral = raw.get("ephemeral_storage")
-    if ephemeral is not None and (cluster == "homelab" or not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral)):
-        raise Unavailable("profile ephemeral_storage" + away + " and must look like 20Gi, got %r" % (ephemeral,))
+    if ephemeral is not None and (not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral)):
+        raise Unavailable("profile ephemeral_storage must look like 20Gi, got %r" % (ephemeral,))
+    ephemeral_limit = raw.get("ephemeral_storage_limit")
+    if ephemeral_limit is not None:
+        if cluster != "homelab":
+            raise Unavailable("profile ephemeral_storage_limit is for the homelab only (a kubectl cluster's limit equals ephemeral_storage)")
+        if not isinstance(ephemeral_limit, str) or not re.fullmatch(MEM_SIZE, ephemeral_limit):
+            raise Unavailable("profile ephemeral_storage_limit must look like 20Gi, got %r" % (ephemeral_limit,))
+        if mem_bytes(ephemeral_limit) < mem_bytes(ephemeral or EPHEMERAL_DEFAULT):
+            raise Unavailable("profile ephemeral_storage_limit must be at least ephemeral_storage, got ephemeral_storage_limit=%r and ephemeral_storage=%r" % (ephemeral_limit, ephemeral or EPHEMERAL_DEFAULT))
     cpu_limit = raw.get("cpu_limit")
     if cpu_limit is not None and (cluster == "homelab" or not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
         raise Unavailable("profile cpu_limit" + away + " and must be a whole number of at least 1, got %r" % (cpu_limit,))
@@ -283,7 +294,7 @@ def parse_profile(text):
     github_ci = parse_github_ci(raw.get("github_ci"))
     return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
-            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc,
+            "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "cache_pvc": cache_pvc,
             "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
 
@@ -383,6 +394,13 @@ def parse_mssql(table, services, cluster, away):
     return {"image": image, "cpu": cpu, "cpu_limit": cpu_limit, "memory": memory, "memory_limit": memory_limit, "ephemeral_storage": ephemeral, "ready_s": ready}
 
 
+def evicted_message(status):
+    """The kubelet's message when a pod's status says the node evicted it (phase Failed, reason Evicted), else None. The status stays on the Failed pod until it is deleted."""
+    if status.get("phase") == "Failed" and status.get("reason") == "Evicted":
+        return " ".join((status.get("message") or "no message").split())
+    return None
+
+
 def mem_bytes(size):
     return int(size[:-2]) << (20 if size.endswith("Mi") else 30)
 
@@ -407,8 +425,9 @@ def version_found(text, expected):
     return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True):
-    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name)."""
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None):
+    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request;
+    `ephemeral_limit`, when set, is the limit (the kubelet evicts a pod that writes past it)."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
     if secret_env:
@@ -425,9 +444,12 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
            {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
            {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu}]
+    limits = {"memory": memory_limit or memory}
+    if ephemeral_limit:
+        limits["ephemeral-storage"] = ephemeral_limit
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
                  "command": ["tini", "--", "sleep", "infinity"], "env": env,
-                 "resources": {"requests": {"cpu": str(cpu), "memory": memory}, "limits": {"memory": memory_limit or memory}},
+                 "resources": {"requests": {"cpu": str(cpu), "memory": memory, "ephemeral-storage": ephemeral}, "limits": limits},
                  "volumeMounts": [{"name": "cache", "mountPath": "/cache"},
                                   {"name": "out", "mountPath": "/out"}]}
     if secret_env:
@@ -1401,7 +1423,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
+                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "ephemeral_storage_limit": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -1560,6 +1582,8 @@ class Job:
             sched = next((c for c in status.get("conditions", []) if c.get("type") == "PodScheduled" and c.get("status") == "False"), None)
             what = waiting.get("reason") or (sched and sched.get("reason")) or status.get("phase")
             detail = waiting.get("message") or (sched and sched.get("message")) or status.get("message") or ""
+            if evicted_message(status):
+                raise Unavailable("evicted: " + evicted_message(status))
             if status.get("phase") in ("Failed", "Succeeded") or waiting.get("reason") in FATAL_WAITING:
                 raise Unavailable("pod did not start: %s %s" % (what, detail[:300]))
             if sched and sched.get("reason") == "Unschedulable" and self.cluster.kind != "kubectl" and time.time() >= sched_deadline:
@@ -1730,13 +1754,19 @@ class Job:
             manifests, cold = make()
             self.rec["cache"] = "pvc" if prof["cache_pvc"] else "none"
         else:
-            manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"])
+            manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"],
+                                      ephemeral=prof["ephemeral_storage"] or EPHEMERAL_DEFAULT, ephemeral_limit=prof["ephemeral_storage_limit"])
         del secret_env, pull
         while True:
             try:
                 return self.attempt(manifests, cold, tar_bytes)
             except Lost:
-                why = self.eviction() if self.cluster.kind == "kubectl" else None
+                if self.cluster.kind != "kubectl":
+                    gone = self.evicted()
+                    if gone:   # read before cleanup deletes the pod; the result is still unknown (CMD may have had effects), so exit 69 and no rerun
+                        raise Unavailable("evicted: " + gone)
+                    raise
+                why = self.eviction()
                 if not why:
                     raise      # no sign that the cluster took the pod: the result is unknown and CMD may have had effects, so it is not rerun
                 manifests, cold = self.rerun(why, make)
@@ -1774,6 +1804,16 @@ class Job:
         if transport != code:
             raise Unavailable("kubectl exited %d but CMD reported %d; not trusted" % (transport, code))
         return code
+
+    def evicted(self):
+        """The kubelet's message when the pod's own status says the node evicted it, else None (also when the pod cannot be read)."""
+        got = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
+        if got.returncode != 0:
+            return None
+        try:
+            return evicted_message(json.loads(got.stdout).get("status") or {})
+        except (ValueError, AttributeError):
+            return None
 
     def eviction(self):
         """Why the cluster took this job's pod away, or None when nothing says it did. The pod's own status first (an evicted pod can stay as Failed, and a
