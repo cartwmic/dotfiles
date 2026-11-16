@@ -814,6 +814,20 @@ def worktree(cwd, skipped=None):
     return wt, common, files
 
 
+def repo_name(wt, common):
+    """The repo's name for the log: the last part of the origin remote's URL, minus `.git` (git@github.com:me/coordinator.git and
+    https://github.com/me/coordinator/ both give coordinator), so a clone in any folder logs the name its repo has. With no origin
+    (or one with no name in it) it is the folder that holds the shared .git, as before."""
+    done = subprocess.run(["git", "-C", wt, "remote", "get-url", "origin"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    url = done.stdout.decode(errors="replace").strip().rstrip("/") if done.returncode == 0 else ""
+    if url.endswith(".git"):
+        url = url[:-4]
+    name = re.split(r"[/:]", url)[-1] if url else ""
+    if name:
+        return name
+    return os.path.basename(os.path.dirname(common)) if common.endswith("/.git") else os.path.basename(common)
+
+
 def user_locations():
     """The places a user or an agent keeps files of their own: home, the temp folders and the per-user runtime folder."""
     places = [os.path.expanduser("~"), "/tmp", os.environ.get("TMPDIR"), "/var/tmp", "/run/user"]
@@ -838,6 +852,36 @@ def outside_worktree(command, root, cwd):
     return None
 
 
+def add_git_dir(tar, path, arcname, keep):
+    """tar.add(path, arcname, filter=keep) for a git folder, except that a file or folder that vanishes while it is read is left out.
+    Other tools write and delete in a shared .git while a job ships (T3's checkpoint indexes, git's own lock files); tarfile.add stats
+    the path before it calls `keep`, so its own recursion cannot tolerate that. Only the git folders use this: a file of the worktree
+    that vanishes still fails the job, since the tree hash was taken from it."""
+    try:
+        info = tar.gettarinfo(path, arcname)
+    except FileNotFoundError:
+        return
+    info = keep(info) if info is not None else None   # None: a socket or other type tar cannot hold
+    if info is None:
+        return
+    if info.isreg():
+        try:
+            f = open(path, "rb")
+        except FileNotFoundError:
+            return
+        with f:
+            tar.addfile(info, f)
+    else:
+        tar.addfile(info)
+        if info.isdir():
+            try:
+                names = sorted(os.listdir(path))
+            except FileNotFoundError:
+                return
+            for name in names:
+                add_git_dir(tar, os.path.join(path, name), arcname + "/" + name, keep)
+
+
 def archive(wt, common, files, extra, history=True, skipped=()):
     """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: a kubectl cluster rebuilds a one-commit repo in the pod), plus extra {name: bytes}.
     With history, each skipped submodule gets an empty directory, so the shipped .git and the tree agree (git status is clean in the pod), and its repository under modules/ stays out."""
@@ -859,9 +903,9 @@ def archive(wt, common, files, extra, history=True, skipped=()):
                 info = tarfile.TarInfo((wt + "/" + p).lstrip("/"))
                 info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
                 tar.addfile(root(info))
-            tar.add(os.path.join(wt, ".git"), arcname=(wt + "/.git").lstrip("/"), filter=no_modules((wt + "/.git").lstrip("/")))
+            add_git_dir(tar, os.path.join(wt, ".git"), (wt + "/.git").lstrip("/"), no_modules((wt + "/.git").lstrip("/")))
             if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
-                tar.add(common, arcname=common.lstrip("/"), filter=no_modules(common.lstrip("/")))
+                add_git_dir(tar, common, common.lstrip("/"), no_modules(common.lstrip("/")))
         for name, data in extra.items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
@@ -1590,7 +1634,7 @@ class Job:
         wt, common, files = worktree(os.getcwd(), skipped)
         if skipped:
             self.note("not shipping submodules: " + ", ".join(skipped))
-        self.rec["repo"] = os.path.basename(os.path.dirname(common)) if common.endswith("/.git") else os.path.basename(common)
+        self.rec["repo"] = repo_name(wt, common)
         head = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.rec["head"] = head.stdout.decode().strip() or None
         image, cpu, mem, mem_limit, prof = self.settings(wt)
