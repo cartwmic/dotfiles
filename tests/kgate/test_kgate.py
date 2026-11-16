@@ -177,7 +177,7 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
     def test_priority_class_is_kgate_or_kgate_first_on_the_homelab_only(self):
         # opt-in (coordinator decision #2874): unset keeps the pod in `kgate`; `kgate-first` puts it ahead of waiting `kgate` pods (homelab `k8s/kgate/priorityclass-first.yaml`).
         self.assertIsNone(K.parse_profile("")["priority_class"])
-        for ok in ("kgate", "kgate-first"):
+        for ok in ("kgate", "kgate-first", "kgate-main"):   # `kgate-main` (homelab#440, value -40) is the coordinator's main run
             self.assertEqual(K.parse_profile('priority_class = "%s"' % ok)["priority_class"], ok)
         for bad in ('priority_class = "homelab-critical"', 'priority_class = "kgate-last"', 'priority_class = ""', 'priority_class = 1', 'priority_class = true',
                     'cluster = "example"\npriority_class = "kgate"', 'cluster = "example"\npriority_class = "kgate-first"'):   # a kubectl cluster's own policy decides its class
@@ -895,6 +895,10 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 75, done.stdout)
         self.assertNotIn("pinned", done.stdout)
 
+    def test_the_scheduling_deadline_defaults_to_30_minutes(self):   # a 75 loses the job's place in the queue, so the default waits longer than a resubmit would
+        self.assertEqual(K.parse_args(["--", "true"]).sched_wait, 1800)
+        self.assertEqual(K.SCHED_WAIT_S, 1800)
+
     def test_scheduling_deadline_from_env_and_the_flag_wins(self):
         done = self.kgate("--", "true", env={"FAKE_POD": "pending", "KGATE_SCHED_WAIT": "1"})
         self.assertEqual(done.returncode, 75, done.stdout)
@@ -1114,11 +1118,40 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate-first")
 
-    def test_a_priority_class_other_than_the_two_is_refused_before_any_pod(self):
+    def test_a_priority_class_other_than_the_three_is_refused_before_any_pod(self):
         self.profile(extra='priority_class = "homelab-critical"')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertIn("profile priority_class must be kgate or kgate-first", self.records()[-1]["reason"])
+        self.assertIn("profile priority_class must be kgate or kgate-first or kgate-main", self.records()[-1]["reason"])
+        self.assertFalse(any("manifest" in c for c in self.calls()))
+
+    def test_the_pod_is_in_kgate_main_when_the_profile_or_the_environment_says_so(self):
+        self.profile(extra='priority_class = "kgate-main"')
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate-main")
+        self.assertEqual(self.records()[-1]["priority_class"], "kgate-main")
+
+    def test_KGATE_PRIORITY_CLASS_wins_over_the_profile_key_and_the_default(self):
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate-main"})   # no profile key: the default is overridden
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate-main")
+        self.assertIn("priority class kgate-main\n", done.stdout)
+        self.assertEqual(self.records()[-1]["priority_class"], "kgate-main")
+        self.profile(extra='priority_class = "kgate-first"')   # a profile key: the environment still wins
+        (self.fake / "calls.jsonl").unlink()
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate")
+        (self.fake / "calls.jsonl").unlink()
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": ""})   # empty is unset: the profile's key stands
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate-first")
+
+    def test_an_unknown_KGATE_PRIORITY_CLASS_is_refused_before_any_pod_even_with_a_good_profile_key(self):
+        self.profile(extra='priority_class = "kgate-first"')
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "homelab-critical"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("KGATE_PRIORITY_CLASS must be kgate or kgate-first or kgate-main, got 'homelab-critical'", self.records()[-1]["reason"])
         self.assertFalse(any("manifest" in c for c in self.calls()))
 
     def test_a_homelab_cpu_limit_sets_limits_cpu_and_none_leaves_no_cpu_limit(self):
@@ -3147,6 +3180,11 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("2Gi limit, 5 cpu limit\n", done.stdout)
         self.assertIsNone(self.records()[-1]["priority_class"])
+
+    def test_KGATE_PRIORITY_CLASS_is_refused_on_a_kubectl_cluster_like_the_profile_key(self):
+        done = self.run_kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate-main"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("KGATE_PRIORITY_CLASS is for the homelab only", self.records()[-1]["reason"])
 
     def test_the_record_carries_the_effective_cpu_limit_even_when_it_defaults(self):
         self.run_kgate("--", "true")
