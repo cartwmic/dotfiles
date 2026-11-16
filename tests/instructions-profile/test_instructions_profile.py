@@ -1,6 +1,6 @@
 """Render the three harness instruction templates for each profile with the real chezmoi.
 
-The escalation paragraph is in every render. profile-work.md is included only for axon-work-computer and
+The ownership and escalation paragraphs are in every render, ownership directly before escalation. profile-work.md is included only for axon-work-computer and
 profile-personal.md only for personal; termux gets neither. Skipped when chezmoi is not installed.
 
     python3 -m unittest discover -s tests/instructions-profile -v
@@ -43,6 +43,10 @@ ESCALATION = (
     "something could answer the question, run it instead. When you do ask: one question at a time, with your "
     "recommendation, using your harness's question tool. No is an acceptable answer."
 )
+OWNERSHIP = (
+    "Ownership. A codebase you work in is yours: what it's for and how it's built are your call, and you'll keep "
+    "building on it. Merge duplicate code and fix bugs you find nearby. The escalation rules below still hold."
+)
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
@@ -68,6 +72,7 @@ class InstructionProfileTests(unittest.TestCase):
         self.assertIn(WORK, (INSTR / "profile-work.md").read_text())
         self.assertIn(PERSONAL, (INSTR / "profile-personal.md").read_text())
         self.assertIn(ESCALATION, (INSTR / "AGENTS.md").read_text())
+        self.assertIn(OWNERSHIP, (INSTR / "AGENTS.md").read_text())
 
     def test_every_harness_and_profile(self):
         for name, template in TEMPLATES.items():
@@ -79,6 +84,8 @@ class InstructionProfileTests(unittest.TestCase):
                 with self.subTest(harness=name, profile=profile):
                     text = render(template, profile)
                     self.assertEqual(text.count(ESCALATION), 1)
+                    self.assertEqual(text.count(OWNERSHIP), 1)
+                    self.assertIn(OWNERSHIP + "\n\n" + ESCALATION, text)
                     self.assertNotIn("Decisions and doors", text)
                     self.assertNotIn("Walk through two-way doors", text)
                     if want:
