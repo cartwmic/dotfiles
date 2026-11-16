@@ -120,7 +120,9 @@ class LogFile(WrapperBase):
     def test_a_shell_parent_contributes_its_program_name_and_never_the_command_text(self):
         """An agent shell runs gh as `sh -c "<whole command>"`. The command's body and the token in the environment must not reach the log."""
         cmd = '%s api -f body=MARKERBODY repos/o/r/issues; true' % (self.wbin / "gh")
-        done = subprocess.run(["sh", "-c", cmd], cwd=str(self.other_cwd), env=self.env({"GH_TOKEN": "MARKERTOKEN"}), capture_output=True, text=True, timeout=60)
+        # stdin is closed: the fake gh reads its standard input, and an open one (a terminal, a runner's pipe) would hang the test.
+        done = subprocess.run(["sh", "-c", cmd], cwd=str(self.other_cwd), env=self.env({"GH_TOKEN": "MARKERTOKEN"}), stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertNotIn("MARKERBODY", self.log.read_text())
         self.assertNotIn("MARKERTOKEN", self.log.read_text())
