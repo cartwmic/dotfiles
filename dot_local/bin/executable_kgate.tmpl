@@ -35,7 +35,7 @@ Contract
 - 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
 {{ end }}  Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
-- The node cache (/cache in the pod, /var/lib/kgate/cache on the node) is bounded: a job that starts on an idle node removes the least recently used cache entries past 4 GiB, and a running job's entries are never removed. Docs: "The node cache".
+- The node cache (/cache in the pod, /var/lib/kgate/cache on the node) is bounded: a job that starts on an idle node removes the least recently used cache entries past 8 GiB, and a running job's entries are never removed. Docs: "The node cache".
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - The pod is deleted on every path (CMD's exit, 69, an interrupt). A failed delete is retried for up to 60 s; the record's `cleanup` says whether it was confirmed and `cleanup_attempts` how many tries it took.
 - A job whose client has died is ended by the next kgate job that starts on the same cluster (exit 143, `reason` naming the gone client, pod deleted), before that job creates its own pod. Every pod also ends itself at 4 hours on the homelab (the cluster file's `deadline_s` on another cluster).
@@ -130,7 +130,10 @@ TAINT_DELETE_MESSAGE = "Marking for deletion"
 # pnpm, playwright, per-gate dirs) fill it and nothing emptied it: 7.1 GiB on agent-4, which has about 3 GiB above the kubelet's eviction line (dotfiles#484, coordinator
 # decision #2755). It holds no container images (the kubelet keeps those under /var/lib/containerd), so trimming it cannot cause a re-pull.
 CACHE_ROOT = "/cache"
-CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 4 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. 4 GiB keeps the caches the hot gates use (coordinator and agent-kit npm 0.44 GiB, Go 3.2 GiB with its build cache, playwright 0.7 GiB) and cuts agent-4 from 7.6 GiB. The env var is for a live proof of the trim only
+# Sized from agent-4's cache at 15:51Z 2026-11-16, 7.93 GiB, all of it uid 1000: Go build cache 3.9 GiB, Go modules 2.1, pnpm 0.44, pip 0.28, npm 0.20, three per-gate scratch folders
+# under HOME 0.28 each (go427, ru4, ru6) and one 0.23 (n26), the rest small. That is what the hot gates (coordinator, agent-kit, homelab, dotfiles) keep warm, so a cap below it throws away
+# Go modules that the next Go job downloads again. The scratch folders are entries like any other and go by least recently used. 8 GiB holds that set; agent-4 had 27 GB free, its pods are capped at 12Gi.
+CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 8 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. The env var is for a live proof of the trim only
 CACHE_LOCK = ".kgate-use"    # a shared flock held by every running job, taken exclusively to trim; names that start ".kgate" are not cache entries
 CACHE_TRASH = ".kgate-trash"
 CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
@@ -867,12 +870,6 @@ def hold_cache(root, cap, say):
     return fd
 
 
-def release_cache(root, cap, fd, say):
-    """The job is done: let go of the shared lock and trim if this was the last job on the node, so a node that is always busy is still trimmed when its jobs drain."""
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    trim_idle(root, cap, fd, say)
-
-
 def prepare_user(job, euid=None, chown=os.lchown, root=""):
     """CMD should run as the profile's user, like on a developer's Mac, not as root (root passes chmod-based tests a user fails).
     The pod's exec starts as root: give that user the shipped tree, /out, a home and its own caches, and return how to start a process as it."""
@@ -904,7 +901,7 @@ def pod_main(jobfile):
         return 70
     out("kgate: hash ok %s\n" % found)
     cache = job.get("cache")
-    cache_lock = hold_cache(cache["root"], cache["cap"], out) if cache else None
+    cache_lock = hold_cache(cache["root"], cache["cap"], out) if cache else None   # held until this process exits, which lets go of it: nothing runs after the end line (dotfiles#493)
     as_user, env_user = prepare_user(job)
     env = {**os.environ, **env_user}
     for name, (version, cmd) in job["tools"].items():
@@ -928,8 +925,6 @@ def pod_main(jobfile):
     peak, source = meter.stop()
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
-    if cache_lock is not None:
-        release_cache(cache["root"], cache["cap"], cache_lock, out)   # after the end marker: the result is already known
     return code if code >= 0 else 128 - code
 
 
