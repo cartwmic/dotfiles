@@ -49,7 +49,7 @@ Two round numbers. `N`, the *log round*, is counted across the item's stages, st
 
 `<item>` is `<repo>#<pr>`, a run id, or, for design work, `<folder>:<document>` (the work folder's name, a colon, and the document's name without its extension), so two documents in one folder do not share an item and a counter. `<repo>` is the repo's git directory name (`coordinator#217`), so a project label can be resolved from it.
 
-**One item id per PR or per run.** A new PR or run gets a new item; an item id is never reused for a second diff. One item that spans several diffs makes the stuck and churn tests unreadable: they count rounds within one item, so rounds of unrelated diffs look like one review that never converges (`r720-ha-3member-2` held 29 rounds over several diffs). A PR that is reviewed again after a rewrite is still one item: the redesign path (`--new-sequence`) is for that.
+**One item id per PR or per run.** A new PR or run gets a new item; an item id is never reused for a second PR or run. One item that spans several diffs makes the stuck and churn tests unreadable: they count rounds within one item, so rounds of unrelated diffs look like one review that never converges (`r720-ha-3member-2` held 29 rounds over several diffs). A PR that is reviewed again after a rewrite is still one item: the redesign path (`--new-sequence`) is for that.
 
 `agent-traces review` writes the log (by hand until it ships). Every finding gets a log-wide id `r<N>.<id>` (round number, then the return's own id), because ids repeat across rounds; with several readers it is `r<N>.<reader>.<id>`, because ids also repeat across readers. Every other record points to a finding by that log id.
 
