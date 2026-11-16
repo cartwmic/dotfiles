@@ -5,6 +5,7 @@ The client also runs as a real process against a scripted cluster: a fake `ssh` 
 commands the client sends and runs the "pod" on this machine, and a fake `op` returns scripted secrets. Everything is
 checked from outside: exit codes, output, the job record, files that came back, and what the fake cluster was sent.
 """
+import fcntl
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -312,6 +313,115 @@ class RunAsUser(unittest.TestCase):
     def test_uid_zero_or_a_non_root_pod_changes_nothing(self):
         self.assertEqual(K.prepare_user({"uid": 0, "gid": 0, "own": []}, euid=0), ({}, {}))
         self.assertEqual(K.prepare_user({"uid": 1000, "gid": 1000, "own": []}, euid=1000), ({}, {}))
+
+
+class NodeCache(unittest.TestCase):
+    """The node cache (/cache in the pod, /var/lib/kgate/cache on the node) is bounded: dotfiles#484, coordinator decision #2755."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="kc-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = self.tmp / "cache"
+        self.root.mkdir()
+        self.fds = []
+
+    def lock(self):
+        fd = os.open(str(self.root / K.CACHE_LOCK), os.O_RDWR | os.O_CREAT, 0o666)
+        self.fds.append(fd)
+        self.addCleanup(os.close, fd)
+        return fd
+
+    def entry(self, rel, age, kib=64):
+        """An entry of about `kib` KiB whose newest file was last used `age` seconds ago."""
+        path = self.root / rel
+        path.mkdir(parents=True)
+        (path / "blob").write_bytes(b"x" * kib * 1024)
+        t = time.time() - age
+        for each in (path / "blob", path):
+            os.utime(each, (t, t))
+        return path
+
+    def size(self, *paths):
+        return sum(K.entry_use(str(p))[0] for p in paths)
+
+    def test_entries_are_whole_trees_below_the_user_folders(self):
+        for rel in ("npm", "cargo-registry", "u1000/npm", "u1000/cargo", "u1000/home/go", "u1000/home/n26", "u1000/home/.cache/go-build", "u1000/home/.cache/ms-playwright"):
+            self.entry(rel + "/x", 1)
+        (self.root / K.CACHE_LOCK).write_text("")
+        self.assertEqual(sorted(os.path.relpath(p, self.root) for p in K.cache_entries(str(self.root))),
+                         ["cargo-registry", "npm", "u1000/cargo", "u1000/home/.cache/go-build", "u1000/home/.cache/ms-playwright", "u1000/home/go", "u1000/home/n26", "u1000/npm"])
+
+    def test_over_the_cap_the_least_recently_used_entries_go_first_until_it_fits(self):
+        old, mid, new = self.entry("u1000/home/old", 3000), self.entry("u1000/npm", 2000), self.entry("u1000/home/.cache/new", 10)
+        lock = self.lock()
+        gone, freed, skipped = K.trim_cache(str(self.root), self.size(mid, new), lock)
+        self.assertEqual((gone, skipped), (1, None))
+        self.assertEqual((old.exists(), mid.exists(), new.exists()), (False, True, True))
+        self.assertGreaterEqual(freed, 64 * 1024)
+        gone, _, _ = K.trim_cache(str(self.root), self.size(new), lock)
+        self.assertEqual((gone, mid.exists(), new.exists()), (1, False, True), "the newest entry is the last to go")
+
+    def test_a_recently_used_file_keeps_its_whole_entry_young(self):
+        a, b = self.entry("u1000/home/a", 3000), self.entry("u1000/home/b", 2000)
+        t = time.time()
+        os.utime(a / "blob", (t, t))   # a's old directory, but a file in it was just used
+        K.trim_cache(str(self.root), self.size(a), self.lock())
+        self.assertEqual((a.exists(), b.exists()), (True, False))
+
+    def test_within_the_cap_nothing_is_removed(self):
+        a = self.entry("npm", 5000)
+        self.assertEqual(K.trim_cache(str(self.root), self.size(a) + 1, self.lock()), (0, 0, None))
+        self.assertTrue(a.exists())
+
+    def test_nothing_is_removed_while_another_job_is_running(self):
+        a, b = self.entry("u1000/home/a", 3000), self.entry("u1000/home/b", 2000)
+        other = self.lock()
+        fcntl.flock(other, fcntl.LOCK_SH)   # a running job holds the shared lock
+        self.assertEqual(K.trim_cache(str(self.root), 1, self.lock()), (0, 0, "another job is running on this node"))
+        self.assertTrue(a.exists() and b.exists(), "an entry a running job may be using is never removed, over the cap or not")
+        fcntl.flock(other, fcntl.LOCK_UN)
+        self.assertEqual(K.trim_cache(str(self.root), 1, self.lock())[0], 2)
+
+    def test_a_cut_short_trim_leaves_no_half_entry_and_the_next_one_empties_the_trash(self):
+        left = self.root / K.CACHE_TRASH / "0"
+        left.mkdir(parents=True)
+        (left / "blob").write_text("left over")
+        a = self.entry("npm", 100)
+        K.trim_cache(str(self.root), 10 ** 9, self.lock())
+        self.assertFalse((self.root / K.CACHE_TRASH).exists())
+        self.assertTrue(a.exists())
+
+    def test_a_job_holds_the_shared_lock_after_it_trims_an_idle_node(self):
+        a, b = self.entry("u1000/home/a", 3000), self.entry("u1000/home/b", 10)
+        said = []
+        fd = K.hold_cache(str(self.root), self.size(b), said.append)
+        self.addCleanup(os.close, fd)
+        self.assertEqual((a.exists(), b.exists()), (False, True))
+        self.assertEqual(len(said), 1)
+        self.assertRegex(said[0], r"^kgate: cache over \d+ MiB: removed the 1 least recently used entries \(\d+ MiB\)\n$")
+        self.assertEqual(K.trim_cache(str(self.root), 1, self.lock())[2], "another job is running on this node", "the job's lock is held")
+        self.assertTrue(b.exists())
+
+    def test_no_cache_folder_is_no_trim(self):
+        self.assertIsNone(K.hold_cache(str(self.tmp / "none"), 1, lambda _: None))
+
+    def test_the_pod_trims_before_cmd_runs_and_cmd_still_runs(self):
+        # the pod side as a process of its own, on this machine, with the cache pointed at a scratch folder
+        tree = self.tmp / "wt"
+        tree.mkdir()
+        (tree / "f").write_text("x")
+        old, new = self.entry("u1000/home/old", 3000), self.entry("u1000/home/new", 10)
+        job = {"id": "kgate-1-2", "root": str(tree), "cwd": str(tree), "files": ["f"], "tree": K.tree_hash(str(tree), ["f"]), "argv": ["sh", "-c", "echo cmd-ran"],
+               "uid": 1000, "gid": 1000, "own": [str(tree)], "head": None, "tools": {}, "cache": {"root": str(self.root), "cap": self.size(new)}}
+        (self.tmp / "job.json").write_text(json.dumps(job))
+        done = subprocess.run([sys.executable, str(SCRIPT), "--pod", str(self.tmp / "job.json")], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("kgate[kgate-1-2]: cache over", done.stdout)
+        self.assertIn("cmd-ran", done.stdout)
+        self.assertEqual((old.exists(), new.exists()), (False, True))
+
+    def test_the_default_cap_is_four_gib_unless_the_env_overrides_it(self):
+        self.assertEqual((K.CACHE_ROOT, K.CACHE_CAP), ("/cache", int(os.environ.get("KGATE_CACHE_CAP") or 4 << 30)))
 
 
 class Pieces(unittest.TestCase):

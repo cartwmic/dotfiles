@@ -34,6 +34,7 @@ Contract
 - 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
 {{ end }}  Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
+- The node cache (/cache in the pod, /var/lib/kgate/cache on the node) is bounded: a job that starts on an idle node removes the least recently used cache entries past 4 GiB, and a running job's entries are never removed. Docs: "The node cache".
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - The pod is deleted on every path (CMD's exit, 69, an interrupt). A failed delete is retried for up to 60 s; the record's `cleanup` says whether it was confirmed and `cleanup_attempts` how many tries it took.
 - A job whose client has died is ended by the next kgate job that starts on the same cluster (exit 143, `reason` naming the gone client, pod deleted), before that job creates its own pod. Every pod also ends itself at 4 hours on the homelab (the cluster file's `deadline_s` on another cluster).
@@ -60,6 +61,7 @@ import os
 import posixpath
 import re
 import secrets
+import shutil
 import shlex
 import signal
 import stat
@@ -116,6 +118,14 @@ EVICTION_REASONS = frozenset(("Evicted", "TaintManagerEviction", "Preempted", "D
 # first message. "Evicted" has one meaning each in the kubelet (evictPod, just before it kills the pod) and in the node autoscaler (EvictPod, "Evicted pod: <why>"). "Preempted"
 # is emitted once, on the victim, by the scheduler's preemption executor ("Preempted by ..."). "Disrupted" is the node autoscaler's forced pod delete, once.
 TAINT_DELETE_MESSAGE = "Marking for deletion"
+# The node cache: /var/lib/kgate/cache on each homelab node, mounted at /cache in every pod. A job's HOME, npm, cargo and its tools' own caches (go build, go modules, pip,
+# pnpm, playwright, per-gate dirs) fill it and nothing emptied it: 7.1 GiB on agent-4, which has about 3 GiB above the kubelet's eviction line (dotfiles#484, coordinator
+# decision #2755). It holds no container images (the kubelet keeps those under /var/lib/containerd), so trimming it cannot cause a re-pull.
+CACHE_ROOT = "/cache"
+CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 4 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. 4 GiB keeps the caches the hot gates use (coordinator and agent-kit npm 0.44 GiB, Go 3.2 GiB with its build cache, playwright 0.7 GiB) and cuts agent-4 from 7.6 GiB. The env var is for a live proof of the trim only
+CACHE_LOCK = ".kgate-use"    # a shared flock held by every running job, taken exclusively to trim; names that start ".kgate" are not cache entries
+CACHE_TRASH = ".kgate-trash"
+CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
 MSSQL_PORT = 1433
@@ -748,6 +758,84 @@ class PeakMeter:
         return (self.peak or None), "sampled"
 
 
+def cache_entries(root):
+    """The cache entries, each trimmed whole: the children of root, of each uNNN (a profile user's folder), of its home and of its home/.cache. Whole, so a Go module tree
+    or a browser install is never left half there."""
+    found = []
+
+    def walk(path, rel):
+        for e in sorted(os.scandir(path), key=lambda e: e.name):
+            name = (rel + "/" + e.name) if rel else e.name
+            if e.name.startswith(".kgate"):
+                continue
+            if e.is_dir(follow_symlinks=False) and CACHE_DESCEND.fullmatch(name):
+                walk(e.path, name)
+            else:
+                found.append(e.path)
+    walk(root, "")
+    return found
+
+
+def entry_use(path):
+    """(disk bytes, newest of mtime, atime and ctime in the tree) of one entry."""
+    size, newest = 0, 0.0
+    stack = [path]
+    while stack:
+        here = stack.pop()
+        try:
+            st = os.lstat(here)
+        except OSError:
+            continue
+        size += st.st_blocks * 512
+        newest = max(newest, st.st_mtime, st.st_atime, st.st_ctime)
+        if stat.S_ISDIR(st.st_mode):
+            try:
+                stack.extend(os.path.join(here, n) for n in os.listdir(here))
+            except OSError:
+                pass
+    return size, newest
+
+
+def trim_cache(root, cap, lock):
+    """Delete least recently used cache entries until the cache is within `cap`, but only when no other job is running on this node: every job holds a shared flock on
+    `lock` (an open fd) while it runs, so taking it exclusively succeeds only on an idle node, and a job that starts meanwhile waits for it. An entry is moved into a trash
+    folder first (a rename), so a trim cut short never leaves half an entry in the cache; the next trim empties what it left. Returns (entries removed, bytes freed, skipped:
+    why nothing was done or None)."""
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0, 0, "another job is running on this node"
+    trash = os.path.join(root, CACHE_TRASH)
+    shutil.rmtree(trash, ignore_errors=True)
+    entries = sorted((newest, path, size) for path, (size, newest) in ((p, entry_use(p)) for p in cache_entries(root)))
+    total = sum(size for _, _, size in entries)
+    gone = freed = 0
+    os.makedirs(trash, exist_ok=True)
+    for _, path, size in entries:
+        if total <= cap:
+            break
+        os.rename(path, os.path.join(trash, str(gone)))
+        total, freed, gone = total - size, freed + size, gone + 1
+    shutil.rmtree(trash, ignore_errors=True)
+    return gone, freed, None
+
+
+def hold_cache(root, cap, say):
+    """Trim the node cache if this node is idle, then hold the shared lock for the life of the job. Returns the open fd (keep it open) or None when there is no cache.
+    A trim that fails is noted and never fails the job."""
+    if not os.path.isdir(root):
+        return None
+    fd = os.open(os.path.join(root, CACHE_LOCK), os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        gone, freed, skipped = trim_cache(root, cap, fd)
+        if gone:
+            say("kgate: cache over %d MiB: removed the %d least recently used entries (%d MiB)\n" % (cap >> 20, gone, freed >> 20))
+    except OSError as e:
+        say("kgate: cache not trimmed: %s\n" % e)
+    fcntl.flock(fd, fcntl.LOCK_SH)
+    return fd
+
+
 def prepare_user(job, euid=None, chown=os.lchown, root=""):
     """CMD should run as the profile's user, like on a developer's Mac, not as root (root passes chmod-based tests a user fails).
     The pod's exec starts as root: give that user the shipped tree, /out, a home and its own caches, and return how to start a process as it."""
@@ -778,6 +866,7 @@ def pod_main(jobfile):
         out("kgate: hash MISMATCH expected=%s found=%s\n" % (job["tree"], found))
         return 70
     out("kgate: hash ok %s\n" % found)
+    cache_lock = hold_cache(job["cache"]["root"], job["cache"]["cap"], out) if job.get("cache") else None   # noqa: F841 (held until the pod ends)
     as_user, env_user = prepare_user(job)
     env = {**os.environ, **env_user}
     for name, (version, cmd) in job["tools"].items():
@@ -1718,7 +1807,8 @@ class Job:
         job = {"id": self.id, "root": wt, "cwd": os.getcwd(), "files": files, "tree": tree, "argv": o.command,
                "uid": int(prof["user"].split(":")[0]), "gid": int(prof["user"].split(":")[1]),
                "own": [wt] + ([common] if not common.startswith(wt + "/") else []),
-               "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()}}
+               "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()},
+               "cache": {"root": CACHE_ROOT, "cap": CACHE_CAP}}
         if self.cluster.kind == "kubectl":
             shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"]}).encode(),
                        "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
