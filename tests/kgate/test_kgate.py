@@ -550,9 +550,22 @@ def fake_delete(fake, pods):
 '''
 
 FAKE_SSH = r'''#!/usr/bin/env python3
-import json, os, re, shlex, subprocess, sys
+import hashlib, json, os, re, shlex, subprocess, sys
 ''' + FAKE_DELETE + r'''
 fake = os.environ["FAKE"]
+# What ssh was asked, apart from the kubectl calls: every argv, and a stand-in for the multiplexed master (ControlMaster=auto makes the ControlPath socket if it
+# is not there; `-O exit` removes it), so a test sees what the client left behind.
+argv = sys.argv[1:]
+with open(os.path.join(fake, "ssh-argv.jsonl"), "a") as f:
+    f.write(json.dumps(argv) + "\n")
+opts = {argv[i + 1].partition("=")[0]: argv[i + 1].partition("=")[2] for i, x in enumerate(argv[:-1]) if x == "-o"}
+socket_path = opts.get("ControlPath", "").replace("%C", hashlib.sha1(argv[-1].encode()).hexdigest())
+if "-O" in argv:
+    if socket_path and os.path.exists(socket_path):
+        os.unlink(socket_path)
+    sys.exit(0)
+if opts.get("ControlMaster") == "auto" and socket_path and not os.path.exists(socket_path) and not argv[-2:-1] == ["-O"] and not argv[-1].endswith("down"):
+    open(socket_path, "w").close()
 host, remote = sys.argv[-2], sys.argv[-1]
 def log(entry):
     with open(os.path.join(fake, "calls.jsonl"), "a") as f:
@@ -4270,6 +4283,107 @@ class InterruptKubectl(InterruptDeletesThePod, unittest.TestCase):
 
     def job_popen(self, *args, env=None):
         return self.kgate_popen(*args, host="", env={**self.cmd_env, **(env or {})})
+
+
+class SshMux:
+    """The homelab adapter runs every ssh of one job through one multiplexed connection (master-1's sshd drops handshakes beyond MaxStartups 10:30:100, and a
+    job waiting for a pod used to open a new ssh every 2 s, so 2026-11-16's queued jobs died with exit 69), and closes it on every way out of the job."""
+
+    def launcher(self):
+        stub = self.tmp / "orphan_launch.py"
+        stub.write_text(ORPHAN_LAUNCH)
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def ssh_calls(self):
+        path = self.fake / "ssh-argv.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def control_paths(self, calls):
+        return {a[1].partition("=")[2] for c in calls for a in zip(c, c[1:]) if a[0] == "-o" and a[1].startswith("ControlPath=")}
+
+    def assert_one_master_closed_last(self, hosts=None):
+        calls = self.ssh_calls()
+        working = [c for c in calls if "-O" not in c]
+        closing = [c for c in calls if "-O" in c]
+        self.assertGreater(len(working), 2, "the job made several ssh calls")
+        paths = self.control_paths(calls)
+        self.assertEqual(len(paths), 1, "every ssh of the job names the same ControlPath: %s" % paths)
+        for c in working:
+            self.assertIn("ControlMaster=auto", c)
+            self.assertTrue(any(x.startswith("ControlPersist=") for x in c), c)
+        self.assertTrue(closing, "the master was closed")
+        self.assertEqual(calls[-len(closing):], closing, "the close is the last thing the client does with ssh")
+        for c in closing:
+            self.assertEqual(c[c.index("-O") + 1], "exit")
+        folder = Path(next(iter(paths))).parent
+        self.assertFalse(folder.exists(), "no socket or folder is left: %s" % folder)
+        return working, closing
+
+    def test_a_job_that_passes_shares_one_connection_and_closes_it(self):
+        done = self.job("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assert_one_master_closed_last()
+
+    def test_a_job_that_fails_closes_it(self):
+        done = self.job("--", "true", env={"FAKE_POD": "pullfail"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assert_one_master_closed_last()
+
+    def test_a_waiting_job_polls_over_the_one_connection(self):
+        done = self.job("--wait", "5", "--sched-wait", "5", "--", "true", env={"FAKE_POD": "pending"})
+        self.assertEqual(done.returncode, 75, done.stdout)
+        working, _ = self.assert_one_master_closed_last()
+        polls = [c for c in working if "get pod" in c[-1] and "-o json" in c[-1]]
+        self.assertGreater(len(polls), 2, "it polled more than twice, all over the same master")
+
+    def test_a_stop_closes_it(self):
+        proc = self.job_popen("--", "true", env={"FAKE_POD": "pending"})
+        self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if "waiting for the pod: " in line:
+                break
+        proc.send_signal(signal.SIGTERM)
+        rest = seen + proc.stdout.read()
+        self.assertEqual(proc.wait(timeout=60), 143, rest)
+        self.assert_one_master_closed_last()
+
+    def test_with_two_hosts_the_one_that_answers_gets_the_connection(self):
+        done = self.job("--", "true", host="u@one-down,u@two")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        working, closing = self.assert_one_master_closed_last()
+        self.assertEqual({c[-2] if c[-1] == "true" else c[-2] for c in working if "-O" not in c}, {"u@one-down", "u@two"}, "the first host was only probed")
+        self.assertEqual({c[-2] for c in working if "kubectl" in c[-1]}, {"u@two"})
+
+    def test_kgate_cancel_closes_the_connection_it_used(self):
+        proc = self.job_popen("--", "true", env={"FAKE_POD": "pending", "FAKE_DELETE_FAIL": "always"})
+        self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
+        for line in proc.stdout:
+            if "waiting for the pod: " in line:
+                break
+        proc.send_signal(signal.SIGTERM)
+        proc.stdout.read()
+        proc.wait(timeout=60)
+        job_id = self.records()[-1]["id"]
+        before = len(self.ssh_calls())
+        done = self.job("cancel", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        later = self.ssh_calls()[before:]
+        self.assertTrue(later and "-O" in later[-1], "cancel closed its own connection last")
+        folder = Path(next(iter(self.control_paths(later)))).parent
+        self.assertFalse(folder.exists())
+
+
+class SshMuxHomelab(SshMux, unittest.TestCase):
+    for _name in ("kgate", "kgate_popen", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def job(self, *args, host="fake", env=None):
+        return self.kgate(*args, host=host, env=env)
+
+    def job_popen(self, *args, env=None):
+        return self.kgate_popen(*args, env=env)
 
 
 if __name__ == "__main__":

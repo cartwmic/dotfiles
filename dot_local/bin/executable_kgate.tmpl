@@ -167,6 +167,7 @@ NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the 
 SCHED_WAIT_S = 600  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
 CANCELLED = "cancelled by kgate cancel"
 CLEANUP_RETRY_S = 60       # how long a client that gave up on a pod keeps trying to delete it (an API timeout or a lost ssh is transient); under `kgate cancel`'s default --wait of 120
+MUX_PERSIST_S = 120        # the ssh master outlives the longest gap between two calls of a job (the delete retries wait up to 30 s); close() ends it earlier
 CLEANUP_ATTEMPT_S = 30     # one delete attempt is cut off here, so a hung ssh or kubectl cannot outlast CLEANUP_RETRY_S
 CLEANUP_FIRST_DELAY, CLEANUP_MAX_DELAY = 2, 15   # seconds between delete attempts: 2, 4, 8, 15, 15, ...
 JOB_ID = r"kgate-[0-9]+-[0-9]+"
@@ -1114,14 +1115,39 @@ class Cluster:
     name = "homelab"
     kind = "ssh"
 
+    mux_dir = None   # the folder of this job's ssh master socket; made on the first ssh, removed by close()
+
     def __init__(self, hosts, key):
         self.hosts, self.key = list(hosts), key
+        self.mux_hosts = set()
         self.use(self.hosts[0] if self.hosts else "")
 
     def use(self, host):
         self.host = host
-        self.ssh = ["ssh", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=8",
-                    "-o", "ServerAliveInterval=30", "-i", self.key, host]
+
+    @property
+    def ssh(self):
+        """The ssh command for the current host. Every call of one job goes through one multiplexed connection (the first ssh starts the master, the rest ride on it):
+        master-1's sshd drops a handshake beyond MaxStartups, and a job waiting for a pod polls every 2 s."""
+        if not self.mux_dir:
+            self.mux_dir = tempfile.mkdtemp(prefix="kgate-mux-", dir="/tmp")   # short and private: a socket path is limited to about 100 bytes
+            self.mux_hosts = set()
+        self.mux_hosts.add(self.host)
+        return ["ssh", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=30",
+                "-o", "ControlMaster=auto", "-o", "ControlPath=%s/%%C" % self.mux_dir, "-o", "ControlPersist=%d" % MUX_PERSIST_S, "-i", self.key, self.host]
+
+    def close(self):
+        """End the master of each host this job used, and remove the socket folder. Safe to call twice. ControlPersist is only the net under a client that was killed."""
+        if not self.mux_dir:
+            return
+        for host in sorted(self.mux_hosts):
+            try:
+                subprocess.run(["ssh", "-o", "ControlPath=%s/%%C" % self.mux_dir, "-O", "exit", host], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        shutil.rmtree(self.mux_dir, ignore_errors=True)
+        self.mux_dir = None
 
     def pick(self):
         """With several hosts, use the first that answers a bare ssh. A job whose host dies later still fails; a rerun picks again."""
@@ -2174,8 +2200,17 @@ def cancel_orphan(state, e, ended=None):
     """The client is gone: delete exactly this job's pod and Secrets, and write the end line. `ended` is the end line its client wrote when it could not confirm
     its own delete: that line stays the job's record, and the entry goes once this delete is confirmed."""
     name = e.get("cluster") or "homelab"
+    cluster = Cluster(HOSTS, KEY) if name == "homelab" else None
     try:
-        cluster = Cluster(HOSTS, KEY) if name == "homelab" else KubectlCluster(load_cluster(name))
+        return cancel_orphan_on(state, e, ended, name, cluster)
+    finally:
+        if cluster:
+            cluster.close()
+
+
+def cancel_orphan_on(state, e, ended, name, cluster):
+    try:
+        cluster = cluster or KubectlCluster(load_cluster(name))
         check_reachable(cluster)
     except Unavailable as err:
         print("kgate cancel: %s (the job's pod and Secrets are not deleted; run it again)" % err, file=sys.stderr)
@@ -2375,7 +2410,10 @@ def main(argv):
         job.finish(code, reason)
         return code
     finally:
-        job.unregister()
+        try:
+            job.unregister()
+        finally:
+            job.cluster.close()
 
 
 if __name__ == "__main__":
