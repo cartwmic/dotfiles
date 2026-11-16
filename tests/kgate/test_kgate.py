@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -315,7 +316,8 @@ class Pieces(unittest.TestCase):
 FAKE_DELETE = r'''
 def fake_delete(fake, pods):
     """The delete of a pod, shared by both fakes. FAKE_DELETE_FAIL: "N" fails the first N pod deletes with an etcd timeout, "always" fails every one.
-    FAKE_DELETE_HANG: "N" makes the first N pod deletes hang. A pod delete that succeeds is written to <fake>/deleted-pods."""
+    FAKE_DELETE_HANG: "N" makes the first N pod deletes hang. FAKE_DELETE_SLOW: "S" makes the first pod delete take S seconds, and writes <fake>/delete-started
+    when it begins (the test signals the client while it is in flight). A pod delete that succeeds is written to <fake>/deleted-pods."""
     named = [x for x in pods if x.startswith("pod/")]
     if not named:
         return 0   # the sweep's label delete
@@ -323,6 +325,10 @@ def fake_delete(fake, pods):
     counter = os.path.join(fake, "delete-tries")
     n = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
     open(counter, "w").write(str(n))
+    if os.environ.get("FAKE_DELETE_SLOW") and n == 1:
+        import time
+        open(os.path.join(fake, "delete-started"), "w").write("x")
+        time.sleep(float(os.environ["FAKE_DELETE_SLOW"]))
     if os.environ.get("FAKE_DELETE_HANG") and n <= int(os.environ["FAKE_DELETE_HANG"]):   # the first N pod deletes never answer
         import time
         time.sleep(60)
@@ -481,6 +487,12 @@ class Black(unittest.TestCase):
 
     def launcher(self):
         return [sys.executable, str(SCRIPT)]
+
+    def kgate_popen(self, *args, host="fake", env=None):
+        """The client as a process of its own, in a process group of its own (so a test can signal the group the way a stop does, and no test run is in it)."""
+        e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
+             "KGATE_SSH": host, "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **self.op_env(), **(env or {})}
+        return subprocess.Popen([*self.launcher(), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
 
     def records(self):
         path = self.state / "kgate" / "log.jsonl"
@@ -3692,6 +3704,153 @@ class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
 
     def unreachable_env(self):
         return {"FAKE_DELETE_FAIL": "always", "FAKE_CANI": "no"}
+
+
+# ---------------------------------------------------------------- an interrupted client deletes its pod, or leaves the entry that finds it (dotfiles#481)
+
+class InterruptDeletesThePod:
+    """A stop of the client while its pod is Pending/Unschedulable. On 2026-11-16 a stop that signals the whole process group reached the client twice (the
+    group's signal, and run-and-wake forwarding it): the second one raised inside the cleanup, the client died with the delete unfinished, and its registry
+    entry went with it. Run for both cluster kinds."""
+
+    def launcher(self):
+        stub = self.tmp / "orphan_launch.py"
+        stub.write_text(ORPHAN_LAUNCH)
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def deleted(self):
+        path = self.fake / "deleted-pods"
+        return path.read_text().split() if path.exists() else []
+
+    def active(self):
+        return self.state / "kgate" / "active"
+
+    def pending_client(self, env=None):
+        """A client whose pod stays Pending; returns it once it is waiting for the pod, with the output read so far."""
+        proc = self.job_popen("--", "true", env={"FAKE_POD": "pending", **(env or {})})
+        self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if "waiting for the pod: " in line:
+                break
+        self.assertIn("waiting for the pod: ", seen)
+        return proc, seen
+
+    def wait_for(self, path, secs=20):
+        t_end = time.time() + secs
+        while not path.exists():
+            self.assertLess(time.time(), t_end, "never appeared: %s" % path)
+            time.sleep(0.05)
+
+    def test_one_stop_while_the_pod_is_pending_deletes_it(self):
+        proc, seen = self.pending_client()
+        proc.send_signal(signal.SIGTERM)
+        rest = seen + proc.stdout.read()
+        self.assertEqual(proc.wait(timeout=60), 143, rest)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cleanup"]), (143, "interrupted (SIGTERM)", True))
+        self.assertIn(rec["id"], self.deleted())
+        self.assertFalse((self.active() / (rec["id"] + ".json")).exists())
+
+    def stop_twice(self, first, second):
+        proc, seen = self.pending_client(env={"FAKE_DELETE_SLOW": "30"})
+        proc.send_signal(first)
+        self.wait_for(self.fake / "delete-started")          # the cleanup's delete is in flight
+        os.killpg(proc.pid, second)                          # the stop that signals the whole group: this client and the delete it runs
+        rest = seen + proc.stdout.read()
+        return proc, rest
+
+    def test_a_second_sigterm_during_the_delete_does_not_stop_the_cleanup(self):
+        proc, rest = self.stop_twice(signal.SIGTERM, signal.SIGTERM)
+        self.assertEqual(proc.wait(timeout=60), 143, rest)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cleanup"]), (143, "interrupted (SIGTERM)", True))
+        self.assertIn(rec["id"], self.deleted(), "the pod was deleted")
+        self.assertGreater(rec["cleanup_attempts"], 1, "the delete the signal cut off was tried again")
+        self.assertFalse((self.active() / (rec["id"] + ".json")).exists())
+        self.assertIn("kgate: exit 143 (interrupted (SIGTERM))", rest)
+
+    def test_a_second_sigint_during_the_delete_does_not_stop_the_cleanup(self):
+        proc, rest = self.stop_twice(signal.SIGINT, signal.SIGINT)
+        self.assertEqual(proc.wait(timeout=60), 130, rest)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cleanup"]), (130, "interrupted (SIGINT)", True))
+        self.assertIn(rec["id"], self.deleted(), "the pod was deleted")
+        self.assertFalse((self.active() / (rec["id"] + ".json")).exists())
+
+    def left_behind(self):
+        """A client stopped while Pending whose delete never succeeds: returns the job id."""
+        proc, seen = self.pending_client(env={"FAKE_DELETE_FAIL": "always"})
+        proc.send_signal(signal.SIGTERM)
+        rest = seen + proc.stdout.read()
+        self.assertEqual(proc.wait(timeout=60), 143, rest)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["cleanup"]), (143, False))
+        self.assertEqual(self.deleted(), [])
+        return rec["id"]
+
+    def test_a_delete_that_is_not_confirmed_keeps_the_entry_and_the_next_client_deletes_the_pod(self):
+        job_id = self.left_behind()
+        self.assertTrue((self.active() / (job_id + ".json")).exists(), "the entry that finds the pod is kept")
+        done = self.job("--", "true")                                   # the next client
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ended %s: its client ended without confirming the pod delete; pod deleted" % job_id, done.stdout)
+        self.assertIn(job_id, self.deleted())
+        self.assertFalse((self.active() / (job_id + ".json")).exists())
+        self.assertEqual([r["exit"] for r in self.records() if r["id"] == job_id], [143], "its own end line stays the only one")
+
+    def test_kgate_cancel_deletes_the_pod_of_a_client_that_could_not(self):
+        job_id = self.left_behind()
+        done = self.job("cancel", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ended: exit 143 (interrupted (SIGTERM))", done.stdout)
+        self.assertIn(job_id, self.deleted())
+        self.assertFalse((self.active() / (job_id + ".json")).exists())
+
+    def test_a_cancel_whose_delete_fails_keeps_the_entry(self):
+        stale = self.active()
+        stale.mkdir(parents=True, exist_ok=True)
+        corpse = subprocess.Popen(["sleep", "300"])
+        start, command = K.proc_identity(corpse.pid)
+        job_id = "kgate-1700000003-333"
+        entry = {"id": job_id, "job": None, "pid": corpse.pid, "start": start, "proc_cmd": command, "cwd": str(self.repo), "argv": ["kgate", "--", "sleep"],
+                 "cmd": "sleep 300", "node": "n", "cluster": self.cluster_name}
+        (stale / (job_id + ".json")).write_text(json.dumps(entry))
+        corpse.kill()
+        corpse.wait()
+        done = self.job("cancel", job_id, env={"FAKE_DELETE_FAIL": "always"})
+        self.assertIn("delete not confirmed", done.stdout)
+        self.assertTrue((stale / (job_id + ".json")).exists(), "the pod may still be there: the entry stays")
+        done = self.job("cancel", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse((stale / (job_id + ".json")).exists())
+
+
+class InterruptHomelab(InterruptDeletesThePod, unittest.TestCase):
+    for _name in ("kgate", "kgate_popen", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+    cluster_name = "homelab"
+
+    def job(self, *args, env=None):
+        return self.kgate(*args, env=env)
+
+    def job_popen(self, *args, env=None):
+        return self.kgate_popen(*args, env=env)
+
+
+class InterruptKubectl(InterruptDeletesThePod, unittest.TestCase):
+    for _name in ("kgate", "kgate_popen", "records", "calls", "op_token_checks", "op_env"):
+        locals()[_name] = getattr(Black, _name)
+    for _name in ("setUp", "write_cluster", "profile", "run_kgate", "kcalls"):
+        locals()[_name] = getattr(KubectlBlack, _name)
+    cluster_name = "example"
+
+    def job(self, *args, env=None):
+        return self.run_kgate(*args, env=env)
+
+    def job_popen(self, *args, env=None):
+        return self.kgate_popen(*args, host="", env={**self.cmd_env, **(env or {})})
 
 
 if __name__ == "__main__":
