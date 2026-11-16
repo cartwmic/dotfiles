@@ -19,7 +19,7 @@ Contract
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
 - Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
-  memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 3Gi; ephemeral_storage_limit optional), the exact tool
+  memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line, or a CMD element that names a local file outside the worktree (the pod would not have it; nothing is submitted). 69 when the job could not
@@ -225,7 +225,11 @@ def tree_hash(root, files):
 MEM_SIZE = r"[1-9][0-9]*(Mi|Gi)"
 # The homelab pod's ephemeral-storage request when the profile sets none. Without a request the scheduler cannot keep a pod off a node that is short on disk, and
 # under disk pressure the kubelet evicts pods that use more than they asked for, first (dotfiles#484). Sized from the live per-pod use in docs/kgate.md.
-EPHEMERAL_DEFAULT = "3Gi"
+EPHEMERAL_DEFAULT = "4Gi"
+# The homelab pod's ephemeral-storage limit when the profile sets none (the larger of this and the request, so a profile that raises only the request is never refused).
+# A pod that writes past it is evicted by the kubelet, reported as `evicted: ...`, so one fat gate goes before the other pods on its node (2026-11-16 13:37Z, agent-4).
+# Sized from the live peaks in docs/kgate.md.
+EPHEMERAL_LIMIT_DEFAULT = "12Gi"
 
 
 def parse_profile(text):
@@ -440,7 +444,7 @@ def version_found(text, expected):
 
 def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None):
     """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request;
-    `ephemeral_limit`, when set, is the limit (the kubelet evicts a pod that writes past it)."""
+    `ephemeral_limit` is the limit (the kubelet evicts a pod that writes past it); unset, it is EPHEMERAL_LIMIT_DEFAULT, or the request when that is larger."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
     if secret_env:
@@ -458,8 +462,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
            {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu}]
     limits = {"memory": memory_limit or memory}
-    if ephemeral_limit:
-        limits["ephemeral-storage"] = ephemeral_limit
+    limits["ephemeral-storage"] = ephemeral_limit or max(EPHEMERAL_LIMIT_DEFAULT, ephemeral, key=mem_bytes)
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
                  "command": ["tini", "--", "sleep", "infinity"], "env": env,
                  "resources": {"requests": {"cpu": str(cpu), "memory": memory, "ephemeral-storage": ephemeral}, "limits": limits},
