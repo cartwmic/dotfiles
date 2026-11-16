@@ -220,17 +220,6 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 78_agent_chrome_systemd.sh
 {{- end }}
 
-{{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
-# Kelsey intake (her shartifacts page to the board's New box): the pickup script, its page source, its timer units and the script that loads them. Personal Linux only:
-# it files into the personal board on the Omarchy box, and her page has nothing to do with the work machine.
-.local/user_scripts/kelsey_intake.py
-.local/share/kelsey-intake
-.local/share/kelsey-intake/**
-.config/systemd/user/kelsey-intake.service
-.config/systemd/user/kelsey-intake.timer
-79_kelsey_intake_systemd.sh
-{{- end }}
-
 {{- $sessionCost := eq (includeTemplate "session_cost_config" .) "true" }}
 {{- if not $sessionCost }}
 # session-cost (list-price cost per agent seat from the Claude Code logs): the command, its code folder and the daily timer units. chezmoi data
@@ -457,7 +446,6 @@ Library/Preferences/pnpm/**
 .local/share/instances/**
 .local/user_scripts/instances_reconcile_systemd.sh
 .local/user_scripts/configure_rustdesk.sh
-.local/user_scripts/kelsey_intake.py
 .local/user_scripts/ssh_unlock_check_image.sh
 .local/bin/agent-chrome
 .local/bin/agent-desktop
@@ -473,8 +461,6 @@ Library/Preferences/pnpm/**
 .local/share/browser-harness-mcp/**
 .local/share/initramfs-ssh-unlock
 .local/share/initramfs-ssh-unlock/**
-.local/share/kelsey-intake
-.local/share/kelsey-intake/**
 .local/share/mistakes-report
 .local/share/mistakes-report/**
 .local/share/token-efficiency
