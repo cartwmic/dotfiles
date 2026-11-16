@@ -1,12 +1,13 @@
 #!/bin/sh
-# T3 Code as a systemd user service on Linux (personal; .chezmoiignore). Runs when the PATH drop-in changes, and on a machine that has no T3 service yet.
+# T3 Code as a systemd user service on Linux (personal; .chezmoiignore). Runs when the PATH drop-in or the agent fence drop-in (app-t3code.slice.d: MemoryHigh and CPUWeight for the agents) changes, and on a machine that has no T3 service yet.
 # drop-in: {{ include "dot_config/systemd/user/t3code.service.d/10-path.conf.tmpl" | sha256sum }}
+# fence: {{ include "dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf" | sha256sum }}
 #
 # T3 writes t3code.service itself (`t3 service install`; ExecStart is pinned to the installed version), so dotfiles never templates that unit. It owns
 # only the drop-in t3code.service.d/10-path.conf (the PATH). This script:
 #   1. installs T3 (user_scripts/install_t3.sh: https://t3.codes/install.sh puts `t3` in ~/.local/bin) when `t3` is not on PATH;
 #   2. runs `t3 service install` when ~/.config/systemd/user/t3code.service does not exist yet;
-#   3. daemon-reloads so systemd reads the drop-in, and restarts the service only when step 2 just created it (the PATH reaches a
+#   3. daemon-reloads so systemd reads the drop-ins (the fence takes effect on the running slice at the reload, no T3 restart), and restarts the service only when step 2 just created it (the PATH reaches a
 #      service only when it starts; an existing, running T3 is never restarted here: `systemctl --user restart t3code.service` is the owner's call).
 # A host with no systemd user manager gets a notice and a clean exit. A failed install (T3 or `t3 service install`) fails the script, so the next
 # apply retries it (chezmoi records a run_onchange script only when it succeeds). A failed daemon-reload or restart is a warning with the command
