@@ -612,6 +612,12 @@ if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL"):   # the API server times out on every read of the pod
     sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
+if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL_FIRST") and "json" in a:   # ... on the first N reads only, then it recovers
+    count_file = os.path.join(fake, "get-pod-reads")
+    reads = int(open(count_file).read()) if os.path.exists(count_file) else 0
+    open(count_file, "w").write(str(reads + 1))
+    if reads < int(os.environ["FAKE_GET_FAIL_FIRST"]):
+        sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
 if a[:2] == ["get", "events"]:   # the kubelet's Evicted event for a pod that died (FAKE_EVICT_EVENT) outlives the pod
     items = [{"reason": "Killing", "message": "Stopping container job"}] if os.environ.get("FAKE_EVICT_EVENT") and os.path.exists(os.path.join(fake, "died")) else []   # "-": the pod is gone and no event says why
     if items and os.environ["FAKE_EVICT_EVENT"] != "-":
@@ -4230,7 +4236,8 @@ QUEUE_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
                 "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
                 "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                 "loader.exec_module(K)\n"
-                "K.QUEUE_POLL_S = 0.2\n"      # the queue's look at the cluster, shortened
+                "K.QUEUE_POLL_S, K.QUEUE_LOCAL_POLL_S = 0.2, 0.1\n"      # the queue's look at the cluster, shortened
+                "K.QUEUE_QUIET_S = %s\n"      # a wait on a neighbour is reported at once unless a test says otherwise
                 "sys.exit(K.main(sys.argv[2:]))\n")
 
 
@@ -4242,7 +4249,7 @@ class QueueHomelab(unittest.TestCase):
 
     def launcher(self):
         stub = self.tmp / "queue_launch.py"
-        stub.write_text(QUEUE_LAUNCH)
+        stub.write_text(QUEUE_LAUNCH % getattr(self, "quiet", 0))
         return [sys.executable, str(stub), str(SCRIPT)]
 
     def waiting(self, name="other", cpu="2", memory="1Gi", disk="4Gi", cls="kgate", pin=None, message="0/7 nodes are available: 7 Insufficient cpu."):
@@ -4404,6 +4411,58 @@ class QueueHomelab(unittest.TestCase):
         self.assertFalse(ghost.exists(), "a dead client's ticket is removed")
 
 
+    def test_a_ticket_past_its_clients_wait_is_cleared_even_when_the_client_looks_alive(self):
+        # another pid namespace (the pid cannot be checked) or a stopped client: its ticket must not hold later jobs until their --wait ends
+        queue = self.state / "kgate" / "queue"
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        foreign = self.ticket("kgate-1-1", 4194000)
+        foreign.write_text(json.dumps({**json.loads(foreign.read_text()), "pidns": "pid:[4026539999]", "deadline": time.time() - 1000}))
+        stopped = self.ticket("kgate-2-2", holder.pid)
+        stopped.write_text(json.dumps({**json.loads(stopped.read_text()), "deadline": time.time() - 1000}))
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate-first"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout)
+        self.assertEqual((self.creates(), foreign.exists(), stopped.exists()), (1, False, False))
+        self.assertEqual(list(queue.glob("kgate-*.json")), [])
+
+    def test_a_foreign_ticket_still_inside_its_wait_holds_the_job_back_and_never_longer_than_that_wait(self):
+        foreign = self.ticket("kgate-1-1", 4194000)
+        foreign.write_text(json.dumps({**json.loads(foreign.read_text()), "pidns": "pid:[4026539999]", "deadline": time.time() + 1.5 - K.QUEUE_STALE_S}))
+        done = self.kgate("--wait", "30", "--", "true")   # the grace is added to the deadline: the ticket is stale in 1.5 s
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual((self.creates(), foreign.exists()), (1, False))
+
+    def test_a_job_ticket_carries_its_own_wait_deadline(self):
+        proc = self.start("--wait", "100", "--", "true", env=self.full(self.waiting()))
+        self.read_until(proc, "queued: ")
+        (path,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        deadline = json.loads(path.read_text())["deadline"]
+        self.assertTrue(time.time() + 80 < deadline < time.time() + 101, deadline)
+
+    def test_jobs_started_together_on_a_cluster_with_room_do_not_report_a_queue(self):
+        # a job that only waits for a neighbour's placement is not reported (the real quiet time), and polls the local queue every 0.1 s here, 0.3 s in the client, not every 3 s
+        self.quiet = K.QUEUE_QUIET_S
+        procs = [self.start("--", "true") for _ in range(3)]
+        outs = [p.communicate(timeout=60)[0] for p in procs]
+        for proc, out in zip(procs, outs):
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertNotIn("queued", out)
+            self.assertNotIn("left the queue", out)
+        self.assertEqual(self.creates(), 3)
+        self.assertTrue(all("queue_wait_s" not in r for r in self.records()), self.records())
+
+    def test_a_wait_on_a_neighbour_that_lasts_is_reported_after_the_quiet_time(self):
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        self.ticket("kgate-1-1", holder.pid)
+        self.quiet = 1.5
+        done = self.kgate("--wait", "4", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("queued: behind kgate-1-1", done.stdout)
+        self.assertEqual(self.creates(), 0)
+
+
 class PodLostReason(unittest.TestCase):
     """dotfiles: 86 jobs in a week were lost pods with no reason printed. The reason is read from the cluster before the pod is deleted."""
     for _name in ("kgate", "launcher", "records", "calls", "op_env", "profile", "setUp"):
@@ -4425,6 +4484,15 @@ class PodLostReason(unittest.TestCase):
         reason = self.records()[-1]["reason"]
         self.assertIn("pod end reason: the pod is gone (Error from server (NotFound)", reason)
         self.assertIn("event Killing: Stopping container job", reason)
+
+    def test_a_failed_read_of_the_pod_while_waiting_is_retried_and_the_job_runs(self):
+        # the API server times out on the first two reads of the pod (the first is the queue's own look after the create), then recovers
+        done = self.kgate("--", "true", env={"FAKE_GET_FAIL_FIRST": "2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"], rec["reason"]), (0, True, None))
+        reads = [c for c in self.calls() if c.get("kubectl", [])[:2] == ["get", "pod"] and "json" in c["kubectl"]]
+        self.assertGreaterEqual(len(reads), 3)
 
     def test_a_lost_pod_with_nothing_wrong_to_read_still_keeps_todays_text_first(self):
         done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1"})

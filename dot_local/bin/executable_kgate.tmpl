@@ -170,6 +170,9 @@ SCHED_WAIT_S = 1800  # default scheduling deadline (--sched-wait, KGATE_SCHED_WA
 # The PriorityClass values (the homelab repo's k8s/kgate/priorityclass*.yaml), for a pod whose spec has no resolved `priority` yet and for this job's own pod.
 PRIORITY_VALUES = {"kgate": -100, "kgate-first": -50, "kgate-main": -40}
 QUEUE_POLL_S = 3      # a queued job looks at the local queue (and, when it is first in line, at the cluster) this often
+QUEUE_LOCAL_POLL_S = 0.3   # while only another client on this machine is ahead (a local file read, no cluster call)
+QUEUE_QUIET_S = 5     # a wait on a neighbour's placement is not reported until it lasts this long; a full cluster is reported at once
+QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or in a pid namespace this one cannot see
 QUEUE_SETTLE_S = 20   # after it creates its pod, a job holds its place until the scheduler has answered for the pod (placed or Unschedulable), for at most this long
 POLL_RETRY_S = 60     # a failed read of the pod while waiting for it is tried again for this long (an etcd timeout or a dropped ssh does not last), unless the pod is NotFound
 LOST_READ_S = 20      # each read of why a pod was lost is cut off here
@@ -1788,8 +1791,8 @@ class Job:
         os.makedirs(queue, exist_ok=True)
         ticket = os.path.join(queue, self.id + ".json")
         ident = proc_identity(os.getpid())
-        write_json_atomic(ticket, {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "shape": mine})
-        t_wait, last = None, None
+        write_json_atomic(ticket, {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": deadline, "shape": mine})
+        t_wait, last, noted = None, None, False
         with open(os.path.join(queue, ".lock"), "a") as lock:
             try:
                 while True:
@@ -1809,16 +1812,18 @@ class Job:
                             finally:
                                 fcntl.flock(lock, fcntl.LOCK_UN)
                     t_wait = t_wait or time.time()
-                    if why != last and why != "another job is being placed":
+                    local = why.startswith(("behind ", "another job"))   # a neighbour on this machine is being placed: usually seconds, and the cluster has room
+                    if why != last and why != "another job is being placed" and (not local or time.time() - t_wait >= QUEUE_QUIET_S or noted):
                         self.note("queued: " + why)
-                        last = why
-                    self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
+                        last, noted = why, True
+                    if noted:
+                        self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
                     if time.time() >= deadline:
                         raise Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
-                    time.sleep(max(0, min(QUEUE_POLL_S, deadline - time.time())))
+                    time.sleep(max(0, min(QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S, deadline - time.time())))
             finally:
                 forget(ticket)
-        if t_wait:
+        if noted:
             self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
             self.note("left the queue after %.0fs; creating the pod" % self.rec["queue_wait_s"])
 
@@ -1835,6 +1840,9 @@ class Job:
                 continue   # not a ticket, or one that is being written or removed
             if t.get("pidns") == pid_namespace() and (proc_identity(t["pid"]) or [None])[0] != t.get("start"):
                 forget(path)   # its client died without removing it
+                continue
+            if t.get("deadline") and time.time() > t["deadline"] + QUEUE_STALE_S:
+                forget(path)   # a client that is stopped, or in a pid namespace this one cannot check, is past its own --wait: it cannot still be waiting
                 continue
             tickets.append(t)
         mine_key = (-mine["priority"], self.t0, self.id)
@@ -1870,7 +1878,9 @@ class Job:
         while time.time() < end:
             try:
                 got = self.cluster.run(["get", "pod", self.pod, "-o", "json"], timeout=30)
-                status = json.loads(got.stdout).get("status", {}) if got.returncode == 0 else {}
+                if got.returncode != 0:
+                    return   # best effort: the pod wait that follows reads and retries it
+                status = json.loads(got.stdout).get("status", {})
             except (subprocess.TimeoutExpired, ValueError):
                 return
             if status.get("phase", "Pending") != "Pending" or any(c.get("type") == "PodScheduled" for c in status.get("conditions") or []):
