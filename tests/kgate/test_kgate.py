@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import stat
+import tarfile
 import subprocess
 import sys
 import tempfile
@@ -79,6 +80,11 @@ def git(cwd, *args, **env):
     subprocess.run(["git", "-C", str(cwd), *args], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                    env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
                         "GIT_COMMITTER_EMAIL": "t@t", **env})
+
+
+def gitout(cwd, *args):
+    """git's stdout as text (stripped)."""
+    return subprocess.run(["git", "-C", str(cwd), *args], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout.strip()
 
 
 class TreeHash(unittest.TestCase):
@@ -2712,6 +2718,86 @@ class Archive(unittest.TestCase):
             names = tar.getnames()
         self.assertNotIn(victim.lstrip("/"), names)
         self.assertIn((common + "/config").lstrip("/"), names)
+
+    def lean_repo(self):
+        """A repo with a second worktree, an rr-cache entry, reflogs and metadata for two linked worktrees (own, other)."""
+        main, own = self.repo_and_linked()
+        tmp = main.parent
+        other = tmp / "other"
+        git(main, "worktree", "add", "-q", "-b", "side", str(other))
+        (other / "g").write_text("y\n")
+        git(other, "add", "-A")
+        git(other, "commit", "-q", "-m", "side")
+        common = main / ".git"
+        (common / "rr-cache" / "abc").mkdir(parents=True)
+        (common / "rr-cache" / "abc" / "preimage").write_text("p\n")
+        # names that look like the dropped ones but are not at the top of the git folder
+        git(main, "branch", "logs")
+        git(main, "branch", "rr-cache-notes")
+        return main, own, other
+
+    def extracted(self, wt):
+        """(names, pod root) of the history archive of `wt`, extracted under a temp root."""
+        w, common, files = K.worktree(str(wt))
+        data = K.archive(w, common, files, {}, history=True)
+        out = self.tmp_out()
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            names = tar.getnames()
+            tar.extractall(out)
+        return names, out, w, common
+
+    def tmp_out(self):
+        out = Path(tempfile.mkdtemp(prefix="kal-")).resolve()
+        self.addCleanup(shutil.rmtree, out, True)
+        return out
+
+    def test_the_shared_git_folder_leaves_out_rr_cache_reflogs_and_other_worktrees(self):
+        main, own, other = self.lean_repo()
+        names, out, w, common = self.extracted(own)
+        c = common.lstrip("/")
+        own_name = os.path.basename(gitout(own, "rev-parse", "--git-dir"))
+        other_name = os.path.basename(gitout(other, "rev-parse", "--git-dir"))
+        self.assertNotEqual(own_name, other_name)
+        under = lambda *parts: [n for n in names if n == "/".join((c,) + parts) or n.startswith("/".join((c,) + parts) + "/")]
+        self.assertEqual(under("rr-cache"), [], "rr-cache stays here")
+        self.assertEqual(under("logs"), [], "reflogs stay here")
+        self.assertEqual(under("worktrees", other_name), [], "another worktree's metadata stays here")
+        self.assertEqual(under("worktrees", own_name, "logs"), [], "the worktree's own reflogs stay here")
+        self.assertIn("%s/worktrees/%s/HEAD" % (c, own_name), names, "the shipping worktree's own metadata ships")
+        self.assertIn("%s/worktrees/%s/index" % (c, own_name), names)
+        for kept in ("HEAD", "config", "packed-refs", "refs/heads/logs", "refs/heads/rr-cache-notes", "refs/heads/side"):
+            if os.path.exists(os.path.join(common, kept)):
+                self.assertIn("%s/%s" % (c, kept), names, kept)
+        self.assertTrue([n for n in names if n.startswith(c + "/objects/")], "objects ship")
+
+    def test_the_main_checkout_ships_no_linked_worktree_metadata(self):
+        main, own, other = self.lean_repo()
+        names, out, w, common = self.extracted(main)
+        dot = (w + "/.git").lstrip("/")
+        self.assertEqual([n for n in names if n.startswith(dot + "/worktrees/") and n != dot + "/worktrees"], [])
+        self.assertEqual([n for n in names if n == dot + "/rr-cache" or n.startswith(dot + "/rr-cache/") or n == dot + "/logs" or n.startswith(dot + "/logs/")], [])
+        self.assertIn(dot + "/HEAD", names)
+
+    def pod_git(self, out, wt, common, gitdir, *args):
+        """git against the extracted copy only: the .git file of a linked worktree holds an absolute path back to the real repo, so
+        the folders are named explicitly."""
+        env = {**os.environ, "GIT_DIR": str(out / gitdir.lstrip("/")), "GIT_COMMON_DIR": str(out / common.lstrip("/")),
+               "GIT_WORK_TREE": str(out / wt.lstrip("/"))}
+        done = subprocess.run(["git", *args], cwd=out / wt.lstrip("/"), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return done.returncode, done.stdout
+
+    def test_git_in_the_pod_works_without_the_left_out_folders(self):
+        main, own, other = self.lean_repo()
+        for wt in (own, main):
+            names, out, w, common = self.extracted(wt)
+            gitdir = gitout(wt, "rev-parse", "--path-format=absolute", "--git-dir")
+            self.assertTrue((out / gitdir.lstrip("/") / "HEAD").is_file())
+            want = gitout(wt, "rev-parse", "HEAD")
+            self.assertEqual(self.pod_git(out, w, common, gitdir, "status", "--porcelain"), (0, ""))
+            self.assertEqual(self.pod_git(out, w, common, gitdir, "rev-parse", "HEAD"), (0, want + "\n"))
+            self.assertEqual(self.pod_git(out, w, common, gitdir, "log", "-1", "--format=%H"), (0, want + "\n"))
+            rc, merged = self.pod_git(out, w, common, gitdir, "merge-tree", "--write-tree", "HEAD", "side")
+            self.assertEqual(rc, 0, merged)
 
     def test_a_worktree_file_that_vanishes_still_fails_the_job(self):
         main, linked = self.repo_and_linked()

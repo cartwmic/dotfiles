@@ -1035,17 +1035,31 @@ def add_git_dir(tar, path, arcname, keep):
 
 def archive(wt, common, files, extra, history=True, skipped=()):
     """The tar stream (bytes) of the worktree files, its .git and the shared git folder (not with history=False: a kubectl cluster rebuilds a one-commit repo in the pod), plus extra {name: bytes}.
-    With history, each skipped submodule gets an empty directory, so the shipped .git and the tree agree (git status is clean in the pod), and its repository under modules/ stays out."""
+    With history, each skipped submodule gets an empty directory, so the shipped .git and the tree agree (git status is clean in the pod), and its repository under modules/ stays out.
+    The shared git folder also leaves out rr-cache, the reflogs and the metadata of the other linked worktrees (see `lean`): about 190 of the 279 MB of a coordinator worktree's folder."""
     buf = io.BytesIO()
     root = lambda tarinfo: (setattr(tarinfo, "uid", 0), setattr(tarinfo, "gid", 0),
                             setattr(tarinfo, "uname", ""), setattr(tarinfo, "gname", ""), tarinfo)[-1]
 
-    def no_modules(base):
-        """Drops <base>/modules and <base>/worktrees/<name>/modules: the submodules' own repositories, whose files are not shipped."""
+    def lean(base, own):
+        """What a shared git folder leaves out, by path under <base>: the submodules' repositories (modules, worktrees/<name>/modules), rr-cache, the
+        reflogs (logs, worktrees/<name>/logs) and the metadata of every linked worktree except `own` (its folder name under worktrees/, None for none).
+        Git in the pod reads none of them. Each rule is anchored at the top of the git folder and compares whole path parts, so a branch named
+        `logs` (refs/heads/logs) stays."""
         def keep(tarinfo):
-            rel = tarinfo.name[len(base):].lstrip("/")
-            return None if re.match(r"(worktrees/[^/]+/)?modules(/|$)", rel) else root(tarinfo)
+            parts = tarinfo.name[len(base):].strip("/").split("/")
+            if parts[0] in ("modules", "rr-cache", "logs"):
+                return None
+            if parts[0] == "worktrees" and len(parts) > 1 and (parts[1] != own or (len(parts) > 2 and parts[2] in ("modules", "logs"))):
+                return None
+            return root(tarinfo)
         return keep
+
+    def own_worktree_dir():
+        """The folder name under <common>/worktrees/ that holds this worktree's own metadata (its index and HEAD); None for the main checkout."""
+        gitdir = os.path.realpath(git(wt, "rev-parse", "--path-format=absolute", "--git-dir").decode().strip())
+        parent, name = os.path.split(gitdir)
+        return name if parent == os.path.join(os.path.realpath(common), "worktrees") else None
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
         for p in files:
             tar.add(os.path.join(wt, p), arcname=(wt + "/" + p).lstrip("/"), recursive=False, filter=root)
@@ -1054,9 +1068,10 @@ def archive(wt, common, files, extra, history=True, skipped=()):
                 info = tarfile.TarInfo((wt + "/" + p).lstrip("/"))
                 info.type, info.mode, info.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
                 tar.addfile(root(info))
-            add_git_dir(tar, os.path.join(wt, ".git"), (wt + "/.git").lstrip("/"), no_modules((wt + "/.git").lstrip("/")))
+            own = own_worktree_dir()
+            add_git_dir(tar, os.path.join(wt, ".git"), (wt + "/.git").lstrip("/"), lean((wt + "/.git").lstrip("/"), own))
             if os.path.realpath(common) != os.path.realpath(os.path.join(wt, ".git")):
-                add_git_dir(tar, common, common.lstrip("/"), no_modules(common.lstrip("/")))
+                add_git_dir(tar, common, common.lstrip("/"), lean(common.lstrip("/"), own))
         for name, data in extra.items():
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())

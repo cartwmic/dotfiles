@@ -27,7 +27,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 
 ## What it does
 
-1. Ships the git worktree of the current directory to one pod: tracked and untracked non-ignored files, the `.git` file and the shared git folder (on a kubectl cluster no `.git`: see "A second cluster"), all at the same absolute path. Ignored files (`node_modules`, `target`) stay here. Git submodules are skipped (see below).
+1. Ships the git worktree of the current directory to one pod: tracked and untracked non-ignored files, the `.git` file and the shared git folder (on a kubectl cluster no `.git`: see "A second cluster"), all at the same absolute path. The shared git folder is shipped lean: `rr-cache/`, the reflogs (`logs/`, `worktrees/<name>/logs/`) and the `worktrees/<name>/` metadata of every other linked worktree stay here, since git in the pod reads none of them (2026-11-16: a coordinator pod uploaded 279 MB and took about 12 s to prepare, against about 3 s for a lean tree). Objects, refs, `packed-refs`, `HEAD`, `config`, `info/` and the shipping worktree's own `worktrees/<name>/` (its index and `HEAD`) ship. Ignored files (`node_modules`, `target`) stay here. Git submodules are skipped (see below).
 2. **Tree hash.** Before sending, it computes the git tree hash of the shipped files (what `git write-tree` gives for an index of exactly those files). The pod recomputes it after unpacking. If they differ, the job fails and CMD never runs.
 3. **Version preflight.** The pod checks each tool in the profile. A mismatch fails the job and prints the tool, expected and found.
 4. Runs CMD with the output streaming back live. CMD's exit code is kgate's.
