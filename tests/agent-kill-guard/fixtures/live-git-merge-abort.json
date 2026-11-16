@@ -1,0 +1,12 @@
+{
+ "session_id": "live-checkout-guard",
+ "transcript_path": "x.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git merge --abort",
+  "description": "Undo the merge in progress"
+ },
+ "tool_use_id": "toolu_fixture"
+}
