@@ -11,7 +11,9 @@
               same and-list (any order); the refusal names
               `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> ...`: --merge-gate exits 0 for
               UNTESTED and 1 for RED, as playbook fab9b713 allows an untested merge; a bare `ci-main-status` exits 2 for UNTESTED and
-              blocks it. Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
+              blocks it. The PR that fixes a red main adds `--pr N`: `--merge-gate <repo> --pr N` passes a red GitHub-run main when
+              PR N's own full-suite run on its head tree succeeded (a pull_request run that skips the suite does not count; a
+              workflow_dispatch run does), and for dotfiles only the release-pins fix. Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
               which runs both checks itself. The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
               the hook never sees, so they pass.
 
@@ -90,7 +92,8 @@ MERGE_BARE = (
     "`gh pr merge` without both gates is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> ...` "
-    "(--merge-gate lets an untested tip merge and stops only red; pr-body-check enforces playbook rules ecd63156, 385acc43 and ccc6c94b); "
+    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
+    "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43 and ccc6c94b); "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 PR_BODY = (

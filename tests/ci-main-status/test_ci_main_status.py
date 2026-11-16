@@ -38,6 +38,8 @@ GH_FAKE = textwrap.dedent('''\
             rows = [r for r in rows if r["headSha"] == args[args.index("--commit") + 1]]
         if "--event" in args:
             rows = [r for r in rows if r["event"] == args[args.index("--event") + 1]]
+        if "--branch" in args:   # a row with no headBranch is a run on main
+            rows = [r for r in rows if r.get("headBranch", "main") == args[args.index("--branch") + 1]]
         print(json.dumps(rows))
     elif args[:2] == ["run", "view"]:
         attempt = args[args.index("--attempt") + 1] if "--attempt" in args else None
@@ -106,14 +108,14 @@ def commit(path, msg):
     return git(path, "rev-parse", "HEAD")
 
 
-def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None):
+def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None, branch="main"):
     """One gh run list row. Newer runs have a larger age. A rerun keeps its created time; its started time
     (started_age, default age) is when the latest attempt started."""
     started = age if started_age is None else started_age
     return {"databaseId": run_id, "event": event, "headSha": sha, "status": status,
             "conclusion": conclusion if status == "completed" else "", "attempt": attempt,
             "createdAt": f"2026-11-11T10:{age:02d}:00Z", "startedAt": f"2026-11-11T10:{started:02d}:00Z",
-            "url": ""}
+            "headBranch": branch, "url": f"https://example.invalid/runs/{run_id}"}
 
 
 class Fixture(unittest.TestCase):
@@ -677,12 +679,186 @@ class PinFixException(Fixture):
         script = [sys.executable, str(SCRIPT)]
         for args in (["--merge-gate", "dotfiles", "--pr"], ["--merge-gate", "dotfiles", "--pr", "x"], ["--merge-gate", "dotfiles", "--pr", "0"],
                      ["dotfiles", "--pr", "7"], ["--tip", "--merge-gate", "dotfiles", "--pr", "7"], ["--merge-gate", "--all", "--pr", "7"],
-                     ["--merge-gate", "loop-engine", "--pr", "7"], ["--merge-gate", "dotfiles", "--pr", "7", "--pr", "8"],
+                     ["--merge-gate", "no-such-repo", "--pr", "7"], ["--merge-gate", "dotfiles", "--pr", "7", "--pr", "8"],
                      ["--merge-gate", "dotfiles", "--pr=7"]):
             with self.subTest(args=args):
                 r = subprocess.run(script + args, capture_output=True, text=True, env=self.env, timeout=120)
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertIn("usage", r.stderr)
+
+
+UNIT_STEP = "unit tests (not on pull requests)"
+FLOOR_STEP = "Run npx vitest run"
+
+
+def red_unit_jobs():
+    """main's red run: both jobs failed, the unit job in its full-suite step, node-floor in vitest."""
+    return [{"databaseId": 11, "name": "unit", "conclusion": "failure", "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": UNIT_STEP, "conclusion": "failure"},
+                {"name": "Run npm run build", "conclusion": "skipped"}]},
+            {"databaseId": 12, "name": "node-floor", "conclusion": "failure", "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": FLOOR_STEP, "conclusion": "failure"}]}]
+
+
+def full_suite_jobs(unit="success", floor="success", unit_step="success"):
+    """A run that ran the whole suite: workflow_dispatch on a branch."""
+    return [{"databaseId": 21, "name": "unit", "conclusion": unit, "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": UNIT_STEP, "conclusion": unit_step}]},
+            {"databaseId": 22, "name": "node-floor", "conclusion": floor,
+             "steps": [] if floor == "skipped" else [{"name": FLOOR_STEP, "conclusion": "success" if floor == "success" else floor}]}]
+
+
+def pull_request_jobs():
+    """What unit.yml does on a pull_request: the job runs, its full-suite step and node-floor are skipped."""
+    return full_suite_jobs(floor="skipped", unit_step="skipped")
+
+
+class RedMainFix(Fixture):
+    """--merge-gate REPO --pr N for a repo that is not dotfiles: a red main passes when PR N's own full-suite run on its head tree passed.
+
+    The shape is agent-kit on 2026-11-16: unit.yml fails main in `unit` and `node-floor`; the PR's pull_request run skips both
+    (so it proves nothing) and its workflow_dispatch run is the full suite.
+    """
+    WF = "cartwmic/agent-kit|unit.yml"
+
+    def setUp(self):
+        super().setUp()
+        git(self.src, "switch", "-q", "-c", "fix", self.c3)
+        (self.src / "f.txt").write_text("fix\n")
+        git(self.src, "add", "f.txt")
+        self.head = commit(self.src, "the fix")
+        git(self.src, "switch", "-q", "main")
+        self.world()
+
+    def world(self, *head_runs, jobs_of=None):
+        """Main's tip c3 is red (run 2); PR 7's branch `fix` is at self.head. head_runs are (run row, its jobs) pairs."""
+        rows = [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]
+        self.jobs = {"2": red_unit_jobs()}
+        for row, jobs in head_runs:
+            rows.append(row)
+            self.jobs[str(row["databaseId"])] = jobs
+        self.runs = {self.WF: rows}
+        self.prs = {"7": {"headRefOid": self.head, "headRefName": "fix"}}
+
+    def dispatch(self, run_id, conclusion="success", sha=None, **jobs):
+        return run(run_id, sha or self.head, conclusion, event="workflow_dispatch", age=run_id, branch="fix"), full_suite_jobs(**jobs)
+
+    def pull_request(self, run_id, sha=None, conclusion="success"):
+        return run(run_id, sha or self.head, conclusion, event="pull_request", age=run_id, branch="fix"), pull_request_jobs()
+
+    def gate(self, *extra, repo="agent-kit"):
+        self.write_fixture()
+        r = subprocess.run([sys.executable, str(SCRIPT), "--merge-gate", repo, *extra], capture_output=True, text=True,
+                           env=self.env, timeout=120)
+        return r.returncode, r.stdout, r.stderr
+
+    def assert_stays_red(self, why):
+        """The same exit code and stdout as the gate without --pr; the reason goes to stderr."""
+        rc0, out0, _ = self.gate()
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertIn(why, err)
+
+    def test_a_green_full_suite_run_on_the_head_passes_and_the_line_names_the_run(self):
+        self.world(self.dispatch(4))
+        rc0, out0, _ = self.gate()
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(out.startswith(out0), "the RED lines print as before:\n" + out)
+        line = [l for l in out.splitlines() if "merge-gate:" in l]
+        self.assertEqual(len(line), 1, out)
+        for text in ("passed as a red-main fix", "run 4 (https://example.invalid/runs/4)", "run 2"):
+            self.assertIn(text, line[0])
+        self.assertEqual(err, "")
+
+    def test_a_newer_pull_request_run_that_skipped_the_suite_does_not_hide_the_full_suite_run(self):
+        self.world(self.dispatch(4), self.pull_request(5))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("run 4 (", out)
+        self.assertNotIn("run 5", out.split("merge-gate:")[1])
+
+    def test_no_run_on_the_head_stays_red(self):
+        self.world()
+        self.assert_stays_red("no unit.yml run of")
+
+    def test_only_a_pull_request_run_that_skipped_the_suite_stays_red(self):
+        self.world(self.pull_request(5))
+        self.assert_stays_red(f'run 5 skipped step "{UNIT_STEP}" in job unit')
+
+    def test_a_job_that_passed_with_its_failing_step_skipped_stays_red(self):
+        self.jobs = {}
+        self.world(self.dispatch(4, unit_step="skipped"))
+        self.jobs["2"] = red_unit_jobs()[:1]   # only `unit` failed in main
+        self.assert_stays_red(f'run 4 skipped step "{UNIT_STEP}" in job unit')
+
+    def test_a_failed_full_suite_run_stays_red(self):
+        self.world(self.dispatch(4, "failure", unit="failure", unit_step="failure"))
+        self.assert_stays_red("run 4 did not pass unit")
+
+    def test_a_run_that_skipped_the_job_that_failed_in_main_stays_red(self):
+        self.world(self.dispatch(4, floor="skipped"))
+        self.assert_stays_red("run 4 skipped job node-floor")
+
+    def test_a_failed_run_is_not_hidden_by_an_older_passing_one(self):
+        self.world(self.dispatch(4), self.dispatch(6, "failure", floor="failure"))
+        self.assert_stays_red("run 6 did not pass node-floor")
+
+    def test_a_full_suite_run_still_going_stays_red(self):
+        row, jobs = self.dispatch(4)
+        row.update(status="in_progress", conclusion="")
+        self.world((row, jobs))
+        self.assert_stays_red("run 4 is in_progress, not success")
+
+    def test_a_run_on_a_commit_with_another_tree_stays_red(self):
+        git(self.src, "switch", "-q", "fix")
+        (self.src / "f.txt").write_text("another\n")
+        git(self.src, "add", "f.txt")
+        other = commit(self.src, "later change")   # no --amend: the PR head stays self.head
+        git(self.src, "switch", "-q", "main")
+        self.world(self.dispatch(4, sha=other))
+        self.assert_stays_red("no unit.yml run of")
+
+    def test_a_run_on_another_commit_with_the_same_tree_counts(self):
+        git(self.src, "switch", "-q", "fix")
+        again = commit(self.src, "same tree, new commit")   # an empty commit: the tree is the head's
+        git(self.src, "switch", "-q", "main")
+        self.world(self.dispatch(4, sha=again))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("same tree as its head", out)
+
+    def test_the_coordinator_journal_is_not_a_github_run_and_stays_red(self):
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "fail"}) + "\n")
+        rc0, out0, _ = self.gate(repo="coordinator")
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7", repo="coordinator")
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertIn("the red verdict is not a GitHub run", err)
+
+    def test_a_gh_failure_in_the_check_stays_red(self):
+        self.world(self.dispatch(4))
+        self.failing_pr = ["cartwmic/agent-kit"]
+        self.write_fixture()
+        self.assert_stays_red("could not read it")
+
+    def test_a_green_main_with_pr_prints_what_it_prints_without_it(self):
+        self.runs = {self.WF: [run(1, self.c3, "success")]}
+        self.assertEqual(self.gate("--pr", "7")[:2], self.gate()[:2])
+
+    def test_dotfiles_keeps_the_pin_rule_only(self):
+        """A red dotfiles main that is not the pin step has no --pr path, even with a green own run on the head tree."""
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1),
+                                                  run(3, self.head, "success", event="pull_request", age=7, branch="fix")]}
+        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": [{"name": "Some other step", "conclusion": "failure"}]}],
+                     "3": [{"name": "tests", "conclusion": "success", "steps": [{"name": "Some other step", "conclusion": "success"}]}]}
+        self.prs = {"7": {"files": [], "changedFiles": 0, "headRefOid": self.head, "headRefName": "fix"}}
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("failed on more than the release-pins step", err)
+        self.assertNotIn("merge-gate:", out)
 
 
 NOT_ACQUIRED = "The job was not acquired by Runner of type hosted even after multiple attempts"
