@@ -314,8 +314,8 @@ class MacTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, "")
 
-    # denied: the message points at the app that runs the session (kitty, through the helper), not at ssh's own program
-    def test_a_denied_message_names_kitty_and_the_permission_and_no_longer_sshd_keygen_wrapper(self):
+    # denied: the message names the permission, not ssh's own program
+    def test_a_denied_message_names_the_permission_and_no_longer_sshd_keygen_wrapper(self):
         for args, env, what in ((("shot", str(self.shot_file)), {"FAKE_SCREEN": "denied"}, "Screen Recording"),
                                 (("move", "1", "2"), {"FAKE_AX": "denied"}, "Accessibility"),
                                 (("shot", str(self.shot_file)), {"FAKE_SC_EXIT": "1"}, "Screen Recording")):
@@ -323,7 +323,21 @@ class MacTest(unittest.TestCase):
                 r = self.run_script(*args, **env)
                 self.assertEqual(r.returncode, 1)
                 self.assertIn(what, r.stderr)
-                self.assertIn("kitty", r.stderr)
+                self.assertNotIn("sshd-keygen-wrapper", r.stderr)
+
+    # the fix in the message depends on where the call runs: the helper (kitty), ssh with no helper (work profile), or a local terminal
+    def test_a_denied_message_names_the_fix_for_where_the_call_runs(self):
+        cases = (({"AGENT_DESKTOP_IN_RELAY": "1", "SSH_CONNECTION": ""}, "allow kitty"),
+                 ({"AGENT_DESKTOP_IN_RELAY": "", "SSH_CONNECTION": "10.0.0.1 1 10.0.0.2 22"}, "allowing kitty does not help"),
+                 ({"AGENT_DESKTOP_IN_RELAY": "", "SSH_CONNECTION": ""}, "your terminal"))
+        for env, expect in cases:
+            with self.subTest(env=env):
+                r = self.run_script("move", "1", "2", FAKE_AX="denied", **env)
+                self.assertEqual(r.returncode, 1)
+                self.assertIn(expect, r.stderr)
+                for _, other in cases:
+                    if other != expect:
+                        self.assertNotIn(other, r.stderr)
                 self.assertNotIn("sshd-keygen-wrapper", r.stderr)
 
     # denied accessibility

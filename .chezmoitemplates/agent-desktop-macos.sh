@@ -247,7 +247,14 @@ denied() {  # denied screen|accessibility: exit 1 with a message that names the 
     *) what="Accessibility" ;;
   esac
   record "FAIL permission $what"
-  fail 1 "$what is not allowed for the app that runs this session, so macOS would drop the request or blank its result. Over ssh that app is kitty (through the helper): allow kitty under System Settings, Privacy & Security, $what. Steps: $DOC"
+  if [ -n "${AGENT_DESKTOP_IN_RELAY:-}" ]; then
+    who="This call ran in the kitty helper: allow kitty under System Settings, Privacy & Security, $what."
+  elif [ -n "${SSH_CONNECTION:-}" ]; then
+    who="This ssh session has no kitty helper on this Mac (the work profile leaves it out), so allowing kitty does not help; see \"Work Mac\" in the doc."
+  else
+    who="Allow the app you ran this from (your terminal) under System Settings, Privacy & Security, $what."
+  fi
+  fail 1 "$what is not allowed for the app that runs this session, so macOS would drop the request or blank its result. $who Steps: $DOC"
 }
 
 allowed() {  # allowed screen|accessibility: continue only when the system says the grant is there
