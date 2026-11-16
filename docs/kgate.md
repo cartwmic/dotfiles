@@ -32,7 +32,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 3. **Version preflight.** The pod checks each tool in the profile. A mismatch fails the job and prints the tool, expected and found.
 4. Runs CMD with the output streaming back live. CMD's exit code is kgate's.
 5. **`/out`.** Whatever CMD writes to `/out` (also `$KGATE_OUT`) in the pod is copied to `<state>/<id>.out/` before the pod is deleted, whether CMD passed or failed.
-6. Deletes the pod and its Secrets. At each start it also removes what a client that died left behind.
+6. Deletes the pod and its Secrets, on every path: CMD's exit, exit 69 (including "lost the pod while waiting for it") and an interrupt. If the delete fails (the 2026-11-16 etcd timeout did), kgate tries again for up to 60 s (`CLEANUP_RETRY_S`; each attempt is cut off after 30 s, waits between attempts 2, 4, 8, 15 s) and then gives up with `cleanup not confirmed`. A job that never created a pod (cluster unreachable, refused before the create) tries once. At each start it also removes what a client that died left behind.
 
 **A file outside the worktree is refused.** The pod gets only the worktree, so a CMD element that names an existing local file or directory outside it would not be found there and the job would fail after waiting for scheduling (2026-11-13: `kgate -- sh /tmp/.../unit.sh`, twice). Before anything is submitted, kgate checks each element after `--`. If it resolves, relative to the current directory, to a path that exists here, is outside the worktree root and lies under the home folder, `/tmp`, `$TMPDIR`, `/var/tmp` or `/run/user`, kgate prints `kgate: refused: PATH is outside the worktree ROOT; ...` and exits 64 with no log record and no cluster call. System paths (`/bin/sh`), pod-only paths (`/out`, `/cache`: they do not exist here), the folders themselves (`/tmp`) and options (`-x`) pass. The text inside `sh -c '...'` is one element and is not read. `--profile FILE` may be anywhere: kgate reads it here. A path that the pod would create (such as `--out /tmp/jout`) is refused when a file of that name happens to exist here; use `/out` or another name. The shared git folder of a linked worktree is shipped on the homelab but is not part of the worktree root, so a path inside it is refused too. A script the check misses (a path inside a `sh -c` string, or `--flag=/tmp/x`) still fails in the pod. To fix a refusal, put the file in the worktree or run the command inline.
 
@@ -211,6 +211,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `ran` | CMD started |
 | `exit`, `reason` | exit code; the reason when it is 69 |
 | `out_files`, `cleanup`, `output`, `cmd` | files copied back; pod and Secrets confirmed deleted; log file; the command |
+| `cleanup_attempts` | delete attempts made, only on a job that created a pod; `cleanup` is true when one was confirmed |
 | `cancelled` | only on a job stopped by `kgate cancel`: `true` |
 
 ## A second cluster, reached through kubectl

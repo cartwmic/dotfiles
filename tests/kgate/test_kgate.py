@@ -312,8 +312,31 @@ class Pieces(unittest.TestCase):
             self.assertEqual(meter.stop(), (777, "sampled"))
 
 
+FAKE_DELETE = r'''
+def fake_delete(fake, pods):
+    """The delete of a pod, shared by both fakes. FAKE_DELETE_FAIL: "N" fails the first N pod deletes with an etcd timeout, "always" fails every one.
+    FAKE_DELETE_HANG: "N" makes the first N pod deletes hang. A pod delete that succeeds is written to <fake>/deleted-pods."""
+    named = [x for x in pods if x.startswith("pod/")]
+    if not named:
+        return 0   # the sweep's label delete
+    fails = os.environ.get("FAKE_DELETE_FAIL", "")
+    counter = os.path.join(fake, "delete-tries")
+    n = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
+    open(counter, "w").write(str(n))
+    if os.environ.get("FAKE_DELETE_HANG") and n <= int(os.environ["FAKE_DELETE_HANG"]):   # the first N pod deletes never answer
+        import time
+        time.sleep(60)
+    if fails and (fails == "always" or n <= int(fails)):
+        sys.stderr.write("Error from server: etcdserver: request timed out\n")
+        return 1
+    with open(os.path.join(fake, "deleted-pods"), "a") as f:
+        f.write("\n".join(x[4:] for x in named) + "\n")
+    return 0
+'''
+
 FAKE_SSH = r'''#!/usr/bin/env python3
 import json, os, re, shlex, subprocess, sys
+''' + FAKE_DELETE + r'''
 fake = os.environ["FAKE"]
 host, remote = sys.argv[-2], sys.argv[-1]
 def log(entry):
@@ -333,10 +356,7 @@ scenario = os.environ.get("FAKE_POD", "ready")
 if a[:2] == ["get", "namespace"]:
     print("namespace/kgate"); sys.exit(0)
 if a[0] == "delete":
-    names = [x for x in a[1:] if "/" in x]
-    for n in names:
-        pass
-    sys.exit(0)
+    sys.exit(fake_delete(fake, a[1:]))
 if a[:2] == ["get", "pods"] or a[:2] == ["get", "secrets"]:
     print(json.dumps({"items": []})); sys.exit(0)
 if a[:2] == ["create", "-f"]:
@@ -345,6 +365,8 @@ if a[:2] == ["create", "-f"]:
     sys.exit(0)
 if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
+if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL"):   # the API server times out on every read of the pod
+    sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
 if a[:2] == ["get", "pod"]:
     if scenario == "ready":
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
@@ -1351,6 +1373,7 @@ KCFG = {"name": "example", "path": "/nowhere/example.toml", "kubeconfig": "/nowh
 
 FAKE_KUBECTL = r'''#!/usr/bin/env python3
 import json, os, re, shlex, shutil, subprocess, sys, time
+''' + FAKE_DELETE + r'''
 fake = os.environ["FAKE"]
 argv = sys.argv[1:]
 def log(entry):
@@ -1377,7 +1400,7 @@ if a[:3] == ["auth", "can-i", "create"]:
         print("no"); sys.exit(1)
     sys.stderr.write("error: You must be logged in to the server (Unauthorized)\n"); sys.exit(1)
 if a[0] == "delete":
-    sys.exit(0)
+    sys.exit(fake_delete(fake, a[1:]))
 if a[:2] == ["get", "pods"]:
     print(json.dumps({"items": []})); sys.exit(0)
 # Pods the fake cluster took away (FAKE_LOST): what is left of each one says why. "event": the pod is gone and the namespace events say Evicted (the autoscaler's
@@ -1438,6 +1461,8 @@ if a[:2] == ["create", "-f"]:
     log({"manifest": manifest, "registry": entries}); sys.exit(0)
 if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
+if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL"):   # the API server times out on every read of the pod
+    sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
 if a[:2] == ["get", "pod"]:
     polls = os.path.join(fake, "polls")
     n = int(open(polls).read()) + 1 if os.path.exists(polls) else 1
@@ -3438,6 +3463,99 @@ class KubectlBlack(unittest.TestCase):
         self.assertIn(["delete", "pod/" + job_id + "-r2", "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
         self.assertIn(["get", "pod", job_id + "-r2", "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"], self.kubectl_args())
         self.assertEqual((self.records()[-1]["id"], self.records()[-1]["exit"], self.records()[-1]["cleanup"]), (job_id, 143, True))
+
+
+# ---------------------------------------------------------------- a client that gives up on a pod still deletes it (dotfiles#473)
+
+ORPHAN_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
+                 "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                 "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                 "loader.exec_module(K)\n"
+                 "K.CLEANUP_FIRST_DELAY, K.CLEANUP_MAX_DELAY, K.CLEANUP_RETRY_S, K.CLEANUP_ATTEMPT_S = 0.05, 0.1, 3, 1\n"   # the delete retry waits, shortened
+                 "sys.exit(K.main(sys.argv[2:]))\n")
+
+
+class GiveUpDeletesThePod:
+    """Both give-up paths of the client (CMD's own non-zero exit, and exit 69 "lost the pod while waiting for it") against a cluster whose API server times out
+    on the delete, as etcd did on 2026-11-16: the pod must end up deleted, and the record says whether the delete was confirmed. Run for both cluster kinds."""
+
+    def launcher(self):
+        stub = self.tmp / "orphan_launch.py"
+        stub.write_text(ORPHAN_LAUNCH)
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def deleted(self):
+        path = self.fake / "deleted-pods"
+        return path.read_text().split() if path.exists() else []
+
+    def tries(self):
+        path = self.fake / "delete-tries"
+        return int(path.read_text()) if path.exists() else 0
+
+    def test_cmd_fails_and_the_first_deletes_time_out(self):
+        done = self.job("--", "sh", "-c", "exit 1", env={"FAKE_DELETE_FAIL": "2"})
+        self.assertEqual(done.returncode, 1, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"]), (1, None))
+        self.assertIn(rec["id"], self.deleted(), "the pod was deleted")
+        self.assertEqual((rec["cleanup"], rec["cleanup_attempts"]), (True, 3))
+        self.assertNotIn("cleanup not confirmed", done.stdout)
+
+    def test_the_pod_is_lost_while_waiting_and_the_first_delete_times_out(self):
+        done = self.job("--", "true", env={"FAKE_GET_FAIL": "1", "FAKE_DELETE_FAIL": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (69, False))
+        self.assertEqual(rec["reason"], "lost the pod while waiting for it: Error from server: etcdserver: request timed out")
+        self.assertIn(rec["id"], self.deleted(), "the pod was deleted")
+        self.assertEqual((rec["cleanup"], rec["cleanup_attempts"]), (True, 2))
+
+    def test_a_delete_that_hangs_is_cut_off_and_tried_again(self):
+        done = self.job("--", "sh", "-c", "exit 1", env={"FAKE_DELETE_HANG": "1"})
+        self.assertEqual(done.returncode, 1, done.stdout)
+        rec = self.records()[-1]
+        self.assertIn(rec["id"], self.deleted(), "the pod was deleted")
+        self.assertEqual((rec["cleanup"], rec["cleanup_attempts"]), (True, 2))
+
+    def test_a_delete_that_never_succeeds_stops_trying_and_says_so(self):
+        done = self.job("--", "sh", "-c", "exit 3", env={"FAKE_DELETE_FAIL": "always"})
+        self.assertEqual(done.returncode, 3, done.stdout)    # the exit code is still CMD's
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["cleanup"]), (3, False))
+        self.assertGreater(rec.get("cleanup_attempts", 0), 1, "it tried again")
+        self.assertEqual(self.deleted(), [])
+        self.assertIn("cleanup not confirmed for %s: Error from server: etcdserver: request timed out" % rec["id"], done.stdout)
+
+    def test_nothing_was_created_so_one_attempt_and_no_wait(self):
+        done = self.job("--", "true", env=self.unreachable_env())
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertNotIn("cleanup_attempts", rec)
+        self.assertLessEqual(self.tries(), 1)
+
+
+class GiveUpHomelab(GiveUpDeletesThePod, unittest.TestCase):
+    for _name in ("kgate", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def job(self, *args, env=None):
+        return self.kgate(*args, env=env)
+
+    def unreachable_env(self):
+        return {"FAKE_DELETE_FAIL": "always", "KGATE_SSH": "fake-unreachable"}
+
+
+class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
+    for _name in ("kgate", "records", "calls", "op_token_checks", "op_env"):
+        locals()[_name] = getattr(Black, _name)
+    for _name in ("setUp", "write_cluster", "profile", "run_kgate", "kcalls"):
+        locals()[_name] = getattr(KubectlBlack, _name)
+
+    def job(self, *args, env=None):
+        return self.run_kgate(*args, env=env)
+
+    def unreachable_env(self):
+        return {"FAKE_DELETE_FAIL": "always", "FAKE_CANI": "no"}
 
 
 if __name__ == "__main__":
