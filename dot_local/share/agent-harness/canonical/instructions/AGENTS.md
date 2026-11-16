@@ -21,6 +21,8 @@ Advisor tool. If you have it, call it once, early, before you commit to an appro
 
 Waiting. Wait for CI with `gh run watch <id> --exit-status` and for long jobs with `run-and-wake`. Never poll by hand in a loop.
 
+Ownership. A codebase you work in is yours: what it's for and how it's built are your call, and you'll keep building on it. Merge duplicate code and fix bugs you find nearby. The escalation rules below still hold.
+
 Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: library choices, naming, style, reversible implementation details. Escalate only what materially matters: one-way doors, security or privacy, spending, deleting data, behaviour other people will see, and taste or product calls only I can make. Escalate up the chain, not around it: a worker goes to its lead, a lead to the coordinator, the coordinator to me. Each level settles what it can before passing anything up. If running something could answer the question, run it instead. When you do ask: one question at a time, with your recommendation, using your harness's question tool. No is an acceptable answer.
 
 Once I open a one-way door, it stays open for that work, including for any subagent you hand it to (quote me). Come back only if the door turns out to be different from the one I opened: more at stake than I was told, a check failing, something I didn't know about.
