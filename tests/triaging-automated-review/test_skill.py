@@ -56,9 +56,21 @@ class SkillTest(unittest.TestCase):
 
     def test_names_the_four_tests_and_the_loop_skills(self):
         _, body = parts()
-        for needle in ("**Real.**", "**Useful.**", "**Maintainable.**", "**Fits.**", "design-principles.md",
+        for needle in ("finding-triage.md", "**Real.**", "**Useful.**", "**Maintainable.**", "**Fits.**", "design-principles.md",
                        "`reviewing-prs` skill", "`no-ai-slop` skill", "gh pr checks", "resolveReviewThread"):
             self.assertIn(needle, body)
+
+    def test_step_7_reaches_the_self_review(self):
+        # Step 7 must not loop back to step 1 unconditionally, or step 8 (reviewing-prs) is never reached.
+        _, body = parts()
+        step7 = body[body.index("7. **Re-request"):body.index("8. **Run the")]
+        self.assertIn("go to step 8", " ".join(step7.split()))
+
+    def test_does_not_restate_the_shared_tests(self):
+        # The wording of the four tests lives in finding-triage.md; two copies drift.
+        _, body = parts()
+        self.assertNotIn("Verify it against the code: reproduce it or read it", body)
+        self.assertNotIn("Fixing it is worth the change", body)
 
     def test_has_no_work_profile_content(self):
         text = SKILL.read_text()

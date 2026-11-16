@@ -55,7 +55,9 @@ listed as pending. The final head has passed `reviewing-prs`.
 6. **If you pushed, go to step 1.** A push can start a new bot review.
 7. **Re-request or re-run the bot reviews.** When no findings are left, or the
    latest are all declined or deferred, post each bot's re-run command, or
-   re-request its review, if it has one. Then go to step 1.
+   re-request its review, if it has one. Wait for it (step 1) and triage what
+   it adds. If there is no re-run, or it brings no new applicable finding, go
+   to step 8.
 8. **Run the `reviewing-prs` skill on the final head**, as a fresh-eyes pass.
    (That skill is for someone else's work; the owner asked for it here.)
 9. **Triage its findings** with the same four tests, fix what passes, and push.
@@ -69,36 +71,28 @@ Write any PR body text with the `no-ai-slop` skill too.
 
 ## The four tests
 
-Every finding gets all four, whoever wrote it. A finding is not right because a
-person or a bot wrote it. The shared wording is
-`~/.local/share/agent-harness/finding-triage.md`.
+Run the four tests in `~/.local/share/agent-harness/finding-triage.md` on every
+finding, whoever wrote it: real, useful, maintainable, fits. A finding is not
+right because a person or a bot wrote it. That file is the wording; this skill
+does not restate it. Its additions for PR review:
 
-1. **Real.** Verify it against the code: reproduce it or read it. A claim about
-   a dependency's behaviour needs the dependency's source read. A finding you
-   cannot verify is not real yet.
-2. **Useful.** Fixing it is worth the change, including the cost of another
-   review cycle. A real defect, missing requirement, security or data risk, or
-   break of a written repo convention is useful. Style the repo does not
-   require is not, and neither is a fix that an existing job or check already
-   does (gold plating). Comment, test-style and coverage findings are not
-   useful by default; take one only when it makes a test unable to fail, makes
-   a test flaky, or states something false that a later change will rely on.
-3. **Maintainable.** The fix serves long-term maintainability under
-   `~/.local/share/agent-harness/design-principles.md`. Cite the section in
-   your verdict, whether it supports the fix or blocks it: a layer, cap or guard
-   nobody asked for fails §4 or §9; moving judgment into code fails §8; a
-   cross-component import fails §7. This test judges the fix. If the suggested
-   fix fails, pick a smaller one that passes. Decline under this test only when
-   no fix passes.
-4. **Fits.** It fits the intent and scope of this PR and of the overall change
-   it belongs to. A problem that existed before the PR, or is outside its
-   scope, is deferred. A defect the PR itself introduces is always in scope. A
-   finding that undoes a decision the owner made fails here.
+- **Real.** A claim about a dependency's behaviour needs the dependency's source
+  read. A finding you cannot verify is not real yet.
+- **Useful.** Comment, test-style and coverage findings are not useful by
+  default. Take one only when it makes a test unable to fail, makes a test
+  flaky, or states something false that a later change will rely on.
+- **Maintainable.** Cite the `~/.local/share/agent-harness/design-principles.md`
+  section in the verdict, whether it supports the fix or blocks it: a layer, cap
+  or guard nobody asked for fails §4 or §9; moving judgment into code fails §8;
+  a cross-component import fails §7. If the suggested fix fails, pick a smaller
+  one that passes. Decline under this test only when no fix passes.
+- **Fits.** A finding that undoes a decision the owner made fails this test.
+  Ask the owner when the scope is unclear (see [Stop](#stop)).
 
 ## Outcomes
 
 - **Fix:** passes all four tests.
-- **Defer:** real, but out of this PR's scope (test 4). The reply says so and
+- **Defer:** real, but out of this PR's scope (test 4, fits). The reply says so and
   names the follow-up (an existing ticket, or a note in the report; file no
   ticket unasked). It is never fixed in this PR and never blocks it. The report
   lists deferred findings apart from declined ones.
