@@ -540,6 +540,15 @@ class LiveGit(unittest.TestCase):
         # the 2026-11-11 reviewer
         ("cd ~/git/coordinator && git fetch origin pull/438/head:pr438 && git checkout pr438", "git checkout"),
         ("cd ~/git/coordinator && git checkout pr438", "git checkout"),
+        # `gh pr checkout` runs git fetch and checkout in the directory it runs in
+        ("cd ~/git/coordinator && gh pr checkout 438", "gh pr checkout"),
+        ("cd ~/git/coordinator && gh pr co 438", "gh pr checkout"),
+        ("cd $HOME/git/coordinator && gh pr checkout https://github.com/cartwmic/coordinator/pull/438", "gh pr checkout"),
+        ("cd ~/git/coordinator && gh pr checkout --detach 438", "gh pr checkout"),
+        ("cd ~/git/coordinator && gh pr checkout 438 -R cartwmic/coordinator", "gh pr checkout"),
+        ("cd ~/git/coordinator/src && gh pr checkout 438", "gh pr checkout"),
+        ("cd ~/git/coordinator && echo go; timeout 60 gh pr checkout 438 | tail -1", "gh pr checkout"),
+        ("bash -c 'cd ~/git/coordinator && gh pr checkout 438'", "gh pr checkout"),
         # every changing verb
         ("cd ~/git/coordinator && git pull", "git pull"),
         ("cd ~/git/coordinator && git pull --ff-only", "git pull"),
@@ -548,7 +557,6 @@ class LiveGit(unittest.TestCase):
         ("cd ~/git/coordinator && git merge --ff-only main", "git merge"),
         ("cd ~/git/coordinator && git merge --ff-only 0123abc extra", "git merge"),
         ("cd ~/git/coordinator && git merge --ff-only --squash 0123abc", "git merge"),
-        ("cd ~/git/coordinator && git merge --abort", "git merge"),
         ("cd ~/git/coordinator && git reset --hard origin/main", "git reset"),
         ("cd ~/git/coordinator && git reset", "git reset"),
         ("cd ~/git/coordinator && git reset --keep origin/main", "git reset"),
@@ -582,6 +590,8 @@ class LiveGit(unittest.TestCase):
         "git -C ~/git/coordinator merge --ff-only 0123abc",
         "cd ~/git/coordinator && git merge --ff-only 0123abcDEF",
         "cd ~/git/coordinator && git merge -q --ff-only 0123456",
+        "cd ~/git/coordinator && git merge --abort",
+        "git -C ~/git/coordinator merge --abort",
         "cd ~/git/coordinator && git reset --keep 0123abc",
         "cd ~/git/coordinator && git reset --keep 0123456789abcdef0123456789abcdef01234567",
         "run-and-wake -- bash -c 'cd ~/git/coordinator && { git fetch -q origin main || git fetch -q origin main; } && s=$(git show origin/main:scripts/main-journeys.sh) && exec bash -c \"$s\" main-journeys.sh'",
@@ -620,6 +630,16 @@ class LiveGit(unittest.TestCase):
         "cd ~/git/coordinator && git push origin HEAD",
         "cd ~/git/coordinator && echo git reset --hard",
         "cd ~/git/coordinator && grep -n 'git merge' docs/deploy.md",
+        # gh in a worktree or another checkout, and the PR commands that change nothing here
+        "cd ~/tmp-home/x && gh pr checkout 438",
+        "cd ~/git/coordinator-notes && gh pr checkout 438",
+        "cd ~/git/coordinator && gh pr view 438",
+        "cd ~/git/coordinator && gh pr diff 438",
+        "cd ~/git/coordinator && gh pr list",
+        "cd ~/git/coordinator && gh pr status",
+        "cd ~/git/coordinator && echo gh pr checkout 438",
+        "cd ~/git/coordinator && cd ~/tmp-home/x && gh pr checkout 438",
+        'cd "$WT" && gh pr checkout 438',
         # the same verbs in a worktree or another checkout
         "cd ~/tmp-home/x && git merge origin/main",
         "cd ~/tmp-home/x && git reset --hard origin/main",
@@ -654,16 +674,19 @@ class LiveGit(unittest.TestCase):
                 self.assertIsNone(self.live(text))
 
     def test_a_session_whose_directory_is_the_live_checkout(self):
-        for text in ["git merge origin/main", "git checkout pr438", "git pull", "git commit -m x", "git reset --hard", "git -c a=b stash"]:
+        for text in ["git merge origin/main", "git checkout pr438", "git pull", "git commit -m x", "git reset --hard", "git -c a=b stash",
+                     "gh pr checkout 438", "gh pr co 438"]:
             with self.subTest(text=text):
                 self.assertTrue(self.live(text, cwd=self.LIVE))
         for text in ["git fetch origin", "git merge --ff-only " + self.SHA, "git reset --keep 0123abc", "git status", "git log -1",
-                     "git worktree add ~/tmp-home/x origin/main", "git show origin/main:scripts/main-journeys.sh"]:
+                     "git worktree add ~/tmp-home/x origin/main", "git show origin/main:scripts/main-journeys.sh", "git merge --abort",
+                     "gh pr view 438", "gh pr diff 438"]:
             with self.subTest(text=text):
                 self.assertIsNone(self.live(text, cwd=self.LIVE))
 
     def test_leaving_the_live_checkout_is_not_refused(self):
         for text in ["cd ~/tmp-home/x && git commit -m x", "git -C /home/cartwmic/tmp-home/x reset --hard", 'cd "$WT" && git commit -m x',
+                     "cd ~/tmp-home/x && gh pr checkout 438",
                      "cd ~/tmp-home/x && git merge origin/main"]:
             with self.subTest(text=text):
                 self.assertIsNone(self.live(text, cwd=self.LIVE))
@@ -807,10 +830,12 @@ class Hook(unittest.TestCase):
                               capture_output=True, text=True, env=env, timeout=30)
 
     def test_the_real_live_checkout_commands_are_refused_through_the_real_script(self):
-        """2026-11-16: a builder ran `git merge origin/main` in ~/git/coordinator (and reset it 13 s later); 2026-11-11: a reviewer ran
-        `git checkout` of PR #438 there and the daemon restarted onto PR code. Recorded as the hook's PreToolUse JSON in fixtures/."""
+        """2026-11-16: a builder ran `git merge origin/main` in ~/git/coordinator (and reset it 13 s later); 2026-11-11: a reviewer checked out
+        PR #438 there and the daemon restarted onto PR code. The fixtures are hand-built in the hook's PreToolUse JSON shape from the
+        command texts (no transcript of the 11-11 command survives, so both its likely forms are here: `git checkout` and `gh pr checkout`)."""
         for name, spelling in [("live-git-merge-cd.json", "git merge"), ("live-git-merge-C.json", "git merge"),
-                               ("live-git-checkout-pr438.json", "git checkout")]:
+                               ("live-git-checkout-pr438.json", "git checkout"), ("live-gh-pr-checkout-438-cd.json", "gh pr checkout"),
+                               ("live-gh-pr-checkout-438-cwd.json", "gh pr checkout")]:
             for profile in ("personal", "axon-work-computer", None):
                 with self.subTest(fixture=name, profile=profile):
                     run = self.run_fixture(name, profile=profile)
@@ -820,7 +845,7 @@ class Hook(unittest.TestCase):
                     self.assertIn("git worktree add ~/tmp-home/<name> origin/main", run.stderr)
 
     def test_the_deploy_and_the_main_run_start_pass_through_the_real_script(self):
-        for name in ("live-git-ffonly-deploy.json", "live-git-main-run-start.json"):
+        for name in ("live-git-ffonly-deploy.json", "live-git-main-run-start.json", "live-git-merge-abort.json"):
             with self.subTest(fixture=name):
                 run = self.run_fixture(name)
                 self.assertEqual((run.returncode, run.stderr), (0, ""))

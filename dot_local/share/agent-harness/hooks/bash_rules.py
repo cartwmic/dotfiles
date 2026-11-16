@@ -36,8 +36,9 @@
   live git    (both profiles)  git that changes the working tree, index, HEAD or a branch of the live coordinator checkout, ~/git/coordinator,
               which the coordinator daemon runs from (2026-11-11: a reviewer checked out PR #438 there and the daemon restarted onto PR code;
               2026-11-16: a builder ran `git merge origin/main` there). Refused: merge, pull, reset, checkout, switch, restore, commit, rebase,
-              cherry-pick, revert, stash, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames).
-              Allowed there: `merge --ff-only <sha>` (the deploy; 7 to 40 hex, never a ref), `reset --keep <sha>` (the rollback in
+              cherry-pick, revert, stash, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames), and
+              `gh pr checkout` / `gh pr co` run in the live checkout.
+              Allowed there: `merge --abort`, `merge --ff-only <sha>` (the deploy; 7 to 40 hex, never a ref), `reset --keep <sha>` (the rollback in
               docs/deploy.md), fetch, `stash list|show`, worktree add/remove/prune, every read-only git. The place is the command's directory
               (the session's, a `cd` or `pushd`, each `-C`) or a `--git-dir`, `--work-tree`, GIT_DIR, GIT_WORK_TREE; `~`, `$HOME` and `${HOME}`
               are the Context's HOME. The refusal names `git worktree add ~/tmp-home/<name> origin/main`.
@@ -529,6 +530,8 @@ def _git_change(sub, args):
     flags = [a for a in args if a.startswith("-")]
     plain = [a for a in args if not a.startswith("-")]
     if sub == "merge":
+        if flags == ["--abort"] and not plain:  # undoes a merge already in progress
+            return None
         deploy = "--ff-only" in flags and set(flags) <= GIT_MERGE_FLAGS and len(plain) == 1 and SHA.fullmatch(plain[0])
         return None if deploy else "git merge"
     if sub == "reset":
@@ -567,6 +570,10 @@ def _git_places(cmd, opts, home):
 
 def live_git_rule(walk, ctx):
     for cmd in walk.cmds:
+        if _base(cmd.words[0]) == "gh":  # `gh pr checkout` fetches the PR and checks it out in the directory it runs in
+            args = cmd.words[1:]
+            if any(a == "pr" and b in ("checkout", "co") for a, b in zip(args, args[1:])) and cmd.cwd and _in_live_checkout(cmd.cwd, walk.home):
+                return GIT_LIVE % "gh pr checkout"
         if _base(cmd.words[0]) != "git":
             continue
         opts, sub, args = _git_parts(cmd.words)
