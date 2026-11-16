@@ -1101,7 +1101,7 @@ class Black(unittest.TestCase):
         self.profile(extra='priority_class = "homelab-critical"')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertIn("priority_class", self.records()[-1]["reason"])
+        self.assertIn("profile priority_class must be kgate or kgate-first", self.records()[-1]["reason"])
         self.assertFalse(any("manifest" in c for c in self.calls()))
 
     def test_a_homelab_cpu_limit_sets_limits_cpu_and_none_leaves_no_cpu_limit(self):
