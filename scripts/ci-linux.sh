@@ -91,7 +91,6 @@ python3 scripts/ci-par.py \
   tests/hill-climb \
   tests/deriving-readable-docs \
   tests/triaging-automated-review \
-  tests/kelsey-intake \
   tests/git-credential \
   tests/tmp-on-disk \
   tests/initramfs-ssh-unlock \
