@@ -409,9 +409,11 @@ Library/Preferences/pnpm/**
 {{- end }}
 
 {{- if or (ne .profile "personal") (ne .chezmoi.os "linux") }}
-# T3 Code as a systemd user service (personal Linux): the PATH drop-in for the unit T3 writes itself, and the script that installs T3 and that unit.
+# T3 Code as a systemd user service (personal Linux): the PATH drop-in for the unit T3 writes itself, the memory and CPU fence drop-in for the agents' parent slice, and the script that installs T3 and that unit.
 .config/systemd/user/t3code.service.d
 .config/systemd/user/t3code.service.d/**
+.config/systemd/user/app-t3code.slice.d
+.config/systemd/user/app-t3code.slice.d/**
 74_t3_service_linux.sh
 .local/user_scripts/install_t3.sh
 # The Pi wrapper behind the T3 pi-lead instance (personal Linux, where modify_settings.json.tmpl owns that instance).

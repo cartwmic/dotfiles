@@ -171,3 +171,26 @@ class DropInShell(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentFence(unittest.TestCase):
+    """dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf: the agents' parent slice may only be throttled, never made to kill."""
+    DROPIN = ROOT / "dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf"
+
+    def settings(self):
+        return dict(line.split("=", 1) for line in self.DROPIN.read_text().splitlines() if re.match(r"^[A-Za-z]+=", line))
+
+    def test_it_throttles_with_a_memory_high_and_a_low_cpu_weight(self):
+        s = self.settings()
+        self.assertRegex(s.get("MemoryHigh", ""), r"^\d+[KMGT]?$")
+        self.assertLess(int(s["CPUWeight"]), 100)
+
+    def test_it_sets_nothing_that_can_kill_a_process(self):
+        # MemoryMax, MemorySwapMax, TasksMax and an OOM policy can end an agent; T3 owns its own MemoryMax on the child slice and this file must not add to it.
+        self.assertEqual(set(self.settings()), {"MemoryHigh", "CPUWeight"}, "this drop-in only throttles: use MemoryHigh and CPUWeight")
+
+    def test_its_name_sorts_after_t3s_runtime_drop_ins(self):
+        self.assertGreater(self.DROPIN.name, "50-MemoryHigh.conf")   # T3's set-property --runtime writes 50-*.conf; the later name wins at each reload
+
+    def test_the_service_script_reloads_when_it_changes(self):
+        self.assertIn('include "dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf"', TEMPLATE.read_text())

@@ -22,6 +22,8 @@ Do not add a `~/AGENTS.md` source. Chezmoi ignore and source mapping use the
 This repository is a public personal dotfiles source. Chezmoi maps it onto
 `$HOME`. Edit **source** files here; live files under `~` are generated.
 
+Design principles: [design-principles.md](./dot_local/share/agent-harness/design-principles.md) is the owner's standing architecture and design rule set. It deploys to `~/.local/share/agent-harness/design-principles.md`. Cite its sections by number; do not copy them here.
+
 ## Authority
 
 Precedence when the cwd is this repo:
@@ -208,12 +210,24 @@ chezmoi --source "$REPO" apply --dry-run --verbose "$DEST"
 `chezmoi cat` can render secrets. Keep their values out of logs and chat. Use
 the same `DEST` for any approved apply.
 
-Ask before a live apply, committing, pushing, restarting an owner's server,
-or removing persistent user state. Never edit a managed live destination as if
-it were source; never put a secret in Git. Only clean up test resources your
-own check created. These markdown rules are advisory. `.chezmoiignore`
-mechanically excludes the root agent guide from home deployment; do not
-assume a hook enforces the other boundaries.
+On the `personal` profile, do approved work without asking again. The brief is
+the ask for the commits and pushes it names (playbook a1ffc2e3). A restart that
+the work needs is agent work (playbook c04b6a19). After a dotfiles PR merges
+under ledger grant 32 (reviewer PASS and green `tests` check first, and run
+`ci-main-status dotfiles` before the merge), apply only that PR's own targets:
+show the diff first, stop on any other drift, and confirm the diff is empty
+after. Still ask the owner before a one-way door (force-push, history rewrite
+or anything else hard to undo), a purchase (hardware, subscriptions, paid
+services) or removing persistent user state: those stay reserved (playbook
+c04b6a19, 4b79e75c). On `axon-work-computer` and any other
+profile, ask before a live apply, commit, push, restart or merge: no grant
+covers a merge or deploy on a work machine (playbook 7cd71e55), and do not
+apply on the work Mac without the owner's confirmation for that action
+(playbook 272f08d0). Never edit a managed live destination as if it were
+source; never put a secret in Git. Only clean up test resources your own check
+created. These markdown rules are advisory. `.chezmoiignore` mechanically
+excludes the root agent guide from home deployment; do not assume a hook
+enforces the other boundaries.
 
 After approval to take the source side of a specific merge conflict, a
 non-TTY apply may use `chezmoi --source "$REPO" apply --force "$DEST"` with
@@ -264,9 +278,11 @@ Done means all of the following that apply:
   pending with a reason; do not describe unverified behavior as done. For ignored
   source-only docs, confirm they remain ignored; there is no live target to preview.
 - On the personal Mac (the homelab path is personal only; a machine with its own cluster files uses `kgate` for a second cluster, see `docs/kgate.md`), the heavy suites, `tests/heavy-gate` (about 9 minutes) and `tests/workstream-rank`, run on the cluster, not on this Mac: `run-and-wake -- kgate -- sh -c 'export PYTHONDONTWRITEBYTECODE=1; python3 -m unittest discover -s tests/heavy-gate && python3 -m unittest discover -s tests/workstream-rank'` (profile `kgate.toml`, moved there 2026-11-05 after a parity run matched; contract in `docs/kgate.md`). Undo: run the same commands under `heavy-gate --wait 7200 --` on the Mac. Other suites run directly.
-- A real `chezmoi apply` ran only with explicit user approval. If verification
+- A real `chezmoi apply` ran only with explicit user approval (on `personal`,
+  ledger grant 32 is that approval for a merged PR's own targets). If verification
   requires materializing and approval is absent, name that check as pending.
-- No commit or push unless the user asked.
+- Commit and push only what your brief or owner asked for (playbook a1ffc2e3;
+  the profile rule above applies on `axon-work-computer`).
 - Secrets, 1Password references, and `private_*` files were not given
   committed secret values.
 - `~/.pi/agent/AGENTS.md` / `dot_pi/private_agent/literal_AGENTS.md.tmpl`
