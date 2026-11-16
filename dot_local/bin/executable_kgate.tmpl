@@ -20,13 +20,13 @@ Contract
   difference fails the job before CMD runs.
 - Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
   memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), cpu_limit (optional, at least cpu; the pod's CPU limit, default none),
-  priority_class (homelab, optional: kgate or kgate-first), the exact tool
+  priority_class (homelab, optional: kgate, kgate-first or kgate-main; env KGATE_PRIORITY_CLASS overrides it), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line, or a CMD element that names a local file outside the worktree (the pod would not have it; nothing is submitted). 69 when the job could not
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
-  after --sched-wait SECONDS (default 600, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. An evicted homelab pod is 69 with the reason `evicted: <the kubelet's message>`, read from the pod's status before it is deleted. kgate NEVER runs CMD on this Mac and never
+  after --sched-wait SECONDS (default 1800, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. An evicted homelab pod is 69 with the reason `evicted: <the kubelet's message>`, read from the pod's status before it is deleted. kgate NEVER runs CMD on this Mac and never
   reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
 {{ if eq .profile "personal" -}}
 - 1Password reads (profile secrets and the pull token) call `op` by name. When `op` is the op shim and a Connect token is set, the shim sends them to the homelab Connect server; otherwise they use the service-account token: OP_SERVICE_ACCOUNT_TOKEN, else
@@ -102,7 +102,8 @@ OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 PRIORITY_CLASS = "kgate"
 # A profile may ask for `kgate-first` (homelab `k8s/kgate/priorityclass-first.yaml`, value -50, preemptionPolicy Never): the scheduler places the pod ahead of waiting `kgate` pods.
 # It never evicts a running job. Opt-in per profile (coordinator decision #2874); the default stays PRIORITY_CLASS.
-PRIORITY_CLASSES = (PRIORITY_CLASS, "kgate-first")
+# `kgate-main` (homelab#440, value -40, preemptionPolicy Never) sits ahead of both: the coordinator's main run asks for it with KGATE_PRIORITY_CLASS (decision #3034).
+PRIORITY_CLASSES = (PRIORITY_CLASS, "kgate-first", "kgate-main")
 # The G14 runs the same gate about twice as fast (unit gate median 237 s against about 500 s on the agents) and was Ready 100% of
 # the last 20 days, so jobs go there first. If it is down, NotReady or full, the preference does not apply and the pod goes to an
 # agent. A pinned --node ignores it, and a profile with prefer_nodes = false (the coordinator journeys) leaves it out. 2026-11-08, Michael,
@@ -164,7 +165,7 @@ MAX_RUN_S = 4 * 3600  # the homelab pod ends itself at this age: the hard bound 
 UNAVAILABLE = 69
 USAGE = 64
 NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the whole scheduling deadline. Nothing else in kgate uses 75.
-SCHED_WAIT_S = 600  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
+SCHED_WAIT_S = 1800  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
 CANCELLED = "cancelled by kgate cancel"
 CLEANUP_RETRY_S = 60       # how long a client that gave up on a pod keeps trying to delete it (an API timeout or a lost ssh is transient); under `kgate cancel`'s default --wait of 120
 MUX_PERSIST_S = 120        # the ssh master outlives the longest gap between two calls of a job (the delete retries wait up to 30 s); close() ends it earlier
@@ -242,6 +243,14 @@ EPHEMERAL_DEFAULT = "4Gi"
 EPHEMERAL_LIMIT_DEFAULT = "12Gi"
 
 
+def check_priority_class(value, cluster, name):
+    """Refuse a PriorityClass the homelab does not offer, and any class for a kubectl cluster (its own policy decides its pods' class). `name` is what the message calls the source."""
+    if cluster != "homelab":
+        raise Unavailable("%s is for the homelab only (a kubectl cluster's own policy decides its pods' class)" % name)
+    if value not in PRIORITY_CLASSES:
+        raise Unavailable("%s must be %s, got %r" % (name, " or ".join(PRIORITY_CLASSES), value))
+
+
 def parse_profile(text):
     """Profile TOML -> dict with image, cpu, memory, memory_limit, tools {name: (version, cmd|None)}, secrets {ENV: op ref}, services."""
     try:
@@ -292,10 +301,7 @@ def parse_profile(text):
         raise Unavailable("profile cpu_limit must be a whole number of at least 1, got %r" % (cpu_limit,))
     priority_class = raw.get("priority_class")
     if priority_class is not None:
-        if cluster != "homelab":
-            raise Unavailable("profile priority_class is for the homelab only (a kubectl cluster's own policy decides its pods' class)")
-        if priority_class not in PRIORITY_CLASSES:
-            raise Unavailable("profile priority_class must be %s, got %r" % (" or ".join(PRIORITY_CLASSES), priority_class))
+        check_priority_class(priority_class, cluster, "profile priority_class")
     cache_pvc = raw.get("cache_pvc")
     if cache_pvc is not None and (cluster == "homelab" or not isinstance(cache_pvc, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", cache_pvc)):
         raise Unavailable("profile cache_pvc" + away + " and must be a claim name like my-cache, got %r" % (cache_pvc,))
@@ -1595,6 +1601,10 @@ class Job:
         mem = o.mem or prof["memory"] or "4Gi"
         mem_limit = o.mem_limit or prof["memory_limit"] or mem
         check_settings(image, cpu, mem, mem_limit)
+        env_class = os.environ.get("KGATE_PRIORITY_CLASS")   # wins over the profile key, like the flag over KGATE_SCHED_WAIT
+        if env_class:
+            check_priority_class(env_class, prof["cluster"], "KGATE_PRIORITY_CLASS")
+            prof["priority_class"] = env_class
         if self.kcfg:
             self.use_kubectl(image, prof, cpu)
         else:
@@ -2102,7 +2112,7 @@ USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SI
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate cluster-setup NAME --from-context CTX [--namespace NS]   write a one-context kubeconfig and a cluster-file skeleton (profiles with cluster = NAME)\n" \
-             "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 600 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
+             "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 1800 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
 
 # ---------------------------------------------------------------- kgate cancel
