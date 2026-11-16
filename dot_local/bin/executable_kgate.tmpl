@@ -721,18 +721,24 @@ kg_check() {
 kg_tools || exit 71
 say "preflight ok $n tools"
 cg=${KGATE_CGROUP:-/sys/fs/cgroup}
+up0=; { read up0 _ < /proc/uptime; } 2>/dev/null
 say "running $*"
 ( cd "$CWD" && exec "$@" )
 code=$?
+up1=; { read up1 _ < /proc/uptime; } 2>/dev/null
+cpu=unknown
+if [ -r "$cg/cpu.stat" ]; then while read k v; do [ "$k" = usage_usec ] && cpu=$v; done < "$cg/cpu.stat"; fi
 peak=unknown
 [ -r "$cg/memory.peak" ] && peak="$(cat "$cg/memory.peak") cgroup"
 printf '\n'; say "peak $peak"
+say "cpu $cpu"
+[ -n "$up0" ] && [ -n "$up1" ] && say "clock $up0 $up1"
 say "end $(date +%s) exit $code"
 exit "$code"
 """
 
 
-MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|commit|image|preflight)\b(.*)"
+MARKER = r"kgate\[%s\]: (start|running|peak|cpu|clock|end|hash|commit|image|preflight)\b(.*)"
 
 
 class Markers:
@@ -769,6 +775,24 @@ def read_int(path):
         with open(path) as f:
             return int(f.read().strip())
     except (OSError, ValueError):
+        return None
+
+
+def cpu_stat_usec(text):
+    """`usage_usec` from the text of a cgroup's cpu.stat (CPU time, in microseconds, used by every process in it since it started), or None."""
+    for line in (text or "").splitlines():
+        key, _, value = line.partition(" ")
+        if key == "usage_usec" and value.strip().isdigit():
+            return int(value)
+    return None
+
+
+def read_cpu_usec(base="/sys/fs/cgroup"):
+    """This container's CPU time so far, from the cgroup's cpu.stat; None when it cannot be read."""
+    try:
+        with open(base + "/cpu.stat") as f:
+            return cpu_stat_usec(f.read())
+    except OSError:
         return None
 
 
@@ -923,14 +947,19 @@ def pod_main(jobfile):
     out("kgate: preflight ok %d tools\n" % len(job["tools"]))
     meter = PeakMeter()
     meter.start()
+    t0 = time.monotonic()
     out("kgate: running %s\n" % json.dumps(job["argv"]))
     try:
         code = subprocess.call(job["argv"], cwd=job["cwd"], env=env, **as_user)
     except OSError as e:
         out("kgate: cannot start %s: %s\n" % (job["argv"][0], e))
         code = 127
+    t1 = time.monotonic()
+    cpu = read_cpu_usec(os.environ.get("KGATE_CGROUP") or "/sys/fs/cgroup")
     peak, source = meter.stop()
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
+    out("kgate: cpu %s\n" % (cpu if cpu is not None else "unknown"))
+    out("kgate: clock %.3f %.3f\n" % (t0, t1))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
     return code if code >= 0 else 128 - code
 
@@ -1520,7 +1549,7 @@ class Job:
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
-                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "ran": False,
+                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "cpu_usec": None, "run_s": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log", "priority_class": None}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
@@ -1821,6 +1850,14 @@ class Job:
             self.rec["service_peak_bytes"] = int(value)
             self.note("peak mssql %s cgroup" % value)
 
+    def sidecar_cpu(self):
+        """CPU time of the sidecar's own cgroup (cpu.stat usage_usec), read after CMD ends. Best effort: null in the record when it cannot be read."""
+        read = self.cluster.run(["exec", self.pod, "-c", "mssql", "--", "sh", "-c", "cat /sys/fs/cgroup/cpu.stat 2>/dev/null"])
+        value = cpu_stat_usec(read.stdout.decode(errors="replace")) if read.returncode == 0 else None
+        if value is not None:
+            self.rec["service_cpu_usec"] = value
+            self.note("cpu mssql %d usec" % value)
+
     def execute(self, tar_bytes):
         """One exec: unpack, verify, run. Returns (markers, transport exit)."""
         script = self.cluster.exec_script(self.id)
@@ -1982,10 +2019,19 @@ class Job:
         seen, transport = self.execute(tar_bytes)
         if self.mssql:
             self.sidecar_peak()
+            self.sidecar_cpu()
         self.rec["ran"] = self.rec["ran"] or "running" in seen     # CMD started in some attempt
         peak = seen.get("peak", "").split()
         if peak and peak[0].isdigit():
             self.rec["peak_bytes"], self.rec["peak_source"] = int(peak[0]), (peak[1] if len(peak) > 1 else None)
+        if seen.get("cpu", "").isdigit():
+            self.rec["cpu_usec"] = int(seen["cpu"])
+        clock = seen.get("clock", "").split()
+        if len(clock) == 2:   # two readings of one monotonic clock in the pod, taken just before CMD started and just after it ended
+            try:
+                self.rec["run_s"] = round(max(float(clock[1]) - float(clock[0]), 0.0), 2)
+            except ValueError:
+                pass
         if "hash" in seen and seen["hash"].startswith("MISMATCH"):
             raise Unavailable("tree hash differs: " + seen["hash"].replace("MISMATCH", "").strip() + " (CMD not run)")
         if seen.get("image", "").startswith("FAILED"):
