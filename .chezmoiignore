@@ -189,10 +189,17 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (or (eq .chezmoi.os "darwin") (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}
-# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher and the MCP server launcher; the MCP entry is gated the same way in servers.json.tmpl.
+# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher that Browse (personal) and browser-harness (work) drive.
 .local/bin/agent-chrome
+{{- end }}
+
+{{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
+# browser-harness (the work Mac's browser tool): its MCP server launcher and its pi-mcp-lazy seed. The MCP entry is gated the same way in servers.json.tmpl. The personal profile uses Browse instead (docs/profiles.md).
 .local/share/browser-harness-mcp
 .local/share/browser-harness-mcp/**
+{{- end }}
+{{- if ne .profile "axon-work-computer" }}
+.local/share/pi-mcp-lazy/seed/browser-harness.json
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
@@ -290,6 +297,15 @@ Library/**
 .local/bin/qmd-export
 .local/bin/qmd-refresh-scheduled
 .local/bin/qmd
+{{- end }}
+
+{{- if ne .profile "personal" }}
+# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal only. A new Chrome extension with debugger access to every site is something the employer might care about, so it is asked before the work Mac gets it (rule 272f08d0). The pin, the download helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
+.config/mise/conf.d/browse.toml
+.local/bin/agent-download
+.local/share/agent-harness/canonical/skills/using-browse
+.local/share/agent-harness/canonical/skills/using-browse/**
+91_browse_setup.sh
 {{- end }}
 
 {{- if ne .profile "personal" }}
@@ -456,8 +472,6 @@ Library/Preferences/pnpm/**
 .local/bin/ntfy-zellij-notify.sh
 .local/bin/mistakes-report
 .local/bin/session-cost
-.local/share/browser-harness-mcp
-.local/share/browser-harness-mcp/**
 .local/share/initramfs-ssh-unlock
 .local/share/initramfs-ssh-unlock/**
 .local/share/mistakes-report
@@ -481,6 +495,10 @@ Library/Preferences/pnpm/**
 .config/mise/conf.d/linux.toml
 .config/mise/conf.d/qmd.toml
 .config/mise/conf.d/agentsview.toml
+.config/mise/conf.d/browse.toml
+.local/bin/agent-download
+.local/share/agent-harness/canonical/skills/using-browse
+.local/share/agent-harness/canonical/skills/using-browse/**
 .local/bin/qmd
 .local/bin/qmd-export
 .local/bin/qmd-refresh
