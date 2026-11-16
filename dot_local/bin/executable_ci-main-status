@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ci-main-status: is main green, red, or untested? Read before every merge.
 
-usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab)
+usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer)
        ci-main-status [--tip | --merge-gate] --all
        ci-main-status --merge-gate dotfiles --pr N     (the pin-fix exception, below)
 
@@ -42,7 +42,7 @@ Exit codes:
 Under --tip the GREEN line ends with the full 40-char tip sha ("tip <sha>"). A deploy pulls that sha
 (git merge --ff-only <sha>), because main can move between the check and the pull.
 Under --merge-gate, 2 becomes 0 (the line is unchanged), so the exit is 0 unless a repo is red or unreadable.
---all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab has no main run: "n/a", never affects the code.
+--all exits 1 if any repo is 1, else 2 if any repo is 2, else 0. homelab and amazon-itemizer have no main run: "n/a", never affects the code.
 
 GitHub repos: the full workflow's runs on main, read from gh run list (the newest RUN_LIMIT runs).
 coordinator: the coordinator journal, the last conclusive line for each tip (verdict pass, fail or flake) in
@@ -68,8 +68,9 @@ REPOS = {
     "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml"},
     "coordinator": {"github": "cartwmic/coordinator", "journal": True},
     "homelab": None,
+    "amazon-itemizer": None,
 }
-ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab"]
+ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab", "amazon-itemizer"]
 JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/main-journeys.jsonl")
 LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-journeys.lock.d")
