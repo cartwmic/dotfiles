@@ -24,6 +24,8 @@ GH_FAKE = textwrap.dedent('''\
     args = sys.argv[1:]
     with open(os.environ["FAKE_GH_LOG"], "a") as log:
         log.write(" ".join(args) + "\\n")
+    with open(os.environ["FAKE_GH_ENV_LOG"], "a") as env_log:   # what each call's environment said: the caller and urgency tests read it
+        env_log.write(json.dumps({"args": args, "caller": os.environ.get("GH_CALLER"), "urgent": os.environ.get("GH_URGENT")}) + "\\n")
     def fail(msg):
         print(msg, file=sys.stderr); sys.exit(1)
     def git(path, *a):
@@ -145,9 +147,12 @@ class Fixture(unittest.TestCase):
         bindir.mkdir()
         (bindir / "gh").write_text(GH_FAKE)
         (bindir / "gh").chmod(0o755)
+        self.env_log = t / "gh.env.jsonl"
         self.env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
-                    "FAKE_GH_LOG": str(self.log), "FAKE_GH_FIXTURE": str(t / "fixture.json"),
+                    "FAKE_GH_LOG": str(self.log), "FAKE_GH_ENV_LOG": str(self.env_log), "FAKE_GH_FIXTURE": str(t / "fixture.json"),
                     "CI_MAIN_STATUS_JOURNAL": str(self.journal), "CI_MAIN_STATUS_LOCK": str(self.lock)}
+        for name in ("GH_CALLER", "GH_URGENT"):   # each test sets these itself; an inherited value must not leak in
+            self.env.pop(name, None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -175,7 +180,7 @@ class Fixture(unittest.TestCase):
     def walked_commits(self):
         """The commits API calls the script made, as SHAs."""
         calls = self.log.read_text().splitlines() if self.log.exists() else []
-        return [c.split("/commits/")[1] for c in calls if "/commits/" in c]
+        return [c.split("/commits/")[1].split()[0] for c in calls if "/commits/" in c]
 
     def range_lines(self, out):
         return [line.strip() for line in out.splitlines() if re.match(r"^    [0-9a-f]{7} ", line)]
@@ -455,6 +460,49 @@ class TipFlag(Fixture):
         self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
         rc, out = self.status("--tip", "coordinator")
         self.assertEqual(rc, 0, out)
+
+
+class CallerAndCache(Fixture):
+    """Commit reads are cached for an hour, and nothing else is. Every gh call names its caller. Only the merge gate and
+    the deploy check mark their reads urgent for the gh wrapper (GH_URGENT=1)."""
+
+    def gh_calls(self):
+        return [json.loads(line) for line in self.env_log.read_text().splitlines()] if self.env_log.exists() else []
+
+    def test_commit_reads_are_cached_for_an_hour_and_run_list_and_branch_are_not(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        self.status("dotfiles")
+        calls = self.log.read_text().splitlines()
+        commit_reads = [c for c in calls if "/commits/" in c]
+        self.assertEqual(len(commit_reads), 3, calls)   # c3, M, c2: the walk stops at the green
+        for c in commit_reads:
+            self.assertRegex(c, r"^api repos/cartwmic/dotfiles/commits/[0-9a-f]{40} --cache 1h$")
+        others = [c for c in calls if "/commits/" not in c]
+        self.assertTrue(any(c.startswith("run list ") for c in others), others)
+        self.assertIn("api repos/cartwmic/dotfiles/branches/main", others)
+        self.assertEqual([c for c in others if "--cache" in c], [], others)
+
+    def test_every_gh_call_names_the_caller(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        self.status("dotfiles")
+        calls = self.gh_calls()
+        self.assertTrue(calls)
+        self.assertEqual({c["caller"] for c in calls}, {"ci-main-status"})
+
+    def test_plain_mode_is_not_urgent(self):
+        self.dotfiles_runs([run(1, self.c2, "success")])
+        self.status("dotfiles")
+        self.assertEqual({c["urgent"] for c in self.gh_calls()}, {None})
+
+    def test_merge_gate_and_tip_mark_every_call_urgent_run_list_included(self):
+        for flag in ("--merge-gate", "--tip"):
+            with self.subTest(flag=flag):
+                self.dotfiles_runs([run(1, self.c3, "success")])
+                self.env_log.unlink(missing_ok=True)
+                self.status(flag, "dotfiles")
+                calls = self.gh_calls()
+                self.assertTrue(any(c["args"][0] == "run" for c in calls), "run list is one of the calls")
+                self.assertEqual({c["urgent"] for c in calls}, {"1"})
 
 
 class MergeGateFlag(Fixture):
