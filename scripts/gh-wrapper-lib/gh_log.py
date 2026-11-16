@@ -33,7 +33,7 @@ def max_bytes(environ=os.environ):
         return DEFAULT_MAX_BYTES
 
 
-# ---- the record: no I/O except proc(), which reads the calling processes ------------------------------------------------------------------------------
+# ---- the record: reads the clock, the working directory and the environment, and writes nothing; proc() reads the calling processes ------------------------------------------------------------------------------
 
 def is_watch(call):
     return call.klass in WATCH_CLASSES or "--watch" in call.args
