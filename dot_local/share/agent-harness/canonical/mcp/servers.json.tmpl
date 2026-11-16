@@ -28,7 +28,13 @@
     "hindsight": {
       "type": "http",
       "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/"
-    }{{ if or (eq .chezmoi.os "darwin") (and (eq .chezmoi.os "linux") (eq .profile "personal")) }},
+    }{{ if and (eq .profile "personal") (or (eq .chezmoi.os "darwin") (eq .chezmoi.os "linux")) (not (includeTemplate "container" . | fromJson).enabled) }},
+    "browse": {
+      "command": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/browse",
+      "args": [
+        "mcp"
+      ]
+    }{{ end }}{{ if and (eq .profile "axon-work-computer") (eq .chezmoi.os "darwin") }},
     "browser-harness": {
       "command": "uvx",
       "args": [

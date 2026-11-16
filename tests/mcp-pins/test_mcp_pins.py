@@ -15,11 +15,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TMPL = ROOT / "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl"
 MISE = ROOT / "dot_config/mise/config.toml"
+BROWSE_MISE = ROOT / "dot_config/mise/conf.d/browse.toml"
 APPLY = ROOT / "dot_local/user_scripts/executable_apply_harness_config.sh"
 HOME = "/Users/test"
 PROFILES = ("personal", "axon-work-computer")
 # canonical server name -> (shim it must run, mise tool that provides the shim)
 SERVERS = {"rea": ("rea", "npm:rea-agents")}
+# the same, for servers only the personal profile renders (the work render has none of them); their pin lives in conf.d/browse.toml
+PERSONAL_SERVERS = {"browse": ("browse", "npm:@opencode/browse")}
 WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
              "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 
@@ -50,6 +53,23 @@ class McpPinTests(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.assertIn(tool, tools, f"{MISE.name} [tools] must install {tool} (the {name} MCP server)")
                 self.assertRegex(str(tools[tool]), r"^\d+\.\d+\.\d+$", f"{tool} must be pinned to an exact version")
+
+    def test_the_personal_profile_runs_browse_from_its_mise_shim_and_the_work_profile_has_none(self):
+        for name, (shim, _tool) in PERSONAL_SERVERS.items():
+            with self.subTest(server=name):
+                self.assertEqual(render("personal")[name]["command"], f"{HOME}/.local/share/mise/shims/{shim}")
+                self.assertNotIn(name, render("axon-work-computer"))
+        self.assertNotIn("browser-harness", render("personal"))   # retired there (ask 1192); the work Mac keeps it
+
+    def test_mise_pins_the_personal_packages_at_an_exact_version(self):
+        tools = tomllib.loads(BROWSE_MISE.read_text())["tools"]
+        for name, (_shim, tool) in PERSONAL_SERVERS.items():
+            with self.subTest(tool=tool):
+                self.assertIn(tool, tools, f"{BROWSE_MISE.name} [tools] must install {tool} (the {name} MCP server)")
+                version = tools[tool]["version"] if isinstance(tools[tool], dict) else tools[tool]   # an inline table when the pin carries an option
+                self.assertRegex(str(version), r"^\d+\.\d+\.\d+$", f"{tool} must be pinned to an exact version")
+                self.assertIs(tools[tool].get("allow_low_downloads"), True,
+                              f"mise's package-age guard refuses {tool} without allow_low_downloads (ledger #3148); the install fails at apply")
 
     def test_playwright_mcp_server_is_gone(self):
         for profile in PROFILES:

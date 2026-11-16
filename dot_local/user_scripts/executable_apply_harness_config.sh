@@ -367,7 +367,8 @@ for name, cfg in servers.items():
         lines.append(f"log {json.dumps(f'Skipping unsupported MCP server shape for {name}')}")
 
 # Servers dropped from canonical: Claude keeps a stored entry until it is removed, so remove it here (a no-op once it is gone).
-RETIRED = ("playwright",)  # the Playwright MCP server, retired (Michael, ask #1040)
+# browser-harness is retired on the personal profile only (Browse replaced it, ask 1192); the work profile still renders it, and the check below skips a name canonical has.
+RETIRED = ("playwright", "browser-harness")  # playwright: the Playwright MCP server, retired (Michael, ask #1040)
 for name in RETIRED:
     if name not in servers:
         lines.append(f"if \"${{CLAUDE_BIN:-claude}}\" mcp remove -s user {json.dumps(name)} >/dev/null 2>&1; then log {json.dumps(name + ': retired, removed')}; fi")

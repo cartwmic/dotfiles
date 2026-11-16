@@ -1,15 +1,22 @@
 #!/bin/sh
-# Start the dedicated Chrome that the browser-harness MCP server attaches to (docs: agent-harness README, "Agent browser").
+# Start the dedicated Chrome that the agent browser tools drive: Browse on the personal profile, browser-harness on the work Mac (docs: agent-harness README, "Agent browser").
 # Own profile directory, remote debugging on 127.0.0.1:9333. Does nothing if that port already answers.
 # Every run appends its outcome to ${XDG_STATE_HOME:-~/.local/state}/agent-chrome/agent-chrome.log; Chrome's own output goes to chrome.log.
 #   agent-chrome              start Chrome in the background and wait for the port (hand use).
 #   agent-chrome --stop       end every Chrome that uses the agent profile and wait until the port stops answering.
 #   agent-chrome --foreground exec Chrome as this process (agent-chrome.service runs it so: systemd then owns Chrome, stop ends it).
+#   agent-chrome focus URLPART make the one page whose URL contains URLPART the active tab (Chrome's /json/activate), so Ctrl+Shift+X opens the 1Password popup for it.
+#                             Exit 0 and prints the page's URL; exit 1 and lists the candidates when no page or more than one matches; exit 2 on a usage error.
 set -eu
 
 SCRIPT_NAME="agent-chrome"
 MODE="${1:-}"
-case "$MODE" in ""|--stop|--foreground) ;; *) echo "usage: agent-chrome [--stop|--foreground]" >&2; exit 2 ;; esac
+PART="${2:-}"
+case "$MODE" in
+  ""|--stop|--foreground) [ -z "$PART" ] || { echo "usage: agent-chrome [--stop|--foreground|focus URLPART]" >&2; exit 2; } ;;
+  focus) [ -n "$PART" ] || { echo "usage: agent-chrome focus URLPART (part of the page's URL)" >&2; exit 2; } ;;
+  *) echo "usage: agent-chrome [--stop|--foreground|focus URLPART]" >&2; exit 2 ;;
+esac
 OS="${AGENT_CHROME_OS:-$(uname -s)}"   # test hook; macOS and Linux (Omarchy, Wayland) are the two targets
 if [ "$OS" = Linux ]; then
   DEFAULT_APP=/usr/bin/google-chrome-stable
@@ -37,6 +44,33 @@ log() {
 }
 
 up() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; }
+
+# focus: list the page targets on the debug port, pick the one page whose URL contains PART, and activate it (a plain HTTP call; no WebSocket).
+if [ "$MODE" = focus ]; then
+  list=$(curl -fsS --max-time 5 "http://127.0.0.1:$PORT/json/list" 2>/dev/null) || { log ERROR "nothing answers on port $PORT; run agent-chrome first"; exit 1; }
+  # One "id<TAB>url" line per page target whose URL contains PART. python3 is on both targets (macOS, Omarchy).
+  matches=$(printf '%s' "$list" | python3 -c '
+import json, sys
+part = sys.argv[1]
+for t in json.load(sys.stdin):
+    if t.get("type") == "page" and part in t.get("url", ""):
+        print("%s\t%s" % (t["id"], t["url"]))' "$PART") || { log ERROR "could not read the target list from port $PORT"; exit 1; }
+  count=$(printf '%s' "$matches" | grep -c . || true)
+  if [ "$count" -ne 1 ]; then
+    log ERROR "$count pages contain \"$PART\" (need exactly one); open pages:"
+    printf '%s' "$list" | python3 -c '
+import json, sys
+for t in json.load(sys.stdin):
+    if t.get("type") == "page":
+        print("  " + t.get("url", ""))' >&2 || true
+    exit 1
+  fi
+  id=$(printf '%s' "$matches" | cut -f1)
+  url=$(printf '%s' "$matches" | cut -f2-)
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/json/activate/$id" >/dev/null 2>&1 || { log ERROR "Chrome refused to activate $url (id $id)"; exit 1; }
+  log INFO "activated $url (id $id)"
+  exit 0
+fi
 
 # --stop: SIGTERM every process whose command line carries the agent profile (Chrome moves its browser process out of any unit's cgroup,
 # so the profile is the only reliable handle), wait for them and for the port to go quiet, then SIGKILL what is left.

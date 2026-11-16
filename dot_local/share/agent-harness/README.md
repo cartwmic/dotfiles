@@ -54,14 +54,14 @@ Rules:
   the version lives); the canonical entry names the mise shim (`~/.local/share/mise/shims/rea`), so the server is one process with no
   `npm exec` wrapper beside it. To bump it, change the pin in `config.toml`, apply, and regenerate the pi-mcp-lazy seed. `mise install`
   must have run before a harness starts it (the apply's bootstrap does it). Still launched through a package runner: `jira` (work,
-  unpinned `npx -y mcp-remote`, its URL and sign-in exist only on the work Mac) and `browser-harness` (`uvx`, pinned, patched launcher).
-- The Playwright MCP server (`@playwright/mcp`) is retired (Michael, ask #1040): browser work goes through `browser-harness`. The
+  unpinned `npx -y mcp-remote`, its URL and sign-in exist only on the work Mac) and `browser-harness` (work Mac only; `uvx`, pinned, patched launcher). The personal profile's browser server is `browse` (a pinned mise install, below).
+- The Playwright MCP server (`@playwright/mcp`) is retired (Michael, ask #1040): browser work goes through Browse (personal) or `browser-harness` (work Mac). The
   Claude apply step removes a leftover `playwright` registration from `~/.claude.json`; Codex's block and Pi's `mcp.json` drop it
   on the same apply. (The Chromium wrapper `~/.local/bin/chromium`, which uses Playwright's Chrome for Testing build for Pi's
   `launch_browser`, is a different thing and stays.)
-- The Claude, Codex and Pi adapters wrap the local `rea` and `browser-harness` entries in `~/.local/bin/pi-mcp-lazy` (names in
+- The Claude, Codex and Pi adapters wrap the local `rea` entry (and `browser-harness` on the work profile) in `~/.local/bin/pi-mcp-lazy` (names in
   `~/.local/share/pi-mcp-lazy/servers.list`) so a session starts each server on first use, not at session start. `rea` stops when idle;
-  `browser-harness` is never stopped. (`jira` on the work profile is lazy in Pi only.) See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
+  `browser-harness` is never stopped. `browse` is not wrapped: `browse mcp` is a 3.5 MiB stdio proxy and its relay is shared and manages itself. (`jira` on the work profile is lazy in Pi only.) See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
 
@@ -225,15 +225,50 @@ Profiles: the file and the hook land on both desktop profiles (the seat files do
 
 ## Agent browser
 
-A logged-in Chrome that agents can drive. macOS on both desktop profiles (`personal` and `axon-work-computer`), and personal Linux (Omarchy, Wayland).
-The work profile is on by Michael's decision (2026-10-29 11:33 PDT); the work Mac gets it only when Michael or the work
-coordinator runs `chezmoi apply` and the mise bootstrap there.
+A logged-in Chrome that agents can drive, with one browser tool per profile.
+
+- **Personal profile (macOS and Linux): OpenCode Browse** (npm `@opencode/browse`, the `browse` MCP server, skill `using-browse`). The default browser tool for every agent (Michael, ask 1192).
+- **Work profile (the work Mac): `browser-harness`**, unchanged (section "browser-harness, work Mac" below). Browse is not on the work Mac: a new Chrome extension with debugger access to every site is something the employer might care about, so it is asked before it is built (rule 272f08d0).
+
+Both drive the same agent Chrome (`agent-chrome`, remote debugging on 127.0.0.1:9333, own profile `~/.local/share/agent-chrome-profile`).
+
+### Browse (personal)
 
 | Piece | Source | Lands at |
 |---|---|---|
-| Google Chrome | macOS: `install-google-chrome` task in `dot_config/mise/config.toml` (brew cask), part of `bootstrap`. Linux: not installed by the dotfiles; the homelab repo's `scripts/omarchy-devbox/setup.sh` installs google-chrome (aarch64) | macOS `/Applications/Google Chrome.app`; Linux `/usr/bin/google-chrome-stable` |
-| Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` |
-| Login unit (Linux) | `dot_config/systemd/user/agent-chrome.service` (owns Chrome via `agent-chrome --stop` and `--foreground`), loaded by `run_onchange_after_78_agent_chrome_systemd.sh.tmpl` | `~/.config/systemd/user/agent-chrome.service` |
+| Google Chrome | macOS: `install-google-chrome` task in `dot_config/mise/config.toml` (brew cask). Linux: the homelab repo's `scripts/omarchy-devbox/setup.sh` (google-chrome, aarch64) | macOS `/Applications/Google Chrome.app`; Linux `/usr/bin/google-chrome-stable` |
+| Launcher | `dot_local/bin/executable_agent-chrome` | `~/.local/bin/agent-chrome` (`agent-chrome focus URLPART`, below) |
+| Login unit (Linux) | `dot_config/systemd/user/agent-chrome.service`, loaded by `run_onchange_after_78_agent_chrome_systemd.sh.tmpl` | `~/.config/systemd/user/agent-chrome.service` |
+| Browse pin | `dot_config/mise/conf.d/browse.toml` (`"npm:@opencode/browse" = { version = "0.1.0", allow_low_downloads = true }`; mise's package-age guard refuses a new package without the exception, ledger #3148) | `~/.config/mise/conf.d/browse.toml`; shim `~/.local/share/mise/shims/browse` |
+| MCP entry `browse` (`browse mcp`) | `canonical/mcp/servers.json.tmpl` (personal, macOS and Linux, not container mode) | Claude (`~/.claude.json`), Codex (`~/.codex/config.toml`), Pi (`~/.pi/agent/mcp.json`) by the adapters. The T3 seat instances and the coordinator do not load it (`--strict-mcp-config`): a seat that needs a browser hands the job to the browser seat |
+| Setup | `run_onchange_after_91_browse_setup.sh.tmpl` | runs on apply when the pin changes: `browse update --mode off`, removes `~/.local/bin/browse` and the browser-harness leftovers |
+| Download helper | `dot_local/bin/executable_agent-download` | `~/.local/bin/agent-download` |
+| Skill | `canonical/skills/using-browse/SKILL.md` | `~/.claude/skills`, `~/.codex/skills`, Pi |
+
+How it works: `browse mcp` is a stdio proxy that starts a relay (`127.0.0.1:19988`; the next free port from 19990) when a client connects. The relay exits after 30 minutes without use and restores saved agent tabs when it starts again. Several agents share one relay and each sees only the tabs it opened. There is no systemd unit for the relay (ledger #3123): the product owns that lifecycle. Logs: `~/.local/state/browse/logs/relay.log`. Config and state: `~/.config/browse`, `~/.local/share/browse` (`relay-token`, `browser-tokens.json`), `~/.local/state/browse`; none of it is in git.
+
+**Pin and updates.** The relay checks for updates hourly and, for an npm install, runs `npm install -g`, which fights the pin, so the setup script runs `browse update --mode off` (saved under `~/.local/state/browse`, survives a relay restart). Bump: change the version in `conf.d/browse.toml`, apply, restart agent sessions (an MCP server started before an update cannot talk to a newer relay). The Web Store extension updates itself and cannot be pinned.
+
+**Do not run `browse install`.** It writes a second, self-updating binary to `~/.local/bin/browse`, ahead of the mise shim on PATH, which defeats the pin. Pairing needs only `browse pair`. The setup script deletes that copy if it is there.
+
+**Pair Browse (once per machine and Chrome profile).** The extension (id `mfnicocicmmlkpjnaffgihfjhdgjkdjg`, Chrome Web Store) is installed in the agent Chrome by hand; a Chrome restart does not unpair it. Proven 2026-11-16 (observed, not scripted: a script that fills the extension page is not worth it for a once-per-machine step):
+1. Start the agent Chrome (`agent-chrome`), check `curl -s 127.0.0.1:9333/json/version`, and check `browse --version` prints the pinned version.
+2. Open `chrome-extension://mfnicocicmmlkpjnaffgihfjhdgjkdjg/settings.html` in the agent Chrome (`curl -s -X PUT "http://127.0.0.1:9333/json/new?chrome-extension://mfnicocicmmlkpjnaffgihfjhdgjkdjg/settings.html"`), then `agent-chrome focus mfnicocicmmlkpjnaffgihfjhdgjkdjg` and `agent-desktop focus google-chrome`. Click **Pair with a code**; it expands the advanced settings. Keep the default relay address.
+3. Run `browse pair --wait-seconds 180` with its output in a private file (`f=$(mktemp); chmod 600 "$f"; browse pair --wait-seconds 180 >"$f" 2>&1 &`). It prints a one-time code valid 10 minutes. Type the code from that file into **Pairing code** and click **Connect** (screen input through `agent-desktop`, one agent at a time), then delete the file. Do not print the code.
+4. Check `browse status` (Extension: connected, a browser id), `browse pair --list` and `browse tabs`. Close only tabs you opened. `browse pair --revoke <browser>` unpairs; a wiped profile or a replaced machine repeats these steps. The page cannot be driven by Browse itself (it refuses other extensions' pages), hence the screen input.
+
+**Downloads: `agent-download`.** Browse has no download tool. Chrome puts a click's download in its default folder (`xdg-user-dir DOWNLOAD`, else `~/Downloads`; override `--dir DIR` or `AGENT_DOWNLOAD_DIR`) with no prompt (proven 2026-11-16: a Browse click on GitHub's Download ZIP landed the file, found 1.62 s after the click). `mark=$(agent-download mark)` before the click records the folder's files in a handle file under `~/.local/state/agent-download/marks` (one per call, so agents sharing this Chrome do not collide; handles older than a day are deleted); `path=$(agent-download wait --mark "$mark" [--timeout 60])` prints the absolute path of the first completed file that is new or has a changed size (exit 1 on timeout, exit 2 without a readable mark). Completed means a regular, non-hidden file, not `*.crdownload` or `*.part`, with no sibling `NAME.crdownload`, whose size is unchanged over 0.5 s. Timestamps are not used. It polls every 0.2 s. Two downloads in one window can hand the first new file to whichever `wait` asks first; no lock is added. Each call appends one line to `~/.local/state/agent-download/agent-download.log`. Test: `tests/agent-browser/test_download.py`.
+
+**The 1Password popup: `agent-desktop`.** Browse cannot see it. Browse opens tabs in the background, so the page's tab is not the active one and Ctrl+Shift+X would open the popup for another tab. `agent-chrome focus URLPART` reads `http://127.0.0.1:9333/json/list`, picks the one page whose URL contains `URLPART` (exit 1 and the list of open pages if none or several), and calls Chrome's `/json/activate/<id>`. It does not raise the window: a floating 1Password desktop window can sit on top, so follow it with `agent-desktop focus google-chrome`, then `agent-desktop key x ctrl shift` opens the popup (wait about 2 s before the screenshot) and `agent-desktop key Escape` closes it. Proven on this box 2026-11-16; not proven on a Mac. The skill carries this sequence. Test: `tests/agent-browser/test_focus.py`.
+
+Tests: `tests/agent-browser`, `tests/mcp-pins`, `tests/profiles`, `tests/container-mode`.
+
+### browser-harness, work Mac
+
+The work profile keeps this as it was (2026-10-29 decision). The pieces below are macOS on the work profile only, plus the launcher and login unit above.
+
+| Piece | Source | Lands at |
+|---|---|---|
 | MCP server launcher | `dot_local/share/browser-harness-mcp/server.py` | `~/.local/share/browser-harness-mcp/server.py` |
 | MCP server `browser-harness` (runs `browser-use`) | `canonical/mcp/servers.json.tmpl` | `uvx --from browser-use==1.0.2 python -I ~/.local/share/browser-harness-mcp/server.py`, `BU_CDP_URL=http://127.0.0.1:9333`, telemetry off: `ANONYMIZED_TELEMETRY=false` (browser-use) and `BH_TELEMETRY=0` (browser-harness) — Michael, 2026-11-12 |
 
@@ -241,7 +276,7 @@ The server is `browser-use` 1.0.2 (`browser-use --cli-mcp`), which pins `browser
 
 The server entry is canonical, so Claude and Codex are given it too, as with every canonical server. The Claude adapter stores a server's `env` with `claude mcp add -e` (before this change it only set it for the registering process). When a canonical server entry changes, the Claude adapter compares it with the stored user-scope entry (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`) and replaces a changed one with `claude mcp remove` then `claude mcp add`; a missing one is added and an unchanged one is left alone, so a stored sign-in survives. Before this change `claude mcp add` failed on an existing name and the old entry stayed (found when `browser-harness` moved to `server.py`). Test: `tests/agent-browser/test_claude_registration.py`.
 
-Use:
+Use (step 1, the launcher and its login unit, is the same for Browse; steps 2 to 4 are browser-harness):
 
 1. Start the browser: `agent-chrome`. It runs Chrome with `--remote-debugging-port=9333` and its own profile at
    `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Each run appends its outcome (UTC time, run id, elapsed) to

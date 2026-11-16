@@ -40,18 +40,56 @@ class ClaudeEnvTest(unittest.TestCase):
         self.assertFalse(line.startswith("env "), line)
 
     @unittest.skipUnless(CLAUDE and DARWIN, "needs the claude CLI and the macOS-only entry")
-    def test_real_claude_registration_keeps_browser_harness_env(self):
-        for profile in ("personal", "axon-work-computer"):
-            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as t:
-                rendered = chezmoi(profile, "execute-template", stdin=TMPL.read_text())
-                only = {"mcpServers": {"browser-harness": json.loads(rendered)["mcpServers"]["browser-harness"]}}
-                script, home, env = generate_claude_script(Path(t), json.dumps(only))
-                r = subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True, timeout=60)
-                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-                stored = json.loads((home / ".claude.json").read_text())["mcpServers"]["browser-harness"]
-                self.assertEqual(stored["env"], {"BU_CDP_URL": "http://127.0.0.1:9333", "ANONYMIZED_TELEMETRY": "false", "BH_TELEMETRY": "0"})
-                self.assertEqual(stored["args"][:4], ["--from", "browser-use==1.0.2", "python", "-I"])
-                self.assertTrue(stored["args"][4].endswith("/.local/share/browser-harness-mcp/server.py"))
+    def test_real_claude_registration_keeps_browser_harness_env_on_the_work_profile(self):
+        with tempfile.TemporaryDirectory() as t:
+            rendered = chezmoi("axon-work-computer", "execute-template", stdin=TMPL.read_text())
+            only = {"mcpServers": {"browser-harness": json.loads(rendered)["mcpServers"]["browser-harness"]}}
+            script, home, env = generate_claude_script(Path(t), json.dumps(only))
+            r = subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            stored = json.loads((home / ".claude.json").read_text())["mcpServers"]["browser-harness"]
+            self.assertEqual(stored["env"], {"BU_CDP_URL": "http://127.0.0.1:9333", "ANONYMIZED_TELEMETRY": "false", "BH_TELEMETRY": "0"})
+            self.assertEqual(stored["args"][:4], ["--from", "browser-use==1.0.2", "python", "-I"])
+            self.assertTrue(stored["args"][4].endswith("/.local/share/browser-harness-mcp/server.py"))
+
+    @unittest.skipUnless(CLAUDE, "needs the claude CLI")
+    def test_real_claude_registration_of_browse_on_the_personal_profile(self):
+        with tempfile.TemporaryDirectory() as t:
+            data = json.dumps({"chezmoi": {"os": "linux", "homeDir": "/home/test"}})
+            rendered = chezmoi("personal", "execute-template", "--override-data", data, stdin=TMPL.read_text())
+            only = {"mcpServers": {"browse": json.loads(rendered)["mcpServers"]["browse"]}}
+            script, home, env = generate_claude_script(Path(t), json.dumps(only))
+            r = subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            stored = json.loads((home / ".claude.json").read_text())["mcpServers"]["browse"]
+            self.assertEqual((stored["command"], stored["args"]), ("/home/test/.local/share/mise/shims/browse", ["mcp"]))
+            self.assertEqual(stored.get("env", {}), {})   # no env, no token: nothing secret in the entry
+
+
+class ClaudeRetiredTest(unittest.TestCase):
+    """browser-harness is retired on the personal profile: the Claude step removes a stored entry when canonical lacks it, and leaves it
+    alone when canonical still has it (the work Mac). A fake claude records its calls."""
+
+    def calls(self, servers):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            script, home, env = generate_claude_script(tmp, json.dumps({"mcpServers": servers}))
+            log = tmp / "claude.log"
+            fake = tmp / "claude"
+            fake.write_text('#!/bin/sh\necho "$@" >> "$FAKE_LOG"\nexit 0\n')
+            fake.chmod(0o755)
+            r = subprocess.run(["sh", str(script)], env=dict(env, CLAUDE_BIN=str(fake), FAKE_LOG=str(log)), capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            return log.read_text().splitlines(), r.stdout
+
+    def test_a_stored_browser_harness_is_removed_when_canonical_lacks_it(self):
+        calls, out = self.calls({"browse": {"command": "/x/browse", "args": ["mcp"]}})
+        self.assertIn("mcp remove -s user browser-harness", calls)
+        self.assertIn("browser-harness: retired, removed", out)
+
+    def test_a_stored_browser_harness_is_kept_when_canonical_still_has_it(self):   # the work Mac
+        calls, _ = self.calls({"browser-harness": {"command": "uvx", "args": ["x"]}})
+        self.assertNotIn("mcp remove -s user browser-harness", calls)
 
 
 @unittest.skipUnless(CLAUDE, "needs the claude CLI")
