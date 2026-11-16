@@ -1364,15 +1364,21 @@ class Black(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.active().glob("*.json")), ["kgate-1700000001-111.json", "kgate-1700000002-222.json", "kgate-1700000003-333.json"])
         self.assertEqual([d for d in self.deletes() if d[1].startswith("pod/") and d[1] != "pod/" + self.records()[-1]["id"]], [])
 
-    def test_a_client_holding_the_reap_lock_is_not_ended_twice(self):
+    def test_clients_starting_while_another_holds_the_job_do_not_end_it_and_leave_no_lock_file(self):
         self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
         import fcntl
-        fd = os.open(self.active() / "kgate-1700000003-333.reap", os.O_WRONLY | os.O_CREAT)
+        fd = os.open(self.active() / "kgate-1700000003-333.json", os.O_RDONLY)      # another client is ending this job
         self.addCleanup(os.close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        self.assertEqual(self.kgate("--", "true").returncode, 0)
-        self.assertEqual(self.reaped("kgate-1700000003-333"), [])
+        for _ in range(2):                                                          # two more clients start while it is held
+            self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.reaped("kgate-1700000003-333"), [], "neither client ended a job another one holds")
         self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())
+        self.assertEqual([p.name for p in self.active().iterdir()], ["kgate-1700000003-333.json"], "no lock file is left behind")
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(self.kgate("--", "true").returncode, 0)                    # once it is free, the next client ends it, once
+        self.assertEqual(len(self.reaped("kgate-1700000003-333")), 1)
+        self.assertEqual(list(self.active().iterdir()), [])
 
     def test_the_pod_carries_a_hard_bound_that_fits_the_longest_job_on_record(self):
         self.assertEqual(self.kgate("--", "true").returncode, 0)

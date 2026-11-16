@@ -1995,7 +1995,10 @@ def reap_gone(state, cluster, me, note):
         if "pidns" not in e or e["pidns"] != pid_namespace() or proc_identity(e["pid"]) == (e.get("start"), e.get("proc_cmd")):
             continue
         entry = os.path.join(state, "active", e["id"] + ".json")
-        fd = os.open(os.path.join(state, "active", e["id"] + ".reap"), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            fd = os.open(entry, os.O_RDONLY)    # the lock is on the entry itself: no lock file to leave behind or to remove from under a holder
+        except OSError:
+            continue    # it was ended since the list was read
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2018,7 +2021,6 @@ def reap_gone(state, cluster, me, note):
             note("ended %s: %s; pod deleted, exit 143" % (e["id"], why))
         finally:
             os.close(fd)
-            forget(os.path.join(state, "active", e["id"] + ".reap"))
 
 
 def cancel_live(state, e, wait):
