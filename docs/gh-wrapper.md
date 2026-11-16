@@ -59,6 +59,45 @@ A layer is a module in the lib directory. `LAYERS = ("gh_rewrite", "gh_budget", 
 
 Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there. With the budget file off or missing (the work Mac), a lib that is not installed at all is silent, as it was before the layers existed; a lib that is there and broken still prints the line.
 
+## The budget guard (`gh_budget.py`)
+
+A layer that refuses a read when its bucket is nearly empty, so that one agent's polling cannot leave the others with a 403. It acts only where the budget file says `on`.
+
+| Call | What the guard does |
+|---|---|
+| a read on `core` or `graphql` | reads the bucket's `remaining`; under the floor (600) it refuses |
+| a write (merge, `workflow run`, `run rerun`, `pr create/edit/comment`, non-GET `api`, a GraphQL mutation, and any call the wrapper could not read) | passes, no rate read |
+| any call with `GH_URGENT=1` in its environment | passes, no rate read |
+| `gh api rate_limit` (`free`) and `search` | never refused |
+| a host other than github.com (`GH_HOST`, or `gh api --hostname`) | skipped |
+| the rate read fails, or takes over 3 seconds | passes (fail open) |
+
+Each command is judged on its own bucket: `pr view` on `graphql`, `run list` on `core` (the table is [Classification](#classification-gh_classifypy)), so an empty core bucket does not stop `pr view`.
+
+**Refusal.** Exit code 75, one line on standard error, no `gh` call, no waiting (a wait could hang an agent for up to an hour):
+
+```
+gh-wrapper: core budget low: 212 left of 5000 (floor 600), resets 14:41 PST in 17m. Refused "run view" (not urgent). If this is a merge, deploy, workflow run or merge-gate read, run it with GH_URGENT=1; otherwise wait for the reset or use a cheaper read.
+```
+
+**Floor.** 600 is 12% of 5000: the reserve that makes "urgent always passes" true, since a call that passes the wrapper with nothing left only earns a 403 from GitHub. `GH_BUDGET_FLOOR=<n>` overrides it for one command or one shell.
+
+**The rate read.** The wrapper runs the real `gh api rate_limit --hostname github.com` (free, and it still answers at 0 left) and keeps the answer in `~/.local/state/gh-wrapper/rate.json` (`$XDG_STATE_HOME/gh-wrapper/rate.json`) for 30 seconds. The key is the host plus a hash of `GH_TOKEN` (or `GITHUB_TOKEN`); the token itself is never written. The file is written by temp file and rename. Calls from several machines on one account see each other's spend within 30 seconds. The active account of the real gh is not in the key, so `gh auth switch` can give a wrong answer for at most 30 seconds. A failed or slow read is cached for the same 30 seconds, so an outage costs one wait of up to 3 seconds per half minute and not one per call.
+
+**What it leaves for the log layer** (in `call.notes`):
+
+| Key | Values |
+|---|---|
+| `urgent` | `write` (the call is a write), `env` (`GH_URGENT=1`), `no` |
+| `budget` | `ok`, `refused`, `unread` (the rate read failed: the call passed), `skip` (not github.com), `unchecked` (urgent, a write, `free` or `search`: nothing to decide) |
+| `budget_left` | the bucket's remaining calls when this call knew them; a fresh cache entry counts, and the guard reads GitHub only to decide a non-urgent read |
+
+Over-use of `GH_URGENT=1` on reads shows up as `urgent:"env"` in the log.
+
+**Invariants.** It fails open: if the rate read fails, takes over 3 seconds, or returns something unexpected, the call goes on. It never refuses a write, an urgent call, `free` or `search`. It never changes the call's arguments. The floor is an estimate; read the log and set `GH_BUDGET_FLOOR` to what the numbers say.
+
+**Callers that should set `GH_URGENT=1`:** `merge-pr.sh`, `loop_engine_bump.py`, `agent_kit_bump.py` and `ci-main-status --merge-gate` / `--tip` (a separate change). Plain `ci-main-status` stays non-urgent, so a refusal there reads as `ERROR cannot read state: ... gh-wrapper: core budget low ...`.
+
 ## The budget file
 
 `~/.config/gh-wrapper/budget` holds `on` or `off`, written by the installer from the chezmoi data key `ghBudget.enabled` (`true` or `false`). Default: `on` on `personal`, `off` on `axon-work-computer`. A host with no file runs as off. The log and budget layers and the `gh api` cache are held by this one file. The watch-interval default is not: it runs on every profile (see "Cheaper by default").
@@ -110,7 +149,7 @@ jq -sr 'map(select(.event=="exit")) | group_by(.class,.who) | map({class:.[0].cl
 
 ## Tests
 
-`python3 -m unittest discover -s tests/leak-guard`: `test_gh_layers.py` drives the classification, the exempt set and the seam through the installed layout (`bin/gh` next to `lib/`) with a fake real gh and fake layer modules; `test_gh_log.py` the call log's record and file through the installed wrapper; `test_gh_rewrite.py` the rewrite layer (below); `test_gh_installer.py` runs the real template; `test_gh_path.py` the shells; `test_gh_wrapper.py` the leak-guard checks, unchanged.
+`python3 -m unittest discover -s tests/leak-guard`: `test_gh_budget.py` drives the budget guard through the installed layout with a fake real gh that answers `api rate_limit` from the environment; `test_gh_layers.py` drives the classification, the exempt set and the seam through the installed layout (`bin/gh` next to `lib/`) with a fake real gh and fake layer modules; `test_gh_log.py` the call log's record and file through the installed wrapper; `test_gh_rewrite.py` the rewrite layer (below); `test_gh_installer.py` runs the real template; `test_gh_path.py` the shells; `test_gh_wrapper.py` the leak-guard checks, unchanged.
 
 ## Cheaper by default (`gh_rewrite.py`)
 
