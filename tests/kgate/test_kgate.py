@@ -164,7 +164,7 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
         self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), ("8Gi", "12Gi"))
         p = K.parse_profile("")
         self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), (None, None))
-        K.parse_profile('ephemeral_storage_limit = "3Gi"')   # equal to the default request is allowed
+        K.parse_profile('ephemeral_storage_limit = "4Gi"')   # equal to the default request is allowed
 
     def test_bad_homelab_ephemeral_storage_is_refused(self):
         for bad in ('ephemeral_storage = "20G"', 'ephemeral_storage = 20', 'ephemeral_storage_limit = "20G"', 'ephemeral_storage_limit = 1',
@@ -204,8 +204,8 @@ class PodSpec(unittest.TestCase):
     def test_limits_and_jobs_follow_the_request(self):
         pod, _ = self.pod()
         c = pod["spec"]["containers"][0]
-        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "6Gi", "ephemeral-storage": "3Gi"})
-        self.assertEqual(c["resources"]["limits"], {"memory": "6Gi"})
+        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "6Gi", "ephemeral-storage": "4Gi"})
+        self.assertEqual(c["resources"]["limits"], {"memory": "6Gi", "ephemeral-storage": "12Gi"})
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"]), ("3", "3", "-j3"))
         self.assertEqual(c["image"], DIGEST)
@@ -214,28 +214,41 @@ class PodSpec(unittest.TestCase):
     def test_request_and_limit_render_separately(self):
         pod, _ = self.pod(memory="256Mi", memory_limit="512Mi")
         c = pod["spec"]["containers"][0]
-        self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "512Mi"}})
+        self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "512Mi", "ephemeral-storage": "12Gi"}})
 
     def test_the_pod_asks_for_ephemeral_storage_and_a_profile_can_change_it(self):
         # dotfiles#484: a pod with no request is the first one the kubelet evicts when the node is short on disk, and the scheduler cannot keep it off a full node.
-        self.assertEqual(K.EPHEMERAL_DEFAULT, "3Gi")
+        self.assertEqual(K.EPHEMERAL_DEFAULT, "4Gi")
         pod, _ = self.pod()
-        self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["ephemeral-storage"], "3Gi")
-        self.assertNotIn("ephemeral-storage", pod["spec"]["containers"][0]["resources"]["limits"], "a request only: no limit unless the profile sets one")
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["ephemeral-storage"], "4Gi")
         pod, _ = self.pod(ephemeral="8Gi")
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["ephemeral-storage"], "8Gi")
+
+    def test_the_pod_has_a_default_ephemeral_storage_limit_that_never_falls_below_the_request(self):
+        # 2026-11-16 13:37Z (agent-4): a gate with no limit fills the node's disk and the kubelet evicts its neighbours. With a limit it is the one evicted, reported as `evicted:`.
+        self.assertEqual(K.EPHEMERAL_LIMIT_DEFAULT, "12Gi")
+        pod, _ = self.pod()
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"], "12Gi")
+        pod, _ = self.pod(ephemeral="25Gi")   # a profile that raises only the request (storycraft): a limit below it would be refused by the API
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"], "25Gi")
+        pod, _ = self.pod(ephemeral="12Gi")
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"], "12Gi")
+        pod, _ = self.pod(ephemeral_limit="40Gi")   # an explicit limit wins, larger or smaller than the default
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"], "40Gi")
+        pod, _ = self.pod(ephemeral_limit="5Gi")
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"], "5Gi")
 
     def test_an_ephemeral_storage_limit_is_rendered_when_set(self):
         pod, _ = self.pod(ephemeral="1Gi", ephemeral_limit="2Gi")
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"], {"memory": "6Gi", "ephemeral-storage": "2Gi"})
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "3Gi", dotfiles#484)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi")
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "0133381d0690b00ebb4ca94dd44900242d8744a2e155d2fd0db7fa57521d44f0"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "25754695a6632559670764ecdae9dbb462ae1de6b86811afd981aac73a365b61"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "5840560644b4ffdb28880396e79c9a710aa21b73f75a435af94c9fd3c9d06e3b"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "951ead9a44f4fee97d862955b04d78396fa15db1ec17407599b24390d36af550"),
+             "3601ffc42122ee8fc5ad6cea9a3130da4b7bdf8b5bb02e9ee9e909a48b67c119"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "4099eaf8064d51bce22677bb8711692a22494ca7f0d8b76c27d1edb9e21eb3c7"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -1019,8 +1032,13 @@ class Black(unittest.TestCase):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
         res = next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["resources"]
-        self.assertEqual(res["requests"]["ephemeral-storage"], "3Gi")
-        self.assertNotIn("ephemeral-storage", res["limits"])
+        self.assertEqual((res["requests"]["ephemeral-storage"], res["limits"]["ephemeral-storage"]), ("4Gi", "12Gi"))
+        self.profile(extra='ephemeral_storage = "20Gi"')
+        (self.fake / "calls.jsonl").unlink()
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["resources"]
+        self.assertEqual((res["requests"]["ephemeral-storage"], res["limits"]["ephemeral-storage"]), ("20Gi", "20Gi"))
         self.profile(extra='ephemeral_storage = "6Gi"\nephemeral_storage_limit = "7Gi"')
         (self.fake / "calls.jsonl").unlink()
         done = self.kgate("--", "true")
@@ -1299,8 +1317,8 @@ class Black(unittest.TestCase):
         self.assertEqual(self.kgate("--cpu", "3", "--mem", "2Gi", "--", "true").returncode, 0)
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
         c = manifest["items"][-1]["spec"]["containers"][0]
-        self.assertEqual(c["resources"]["limits"], {"memory": "2Gi"})
-        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi", "ephemeral-storage": "3Gi"})
+        self.assertEqual(c["resources"]["limits"], {"memory": "2Gi", "ephemeral-storage": "12Gi"})
+        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi", "ephemeral-storage": "4Gi"})
 
     def pod_resources(self):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
@@ -1310,7 +1328,7 @@ class Black(unittest.TestCase):
         self.profile(memory="256Mi", extra='memory_limit = "512Mi"')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "512Mi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "512Mi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("256Mi", "512Mi"))
         self.assertIn("256Mi memory request, 512Mi limit", done.stdout)
@@ -1318,7 +1336,7 @@ class Black(unittest.TestCase):
     def test_without_memory_limit_the_limit_is_the_request(self):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "1Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("1Gi", "1Gi"))
         self.assertIn("1Gi memory request\n", done.stdout)
@@ -1343,7 +1361,7 @@ class Black(unittest.TestCase):
     def test_mem_sets_the_request_and_the_profile_limit_stays(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
         self.assertEqual(self.kgate("--mem", "512Mi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "2Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "2Gi", "ephemeral-storage": "12Gi"}})
 
     def test_mem_above_the_profile_limit_is_refused(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
@@ -1354,7 +1372,7 @@ class Black(unittest.TestCase):
 
     def test_mem_limit_flag_sets_the_limit(self):
         self.assertEqual(self.kgate("--mem-limit", "3Gi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "3Gi"}, "limits": {"memory": "3Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "3Gi", "ephemeral-storage": "12Gi"}})
 
     def test_mem_limit_flag_below_the_request_is_refused(self):
         done = self.kgate("--mem-limit", "512Mi", "--", "true")
@@ -2141,7 +2159,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "0133381d0690b00ebb4ca94dd44900242d8744a2e155d2fd0db7fa57521d44f0"  # the same pin as test_default_render_is_byte_identical
+        want = "25754695a6632559670764ecdae9dbb462ae1de6b86811afd981aac73a365b61"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
