@@ -680,6 +680,9 @@ KEEP = {
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
+# The tools the builder, planner and reviewer seat files deny (restated from .chezmoitemplates/fleet_seat); the lead and coordinator keep them.
+UNUSED_TOOLS = {"ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"}
+UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer"}
 # Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat); workflow-authoring stays on.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
@@ -864,7 +867,8 @@ class FleetFilesTest(unittest.TestCase):
                     # the builder seat also carries its Stop hook (tests/stop-running-jobs)
                     self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat == "builder" else set())
                                      | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set()), (profile, seat))
-                    self.assertEqual(f["permissions"], {"deny": ["Artifact"]})
+                    # builder, planner and reviewer also deny the four tools they never call; lead and coordinator keep them
+                    self.assertEqual(f["permissions"], {"deny": ["Artifact"] + (sorted(UNUSED_TOOLS) if seat in UNUSED_TOOL_SEATS else [])}, (profile, seat))
                     self.assertIs(f["syncClaudeAiSkills"], False)
                     # bundled skills stay on so the Workflow tool keeps its short text (workflow-authoring carries the reference); every other bundled skill is off
                     self.assertIs(f["disableBundledSkills"], False)

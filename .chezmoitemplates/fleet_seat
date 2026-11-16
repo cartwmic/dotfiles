@@ -48,7 +48,13 @@
   its name is added here: tests/t3-hub test_every_bundled_skill_is_off_or_workflow_authoring runs the binary and fails naming it. */ -}}
 {{- $bundledOff := list "artifact-design" "artifact-diagramming" "claude-api" "code-review" "dataviz" "fewer-permission-prompts" "init" "keybindings-help" "loop" "plugin-authoring" "run" "security-review" "simplify" "update-config" -}}
 {{- range $name := $bundledOff -}}{{- if has $name $keep -}}{{ fail (printf "fleet_seat: seat %s keeps %q, which is also a Claude Code bundled skill turned off above; rename the kept skill or drop the name from $bundledOff" $.seat $name) }}{{- end -}}{{- $_ := set $off $name "off" -}}{{- end -}}
-{{- $seatFile := dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" false "skillOverrides" $off -}}
+{{- /* Builder, planner and reviewer: four tools they do not use are denied, which takes them out of the tools array (about 4,965 tokens in every request). ReportFindings (typed review findings for a host UI),
+  ScheduleWakeup (/loop pacing; sleeping and polling are against the rules), ListAgents, and Workflow (needs an explicit opt-in; 1,993 tokens even with workflow-authoring on). Counts 2026-11-14..16, main sessions:
+  none of the four called in the planner and reviewer seats; the builder called ScheduleWakeup 8 times and ListAgents 3 times (polling and a listing it can do without), Workflow once. The lead and the coordinator
+  keep all four: leads drive workflows and loops. Probe and numbers: coordinator-workspace token-efficiency/build-1116/L5/PROBE.md. */ -}}
+{{- $deny := list "Artifact" -}}
+{{- if has .seat (list "builder" "planner" "reviewer") -}}{{- $deny = concat $deny (list "ListAgents" "ReportFindings" "ScheduleWakeup" "Workflow") -}}{{- end -}}
+{{- $seatFile := dict "permissions" (dict "deny" $deny) "syncClaudeAiSkills" false "disableBundledSkills" false "skillOverrides" $off -}}
 {{- /* Builder, planner and reviewer only: ~/.claude/CLAUDE.md (with the hindsight memory guide) is not loaded; the same text without the guide comes from the worker folder (claudeMdExcludes only skips this one file). The T3 instance adds --add-dir and CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 (modify_settings.json.tmpl) and tests/t3-hub keeps the three halves together: an exclude without them would leave the seat with no user instructions at all. */ -}}
 {{- if has .seat (list "builder" "planner" "reviewer") -}}
 {{-   $_ := set $seatFile "claudeMdExcludes" (list (joinPath .ctx.chezmoi.homeDir ".claude" "CLAUDE.md")) -}}

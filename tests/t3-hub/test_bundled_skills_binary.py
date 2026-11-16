@@ -1,4 +1,4 @@
-"""What the installed Claude Code lists to the model under each seat file: only workflow-authoring may be a bundled skill.
+"""What the installed Claude Code lists to the model under each seat file: only workflow-authoring may be a bundled skill, and the four unused tools are absent from the worker seats.
 
 .chezmoitemplates/fleet_seat keeps Claude Code's bundled skills on (with disableBundledSkills true the Workflow tool carries its whole 20K-char
 authoring reference in every request) and turns every bundled skill but workflow-authoring off by name, because skillOverrides has no wildcard.
@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 from test_fizzy_grove_binary import find_binary
-from test_t3_hub import KEEP, fleet_env
+from test_t3_hub import KEEP, UNUSED_TOOLS, UNUSED_TOOL_SEATS, fleet_env
 
 LIST_HEAD = "The following skills are available for use with the Skill tool:"
 EVENTS = [("message_start", {"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "model": "x", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 1}}}),
@@ -69,7 +69,7 @@ def first_request(binary, seat_file):
 
 
 def listed_skills(request):
-    """The skill names in the listing block of the request, and the Workflow tool's description length."""
+    """The skill names in the listing block of the request, and the Workflow tool's description length (None when the tool is absent)."""
     names = []
     for message in request["messages"]:
         parts = message["content"] if isinstance(message["content"], list) else [{"text": message["content"]}]
@@ -91,14 +91,20 @@ class BundledSkillsBinaryTest(unittest.TestCase):
             for seat in sorted(KEEP):
                 seat_file = env.home / ("seat-%s.json" % seat)
                 seat_file.write_text(env.render("dot_claude/fleet/seat-%s.json.tmpl" % seat))
-                names, workflow_chars = listed_skills(first_request(binary, seat_file))
+                request = first_request(binary, seat_file)
+                names, workflow_chars = listed_skills(request)
                 # the throwaway HOME has no personal skills, so whatever is listed is a bundled (or built-in) skill
                 extra = sorted(set(names) - {"workflow-authoring"})
                 self.assertEqual(extra, [], "Claude Code %s lists %s to a %s seat. Add each to $bundledOff in .chezmoitemplates/fleet_seat and to BUNDLED_OFF in "
                                  "tests/t3-hub/test_t3_hub.py (a bundled skill nobody turned off is a listing in every request of every seat)." % (binary, extra, seat))
                 self.assertIn("workflow-authoring", names, "workflow-authoring must stay listed: without it the Workflow tool carries its whole 20K-char reference (seat %s)" % seat)
-                self.assertIsNotNone(workflow_chars, "no Workflow tool in the first request of seat %s: has Claude Code dropped it?" % seat)
-                self.assertLess(workflow_chars, 6000, "the Workflow tool description is %d chars on seat %s: the authoring reference is inline again" % (workflow_chars, seat))
+                tools = {t["name"] for t in request["tools"]}
+                if seat in UNUSED_TOOL_SEATS:
+                    self.assertEqual(sorted(tools & UNUSED_TOOLS), [], "seat %s still has tools it never calls in the first request; the seat file denies them" % seat)
+                else:
+                    self.assertTrue(UNUSED_TOOLS <= tools, "seat %s lost %s: the lead and the coordinator keep them" % (seat, sorted(UNUSED_TOOLS - tools)))
+                    self.assertIsNotNone(workflow_chars, "no Workflow tool in the first request of seat %s: has Claude Code dropped it?" % seat)
+                    self.assertLess(workflow_chars, 6000, "the Workflow tool description is %d chars on seat %s: the authoring reference is inline again" % (workflow_chars, seat))
         finally:
             env.close()
 
