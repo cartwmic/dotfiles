@@ -28,7 +28,7 @@ SEAT_ROWS = (
     "| Lead | Opus 5.5 medium |",
     "| Planner | Sonnet 5.5 high |",
     "| Reviewer | Opus 5.5 medium |",
-    "| Builder | Haiku 5.5 xhigh or Sonnet 5.5 high; use Sonnet 5.5 high on failure, or when the work is ambiguous |",
+    "| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |",
 )
 BROWSER = {
     "personal": "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
