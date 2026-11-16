@@ -57,6 +57,7 @@ How it works:
 - Cancel waits up to `--wait` seconds for that job's end line in `log.jsonl`, prints it, and exits 0. The job's own exit code (143) is in the line. If the job has not ended by then, cancel exits 69, prints the client's pid and says it did not force it. Cancel never escalates to SIGKILL by itself; the caller decides (`kill -9 <that pid>`).
 - **Orphan.** If the client is already gone (killed -9, or the Mac rebooted) and left no end line, cancel deletes exactly that job's `pod/<id>`, `secret/<id>-env` and `secret/<id>-pull` (after checking that the pod, if it exists, carries the `app=kgate` label), writes an end line with exit 143, `reason` `cancelled by kgate cancel (client already gone)`, `cleanup` true or false and `"cancelled": true`, and removes the entry. If the cluster is unreachable it exits 69 and keeps the entry so you can run it again.
 - A job that ended on its own but left its entry behind is reported from its end line and the entry is removed.
+- **A starting job ends the orphans of its cluster.** The pod cannot see this machine's pids, so a pod whose client died keeps running; the next client to start can tell. After kgate reaches the cluster and before it creates its own pod, it does what the Orphan step above does for every entry of that cluster whose client is gone (same start time and command not running) and that was written in this pid namespace. Each is ended with exit 143, `reason` `ended by kgate: its client (pid N) is gone`, `"cancelled": true` and `reaped_by` (the id of the job that did it), and one `kgate: ended <id>: ...` line in the new job's output. Each kubectl call is cut off after 30 s. A delete that is not confirmed, or a pod that is not kgate's, leaves the entry for the next client, prints one `could not end ...` line and never changes the new job's exit code. Two clients starting together take a lock (`<state>/active/<id>.reap`), so a job gets one end line. An entry with no `pidns` (written by an older client) or from another pid namespace is left to `kgate cancel`. Nothing runs between jobs: if no client starts, an orphan stays until one does.
 
 | Exit | Meaning |
 |---|---|
@@ -212,7 +213,8 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `exit`, `reason` | exit code; the reason when it is 69 |
 | `out_files`, `cleanup`, `output`, `cmd` | files copied back; pod and Secrets confirmed deleted; log file; the command |
 | `cleanup_attempts` | delete attempts made, only on a job that created a pod; `cleanup` is true when one was confirmed |
-| `cancelled` | only on a job stopped by `kgate cancel`: `true` |
+| `cancelled` | only on a job stopped by `kgate cancel` or ended by a later job because its client was gone: `true` |
+| `reaped_by` | only on a job ended because its client was gone: the id of the kgate job that ended it |
 
 ## A second cluster, reached through kubectl
 
@@ -276,7 +278,7 @@ A `registries` entry is a host (`registry.example`) or a host plus a path prefix
 
 - **One job holds the cache; a second runs cold.** A second job's pod stays `Pending` (`Unschedulable`, "node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode"). If it is still Pending on that reason after about 10 s (`CACHE_BUSY_S`), kgate deletes the pod, creates the same pod again with an emptyDir `/cache` (no claim, no `fsGroup`), prints `kgate: cache in use by another job; running without it`, and the job runs cold. The record's `cache` field says which: `pvc`, `fallback`, or `none` (no claim; kubectl-cluster records only). Any other Pending reason (quota, capacity) keeps the existing waits, with the cache.
 - **Zone.** A disk lives in one availability zone, so a pod that mounts the claim is scheduled in that zone; a pod that falls back to the emptyDir can go anywhere.
-- **A dead client's pod.** If a client dies, its pod keeps running until the deadline and can hold the disk that long; other jobs then run cold. `kgate cancel` deletes it sooner.
+- **A dead client's pod.** If a client dies, its pod keeps running until the deadline and can hold the disk that long; other jobs then run cold. `kgate cancel` deletes it sooner, and so does the next job that starts on this cluster.
 - **Cleanup.** The pod side removes `/cache/<job id>` (the job's own script, file list, error file and HOME) at the end of every job, pass or fail, and at its start removes any other `/cache/kgate-*` directory older than a day (a dead client's leftover). The caches stay.
 - **Missing claim.** The pod would stay `Pending` with `persistentvolumeclaim "<name>" not found`. kgate sees that at once and exits 69 with `the cache claim <name> does not exist in <namespace> (cache_pvc in the profile)`; the pod is deleted.
 
@@ -305,7 +307,7 @@ A `registries` entry is a host (`registry.example`) or a host plus a path prefix
 | Tree location | the pod's filesystem | emptyDir at the tree's top directory |
 | Git history | `.git` and the shared git folder shipped | none shipped; one synthetic commit built in the pod |
 | Caches | hostPath | emptyDir `/cache` (cold each job), or a claim (warm; one job holds it, a second runs cold) |
-| Deadline | 8 h | the cluster file's `deadline_s` |
+| Deadline | 4 h (`MAX_RUN_S`; the longest job on record ran 3 h 3 min) | the cluster file's `deadline_s` |
 | Scheduling | node affinity | the cluster's |
 | Cleanup | pod and two Secrets | pod only |
 | Image needs | `tini`, `python3` 3.11+ | `sh`, `tar`, `git` |

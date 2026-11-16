@@ -36,6 +36,7 @@ Contract
 {{ end }}  Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - The pod is deleted on every path (CMD's exit, 69, an interrupt). A failed delete is retried for up to 60 s; the record's `cleanup` says whether it was confirmed and `cleanup_attempts` how many tries it took.
+- A job whose client has died is ended by the next kgate job that starts on the same cluster (exit 143, `reason` naming the gone client, pod deleted), before that job creates its own pod. Every pod also ends itself at 4 hours on the homelab (the cluster file's `deadline_s` on another cluster).
 - One JSON line per job in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl (keyed by the run-and-wake job id when
   there is one); the full output is in <id>.log beside it.
 
@@ -137,7 +138,7 @@ def registry_admits(regs, ref):
 
 CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default"}
 CLUSTER_REQUIRED = ("kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s")
-MAX_RUN_S = 8 * 3600  # the pod ends itself: a pod whose client died must not hold its memory for ever
+MAX_RUN_S = 4 * 3600  # the homelab pod ends itself at this age: the hard bound on any job. The longest legitimate jobs on record ran 3 h (a 30-run journey repeat); it was 8 h, which two of the three 2026-11-16 orphans never reached
 UNAVAILABLE = 69
 USAGE = 64
 NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the whole scheduling deadline. Nothing else in kgate uses 75.
@@ -939,6 +940,14 @@ def proc_identity(pid):
     return None if not m or m.group(1).startswith("Z") else (m.group(2), m.group(3))
 
 
+def pid_namespace():
+    """The pid namespace this process is in (None where there is none to name, as on a Mac). A pid means the same process only inside one namespace."""
+    try:
+        return os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return None
+
+
 def write_json_atomic(path, obj):
     tmp = "%s.%d.tmp" % (path, os.getpid())
     with open(tmp, "w") as f:
@@ -1376,7 +1385,7 @@ class Job:
             raise RuntimeError("cannot read this process's start time and command")
         os.makedirs(os.path.dirname(self.entry), exist_ok=True)
         write_json_atomic(self.entry, {"id": self.id, "job": self.rec["job"] or None, "pid": os.getpid(), "start": ident[0],
-                                       "proc_cmd": ident[1], "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
+                                       "proc_cmd": ident[1], "pidns": pid_namespace(), "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
                                        "node": self.rec["node"], "cluster": self.cluster.name, "pod": self.pod})
 
     def unregister(self):
@@ -1468,6 +1477,12 @@ class Job:
         check_reachable(self.cluster)
         if len(getattr(self.cluster, "hosts", ())) > 1:
             self.note("control plane %s" % self.cluster.host)
+
+    def reap(self):
+        try:
+            reap_gone(self.state, self.cluster, self.id, self.note)
+        except Exception as e:
+            self.note("could not look for jobs whose client is gone: %s" % e)
 
     def sweep(self):
         """Remove what an earlier client that died left behind: finished pods, and Secrets whose pod is gone."""
@@ -1683,6 +1698,7 @@ class Job:
         tar_bytes = archive(wt, common, files, shipped, history=self.cluster.kind != "kubectl", skipped=skipped)
         self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
         self.reachable()
+        self.reap()
         self.sweep()
         secret_env = {k: op_read(ref) for k, ref in prof["secrets"].items()}
         host = image.split("/")[0]
@@ -1922,6 +1938,31 @@ def report_end(rec):
     return 0
 
 
+def orphan_delete(cluster, e, timeout=None):
+    """Delete exactly the pod and Secrets of the job whose entry is `e` (the pod its client was on: after an eviction that is "<id>-r2").
+    Returns (the delete's result, None), or (None, why nothing was deleted: the look-up failed, or the pod is not a kgate pod). `timeout` cuts off each kubectl call."""
+    pod = e.get("pod") or e["id"]
+    label = cluster.run(["get", "pod", pod, "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"], timeout=timeout)
+    if label.returncode != 0:
+        return None, "could not look up pod %s: %s; nothing deleted" % (pod, label.stderr.decode(errors="replace").strip()[:200])
+    if label.stdout.decode().strip() not in ("", "kgate"):
+        return None, "pod %s is not a kgate pod; nothing deleted" % pod
+    return delete_job_objects(cluster, pod, timeout=timeout), None
+
+
+def write_orphan_end(state, e, cluster, reason, done, **more):
+    """Write the end line of a job whose client is gone (exit 143), and drop its registry entry."""
+    t0 = int(e["id"].split("-")[1])
+    now = time.time()
+    rec = {"id": e["id"], "job": e.get("job"), "start": utc(t0), "end": utc(now), "duration_s": round(now - t0, 3), "cwd": e.get("cwd"),
+           "cmd": e.get("cmd"), "cluster": cluster.name, "node": e.get("node"), "ran": None, "exit": 143, "reason": reason,
+           "cleanup": done.returncode == 0, "cancelled": True, **more}
+    with open(os.path.join(state, "log.jsonl"), "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
+    return rec
+
+
 def cancel_orphan(state, e):
     """The client is gone and wrote no end line: delete exactly this job's pod and Secrets, and write the end line."""
     name = e.get("cluster") or "homelab"
@@ -1931,27 +1972,53 @@ def cancel_orphan(state, e):
     except Unavailable as err:
         print("kgate cancel: %s (the job's pod and Secrets are not deleted; run it again)" % err, file=sys.stderr)
         return UNAVAILABLE
-    pod = e.get("pod") or e["id"]     # the pod the client was on: after an eviction that is "<id>-r2"
-    label = cluster.run(["get", "pod", pod, "--ignore-not-found", "-o", "jsonpath={.metadata.labels.app}"])
-    if label.returncode != 0:
-        print("kgate cancel: could not look up pod %s: %s; nothing deleted" % (pod, label.stderr.decode(errors="replace").strip()[:200]), file=sys.stderr)
+    done, problem = orphan_delete(cluster, e)
+    if problem:
+        print("kgate cancel: " + problem, file=sys.stderr)
         return UNAVAILABLE
-    if label.stdout.decode().strip() not in ("", "kgate"):
-        print("kgate cancel: pod %s is not a kgate pod; nothing deleted" % pod, file=sys.stderr)
-        return UNAVAILABLE
-    done = delete_job_objects(cluster, pod)
-    t0 = int(e["id"].split("-")[1])
-    now = time.time()
-    rec = {"id": e["id"], "job": e.get("job"), "start": utc(t0), "end": utc(now), "duration_s": round(now - t0, 3), "cwd": e.get("cwd"),
-           "cmd": e.get("cmd"), "cluster": cluster.name, "node": e.get("node"), "ran": None, "exit": 143, "reason": CANCELLED + " (client already gone)",
-           "cleanup": done.returncode == 0, "cancelled": True}
-    with open(os.path.join(state, "log.jsonl"), "a") as f:
-        f.write(json.dumps(rec) + "\n")
-    forget(os.path.join(state, "active", e["id"] + ".json"), os.path.join(state, "active", e["id"] + ".cancel"))
+    pod = e.get("pod") or e["id"]
+    rec = write_orphan_end(state, e, cluster, CANCELLED + " (client already gone)", done)
     if done.returncode != 0:
         print("kgate cancel: delete not confirmed: %s (delete pod/%s secret/%s-env secret/%s-pull by hand)"
               % (done.stderr.decode(errors="replace").strip()[:200], pod, pod, pod), file=sys.stderr)
     return report_end(rec)
+
+
+def reap_gone(state, cluster, me, note):
+    """End the jobs of `cluster` whose client is gone, before job `me` takes cluster capacity of its own. The pod cannot see this host's pids, so a pod
+    whose client died keeps running; the next client to start is the one that can tell. An entry is reaped only when its client's (start, command) is not
+    running and it was written in this pid namespace (in another one a live client looks gone). Whatever goes wrong here is a note, never the new job's
+    failure; an entry whose delete was not confirmed stays for the next client."""
+    for e in active_entries(state):
+        if e["id"] == me or (e.get("cluster") or "homelab") != cluster.name:
+            continue
+        if "pidns" not in e or e["pidns"] != pid_namespace() or proc_identity(e["pid"]) == (e.get("start"), e.get("proc_cmd")):
+            continue
+        entry = os.path.join(state, "active", e["id"] + ".json")
+        fd = os.open(os.path.join(state, "active", e["id"] + ".reap"), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue    # another client is ending this one
+            if not os.path.exists(entry):
+                continue    # it was ended while this client waited for the lock
+            if end_line(state, e["id"])[0]:     # it ended; only its entry was left behind
+                forget(entry, os.path.join(state, "active", e["id"] + ".cancel"))
+                continue
+            why = "its client (pid %d) is gone" % e["pid"]
+            try:
+                done, problem = orphan_delete(cluster, e, timeout=CLEANUP_ATTEMPT_S)
+            except Exception as err:
+                done, problem = None, "%s: %s" % (type(err).__name__, err)
+            if problem or done.returncode != 0:
+                note("could not end %s (%s): %s; left for the next kgate job" % (e["id"], why, problem or done.stderr.decode(errors="replace").strip()[:200]))
+                continue
+            write_orphan_end(state, e, cluster, "ended by kgate: " + why, done, reaped_by=me)
+            note("ended %s: %s; pod deleted, exit 143" % (e["id"], why))
+        finally:
+            os.close(fd)
+            forget(os.path.join(state, "active", e["id"] + ".reap"))
 
 
 def cancel_live(state, e, wait):
