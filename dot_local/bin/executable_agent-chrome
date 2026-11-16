@@ -70,17 +70,14 @@ if [ ! -x "$APP" ]; then
   exit 1
 fi
 
-# Linux: Chrome runs on Wayland. An agent shell under t3code.service has no WAYLAND_DISPLAY, so take the first wayland-* socket in XDG_RUNTIME_DIR.
+# Linux: Chrome runs on Wayland. An agent shell under t3code.service may have no WAYLAND_DISPLAY; session.sh (shared with
+# ~/.zshenv and agent-desktop) sets it from the newest live Hyprland instance.
 set --
 if [ "$OS" = Linux ]; then
   set -- --ozone-platform=wayland
-  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    for sock in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-*; do
-      [ -S "$sock" ] || continue
-      WAYLAND_DISPLAY=$(basename "$sock")
-      export WAYLAND_DISPLAY
-      break
-    done
+  if [ -r "$HOME/.local/share/agent-desktop/session.sh" ]; then
+    . "$HOME/.local/share/agent-desktop/session.sh"
+    agent_desktop_session
   fi
 fi
 

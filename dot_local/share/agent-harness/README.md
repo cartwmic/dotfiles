@@ -230,7 +230,7 @@ Use:
 1. Start the browser: `agent-chrome`. It runs Chrome with `--remote-debugging-port=9333` and its own profile at
    `~/.local/share/agent-chrome-profile`, and does nothing if port 9333 already answers. Each run appends its outcome (UTC time, run id, elapsed) to
    `~/.local/state/agent-chrome/agent-chrome.log`; Chrome's own output goes to `chrome.log` in the same directory.
-   On Linux it runs `google-chrome-stable --ozone-platform=wayland`, and when `WAYLAND_DISPLAY` is unset (agent shells under `t3code.service` have none) it uses the first `wayland-*` socket in `$XDG_RUNTIME_DIR`. Check by hand on the box: `agent-chrome`, then `curl -s http://127.0.0.1:9333/json/version`.
+   On Linux it runs `google-chrome-stable --ozone-platform=wayland`, and when `WAYLAND_DISPLAY` is unset (agent shells under `t3code.service` have none) it takes it from the newest live Hyprland instance (`~/.local/share/agent-desktop/session.sh`, the lookup `~/.zshenv` runs for every agent shell and `agent-desktop` shares). Check by hand on the box: `agent-chrome`, then `curl -s http://127.0.0.1:9333/json/version`.
    On Linux the unit `agent-chrome.service` starts the agent Chrome at login (after `graphical-session.target`), so nothing needs starting after a reboot. The unit owns Chrome:
    `ExecStartPre` runs `agent-chrome --stop` (ends every Chrome on the agent profile, including one started by hand, and waits for port 9333 to go quiet), then `ExecStart` runs `agent-chrome --foreground` (Chrome as the unit's main process).
    So `systemctl --user restart agent-chrome` always ends in a new Chrome process, and `stop` closes it. Check: `systemctl --user status agent-chrome`, `curl -s http://127.0.0.1:9333/json/version`; output: `journalctl --user -u agent-chrome`.

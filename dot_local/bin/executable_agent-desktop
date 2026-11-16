@@ -28,8 +28,9 @@
 # Coordinates are logical. At scale 1 screenshot pixels equal logical coordinates. For another scale, check
 # `hyprctl monitors -j` and divide.
 # Agent shells under t3code.service may have no WAYLAND_DISPLAY or HYPRLAND_INSTANCE_SIGNATURE. hyprctl then exits 1
-# ("HYPRLAND_INSTANCE_SIGNATURE not set"). When either is unset, the script takes it from the first wayland-* socket
-# and the first $XDG_RUNTIME_DIR/hypr/*/.socket.sock.
+# ("HYPRLAND_INSTANCE_SIGNATURE not set"). ~/.zshenv sets both in an agent shell; when either is still unset (a bash
+# shell, a service), the script sets it from the newest live Hyprland instance, found by
+# ~/.local/share/agent-desktop/session.sh (the one lookup agent-chrome and ~/.zshenv share).
 # A missing tool exits 69 and names its package before any action runs (wlrctl is AUR: yay -S --needed wlrctl).
 #
 # Exit: 0 ok; 1 a tool failed or printed something unexpected; 2 usage; 69 missing tool.
@@ -69,26 +70,11 @@ require() {  # require TOOL...: exit 69 naming the package of the first tool tha
   done
 }
 
-find_session() {  # fill in WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE when this shell has neither
-  runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    for sock in "$runtime"/wayland-*; do
-      if [ -S "$sock" ]; then
-        WAYLAND_DISPLAY=${sock##*/}
-        export WAYLAND_DISPLAY
-        break
-      fi
-    done
-  fi
-  if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
-    for sock in "$runtime"/hypr/*/.socket.sock; do
-      if [ -S "$sock" ]; then
-        sig=${sock%/.socket.sock}
-        HYPRLAND_INSTANCE_SIGNATURE=${sig##*/}
-        export HYPRLAND_INSTANCE_SIGNATURE
-        break
-      fi
-    done
+find_session() {  # fill in WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE when this shell lacks either
+  session_lib="${HOME}/.local/share/agent-desktop/session.sh"
+  if [ -r "$session_lib" ]; then
+    . "$session_lib"
+    agent_desktop_session
   fi
 }
 
