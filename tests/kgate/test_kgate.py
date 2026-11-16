@@ -198,12 +198,12 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), and 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "f0456d86950e4e100ee17d76ed68e4bac3f4f383c039555428ed65608d7bf352"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "b617cec77bf154a3136dc35e106cc35dd5634e70fd4bf7798f3911a556597fdc"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "40a862dd4f7ce2be79587289297d553af695ea0be994185d15b28ba8cde64fb3"),
+             "7e7573c726bbfd4a8a5cacdfe112cbddbae059fabc3f942b814be5025de66b29"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "06bd400ee9ef5c300ca7af6e0617c9bc74acb582578881569bd6b1a16201c077"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -1131,13 +1131,17 @@ class Black(unittest.TestCase):
     def active(self):
         return self.state / "kgate" / "active"
 
-    def add_entry(self, job_id, run_id, pid, tamper_start=False, node="fake-node"):
-        """A registry entry for the process `pid`, as the running client would have written it."""
+    def add_entry(self, job_id, run_id, pid, tamper_start=False, node="fake-node", cluster=None, pidns=True):
+        """A registry entry for the process `pid`, as the running client would have written it. `pidns`: this test's pid namespace, or False for an entry with no such key (an older client), or the namespace's name."""
         start, command = K.proc_identity(pid)
         self.active().mkdir(parents=True, exist_ok=True)
-        (self.active() / (job_id + ".json")).write_text(json.dumps({
-            "id": job_id, "job": run_id, "pid": pid, "start": "other" if tamper_start else start, "proc_cmd": command,
-            "cwd": str(self.repo), "argv": ["kgate", "--", "sleep"], "cmd": "sleep 300", "node": node}))
+        entry = {"id": job_id, "job": run_id, "pid": pid, "start": "other" if tamper_start else start, "proc_cmd": command,
+                 "cwd": str(self.repo), "argv": ["kgate", "--", "sleep"], "cmd": "sleep 300", "node": node}
+        if cluster:
+            entry["cluster"] = cluster
+        if pidns is not False:
+            entry["pidns"] = (os.readlink("/proc/self/ns/pid") if os.path.exists("/proc/self/ns/pid") else None) if pidns is True else pidns
+        (self.active() / (job_id + ".json")).write_text(json.dumps(entry))
 
     def dead_entry(self, job_id, run_id, **kw):
         """An entry whose client was killed -9: the pid is gone."""
@@ -1267,6 +1271,121 @@ class Black(unittest.TestCase):
         self.assertIn("ended: exit 0", done.stdout)
         self.assertEqual((self.calls(), len(self.records())), ([], 1))
         self.assertFalse((self.active() / "kgate-1700000003-333.json").exists())
+
+    # --- a job that starts ends the jobs whose client is gone (dotfiles#479)
+
+    def reaped(self, job_id):
+        return [r for r in self.records() if r["id"] == job_id]
+
+    def test_a_starting_job_ends_the_job_whose_client_is_gone_before_it_creates_its_own_pod(self):
+        live = self.fake_client("kgate-1700000001-111", "20261107T000000Z-aaaaaa")
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc", node="agent-2")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        mine = self.records()[-1]
+        self.assertEqual(len(self.reaped("kgate-1700000003-333")), 1, "the gone client's job has an end line")
+        gone, = self.reaped("kgate-1700000003-333")
+        self.assertEqual((gone["exit"], gone["cleanup"], gone["cancelled"], gone["reaped_by"], gone["job"]), (143, True, True, mine["id"], "20261107T000000Z-cccccc"))
+        self.assertRegex(gone["reason"], r"^ended by kgate: its client \(pid \d+\) is gone$")
+        self.assertIn(["delete", "pod/kgate-1700000003-333", "secret/kgate-1700000003-333-env", "secret/kgate-1700000003-333-pull",
+                       "--ignore-not-found", "--grace-period=0", "--wait=true"], self.deletes())
+        kinds = [("delete", c["kubectl"][1]) if c["kubectl"][0] == "delete" else ("create",) for c in self.calls() if "kubectl" in c and c["kubectl"][0] in ("delete", "create")]
+        self.assertIn(("delete", "pod/kgate-1700000003-333"), kinds, "the gone client's pod was deleted")
+        self.assertLess(kinds.index(("delete", "pod/kgate-1700000003-333")), kinds.index(("create",)), "ended before this job's own pod is created")
+        self.assertIn("ended kgate-1700000003-333: its client (pid ", done.stdout)
+        self.assertFalse((self.active() / "kgate-1700000003-333.json").exists())
+        self.assertEqual(list(self.active().glob("*.reap")), [])
+        self.assertIsNone(live.poll())                                                      # the live client is not touched
+        self.assertTrue((self.active() / "kgate-1700000001-111.json").exists())
+        self.assertEqual(self.reaped("kgate-1700000001-111"), [])
+        self.assertNotIn("pod/kgate-1700000001-111", [x for d in self.deletes() for x in d])
+
+    def test_the_end_line_makes_kgate_cancel_report_the_reaped_job(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        (self.active()).mkdir(exist_ok=True)
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")      # the same id back in the registry: its end line is already there
+        before = self.deletes()
+        done = self.kgate("cancel", "kgate-1700000003-333")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ended: exit 143 (ended by kgate: its client", done.stdout)
+        self.assertEqual(self.deletes(), before)
+
+    def test_an_entry_that_already_has_an_end_line_only_loses_its_entry(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        (self.state / "kgate" / "log.jsonl").write_text(json.dumps({"id": "kgate-1700000003-333", "job": None, "exit": 0, "reason": None}) + "\n")
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertFalse((self.active() / "kgate-1700000003-333.json").exists())
+        self.assertEqual(len(self.reaped("kgate-1700000003-333")), 1)                       # no second end line
+        self.assertNotIn("pod/kgate-1700000003-333", [x for d in self.deletes() for x in d])
+
+    def test_a_delete_that_is_not_confirmed_leaves_the_entry_and_does_not_fail_the_new_job(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        done = self.kgate("--", "true", env={"FAKE_DELETE_FAIL": "1"})        # the first pod delete (the reap's) times out; the job's own cleanup is the second
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("could not end kgate-1700000003-333", done.stdout)
+        self.assertIn("left for the next kgate job", done.stdout)
+        self.assertEqual(self.reaped("kgate-1700000003-333"), [])
+        self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())
+        self.assertEqual(self.kgate("--", "true").returncode, 0)               # the next one finishes it
+        self.assertEqual(len(self.reaped("kgate-1700000003-333")), 1)
+        self.assertFalse((self.active() / "kgate-1700000003-333.json").exists())
+
+    def test_a_delete_that_hangs_is_cut_off_and_does_not_fail_the_new_job(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        stub = self.tmp / "short_launch.py"
+        stub.write_text("import importlib.machinery, importlib.util, sys\n"
+                        "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                        "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                        "loader.exec_module(K)\n"
+                        "K.CLEANUP_ATTEMPT_S = 1\n"
+                        "sys.exit(K.main(sys.argv[2:]))\n")
+        self.launcher = lambda: [sys.executable, str(stub), str(SCRIPT)]
+        done = self.kgate("--", "true", env={"FAKE_DELETE_HANG": "1"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("could not end kgate-1700000003-333", done.stdout)
+        self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())
+
+    def test_a_pod_that_is_not_kgates_is_not_deleted_and_the_new_job_runs(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        done = self.kgate("--", "true", env={"FAKE_LABEL": "something-else"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("is not a kgate pod; nothing deleted", done.stdout)
+        self.assertEqual(self.reaped("kgate-1700000003-333"), [])
+        self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())
+
+    def test_entries_it_cannot_judge_are_left_alone(self):
+        self.dead_entry("kgate-1700000001-111", "20261107T000000Z-aaaaaa", cluster="example")       # another cluster
+        self.dead_entry("kgate-1700000002-222", "20261107T000000Z-bbbbbb", pidns="pid:[4026539999]")  # another pid namespace: a live client looks gone there
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc", pidns=False)               # written by a client that did not record one
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual([r["id"] for r in self.records()][:-1], [])
+        self.assertEqual(sorted(p.name for p in self.active().glob("*.json")), ["kgate-1700000001-111.json", "kgate-1700000002-222.json", "kgate-1700000003-333.json"])
+        self.assertEqual([d for d in self.deletes() if d[1].startswith("pod/") and d[1] != "pod/" + self.records()[-1]["id"]], [])
+
+    def test_clients_starting_while_another_holds_the_job_do_not_end_it_and_leave_no_lock_file(self):
+        self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
+        import fcntl
+        fd = os.open(self.active() / "kgate-1700000003-333.json", os.O_RDONLY)      # another client is ending this job
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        for _ in range(2):                                                          # two more clients start while it is held
+            self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.reaped("kgate-1700000003-333"), [], "neither client ended a job another one holds")
+        self.assertTrue((self.active() / "kgate-1700000003-333.json").exists())
+        self.assertEqual([p.name for p in self.active().iterdir()], ["kgate-1700000003-333.json"], "no lock file is left behind")
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(self.kgate("--", "true").returncode, 0)                    # once it is free, the next client ends it, once
+        self.assertEqual(len(self.reaped("kgate-1700000003-333")), 1)
+        self.assertEqual(list(self.active().iterdir()), [])
+
+    def test_the_pod_carries_a_hard_bound_that_fits_the_longest_job_on_record(self):
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
+        bound = manifest["items"][-1]["spec"]["activeDeadlineSeconds"]
+        self.assertGreater(bound, 3 * 3600, "the longest legitimate job on record (a 30-run journey repeat) ran 3 h 3 min")
+        self.assertLessEqual(bound, 4 * 3600, "past this a job nobody is waiting for must not still hold CPU (it was 8 h)")
 
     def test_a_client_that_does_not_end_in_time_is_69_and_is_not_forced(self):
         stubborn = self.fake_client("kgate-1700000005-555", "20261107T000000Z-eeeeee", mode="ignore")
@@ -1786,7 +1905,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"  # the same pin as test_default_render_is_byte_identical
+        want = "f0456d86950e4e100ee17d76ed68e4bac3f4f383c039555428ed65608d7bf352"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
@@ -2285,7 +2404,7 @@ class RepoName(unittest.TestCase):
 
 class KubectlBlack(unittest.TestCase):
     """The kubectl adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
-    for _name in ("kgate", "records", "calls", "op_token_checks", "op_env"):
+    for _name in ("kgate", "records", "calls", "op_token_checks", "op_env", "active", "add_entry", "dead_entry"):
         locals()[_name] = getattr(Black, _name)
 
     def launcher(self):
@@ -2955,6 +3074,23 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(self.calls(), [], "no ssh")
         rec = self.records()[-1]
         self.assertEqual((rec["exit"], rec["cluster"], rec["cleanup"], rec["cancelled"]), (143, "example", True, True))
+
+    def test_a_starting_job_ends_the_job_on_its_cluster_whose_client_is_gone(self):
+        self.dead_entry("kgate-1700000009-999", "rw-1", cluster="example")
+        self.dead_entry("kgate-1700000008-888", "rw-2")                       # a homelab job: not this cluster's to end
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(len([r for r in self.records() if r["id"] == "kgate-1700000009-999"]), 1, "the gone client's job has an end line")
+        gone, = [r for r in self.records() if r["id"] == "kgate-1700000009-999"]
+        self.assertEqual((gone["exit"], gone["cluster"], gone["cleanup"], gone["cancelled"], gone["reaped_by"]), (143, "example", True, True, self.records()[-1]["id"]))
+        self.assertRegex(gone["reason"], r"^ended by kgate: its client \(pid \d+\) is gone$")
+        args = self.kubectl_args()
+        delete = ["delete", "pod/kgate-1700000009-999", "--ignore-not-found", "--grace-period=0", "--wait=true"]
+        self.assertIn(delete, args)
+        self.assertLess(args.index(delete), args.index(next(a for a in args if a[:1] == ["create"])), "ended before this job's own pod is created")
+        self.assertNotIn("pod/kgate-1700000008-888", [x for a in args for x in a])
+        self.assertTrue((self.active() / "kgate-1700000008-888.json").exists())
+        self.assertFalse((self.active() / "kgate-1700000009-999.json").exists())
 
     def test_the_registry_entry_names_the_cluster_before_the_pod_exists(self):
         self.run_kgate("--", "true")
