@@ -3955,6 +3955,70 @@ class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
         return {"FAKE_DELETE_FAIL": "always", "FAKE_CANI": "no"}
 
 
+# ---------------------------------------------------------------- a process CMD leaves behind does not keep the job alive
+
+ORPHAN_STREAM_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
+                        "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                        "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                        "loader.exec_module(K)\n"
+                        "K.END_GRACE_S = 1\n"     # the wait after the end line, shortened
+                        "sys.exit(K.main(sys.argv[2:]))\n")
+
+
+class LeftBehindProcess:
+    """CMD starts a background process that outlives it and holds the exec stream open (five coordinator jobs, 2026-11-16, held their pods for hours). The job
+    returns with CMD's exit code soon after the end line and the pod is deleted. Run for both cluster kinds."""
+
+    def launcher(self):
+        stub = self.tmp / "orphan_stream_launch.py"
+        stub.write_text(ORPHAN_STREAM_LAUNCH)
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def run_orphan(self, command):
+        started = time.time()
+        done = self.job("--", "sh", "-c", command)
+        return done, time.time() - started
+
+    def test_a_background_process_holding_stdout_does_not_hold_the_job(self):
+        done, took = self.run_orphan("( sleep 40 ) & echo hi; exit 3")
+        self.assertEqual(done.returncode, 3, done.stdout)
+        self.assertLess(took, 25, "the job waited for the process CMD left behind: " + done.stdout)
+        self.assertIn("hi", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["reason"], rec["ran"]), (3, None, True))
+        self.assertIn(rec["id"], (self.fake / "deleted-pods").read_text().split(), "the pod was deleted")
+        self.assertTrue(rec["cleanup"])
+
+    def test_the_end_and_peak_lines_still_print(self):
+        done, _ = self.run_orphan("( sleep 40 ) & exit 0")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertRegex(done.stdout, r"kgate\[[^\]]+\]: peak ")
+        self.assertRegex(done.stdout, r"kgate\[[^\]]+\]: end \d+ exit 0")
+
+    def test_a_command_that_leaves_nothing_behind_does_not_wait(self):
+        done, took = self.run_orphan("exit 4")
+        self.assertEqual(done.returncode, 4, done.stdout)
+        self.assertNotIn("not waiting", done.stdout)
+
+
+class LeftBehindHomelab(LeftBehindProcess, unittest.TestCase):
+    for _name in ("kgate", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def job(self, *args, env=None):
+        return self.kgate(*args, env=env)
+
+
+class LeftBehindKubectl(LeftBehindProcess, unittest.TestCase):
+    for _name in ("kgate", "records", "calls", "op_token_checks", "op_env"):
+        locals()[_name] = getattr(Black, _name)
+    for _name in ("setUp", "write_cluster", "profile", "run_kgate", "kcalls"):
+        locals()[_name] = getattr(KubectlBlack, _name)
+
+    def job(self, *args, env=None):
+        return self.run_kgate(*args, env=env)
+
+
 # ---------------------------------------------------------------- an interrupted client deletes its pod, or leaves the entry that finds it (dotfiles#481)
 
 class InterruptDeletesThePod:
