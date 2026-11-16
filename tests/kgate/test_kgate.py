@@ -198,12 +198,12 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(c["resources"], {"requests": {"cpu": "3", "memory": "256Mi"}, "limits": {"memory": "512Mi"}})
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), and 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "f0456d86950e4e100ee17d76ed68e4bac3f4f383c039555428ed65608d7bf352"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "b617cec77bf154a3136dc35e106cc35dd5634e70fd4bf7798f3911a556597fdc"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "40a862dd4f7ce2be79587289297d553af695ea0be994185d15b28ba8cde64fb3"),
+             "7e7573c726bbfd4a8a5cacdfe112cbddbae059fabc3f942b814be5025de66b29"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "06bd400ee9ef5c300ca7af6e0617c9bc74acb582578881569bd6b1a16201c077"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -1899,7 +1899,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "f44b99db04abdaf19b660d7a867f35fcdf93563847275dd3d960634618853fcf"  # the same pin as test_default_render_is_byte_identical
+        want = "f0456d86950e4e100ee17d76ed68e4bac3f4f383c039555428ed65608d7bf352"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
