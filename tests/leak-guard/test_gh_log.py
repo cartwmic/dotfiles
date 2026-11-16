@@ -87,6 +87,11 @@ class LogFile(WrapperBase):
 
     def setUp(self):
         super().setUp()
+        # These tests check the log alone. A real budget layer runs before the log and reads the rate limit first, so a watch killed then
+        # would leave no start line, and its notes would change the exit fields. The budget facts have their own test with a fake layer.
+        for name in L.LAYERS:
+            if name != "gh_log":      # the log layer under test stays
+                (self.tmp / "lib" / (name + ".py")).unlink(missing_ok=True)
         (self.home / ".config" / "gh-wrapper").mkdir(parents=True)
         (self.home / ".config" / "gh-wrapper" / "budget").write_text("on\n")
         self.state = self.home / ".local" / "state" / "gh-wrapper"
