@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ci-main-status: is main green, red, or untested? Read before every merge.
 
-usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer)
+usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward)
        ci-main-status [--tip | --merge-gate] --all
        ci-main-status --merge-gate dotfiles --pr N     (the pin-fix exception, below)
 
@@ -69,8 +69,9 @@ REPOS = {
     "coordinator": {"github": "cartwmic/coordinator", "journal": True},
     "homelab": None,
     "amazon-itemizer": None,
+    "alert-steward": {"github": "cartwmic/alert-steward", "workflow": "image.yml"},
 }
-ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab", "amazon-itemizer"]
+ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab", "amazon-itemizer", "alert-steward"]
 JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/main-journeys.jsonl")
 LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-journeys.lock.d")
