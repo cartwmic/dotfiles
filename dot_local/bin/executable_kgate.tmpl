@@ -34,7 +34,7 @@ Contract
 - 1Password reads (profile secrets and the pull token) use the service-account token only: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. With neither, the job exits 69 before `op` runs; `op` never reaches the desktop app.
 {{ end }}  Each reference is read at most once in 24 hours: the value is cached in ${XDG_CACHE_HOME:-~/.cache}/kgate/ (see docs/kgate.md, "Secret cache").
-- The node cache (/cache in the pod, /var/lib/kgate/cache on the node) is bounded: a job that starts on an idle node removes the least recently used cache entries past 4 GiB, and a running job's entries are never removed. Docs: "The node cache".
+- The node cache (/cache in the pod, /var/lib/kgate/cache on the node) is bounded: a job that starts on an idle node removes the least recently used cache entries past 8 GiB, and a running job's entries are never removed. Docs: "The node cache".
 - Files CMD writes to /out in the pod come back to <state>/<id>.out/ before the pod is deleted.
 - The pod is deleted on every path (CMD's exit, 69, an interrupt). A failed delete is retried for up to 60 s; the record's `cleanup` says whether it was confirmed and `cleanup_attempts` how many tries it took.
 - A job whose client has died is ended by the next kgate job that starts on the same cluster (exit 143, `reason` naming the gone client, pod deleted), before that job creates its own pod. Every pod also ends itself at 4 hours on the homelab (the cluster file's `deadline_s` on another cluster).
@@ -123,7 +123,10 @@ TAINT_DELETE_MESSAGE = "Marking for deletion"
 # pnpm, playwright, per-gate dirs) fill it and nothing emptied it: 7.1 GiB on agent-4, which has about 3 GiB above the kubelet's eviction line (dotfiles#484, coordinator
 # decision #2755). It holds no container images (the kubelet keeps those under /var/lib/containerd), so trimming it cannot cause a re-pull.
 CACHE_ROOT = "/cache"
-CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 4 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. 4 GiB keeps the caches the hot gates use (coordinator and agent-kit npm 0.44 GiB, Go 3.2 GiB with its build cache, playwright 0.7 GiB) and cuts agent-4 from 7.6 GiB. The env var is for a live proof of the trim only
+# Sized from agent-4's cache at 15:51Z 2026-11-16, 7.93 GiB, all of it uid 1000: Go build cache 3.9 GiB, Go modules 2.1, pnpm 0.44, pip 0.28, npm 0.20, three per-gate scratch folders
+# under HOME 0.28 each (go427, ru4, ru6) and one 0.23 (n26), the rest small. That is what the hot gates (coordinator, agent-kit, homelab, dotfiles) keep warm, so a cap below it throws away
+# Go modules that the next Go job downloads again. The scratch folders are entries like any other and go by least recently used. 8 GiB holds that set; agent-4 had 27 GB free, its pods are capped at 12Gi.
+CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 8 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. The env var is for a live proof of the trim only
 CACHE_LOCK = ".kgate-use"    # a shared flock held by every running job, taken exclusively to trim; names that start ".kgate" are not cache entries
 CACHE_TRASH = ".kgate-trash"
 CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that hold entries; every other child of these is one entry, trimmed whole

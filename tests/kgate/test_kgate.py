@@ -450,8 +450,8 @@ class NodeCache(unittest.TestCase):
         self.assertIn("cmd-ran", done.stdout)
         self.assertEqual((old.exists(), new.exists()), (False, True))
 
-    def test_the_default_cap_is_four_gib_unless_the_env_overrides_it(self):
-        self.assertEqual((K.CACHE_ROOT, K.CACHE_CAP), ("/cache", int(os.environ.get("KGATE_CACHE_CAP") or 4 << 30)))
+    def test_the_default_cap_is_eight_gib_unless_the_env_overrides_it(self):
+        self.assertEqual((K.CACHE_ROOT, K.CACHE_CAP), ("/cache", int(os.environ.get("KGATE_CACHE_CAP") or 8 << 30)))
 
 
 class Pieces(unittest.TestCase):
