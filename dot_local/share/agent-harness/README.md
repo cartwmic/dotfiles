@@ -158,8 +158,14 @@ time (the apply installs the entry whether or not the variable is set):
 ## Pattern-kill guard
 
 Agent sessions refuse `pkill` and `killall`, so a pattern kill cannot hit another agent's jobs (three incidents in two days, including a
-reviewer's `pkill -f "sleep 30" -P 1`). Decision: Michael, ask 744, "Add the guard". The refusal text tells the agent to kill an exact PID
-(`kill <pid>`, the PID from `$!`) and to use `kgate cancel <id>` for a kgate job.
+reviewer's `pkill -f "sleep 30" -P 1`). Decision: Michael, ask 744, "Add the guard". The refusal text tells the agent to use `kill-mine '<pattern>'`, to kill an exact PID
+(`kill <pid>`, the PID from `$!`; the way on macOS) or to use `kgate cancel <id>` for a kgate job.
+
+The refusal was hit 868 times in 397 sessions in the week of 2026-11-09 (retro, build-1116 L6) and agents often retried: telling them again did not work, so there is a tool that does what they wanted. `kill-mine PATTERN [-SIGNAL] [--dry-run]` (`dot_local/bin/executable_kill-mine`, `~/.local/bin/kill-mine`, both desktop profiles) signals the processes whose command line matches PATTERN (a regular expression, like `pgrep -f`) **and** that the caller's own agent session started. It prints each PID and command line it signalled, and exits 1 when nothing of this session matched (it says whether other sessions' processes matched and were left alone).
+
+- *Own session* is read from `/proc/PID/environ`. Claude Code tool-call shells carry `CLAUDE_CODE_SESSION_ID`; the `claude` process and T3's `sh` wrapper around it do not (checked live), so a harness process is never mine though it shares `T3CODE_THREAD_ID`. Under T3 the target must carry the caller's `T3CODE_THREAD_ID` (the thread outlives a resumed session), else the session id. Pi sets `PI_SESSION_FILE` on every bash call and not on itself, and a Pi under T3 can inherit one `T3CODE_THREAD_ID` for many sessions, so Pi's own session file is the marker there. Anything a tool call starts inherits the markers (`ssh -f` tunnels, `nohup`, run-and-wake jobs, test servers, Chrome with a debug port).
+- With no marker (a plain terminal, Codex) it refuses with exit 2 and says to kill the exact PID; it does not guess. It never signals itself or its ancestors. Linux only: on macOS it refuses and points at `kill <pid>`.
+- Not covered: `pkill -P <pid>` (kill the children of a PID; 9 of 163 refused invocations in the replay set had it). List them with `pgrep -P <pid>` and kill the PIDs.
 
 | Harness | Mechanism | Source | Lands at |
 |---|---|---|---|
@@ -206,7 +212,7 @@ What is not covered (each is named in the code or the tests):
 - while the Codex hook is untrusted, the rules file cannot see inside `sh -c '...'`, a redirect or `&`, nor a wrapper with options first (`sudo -u root pkill x`);
 - Pi foreground `pi-subagents` children are launched with extension discovery off, so they do not load the extension.
 
-Tests: `tests/agent-kill-guard` (classifier, `test_bash_rules.py`, `run_fixture.py` with recorded tool calls in `fixtures/`, Claude settings on both profiles, the Codex hook block and its trust step against a real `codex app-server`, Codex rules with Codex's own `execpolicy check`, deploy per profile) and
+Tests: `tests/agent-kill-guard` (classifier, `test_kill_mine.py` (fake sessions A and B, the caller, harness processes, and a replay of real refused commands),  `test_bash_rules.py`, `run_fixture.py` with recorded tool calls in `fixtures/`, Claude settings on both profiles, the Codex hook block and its trust step against a real `codex app-server`, Codex rules with Codex's own `execpolicy check`, deploy per profile) and
 `node --test dot_pi/private_agent/extensions/refuse-pattern-kill/index.test.ts`. Proof in a real session of each harness: the PR description.
 
 ## Builder Stop hook

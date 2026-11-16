@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""kill-mine PATTERN [-SIGNAL] [--dry-run]: signal the processes your own agent session started that match PATTERN.
+
+The safe replacement for `pkill -f PATTERN` (the agent-harness hook refuses pkill and killall: a pattern kill can hit another agent's jobs).
+PATTERN is a regular expression matched against the whole command line, like `pgrep -f`. SIGNAL is -TERM (default), -KILL, -9, -HUP and so on.
+`-f` is accepted and ignored (the match is always on the whole command line); `--` ends the options. Prints each PID and command line it
+signalled (or, with --dry-run, would signal). Exit 0: signalled at least one. 1: nothing of this session matched. 2: usage error or refused.
+
+Which processes are "mine": the same agent session as the caller, found in /proc/PID/environ. A tool-call shell carries a variable that
+the harness itself does not, so a harness process is never mine, even though it shares the thread id:
+  Pi          PI_SESSION_FILE      (Pi sets it on every bash call, not on itself): the target must carry the same value
+  Claude Code CLAUDE_CODE_SESSION_ID is in tool-call shells only (not in `claude`, not in T3's `sh` wrapper around it); the target must carry
+              it and the caller's T3CODE_THREAD_ID (the thread outlives a resumed session; without T3, the session id itself)
+A process started from a tool call inherits both (ssh -f tunnels, nohup, run-and-wake jobs, test servers, Chrome with a debug port).
+With neither marker set, kill-mine refuses: it will not guess. It never signals itself or its own ancestors (the tool-call shell).
+Linux only (/proc); on macOS it refuses and points at `kill <pid>`.
+"""
+import os
+import re
+import signal
+import sys
+
+USAGE = "usage: kill-mine PATTERN [-SIGNAL] [--dry-run]"
+SHELL_VARS = ("PI_SESSION_FILE", "CLAUDE_CODE_SESSION_ID")  # set in an agent's tool-call shells, never in the harness process itself
+
+
+def session(env):
+    """(variable, value, shell variable) that ties a process to the caller's session, else None."""
+    if env.get("PI_SESSION_FILE"):
+        return "PI_SESSION_FILE", env["PI_SESSION_FILE"], "PI_SESSION_FILE"
+    if env.get("CLAUDE_CODE_SESSION_ID"):
+        var = "T3CODE_THREAD_ID" if env.get("T3CODE_THREAD_ID") else "CLAUDE_CODE_SESSION_ID"
+        return var, env[var], "CLAUDE_CODE_SESSION_ID"
+    return None
+
+
+def environ_of(pid):
+    with open("/proc/%d/environ" % pid, "rb") as handle:
+        pairs = (item.split(b"=", 1) for item in handle.read().split(b"\0") if b"=" in item)
+        return {k.decode("utf-8", "replace"): v.decode("utf-8", "replace") for k, v in pairs}
+
+
+def cmdline_of(pid):
+    with open("/proc/%d/cmdline" % pid, "rb") as handle:
+        return handle.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+
+
+def parent_of(pid):
+    with open("/proc/%d/stat" % pid) as handle:
+        return int(handle.read().rsplit(")", 1)[1].split()[1])
+
+
+def ancestors(pid):
+    found = set()
+    while pid > 1 and pid not in found:
+        found.add(pid)
+        pid = parent_of(pid)
+    return found
+
+
+def parse(argv):
+    """(pattern, signal number, dry run) or an error text."""
+    pattern, sig, dry, options = None, signal.SIGTERM, False, True
+    for arg in argv:
+        if options and arg == "--":
+            options = False
+        elif options and arg == "--dry-run":
+            dry = True
+        elif options and arg == "-f":
+            continue
+        elif options and re.fullmatch(r"-(\d+|[A-Za-z0-9]+)", arg):
+            name = arg[1:]
+            try:
+                sig = signal.Signals(int(name)) if name.isdigit() else signal.Signals["SIG" + name.upper().removeprefix("SIG")]
+            except (ValueError, KeyError):
+                return "%s: not a signal (put -- before a PATTERN that starts with -). %s" % (arg, USAGE)
+        elif pattern is None:
+            pattern = arg
+        else:
+            return "one PATTERN only. %s" % USAGE
+    return (pattern, sig, dry) if pattern else USAGE
+
+
+def main(argv, env=None):
+    env = os.environ if env is None else env
+    if sys.platform != "linux":
+        sys.stderr.write("kill-mine: reads /proc, which this OS does not have. Kill the exact PID instead: kill <pid> (take it from $! or from the command that started it).\n")
+        return 2
+    parsed = parse(argv)
+    if isinstance(parsed, str):
+        sys.stderr.write("kill-mine: %s\n" % parsed)
+        return 2
+    pattern, sig, dry = parsed
+    try:
+        regex = re.compile(pattern)
+    except re.error as error:
+        sys.stderr.write("kill-mine: PATTERN is not a regular expression (%s)\n" % error)
+        return 2
+    own = session(env)
+    if own is None:
+        sys.stderr.write("kill-mine: no agent session marker (PI_SESSION_FILE or CLAUDE_CODE_SESSION_ID) in this environment, so it cannot tell which processes are yours. Kill the exact PID instead: kill <pid>.\n")
+        return 2
+    var, value, shell_var = own
+    skip = ancestors(os.getpid())
+    mine, others = [], []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) in skip:
+            continue
+        pid = int(name)
+        try:
+            if os.stat("/proc/%d" % pid).st_uid != os.getuid():
+                continue
+            cmd = cmdline_of(pid)
+            if not cmd or not regex.search(cmd):
+                continue
+            theirs = environ_of(pid)
+        except (OSError, ValueError):
+            continue  # gone, or not readable
+        (mine if theirs.get(var) == value and shell_var in theirs else others).append((pid, cmd))
+    if not mine:
+        if others:
+            sys.stderr.write("kill-mine: %d process(es) match but this session did not start them, so none was signalled (%s). If you started one, kill its exact PID.\n"
+                             % (len(others), "; ".join("%d %s" % (p, c[:60]) for p, c in others[:3])))
+        else:
+            sys.stderr.write("kill-mine: no process matches %r\n" % pattern)
+        return 1
+    for pid, cmd in sorted(mine):
+        try:
+            if not dry:
+                os.kill(pid, sig)
+            print("%s %d %s" % ("would signal" if dry else "signalled", pid, cmd[:200]))
+        except ProcessLookupError:
+            print("gone %d %s" % (pid, cmd[:200]))
+        except PermissionError as error:
+            sys.stderr.write("kill-mine: %d: %s\n" % (pid, error))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

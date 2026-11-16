@@ -7,10 +7,10 @@
 prefix_rule(
     pattern = [["pkill", "killall", "/usr/bin/pkill", "/usr/bin/killall", "/bin/pkill", "/bin/killall"]],
     decision = "forbidden",
-    justification = "pkill and killall are refused in agent sessions: a pattern kill can hit another agent's jobs. Kill only a process you started, by exact PID (kill <pid>; take the PID from $! or from the command that started it). For a kgate job use `kgate cancel <id>`.",
+    justification = "pkill and killall are refused in agent sessions: a pattern kill can hit another agent's jobs. Use `kill-mine '<pattern>'` (Linux; signals only processes your own session started; `-9` for KILL, `--dry-run` to look first), or kill the exact PID (kill <pid>; take the PID from $! or from the command that started it; on macOS this is the way). For a kgate job use `kgate cancel <id>`.",
 )
 prefix_rule(
     pattern = [["sudo", "env", "command", "nohup", "exec", "time", "nice", "xargs", "stdbuf", "setsid", "caffeinate"], ["pkill", "killall", "/usr/bin/pkill", "/usr/bin/killall", "/bin/pkill", "/bin/killall"]],
     decision = "forbidden",
-    justification = "pkill and killall are refused in agent sessions: a pattern kill can hit another agent's jobs. Kill only a process you started, by exact PID (kill <pid>; take the PID from $! or from the command that started it). For a kgate job use `kgate cancel <id>`.",
+    justification = "pkill and killall are refused in agent sessions: a pattern kill can hit another agent's jobs. Use `kill-mine '<pattern>'` (Linux; signals only processes your own session started; `-9` for KILL, `--dry-run` to look first), or kill the exact PID (kill <pid>; take the PID from $! or from the command that started it; on macOS this is the way). For a kgate job use `kgate cancel <id>`.",
 )

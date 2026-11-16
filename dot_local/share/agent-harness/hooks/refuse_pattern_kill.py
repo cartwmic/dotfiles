@@ -25,7 +25,8 @@ import sys
 REFUSED = ("pkill", "killall")
 MESSAGE = (
     "{name} is refused in agent sessions: a pattern kill can hit another agent's jobs. "
-    "Kill only a process you started, by exact PID (kill <pid>; take the PID from $! or from the command that started it). "
+    "Use `kill-mine '<pattern>'` (Linux; signals only processes your own session started; `-9` for KILL, `--dry-run` to look first), "
+    "or kill the exact PID (kill <pid>; take the PID from $! or from the command that started it; on macOS this is the way). "
     "For a kgate job use `kgate cancel <id>`."
 )
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "ash"}

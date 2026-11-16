@@ -50,7 +50,7 @@ kgate cancel --list                     # the jobs running now: id, run-and-wake
 kgate cancel [--wait SECONDS] JOB_ID    # stop that one job (default wait 120)
 ```
 
-**Never `pkill`, `killall` or `kill $(pgrep ...)` to stop a kgate job.** A pattern kills every seat's job that matches it, on every node. `kgate cancel` is the only supported way, and a caller cancels **its own job id only**.
+**Never `pkill`, `killall` or `kill $(pgrep ...)` to stop a kgate job.** A pattern kills every seat's job that matches it, on every node. `kgate cancel` is the only supported way, and a caller cancels **its own job id only**. For the other processes around a job (an ssh tunnel, a test server, a runner), `kill-mine '<pattern>'` signals only those your own session started.
 
 How it works:
 
