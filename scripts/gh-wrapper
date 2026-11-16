@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -755,8 +756,22 @@ def run_real(real, args, stdin_data, no_prompt=False, wait=False):
         if env is None:
             os.execv(real, ["gh"] + args)
         os.execve(real, ["gh"] + args, env)
-    rc = subprocess.run([real] + args, input=stdin_data, env=env).returncode
+    rc = run_child(real, args, stdin_data, env)
     return 128 - rc if rc < 0 else rc          # a gh killed by a signal exits as a shell reports it, 128 + the signal
+
+
+def run_child(real, args, stdin_data, env):
+    """gh as a child, with its exit status. While it runs, SIGTERM and SIGHUP sent to this process go to gh too (a timeout kills only the process it started,
+    which would leave a `gh run watch` polling), and SIGINT is left to the terminal, which sends it to gh as well."""
+    proc = subprocess.Popen([real] + args, stdin=None if stdin_data is None else subprocess.PIPE, env=env)
+    saved = {n: signal.signal(n, (lambda num, _frame: proc.send_signal(num)) if n != signal.SIGINT else signal.SIG_IGN)
+             for n in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        proc.communicate(stdin_data)
+    finally:
+        for n, handler in saved.items():
+            signal.signal(n, handler)
+    return proc.returncode
 
 
 def checked_run(real, args, t0, wait):
@@ -839,18 +854,22 @@ def main(argv):
     args = argv[1:]
     real = real_gh()
     if real is None:
-        print("leak-guard gh: no real gh found on PATH (only this wrapper); install gh", file=sys.stderr)
+        print("gh-wrapper: no real gh found on PATH (only this wrapper); install gh", file=sys.stderr)
         return 127
     if exempt(args) or not layers_on():
         return checked_run(real, args, t0, False)
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
-    import gh_classify
-    import gh_layers
-    name = command_name(args) or "unrecognised"
-    group, _, verb = name.partition(" ")
-    read = group == "search" or verb in READ.get(group, ())
-    call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args) if name == "api" else None))
-    layers = gh_layers.load()
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+        import gh_classify
+        import gh_layers
+        name = command_name(args) or "unrecognised"
+        group, _, verb = name.partition(" ")
+        read = group == "search" or verb in READ.get(group, ())
+        call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args) if name == "api" else None))
+        layers = gh_layers.load()
+    except Exception as e:      # a lib that is missing or broken must not stop gh: the layers are an optimisation, the leak-guard check is not
+        print("gh-wrapper: the layers could not start (%s: %s); the call goes on without them" % (type(e).__name__, e), file=sys.stderr)
+        return checked_run(real, args, t0, False)
     stop = gh_layers.before(layers, call)
     if stop:
         print(stop.message, file=sys.stderr)

@@ -19,7 +19,7 @@ To re-run it by hand: `chezmoi execute-template < "$(chezmoi source-path)/run_on
 
 ## Getting first on PATH
 
-`~/.local/share/gh-wrapper/bin` must come before every other `gh`. Three pieces do it, as they did for leak-guard: the mise file (mise puts `_.path` entries ahead of the real gh, and is the load-bearing one wherever mise is active), `dot_zshenv` (plain `zsh -c`) and `dot_zprofile` (login shells, after `/etc/zprofile`'s `path_helper`). `tests/leak-guard/test_gh_path.py` runs fresh `zsh -c`, `-lc`, `-ic` and `-lic` on a work install and on a personal install with no data, and checks each prints the wrapper. One host thing breaks it: a `gh` in `~/.local/share/mise/command-wrappers/bin`, which mise puts ahead of `_.path` (the Omarchy-owned directory). Remove any file there.
+`~/.local/share/gh-wrapper/bin` must come before every other `gh`. Three pieces do it, as they did for leak-guard: the mise file (mise puts `_.path` entries ahead of the real gh, and is the load-bearing one wherever mise is active), `dot_zshenv` (plain `zsh -c`) and `dot_zprofile` (login shells, after `/etc/zprofile`'s `path_helper`). `tests/leak-guard/test_gh_path.py` runs fresh `zsh -c`, `-lc`, `-ic` and `-lic` on a work install and on a personal install with no data, and checks each prints the wrapper. One host thing breaks it: a `gh` in `~/.local/share/mise/command-wrappers/bin`, which mise puts ahead of `_.path` (the Omarchy-owned directory). Remove a `gh` file there.
 
 Service unit PATHs (t3code, coordinatord) are separate changes.
 
@@ -29,7 +29,7 @@ Service unit PATHs (t3code, coordinatord) are separate changes.
 2. **Layers off** (`~/.config/gh-wrapper/budget` missing, or anything but `on`): straight to the leak-guard check below. Nothing in the lib directory is read. This is the work Mac.
 3. **Layers on:** the command is classified, then each layer's `before` hook runs, then the leak-guard check, then the real gh, then each layer's `after` hook.
 4. **Leak-guard check:** exactly as [leak-guard.md](./leak-guard.md) says, and only where `~/.config/leak-guard/repos` exists. It fails closed as before.
-5. **Real gh:** found on PATH skipping any file with the mark, so the wrapper never finds itself. With no `after` hook anywhere, the wrapper replaces itself with gh (`exec`), as before. With one, it runs gh as a child and returns its exit code, standard input and output unchanged.
+5. **Real gh:** found on PATH skipping any file with the mark, so the wrapper never finds itself. With no `after` hook anywhere, the wrapper replaces itself with gh (`exec`), as before. With one, it runs gh as a child and returns its exit code, standard input and output unchanged. While the child runs, SIGTERM and SIGHUP sent to the wrapper are passed on to gh (a timeout that kills only the process it started would otherwise leave a `gh run watch` polling), and the `after` hooks then see exit code 128 plus the signal. SIGINT from a terminal reaches gh directly.
 
 ## Classification (`gh_classify.py`)
 
@@ -57,7 +57,7 @@ A layer is a module in the lib directory. `LAYERS = ("gh_rewrite", "gh_budget", 
 
 `call` carries `args`, `klass`, `bucket`, `write`, `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
 
-Invariant: **a layer's own exception never changes the call.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there.
+Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there.
 
 ## The budget file
 

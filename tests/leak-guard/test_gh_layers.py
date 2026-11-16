@@ -5,8 +5,10 @@ modules dropped into lib/, and check what the layers saw and what the real gh go
 """
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 import unittest
 
 from test_gh_wrapper import GUARDED, LIB, PLANTED, WrapperBase, load_wrapper
@@ -198,6 +200,37 @@ class Layers(WrapperBase):
         self.assertEqual(len(self.real_calls()), 1)
         for name in ("gh_rewrite", "gh_budget", "gh_log"):
             self.assertIn("gh-wrapper: layer %s failed" % name, done.stderr)
+
+    def test_a_signal_to_the_wrapper_reaches_gh_and_the_after_hooks_still_run(self):
+        """With an after hook the wrapper is gh's parent, not gh itself, so a timeout's SIGTERM or a hangup must be passed on: an orphaned `gh run watch`
+        would keep polling."""
+        self.layer("gh_log", SEEING)
+        self.budget("on")
+        for sig, code in ((signal.SIGTERM, 143), (signal.SIGHUP, 129)):
+            with self.subTest(sig):
+                self.reset()
+                proc = subprocess.Popen([str(self.wbin / "gh"), "run", "watch", "9"], cwd=str(self.other_cwd), env=self.env({"FAKE_GH_SLEEP": "60"}), stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                pidfile = self.fake / "gh.pid"
+                deadline = time.time() + 20
+                while not pidfile.exists() and time.time() < deadline:
+                    time.sleep(0.02)
+                gh_pid = int(pidfile.read_text())
+                proc.send_signal(sig)
+                proc.communicate(timeout=20)
+                self.assertEqual(proc.returncode, code)
+                self.assertFalse(os.path.exists("/proc/%d" % gh_pid) and "Z" not in open("/proc/%d/stat" % gh_pid).read().split(") ")[-1][:1], "gh outlived the wrapper")
+                self.assertEqual([(s["kind"], s["rc"]) for s in self.seen()], [("before", None), ("after", code)])
+
+    def test_with_the_budget_on_and_no_lib_the_call_goes_on_with_a_note_and_leak_guard_still_blocks(self):
+        self.budget("on")
+        os.rename(self.lib, self.tmp / "lib-gone")
+        done = self.gh("pr", "view", "5", cwd=self.other_cwd)
+        self.assertEqual((done.returncode, done.stdout), (0, "real gh out\n"))
+        self.assertIn("gh-wrapper: the layers could not start (ModuleNotFoundError", done.stderr)
+        done = self.gh("pr", "comment", "5", "--body", PLANTED)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertEqual(len(self.real_calls()), 1)
 
     def test_a_layer_with_no_file_is_skipped_quietly(self):
         self.budget("on")

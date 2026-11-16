@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate FLAGS and FLAGS_FROM_GH in scripts/gh-wrapper from the installed gh. Work machine only; docs/leak-guard.md, Flag tables.
+"""Regenerate FLAGS and FLAGS_FROM_GH in scripts/gh-wrapper from the installed gh. A development tool (docs/leak-guard.md, Flag tables).
 
     leak-guard-gh-flags [--check] [--gh PATH] [--wrapper FILE]
 

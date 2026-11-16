@@ -36,6 +36,11 @@ d = os.environ["FAKE"]
 stdin = sys.stdin.read() if os.environ.get("FAKE_GH_STDIN") else ""
 with open(os.path.join(d, "gh-calls.jsonl"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin, "prompt_disabled": os.environ.get("GH_PROMPT_DISABLED")}) + "\\n")
+if os.environ.get("FAKE_GH_SLEEP"):
+    with open(os.path.join(d, "gh.pid"), "w") as f:
+        f.write(str(os.getpid()))
+    import time
+    time.sleep(float(os.environ["FAKE_GH_SLEEP"]))
 if os.environ.get("FAKE_GH_SIGNAL"):
     os.kill(os.getpid(), int(os.environ["FAKE_GH_SIGNAL"]))
 sys.stdout.write("real gh out\\n")
