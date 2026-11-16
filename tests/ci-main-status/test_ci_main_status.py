@@ -877,10 +877,18 @@ class RedMainFix(Fixture):
         self.runs = {self.WF: [run(1, self.c3, "success")]}
         self.assertEqual(self.gate("--pr", "7")[:2], self.gate()[:2])
 
-    def test_a_full_suite_run_still_queued_with_no_jobs_listed_is_going_not_skipped(self):
+    def test_a_run_still_queued_with_no_steps_listed_is_passed_over_and_an_older_green_run_decides(self):
+        """Documented behaviour (review note n1): nothing has run yet, so it says nothing; it does not refuse."""
         queued = run(6, self.head, status="queued", event="workflow_dispatch", age=6, branch="fix")
-        self.world(self.dispatch(4), (queued, []))
-        self.assert_stays_red("run 6 is queued, not success")
+        self.world(self.dispatch(4), (queued, [{"databaseId": 31, "name": "unit", "conclusion": "", "steps": []}]))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("run 4 (", out)
+
+    def test_a_queued_run_with_no_steps_listed_and_no_older_green_run_stays_red(self):
+        queued = run(6, self.head, status="queued", event="workflow_dispatch", age=6, branch="fix")
+        self.world((queued, [{"databaseId": 31, "name": "unit", "conclusion": "", "steps": []}]))
+        self.assert_stays_red("no full-suite run of its head tree: run 6 skipped step")
 
     def test_a_pull_request_run_still_going_whose_red_job_is_listed_as_skipped_is_passed_over(self):
         row, jobs = self.pull_request(5)

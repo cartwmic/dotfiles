@@ -20,7 +20,7 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   skipped does not count: agent-kit's unit.yml skips `npm test` and the node-floor job on pull_request events, so a
   pull_request run is not a full-suite run and a workflow_dispatch run on the branch is. Runs are read newest first: one that
   skipped a red job or step is passed over, and the first one that ran them decides (a failed one refuses). The "merge-gate:"
-  line names the run (id and URL). No such run, a failed one, a run still going, a run on another tree or one that skipped a red job refuses.
+  line names the run (id and URL). No such run, a failed one, a run still going with its steps listed, a run on another tree or one that skipped a red job refuses.
 
   dotfiles tries one more rule first (the pin fix), and falls back to the rule above when it does not apply: a red main passes
   as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
@@ -416,16 +416,13 @@ def judge_run(repo, run, wanted):
     """How one run on the PR's tree answers main's red: ("skipped", why), ("bad", why) or ("good", None).
 
     skipped: the run did not run a job or step that failed in main (a pull_request run that skips the full suite), so it says nothing.
-    bad: it ran them and they did not all pass, or it did not succeed, or it is still going. A run that has not finished and has no
-    listing yet for a red job or step (queued, jobs not created) is still going and counts as bad; only a job or step GitHub lists
-    as skipped, or one missing from a finished run, counts as skipped.
+    bad: it ran them and they did not all pass, or it did not succeed, or it is still going with its red jobs and steps listed.
+    A run still going whose red job has no steps listed yet (queued, nothing started) is read as skipped: it has run nothing, so it
+    says nothing, and the next older run on the same tree decides. It does not refuse. Once its steps are listed it is "bad".
     """
     jobs = {j["name"]: j for j in gh(["run", "view", str(run["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]}
     for name, step_names in wanted.items():
         job = jobs.get(name)
-        going = run["status"] != "completed"
-        if going and (job is None or (job["conclusion"] != "skipped" and any(s not in {x["name"] for x in job["steps"]} for s in step_names))):
-            return "bad", f"run {run['databaseId']} is {run['status']}, not success"
         if job is None or job["conclusion"] == "skipped":
             return "skipped", f"run {run['databaseId']} skipped job {name}"
         steps = {s["name"]: s for s in job["steps"]}
