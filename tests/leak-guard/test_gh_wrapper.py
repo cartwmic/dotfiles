@@ -1,4 +1,4 @@
-"""The gh wrapper (scripts/leak-guard-gh), as a process.
+"""The gh wrapper (scripts/gh-wrapper), as a process.
 
 The wrapper is copied to a bin directory as `gh`, ahead of a fake real `gh` on PATH. leak-guard is the real script and `claude` is a fake one.
 Every term and repository is invented: "fooco" is term 1, "bar.*baz" term 2, and `fooco-dev/guarded` the one guarded repository.
@@ -20,7 +20,8 @@ from unittest import mock
 from test_leak_guard import FAKE_CLAUDE
 
 ROOT = Path(__file__).resolve().parents[2]
-WRAPPER = ROOT / "scripts/leak-guard-gh"
+WRAPPER = ROOT / "scripts/gh-wrapper"
+LIB = ROOT / "scripts/gh-wrapper-lib"
 GUARD = ROOT / "dot_local/bin/executable_leak-guard"
 GUARDED = "fooco-dev/guarded"
 PLANTED = "an invented sentence naming fooco here"
@@ -41,6 +42,11 @@ sys.stdout.write("real gh out\\n")
 sys.stderr.write("real gh err\\n")
 sys.exit(int(os.environ.get("FAKE_GH_EXIT", "0")))
 ''' % sys.executable
+
+
+def lib_copy(dest):
+    """The wrapper's lib directory, where the installed wrapper looks for it: ../lib next to its bin directory."""
+    shutil.copytree(LIB, dest, ignore=shutil.ignore_patterns("__pycache__"))
 
 
 def script_copy(src, dest):
@@ -86,6 +92,7 @@ class WrapperBase(unittest.TestCase):
         for d in (self.wbin, self.realbin, self.cbin, self.fake):
             d.mkdir()
         script_copy(WRAPPER, self.wbin / "gh")
+        lib_copy(self.tmp / "lib")
         script_copy(GUARD, self.tmp / "leak-guard")
         (self.realbin / "gh").write_text(FAKE_GH)
         (self.realbin / "gh").chmod(0o755)
