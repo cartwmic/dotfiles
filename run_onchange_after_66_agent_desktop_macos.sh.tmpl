@@ -1,0 +1,148 @@
+#!/bin/sh
+# Install agent-desktop on a Mac: copy the macOS script (.chezmoitemplates/agent-desktop-macos.sh) to ~/.local/bin/agent-desktop, and
+# download Vercel's agent-desktop (the program behind `agent-desktop ui`) at one fixed version into ~/.local/share/agent-desktop/vercel/.
+# Runs on a Mac only, on both profiles (.chezmoiignore leaves it out on Linux and Windows), and again when the script or this file changes.
+# The script is a run step and not a managed file because chezmoi refuses two source files for one destination, and
+# ~/.local/bin/agent-desktop is already the Linux script's. The script is copied first, so a failed download still leaves the eight actions.
+# Applying again downloads nothing and changes nothing. Docs and how to redo it by hand: docs/agent-desktop.md.
+# Personal profile only, a second part (the work profile leaves it out: docs/agent-desktop.md, "Work Mac"): the kitty helper
+# (.chezmoitemplates/agent-desktop-relay.sh, copied to ~/.local/bin/agent-desktop-relay), the login item that starts it
+# (~/Library/LaunchAgents/com.cartwmic.agent-desktop-relay.plist, written below) and a start of the helper now, so an apply over ssh
+# leaves it working without a login. Neither a login item that will not load nor a helper that will not start fails the apply:
+# the files are in place and the login item starts the helper at the next login.
+# agent-desktop-macos.sh: {{ include ".chezmoitemplates/agent-desktop-macos.sh" | sha256sum }}
+{{- if eq .profile "personal" }}
+# agent-desktop-relay.sh: {{ include ".chezmoitemplates/agent-desktop-relay.sh" | sha256sum }}
+{{- end }}
+set -eu
+log() { printf '[agent_desktop_macos] %s: %s\n' "$1" "$2"; }
+fail() { log ERROR "$1 chezmoi stops the apply at this step, so the steps after it (70 and later) did not run in this apply; they run at the next apply that gets past this one." >&2; exit 1; }
+
+VERSION="v1.3.1"
+RELEASES="https://github.com/vercel-labs/agent-desktop/releases/download"
+dest="$HOME/.local/bin/agent-desktop"
+vdir="$HOME/.local/share/agent-desktop/vercel"
+retry='chezmoi apply (this step is retried at every apply until it succeeds)'
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-desktop-install.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+
+# 1. The script.
+cat >"$tmp/agent-desktop" <<'AGENT_DESKTOP_MACOS_EOF'
+{{ include ".chezmoitemplates/agent-desktop-macos.sh" -}}
+AGENT_DESKTOP_MACOS_EOF
+mkdir -p "$HOME/.local/bin"
+if [ ! -f "$dest" ] || ! cmp -s "$tmp/agent-desktop" "$dest"; then
+  cp "$tmp/agent-desktop" "$dest.new"
+  mv -f "$dest.new" "$dest"
+  log INFO "installed the macOS script at $dest"
+fi
+chmod 755 "$dest"
+
+{{ if eq .profile "personal" -}}
+# 2. The kitty helper, its login item, and the helper started now (personal profile only).
+relay="$HOME/.local/bin/agent-desktop-relay"
+label="com.cartwmic.agent-desktop-relay"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+cat >"$tmp/relay" <<'AGENT_DESKTOP_RELAY_EOF'
+{{ include ".chezmoitemplates/agent-desktop-relay.sh" -}}
+AGENT_DESKTOP_RELAY_EOF
+relay_changed=
+if [ ! -f "$relay" ] || ! cmp -s "$tmp/relay" "$relay"; then
+  cp "$tmp/relay" "$relay.new"
+  mv -f "$relay.new" "$relay"
+  relay_changed=1
+  log INFO "installed the kitty helper at $relay"
+fi
+chmod 755 "$relay"
+
+# kitty, not launchd, must be the app macOS checks, so the job only runs `start`, which opens kitty.
+cat >"$tmp/plist" <<AGENT_DESKTOP_PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>$relay</string><string>start</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/agent-desktop-relay.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/agent-desktop-relay.log</string>
+</dict>
+</plist>
+AGENT_DESKTOP_PLIST_EOF
+if [ ! -f "$plist" ] || ! cmp -s "$tmp/plist" "$plist"; then
+  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+  cp "$tmp/plist" "$plist.new"
+  mv -f "$plist.new" "$plist"
+  log INFO "wrote the login item $plist"
+  lib="$HOME/.local/share/launchd-reload/launchd_reload.sh"
+  if [ -r "$lib" ]; then
+    LAUNCHD_TAG=agent_desktop_macos
+    . "$lib"
+    uid="$(id -u)"
+    if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+      launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
+      launchd_wait_gone "$label" || log WARN "launchd still has $label; the login item is loaded again at the next login"
+    fi
+    if launchd_bootstrap "$label" "$plist"; then
+      log INFO "loaded $label"
+    else
+      log WARN "the login item is not loaded now; it loads at the next login"
+    fi
+  else
+    log WARN "$lib is not installed (a full chezmoi apply installs it), so the login item is written but not loaded; it loads at the next login"
+  fi
+fi
+
+# A helper that is already running keeps the old script in memory, so a new copy restarts it.
+if [ -n "$relay_changed" ] && "$relay" status >/dev/null 2>&1; then
+  out="$("$relay" stop 2>&1)" || log WARN "could not stop the running kitty helper: $out"
+fi
+if out="$("$relay" start 2>&1)"; then
+  log INFO "$out"
+else
+  log WARN "the kitty helper is not running: $out (the login item starts it at the next login; by hand: agent-desktop-relay start)"
+fi
+
+{{ end -}}
+# {{ if eq .profile "personal" }}3{{ else }}2{{ end }}. Vercel's program, for this Mac's processor.
+arch="$(uname -m)"
+case $arch in
+  arm64|aarch64) target="aarch64-apple-darwin" ;;
+  x86_64) target="x86_64-apple-darwin" ;;
+  *) fail "no Vercel agent-desktop build for the processor '$arch' ($dest works without it, except for 'agent-desktop ui')." ;;
+esac
+asset="agent-desktop-$VERSION-$target.tar.gz"
+marker="$vdir/.installed"
+if [ -x "$vdir/agent-desktop" ] && [ "$(cat "$marker" 2>/dev/null || true)" = "$VERSION $target" ]; then
+  log INFO "Vercel's agent-desktop $VERSION is already installed in $vdir"
+  exit 0
+fi
+
+curl -fsSL -o "$tmp/$asset" "$RELEASES/$VERSION/$asset" || fail "could not download $RELEASES/$VERSION/$asset; retry: $retry"
+curl -fsSL -o "$tmp/checksums.txt" "$RELEASES/$VERSION/checksums.txt" || fail "could not download $RELEASES/$VERSION/checksums.txt; retry: $retry"
+want="$(awk -v n="$asset" '$2 == n { print $1 }' "$tmp/checksums.txt")"
+got="$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')"
+if [ -z "$want" ] || [ "$want" != "$got" ]; then
+  fail "checksum mismatch for $asset (release says '${want:-nothing}', downloaded file is '$got'), so nothing was installed from it; retry: $retry"
+fi
+
+mkdir "$tmp/x"
+tar -xzf "$tmp/$asset" -C "$tmp/x" || fail "could not unpack $asset; retry: $retry"
+[ -f "$tmp/x/agent-desktop" ] || fail "$asset holds no agent-desktop program; retry: $retry"
+rm -rf "$vdir.new"
+mkdir -p "$vdir.new"
+for f in "$tmp"/x/*; do
+  [ -f "$f" ] || continue
+  cp "$f" "$vdir.new/"
+  chmod 755 "$vdir.new/${f##*/}"
+done
+printf '%s %s\n' "$VERSION" "$target" >"$vdir.new/.installed"
+rm -rf "$vdir"
+mv "$vdir.new" "$vdir"
+log INFO "installed Vercel's agent-desktop $VERSION ($target) in $vdir"

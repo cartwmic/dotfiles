@@ -38,6 +38,8 @@
 # The kgate profile of this repo's heavy suites (source-only; run from the checkout).
 ./kgate.toml
 docs/
+# windows/ is the source of the G14's install script and its files (windows/install.ps1 copies them into place on that machine, docs/agent-desktop.md). chezmoi never deploys it, on any system or profile.
+windows/
 # video-rename's config is written by hand on the one machine that uses it (README.md, "video-rename"); chezmoi must never manage or add it.
 .config/video-rename
 .config/video-rename/**
@@ -195,10 +197,15 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
-# Agent desktop helper (~/.local/bin/agent-desktop: screenshots, windows, focus, pointer, typing on the Omarchy desktop) and session.sh, the lookup of the live Wayland and Hyprland session that it, agent-chrome and ~/.zshenv share: personal Linux only. macOS is not Wayland, and the work profile has no Linux desktop.
+# Agent desktop helper, Linux back end (~/.local/bin/agent-desktop: screenshots, windows, focus, pointer, typing on the Omarchy desktop) and session.sh, the lookup of the live Wayland and Hyprland session that it, agent-chrome and ~/.zshenv share: personal Linux only. It drives Hyprland, and the work profile has no Linux desktop. A Mac gets its own script from the 66 step below, and the G14 from windows/ (docs/agent-desktop.md).
 .local/bin/agent-desktop
 .local/share/agent-desktop
 .local/share/agent-desktop/**
+{{- end }}
+
+{{- if ne .chezmoi.os "darwin" }}
+# Agent desktop helper, macOS back end: the 66 step copies .chezmoitemplates/agent-desktop-macos.sh to ~/.local/bin/agent-desktop and installs Vercel's agent-desktop. Both profiles, on a Mac only (docs/agent-desktop.md). chezmoi refuses two sources for one destination, so the Mac script cannot be a second managed file next to the Linux one.
+66_agent_desktop_macos.sh
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
