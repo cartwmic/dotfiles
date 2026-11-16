@@ -43,7 +43,8 @@ NOT_REPO = {"auth", "config", "alias", "extension", "ext", "completion", "help",
             "codespace", "org", "project", "attestation", "accessibility", "copilot", "preview",
             "__complete", "__completeNoDesc"}      # the last two are the shell-completion entries, which print candidates and send nothing
 
-# The flags of every command whose text the wrapper reads, and of every command group (the flags gh accepts between the group and its subcommand), as
+# The flags of every command whose text the wrapper reads, of the commands whose parsed flags it hands to the layers (FOR_LAYERS), and of every command group
+# (the flags gh accepts between the group and its subcommand), as
 # `gh <group> <verb> --help` lists them in the gh release named by FLAGS_FROM_GH. scripts/leak-guard-gh-flags regenerates this block from the installed gh
 # (docs/leak-guard.md, Flag tables), and tests/leak-guard/test_gh_wrapper.py, FlagTables, compares it with an installed gh of that version and fails when
 # they differ. "s:long" is a short and a long flag, and a trailing "=" means the flag takes a value. The wrapper parses a command's arguments with its own
@@ -75,6 +76,8 @@ FLAGS = {
     ("issue", "reopen"): "c:comment=,h:help,R:repo=",
     ("release", "create"): "discussion-category=,d:draft,fail-on-no-commits,generate-notes,latest,n:notes=,F:notes-file=,notes-from-tag,notes-start-tag=,p:prerelease,target=,t:title=,verify-tag,h:help,R:repo=",
     ("release", "edit"): "discussion-category=,draft,latest,n:notes=,F:notes-file=,prerelease,tag=,target=,t:title=,verify-tag,h:help,R:repo=",
+    ("run", "watch"): "compact,exit-status,i:interval=,h:help,R:repo=",
+    ("pr", "checks"): "fail-fast,i:interval=,q:jq=,json=,required,t:template=,watch,w:web,h:help,R:repo=",
     ("api", ""): "allow-escape-sequences,cache=,F:field=,H:header=,hostname=,i:include,input=,q:jq=,X:method=,paginate,p:preview=,f:raw-field=,silent,slurp,t:template=,verbose,h:help",
 }
 # Which flags carry text, by the label a hit is named with (--subject and --title are both a "title").
@@ -434,6 +437,18 @@ def parse_flags(args, group, verb):
     return flags, positionals, unknown, missing
 
 
+# The commands whose parsed flags the layers get (Call.parsed), by the name command_name gives them, and the FLAGS row each is parsed with. A layer reads these
+# flags from the call and keeps no flag table of its own, so scripts/leak-guard-gh-flags regenerates every row and the FlagTables test compares it.
+FOR_LAYERS = {"api": ("api", ""), "run watch": ("run", "watch"), "pr checks": ("pr", "checks")}
+
+
+def layer_flags(read):
+    """What a layer is given: ([(long name, value or None)], [positional arguments]) from a parse_flags result, or None when the flags could not be read (an
+    unlisted flag, a value flag with no value), so a layer leaves such a call as it is."""
+    flags, positionals, unknown, missing = read
+    return None if unknown is not None or missing is not None else (flags, positionals)
+
+
 def parse_text(args, group, verb):
     """(text to read [(kind, value, from_file)], every -R/--repo value, positional arguments, refusal or None, unparsed, last help value) for a pr/issue/release
     command. `unparsed` is true when parsing stopped at a flag the table does not list. The last help value is None (no help flag), True or False (last_help).
@@ -495,7 +510,12 @@ def gather_text(found, texts):
 def parse_api(args):
     """(method, endpoint, [(typed, "key=value")], [input path], hostname, last help value, unknown flag position, missing value position) for `gh api`
     arguments, parsed with gh's own flag table for `gh api`. Reads nothing."""
-    flags, positionals, unknown, missing = parse_flags(args, "api", "")
+    return read_api(parse_flags(args, "api", ""))
+
+
+def read_api(read):
+    """parse_api of a parse_flags result, for a caller that has parsed the arguments already."""
+    flags, positionals, unknown, missing = read
     method, fields, inputs, hostname = None, [], [], None
     for name, val in flags:
         if name == "method":
@@ -836,10 +856,10 @@ def layers_on():
         return False
 
 
-def api_facts(args):
+def api_facts(args, read=None):
     """(method, path, mutation) for the `gh api` arguments, as gh_classify.classify_api reads them; None when they cannot be read. Reads no file: a GraphQL
-    query that comes from a file or from --input is not known to be a read."""
-    method, endpoint, fields, inputs, _, helped, unknown, missing = parse_api(args[1:])
+    query that comes from a file or from --input is not known to be a read. `read` is the parse_flags result for the arguments, when the caller has it."""
+    method, endpoint, fields, inputs, _, helped, unknown, missing = read_api(read or parse_flags(args[1:], "api", ""))
     if helped or unknown is not None or missing is not None:
         return None
     path = endpoint_path(endpoint)
@@ -868,10 +888,14 @@ def main(argv):
         name = command_name(args) or "unrecognised"
         group, _, verb = name.partition(" ")
         read = group == "search" or verb in READ.get(group, ())
-        call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args) if name == "api" else None), budget_on=on)
+        parsed = parse_flags(args[1:], *FOR_LAYERS[name]) if name in FOR_LAYERS else None      # the one parse of the call's flags: the classification and the layers share it
+        call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args, parsed) if name == "api" else None), budget_on=on,
+                              parsed=layer_flags(parsed) if parsed else None)
         layers = gh_layers.load(gh_layers.LAYERS if on else gh_layers.ALWAYS)
     except Exception as e:      # a lib that is missing or broken must not stop gh: the layers are an optimisation, the leak-guard check is not
-        print("gh-wrapper: the layers could not start (%s: %s); the call goes on without them" % (type(e).__name__, e), file=sys.stderr)
+        absent = isinstance(e, ModuleNotFoundError) and e.name in ("gh_classify", "gh_layers")
+        if on or not absent:      # with the switch off (the work Mac) a lib that is simply not installed is as the base had it: silent. A broken one still says so
+            print("gh-wrapper: the layers could not start (%s: %s); the call goes on without them" % (type(e).__name__, e), file=sys.stderr)
         return checked_run(real, args, t0, False)
     stop = gh_layers.before(layers, call)
     if stop:

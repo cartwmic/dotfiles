@@ -31,13 +31,43 @@ ADD_BODY = (
 ) % PLANTED
 
 
+W = load_wrapper()
+
+
+def parsed(klass, args):
+    """Call.parsed for a call, as the wrapper builds it in main(): its own parse_flags with its own FLAGS row. A test has no parser of its own."""
+    name = "api" if klass.startswith("api") else klass
+    return W.layer_flags(W.parse_flags(args[1:], *W.FOR_LAYERS[name])) if name in W.FOR_LAYERS else None
+
+
 def plan(klass_bucket, *args, urgent=False, budget_on=True):
-    return R.plan(klass_bucket[0], klass_bucket[1], list(args), urgent, budget_on)
+    return R.plan(klass_bucket[0], klass_bucket[1], list(args), parsed(klass_bucket[0], list(args)), urgent, budget_on)
 
 
-class Table(unittest.TestCase):
-    def test_the_api_row_is_the_wrappers_own_row(self):
-        self.assertEqual(R.table(R.API), load_wrapper().flag_table("api", ""))
+class FlagRows(unittest.TestCase):
+    """The layer keeps no flag table: the flags come from the wrapper's FLAGS, which scripts/leak-guard-gh-flags regenerates and FlagTables (test_gh_wrapper.py)
+    compares with gh. These fail when a command the layer rewrites has no row there."""
+
+    def test_every_command_the_layer_rewrites_is_parsed_by_the_wrapper_with_a_row_in_flags(self):
+        for klass in ("run watch", "pr checks", "api"):
+            with self.subTest(klass):
+                self.assertIn(klass, W.FOR_LAYERS)
+                self.assertIn(W.FOR_LAYERS[klass], W.FLAGS)
+
+    def test_the_layer_has_no_flag_table_or_parser_of_its_own(self):
+        self.assertEqual([n for n in ("table", "read_flags", "RUN_WATCH", "PR_CHECKS", "API") if hasattr(R, n)], [])
+
+    def test_every_flag_in_a_watch_row_is_read_so_the_default_still_goes_on(self):
+        """A flag gh adds to `run watch` or `pr checks` and a regeneration puts in FLAGS must not stop the default."""
+        for klass, tail in (("run watch", ["run", "watch", "9"]), ("pr checks", ["pr", "checks", "5", "--watch"])):
+            for item in W.FLAGS[W.FOR_LAYERS[klass]].split(","):
+                short, _, rest = item.rpartition(":")
+                name = rest.rstrip("=")
+                if name in ("help", "interval", "watch"):
+                    continue
+                with self.subTest(klass=klass, flag=name):
+                    args = tail + ["--" + name] + (["x"] if rest.endswith("=") else [])
+                    self.assertEqual(plan((klass, "core"), *args)[1], "interval 60")
 
 
 class Watch(unittest.TestCase):
@@ -140,7 +170,7 @@ class Cache(unittest.TestCase):
 
 class Hook(unittest.TestCase):
     def call(self, klass, bucket, *args, budget_on=True):
-        return L.Call(list(args), (klass, bucket, False), budget_on=budget_on)
+        return L.Call(list(args), (klass, bucket, False), budget_on=budget_on, parsed=parsed(klass, list(args)))
 
     def test_with_the_budget_off_the_watch_default_is_exposed_and_the_cache_is_not(self):
         call = self.call("run watch", "core", "run", "watch", "9", budget_on=False)
@@ -197,6 +227,24 @@ class Wrapper(WrapperBase):
         self.assertEqual(self.run_gh("run", "watch", "9", "-i", "3"), ["run", "watch", "9", "-i", "3"])
         self.assertEqual(self.run_gh("pr", "checks", "5", "--watch"), ["pr", "checks", "5", "--watch", "--interval", "60"])
         self.assertEqual(self.run_gh("pr", "checks", "5"), ["pr", "checks", "5"])
+
+    def with_flag(self, row, flag):
+        """The installed wrapper with a made-up flag added to its FLAGS row `row`, as a regeneration after a gh upgrade would."""
+        path = self.wbin / "gh"
+        text = path.read_text()
+        key = '    %s: "' % row
+        self.assertEqual(text.count(key), 1, "the installed wrapper has no FLAGS row %s" % row)
+        path.write_text(text.replace(key, key + flag + ",", 1))
+
+    def test_a_flag_added_to_a_watch_row_in_the_wrappers_flags_is_read_by_the_layer(self):
+        """The flag rows are the wrapper's only: add a flag there and the layer reads it (it would otherwise leave the call at gh's 3 s poll)."""
+        self.with_flag('("run", "watch")', "madeup-flag")
+        self.with_flag('("pr", "checks")', "madeup-flag")
+        self.assertEqual(self.run_gh("run", "watch", "9", "--madeup-flag"), ["run", "watch", "9", "--madeup-flag", "--interval", "60"])
+        self.assertEqual(self.run_gh("pr", "checks", "5", "--watch", "--madeup-flag"), ["pr", "checks", "5", "--watch", "--madeup-flag", "--interval", "60"])
+
+    def test_a_flag_that_is_in_no_flags_row_leaves_the_watch_alone(self):
+        self.assertEqual(self.run_gh("run", "watch", "9", "--madeup-flag"), ["run", "watch", "9", "--madeup-flag"])
 
     def test_plain_api_reads_get_the_cache_unless_urgent(self):
         self.assertEqual(self.run_gh("api", "repos/a/b/branches/main"), ["api", "repos/a/b/branches/main", "--cache", "15s"])

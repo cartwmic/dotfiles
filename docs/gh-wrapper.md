@@ -1,6 +1,6 @@
 # The gh wrapper
 
-One `gh` wrapper, first on PATH on every desktop profile. It is the leak-guard wrapper ([leak-guard.md](./leak-guard.md)) under a new name, with a seam for layers that save GitHub API calls. Every agent shares one GitHub account, and its core (REST) bucket of 5,000 calls an hour hit 0 twice on 2026-11-16. `gh run watch` alone costs about 4 REST calls per poll (run, jobs, workflow, annotations): 55 calls in 60 seconds at its default 3-second interval.
+One `gh` wrapper, first on PATH on every desktop profile. It is the leak-guard wrapper ([leak-guard.md](./leak-guard.md)) under a new name, with a seam for layers that save GitHub API calls. Every agent shares one GitHub account, and its core (REST) bucket of 5,000 calls an hour hit 0 twice on 2026-11-16. `gh run watch` alone costs about 4 REST calls per poll (run, jobs, workflow, annotations): 64 calls in 60 seconds at its default 3-second interval (measured with `-i 3`).
 
 This page is the contract of the base. The layers themselves (log, watch interval and `gh api` cache, budget guard) are separate changes that add files to the lib directory, and each documents itself here when it lands.
 
@@ -55,9 +55,9 @@ A layer is a module in the lib directory. `LAYERS = ("gh_rewrite", "gh_budget", 
 - `before(call)`: change `call.args`, set `call.action` (`pass`, `rewrite`, `refused`, `exempt`) and `call.rewrite`, or `raise Stop(rc, message)` to refuse the call: the message goes to standard error, the wrapper exits `rc`, gh does not run.
 - `after(call)`: runs once, in reverse order, whatever happened: gh's exit, a `Stop`, or a leak-guard block. `call.rc` is set.
 
-`call` carries `args`, `klass`, `bucket`, `write`, `budget_on` (whether the budget file says `on`), `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
+`call` carries `args`, `klass`, `bucket`, `write`, `budget_on` (whether the budget file says `on`), `parsed` (the flags of a `run watch`, `pr checks` or `gh api` call as the wrapper read them: `([(long name, value or None)], [positional arguments])`, or `None` for another command or flags it could not read), `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
 
-Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there.
+Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there. With the budget file off or missing (the work Mac), a lib that is not installed at all is silent, as it was before the layers existed; a lib that is there and broken still prints the line.
 
 ## The budget file
 
@@ -126,10 +126,10 @@ The cache rewrite is skipped for a call that names a method other than GET, send
 
 A caller's `-i` or `--interval` is honoured and never clamped; for a repeated flag the last value counts, as gh keeps it. A call whose flags cannot be read (an unknown flag, a value flag with no value) is left as it is.
 
-Why 60 seconds: each `gh run watch` poll is about 4 REST calls, so the default 3-second poll costs about 55 calls a minute per watcher. The design had 30; 60 matches the agents' waiting rule. Why 15 seconds: `gh api --cache` is a plain time-to-live file cache. A second read of the same URL inside the window makes no network call. The cache key includes the request headers: a raw-`Accept` read of a file URL was not served the cached JSON for the same URL.
+Why 60 seconds: each `gh run watch` poll is about 4 REST calls, so the default 3-second poll costs about 64 calls a minute per watcher (measured: 16 polls in 60 seconds). The design had 30; 60 matches the agents' waiting rule. Why 15 seconds: `gh api --cache` is a plain time-to-live file cache. A second read of the same URL inside the window makes no network call. The cache key includes the request headers: a raw-`Accept` read of a file URL was not served the cached JSON for the same URL.
 
 What it exposes for the log layer: `call.action` is `rewrite` and `call.rewrite` is `interval 60` or `cache 15s` when the call changed. `call.notes["interval"]` is set on every watch call (`run watch`, and `pr checks --watch`): the interval gh polls at, the caller's own or the default, as an int when it is a number. The log layer should record `rewrite` and `interval` from these.
 
 Leak-guard sees the arguments after the rewrite: `checked_run` takes `call.args` after the layers ran, and `test_gh_rewrite.py` checks it with a test-only layer that adds text to a guarded comment. This layer's rewrites add flags to reads only, which leak-guard does not check, so no rewrite of this layer can change a guard verdict.
 
-Tests: `python3 -m unittest discover -s tests/leak-guard -p 'test_gh_rewrite.py'`. The planning is tested as pure functions, the `gh api` flag table is tested equal to the wrapper's, and the installed wrapper is run with the budget on, off and missing.
+Tests: `python3 -m unittest discover -s tests/leak-guard -p 'test_gh_rewrite.py'`. The planning is tested as pure functions on the wrapper's own parse, and the installed wrapper is run with the budget on, off and missing. The layer has no flag table: the wrapper parses `run watch`, `pr checks` and `gh api` with its `FLAGS` rows (`FOR_LAYERS` in `scripts/gh-wrapper`) and hands the result in as `call.parsed`. The tests fail when a watch row is missing from `FLAGS`, and when a flag added to a row is not read.

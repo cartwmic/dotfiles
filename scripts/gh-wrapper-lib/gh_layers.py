@@ -30,12 +30,15 @@ class Stop(Exception):
 
 class Call:
     """One gh call as the layers see it. `args` are the arguments after `gh`; `klass`, `bucket` and `write` come from gh_classify. `budget_on` is whether
-    ~/.config/gh-wrapper/budget says on, which the wrapper reads once for every call."""
+    ~/.config/gh-wrapper/budget says on, which the wrapper reads once for every call. `parsed` is the call's flags as the wrapper read them, for the commands
+    it parses for the layers (FOR_LAYERS in the wrapper): ([(long name, value or None)], [positional arguments]) of the arguments after the group, or None
+    when the command is not one of them or its flags could not be read. A layer reads flags from here and keeps no flag table of its own."""
 
-    def __init__(self, args, classification, budget_on=False):
+    def __init__(self, args, classification, budget_on=False, parsed=None):
         self.args = list(args)
         self.klass, self.bucket, self.write = classification
         self.budget_on = budget_on
+        self.parsed = parsed
         self.id = os.getpid()
         self.t0 = time.time()
         self.action = "pass"      # pass | rewrite | refused | exempt

@@ -131,7 +131,15 @@ class Layers(WrapperBase):
                 self.assertEqual(len(self.real_calls()), 1)
         (self.lib / "gh_budget.py").unlink()
         os.rename(self.lib, self.tmp / "lib-gone")
-        self.assertEqual(self.gh("pr", "view", "5", cwd=self.other_cwd).returncode, 0)      # no lib at all: the call still goes on (gh_rewrite is lost, the check is not)
+        done = self.gh("pr", "view", "5", cwd=self.other_cwd)      # no lib at all: the call still goes on (gh_rewrite is lost, the check is not)
+        self.assertEqual((done.returncode, done.stderr), (0, "real gh err\n"))      # and with the switch off the wrapper says nothing about it, as before the layers existed
+
+    def test_with_the_budget_off_a_broken_lib_is_still_reported(self):
+        self.budget("off")
+        (self.lib / "gh_layers.py").write_text("raise RuntimeError('broken on purpose')\n")
+        done = self.gh("pr", "view", "5", cwd=self.other_cwd)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("gh-wrapper: the layers could not start (RuntimeError", done.stderr)
 
     def test_with_the_budget_on_each_layer_sees_the_classified_call_before_and_after(self):
         self.layer("gh_budget", SEEING)
