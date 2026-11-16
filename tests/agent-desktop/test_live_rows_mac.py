@@ -234,6 +234,14 @@ class J5(Case):
         self.assertEqual(mini.shown, "7")
         self.assertEqual(mini.misdirected, [])
 
+    def test_passes_when_the_calculator_already_showed_a_7(self):
+        mini = FakeMini()
+        mini.apps.update({"Calculator": True, "TextEdit": True})  # already open, so nothing resets it
+        mini.entry = mini.shown = "7"
+        rows, rec = self.rows(mini)
+        rows["J5"](rec)
+        self.assertEqual(mini.shown, "7")
+
     def test_fails_when_the_click_does_not_register_even_though_a_button_is_named_7(self):
         mini = FakeMini()
         mini.press = lambda name: None

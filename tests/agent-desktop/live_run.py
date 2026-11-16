@@ -832,6 +832,9 @@ def desktop_rows(rec, dev):
         ensure_apps(rec)
         focus_front(rec, hk["calc"])
         env = calc_snapshot("snapshot for coordinates")
+        # the display must start at 0, or a left over entry (a 7 from before) would make the click's 7 a 77 and the check could not tell
+        rec.ui("clear the display", "click", ref_of(env, "clear"))
+        wait_for("the display to read 0 before the click", lambda: display_value(calc_display("read display before", save=False)) == "0" or None, timeout=15)
         ref = ref_of(env, "7")
         g = rec.ui("bounds of 7", "get", ref, "--property", "bounds")
         box = find_box(g.env)
