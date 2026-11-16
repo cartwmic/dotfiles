@@ -144,7 +144,8 @@ class Fixture(unittest.TestCase):
         self.tmp.cleanup()
 
     def write_fixture(self):
-        repos = {r: str(self.src) for r in ("cartwmic/dotfiles", "cartwmic/loop-engine", "cartwmic/agent-kit", "cartwmic/coordinator")}
+        repos = {r: str(self.src) for r in ("cartwmic/dotfiles", "cartwmic/loop-engine", "cartwmic/agent-kit", "cartwmic/coordinator",
+                                            "cartwmic/alert-steward")}
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
             {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts,
              "jobs": self.jobs, "prs": self.prs, "fail_pr": self.failing_pr}))
@@ -412,7 +413,8 @@ class TipFlag(Fixture):
 
     def test_all_with_tip_is_2_when_one_repo_is_untested_at_the_tip(self):
         runs = {f"cartwmic/{r}|{w}": [run(1, self.c3, "success")]
-                for r, w in (("dotfiles", "ci.yml"), ("loop-engine", "ci.yml"), ("agent-kit", "unit.yml"))}
+                for r, w in (("dotfiles", "ci.yml"), ("loop-engine", "ci.yml"), ("agent-kit", "unit.yml"),
+                             ("alert-steward", "image.yml"))}
         runs["cartwmic/dotfiles|ci.yml"] = [run(2, self.c3, status="queued", age=5), run(1, self.c2, "success", age=1)]
         self.runs = runs
         self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
@@ -494,6 +496,16 @@ class MergeGateFlag(Fixture):
         self.assertEqual(self.status("--all", "--merge-gate")[0], 0)
         self.runs["cartwmic/loop-engine|ci.yml"] = [run(1, self.c3, "failure")]
         self.assertEqual(self.status("--all", "--merge-gate")[0], 1)
+
+    def test_alert_steward_reads_its_image_workflow(self):
+        self.runs = {"cartwmic/alert-steward|image.yml": []}
+        rc, out = self.status("--merge-gate", "alert-steward")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("alert-steward: UNTESTED", out)
+        self.runs = {"cartwmic/alert-steward|image.yml": [run(1, self.c3, "failure")]}
+        rc, out = self.status("--merge-gate", "alert-steward")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("alert-steward: RED", out)
 
     def test_with_tip_is_a_usage_error(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
@@ -699,6 +711,7 @@ class AllAndHomelab(Fixture):
         self.assertIn("coordinator: GREEN", out)
         self.assertIn("homelab: n/a", out)
         self.assertIn("amazon-itemizer: n/a", out)
+        self.assertIn("alert-steward: UNTESTED", out)
 
     def test_all_untested_without_red_exits_2(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")],
@@ -729,7 +742,7 @@ class AllAndHomelab(Fixture):
         self.env["PATH"] = str(empty)
         rc, out = self.status("--all")
         self.assertEqual(rc, 1, out)
-        for name in ("dotfiles", "loop-engine", "agent-kit", "coordinator"):
+        for name in ("dotfiles", "loop-engine", "agent-kit", "coordinator", "alert-steward"):
             self.assertIn(f"{name}: ERROR  cannot read state: gh could not start", out)
         self.assertIn("homelab: n/a", out)
         self.assertIn("amazon-itemizer: n/a", out)
