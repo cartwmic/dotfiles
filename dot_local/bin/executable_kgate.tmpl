@@ -1474,7 +1474,7 @@ class Job:
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
                     "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "ran": False,
-                    "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log"}
+                    "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log", "priority_class": None}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
         self.receipt_refused = False
@@ -1572,6 +1572,9 @@ class Job:
             self.use_kubectl(image, prof, cpu)
         else:
             check_cpu_limit(prof, cpu)
+            self.rec["priority_class"] = prof["priority_class"] or PRIORITY_CLASS   # the class the pod runs in; a kubectl cluster's own policy decides there, so the record stays null
+            if prof["cpu_limit"] is not None:
+                self.rec["cpu_limit"] = prof["cpu_limit"]   # only when the profile sets one (a kubectl cluster always records the effective limit)
         if prof["services"] and not self.kcfg:     # a kubectl cluster offers SERVICES (checked when the profile is read); the homelab offers none
             raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
         if o.node in NEVER_NODES:
@@ -1875,6 +1878,10 @@ class Job:
         if host in PULL and self.cluster.kind != "kubectl":
             pull = (host, PULL[host][0], op_read(PULL[host][1]))
         limit = "" if mem_limit == mem else ", %s limit" % mem_limit
+        if prof["cpu_limit"] is not None:
+            limit += ", %d cpu limit" % prof["cpu_limit"]
+        if self.rec["priority_class"]:
+            limit += ", priority class %s" % self.rec["priority_class"]
         self.note("pod %s on %s: image %s, %d cpu, %s memory request%s" % (self.id, o.node or "any node", image.split("@")[0], cpu, mem, limit))
         cold = make = None
         if self.cluster.kind == "kubectl":

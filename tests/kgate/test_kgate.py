@@ -1120,6 +1120,21 @@ class Black(unittest.TestCase):
         res = self.pod_spec_sent()["containers"][0]["resources"]
         self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("2", "2"))
 
+    def test_the_pod_line_and_the_record_name_the_priority_class_and_the_cpu_limit_when_set(self):
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("memory request, priority class kgate\n", done.stdout)
+        self.assertNotIn("cpu limit", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["priority_class"], "kgate")
+        self.assertNotIn("cpu_limit", rec)
+        self.profile(extra='priority_class = "kgate-first"\ncpu_limit = 3')
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("memory request, 3 cpu limit, priority class kgate-first\n", done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["priority_class"], rec["cpu_limit"]), ("kgate-first", 3))
+
     def test_a_homelab_cpu_limit_below_the_request_is_refused_before_any_pod(self):
         self.profile(extra="cpu_limit = 1")
         done = self.kgate("--", "true")
@@ -1420,7 +1435,7 @@ class Black(unittest.TestCase):
         self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("1Gi", "1Gi"))
-        self.assertIn("1Gi memory request\n", done.stdout)
+        self.assertIn("1Gi memory request, priority class kgate\n", done.stdout)
 
     def test_limit_below_request_is_refused_before_anything_is_created(self):
         marker = self.tmp / "cmd-ran"
@@ -3111,6 +3126,13 @@ class KubectlBlack(unittest.TestCase):
         env = {e["name"]: e.get("value") for e in c["env"]}
         self.assertEqual((env["GOMAXPROCS"], env["MAKEFLAGS"], env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"]), ("5", "-j5", "5", "5"))
         self.assertEqual((self.records()[-1]["cpu"], self.records()[-1]["cpu_limit"]), (2, 5))
+
+    def test_a_kubectl_pod_line_names_a_set_cpu_limit_and_never_a_priority_class(self):   # the cluster's own policy decides the class there
+        self.profile(extra="cpu_limit = 5")
+        done = self.run_kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("2Gi limit, 5 cpu limit\n", done.stdout)
+        self.assertIsNone(self.records()[-1]["priority_class"])
 
     def test_the_record_carries_the_effective_cpu_limit_even_when_it_defaults(self):
         self.run_kgate("--", "true")
