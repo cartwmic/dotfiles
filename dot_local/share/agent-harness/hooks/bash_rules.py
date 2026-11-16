@@ -78,7 +78,7 @@ SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 
 POLL = (
     "A sleep-poll loop is refused in agent sessions: it holds the pane while it waits. "
-    "Run the job with `run-and-wake -- <cmd>`; its end wakes the pane, so end your turn instead of polling."
+    "Run the job with `run-and-wake -- <cmd>`: builders wait for it as run-and-wake says, and other seats end their turn."
 )
 HEREDOC = (
     "An unquoted heredoc with a backtick is refused in agent sessions: the shell runs the backticked text as a command. "
