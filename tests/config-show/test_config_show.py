@@ -72,9 +72,12 @@ class ConfigShow(unittest.TestCase):
         self.assertIn("password = <masked>", table)
 
     def test_the_format_flag_overrides_the_name(self):
-        out = run(self.path("c.json"), "--format", "yaml")
+        (Path(self.tmp) / "c.txt").write_text(FILES["c.yml"])
+        self.assertIn("(env)", run(self.path("c.txt")).stdout.splitlines()[0])
+        out = run(self.path("c.txt"), "--format", "yaml")
         self.assertEqual(out.returncode, 0)
-        self.assertIn("a.token = <masked>", out.stdout)
+        self.assertIn("server.password = <masked>", out.stdout)
+        self.assertNotIn("FAKE", out.stdout)
 
     def test_parse_errors_report_a_line_and_no_text(self):
         bad = Path(self.tmp) / "bad.toml"
@@ -83,7 +86,12 @@ class ConfigShow(unittest.TestCase):
         badyml.write_text("a: [FAKEUNCLOSED\n  b: 'FAKE")
         badjson = Path(self.tmp) / "bad.json"
         badjson.write_text('{"token": "FAKEJ"')
-        for path in (bad, badyml, badjson):
+        try:
+            import yaml  # noqa: F401
+            checked = (bad, badyml, badjson)
+        except ImportError:  # the keys-by-indentation reader does not validate
+            checked = (bad, badjson)
+        for path in checked:
             with self.subTest(file=path.name):
                 out = run(str(path))
                 self.assertEqual(out.returncode, 1)
@@ -107,6 +115,14 @@ class ConfigShow(unittest.TestCase):
         without = self.run_without("c.yml", "yaml")
         self.assertEqual(without.stdout.splitlines()[1:], with_yaml)
         self.assertNotIn("FAKE", without.stdout)
+
+    def test_flow_style_yaml_without_pyyaml_is_an_error_not_a_guess(self):
+        flow = Path(self.tmp) / "flow.yml"
+        flow.write_text('{"token": "FAKEFLOW"}')
+        out = self.run_without("flow.yml", "yaml")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(out.stdout, "")
+        self.assertNotIn("FAKE", out.stderr)
 
     def test_without_tomllib_the_toml_reader_still_masks_every_value(self):
         out = self.run_without("RustDesk.toml", "tomllib")

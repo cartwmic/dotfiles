@@ -90,6 +90,8 @@ def parse_yaml_subset(text):
         if not stripped or stripped.startswith("#") or stripped in ("---", "..."):
             continue
         indent = len(raw) - len(raw.lstrip())
+        if not root and not stack[1:] and stripped[0] in "{[":
+            raise ValueError("flow-style YAML needs PyYAML, which is not installed")
         if block is not None:
             if indent > block:
                 continue
