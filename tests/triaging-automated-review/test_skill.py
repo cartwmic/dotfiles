@@ -71,7 +71,9 @@ class SkillTest(unittest.TestCase):
         _, body = parts()
         flat = " ".join(body.split())
         self.assertIn("Before you resolve a bot thread, read every reply in it.", flat)
-        self.assertIn("If any reply's author is not a bot, treat the thread as a human finding: draft the reply for the owner and leave the thread open.", flat)
+        self.assertIn("If any reply's author is neither a bot nor the owner (the `viewer` login), treat the thread as a human finding: draft the reply for the owner and leave the thread open.", flat)
+        self.assertIn("Your own replies post as the owner and do not count.", flat)  # or the thread would never resolve
+        self.assertIn("{viewer{login} repository(", flat)  # the query returns the owner's login to compare with
         self.assertIn("comments(last:20){totalCount nodes{author{login __typename}", flat)  # the query reads the replies
 
     def test_does_not_restate_the_shared_tests(self):

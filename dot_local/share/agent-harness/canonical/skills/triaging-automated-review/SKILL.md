@@ -49,10 +49,11 @@ listed as pending. The final head has passed `reviewing-prs`.
    ("Fixed in `<sha>`: what changed.", "Declining: fails <test>, the true
    reason.", or "Out of scope for this PR: follow-up <ticket or note>."), then
    resolve it. **Before you resolve a bot thread, read every reply in it.** If
-   any reply's author is not a bot, treat the thread as a human finding: draft
-   the reply for the owner and leave the thread open. For a human's thread,
-   write the same reply as a draft and post it only after the owner approves
-   that exact text. For a human's top-level
+   any reply's author is neither a bot nor the owner (the `viewer` login),
+   treat the thread as a human finding: draft the reply for the owner and leave
+   the thread open. Your own replies post as the owner and do not count. For a
+   human's thread, write the same reply as a draft and post it only after the
+   owner approves that exact text. For a human's top-level
    review or comment, draft one PR comment that answers each finding in it.
    Write each reply with the `no-ai-slop` skill: short, in the owner's voice.
 6. **If you pushed, go to step 1.** A push can start a new bot review.
@@ -124,7 +125,7 @@ Stop and report to the owner when:
 ```sh
 # open threads (owner, repo, number)
 gh api graphql -f query='
-query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
+query($o:String!,$r:String!,$n:Int!){viewer{login} repository(owner:$o,name:$r){pullRequest(number:$n){
   reviewThreads(first:100){nodes{id isResolved isOutdated path line originalLine
     root:comments(first:1){nodes{databaseId}}
     comments(last:20){totalCount nodes{author{login __typename} body}}}}}}}' \
@@ -143,5 +144,6 @@ gh pr comment NUMBER --repo OWNER/REPO --body "<the bot's re-run command>"
 More than 100 threads: page with `reviewThreads(first:100, after:$cursor)`.
 GraphQL returns a bot's login bare; REST adds `[bot]`. Match the form your API
 returns.
-A reply is from a bot when its author's `__typename` is `Bot`. If a thread's
+A reply is from a bot when its author's `__typename` is `Bot`, and from the
+owner when its login is the `viewer` login. If a thread's
 `totalCount` is over 20, page back before you resolve it.
