@@ -29,6 +29,12 @@ import windows_testlib as wt
 from windows_testlib import EIGHT, WINDOWS, Sandbox, WindowsTestCase
 
 SCRIPT = WINDOWS / "agent-desktop.ps1"
+
+
+def setUpModule():
+    # Without the Windows script every bridge test would wait out its answer timeout one by one; fail once, at once.
+    if not SCRIPT.is_file():
+        raise RuntimeError(f"{SCRIPT} is missing: the Windows back end is not in this tree")
 LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ run=(\S+) elapsed=\d+s (.+)$")
 
 BAD_CALLS = [
