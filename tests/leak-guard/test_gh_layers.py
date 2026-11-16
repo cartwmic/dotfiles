@@ -118,7 +118,7 @@ class Layers(WrapperBase):
         path = self.fake / "layers.jsonl"
         return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
 
-    def test_with_no_budget_file_or_off_the_lib_is_never_read_and_the_real_gh_runs(self):
+    def test_with_no_budget_file_or_off_the_budget_layer_is_never_read_and_the_real_gh_runs(self):
         self.layer("gh_budget", SEEING)
         for setting in (None, "off", "", "yes"):
             with self.subTest(setting):
@@ -131,7 +131,7 @@ class Layers(WrapperBase):
                 self.assertEqual(len(self.real_calls()), 1)
         (self.lib / "gh_budget.py").unlink()
         os.rename(self.lib, self.tmp / "lib-gone")
-        self.assertEqual(self.gh("pr", "view", "5", cwd=self.other_cwd).returncode, 0)      # no lib at all: the off path does not need it
+        self.assertEqual(self.gh("pr", "view", "5", cwd=self.other_cwd).returncode, 0)      # no lib at all: the call still goes on (gh_rewrite is lost, the check is not)
 
     def test_with_the_budget_on_each_layer_sees_the_classified_call_before_and_after(self):
         self.layer("gh_budget", SEEING)
