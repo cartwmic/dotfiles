@@ -5,6 +5,7 @@ Nothing here touches a real desktop. The scripts run with LOCALAPPDATA, USERPROF
 pwsh must be on PATH (under `mise exec aqua:PowerShell/PowerShell@7.7.0 --` locally; on GitHub's runner it is installed).
 A missing pwsh is a failure, never a skip.
 """
+import atexit
 import hashlib
 import io
 import json
@@ -126,7 +127,7 @@ if mode == "registered":
     if action["Execute"] != "powershell.exe":
         sys.stderr.write("unexpected task program %s\n" % action["Execute"]); sys.exit(1)
     argline = action["Arguments"].replace("-WindowStyle Hidden ", "")
-    env = {k: os.environ[k] for k in ("PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "USERNAME", "USERDOMAIN", "COMPUTERNAME") if k in os.environ}
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "USERNAME", "USERDOMAIN", "COMPUTERNAME", "AGENT_DESKTOP_LOCK_PROCESS") if k in os.environ}
     pwsh = None
     for d in os.environ["PATH"].split(os.pathsep):
         if os.path.isfile(os.path.join(d, "pwsh")): pwsh = os.path.join(d, "pwsh"); break
@@ -190,6 +191,43 @@ else
   echo "INFO: No tasks are running which match the specified criteria."
 fi
 '''
+
+CSC_STUB = r'''#!/bin/sh
+# stub for csc.exe: records the call and writes the "exe" named by /out: (a text file holding the source it was given).
+echo "csc $*" >> "$AD_STUB_STATE/calls.log"
+if [ -n "$AD_STUB_CSC_FAIL" ]; then echo "error CS1002: ; expected" ; exit 1; fi
+out=""; src=""
+for a in "$@"; do
+  case "$a" in /out:*) out="${a#/out:}" ;; *.cs) src="$a" ;; esac
+done
+{ echo "stub client built from"; cat "$src"; } > "$out"
+'''
+
+# The compiled client is called in the tests through this shim: the C# source of windows/agent-desktop-client.cs is compiled
+# once per test run into a DLL (PowerShell 7 does that with Roslyn), and the shim runs its Run() with the console streams.
+CLIENT_SHIM = r'''$ErrorActionPreference = 'Stop'
+Add-Type -Path $env:AD_CLIENT_DLL
+exit ([AgentDesktopClient]::Run([string[]]$args, [Console]::Out, [Console]::Error))
+'''
+
+_client_dll = []
+
+
+def client_dll():
+    """Compile windows/agent-desktop-client.cs once per test process and return the DLL's path."""
+    if not _client_dll:
+        folder = Path(tempfile.mkdtemp(prefix="rad-client-"))
+        atexit.register(shutil.rmtree, folder, True)
+        dll = folder / "AgentDesktopClient.dll"
+        env = dict(os.environ, AD_CLIENT_SRC=str(WINDOWS / "agent-desktop-client.cs"), AD_CLIENT_OUT=str(dll))
+        r = subprocess.run([pwsh(), "-NoProfile", "-Command",
+                            "Add-Type -TypeDefinition ([IO.File]::ReadAllText($env:AD_CLIENT_SRC)) -OutputAssembly $env:AD_CLIENT_OUT"],
+                           capture_output=True, text=True, env=env, timeout=300)
+        if r.returncode != 0 or not dll.exists():
+            raise AssertionError("windows/agent-desktop-client.cs does not compile: %s%s" % (r.stdout, r.stderr))
+        _client_dll.append(dll)
+    return _client_dll[0]
+
 
 UI_STUB = r'''#!/bin/sh
 # stub for Vercel's agent-desktop.exe: records its argv, one bracketed word per argument, next to itself.
@@ -259,6 +297,7 @@ class Sandbox:
         executable(self.stubbin / "reg.exe", REG_STUB)
         executable(self.stubbin / "schtasks.exe", SCHTASKS_STUB)
         executable(self.stubbin / "tasklist", TASKLIST_STUB)
+        executable(self.stubbin / "csc.exe", CSC_STUB)
         self.ui_calls = self.tmp / "ui-calls.txt"
         self.ui_exe = self.tmp / "ui-stub.exe"
         executable(self.ui_exe, UI_STUB)
@@ -274,7 +313,7 @@ class Sandbox:
             HOME=str(self.home), USERPROFILE=str(self.home), LOCALAPPDATA=str(self.local),
             USERNAME="michael", USERDOMAIN="WORKGROUP", COMPUTERNAME="G14",  # USERDOMAIN as an OpenSSH session sets it
             PSModulePath=str(self.mods), AD_STUB_STATE=str(self.state), AD_STUB_RELEASE=str(self.release),
-            AD_STUB_WORKER_CWD=str(self.elsewhere),
+            AD_STUB_WORKER_CWD=str(self.elsewhere), AGENT_DESKTOP_CSC=str(self.stubbin / "csc.exe"), AGENT_DESKTOP_LOCK_PROCESS=self.lock_name,
             PATH=os.pathsep.join([str(self.stubbin), env["PATH"]]),
         )
         env.update(extra)
@@ -284,6 +323,13 @@ class Sandbox:
         """Run a script with pwsh -File and return the CompletedProcess (text mode)."""
         return subprocess.run([pwsh(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), *args],
                               capture_output=True, text=True, env=env or self.env(), cwd=str(cwd or self.work), timeout=timeout)
+
+    def client_shim(self):
+        """A script that runs the compiled client (windows/agent-desktop-client.cs) the way the agent-desktop.exe command would."""
+        shim = self.tmp / "client-shim.ps1"
+        if not shim.exists():
+            shim.write_text(CLIENT_SHIM)
+        return shim
 
     def install(self, source=None, **extra):
         """Run windows/install.ps1 (or the copy in `source`) with the release served from self.release."""
@@ -314,9 +360,15 @@ class Sandbox:
         d = self.local / "agent-desktop"
         return sorted(p.name for p in d.iterdir()) if d.exists() else []
 
+    # This sandbox's own name for the lock screen process (Linux keeps 15 characters): the product looks for AGENT_DESKTOP_LOCK_PROCESS,
+    # so a fake lock screen in one test process is not seen by another that runs at the same time (lane K runs this folder too).
+    @property
+    def lock_name(self):
+        return "LogonUI-" + hashlib.sha1(str(self.tmp).encode()).hexdigest()[:7]
+
     def start_fake_lock_screen(self):
         """A process named LogonUI, which is what Windows runs while the screen is locked."""
-        fake = self.tmp / "LogonUI"
+        fake = self.tmp / self.lock_name
         shutil.copy("/bin/sleep", fake)
         proc = subprocess.Popen([str(fake), "300"])
         self.processes.append(proc)

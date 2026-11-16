@@ -23,7 +23,8 @@
 # The worker checks the lock screen on every request, and exits when this script file changes, so old code never answers.
 #
 # Exit: 0 ok; 1 a tool failed, the screen is locked or no answer came in time; 2 usage; 69 a needed tool or the task is missing.
-# Setting: AGENT_DESKTOP_TIMEOUT, seconds to wait for the answer (default 60).
+# Settings: AGENT_DESKTOP_TIMEOUT, seconds to wait for the answer (default 60); AGENT_DESKTOP_LOCK_PROCESS, the process name that
+# means the screen is locked (default LogonUI; only the tests change it).
 # Log: %LOCALAPPDATA%\agent-desktop\agent-desktop.log, one line per step on both sides of the task: UTC time, run id,
 # elapsed, step. `type` logs its length, not its text. `ui` logs its first argument and how many there are, because its
 # arguments can carry typed text.
@@ -339,6 +340,8 @@ public static class AdNative {
     [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("user32.dll")] static extern void SwitchToThisWindow(IntPtr h, bool altTab);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] static extern uint MapVirtualKeyW(uint code, uint type);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int value, int size);
@@ -426,22 +429,77 @@ public static class AdNative {
 
     public static IntPtr Foreground() { return GetForegroundWindow(); }
 
-    // Bring the window to the front and say whether it is there now.
+    // What the last Focus did, for the log: who was in front, and which step brought the window forward (or none).
+    public static string FocusNote = "";
+
+    static string Describe(IntPtr h) {
+        if (h == IntPtr.Zero) return "no window";
+        StringBuilder cls = new StringBuilder(128); GetClassNameW(h, cls, cls.Capacity);
+        int len = GetWindowTextLengthW(h); StringBuilder t = new StringBuilder(len + 1); GetWindowTextW(h, t, t.Capacity);
+        uint pid; uint thread = GetWindowThreadProcessId(h, out pid);
+        return "'" + t + "' class=" + cls + " pid=" + pid + " thread=" + thread;
+    }
+
+    // Windows lets a program take the front only in some cases (its window is already in front, it has just had input, ...). A
+    // long-lived worker is mostly not one of them, and which cases apply depends on what is in front now, so go through the
+    // usual ways one after another and stop at the first that works. Each is checked by asking Windows who is in front.
     public static bool Focus(IntPtr h) {
         if (IsIconic(h)) ShowWindow(h, 9);
-        uint ignore; uint fgThread = GetWindowThreadProcessId(GetForegroundWindow(), out ignore);
+        IntPtr fg = GetForegroundWindow();
+        FocusNote = "was in front: " + Describe(fg);
+        if (fg == h) { FocusNote += "; already in front"; return true; }
+        uint ignore;
+        uint fgThread = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out ignore);
+        uint target = GetWindowThreadProcessId(h, out ignore);
         uint me = GetCurrentThreadId();
-        bool attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+
+        // 1. share input with the window in front and with the target, then ask
+        bool a1 = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+        bool a2 = target != 0 && target != me && target != fgThread && AttachThreadInput(me, target, true);
         BringWindowToTop(h); SetForegroundWindow(h);
-        if (attached) AttachThreadInput(me, fgThread, false);
-        return GetForegroundWindow() == h;
+        if (a2) AttachThreadInput(me, target, false);
+        if (a1) AttachThreadInput(me, fgThread, false);
+        if (Front(h)) { FocusNote += "; step 1 attach (fg " + a1 + ", target " + a2 + ")"; return true; }
+        FocusNote += "; attach fg=" + a1 + " target=" + a2 + " failed";
+
+        // 2. hold Alt around the call: a key event in flight lifts the foreground lock for that call
+        INPUT[] down = new INPUT[] { Key(0x12, 0) };
+        INPUT[] up = new INPUT[] { Key(0x12, KEYEVENTF_KEYUP) };
+        try {
+            SendInput(1, down, Marshal.SizeOf(typeof(INPUT)));
+            BringWindowToTop(h); SetForegroundWindow(h);
+        } finally { SendInput(1, up, Marshal.SizeOf(typeof(INPUT))); }
+        if (Front(h)) { FocusNote += "; step 2 alt held"; return true; }
+
+        // 3. the shell's own switch call
+        SwitchToThisWindow(h, true);
+        if (Front(h)) { FocusNote += "; step 3 switch"; return true; }
+
+        // 4. minimise and restore, then ask again
+        ShowWindow(h, 6); ShowWindow(h, 9);
+        BringWindowToTop(h); SetForegroundWindow(h);
+        if (Front(h)) { FocusNote += "; step 4 minimise and restore"; return true; }
+
+        FocusNote += "; no step worked, now in front: " + Describe(GetForegroundWindow());
+        return false;
+    }
+
+    // The window manager may take a few milliseconds to move the front after a call; look for up to 200 ms.
+    static bool Front(IntPtr h) {
+        for (int i = 0; i < 20; i++) {
+            if (GetForegroundWindow() == h) return true;
+            Thread.Sleep(10);
+        }
+        return false;
     }
 }
 '@
 
 function Test-ScreenLocked {
     # Windows runs LogonUI.exe while the lock screen is up. This is the check the G14 trial used (poc/g14.md).
-    [bool](Get-Process -Name LogonUI -ErrorAction SilentlyContinue)
+    $name = $env:AGENT_DESKTOP_LOCK_PROCESS   # a test names its own stand-in, so test runs side by side do not see each other's
+    if (-not $name) { $name = 'LogonUI' }
+    [bool](Get-Process -Name $name -ErrorAction SilentlyContinue)
 }
 
 function ConvertTo-ArgString([string[]]$Items) {
@@ -530,7 +588,9 @@ function Invoke-Action([string]$Action, [string[]]$Argv, [string]$Cwd, [string]$
             if ($null -eq $hit) { foreach ($pair in $all) { if ($pair[0].Title -ieq $name) { $hit = $pair[0]; break } } }
             if ($null -eq $hit) { foreach ($pair in $all) { if ($pair[0].Title.IndexOf($name, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hit = $pair[0]; break } } }
             if ($null -eq $hit) { return @{ exit = 1; stdout = ''; stderr = "[$script:Name] ERROR: no window has the app name or a title matching $name`n" } }
-            if (-not [AdNative]::Focus($hit.Handle)) { return @{ exit = 1; stdout = ''; stderr = "[$script:Name] ERROR: Windows did not bring '$($hit.Title)' to the front`n" } }
+            $brought = [AdNative]::Focus($hit.Handle)
+            Write-Log ('worker focus detail: ' + [AdNative]::FocusNote)   # who was in front and which step won, so a refusal can be explained
+            if (-not $brought) { return @{ exit = 1; stdout = ''; stderr = "[$script:Name] ERROR: Windows did not bring '$($hit.Title)' to the front`n" } }
             return @{ exit = 0; stdout = ''; stderr = '' }
         }
         'move' { [AdNative]::Move([int]$Argv[0], [int]$Argv[1]); return @{ exit = 0; stdout = ''; stderr = '' } }
@@ -565,6 +625,7 @@ function Invoke-OneRequest([string]$Dir) {
     # Takes the oldest request, does it and writes the answer. Returns $true when there was one.
     foreach ($file in (Get-ChildItem -LiteralPath $Dir -Filter 'request-*.json' | Sort-Object Name)) {
         $claimed = Join-Path $Dir ('claimed-' + $file.Name.Substring('request-'.Length))
+        $written = $file.CreationTimeUtc   # when the caller began writing it, for the timing line
         try { [IO.File]::Move($file.FullName, $claimed) } catch { continue }   # taken by someone else, or withdrawn
         $req = $null
         try { $req = ConvertFrom-Json ([IO.File]::ReadAllText($claimed)) } catch { }
@@ -572,6 +633,7 @@ function Invoke-OneRequest([string]$Dir) {
         if ($null -eq $req) { $script:RunId = Get-RunId; Write-Log 'worker FAIL unreadable request'; return $true }
         $script:RunId = [string]$req.id
         $script:Clock = [Diagnostics.Stopwatch]::StartNew()
+        $queuedMs = [int]([DateTime]::UtcNow - $written).TotalMilliseconds
         if ([DateTime]::UtcNow.Ticks -gt [int64]$req.expires) { Write-Log 'worker dropped an expired request'; return $true }
         $argv = [string[]]@($req.argv)
         $step = Get-StepText ([string]$req.action) $argv
@@ -588,6 +650,7 @@ function Invoke-OneRequest([string]$Dir) {
                 $result = @{ exit = 1; stdout = ''; stderr = "[$script:Name] ERROR: $($_.Exception.Message)`n" }
             }
         }
+        Write-Log ("worker timing queued={0}ms action={1}ms" -f $queuedMs, [int]$script:Clock.Elapsed.TotalMilliseconds)
         if ([DateTime]::UtcNow.Ticks -gt [int64]$req.expires) { Write-Log 'worker answer dropped: the caller gave up'; return $true }
         $answer = Join-Path $Dir ('answer-' + $script:RunId + '.json')
         Write-TextAtomic $answer (ConvertTo-Json -InputObject ([ordered]@{ exit = [int]$result.exit; stdout = [string]$result.stdout; stderr = [string]$result.stderr }))
@@ -610,7 +673,14 @@ function Invoke-Worker {
         $watcher.EnableRaisingEvents = $true
         foreach ($name in 'Created', 'Renamed', 'Changed') { [void](Register-ObjectEvent -InputObject $watcher -EventName $name -SourceIdentifier "agent-desktop-$name") }
         try { Initialize-Native } catch { Write-Log "worker native tools not ready: $($_.Exception.Message)" }   # the C# compile happens here, once
-        Write-Log "worker started pid=$PID"
+        # A scheduled task starts its program below normal priority, and the ui program inherits it; the worker is what the caller waits for.
+        $priority = 'unknown'
+        try {
+            $me = [Diagnostics.Process]::GetCurrentProcess()
+            $priority = [string]$me.PriorityClass
+            if ($me.PriorityClass -ne [Diagnostics.ProcessPriorityClass]::Normal) { $me.PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal; $priority += ' raised to Normal' }
+        } catch { $priority += ' (not changed: ' + $_.Exception.Message + ')' }
+        Write-Log "worker started pid=$PID priority=$priority"
         while ($true) {
             if ((Get-ScriptStamp $PSCommandPath) -ne $stamp) { $script:RunId = Get-RunId; Write-Log 'worker exits: its script file changed'; break }
             if (Invoke-OneRequest $dir) { continue }

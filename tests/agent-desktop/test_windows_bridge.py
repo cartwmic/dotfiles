@@ -47,9 +47,15 @@ class BridgeBase(WindowsTestCase):
         super().setUp()
         self.box = Sandbox(self)
 
+    exe_client = False   # True: the call goes through the compiled client (agent-desktop-client.cs) instead of agent-desktop.ps1
+
     def call(self, *args, mode="answer", cwd=None, **extra):
+        script = self.script
+        if self.exe_client:
+            extra["AD_CLIENT_DLL"] = str(wt.client_dll())
+            script = self.box.client_shim()
         env = self.box.env(AD_STUB_MODE=mode, **extra)
-        return self.box.run(self.script, *args, env=env, cwd=cwd)
+        return self.box.run(script, *args, env=env, cwd=cwd)
 
     script = SCRIPT
 
@@ -299,6 +305,14 @@ class ChainTest(BridgeBase):
         self.assertEqual(len(self.box.worker_pids()), 1, "one worker answered all five calls")
         self.assertEqual(self.module_calls(), installed_with, "no call may load the ScheduledTasks module")
 
+    def test_the_worker_logs_how_long_each_request_waited_and_took_and_the_priority_it_runs_at(self):
+        # the live N5 run needs this split to say where a slow click spent its time
+        self.assertEqual(self.ui().returncode, 0)
+        lines = self.box.log_lines()
+        self.assertTrue(any(re.search(r" worker started pid=\d+ priority=\S+", l) for l in lines), lines)
+        timing = [l for l in lines if re.search(r" worker timing queued=\d+ms action=\d+ms$", l)]
+        self.assertEqual(len(timing), 1, lines)
+
     def test_a_dead_worker_is_replaced_by_the_next_call(self):
         self.assertEqual(self.ui().returncode, 0)
         for pid in self.box.live_workers():
@@ -329,6 +343,22 @@ class ChainTest(BridgeBase):
         self.assertLess(time.monotonic() - started, 30)
         self.assertEqual(len(self.box.live_workers()), 1, "the first worker is untouched")
         self.assertEqual(self.ui().returncode, 0, "and still answers")
+
+
+# The same calls through the compiled client: it is the command agents run, so it must do exactly what the PowerShell client does.
+class BadCallExeTest(BadCallTest):
+    exe_client = True
+
+
+class RequestAnswerExeTest(RequestAnswerTest):
+    exe_client = True
+
+    def test_the_client_never_loads_the_scheduled_tasks_module(self):
+        super().test_the_client_never_loads_the_scheduled_tasks_module()
+
+
+class ChainExeTest(ChainTest):
+    exe_client = True
 
 
 class WorkerTest(BridgeBase):
