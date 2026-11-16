@@ -174,6 +174,23 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
+    def test_priority_class_is_kgate_or_kgate_first_on_the_homelab_only(self):
+        # opt-in (coordinator decision #2874): unset keeps the pod in `kgate`; `kgate-first` puts it ahead of waiting `kgate` pods (homelab `k8s/kgate/priorityclass-first.yaml`).
+        self.assertIsNone(K.parse_profile("")["priority_class"])
+        for ok in ("kgate", "kgate-first"):
+            self.assertEqual(K.parse_profile('priority_class = "%s"' % ok)["priority_class"], ok)
+        for bad in ('priority_class = "homelab-critical"', 'priority_class = "kgate-last"', 'priority_class = ""', 'priority_class = 1', 'priority_class = true',
+                    'cluster = "example"\npriority_class = "kgate"', 'cluster = "example"\npriority_class = "kgate-first"'):   # a kubectl cluster's own policy decides its class
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
+    def test_a_homelab_profile_may_set_a_cpu_limit_that_is_a_whole_number(self):
+        self.assertIsNone(K.parse_profile("")["cpu_limit"])
+        self.assertEqual(K.parse_profile("cpu_limit = 8")["cpu_limit"], 8)
+        for bad in ("cpu_limit = 0", 'cpu_limit = "8"', "cpu_limit = true", "cpu_limit = 2.5"):
+            with self.assertRaises(K.Unavailable, msg=bad):
+                K.parse_profile(bad)
+
     def test_memory_limit_must_be_at_least_the_request(self):
         K.check_settings(DIGEST, 2, "256Mi", "512Mi")
         K.check_settings(DIGEST, 2, "1Gi", "1024Mi")  # equal is the old behaviour
@@ -195,10 +212,11 @@ class PodSpec(unittest.TestCase):
     def pod(self, **kw):
         args = dict(job="kgate-1-2", image=DIGEST, cpu=3, memory="6Gi", node=None, secret_env={}, pull=None, memory_limit=None, prefer_nodes=True,
                     ephemeral=K.EPHEMERAL_DEFAULT, ephemeral_limit=None)
+        extra = {k: kw.pop(k) for k in ("priority_class", "cpu_limit") if k in kw}   # passed only when a test sets them: the defaults are the signature's own
         args.update(kw)
         items = K.pod_manifests(args["job"], args["image"], args["cpu"], args["memory"], args["node"], args["secret_env"], args["pull"],
                                 memory_limit=args["memory_limit"], prefer_nodes=args["prefer_nodes"], ephemeral=args["ephemeral"],
-                                ephemeral_limit=args["ephemeral_limit"])["items"]
+                                ephemeral_limit=args["ephemeral_limit"], **extra)["items"]
         return items[-1], items[:-1]
 
     def test_limits_and_jobs_follow_the_request(self):
@@ -248,6 +266,20 @@ class PodSpec(unittest.TestCase):
         pod, _ = self.pod()
         self.assertEqual(pod["spec"].get("priorityClassName"), "kgate")
         self.assertEqual(K.PRIORITY_CLASS, "kgate")
+
+    def test_the_pod_runs_in_kgate_first_only_when_asked(self):
+        pod, _ = self.pod(priority_class="kgate-first")
+        self.assertEqual(pod["spec"]["priorityClassName"], "kgate-first")
+        pod, _ = self.pod(priority_class="kgate")
+        self.assertEqual(pod["spec"]["priorityClassName"], "kgate")
+
+    def test_a_cpu_limit_is_rendered_only_when_set(self):
+        # no CPU limit by default (docs/kgate.md "Placement"); a profile that sets cpu_limit gets limits.cpu equal to it, a string like the request.
+        pod, _ = self.pod()
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"], {"memory": "6Gi", "ephemeral-storage": "12Gi"})
+        pod, _ = self.pod(cpu_limit=3)
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"], {"memory": "6Gi", "ephemeral-storage": "12Gi", "cpu": "3"})
+        self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["cpu"], "3")
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
         # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate")
@@ -1052,6 +1084,44 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         res = next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["resources"]
         self.assertEqual((res["requests"]["ephemeral-storage"], res["limits"]["ephemeral-storage"]), ("6Gi", "7Gi"))
+
+    def pod_spec_sent(self):
+        return next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]
+
+    def test_the_pod_is_in_kgate_by_default_and_in_kgate_first_when_the_profile_says_so(self):
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate")
+        self.profile(extra='priority_class = "kgate-first"')
+        (self.fake / "calls.jsonl").unlink()
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.pod_spec_sent()["priorityClassName"], "kgate-first")
+
+    def test_a_priority_class_other_than_the_two_is_refused_before_any_pod(self):
+        self.profile(extra='priority_class = "homelab-critical"')
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("priority_class", self.records()[-1]["reason"])
+        self.assertFalse(any("manifest" in c for c in self.calls()))
+
+    def test_a_homelab_cpu_limit_sets_limits_cpu_and_none_leaves_no_cpu_limit(self):
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = self.pod_spec_sent()["containers"][0]["resources"]
+        self.assertNotIn("cpu", res["limits"])
+        self.profile(extra="cpu_limit = 2")
+        (self.fake / "calls.jsonl").unlink()
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = self.pod_spec_sent()["containers"][0]["resources"]
+        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("2", "2"))
+
+    def test_a_homelab_cpu_limit_below_the_request_is_refused_before_any_pod(self):
+        self.profile(extra="cpu_limit = 1")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("cpu_limit (1) must be at least cpu (2)", self.records()[-1]["reason"])
+        self.assertFalse(any("manifest" in c for c in self.calls()))
 
     def test_a_command_that_prints_marker_lines_cannot_fake_the_outcome(self):
         done = self.kgate("--", "sh", "-c", "echo 'kgate: hash MISMATCH expected=a found=b'; echo 'kgate: end 1 exit 9'")
@@ -1986,10 +2056,10 @@ class KubectlProfile(unittest.TestCase):
         with self.assertRaises(K.Unavailable):
             K.parse_profile('local_hostnames = ["db"]')
 
-    def test_cpu_limit_is_for_a_kubectl_cluster_only_and_a_whole_number(self):
+    def test_cpu_limit_is_a_whole_number_on_a_kubectl_cluster(self):   # the homelab takes it too since dotfiles#<this change>: Profile.test_a_homelab_profile_may_set_a_cpu_limit...
         self.assertIsNone(K.parse_profile('cluster = "example"')["cpu_limit"])
         self.assertEqual(K.parse_profile('cluster = "example"\ncpu_limit = 5')["cpu_limit"], 5)
-        for bad in ('cpu_limit = 5', 'cluster = "example"\ncpu_limit = 0', 'cluster = "example"\ncpu_limit = "5"', 'cluster = "example"\ncpu_limit = true'):
+        for bad in ('cluster = "example"\ncpu_limit = 0', 'cluster = "example"\ncpu_limit = "5"', 'cluster = "example"\ncpu_limit = true'):
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
