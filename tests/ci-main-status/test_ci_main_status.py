@@ -40,9 +40,12 @@ GH_FAKE = textwrap.dedent('''\
             rows = [r for r in rows if r["event"] == args[args.index("--event") + 1]]
         print(json.dumps(rows))
     elif args[:2] == ["run", "view"]:
-        jobs = fixture.get("jobs", {}).get(args[2])
+        attempt = args[args.index("--attempt") + 1] if "--attempt" in args else None
+        jobs = fixture.get("jobs", {}).get(args[2] + "/" + str(attempt))   # a jobs fixture for one attempt, else for the run
         if jobs is None:
-            fail("fake gh: no jobs fixture for run " + args[2])
+            jobs = fixture.get("jobs", {}).get(args[2])
+        if jobs is None:   # a run with no jobs fixture failed in a real job
+            jobs = [{"databaseId": 1, "name": "tests", "conclusion": "failure", "steps": []}]
         print(json.dumps({"jobs": jobs}))
     elif args[:2] == ["pr", "view"]:
         if args[args.index("-R") + 1] in fixture.get("fail_pr", []):
@@ -73,6 +76,11 @@ GH_FAKE = textwrap.dedent('''\
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
             subject = git(src, "log", "-1", "--format=%s", sha).strip()
             print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}}}))
+        elif "/check-runs/" in path:
+            notes = fixture.get("annotations", {}).get(path.split("/check-runs/")[1].split("/")[0])
+            if notes is None:
+                fail("HTTP 404: no annotations fixture for " + path)
+            print(json.dumps(notes))
         elif "/actions/runs/" in path:
             run_id, n = path.split("/actions/runs/")[1].split("/attempts/")
             attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
@@ -127,6 +135,7 @@ class Fixture(unittest.TestCase):
         self.failing = []
         self.attempts = {}                           # run id -> {attempt number -> attempts API row}
         self.jobs = {}                               # run id -> the jobs `gh run view --json jobs` returns
+        self.annotations = {}                        # job id (str) -> the check run's annotations
         self.prs = {}                                # PR number -> `gh pr view --json files,headRefOid`
         self.failing_pr = []                         # repos whose `gh pr view` fails
         self.journal = t / "journal.jsonl"           # absent unless a test writes it
@@ -148,7 +157,7 @@ class Fixture(unittest.TestCase):
                                             "cartwmic/alert-steward")}
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
             {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts,
-             "jobs": self.jobs, "prs": self.prs, "fail_pr": self.failing_pr}))
+             "jobs": self.jobs, "annotations": self.annotations, "prs": self.prs, "fail_pr": self.failing_pr}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -590,8 +599,8 @@ class PinFixException(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("RED", out)
         self.assertNotIn("merge-gate:", out)
-        self.assertFalse([c for c in self.log.read_text().splitlines() if c.startswith(("pr view", "run view"))],
-                         "without --pr nothing about a PR or a run's steps is read")
+        self.assertFalse([c for c in self.log.read_text().splitlines() if c.startswith("pr view")],
+                         "without --pr nothing about a PR is read")
 
     def test_another_step_failed_in_the_red_run_stays_red(self):
         self.set_world(red_steps=steps(other="failure", pins="skipped"))
@@ -674,6 +683,178 @@ class PinFixException(Fixture):
                 r = subprocess.run(script + args, capture_output=True, text=True, env=self.env, timeout=120)
                 self.assertEqual(r.returncode, 1, r.stdout)
                 self.assertIn("usage", r.stderr)
+
+
+NOT_ACQUIRED = "The job was not acquired by Runner of type hosted even after multiple attempts"
+CAPACITY = "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."
+
+
+def note(message, level="failure"):
+    """One check-run annotation, with the fields GitHub returns."""
+    return {"path": ".github", "start_line": 1, "end_line": 1, "annotation_level": level, "title": "", "message": message, "raw_details": ""}
+
+
+NO_RUNNER_NOTES = [note(NOT_ACQUIRED), note(CAPACITY, "notice"), note(CAPACITY, "notice"), note(CAPACITY, "notice")]   # the real payload
+TIMEOUT_NOTES = [note("The job running on runner GitHub Actions 7 has exceeded the maximum execution time of 30 minutes.")]
+ORDINARY_CANCEL_NOTES = [note("The operation was canceled.")]
+MISE_JOB = 22   # the macOS job's id in these fixtures
+
+
+def jobs(mise, tests="success"):
+    """The two jobs of a run. `mise` is the macOS job's conclusion; it never ran when it was cancelled for want of a runner."""
+    return [{"databaseId": 11, "name": "tests", "conclusion": tests, "steps": [{"name": "Set up job", "conclusion": "success"}]},
+            {"databaseId": MISE_JOB, "name": "mise-tests", "conclusion": mise, "steps": []}]
+
+
+class NoRunnerCancel(Fixture):
+    """A job cancelled because no runner picked it up is untested: never green, never red. Every other failure stays red."""
+
+    def world(self, runs, jobs_of=None, notes=NO_RUNNER_NOTES, attempts=None):
+        self.dotfiles_runs(runs)
+        self.jobs = jobs_of if jobs_of is not None else {str(runs[0]["databaseId"]): jobs("cancelled")}
+        self.annotations = {str(MISE_JOB): notes}
+        self.attempts = attempts or {}
+
+    def test_a_job_no_runner_picked_up_is_untested_with_its_name_and_reason(self):
+        self.world([run(1, self.c3, "failure")])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("dotfiles: UNTESTED  run 1 on", out)
+        self.assertIn("job mise-tests untested, no runner picked it up", out)
+        self.assertIn("Not a pass", out)
+        self.assertNotIn("RED", out)
+        self.assertNotIn("GREEN", out)
+
+    def test_it_is_untested_even_when_the_other_job_passed_and_an_older_commit_is_green(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)], {"2": jobs("cancelled")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("UNTESTED  run 2 on", out)
+        self.assertNotIn("GREEN", out)
+
+    def test_merge_gate_lets_it_through_and_tip_does_not(self):
+        self.world([run(1, self.c3, "failure")])
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("job mise-tests untested", out)
+        rc, out = self.status("--tip", "dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("job mise-tests untested", out)
+
+    def test_a_run_going_is_told_to_wait(self):
+        self.world([run(1, self.c3, "failure"), run(2, self.c3, status="queued", age=5)], {"1": jobs("cancelled")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("A run is going; wait for it.", out)
+
+    def test_a_real_failure_next_to_the_no_runner_cancel_is_red(self):
+        self.world([run(1, self.c3, "failure")], {"1": jobs("cancelled", tests="failure")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+        self.assertNotIn("UNTESTED", out)
+
+    def test_a_failed_job_alone_is_red(self):
+        self.world([run(1, self.c3, "failure")], {"1": jobs("success", tests="failure")})
+        self.assertEqual(self.status("dotfiles")[0], 1)
+
+    def test_a_timeout_after_the_job_started_is_red(self):
+        self.world([run(1, self.c3, "failure")], notes=TIMEOUT_NOTES)
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_a_timed_out_job_is_red(self):
+        self.world([run(1, self.c3, "failure")], {"1": jobs("timed_out")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_an_ordinary_cancel_is_red(self):
+        self.world([run(1, self.c3, "failure")], notes=ORDINARY_CANCEL_NOTES)
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_a_cancel_with_no_annotation_is_red(self):
+        self.world([run(1, self.c3, "failure")], notes=[])
+        self.assertEqual(self.status("dotfiles")[0], 1)
+
+    def test_one_no_runner_cancel_does_not_excuse_another_cancel(self):
+        both = jobs("cancelled")
+        both[0]["conclusion"] = "cancelled"
+        self.world([run(1, self.c3, "failure")], {"1": both})
+        self.annotations["11"] = ORDINARY_CANCEL_NOTES
+        self.assertEqual(self.status("dotfiles")[0], 1)
+
+    def test_two_jobs_no_runner_picked_up_are_both_named(self):
+        both = jobs("cancelled")
+        both[0]["conclusion"] = "cancelled"
+        self.world([run(1, self.c3, "failure")], {"1": both})
+        self.annotations["11"] = NO_RUNNER_NOTES
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("jobs tests, mise-tests untested, no runner picked them up", out)
+
+    def test_untested_above_a_red_commit_leaves_it_red(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c2, "failure", age=1)], {"2": jobs("cancelled"), "1": jobs("success", tests="failure")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1", out)
+
+    def test_a_rerun_that_passed_is_green(self):
+        self.world([run(1, self.c3, "success", attempt=2)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN", out)
+
+    def test_an_earlier_real_failure_is_not_hidden_by_a_no_runner_rerun(self):
+        # Attempt 1 failed for real; the rerun never got a runner. The failure still stands.
+        self.world([run(1, self.c3, "failure", attempt=2)],
+                   {"1/2": jobs("cancelled"), "1/1": jobs("success", tests="failure")}, attempts={"1": {"1": {"conclusion": "failure"}}})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1 attempt 1", out)
+
+    def test_an_earlier_pass_is_not_hidden_by_a_no_runner_rerun(self):
+        self.world([run(1, self.c3, "failure", attempt=2)], {"1/2": jobs("cancelled")}, attempts={"1": {"1": {"conclusion": "success"}}})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 1 attempt 1", out)
+
+    def test_a_no_runner_attempt_with_a_rerun_going_is_not_red(self):
+        self.world([run(1, self.c3, status="in_progress", attempt=2)], {"1/1": jobs("cancelled")}, attempts={"1": {"1": {"conclusion": "failure"}}})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("UNTESTED  run 1 attempt 1", out)
+        self.assertIn("A run is going; wait for it.", out)
+
+    def test_a_real_pass_at_the_commit_wins_over_a_newer_no_runner_run(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c3, "success", age=1)], {"2": jobs("cancelled")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  run 1", out)
+
+    def test_a_real_failure_at_the_commit_wins_over_a_newer_no_runner_run(self):
+        self.world([run(2, self.c3, "failure", age=5), run(1, self.c3, "failure", age=1)],
+                   {"2": jobs("cancelled"), "1": jobs("success", tests="failure")})
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  run 1", out)
+
+    def test_the_jobs_of_a_failed_run_below_the_first_pass_are_not_read(self):
+        self.world([run(2, self.c3, "success", age=5), run(1, self.c2, "failure", age=1)])
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([c for c in self.log.read_text().splitlines() if c.startswith("run view") or "/check-runs/" in c], [])
+
+    def test_an_annotation_that_cannot_be_read_is_an_error_not_untested(self):
+        self.world([run(1, self.c3, "failure")])
+        self.annotations = {}
+        rc, out = self.status("dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR  cannot read state", out)
+        self.assertNotIn("UNTESTED", out)
 
 
 class PinFixCopiesMatchTheirSources(unittest.TestCase):

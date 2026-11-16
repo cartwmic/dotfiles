@@ -31,13 +31,23 @@ are conclusive; cancelled, skipped and still-running runs are not, and a run sti
 A red run whose rerun (gh run rerun) is going holds its commit red until the rerun ends. Start and created
 times are never read.
 
+A failed attempt is untested, not red, when the only jobs in it that did not pass or skip were cancelled because no runner
+picked them up (GitHub's annotation on the job's check run: "The job was not acquired by Runner of type hosted even after
+multiple attempts"). No test ran, so it is never green and never red. Any real failure, a timeout after the job started and any
+other cancel in the attempt keeps it red. Like a cancelled attempt it is not conclusive: an earlier or newer conclusive
+attempt of the run, or a conclusive run of the same commit, decides the commit instead. A commit left with only such an
+attempt is treated like a flake ruling: the line reads "UNTESTED  run N on SHA: job J untested, no runner picked it up. Not a pass.",
+and it exits 2 in plain mode and with --tip, 0 with --merge-gate. A red commit below it stays red. The jobs of a failed
+run are read only for the commits the walk reaches.
+
 Exit codes:
   0  green: the newest conclusive commit passed (it may be followed by untested commits while a run is going).
      With --tip: main's tip itself passed.
   1  red: the newest conclusive commit failed. Also any state it cannot read (gh or git error, bad journal, a run on
      a commit that is not on main's first-parent line).
   2  untested: main has commits no conclusive run tested and no run is going (start one), or there is no
-     conclusive run at all. The message says whether a run is going. With --tip, also a green commit below
+     conclusive run at all, or a run left a job untested because no runner picked it up (above). The message says
+     whether a run is going. With --tip, also a green commit below
      untested commits while a run is going: the tip is not tested yet, so wait.
 Under --tip the GREEN line ends with the full 40-char tip sha ("tip <sha>"). A deploy pulls that sha
 (git merge --ff-only <sha>), because main can move between the check and the pull.
@@ -55,6 +65,7 @@ a flake, with "issue") is not red and not tested: plain mode and --tip both exit
 The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green,
 or once every commit with a verdict has been reached. WALK_CAP is a backstop.
 """
+import itertools
 import json
 import os
 import subprocess
@@ -78,6 +89,8 @@ LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-jour
 RUN_EVENTS = ("push", "workflow_dispatch")
 RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,url"
 RUN_LIMIT = 100
+NO_RUNNER = "was not acquired by Runner"   # the annotation GitHub puts on a job it cancelled because no runner picked it up
+UNPROVEN = ("flake", "untested")   # verdicts that are not red and not tested
 # The pin-fix exception. The step name and the file lists are copies: the step is in .github/workflows/ci.yml, the files are
 # agent_kit_bump.py (KIT, PIN_FILES) and loop_engine_bump.py (MISE_CONFIG, SKILLS); tests/ci-main-status checks that they match.
 PINS_STEP = "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release"
@@ -92,8 +105,9 @@ class Unreadable(Exception):
 
 
 class Record:
-    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None, run_id=None, attempt=None):
-        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass", "fail" or (journal) "flake"
+    def __init__(self, tip, verdict, label, rerun_going=False, tree=None, line=0, issue=None, run_id=None, attempt=None, unrun=()):
+        self.tip, self.verdict, self.label = tip, verdict, label   # verdict: "pass", "fail", "untested" (GitHub) or (journal) "flake"
+        self.unrun = list(unrun)   # "untested": the names of the jobs no runner picked up
         self.rerun_going = rerun_going   # the verdict is an earlier attempt, and a rerun of its run is going
         self.tree, self.line, self.issue = tree, line, issue   # journal only: the tip's tree, its line number, a flake's issue
         self.run_id, self.attempt = run_id, attempt   # GitHub only: the run and the attempt that gave the verdict
@@ -120,42 +134,100 @@ def main_tip(repo):
     return gh(["api", f"repos/{repo}/branches/main"])["commit"]["sha"]
 
 
-def run_verdict(repo, r):
-    """A run's verdict as (conclusion, attempt), or None if no attempt of it has concluded.
+def unrun_jobs(repo, run_id, attempt):
+    """The names of the jobs a failed attempt never ran because no runner picked them up, or [] when it failed for any other reason.
 
-    A rerun (gh run rerun) keeps the run id, so its newest attempt can be running or cancelled. Then the verdict
-    is the newest earlier attempt that concluded, read from the attempts API.
+    The attempt is untested only when every job in it that did not pass or skip was cancelled with GitHub's no-runner
+    annotation. A failed job, a timeout, or a cancel with any other annotation keeps it a failure.
+    """
+    jobs = gh(["run", "view", str(run_id), "-R", repo, "--attempt", str(attempt), "--json", "jobs"])["jobs"]
+    bad = not_ok(jobs)
+    if not bad or any(j["conclusion"] != "cancelled" for j in bad):
+        return []
+    for j in bad:
+        notes = gh(["api", f"repos/{repo}/check-runs/{j['databaseId']}/annotations"])
+        if not any(NO_RUNNER in n["message"] for n in notes):
+            return []
+    return [j["name"] for j in bad]
+
+
+def settle(repo, run_id, conclusion, attempt):
+    """One concluded attempt as (verdict, attempt, unrun job names): its conclusion, or "untested" for a failure no runner caused."""
+    unrun = unrun_jobs(repo, run_id, attempt) if conclusion == "failure" else []
+    return ("untested", attempt, unrun) if unrun else (conclusion, attempt, [])
+
+
+def concluded_attempts(repo, r):
+    """The attempts of run `r` that concluded with success or failure, as (conclusion, attempt), newest first, read as asked.
+
+    A rerun (gh run rerun) keeps the run id, so its newest attempt can be running or cancelled. Then the earlier
+    attempts are read, one at a time, from the attempts API.
     """
     if r["status"] == "completed" and r["conclusion"] in ("success", "failure"):
-        return r["conclusion"], r["attempt"]
+        yield r["conclusion"], r["attempt"]
     for n in range(r["attempt"] - 1, 0, -1):
         conclusion = gh(["api", f"repos/{repo}/actions/runs/{r['databaseId']}/attempts/{n}"]).get("conclusion")
         if conclusion in ("success", "failure"):
-            return conclusion, n
-    return None
+            yield conclusion, n
+
+
+def run_verdict(repo, r, attempts):
+    """A run's verdict as (verdict, attempt, unrun job names). `attempts` is its concluded_attempts, at least one left.
+
+    The newest attempt that concluded. An attempt left untested by a job no runner picked up is not conclusive,
+    like a cancelled one: a conclusive attempt of the run wins, and without one the newest untested attempt is the verdict.
+    """
+    untested = None
+    for conclusion, n in attempts:
+        found = settle(repo, r["databaseId"], conclusion, n)
+        if found[0] != "untested":
+            return found
+        untested = untested or found
+    return untested
 
 
 def run_record(r, found):
-    conclusion, attempt = found
+    verdict, attempt, unrun = found
     label = f"run {r['databaseId']}" + ("" if attempt == r["attempt"] else f" attempt {attempt}")
-    return Record(r["headSha"], "pass" if conclusion == "success" else "fail", label,
-                  rerun_going=r["status"] != "completed", run_id=r["databaseId"], attempt=attempt)
+    return Record(r["headSha"], {"success": "pass", "failure": "fail", "untested": "untested"}[verdict], label,
+                  rerun_going=r["status"] != "completed", run_id=r["databaseId"], attempt=attempt, unrun=unrun)
 
 
-def commit_verdict(repo, runs):
-    """One commit's verdict. runs: its full-workflow runs, highest run id first.
+class CommitVerdicts:
+    """{sha: Record} for the commits that have a run with a concluded attempt, read as the walk reaches them.
 
-    The first run with a conclusive verdict counts, except that a red run whose rerun is going holds the commit red.
+    A failed run's jobs (to tell a failure from a job no runner picked up) are fetched only for the commits the walk
+    reaches, not for every failed run gh listed.
     """
-    records = []
-    for r in runs:
-        found = run_verdict(repo, r)
-        if found:
-            records.append(run_record(r, found))
-    for rec in records:
-        if rec.verdict == "fail" and rec.rerun_going:
-            return rec
-    return records[0] if records else None
+
+    def __init__(self, repo, by_sha):
+        self.repo = repo
+        self.by_sha = by_sha   # {sha: [(run, its concluded_attempts with the first one peeked), ...]}, highest run id first
+        self.records = {}      # {run id: Record}
+
+    def __iter__(self):
+        return iter(self.by_sha)
+
+    def get(self, sha):
+        return self[sha] if sha in self.by_sha else None
+
+    def record(self, r, attempts):
+        if r["databaseId"] not in self.records:
+            self.records[r["databaseId"]] = run_record(r, run_verdict(self.repo, r, attempts))
+        return self.records[r["databaseId"]]
+
+    def __getitem__(self, sha):
+        """One commit's verdict.
+
+        The first run with a conclusive verdict counts, except that a red run whose rerun is going holds the commit red.
+        A run left untested counts only when no run of the commit is conclusive.
+        """
+        runs = self.by_sha[sha]
+        for r, attempts in runs:
+            if r["status"] != "completed" and self.record(r, attempts).verdict == "fail":
+                return self.records[r["databaseId"]]
+        records = [self.record(r, attempts) for r, attempts in runs]
+        return next((rec for rec in records if rec.verdict != "untested"), records[0])
 
 
 def github_verdicts(spec):
@@ -166,13 +238,11 @@ def github_verdicts(spec):
     going = any(r["status"] != "completed" for r in runs)
     by_sha = {}
     for r in sorted(runs, key=lambda r: r["databaseId"], reverse=True):   # run ids order runs of one commit
-        by_sha.setdefault(r["headSha"], []).append(r)
-    verdicts = {}
-    for sha, runs_of_commit in by_sha.items():
-        rec = commit_verdict(spec["github"], runs_of_commit)
-        if rec:
-            verdicts[sha] = rec
-    return verdicts, going
+        attempts = concluded_attempts(spec["github"], r)
+        first = next(attempts, None)   # a run with no concluded attempt gives its commit no verdict
+        if first:
+            by_sha.setdefault(r["headSha"], []).append((r, itertools.chain([first], attempts)))
+    return CommitVerdicts(spec["github"], by_sha), going
 
 
 def journal_verdicts():
@@ -323,6 +393,13 @@ def refuse(pr, why):
     return None
 
 
+def untested_line(name, sha, rec):
+    """The UNTESTED line for a commit whose run left jobs untested because no runner picked them up."""
+    one = len(rec.unrun) == 1
+    return (f"{name}: UNTESTED  {rec.label} on {sha[:7]}: {'job' if one else 'jobs'} {', '.join(rec.unrun)} untested, "
+            f"no runner picked {'it' if one else 'them'} up. Not a pass.")
+
+
 def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, spec=None, pr=None):
     """One repo's state. Returns (exit code, output lines). Used by every repo kind.
 
@@ -330,13 +407,16 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
     """
     tip = main_tip(repo)
     walked = first_parent_walk(repo, tip, verdicts, trees)
-    hits = [i for i, (_, _, rec) in enumerate(walked) if rec and rec.verdict != "flake"]
-    flakes = [w for w in walked[:hits[0] if hits else len(walked)] if w[2] and w[2].verdict == "flake"]
-    if flakes and not (hits and walked[hits[0]][2].verdict == "fail"):
-        # A flake ruling is not red and not tested (ask #854: a deploy needs a pass on the tip).
-        sha, _, flake = flakes[0]
-        issue = f" (issue {flake.issue})" if flake.issue else ""
-        lines = [f"{name}: UNTESTED  {flake.label} ruled {sha[:7]} a flake{issue}; a flake is not a pass."]
+    hits = [i for i, (_, _, rec) in enumerate(walked) if rec and rec.verdict not in UNPROVEN]
+    unproven = [w for w in walked[:hits[0] if hits else len(walked)] if w[2] and w[2].verdict in UNPROVEN]
+    if unproven and not (hits and walked[hits[0]][2].verdict == "fail"):
+        # A flake ruling, or a job no runner picked up, is not red and not tested (ask #854: a deploy needs a pass on the tip).
+        sha, _, rec = unproven[0]
+        if rec.verdict == "untested":
+            lines = [untested_line(name, sha, rec)]
+        else:
+            issue = f" (issue {rec.issue})" if rec.issue else ""
+            lines = [f"{name}: UNTESTED  {rec.label} ruled {sha[:7]} a flake{issue}; a flake is not a pass."]
         lines.append("  A run is going; wait for it." if going else "  No run is going. Start a run.")
         return 2, lines
     if not hits:
