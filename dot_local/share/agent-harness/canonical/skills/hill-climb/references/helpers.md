@@ -5,7 +5,7 @@ helper's model from the house seat table:
 
 | Seat | Model | Use it for |
 | --- | --- | --- |
-| Builder | Haiku 5.5 xhigh, or Sonnet 5.5 high on failure or when the work is ambiguous | Reading code, finding harnesses, summarizing logs |
+| Builder | Haiku 5.5 xhigh for small mechanical work; Sonnet 5.5 high for anything long or ambiguous, and on any failure | Reading code, finding harnesses, summarizing logs |
 | Planner | Sonnet 5.5 high | Proposing next ideas from the profile and the log |
 | Reviewer | Opus 5.5 medium | The blocker review and the final review |
 
