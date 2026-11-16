@@ -70,6 +70,7 @@ A layer that refuses a read when its bucket is nearly empty, so that one agent's
 | any call with `GH_URGENT=1` in its environment | passes, no rate read |
 | `gh api rate_limit` (`free`) and `search` | never refused |
 | a host other than github.com (`GH_HOST`, or `gh api --hostname`) | skipped |
+| a cached low reading whose reset time has passed | passes (the reading is out of date) |
 | the rate read fails, or takes over 3 seconds | passes (fail open) |
 
 Each command is judged on its own bucket: `pr view` on `graphql`, `run list` on `core` (the table is [Classification](#classification-gh_classifypy)), so an empty core bucket does not stop `pr view`.
@@ -96,7 +97,7 @@ Over-use of `GH_URGENT=1` on reads shows up as `urgent:"env"` in the log.
 
 **Invariants.** It fails open: if the rate read fails, takes over 3 seconds, or returns something unexpected, the call goes on. It never refuses a write, an urgent call, `free` or `search`. It never changes the call's arguments. The floor is an estimate; read the log and set `GH_BUDGET_FLOOR` to what the numbers say.
 
-**Callers that should set `GH_URGENT=1`:** `merge-pr.sh`, `loop_engine_bump.py`, `agent_kit_bump.py` and `ci-main-status --merge-gate` / `--tip` (a separate change). Plain `ci-main-status` stays non-urgent, so a refusal there reads as `ERROR cannot read state: ... gh-wrapper: core budget low ...`.
+**Who sets `GH_URGENT=1`.** `ci-main-status --merge-gate` and `--tip` (the cache-and-tags change, PR1). The merge scripts (`merge-pr.sh`, `loop_engine_bump.py`, `agent_kit_bump.py`) do not set it yet: their writes pass, but a read of theirs is refused under the floor until they do. Plain `ci-main-status` stays non-urgent, so a refusal there reads as `ERROR cannot read state: ... gh-wrapper: core budget low ...`.
 
 ## The budget file
 

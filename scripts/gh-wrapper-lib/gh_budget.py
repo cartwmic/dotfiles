@@ -158,9 +158,12 @@ def rates(environ, now, fetch=True):
 
 def github_com(call, environ):
     host = environ.get("GH_HOST", "").strip().lower()
-    if call.args[:1] == ["api"] and "--hostname" in call.args:
-        i = call.args.index("--hostname")
-        host = call.args[i + 1].lower() if i + 1 < len(call.args) else host
+    if call.args[:1] == ["api"]:
+        for i, a in enumerate(call.args):
+            if a == "--hostname" and i + 1 < len(call.args):
+                host = call.args[i + 1].lower()
+            elif a.startswith("--hostname="):
+                host = a.partition("=")[2].lower()
     return host in ("", HOST)
 
 
@@ -184,7 +187,7 @@ def before(call):
         return
     remaining, limit, reset = state
     floor = floor_from(environ)
-    if remaining >= floor:
+    if remaining >= floor or reset <= now:      # past its reset time a cached low reading is out of date
         call.notes["budget"] = "ok"
         return
     call.notes["budget"] = "refused"

@@ -199,9 +199,15 @@ class Guard(WrapperBase):
             done = self.run_gh("run", "list", core=0, env=env)
             self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.rate_calls(), [])
-        done = self.run_gh("api", "--hostname", "ghe.example.com", "repos/o/r", core=0)
-        self.assertEqual(done.returncode, 0, done.stderr)
+        for flag in (["--hostname", "ghe.example.com"], ["--hostname=ghe.example.com"]):
+            done = self.run_gh("api", *flag, "repos/o/r", core=0)
+            self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.rate_calls(), [])
+
+    def test_a_low_reading_whose_reset_time_has_passed_does_not_refuse(self):
+        gone = int(time.time()) - 5
+        done = self.run_gh("run", "list", env={"FAKE_RATE": rate(core=3, reset=gone)})
+        self.assertEqual((done.returncode, done.stdout), (0, "real gh out\n"), done.stderr)
 
     def test_the_budget_off_means_the_guard_does_not_run(self):
         (self.home / ".config" / "gh-wrapper" / "budget").write_text("off\n")
