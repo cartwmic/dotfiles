@@ -1165,12 +1165,12 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         res = self.pod_spec_sent()["containers"][0]["resources"]
         self.assertNotIn("cpu", res["limits"])
-        self.profile(extra="cpu_limit = 2")
+        self.profile(extra="cpu_limit = 6")
         (self.fake / "calls.jsonl").unlink()
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
         res = self.pod_spec_sent()["containers"][0]["resources"]
-        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("2", "2"))
+        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("4", "6"))
 
     def test_the_pod_line_and_the_record_name_the_priority_class_and_the_cpu_limit_when_set(self):
         done = self.kgate("--", "true")
@@ -1180,18 +1180,18 @@ class Black(unittest.TestCase):
         rec = self.records()[-1]
         self.assertEqual(rec["priority_class"], "kgate")
         self.assertNotIn("cpu_limit", rec)
-        self.profile(extra='priority_class = "kgate-first"\ncpu_limit = 3')
+        self.profile(extra='priority_class = "kgate-first"\ncpu_limit = 5')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertIn("memory request, 3 cpu limit, priority class kgate-first\n", done.stdout)
+        self.assertIn("memory request, 5 cpu limit, priority class kgate-first\n", done.stdout)
         rec = self.records()[-1]
-        self.assertEqual((rec["priority_class"], rec["cpu_limit"]), ("kgate-first", 3))
+        self.assertEqual((rec["priority_class"], rec["cpu_limit"]), ("kgate-first", 5))
 
     def test_a_homelab_cpu_limit_below_the_request_is_refused_before_any_pod(self):
-        self.profile(extra="cpu_limit = 1")
+        self.profile(extra="cpu_limit = 1")   # checked against the raised request (2 -> 4), the one the pod would ask for
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertIn("cpu_limit (1) must be at least cpu (2)", self.records()[-1]["reason"])
+        self.assertIn("cpu_limit (1) must be at least cpu (4)", self.records()[-1]["reason"])
         self.assertFalse(any("manifest" in c for c in self.calls()))
 
     def test_a_command_that_prints_marker_lines_cannot_fake_the_outcome(self):
@@ -1466,7 +1466,7 @@ class Black(unittest.TestCase):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
         c = manifest["items"][-1]["spec"]["containers"][0]
         self.assertEqual(c["resources"]["limits"], {"memory": "2Gi", "ephemeral-storage": "12Gi"})
-        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi", "ephemeral-storage": "4Gi"})
+        self.assertEqual(c["resources"]["requests"], {"cpu": "4", "memory": "2Gi", "ephemeral-storage": "4Gi"})   # 3 is raised to the slot
 
     def pod_resources(self):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
@@ -1476,7 +1476,7 @@ class Black(unittest.TestCase):
         self.profile(memory="256Mi", extra='memory_limit = "512Mi"')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "512Mi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "256Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "512Mi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("256Mi", "512Mi"))
         self.assertIn("256Mi memory request, 512Mi limit", done.stdout)
@@ -1484,7 +1484,7 @@ class Black(unittest.TestCase):
     def test_without_memory_limit_the_limit_is_the_request(self):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("1Gi", "1Gi"))
         self.assertIn("1Gi memory request, priority class kgate\n", done.stdout)
@@ -1509,7 +1509,7 @@ class Black(unittest.TestCase):
     def test_mem_sets_the_request_and_the_profile_limit_stays(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
         self.assertEqual(self.kgate("--mem", "512Mi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "2Gi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "512Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "2Gi", "ephemeral-storage": "12Gi"}})
 
     def test_mem_above_the_profile_limit_is_refused(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
@@ -1520,7 +1520,58 @@ class Black(unittest.TestCase):
 
     def test_mem_limit_flag_sets_the_limit(self):
         self.assertEqual(self.kgate("--mem-limit", "3Gi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "3Gi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "3Gi", "ephemeral-storage": "12Gi"}})
+
+    # -- a homelab pod's CPU request is a whole number of 4-cpu slots (the nodes are split into slots that kgate pods and the pinned CI runners share)
+
+    def sent_cpu(self):
+        res = self.pod_resources()
+        env = {e["name"]: e.get("value") for e in next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["env"]}
+        return res["requests"]["cpu"], (env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"])
+
+    def test_a_request_below_a_slot_is_raised_to_four_and_the_build_parallelism_follows(self):
+        for asked in (1, 2, 3):
+            (self.fake / "calls.jsonl").unlink(missing_ok=True)
+            done = self.kgate("--cpu", str(asked), "--", "true")
+            self.assertEqual(done.returncode, 0, done.stdout)
+            self.assertEqual(self.sent_cpu(), ("4", ("4", "4", "-j4")), "asked %d" % asked)
+            self.assertEqual(self.records()[-1]["cpu"], 4)
+            self.assertEqual(done.stdout.count("cpu request raised from"), 1)
+            self.assertIn("kgate: cpu request raised from %d to 4: a homelab pod takes whole 4-cpu slots\n" % asked, done.stdout)
+            self.assertIn(" 4 cpu, ", done.stdout)   # the pod line says what the pod asks for
+
+    def test_a_request_of_exactly_a_slot_is_unchanged_and_says_nothing(self):
+        done = self.kgate("--cpu", "4", "--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.sent_cpu(), ("4", ("4", "4", "-j4")))
+        self.assertNotIn("raised", done.stdout)
+
+    def test_a_request_above_a_slot_is_rounded_up_to_whole_slots(self):
+        for asked, got in ((5, 8), (6, 8), (8, 8), (12, 12)):
+            (self.fake / "calls.jsonl").unlink(missing_ok=True)
+            done = self.kgate("--cpu", str(asked), "--", "true")
+            self.assertEqual(done.returncode, 0, done.stdout)
+            self.assertEqual(self.sent_cpu(), (str(got), (str(got), str(got), "-j%d" % got)), "asked %d" % asked)
+            self.assertEqual(self.records()[-1]["cpu"], got)
+            self.assertEqual("raised" in done.stdout, got != asked, "asked %d" % asked)
+
+    def test_a_profile_cpu_is_raised_the_same_way_as_the_flag(self):
+        self.profile(extra="")   # cpu = 2 in the test profile
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.sent_cpu()[0], "4")
+
+    def test_a_cpu_limit_at_or_above_the_raised_request_is_kept(self):
+        self.profile(extra="cpu_limit = 4")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = self.pod_resources()
+        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("4", "4"))
+
+    def test_the_slot_total_counts_service_containers_and_the_job_container_takes_the_rise(self):
+        self.assertEqual(K.SLOT_CPU, 4)
+        for job, services, want in ((1, 0, 4), (4, 0, 4), (6, 0, 8), (12, 0, 12), (1, 2, 2), (2, 2, 2), (3, 2, 6), (4, 2, 6), (1, 5, 3)):
+            self.assertEqual(K.slot_cpu(job, services), want, (job, services))
+            self.assertEqual((want + services) % K.SLOT_CPU, 0, (job, services))
 
     def test_mem_limit_flag_below_the_request_is_refused(self):
         done = self.kgate("--mem-limit", "512Mi", "--", "true")
@@ -3250,6 +3301,17 @@ class KubectlBlack(unittest.TestCase):
     def test_without_a_refusal_the_record_has_no_wait(self):
         self.run_kgate("--", "true")
         self.assertEqual(self.records()[-1]["quota_wait_s"], 0)
+
+    def test_a_kubectl_cluster_asks_for_exactly_the_cpu_it_is_given(self):   # the 4-cpu slot is the homelab's; this adapter is unchanged
+        for asked in (1, 3, 6):
+            shutil.rmtree(self.fake / "podgit", True)   # the fake pod keeps its repo between runs
+            self.assertEqual(self.run_kgate("--cpu", str(asked), "--", "true").returncode, 0)
+            c = [c["manifest"] for c in self.kcalls() if "manifest" in c][-1]["items"][0]["spec"]["containers"][0]
+            env = {e["name"]: e.get("value") for e in c["env"]}
+            self.assertEqual((c["resources"]["requests"]["cpu"], env["CARGO_BUILD_JOBS"]), (str(asked), str(asked)))
+            self.assertEqual(self.records()[-1]["cpu"], asked)
+        shutil.rmtree(self.fake / "podgit", True)
+        self.assertNotIn("raised", self.run_kgate("--cpu", "1", "--", "true").stdout)
 
     def test_cpu_limit_sizes_the_burst_and_the_build_jobs_not_the_request(self):
         self.profile(extra="cpu_limit = 5")
