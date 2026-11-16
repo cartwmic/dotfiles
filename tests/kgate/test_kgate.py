@@ -728,6 +728,24 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("sub-9.8.7", done.stdout)
 
+    def test_the_repo_is_named_for_the_origin_not_the_folder(self):
+        git(self.repo, "remote", "add", "origin", "git@github.com:cartwmic/coordinator.git")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.records()[-1]["repo"], "coordinator")  # the folder is "repo"
+
+    def test_a_linked_worktree_of_a_clone_is_named_for_the_origin_too(self):
+        git(self.repo, "remote", "add", "origin", "https://github.com/cartwmic/coordinator")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "second")
+        linked = self.tmp / "wt-x"
+        git(self.repo, "worktree", "add", "-q", str(linked), "-b", "side")
+        done = subprocess.run([sys.executable, str(SCRIPT), "--", "true"], cwd=linked, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              env={**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake),
+                                   "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", **self.op_env()})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.records()[-1]["repo"], "coordinator")
+
     def test_a_linked_worktree_ships_and_hashes(self):
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "second")
@@ -2160,6 +2178,84 @@ class Archive(unittest.TestCase):
             self.assertEqual([n for n in names if re.search(r"(^|/)\.git(/|$)", n)], [])
             self.assertIn((root + "/f").lstrip("/"), names)
             self.assertIn("cache/x/job.sh", names)
+
+    def test_a_git_file_that_vanishes_while_it_is_read_is_left_out_not_fatal(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        real_listdir, real_lstat = os.listdir, os.lstat
+        ghost = os.path.join(common, "t3-checkpoint-index-0000")
+
+        def listdir(path="."):
+            names = real_listdir(path)
+            return names + ["t3-checkpoint-index-0000"] if os.fspath(path) == common else names
+
+        def lstat(path, *a, **k):
+            if os.fspath(path) == ghost:
+                raise FileNotFoundError(2, "No such file or directory", ghost)   # listed, then deleted before tar stats it
+            return real_lstat(path, *a, **k)
+        with mock.patch("os.listdir", listdir), mock.patch("os.lstat", lstat):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            names = tar.getnames()
+        self.assertIn((common + "/HEAD").lstrip("/"), names)
+        self.assertNotIn(ghost.lstrip("/"), names)
+
+    def test_a_git_file_deleted_between_stat_and_open_is_left_out(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(common, "HEAD")
+        real_open = open
+
+        def fake_open(path, *a, **k):
+            if os.fspath(path) == victim:
+                raise FileNotFoundError(2, "No such file or directory", victim)
+            return real_open(path, *a, **k)
+        with mock.patch.dict(K.__dict__, {"open": fake_open}):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            names = tar.getnames()
+        self.assertNotIn(victim.lstrip("/"), names)
+        self.assertIn((common + "/config").lstrip("/"), names)
+
+    def test_a_worktree_file_that_vanishes_still_fails_the_job(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        os.unlink(os.path.join(wt, "f"))
+        with self.assertRaises(FileNotFoundError):
+            K.archive(wt, common, files, {}, history=True)
+
+
+class RepoName(unittest.TestCase):
+    """The name a job logs for its repo: the origin URL's last part without .git; the folder when there is no origin."""
+
+    def repo(self, folder, origin=None):
+        tmp = Path(tempfile.mkdtemp(prefix="krn-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / folder
+        repo.mkdir()
+        git(repo, "init", "-q")
+        if origin is not None:
+            git(repo, "remote", "add", "origin", origin)
+        wt, common, _ = K.worktree(str(repo))
+        return K.repo_name(wt, common)
+
+    def test_each_url_form_gives_the_last_part(self):
+        for url in ("git@github.com:cartwmic/coordinator.git", "git@github.com:cartwmic/coordinator", "https://github.com/cartwmic/coordinator.git",
+                    "https://github.com/cartwmic/coordinator", "https://github.com/cartwmic/coordinator/", "ssh://git@host:2222/a/b/coordinator.git",
+                    "/srv/git/coordinator.git", "/srv/git/coordinator"):
+            with self.subTest(url=url):
+                self.assertEqual(self.repo("some-folder", url), "coordinator")
+
+    def test_no_origin_is_the_folder(self):
+        self.assertEqual(self.repo("some-folder"), "some-folder")
+
+    def test_a_folder_that_matches_its_origin_logs_what_it_did_before(self):
+        self.assertEqual(self.repo("coordinator", "git@github.com:cartwmic/coordinator.git"), "coordinator")
+
+    def test_an_origin_with_no_name_in_it_is_the_folder(self):
+        self.assertEqual(self.repo("some-folder", "/"), "some-folder")
 
 
 class KubectlBlack(unittest.TestCase):

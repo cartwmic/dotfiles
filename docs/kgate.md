@@ -204,7 +204,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `cpu_limit`, `quota_wait_s` | kubectl clusters only: the effective CPU limit (`cpu` when the profile sets none), and the seconds spent waiting for namespace quota (0 when none) |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds |
-| `repo`, `cwd`, `head` | repo name, working directory, Mac HEAD |
+| `repo`, `cwd`, `head` | repo name (the last part of the `origin` remote's URL without `.git`, so a clone in any folder logs its repo's name; the folder that holds `.git` when there is no origin), working directory, Mac HEAD |
 | `tree` | the tree hash of what was shipped |
 | `node`, `image`, `profile`, `cpu`, `mem`, `mem_limit` | where and how it ran; `mem` is the memory request and `mem_limit` the limit |
 | `peak_bytes`, `peak_source` | the container's peak memory: `cgroup` (`memory.peak`, kernel 5.19 and later) or `sampled` (highest `memory.current` seen every 0.5 s, on older kernels). It includes page cache. |
