@@ -1,0 +1,12 @@
+{
+ "session_id": "live-checkout-guard",
+ "transcript_path": "x.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "run-and-wake -- bash -c 'cd ~/git/coordinator && { git fetch -q origin main || git fetch -q origin main; } && s=$(git show origin/main:scripts/main-journeys.sh) && exec bash -c \"$s\" main-journeys.sh'",
+  "description": "Start the main journeys run"
+ },
+ "tool_use_id": "toolu_fixture"
+}

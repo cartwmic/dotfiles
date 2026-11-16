@@ -1,4 +1,4 @@
-"""The six bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker): what each refuses and what it lets through.
+"""The seven bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -500,6 +500,195 @@ class Docker(unittest.TestCase):
             self.assertTrue(bash_rules.check("docker run alpine", ctx()))
 
 
+class LiveGit(unittest.TestCase):
+    """Git that changes the live coordinator checkout (the daemon runs from it) is refused on every profile; reads, fetch, the deploy's
+    `merge --ff-only <sha>`, the `reset --keep <sha>` rollback and worktrees are not. HOME comes from the Context, not the test machine."""
+    LIVE = "/home/cartwmic/git/coordinator"
+    SHA = "0123456789abcdef0123456789abcdef01234567"
+    HOME = {"HOME": "/home/cartwmic"}
+
+    def live(self, text, cwd="/home/cartwmic/tmp-home/x", **kw):
+        return check(text, env=self.HOME, cwd=cwd, **kw)
+
+    REFUSED = [
+        # the real 2026-11-16 command, in each form the live checkout can be reached
+        ("cd /home/cartwmic/git/coordinator && git merge origin/main", "git merge"),
+        ("git -C /home/cartwmic/git/coordinator merge origin/main", "git merge"),
+        ("cd ~/git/coordinator && git merge origin/main", "git merge"),
+        ("cd $HOME/git/coordinator && git merge origin/main", "git merge"),
+        ('cd "$HOME/git/coordinator" && git merge origin/main', "git merge"),
+        ("cd ${HOME}/git/coordinator; git merge origin/main", "git merge"),
+        ("cd ~/git/coordinator/ && git merge origin/main", "git merge"),
+        ("cd ~/git/coordinator/src && git merge origin/main", "git merge"),
+        ("cd ~/tmp-home && cd ../git/coordinator && git merge origin/main", "git merge"),
+        ("pushd ~/git/coordinator && git merge origin/main", "git merge"),
+        ("git -C ~/git/coordinator merge origin/main", "git merge"),
+        ('git -C "$HOME/git/coordinator" merge origin/main', "git merge"),
+        ("git -C $HOME/git/coordinator merge origin/main", "git merge"),
+        ("cd ~ && git -C git/coordinator merge origin/main", "git merge"),
+        ("cd ~/git && git -C coordinator merge origin/main", "git merge"),
+        ("git -c core.editor=true -C ~/git/coordinator --no-pager merge origin/main", "git merge"),
+        ("git --git-dir=$HOME/git/coordinator/.git merge origin/main", "git merge"),
+        ("git --work-tree ~/git/coordinator reset --hard", "git reset"),
+        ("GIT_WORK_TREE=~/git/coordinator git checkout main", "git checkout"),
+        ("cd ~/tmp-home/x && git -C ~/git/coordinator merge origin/main", "git merge"),
+        ("cd ~/git/coordinator && echo hi | git merge origin/main", "git merge"),
+        ("bash -c 'cd ~/git/coordinator && git merge origin/main'", "git merge"),
+        ("cd ~/git/coordinator && sudo git merge origin/main", "git merge"),
+        ("cd ~/git/coordinator && x=$(git merge origin/main)", "git merge"),
+        ("cd ~/git/coordinator && true || git merge origin/main", "git merge"),
+        # the 2026-11-11 reviewer
+        ("cd ~/git/coordinator && git fetch origin pull/438/head:pr438 && git checkout pr438", "git checkout"),
+        ("cd ~/git/coordinator && git checkout pr438", "git checkout"),
+        # every changing verb
+        ("cd ~/git/coordinator && git pull", "git pull"),
+        ("cd ~/git/coordinator && git pull --ff-only", "git pull"),
+        ("cd ~/git/coordinator && git merge --no-ff x", "git merge"),
+        ("cd ~/git/coordinator && git merge --ff-only origin/main", "git merge"),
+        ("cd ~/git/coordinator && git merge --ff-only main", "git merge"),
+        ("cd ~/git/coordinator && git merge --ff-only 0123abc extra", "git merge"),
+        ("cd ~/git/coordinator && git merge --ff-only --squash 0123abc", "git merge"),
+        ("cd ~/git/coordinator && git merge --abort", "git merge"),
+        ("cd ~/git/coordinator && git reset --hard origin/main", "git reset"),
+        ("cd ~/git/coordinator && git reset", "git reset"),
+        ("cd ~/git/coordinator && git reset --keep origin/main", "git reset"),
+        ("cd ~/git/coordinator && git reset --keep HEAD~1", "git reset"),
+        ("cd ~/git/coordinator && git reset --hard 0123abc", "git reset"),
+        ("cd ~/git/coordinator && git switch main", "git switch"),
+        ("cd ~/git/coordinator && git restore .", "git restore"),
+        ("cd ~/git/coordinator && git commit -m x", "git commit"),
+        ("cd ~/git/coordinator && git commit --amend", "git commit"),
+        ("cd ~/git/coordinator && git rebase origin/main", "git rebase"),
+        ("cd ~/git/coordinator && git cherry-pick abc1234", "git cherry-pick"),
+        ("cd ~/git/coordinator && git revert abc1234", "git revert"),
+        ("cd ~/git/coordinator && git stash", "git stash"),
+        ("cd ~/git/coordinator && git stash push -m x", "git stash"),
+        ("cd ~/git/coordinator && git stash pop", "git stash"),
+        ("cd ~/git/coordinator && git clean -fd", "git clean"),
+        ("cd ~/git/coordinator && git am x.patch", "git am"),
+        ("cd ~/git/coordinator && git apply x.patch", "git apply"),
+        ("cd ~/git/coordinator && git add -A", "git add"),
+        ("cd ~/git/coordinator && git rm x", "git rm"),
+        ("cd ~/git/coordinator && git mv a b", "git mv"),
+        ("cd ~/git/coordinator && git branch -D old", "git branch"),
+        ("cd ~/git/coordinator && git branch -f main origin/main", "git branch"),
+        ("cd ~/git/coordinator && git branch newbranch", "git branch"),
+        ("cd ~/git/coordinator && git update-ref refs/heads/main abc1234", "git update-ref"),
+        ("cd ~/git/coordinator && git symbolic-ref HEAD refs/heads/x", "git symbolic-ref"),
+    ]
+    ALLOWED = [
+        # the deploy, the rollback and the main-run start
+        "cd ~/git/coordinator && git fetch origin && git merge --ff-only 0123456789abcdef0123456789abcdef01234567",
+        "git -C ~/git/coordinator merge --ff-only 0123abc",
+        "cd ~/git/coordinator && git merge --ff-only 0123abcDEF",
+        "cd ~/git/coordinator && git merge -q --ff-only 0123456",
+        "cd ~/git/coordinator && git reset --keep 0123abc",
+        "cd ~/git/coordinator && git reset --keep 0123456789abcdef0123456789abcdef01234567",
+        "run-and-wake -- bash -c 'cd ~/git/coordinator && { git fetch -q origin main || git fetch -q origin main; } && s=$(git show origin/main:scripts/main-journeys.sh) && exec bash -c \"$s\" main-journeys.sh'",
+        "cd ~/git/coordinator && { git fetch -q origin main || git fetch -q origin main; } && git show origin/main:scripts/main-journeys.sh",
+        # fetch, worktrees and reads
+        "cd ~/git/coordinator && git fetch origin",
+        "cd ~/git/coordinator && git fetch origin main:refs/remotes/origin/main",
+        "git -C ~/git/coordinator fetch",
+        "cd ~/git/coordinator && git worktree add ~/tmp-home/x origin/main",
+        "cd ~/git/coordinator && git worktree add -b feat/x ~/tmp-home/reset origin/main",
+        "git -C ~/git/coordinator worktree add ~/tmp-home/merge origin/main",
+        "cd ~/git/coordinator && git worktree remove ~/tmp-home/x",
+        "cd ~/git/coordinator && git worktree remove --force ~/tmp-home/x",
+        "cd ~/git/coordinator && git worktree prune",
+        "cd ~/git/coordinator && git worktree list",
+        "cd ~/git/coordinator && git show origin/main:scripts/main-journeys.sh",
+        "cd ~/git/coordinator && git log --oneline -5",
+        "cd ~/git/coordinator && git log --grep reset --grep merge",
+        "cd ~/git/coordinator && git diff origin/main",
+        "cd ~/git/coordinator && git status --short",
+        "cd ~/git/coordinator && git rev-parse HEAD",
+        "cd ~/git/coordinator && git show stash@{0}",
+        "cd ~/git/coordinator && git stash list",
+        "cd ~/git/coordinator && git stash show -p",
+        "cd ~/git/coordinator && git merge-base HEAD origin/main",
+        "cd ~/git/coordinator && git branch",
+        "cd ~/git/coordinator && git branch -a",
+        "cd ~/git/coordinator && git branch --show-current",
+        "cd ~/git/coordinator && git branch --list 'feat/*'",
+        "cd ~/git/coordinator && git branch --contains abc1234",
+        "cd ~/git/coordinator && git describe --tags",
+        "cd ~/git/coordinator && git blame README.md",
+        "cd ~/git/coordinator && git ls-files",
+        "cd ~/git/coordinator && git remote -v",
+        "cd ~/git/coordinator && git config --get remote.origin.url",
+        "cd ~/git/coordinator && git push origin HEAD",
+        "cd ~/git/coordinator && echo git reset --hard",
+        "cd ~/git/coordinator && grep -n 'git merge' docs/deploy.md",
+        # the same verbs in a worktree or another checkout
+        "cd ~/tmp-home/x && git merge origin/main",
+        "cd ~/tmp-home/x && git reset --hard origin/main",
+        "git -C ~/tmp-home/x checkout feat/y",
+        "git -C /home/cartwmic/tmp-home/x commit -m x",
+        "cd ~/git/coordinator-notes && git commit -m x",
+        "cd ~/git/coordinator.old && git checkout x",
+        "cd ~/git && git -C other pull",
+        "cd ~/git/coordinator && cd ~/tmp-home/x && git commit -m x",
+        "cd ~/git/coordinator && git -C ~/tmp-home/x commit -m x",
+        "git --git-dir=$HOME/tmp-home/x/.git --work-tree=$HOME/tmp-home/x checkout y",
+        "cd /Users/other/git/coordinator && git merge origin/main",
+        # a target the hook cannot know
+        'cd "$WT" && git commit -m x',
+        "git -C $WT reset --hard",
+        "cd $(mktemp -d) && git commit -m x",
+        "cd $COORD && git merge origin/main",
+    ]
+
+    def test_refused_with_the_fix_named(self):
+        for text, spelling in self.REFUSED:
+            with self.subTest(text=text):
+                message = self.live(text) or ""
+                self.assertIn("`%s` in the live coordinator checkout (~/git/coordinator) is refused in agent sessions" % spelling, message)
+                self.assertIn("use a git worktree (git worktree add ~/tmp-home/<name> origin/main)".capitalize(), message)
+                self.assertIn("the live checkout runs the daemon; only fetch and the deploy's `git merge --ff-only <sha>` are allowed there", message)
+                self.assertIn('coordinator AGENTS.md, "The live checkout"', message)
+
+    def test_allowed(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(self.live(text))
+
+    def test_a_session_whose_directory_is_the_live_checkout(self):
+        for text in ["git merge origin/main", "git checkout pr438", "git pull", "git commit -m x", "git reset --hard", "git -c a=b stash"]:
+            with self.subTest(text=text):
+                self.assertTrue(self.live(text, cwd=self.LIVE))
+        for text in ["git fetch origin", "git merge --ff-only " + self.SHA, "git reset --keep 0123abc", "git status", "git log -1",
+                     "git worktree add ~/tmp-home/x origin/main", "git show origin/main:scripts/main-journeys.sh"]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.live(text, cwd=self.LIVE))
+
+    def test_leaving_the_live_checkout_is_not_refused(self):
+        for text in ["cd ~/tmp-home/x && git commit -m x", "git -C /home/cartwmic/tmp-home/x reset --hard", 'cd "$WT" && git commit -m x',
+                     "cd ~/tmp-home/x && git merge origin/main"]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.live(text, cwd=self.LIVE))
+
+    def test_a_command_substitution_runs_in_the_directory_of_the_command_around_it(self):
+        self.assertTrue(self.live("cd ~/git/coordinator && x=$(git merge origin/main)"))
+        self.assertTrue(self.live("cd ~/tmp-home/x && cd ~/git/coordinator && echo `git merge origin/main`"))
+        self.assertTrue(self.live("echo $(cd ~/git/coordinator && git merge origin/main)"))
+        self.assertIsNone(self.live("cd ~/git/coordinator && cd ~/tmp-home/x && x=$(git commit -m x)"))
+        self.assertIsNone(self.live("x=$(git commit -m x) && cd ~/git/coordinator", cwd="/home/cartwmic/tmp-home/x"))
+
+    def test_every_profile_and_no_profile_run_it(self):
+        for profile in ("personal", "axon-work-computer", None):
+            with self.subTest(profile=profile):
+                self.assertTrue(self.live("cd ~/git/coordinator && git merge origin/main", profile=profile))
+                self.assertIsNone(self.live("cd ~/git/coordinator && git merge --ff-only " + self.SHA, profile=profile))
+
+    def test_home_comes_from_the_context_not_the_test_machine(self):
+        text = "cd ~/git/coordinator && git merge origin/main"
+        self.assertTrue(check(text, env={"HOME": "/Users/mac"}, cwd="/x"))
+        self.assertIsNone(check("cd /home/cartwmic/git/coordinator && git merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
+        self.assertTrue(check("cd /Users/mac/git/coordinator && git merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
+        self.assertTrue(check("git -C $HOME/git/coordinator merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
+
+
 class Hook(unittest.TestCase):
     """The real script, copied beside a `profile` file in a temp dir."""
 
@@ -562,7 +751,8 @@ class Hook(unittest.TestCase):
     def test_every_refusal_carries_the_phrase_the_pi_extension_looks_for(self):
         for command, profile in [("until ok; do sleep 1; done", None), ("cat <<EOF\n`x`\nEOF", None), ("gh pr merge 1", "personal"),
                                  ("gh pr create --body-file b.md", "personal"),
-                                 ("kubectl --context a get no", "personal"), ("pkill x", None)] + (
+                                 ("kubectl --context a get no", "personal"), ("pkill x", None),
+                                 ("cd ~/git/coordinator && git merge origin/main", None)] + (
                 [("docker build .", "personal")] if sys.platform.startswith("linux") else []):
             with self.subTest(command=command):
                 run = self.run_hook(command, profile=profile)
@@ -606,6 +796,38 @@ class Hook(unittest.TestCase):
         self.assertEqual(self.run_hook("docker run alpine", profile="axon-work-computer").returncode, 0)
         self.assertEqual(self.run_hook("docker run alpine").returncode, 0)
         self.assertEqual(self.run_hook("docker ps", profile="personal").returncode, 0)
+
+    def run_fixture(self, name, home="/home/cartwmic", profile=None):
+        payload = json.loads((Path(__file__).parent / "fixtures" / name).read_text())
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_HARNESS_PROFILE"}
+        env["HOME"] = home
+        if profile:
+            env["AGENT_HARNESS_PROFILE"] = profile
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    def test_the_real_live_checkout_commands_are_refused_through_the_real_script(self):
+        """2026-11-16: a builder ran `git merge origin/main` in ~/git/coordinator (and reset it 13 s later); 2026-11-11: a reviewer ran
+        `git checkout` of PR #438 there and the daemon restarted onto PR code. Recorded as the hook's PreToolUse JSON in fixtures/."""
+        for name, spelling in [("live-git-merge-cd.json", "git merge"), ("live-git-merge-C.json", "git merge"),
+                               ("live-git-checkout-pr438.json", "git checkout")]:
+            for profile in ("personal", "axon-work-computer", None):
+                with self.subTest(fixture=name, profile=profile):
+                    run = self.run_fixture(name, profile=profile)
+                    self.assertEqual(run.returncode, 2)
+                    self.assertIn("`%s` in the live coordinator checkout" % spelling, run.stderr)
+                    self.assertIn("refused in agent sessions", run.stderr)
+                    self.assertIn("git worktree add ~/tmp-home/<name> origin/main", run.stderr)
+
+    def test_the_deploy_and_the_main_run_start_pass_through_the_real_script(self):
+        for name in ("live-git-ffonly-deploy.json", "live-git-main-run-start.json"):
+            with self.subTest(fixture=name):
+                run = self.run_fixture(name)
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
+
+    def test_the_fixture_home_decides_not_the_machine_it_runs_on(self):
+        run = self.run_fixture("live-git-merge-cd.json", home="/Users/mac")
+        self.assertEqual(run.returncode, 0)  # that command names /home/cartwmic/git/coordinator, which is no checkout of /Users/mac
 
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()

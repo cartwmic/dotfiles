@@ -1,0 +1,12 @@
+{
+ "session_id": "live-checkout-guard",
+ "transcript_path": "x.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd ~/git/coordinator && git fetch origin pull/438/head:pr438 && git checkout pr438",
+  "description": "Check out PR 438 to review it"
+ },
+ "tool_use_id": "toolu_fixture"
+}

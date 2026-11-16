@@ -1,0 +1,12 @@
+{
+ "session_id": "live-checkout-guard",
+ "transcript_path": "x.jsonl",
+ "cwd": "/home/cartwmic/tmp-home/x",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git -C /home/cartwmic/git/coordinator merge origin/main",
+  "description": "Fast-forward main after the worktree add failed"
+ },
+ "tool_use_id": "toolu_fixture"
+}

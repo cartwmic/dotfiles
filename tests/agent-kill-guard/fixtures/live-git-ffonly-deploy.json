@@ -1,0 +1,12 @@
+{
+ "session_id": "live-checkout-guard",
+ "transcript_path": "x.jsonl",
+ "cwd": "/home/cartwmic/git/coordinator",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd ~/git/coordinator && git fetch origin && git merge --ff-only 0123456789abcdef0123456789abcdef01234567",
+  "description": "Deploy the green sha"
+ },
+ "tool_use_id": "toolu_fixture"
+}
