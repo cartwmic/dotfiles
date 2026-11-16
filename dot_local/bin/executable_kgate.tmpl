@@ -1533,7 +1533,8 @@ class Job:
         os.makedirs(os.path.dirname(self.entry), exist_ok=True)
         write_json_atomic(self.entry, {"id": self.id, "job": self.rec["job"] or None, "pid": os.getpid(), "start": ident[0],
                                        "proc_cmd": ident[1], "pidns": pid_namespace(), "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
-                                       "node": self.rec["node"], "cluster": self.cluster.name, "pod": self.pod})
+                                       "node": self.rec["node"], "cluster": self.cluster.name, "pod": self.pod,
+                                       "thread": os.environ.get("T3CODE_THREAD_ID") or None})
 
     def unregister(self):
         """Drop this job's registry entry, unless its pod may still be there: the entry is how a later client (or `kgate cancel`) finds a pod this client could

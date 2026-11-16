@@ -1781,6 +1781,7 @@ class Black(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         e = json.loads(entries[0].read_text())
         self.assertEqual((e["pid"], e["job"], e["node"], e["id"]), (proc.pid, "20261104T000000Z-abcdef", "fake-node", entries[0].stem))
+        self.assertEqual(e["thread"], "thread:test-1")   # the builder seat's Stop hook matches a running job to its thread by this
         proc.terminate()
         proc.stdout.read()
         self.assertEqual(proc.wait(timeout=30), 143)
@@ -1799,7 +1800,7 @@ class Black(unittest.TestCase):
 
     def start_job(self, shell_cmd):
         e = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
-             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", **self.op_env()}
+             "KGATE_SSH": "fake", "KGATE_SSH_KEY": "/dev/null", "RUN_AND_WAKE_JOB": "20261104T000000Z-abcdef", "T3CODE_THREAD_ID": "thread:test-1", **self.op_env()}
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "--", "sh", "-c", shell_cmd], cwd=self.repo, env=e,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)  # own group: see fake_client
         def reap():
