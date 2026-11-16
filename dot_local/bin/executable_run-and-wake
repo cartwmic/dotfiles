@@ -4,6 +4,7 @@
 Usage: run-and-wake [--] CMD [ARGS...]
        run-and-wake -- heavy-gate --wait 7200 -- CMD...
        run-and-wake --recover      (send the wakes a host restart left undelivered; run by run-and-wake-recover.service)
+       run-and-wake --wait JOB     (block until JOB ends, print its result line, exit with its status; the wake for JOB is then dropped)
 
 Contract (docs/run-and-wake.md):
 - Returns at once. Prints the job id, the job's pid and its output file.
@@ -28,6 +29,13 @@ Contract (docs/run-and-wake.md):
   A busy thread takes it as its next turn. If both a pane with a Pi session and a thread are set, the pane wins:
   Pi sets HERDR_PANE_ID and PI_SESSION_FILE on every bash call, so that pair names the actual caller, while
   T3CODE_THREAD_ID may only be inherited from the app that launched the shell.
+- A wake that would say nothing new is not sent, and each drop is a `skip` record with its reason:
+    waited     a `run-and-wake --wait JOB` is blocked on the job (or already printed its result): the waiter delivers the result, so a second message would be a duplicate
+    cancelled  the session stopped the job itself with `kgate cancel` (kgate's end line has "cancelled": true); `kgate cancel` already printed the end line to its caller
+  Every other end, success or failure, still wakes.
+- A T3 thread's wakes for jobs that end within RUN_AND_WAKE_COALESCE seconds (default 10; 0 turns it off) of each other are sent as one message, one line per job,
+  each line the text the job would have got alone. Each merged job has its own `wake` record (`merged_with` names the others). A job that was stopped
+  (a signal reached the watcher) is sent at once. Pane wakes are never merged.
 - Best effort on the session (owner-accepted, ask #347): herdr's prompt targets a pane, not a
   session, so a /new in the milliseconds between the check and the send can put the message
   in the new session. That is logged as session_after on the wake record, not prevented.
@@ -48,11 +56,13 @@ Contract (docs/run-and-wake.md):
     end    {exit, signal, duration_s, stopped?}  (stopped: signals this process forwarded to the job; recover also writes one for a job a restart left
            with no end: exit null, signal null, error "host-restarted", recovered true)
     blocked {}                      (pane showed a dialog; waiting)
-    wake   {target: herdr|t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), session_after?}  (session_after: the pane
-           showed another session right after the send; herdr cannot make the send conditional)
+    wake   {target: herdr|t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), merged_with? (the other jobs in the same message), session_after?}
+           (session_after: the pane showed another session right after the send; herdr cannot make the send conditional)
+    read   {}                       (a `run-and-wake --wait` printed the job's result)
     skip   {reason, detail?}
 """
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -77,6 +87,8 @@ AGENT_SLICE = "app-t3code-agents.slice"  # T3's agents slice: T3 sets its Memory
 GiB = 1024**3
 FORWARDED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 RECOVER = "--recover"
+WAIT = "--wait"
+SPOOL = os.path.join(STATE, "spool")  # one file per T3 thread: the finished jobs whose wake is waiting for the merge window to close
 # The T3 CLI says one of these (exit 1) when no server answers: T3 is restarting or the host is. Anything else it says (thread not found) is an answer.
 UNREACHABLE = ("Could not reach the T3 Code server", "No running T3 Code server")
 # T3 restarts in seconds; the wake waits this long for it. RUN_AND_WAKE_T3_RETRY=<interval>:<window> (seconds) tunes it.
@@ -94,6 +106,21 @@ def t3_retry():
 
 
 T3_RETRY = t3_retry()
+
+
+def coalesce_window():
+    """Seconds a thread's wakes wait for others that end close behind them: RUN_AND_WAKE_COALESCE=<seconds>, default 10, 0 = off. A bad value means the default, with a warning."""
+    setting = os.environ.get("RUN_AND_WAKE_COALESCE")
+    if setting is None or setting == "":
+        return 10.0
+    try:
+        window = float(setting)
+        if window >= 0:
+            return window
+    except ValueError:
+        pass
+    print(f"[{NAME}] WARN: RUN_AND_WAKE_COALESCE={setting!r} is not a number of seconds; using 10", file=sys.stderr)
+    return 10.0
 
 
 def say(level, message):
@@ -229,6 +256,128 @@ def wake_thread(job, thread, text, stopped):
     record_wake(job, started, error, attempts)
 
 
+# --- wakes that would say nothing new: dropped, or merged ---
+
+def kgate_log():
+    return os.path.join(os.environ.get("KGATE_STATE") or os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate"), "log.jsonl")
+
+
+def kgate_cancelled(job):
+    """True when kgate's log ends this job's run with "cancelled": true: the session stopped it itself with `kgate cancel` (a caller cancels its own job id only),
+    and `kgate cancel` printed that end line to it. kgate writes the line before its client exits, so it is there when the watcher looks. Reads the last megabyte."""
+    try:
+        with open(kgate_log(), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 1_000_000))
+            tail = f.read().decode(errors="replace")
+    except OSError:
+        return False
+    for line in reversed(tail.splitlines()):
+        if job in line and '"cancelled"' in line:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and r.get("job") == job and r.get("cancelled") is True:
+                return True
+    return False
+
+
+def wait_file(job):
+    return os.path.join(STATE, "jobs", job + ".wait")
+
+
+def read_marker(job):
+    return os.path.join(STATE, "jobs", job + ".read")
+
+
+def waiter_alive(job):
+    """True while a `--wait` process holds the job's wait lock (a shared lock: the kernel drops it when the waiter dies, so a dead waiter never hides a wake)."""
+    try:
+        fd = os.open(wait_file(job), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def result_read(job):
+    """The waiter is blocked on the job, or has printed its result: the session already has it."""
+    return os.path.exists(read_marker(job)) or waiter_alive(job)
+
+
+class FlushNow(Exception):
+    """A stop signal reached a watcher that was waiting for the merge window: send now, the host may be going down."""
+
+
+def raise_flush(_signum, _frame):
+    raise FlushNow()
+
+
+def wake_thread_merged(job, thread, text, window):
+    """Queue this job's wake for its thread and, after `window` seconds, send everything queued as one message. Whichever watcher wakes first sends the whole
+    queue and writes every merged job's `wake` record; a watcher that finds its job already sent has nothing left to do. The queue lock is held across the send, so a
+    job that ends while T3 is being waited for joins the next message, not a second concurrent send."""
+    key = hashlib.sha1(thread.encode()).hexdigest()[:16]
+    os.makedirs(SPOOL, exist_ok=True)
+    spool, lock = os.path.join(SPOOL, key + ".jsonl"), os.path.join(SPOOL, key + ".lock")
+    with open(lock, "a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        with open(spool, "a", encoding="utf-8") as queue:
+            queue.write(json.dumps({"job": job, "text": text}, ensure_ascii=False) + "\n")
+    flush_now = False
+    handled = [signum for signum in FORWARDED if signal.getsignal(signum) is not signal.SIG_IGN]
+    for signum in handled:
+        signal.signal(signum, raise_flush)
+    try:
+        time.sleep(window)
+    except FlushNow:
+        flush_now = True
+    finally:
+        for signum in handled:
+            signal.signal(signum, signal.SIG_DFL)
+    with open(lock, "a") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        try:
+            with open(spool, encoding="utf-8") as queue:
+                queued = [json.loads(line) for line in queue if line.strip()]
+        except (OSError, ValueError):
+            queued = []
+        if not any(e.get("job") == job for e in queued):
+            return  # a watcher that woke before us has sent it
+        send = []
+        for e in queued:
+            if result_read(e["job"]):
+                record(e["job"], "skip", reason="waited", detail="a run-and-wake --wait delivered the result")
+            else:
+                send.append(e)
+        if send:
+            started = time.monotonic()
+            error, attempts = t3_send_when_up(thread, "\n".join(e["text"] for e in send), started if flush_now else started + T3_RETRY[1])
+            for e in send:
+                record_wake(e["job"], started, error, attempts, **({"merged_with": [o["job"] for o in send if o is not e]} if len(send) > 1 else {}))
+        open(spool, "w").close()
+
+
+def deliver(job, pane, session, thread, text, stopped):
+    """Send this job's wake, unless it would say nothing new (see the docstring)."""
+    if kgate_cancelled(job):
+        record(job, "skip", reason="cancelled", detail="stopped by kgate cancel, which printed its end line to the caller")
+    elif result_read(job):
+        record(job, "skip", reason="waited", detail="a run-and-wake --wait delivered the result")
+    elif not thread:
+        wake(job, pane, session, text)
+    elif stopped or coalesce_window() <= 0:
+        wake_thread(job, thread, text, stopped)
+    else:
+        wake_thread_merged(job, thread, text, coalesce_window())
+
+
 def wake(job, pane, session, text):
     started = time.monotonic()
     while True:
@@ -324,11 +473,7 @@ def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
             sig = signal.Signals(-code).name if code < 0 else None
             record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3), **({"stopped": stopped} if stopped else {}))
             status = f"killed by {sig}" if sig else f"exit {code}"
-    text = message(job, status, time.monotonic() - started, cmd, output)
-    if thread:
-        wake_thread(job, thread, text, stopped)
-    else:
-        wake(job, pane, session, text)
+    deliver(job, pane, session, thread, message(job, status, time.monotonic() - started, cmd, output), stopped)
 
 
 def agent_slice_limited(systemctl):
@@ -470,10 +615,77 @@ def recover():
         return 1 if undelivered else 0
 
 
-def wait_command(pid):
-    """The no-poll wait the builder Stop hook names for a job's pid (wait_hint in dot_local/share/agent-harness/hooks/stop_running_jobs.py).
+def wait_command(job):
+    """The no-poll wait the builder Stop hook names for a run-and-wake job (run_and_wake_wait_hint in dot_local/share/agent-harness/hooks/stop_running_jobs.py).
     tests/run-and-wake checks that the two agree."""
-    return "caffeinate -w %s" % pid if sys.platform == "darwin" else "tail --pid=%s -f /dev/null" % pid
+    return "%s %s %s" % (NAME, WAIT, job)
+
+
+def end_of(job, offset):
+    """(the job's `end` record or None, the log offset to resume from). Reads only the lines added since `offset`, whole lines only."""
+    try:
+        with open(LOG, "rb") as log:
+            log.seek(offset)
+            chunk = log.read()
+    except OSError:
+        return None, offset
+    complete = chunk[: chunk.rfind(b"\n") + 1]
+    marker = ('"job": "%s"' % job).encode()
+    found = None
+    for line in complete.splitlines():
+        if marker in line and b'"end"' in line:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and r.get("job") == job and r.get("event") == "end":
+                found = r
+    return found, offset + len(complete)
+
+
+def pid_alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def wait_for(job):
+    """`run-and-wake --wait JOB`: block until the job ends, print the line its wake would carry, exit with the job's status (128+n for a signal). While it blocks it holds
+    the job's wait lock, and it leaves a marker when it prints, so the watcher drops the wake that would repeat this line. A job that cannot end (its host restarted, its watcher died) says so and exits 1."""
+    start = next((r for r in read_jobs().get(job, []) if r["event"] == "start"), None)
+    if not start:
+        say("ERROR", f"no job {job} in {LOG}")
+        return 64
+    os.makedirs(os.path.join(STATE, "jobs"), exist_ok=True)
+    guard = open(wait_file(job), "a")
+    fcntl.flock(guard, fcntl.LOCK_SH)  # held until this process exits
+    offset, gone = 0, 0
+    while True:
+        end, offset = end_of(job, offset)
+        if end and not end.get("recovered"):
+            break
+        if (start.get("boot") and boot_id() and start["boot"] != boot_id()) or (end and end.get("recovered")):
+            print(f"[{NAME} k:{job}] job did NOT finish: the host restarted and the job was killed. Rerun it; this is not a result. Started {start['ts']}: {' '.join(shlex.join(start['cmd']).split())}. Partial output: {start['output']}.", flush=True)
+            return 1
+        gone = 0 if pid_alive(start.get("pid")) else gone + 1
+        if gone >= 4:  # the watcher records `end` within milliseconds of the job's exit, so four silent seconds mean it died
+            print(f"[{NAME} k:{job}] job has no end record and its process is gone: the watcher died. Treat it as not finished. Output: {start['output']}", flush=True)
+            return 1
+        time.sleep(1)
+    with open(read_marker(job), "w"):
+        pass
+    record(job, "read")
+    status = f"could not start ({end['error']})" if end.get("error") else status_of(end)
+    print(message(job, status, end.get("duration_s") or 0, start["cmd"], start["output"]), flush=True)
+    if end.get("exit") is not None:
+        return end["exit"] & 0xFF
+    return 128 + signal.Signals[end["signal"]].value if end.get("signal") in signal.Signals.__members__ else 1
 
 
 def main(argv):
@@ -485,6 +697,11 @@ def main(argv):
     if argv[:1] == [RECOVER]:
         os.makedirs(STATE, exist_ok=True)
         return recover()
+    if argv[:1] == [WAIT]:
+        if len(argv) != 2 or argv[1].startswith("-"):
+            print(__doc__.strip(), file=sys.stderr)
+            return 2
+        return wait_for(argv[1])
     scoped = argv[:1] == [SCOPED] and len(argv) > 2
     if scoped:
         job, argv = argv[1], argv[2:]
@@ -531,8 +748,7 @@ def main(argv):
     else:
         say("ERROR", f"job {job} could not start: {started[7:] or 'unknown'}; output {output}")
     if thread and started.startswith("pid "):
-        pid = started.split()[1]
-        say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]. Builders: wait with `{wait_command(pid)}` in Bash (run_in_background), then t3_background_wait; the Stop hook refuses to stop while it runs. Other seats can end the turn.")
+        say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]. Builders: wait with `{wait_command(job)}` in Bash (run_in_background), then t3_background_wait; it prints the result and the message is then not sent. The Stop hook refuses to stop while the job runs. Other seats can end the turn.")
     elif thread:
         say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]; you can end your turn")
     elif not pane:

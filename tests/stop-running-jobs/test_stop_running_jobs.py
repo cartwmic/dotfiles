@@ -105,7 +105,9 @@ class HookTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("20261116T180000Z-aaaaaa", done.stderr)
         self.assertIn("heavy-gate -- npm test", done.stderr)
-        self.assertIn(MOD.wait_hint(p.pid), done.stderr)
+        self.assertIn(MOD.run_and_wake_wait_hint("20261116T180000Z-aaaaaa"), done.stderr)
+        self.assertIn("`run-and-wake --wait 20261116T180000Z-aaaaaa`", done.stderr, "the wait that also drops the duplicate wake, not a bare pid wait")
+        self.assertNotIn(MOD.wait_hint(p.pid), done.stderr)
         self.assertIn("t3_background_wait", done.stderr)
 
     def test_the_stop_is_allowed_once_the_job_has_ended(self):

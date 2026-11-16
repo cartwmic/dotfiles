@@ -5,7 +5,7 @@ Mistake it ends (Retro proposal 12, playbook rule 19e13f7b): a builder starts a 
 runs, so nobody reads the result. Exit 2 with the reason on stderr keeps the session going; the reason names each running job and how to wait on it.
 
 Which jobs count: only those started from this thread. The thread is T3CODE_THREAD_ID, which both tools record:
-  run-and-wake  log.jsonl `start` record, field `thread` (set when the job is woken through T3)
+  run-and-wake  log.jsonl `start` record, field `thread` (set when the job is woken through T3); the hook names `run-and-wake --wait <job>` as the way to wait
   kgate         <state>/active/<id>.json (the running-jobs registry), field `thread`; a kgate job that run-and-wake started is listed once, as the run-and-wake job
 A job counts as running when its process is alive, not when a record merely lacks an end line:
   run-and-wake  no `end` record, same boot, pid alive, and (on Linux) RUN_AND_WAKE_JOB=<job> in that process's environment, so a recycled pid is not taken for the job
@@ -147,12 +147,18 @@ def wait_hint(pid, platform=None):
     return "wait: run `%s` with Bash run_in_background, then t3_background_wait on its task id (no sleep loop)" % command
 
 
+def run_and_wake_wait_hint(job):
+    """How to wait for a run-and-wake job: `run-and-wake --wait <job>` blocks until it ends and prints the result line, and the job's own wake message is then not sent
+    (a second message after the result would be a no-news turn). The same text is in `wait_command` in dot_local/bin/executable_run-and-wake; tests/run-and-wake checks that the two agree."""
+    return "wait: run `run-and-wake --wait %s` with Bash run_in_background, then t3_background_wait on its task id (no sleep loop); it prints the result and exits with the job's status" % job
+
+
 def reason(rw, kg):
     lines = ["Do not stop yet: this session started %d job%s that %s still running. Read each result before you hand off." % (
         len(rw) + len(kg), "" if len(rw) + len(kg) == 1 else "s", "is" if len(rw) + len(kg) == 1 else "are")]
     for j in rw:
-        lines.append("- run-and-wake job %s (pid %s, started %s): %s\n    %s; the result is in `grep %s ~/.local/state/run-and-wake/log.jsonl` and its output file" % (
-            j["job"], j["pid"], j["ts"], j["cmd"], wait_hint(j["pid"]), j["job"]))
+        lines.append("- run-and-wake job %s (pid %s, started %s): %s\n    %s; the full record is `grep %s ~/.local/state/run-and-wake/log.jsonl`" % (
+            j["job"], j["pid"], j["ts"], j["cmd"], run_and_wake_wait_hint(j["job"]), j["job"]))
     for j in kg:
         lines.append("- kgate job %s (client pid %s): %s\n    %s; the result is the record in ~/.local/state/kgate/log.jsonl; to stop it instead: `kgate cancel %s`" % (
             j["id"], j["pid"], j["cmd"], wait_hint(j["pid"]), j["id"]))
