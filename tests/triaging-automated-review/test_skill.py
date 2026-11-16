@@ -66,6 +66,14 @@ class SkillTest(unittest.TestCase):
         step7 = body[body.index("7. **Re-request"):body.index("8. **Run the")]
         self.assertIn("go to step 8", " ".join(step7.split()))
 
+    def test_a_human_reply_in_a_bot_thread_keeps_the_thread_open(self):
+        # Resolving a bot thread hides a human reply in it, which the owner has not approved.
+        _, body = parts()
+        flat = " ".join(body.split())
+        self.assertIn("Before you resolve a bot thread, read every reply in it.", flat)
+        self.assertIn("If any reply's author is not a bot, treat the thread as a human finding: draft the reply for the owner and leave the thread open.", flat)
+        self.assertIn("comments(last:20){totalCount nodes{author{login __typename}", flat)  # the query reads the replies
+
     def test_does_not_restate_the_shared_tests(self):
         # The wording of the four tests lives in finding-triage.md; two copies drift.
         _, body = parts()

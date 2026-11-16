@@ -48,8 +48,11 @@ listed as pending. The final head has passed `reviewing-prs`.
 5. **Reply and resolve.** For every bot thread you triaged, reply in the thread
    ("Fixed in `<sha>`: what changed.", "Declining: fails <test>, the true
    reason.", or "Out of scope for this PR: follow-up <ticket or note>."), then
-   resolve it. For a human's thread, write the same reply as a draft and post
-   it only after the owner approves that exact text. For a human's top-level
+   resolve it. **Before you resolve a bot thread, read every reply in it.** If
+   any reply's author is not a bot, treat the thread as a human finding: draft
+   the reply for the owner and leave the thread open. For a human's thread,
+   write the same reply as a draft and post it only after the owner approves
+   that exact text. For a human's top-level
    review or comment, draft one PR comment that answers each finding in it.
    Write each reply with the `no-ai-slop` skill: short, in the owner's voice.
 6. **If you pushed, go to step 1.** A push can start a new bot review.
@@ -123,10 +126,11 @@ Stop and report to the owner when:
 gh api graphql -f query='
 query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
   reviewThreads(first:100){nodes{id isResolved isOutdated path line originalLine
-    comments(first:1){nodes{databaseId author{login} body}}}}}}}' \
+    root:comments(first:1){nodes{databaseId}}
+    comments(last:20){totalCount nodes{author{login __typename} body}}}}}}}' \
   -F o=OWNER -F r=REPO -F n=NUMBER
 
-# reply in a thread (databaseId of the thread's first comment)
+# reply in a thread (databaseId of the thread's first comment, `root` above)
 gh api repos/OWNER/REPO/pulls/NUMBER/comments/COMMENT_ID/replies -f body="$(cat reply.md)"
 
 # resolve a thread (id from the query)
@@ -139,3 +143,5 @@ gh pr comment NUMBER --repo OWNER/REPO --body "<the bot's re-run command>"
 More than 100 threads: page with `reviewThreads(first:100, after:$cursor)`.
 GraphQL returns a bot's login bare; REST adds `[bot]`. Match the form your API
 returns.
+A reply is from a bot when its author's `__typename` is `Bot`. If a thread's
+`totalCount` is over 20, page back before you resolve it.
