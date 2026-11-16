@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""config-show FILE [--format toml|ini|json|yaml|env] [--show KEY ...]
+
+Print the structure of a config file with every value masked whole: one `key.path = <masked>` line per leaf. Use it instead of
+`cat`, `grep` or `sed` on a file that may hold a key, token or password (a RustDesk or rclone config, a .env file): the values never
+reach the transcript, so there is nothing to redact line by line.
+
+A key you know is safe to show is named with `--show`: a dotted path (`options.view_style`) or a bare key name (`view_style`). Its
+value, or every value under it when it is a table, prints unmasked. Everything else stays masked.
+
+The format comes from the file name (.toml, .json, .yaml/.yml, .ini/.conf/.cfg, .env or anything else as KEY=VALUE), or `--format`.
+Parse errors report the line, never the text. Exit 0 printed, 1 the file could not be read or parsed, 2 bad arguments.
+"""
+import json
+import os
+import re
+import sys
+
+MASK = "<masked>"
+FORMATS = ("toml", "ini", "json", "yaml", "env")
+KEY_LINE = re.compile(r"^\s*(?:export\s+)?([^\s=:#;\[][^=:]*?)\s*[=:]")
+SECTION_LINE = re.compile(r"^\s*(\[\[?)\s*([^\]]+?)\s*\]\]?\s*(?:[#;].*)?$")
+
+
+def detect(path):
+    name = os.path.basename(path).lower()
+    if name.endswith(".toml"):
+        return "toml"
+    if name.endswith(".json"):
+        return "json"
+    if name.endswith((".yaml", ".yml")):
+        return "yaml"
+    if name.endswith((".ini", ".conf", ".cfg")) or name in ("rclone.conf", ".pypirc", ".my.cnf"):
+        return "ini"
+    return "env"
+
+
+def _holds_table(node):
+    return any(isinstance(v, dict) or (isinstance(v, list) and _holds_table(v)) for v in node)
+
+
+def leaves(node, prefix=""):
+    """(dotted path, value) for every leaf of a parsed tree: a scalar, or a list of plain values. An empty table is a leaf of None."""
+    if isinstance(node, dict):
+        if not node and prefix:
+            yield prefix, None
+        for key, value in node.items():
+            yield from leaves(value, "%s.%s" % (prefix, key) if prefix else str(key))
+    elif isinstance(node, list):
+        if not _holds_table(node):  # a list of plain values (a byte array, tags) is one leaf, not a line per element
+            yield prefix, node
+            return
+        for index, value in enumerate(node):
+            yield from leaves(value, "%s[%d]" % (prefix, index))
+    else:
+        yield prefix, node
+
+
+def parse_lines(text, sections):
+    """INI and KEY=VALUE: keys only, as {path: None}. A continuation line (indented, no key shape) belongs to the value above."""
+    section, found, key_indent = "", {}, None
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped[0] in "#;":
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        head = SECTION_LINE.match(raw) if sections else None
+        if head:
+            section, key_indent = head.group(2), None
+            found.setdefault(section, {})
+            continue
+        if key_indent is not None and indent > key_indent:
+            continue  # a wrapped value
+        key = KEY_LINE.match(raw)
+        if key:
+            key_indent = indent
+            target = found.setdefault(section, {}) if section else found
+            target[key.group(1).strip()] = None
+    return found
+
+
+def parse_yaml_subset(text):
+    """Without PyYAML: mapping keys and list items by indentation; block scalars and flow values are leaves."""
+    root = {}
+    stack = [(-1, root)]  # (indent of the keys or dashes, container)
+    pending = None        # (container, key, indent) of a `key:` with nothing after it, waiting for its first child line
+    block = None          # indent of a `|` or `>` scalar whose body lines are skipped
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or stripped in ("---", "..."):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if block is not None:
+            if indent > block:
+                continue
+            block = None
+        item = stripped == "-" or stripped.startswith("- ")
+        if pending and (indent > pending[2] or (item and indent == pending[2])):
+            owner, name, _ = pending
+            child = [] if item else {}
+            owner[name] = child
+            stack.append((indent, child))
+        pending = None
+        while len(stack) > 1 and (stack[-1][0] > indent or (stack[-1][0] == indent and isinstance(stack[-1][1], list) and not item)):
+            stack.pop()
+        parent = stack[-1][1]
+        body = stripped[1:].strip() if item else stripped
+        if item:
+            if not isinstance(parent, list):
+                continue
+            if not re.match(r"""^("[^"]*"|'[^']*'|[^\s:#\[{"'][^:#]*?)\s*:(\s|$)""", body):
+                parent.append(None)  # a scalar or flow item
+                continue
+            holder = {}
+            parent.append(holder)
+            indent = indent + (len(stripped) - len(body))
+            stack.append((indent, holder))
+            parent = holder
+        key = re.match(r"""^("[^"]*"|'[^']*'|[^\s:#][^:#]*?)\s*:(\s|$)""", body)
+        if not key or not isinstance(parent, dict):
+            continue
+        name, rest = key.group(1).strip("\"'"), body[key.end():].strip()
+        parent[name] = None
+        if rest.startswith(("|", ">")):
+            block = indent
+        elif rest == "" or rest.startswith("#"):
+            pending = (parent, name, indent)
+    return root
+
+
+def parse(text, fmt):
+    if fmt == "json":
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ValueError("not valid JSON (line %d, column %d)" % (error.lineno, error.colno))
+    if fmt == "toml":
+        try:
+            import tomllib
+        except ImportError:  # Python before 3.11: read the keys line by line
+            return parse_lines(text, sections=True)
+        try:
+            return tomllib.loads(text)
+        except tomllib.TOMLDecodeError as error:
+            match = re.search(r"line (\d+)", str(error))
+            raise ValueError("not valid TOML%s" % (" (line %s)" % match.group(1) if match else ""))
+    if fmt == "yaml":
+        try:
+            import yaml
+        except ImportError:
+            return parse_yaml_subset(text)
+        try:
+            docs = [d for d in yaml.safe_load_all(text) if d is not None]
+        except yaml.YAMLError as error:
+            mark = getattr(error, "problem_mark", None)
+            raise ValueError("not valid YAML%s" % (" (line %d)" % (mark.line + 1) if mark else ""))
+        return docs[0] if len(docs) == 1 else docs
+    return parse_lines(text, sections=(fmt == "ini"))
+
+
+def shown(path, shows):
+    parts = path.replace("]", "").replace("[", ".").split(".")
+    return any(path == s or path.startswith(s + ".") or path.startswith(s + "[") or s in parts[-1:] for s in shows)
+
+
+def render(tree, shows):
+    lines = []
+    for path, value in leaves(tree):
+        label = path or "(value)"
+        if shown(path, shows):
+            lines.append("%s = %s" % (label, json.dumps(value, default=str)))
+        else:
+            lines.append("%s = %s" % (label, MASK if not isinstance(value, list) else "<masked list>"))
+    return lines
+
+
+def main(argv):
+    path, fmt, shows, i = None, None, [], 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        if arg in ("--format", "--show") and i + 1 < len(argv):
+            if arg == "--format":
+                fmt = argv[i + 1]
+            else:
+                shows.append(argv[i + 1])
+            i += 2
+        elif arg.startswith("--format="):
+            fmt, i = arg[9:], i + 1
+        elif arg.startswith("--show="):
+            shows.append(arg[7:])
+            i += 1
+        elif arg.startswith("-") or path is not None:
+            print("config-show: bad argument %r (usage: config-show FILE [--format F] [--show KEY ...])" % arg, file=sys.stderr)
+            return 2
+        else:
+            path, i = arg, i + 1
+    if path is None or (fmt is not None and fmt not in FORMATS):
+        print("config-show: usage: config-show FILE [--format %s] [--show KEY ...]" % "|".join(FORMATS), file=sys.stderr)
+        return 2
+    try:
+        with open(os.path.expanduser(path), errors="replace") as handle:
+            text = handle.read()
+    except OSError as error:
+        print("config-show: cannot read %s: %s" % (path, error.strerror or "error"), file=sys.stderr)
+        return 1
+    fmt = fmt or detect(path)
+    try:
+        tree = parse(text, fmt)
+    except ValueError as error:
+        print("config-show: %s: %s; the text is not printed" % (path, error), file=sys.stderr)
+        return 1
+    lines = render(tree, shows)
+    print("# config-show %s (%s): %d keys, values masked" % (path, fmt, len(lines)))
+    print("\n".join(lines))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

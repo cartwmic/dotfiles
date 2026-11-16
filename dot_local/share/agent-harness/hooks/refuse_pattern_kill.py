@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command, then run the seven checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout).
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the eight checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout, credential config).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
   Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
