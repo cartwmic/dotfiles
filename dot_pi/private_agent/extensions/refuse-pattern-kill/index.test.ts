@@ -12,7 +12,7 @@ const REAL = join(dirname(fileURLToPath(import.meta.url)), "../../../../dot_loca
 test("a pattern kill is refused with the exact-PID reason; ordinary commands are not", () => {
 	const reason = refusal("pkill -f something-harmless", REAL);
 	assert.ok(reason?.includes("pkill is refused in agent sessions"), String(reason));
-	assert.ok(reason?.includes("kill <pid>") && reason.includes("kgate cancel <id>"));
+	assert.ok(reason?.includes("kill-mine") && reason.includes("kill <pid>") && reason.includes("kgate cancel <id>"));
 	assert.ok(refusal("echo a && killall node", REAL)?.includes("killall is refused"));
 	assert.ok(refusal("sh -c 'pkill x'", REAL));
 	for (const ok of ["kill 123", "kgate cancel abc", "git commit -m 'no pkill'", "grep -rn pkill ."]) assert.equal(refusal(ok, REAL), undefined, ok);
