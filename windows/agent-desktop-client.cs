@@ -172,7 +172,7 @@ public static class AgentDesktopClient
             case "click":
                 if (rest.Length < 2 || rest.Length > 3) throw Usage("");
                 if (!IsInt(rest[0]) || !IsInt(rest[1])) throw Usage("click: X and Y must be integers");
-                if (rest.Length == 3 && Array.FindIndex(rest, 2, 1, delegate(string b) { return string.Equals(b, "left", StringComparison.OrdinalIgnoreCase) || string.Equals(b, "right", StringComparison.OrdinalIgnoreCase) || string.Equals(b, "middle", StringComparison.OrdinalIgnoreCase); }) < 0)
+                if (rest.Length == 3 && Array.FindIndex(rest, 2, 1, delegate(string b) { return b == "left" || b == "right" || b == "middle"; }) < 0)
                     throw Usage("click: button must be left, right or middle");
                 break;
             case "type":

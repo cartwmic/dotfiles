@@ -154,7 +154,7 @@ function Test-Call([string[]]$Argv) {
         'click' {
             if ($rest.Count -lt 2 -or $rest.Count -gt 3) { Exit-Usage '' }
             if (-not (Test-Int $rest[0]) -or -not (Test-Int $rest[1])) { Exit-Usage 'click: X and Y must be integers' }
-            if ($rest.Count -eq 3 -and @('left', 'right', 'middle') -notcontains $rest[2]) { Exit-Usage 'click: button must be left, right or middle' }
+            if ($rest.Count -eq 3 -and @('left', 'right', 'middle') -cnotcontains $rest[2]) { Exit-Usage 'click: button must be left, right or middle' }
         }
         'type' { if ($rest.Count -ne 1) { Exit-Usage '' } }
         'key' {

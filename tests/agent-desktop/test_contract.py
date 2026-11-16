@@ -47,6 +47,7 @@ VALUE_CALLS = [
     ["move", "x", "2"],
     ["move", "1", "2.5"],
     ["click", "1", "2", "wheel"],
+    ["click", "1", "2", "RIGHT"],  # buttons are lower case everywhere; the G14 once took RIGHT and did a left click
     ["click", "a", "2"],
     ["key", "bad word!"],
     ["key", "comma", "ct rl"],
