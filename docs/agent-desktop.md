@@ -145,11 +145,23 @@ Reproduce: the install steps above, then `agent-desktop cursor` while the G14 is
 
 ## Work Mac
 
-The work profile gives a work Mac the same setup as any Mac: the `66` step runs on a dotfiles apply and installs the same script and the same pinned Vercel program, but not the kitty helper or its login item (`66` installs those on the personal profile only). Why: the work Mac's permission route is not settled. A read-only check of its limits comes after merge, and each action on that machine is its own ask to Michael. The Omarchy script and the Windows files are personal only; the work profile has no Linux or Windows machine (see [profiles.md](profiles.md)).
+The work profile gives a work Mac the same setup as any Mac: the `66` step runs on a dotfiles apply and installs the same script and the same pinned Vercel program, but not the kitty helper or its login item (`66` installs those on the personal profile only). Why: the kitty helper is for a computer an agent reaches over ssh, and the work Mac has ssh off (see below). The Omarchy script and the Windows files are personal only; the work profile has no Linux or Windows machine (see [profiles.md](profiles.md)).
 
 On the work profile, a blocked GitHub download makes the `66` step exit 1 and stops the apply there; steps 70 and later wait for the next apply.
 
 No agent installs, applies, grants a permission or runs a check on the work Mac without Michael. Each such action is its own ask to him, and a yes covers only the action it names. No keyboard or mouse input goes through the KVM without his OK for each test. Michael takes the merged dotfiles there with his own `chezmoi update`. The permissions in the Mac section are his to set. After that, each step (the read-only check of the Mac's limits, the permissions, the run of the eight actions and `ui` with saved output and screenshots) is its own ask.
+
+### What the read-only check found (2026-11-15)
+
+Michael approved a read-only check of the work Mac (ask #1152). An agent there ran `sw_vers`, `uname -m`, `system_profiler SPConfigurationProfileDataType`, `nc -z 127.0.0.1 22` and `launchctl print system/com.openssh.sshd`, and changed nothing. It found:
+
+- macOS 26.7.3 on Apple silicon.
+- The installed management profiles neither block nor pre-allow Screen Recording, Accessibility, PostEvent or ListenEvent for `agent-desktop`'s terminal. The user may switch each one on in System Settings.
+- A profile turns off the recurring macOS 26 "allow screen recording?" prompt, so a granted Screen Recording permission should stay granted. This is read from the profile, not seen.
+- Screenshots are allowed by profile.
+- Remote Login (ssh) is off, and no profile sets it. So on this Mac `agent-desktop` runs from a local terminal, the same as on the Mac mini without the helper.
+
+The next step is Michael's: granting Screen Recording and Accessibility to the terminal that runs `agent-desktop`, then a run of the eight actions and `ui` with saved output. Each is its own ask.
 
 ## Repeating a live run
 
