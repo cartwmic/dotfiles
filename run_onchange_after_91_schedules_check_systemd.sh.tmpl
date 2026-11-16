@@ -1,0 +1,42 @@
+#!/bin/sh
+# Load, reload or unload the schedules-check timer (schedules-check.timer) when its units or its setting change. Linux only, and only while chezmoi data
+# schedulesCheck.enabled is true (default: personal profile on Linux) or the units are still installed (.chezmoiignore). Same shape as the session-cost
+# loader (run_onchange_after_86_session_cost_systemd.sh.tmpl): the timer runs `coordinator schedules check` once a day.
+# service: {{ include "dot_config/systemd/user/schedules-check.service.tmpl" | sha256sum }}
+# coordinator checkout: {{ includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
+# timer: {{ include "dot_config/systemd/user/schedules-check.timer" | sha256sum }}
+# setting: {{ includeTemplate "schedules_check_config" . }}
+#
+# Fails (and so fails the apply) when systemd does not end up with the timer active: chezmoi records a run_onchange script only when it succeeds,
+# so the next apply tries again. A host with no systemd user manager (a container, WSL without systemd) has nothing to load into: a notice and a clean exit.
+set -eu
+log() { printf '[schedules_check_systemd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Linux ] || exit 0
+if ! command -v systemctl >/dev/null 2>&1 || ! systemctl --user show-environment >/dev/null 2>&1; then
+  log INFO "no systemd user manager here; schedules-check.timer not loaded"
+  exit 0
+fi
+dir="$HOME/.config/systemd/user"
+{{- if eq (includeTemplate "schedules_check_config" .) "true" }}
+if [ ! -f "$dir/schedules-check.service" ] || [ ! -f "$dir/schedules-check.timer" ]; then
+  log ERROR "$dir/schedules-check.service or schedules-check.timer is not installed; apply them too, then apply again"
+  exit 1
+fi
+systemctl --user daemon-reload
+systemctl --user enable schedules-check.timer >/dev/null 2>&1 || { log ERROR "could not enable schedules-check.timer"; exit 1; }
+systemctl --user restart schedules-check.timer || { log ERROR "could not start schedules-check.timer; see: journalctl --user -u schedules-check.timer"; exit 1; }
+systemctl --user is-active --quiet schedules-check.timer || { log ERROR "schedules-check.timer is not active after the restart"; exit 1; }
+log INFO "loaded schedules-check.timer (daily 08:30 UTC; journalctl --user -u schedules-check)"
+{{- else }}
+# schedulesCheck.enabled is false: .chezmoiignore leaves the units alone, so this script stops the timer, then removes both units.
+# A failed stop fails the apply and keeps the units, so the next apply runs this again.
+systemctl --user disable --now schedules-check.timer >/dev/null 2>&1 || :
+if systemctl --user is-active --quiet schedules-check.timer; then
+  log ERROR "could not stop schedules-check.timer; try: systemctl --user disable --now schedules-check.timer, then chezmoi apply again"
+  exit 1
+fi
+rm -f "$dir/schedules-check.service" "$dir/schedules-check.timer"
+systemctl --user daemon-reload
+log INFO "schedulesCheck.enabled is false: schedules-check.timer is stopped and its units removed"
+{{- end }}

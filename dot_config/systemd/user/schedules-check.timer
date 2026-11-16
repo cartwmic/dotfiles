@@ -1,0 +1,10 @@
+# Starts schedules-check.service once a day at 08:30 UTC. Persistent: a run missed while the machine was off happens at the next start.
+[Unit]
+Description=schedules-check daily run
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
