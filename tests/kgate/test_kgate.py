@@ -242,13 +242,20 @@ class PodSpec(unittest.TestCase):
         pod, _ = self.pod(ephemeral="1Gi", ephemeral_limit="2Gi")
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["limits"], {"memory": "6Gi", "ephemeral-storage": "2Gi"})
 
+    def test_the_pod_runs_in_the_kgate_priority_class_and_only_on_the_homelab(self):
+        # A PriorityClass orders scheduling, preemption and eviction: below every app and system pod (homelab `k8s/kgate/priorityclass.yaml`, -100, preemptionPolicy Never).
+        # It gives the pod no CPU share at run time. The kubectl cluster's own policy decides its pods' class.
+        pod, _ = self.pod()
+        self.assertEqual(pod["spec"].get("priorityClassName"), "kgate")
+        self.assertEqual(K.PRIORITY_CLASS, "kgate")
+
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi")
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate")
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "25754695a6632559670764ecdae9dbb462ae1de6b86811afd981aac73a365b61"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "da6cb6e2c3c4deae6c245415ab3a3774d8cbeb08e53a36f77c65d660c7fe21db"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "3601ffc42122ee8fc5ad6cea9a3130da4b7bdf8b5bb02e9ee9e909a48b67c119"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "4099eaf8064d51bce22677bb8711692a22494ca7f0d8b76c27d1edb9e21eb3c7"),
+             "82325df3b64380ec1b1f67a731a07a8d656b4a938c53a6a2183cd6d3bc568634"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "9f907d48a21f710cdb8368fc3c764946f74b732b5e62cea32494a8458b9502bd"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -2163,7 +2170,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "25754695a6632559670764ecdae9dbb462ae1de6b86811afd981aac73a365b61"  # the same pin as test_default_render_is_byte_identical
+        want = "da6cb6e2c3c4deae6c245415ab3a3774d8cbeb08e53a36f77c65d660c7fe21db"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 

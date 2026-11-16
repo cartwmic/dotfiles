@@ -130,6 +130,12 @@ Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch,
 
 **The limit.** `Unschedulable` means no node can take the pod now. It does not say that no node ever could. A profile bigger than every node gets the same prefix, with `Insufficient memory` or `Insufficient cpu` in the scheduler message, and so does a `--node` that matches no node. The reason alone cannot separate those cases from a full cluster, so the caller's fit check does.
 
+## Priority
+
+Every homelab pod runs in the `kgate` PriorityClass (`PRIORITY_CLASS` in the client; the class is in the homelab repo, `k8s/kgate/priorityclass.yaml`: value -100, `preemptionPolicy: Never`, not the global default). It is below every app and system pod, so an app pod that cannot be placed may preempt a running job, and a job's pod is evicted first under node pressure. A preempted job ends like any lost pod: exit 69, `lost the pod before CMD finished; the result is unknown and the job is not rerun`, and the cluster's `Preempted` event on the pod says why. A job pod never preempts anything. The class changes scheduling, preemption and eviction order only: it does **not** change a pod's CPU share at run time, and jobs still have no CPU limit. A second cluster's pods (`cluster = "<name>"`) set no class; that cluster's own policy decides.
+
+The class must exist before a client that names it runs: a pod that names a missing class is refused at creation (`no PriorityClass with name kgate was found`), so every job exits 69 with that message. Apply the homelab repo first.
+
 ## How many jobs at once
 
 Measured on 2026-11-06 from one day's node requests (`kubectl describe node`) and Prometheus. Re-measure when the coordinator's journey tests move to kgate. The scheduler places pods by their requests, not by real use: real CPU use was 5 to 12%.

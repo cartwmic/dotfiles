@@ -96,6 +96,9 @@ KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
 # so it takes kgate jobs only as overflow: eligible, but it scores lowest. 2026-11-08, Michael, ask 742.
 NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker")
 OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
+# The homelab pod's PriorityClass (homelab repo `k8s/kgate/priorityclass.yaml`, value -100, preemptionPolicy Never): below every app and system pod, so a pending app pod
+# may preempt a job and a kgate pod never preempts anything. It orders scheduling, preemption and eviction only; it gives a pod no CPU share at run time.
+PRIORITY_CLASS = "kgate"
 # The G14 runs the same gate about twice as fast (unit gate median 237 s against about 500 s on the agents) and was Ready 100% of
 # the last 20 days, so jobs go there first. If it is down, NotReady or full, the preference does not apply and the pod goes to an
 # agent. A pinned --node ignores it, and a profile with prefer_nodes = false (the coordinator journeys) leaves it out. 2026-11-08, Michael,
@@ -476,7 +479,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
              {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(NEVER_NODES)}]
     if node:
         match = [match[0], {"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]
-    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S,
+    pod = {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1, "activeDeadlineSeconds": MAX_RUN_S, "priorityClassName": PRIORITY_CLASS,
            "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
                "nodeSelectorTerms": [{"matchExpressions": match}]},
                "preferredDuringSchedulingIgnoredDuringExecution": (
