@@ -1,0 +1,7 @@
+{{- $home := .chezmoi.homeDir | replace "%" "%%" -}}
+# Drop-in for coordinatord.service, the coordinator daemon's unit. The unit is the template dot_local/share/instances/systemd/coordinatord.service.tmpl
+# (installed by instances_reconcile_systemd.sh), or a hand-written copy on a host it has not replaced; this drop-in applies to either.
+# It sets the unit's whole PATH: the template's entries with the gh wrapper's bin directory first. tests/instances/test_systemd.py checks the rest equals the template's PATH.
+[Service]
+# The gh wrapper's bin directory comes first, so gh calls from the daemon reach the wrapper before the real gh.
+Environment=PATH={{ $home }}/.local/share/gh-wrapper/bin:{{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin
