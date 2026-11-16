@@ -599,7 +599,8 @@ CREDENTIAL_READ = (
     "`%s` on credential config (%s) is refused in agent sessions: it prints the secret values into the transcript, and a line regex does not "
     "make that safe (it misses a renamed key, a wrapped value or the next field). Print the structure with every value masked: `" + CONFIG_SHOW + " FILE`; "
     "add `--show KEY` for a key you know is safe to show (`--show options.view_style`), `--format toml|ini|json|yaml|env` if the name "
-    "does not say the format. A check that needs no value (`grep -l`, `grep -c`, `ls`, `stat`) is fine."
+    "does not say the format. A check that needs no value (`grep -l`, `grep -c`, `ls`, `stat`) is fine. To compare two configs, diff their "
+    "`config-show` outputs."
 )
 CREDENTIAL_REDACT = (
     "A regex that redacts secrets line by line (`%s`) is refused in agent sessions: it hides only the keys it names, and a miss prints the "
@@ -629,6 +630,84 @@ MASK_WORD = re.compile(r"<[^<>\s]*>|\*{3,}|redact|hidden|mask|x{3,}|\.\.\.|remov
 SED_SUBST = re.compile(r"(?:^|[;{\s])s([/|#,:@!%])((?:\\.|(?!\1).)+)\1((?:\\.|(?!\1).)*)\1[a-zA-Z]*")
 AWK_SUBST = re.compile(r"\bg?sub\(\s*/((?:\\.|[^/])+)/\s*,\s*([\"'])(.*?)\2")
 PS_REPLACE = re.compile(r"(?:get-content|\bgc\b|select-string|\btype\b|\bcat\b)[^\n]*?-i?replace\s+(['\"])((?:(?!\1).)*)\1\s*,\s*(['\"])((?:(?!\3).)*)\3", re.I)
+
+
+# Which words of a reader are files it reads. A search pattern (grep, rg), a filter (jq, yq) or a script (sed, awk) is not a file, and a `>`
+# or `>>` target is written, not read; a `<` input is read.
+OUT_REDIRECT = re.compile(r"(?:\d*|&)>>?\|?$|\d*>&$")  # `>`, `>>`, `2>`, `&>`, `>|`: the next word is the target
+OUT_ATTACHED = re.compile(r"(?:\d*|&)>")               # `>f`, `2>/dev/null`, `2>&1`, `&>f`: the target is in the word
+# command -> (letters of short options that take the next word as a value, long options that do, how many words each long one takes,
+#             short and long options that supply the pattern or script, so every operand is a file)
+SCRIPT_FIRST = {
+    "grep": ("efmABCdD", {"--regexp": 1, "--file": 1, "--max-count": 1, "--after-context": 1, "--before-context": 1, "--context": 1, "--include": 1,
+                          "--exclude": 1, "--exclude-dir": 1, "--exclude-from": 1, "--label": 1}, "ef", {"--regexp", "--file"}),
+    "rg": ("efgtTmABCjMrEd", {"--regexp": 1, "--file": 1, "--glob": 1, "--iglob": 1, "--type": 1, "--type-not": 1, "--max-count": 1,
+                              "--replace": 1, "--threads": 1, "--max-columns": 1, "--max-depth": 1, "--sort": 1, "--sortr": 1, "--context": 1,
+                              "--after-context": 1, "--before-context": 1}, "ef", {"--regexp", "--file"}),
+    "sed": ("efl", {"--expression": 1, "--file": 1, "--line-length": 1}, "ef", {"--expression", "--file"}),
+    "awk": ("fvF", {"--file": 1, "--assign": 1, "--field-separator": 1}, "f", {"--file"}),
+    "jq": ("fL", {"--arg": 2, "--argjson": 2, "--slurpfile": 2, "--rawfile": 2, "--from-file": 1, "--indent": 1}, "f", {"--from-file"}),
+    "yq": ("poIf", {"--input-format": 1, "--output-format": 1, "--indent": 1, "--from-file": 1}, "f", {"--from-file"}),
+}
+for _alias, _name in (("egrep", "grep"), ("fgrep", "grep"), ("ag", "grep"), ("ack", "grep"), ("gawk", "awk"), ("mawk", "awk"), ("tomlq", "jq"),
+                      ("xq", "jq")):
+    SCRIPT_FIRST[_alias] = SCRIPT_FIRST[_name]
+
+
+def _redirects(args):
+    """(the words that are not redirects, the `<` inputs) of a command's arguments: an output target is dropped, an input kept."""
+    operands, inputs, i = [], [], 0
+    while i < len(args):
+        word = args[i]
+        if OUT_REDIRECT.match(word):
+            i += 2
+        elif OUT_ATTACHED.match(word):
+            i += 1
+        elif word == "<":
+            if i + 1 < len(args) and not args[i + 1].startswith("<"):
+                inputs.append(args[i + 1])
+                i += 1
+            i += 1
+        elif word.startswith("<<"):
+            i += 1
+        elif word.startswith("<"):
+            inputs.append(word[1:])
+            i += 1
+        else:
+            operands.append(word)
+            i += 1
+    return operands, inputs
+
+
+def _files_read(name, args):
+    """The words of `name args` that name files it reads (a `<` input included), leaving out the pattern, filter or script and `>` targets."""
+    operands, inputs = _redirects(args)
+    spec = SCRIPT_FIRST.get(name)
+    if spec is None:
+        return operands + inputs
+    letters, long_values, supplies, long_supplies = spec
+    positional, supplied, i = [], False, 0
+    while i < len(operands):
+        word = operands[i]
+        i += 1
+        if word == "--":
+            positional += operands[i:]
+            break
+        if word.startswith("--"):
+            flag = word.split("=", 1)[0]
+            supplied = supplied or flag in long_supplies
+            if "=" not in word:
+                i += long_values.get(flag, 0)
+        elif word.startswith("-") and word != "-":
+            for k, letter in enumerate(word[1:]):
+                if letter in letters:
+                    supplied = supplied or letter in supplies
+                    if k == len(word) - 2:  # the value is the next word; otherwise it is attached (`-A3`)
+                        i += 1
+                    break
+        else:
+            positional.append(word)
+    return (positional if supplied else positional[1:]) + inputs
 
 
 def _credential_path(word, cwd):
@@ -675,7 +754,7 @@ def credential_rule(walk, ctx):
         if name not in CREDENTIAL_READERS:
             continue
         args = cmd.words[1:]
-        paths = [p for p in (_credential_path(a, cmd.cwd) for a in args) if p]
+        paths = [p for p in (_credential_path(a, cmd.cwd) for a in _files_read(name, args)) if p]
         if paths and _prints_value(name, args):
             return CREDENTIAL_READ % (name, os.path.basename(paths[0].rstrip("/")) or paths[0])
     for cmd in walk.cmds:

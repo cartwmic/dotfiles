@@ -740,6 +740,10 @@ class Credential(unittest.TestCase):
         "sudo cat ~/.config/rustdesk/RustDesk.toml", "timeout 5 cat ~/.config/rustdesk/RustDesk.toml", "sh -c 'cat ~/.config/rustdesk/RustDesk.toml'",
         "echo $(cat ~/.config/rustdesk/RustDesk.toml)", "find ~ -name x -exec cat ~/.netrc {} \\;",
         "grep -rn password ~/.config/rclone", "grep -v '^#' ~/.config/rclone/rclone.conf",
+        # the pattern is skipped, the files after it still count; a `<` input counts; an -e pattern leaves every word a file
+        "grep -rn token .env", "grep -e token -e key .env", "grep -A3 token ~/.netrc", "rg -g '*.toml' key ~/.config/rustdesk",
+        "jq .x ~/.config/gh/hosts.yml", "jq --arg a b .x secrets.json", "grep token < .env", "cat <.env", "sed 's/a/b/' < ~/.netrc",
+        "cat foo > out.txt .env", "diff .env.example .env", "cat -- .env",
         # a regex redaction of secret words, on any input
         "cat app.log | sed -E 's/(token|password)=[^ ]*/\\1=<hidden>/g'",
         "env | sed 's/\\(.*KEY.*=\\).*/\\1***/'",
@@ -761,6 +765,13 @@ class Credential(unittest.TestCase):
         "sed 's/foo/bar/' ~/git/x/config.toml", "sed -E 's/token/TOKEN/' notes.txt", "sed 's/password/passphrase/' doc.md",
         "cat > pr.md <<'EOF'\nrefused: sed 's/password/<hidden>/' ~/.config/rustdesk/RustDesk.toml\nEOF",
         "echo cat ~/.config/rustdesk/RustDesk.toml", "grep pkill ~/git/notes.md",
+        # a search pattern, filter or script that names a credential file is not a file read (review round 1, f1)
+        "grep -rn '\\.env' src/", "grep -rn rclone.conf docs/", "rg RustDesk.toml ~/notes", "jq .env package.json",
+        "grep -rn 'credentials.json' .", "grep -n -e .netrc README.md", "rg -g '*.env' token src/", "sed -n '/.env/p' notes.md",
+        "awk '/rclone.conf/' notes.md", "yq .env.example config.yaml", "grep -rn -A3 .pgpass docs/", "jq --arg f .env '.x' package.json",
+        # a `>` or `>>` target is written, not read (f2)
+        "cat > .env <<'EOF'\nA=1\nEOF", "cat foo.txt > .env", "cat > ~/.netrc", "cat foo >> .env", "cat foo >.env", "cat foo 2>/dev/null >> ~/.netrc",
+        "cat foo &> ~/.config/rclone/rclone.conf", "cat <<'EOF' >.env\nA=1\nEOF", "echo hi | tee .env", "sed 's/a/b/' in.txt > ~/.config/rclone/rclone.conf",
     ]
 
     def test_refused_shapes_name_the_reader_on_every_profile(self):
@@ -777,6 +788,9 @@ class Credential(unittest.TestCase):
             for text in self.ALLOWED:
                 with self.subTest(profile=profile, text=text):
                     self.assertIsNone(check(text, profile=profile, env={"HOME": "/home/u"}))
+
+    def test_the_refusal_suggests_diffing_two_reader_outputs(self):
+        self.assertIn("diff their `config-show` outputs", check("diff .env.example .env", env={"HOME": "/home/u"}))
 
     def test_the_read_refusal_names_the_file_and_the_show_flag(self):
         message = check("cat ~/.config/rustdesk/RustDesk.toml", env={"HOME": "/home/u"})
