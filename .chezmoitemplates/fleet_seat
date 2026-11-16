@@ -40,4 +40,9 @@
 {{-     if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
 {{-   end -}}
 {{- end -}}
-{{- dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" true "skillOverrides" $off | toPrettyJson }}
+{{- $seatFile := dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" true "skillOverrides" $off -}}
+{{- /* Builder only: a Stop hook that refuses to stop while a run-and-wake or kgate job this thread started still runs (hooks/stop_running_jobs.py; Retro proposal 12, playbook rule 19e13f7b). It fails open: a missing script or python3 allows the stop. */ -}}
+{{- if eq .seat "builder" -}}
+{{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" `g="$HOME/.local/share/agent-harness/hooks/stop_running_jobs.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0`))))) -}}
+{{- end -}}
+{{- $seatFile | toPrettyJson }}

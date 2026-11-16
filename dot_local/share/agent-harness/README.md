@@ -12,6 +12,7 @@ dot_local/share/agent-harness/
   reviewer-examples.md   # twelve real cases (seven blocking, five notes) for calibrating the bar
   hooks/
     refuse_pattern_kill.py   # the pkill/killall classifier that Claude's hook, Codex's hook and Pi's extension run (see "Pattern-kill guard")
+    stop_running_jobs.py     # the builder seat's Stop hook: refuses to stop while a run-and-wake or kgate job this thread started still runs (see "Builder Stop hook")
     bash_rules.py            # the seven extra refusals it calls: sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout
     profile                  # rendered from profile.tmpl: just the chezmoi profile name, read by bash_rules
   canonical/
@@ -207,6 +208,20 @@ What is not covered (each is named in the code or the tests):
 
 Tests: `tests/agent-kill-guard` (classifier, `test_bash_rules.py`, `run_fixture.py` with recorded tool calls in `fixtures/`, Claude settings on both profiles, the Codex hook block and its trust step against a real `codex app-server`, Codex rules with Codex's own `execpolicy check`, deploy per profile) and
 `node --test dot_pi/private_agent/extensions/refuse-pattern-kill/index.test.ts`. Proof in a real session of each harness: the PR description.
+
+## Builder Stop hook
+
+A builder started a run-and-wake or kgate job, ended its session and handed off while the job still ran, so nobody read the result (Retro proposal 12, playbook rule 19e13f7b; alert-steward builders A and B1). The builder seat now refuses to stop while such a job is running.
+
+| Piece | Source | Lands at |
+|---|---|---|
+| Stop hook entry, builder seat file only | `.chezmoitemplates/fleet_seat` (`seat-builder.json.tmpl` calls it) | `~/.claude/fleet/seat-builder.json`, read when a builder session starts |
+| The check | `dot_local/share/agent-harness/hooks/stop_running_jobs.py` | `~/.local/share/agent-harness/hooks/` |
+| The job's thread, recorded by kgate | `dot_local/bin/executable_kgate.tmpl` (`thread` in the `active/<id>.json` entry) | `~/.local/bin/kgate` |
+
+How it decides: the hook exits 2 (Claude keeps going and is told why) when a job whose recorded thread equals `T3CODE_THREAD_ID` is still running. It names each job, the command, a no-poll way to wait (`tail --pid=<pid> -f /dev/null` in a background Bash call, then `t3_background_wait`) and where the result is. Sources: run-and-wake's `start` record already holds `thread`; the job counts while there is no `end` record, the boot is the same, the pid is alive and (Linux) the process carries `RUN_AND_WAKE_JOB=<job>`, so a recycled pid is not taken for it. kgate's registry had no thread, so `kgate` now writes `thread` in the entry (the smallest change; run-and-wake's wrapper and kgate's own client both inherit `T3CODE_THREAD_ID`); a kgate job counts while its client pid still has the entry's start time and command in the same pid namespace, the check `kgate cancel` uses. A kgate job run under run-and-wake is listed once, as the run-and-wake job. Another thread's jobs, ended jobs, jobs whose process is gone and entries written before the field existed never block. With no `T3CODE_THREAD_ID` (not a T3 session) or any read error it allows the stop. The unit tests are `tests/stop-running-jobs`.
+
+Profiles: the file and the hook land on both desktop profiles (the seat files do, `docs/profiles.md`), but only a T3 builder session reads the seat file, and the work profile has no T3 settings from this source, so it takes effect on personal. A new builder session picks it up. A job started before the kgate change (no `thread` in its entry) is not counted.
 
 ## Agent browser
 

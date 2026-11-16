@@ -831,7 +831,8 @@ class FleetFilesTest(unittest.TestCase):
             try:
                 for seat, keep in KEEP.items():
                     f = self.render(env, "seat-%s.json" % seat)
-                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"}, (profile, seat))
+                    # the builder seat also carries its Stop hook (tests/stop-running-jobs)
+                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat == "builder" else set()), (profile, seat))
                     self.assertEqual(f["permissions"], {"deny": ["Artifact"]})
                     self.assertIs(f["syncClaudeAiSkills"], False)
                     self.assertIs(f["disableBundledSkills"], True)
