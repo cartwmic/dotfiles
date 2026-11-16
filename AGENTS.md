@@ -140,6 +140,8 @@ After `chezmoi apply`, prove it with `~/.local/user_scripts/verify_dotfiles.sh` 
 always exits 1 because the run_after scripts are always pending. The apply also refreshes the response-visibility git extension
 before patching; see the "Extension refresh and verify" section of `dot_local/share/pi-patches/README.md`.
 
+- Before rebooting any cluster node (omarchy included), drain it: `kubectl drain <node> --ignore-daemonsets --delete-emptydir-data`, then `kubectl uncordon <node>` once it is Ready again. A reboot without a drain leaves single-copy apps (for example cliproxyapi) down while their volume moves. This covers both the `personal` and `axon-work-computer` profiles; the work profile has no cluster nodes, so the rule does nothing there.
+
 OpenSpec/`opsx` is retired; do not revive it. Do not write ADRs. Put current
 product/design guidance in the relevant component README and agent procedure
 in its scoped guide; follow the task-specific skill for workflow artifacts.
