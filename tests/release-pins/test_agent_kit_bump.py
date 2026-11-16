@@ -35,6 +35,8 @@ import json, os, subprocess, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_CALL_LOG"], "a") as log:
     log.write("gh " + " ".join(args) + "\n")
+with open(os.environ["FAKE_GH_ENV_LOG"], "a") as env_log:  # what each gh call's environment said: the urgency test reads it
+    env_log.write(json.dumps({"args": args, "urgent": os.environ.get("GH_URGENT"), "caller": os.environ.get("GH_CALLER")}) + "\n")
 state_path = os.environ["FAKE_GH_STATE"]
 state = json.load(open(state_path)) if os.path.exists(state_path) else {"prs": [], "checks": [[{"name": "tests", "bucket": "pass"}]]}
 origin = os.environ["FAKE_ORIGIN"]
@@ -152,6 +154,7 @@ class AgentKitBumpTests(unittest.TestCase):
         return {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.home),
                 "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_CACHE_HOME": str(self.home / ".cache"),
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_CALL_LOG": str(self.call_log),
+                "FAKE_GH_ENV_LOG": str(self.dir / "gh-env.jsonl"),
                 "FAKE_GH_STATE": str(self.gh_state), "FAKE_ORIGIN": str(self.origin), "FAKE_GATE_REFUSE": self.refuse,
                 "FAKE_NPM_INSTALLS": self.npm_installs, "NODE_AUTH_TOKEN": "fake-token",
                 "AGENT_KIT_BUMP_POLL_SECONDS": "0", "TMPDIR": str(self.dir), **self.git_env}
@@ -211,6 +214,18 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertIn(text, result.stderr)
         self.assertEqual(self.log_lines()[-1]["step"], step)
         self.assertEqual(self.log_lines()[-1]["outcome"], "stopped")
+
+    def test_every_gh_call_of_a_bump_is_urgent_and_names_the_script(self):
+        # Reads too (pr list, pr checks, pr view), not only the merge: the gh budget guard never refuses a GH_URGENT=1
+        # call, and GH_CALLER names the script in the gh wrapper's log.
+        self.world()
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in (self.dir / "gh-env.jsonl").read_text(encoding="utf-8").splitlines()]
+        verbs = {tuple(c["args"][:2]) for c in calls}
+        for verb in (("pr", "list"), ("pr", "checks"), ("pr", "create"), ("pr", "view"), ("pr", "merge")):
+            self.assertIn(verb, verbs)
+        self.assertEqual({(c["urgent"], c["caller"]) for c in calls}, {("1", "agent_kit_bump")})
 
     def test_happy_path_checks_then_gates_then_merge_then_only_the_pins_applied_and_installed(self):
         self.world()
