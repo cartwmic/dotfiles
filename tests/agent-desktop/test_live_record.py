@@ -155,6 +155,11 @@ class Accepts(Case):
         line = self.assert_accepted(self.run_check("mac-mini", out))
         self.assertEqual(line, "device=mac-mini score=14/14 pass=%s fail=-" % ",".join(ROWS))
 
+    def test_work_mac_good_record_is_judged_like_a_mac(self):
+        out = self.make_record("work-mac")
+        line = self.assert_accepted(self.run_check("work-mac", out))
+        self.assertEqual(line, "device=work-mac score=14/14 pass=%s fail=-" % ",".join(ROWS))
+
     def test_g14_good_record(self):
         out = self.make_record("g14")
         line = self.assert_accepted(self.run_check("g14", out))
@@ -332,6 +337,23 @@ class Rejects(Case):
         self.edit(out, lambda rec: self.row_of(rec, "N2").update(status="not_offered"))
         self.assert_rejected(self.run_check("mac-mini", out), "required row N2")
 
+    def test_work_mac_row_marked_not_offered(self):
+        out = self.make_record("work-mac")
+        self.edit(out, lambda rec: self.row_of(rec, "N2").update(status="not_offered"))
+        self.assert_rejected(self.run_check("work-mac", out), "required row N2")
+
+    def test_work_mac_failing_required_row(self):
+        out = self.make_record("work-mac")
+
+        def f(rec):
+            self.row_of(rec, "J5").update(status="fail", error="a 7 on the calculator display")
+        self.edit(out, f)
+        self.assert_rejected(self.run_check("work-mac", out), "required row J5", "a 7 on the calculator display")
+
+    def test_a_mac_mini_record_is_not_a_work_mac_record(self):
+        out = self.make_record("mac-mini")
+        self.assert_rejected(self.run_check("work-mac", out), "mac-mini")
+
     def test_old_tree_without_windows_files_rejects_a_g14_record(self):
         # c13 'old: fails': the old tree has no windows/ folder.
         out = self.make_record("g14")
@@ -368,6 +390,9 @@ class Sources(Case):
                 "run_onchange_after_66_agent_desktop_macos.sh.tmpl",
             ]),
         )
+
+    def test_work_mac_is_bound_to_the_same_files_as_the_mac_mini(self):
+        self.assertEqual(self.digest("work-mac"), dict(self.digest("mac-mini"), device="work-mac"))
 
     def test_g14_files(self):
         d = self.digest("g14")
@@ -481,10 +506,26 @@ class DryRun(unittest.TestCase):
         return r.stdout
 
     def test_every_device_plans_all_fourteen_rows(self):
-        for device in ("omarchy", "mac-mini", "g14"):
+        for device in ("omarchy", "mac-mini", "work-mac", "g14"):
             text = self.run_dry(device)
             for rid in ROWS:
                 self.assertRegex(text, r"(?m)^row %s\b" % rid, "%s: %s" % (device, rid))
+
+    def test_work_mac_plan_runs_here_with_no_ssh_and_no_copy_and_checks_it_is_a_mac(self):
+        text = self.run_dry("work-mac")
+        self.assertIn("no ssh, no copy", text)
+        self.assertNotIn("ssh mac-mini", text)
+        self.assertRegex(text, r"(?m)^  this machine is a Mac \(uname -s is Darwin\): (ok|MISSING)$")
+
+    @unittest.skipIf(sys.platform == "darwin", "this test is about a machine that is not a Mac")
+    def test_work_mac_run_on_a_machine_that_is_not_a_mac_stops_before_doing_anything(self):
+        out = Path(tempfile.mkdtemp(prefix="live-notmac-"))
+        self.addCleanup(shutil.rmtree, out, True)
+        r = subprocess.run([sys.executable, "-I", str(HERE / "live_run.py"), "work-mac", "--out", str(out / "proof")],
+                           capture_output=True, text=True, timeout=60, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("precondition this machine is a Mac (uname -s is Darwin): MISSING", r.stdout)
+        self.assertEqual([p.name for p in (out / "proof").iterdir()], [], "nothing is run or saved when the precondition is missing")
 
     def test_g14_plan_has_the_locked_screen_check_before_the_rows(self):
         text = self.run_dry("g14")

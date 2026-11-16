@@ -2,7 +2,8 @@
 """Live proof driver for agent-desktop: prepares one device, runs the 14 rows through the real path, saves a record.
 
 usage: live_run.py DEVICE [--out DIR] [--dry-run] [--only J2,J8] [--phase all|prepare|rows] [--unlock-timeout SECS]
-  DEVICE   omarchy (this machine) | mac-mini (ssh mac-mini) | g14 (ssh mac-mini, then ssh to the G14)
+  DEVICE   omarchy (this machine) | mac-mini (ssh mac-mini) | work-mac (the Mac this runs on: no ssh, no copy) |
+           g14 (ssh mac-mini, then ssh to the G14)
   --dry-run  print the plan and the preconditions; change nothing, write nothing (safe on Omarchy)
   --only     run just these rows, print the results, write record.partial.json; no install, no record
   --phase    g14 only. prepare = install, install again, read settings, locked-screen check. rows = wait for the
@@ -17,7 +18,9 @@ is used for the N rows and to read results back. Waits end on a fact (a window a
 timeout; there is no fixed sleep and no retry wrapper: a failed row is recorded with its error. The only repeat is N3 (the
 row itself is "N2 three times").
 
-Device preconditions (INTENT-NOTES.md section 4): Omarchy has a Hyprland session with wlrctl, wtype, grim and foot. The Mac
+Device preconditions (INTENT-NOTES.md section 4): Omarchy has a Hyprland session with wlrctl, wtype, grim and foot. The work
+Mac is the machine this is started on: it runs the same rows as the Mac mini, in place, from a terminal that holds Screen Recording
+and Accessibility (its ssh is off, and the work profile leaves out the kitty helper). The Mac
 mini has the console user logged in and kitty holding Screen & System Audio Recording and Accessibility; calls over ssh run in the
 kitty helper (agent-desktop-relay), which the install step and its login item start. The G14 is
 unlocked for the rows phase (an ask each time); the prepare phase and the locked-screen check need it locked.
@@ -152,27 +155,20 @@ def elements(env):
     return out
 
 
-def native_values(env):
-    """Values a control carries in its native id, e.g. the Mac Calculator display `StandardInputView;value:408`.
-    After an equals the display's text child is gone and the number is only here."""
-    out = []
-
-    def one(n):
-        nid = n.get("native_id")
-        v = nid.get("value") if isinstance(nid, dict) else None
-        m = re.search(r";value:(.*)$", v) if isinstance(v, str) else None
-        if m:
-            out.append(m.group(1))
-
-    walk(((env or {}).get("data") or {}).get("tree"), one)
-    return out
-
-
 def texts(env):
+    """Every name and value in a snapshot, whatever the node is (buttons too). Not for reading a display on a Mac: see statictext_values."""
     out = []
     tree = ((env or {}).get("data") or {}).get("tree")
     walk(tree, lambda n: out.extend(str(n[k]) for k in ("name", "value") if n.get(k) is not None))
-    return out + native_values(env)
+    return out
+
+
+def statictext_values(env):
+    """The values of the static text nodes of a snapshot, in tree order. A button's name is never one of them."""
+    out = []
+    tree = ((env or {}).get("data") or {}).get("tree")
+    walk(tree, lambda n: out.append(str(n["value"]).strip()) if n.get("role") == "statictext" and n.get("value") is not None else None)
+    return out
 
 
 def find_box(obj):
@@ -297,6 +293,20 @@ class MacMini(Device):
         return [("ssh mac-mini reachable", r.exit == 0 and "Darwin" in r.out)]
 
 
+class WorkMac(MacMini):
+    """The Mac this driver is started on (the work Mac has ssh off): every command runs here, in place, with no ssh and no copy.
+    Judged like a Mac: the same 14 rows as the Mac mini."""
+    name = "work-mac"
+
+    def sh(self, cmd, timeout=60, stdin=None):
+        full = 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"; ' + cmd
+        return self.raw(["sh", "-c", full], stdin=stdin, timeout=timeout)
+
+    def preflight(self):
+        r = self.sh("uname -s", timeout=30)
+        return [("this machine is a Mac (uname -s is Darwin)", r.exit == 0 and "Darwin" in r.out)]
+
+
 class G14(Device):
     """ssh lands in session 0 with cmd.exe as the shell. Anything that must see the desktop runs in a one-shot
     interactive scheduled task (session 1) that this driver creates and deletes itself; it is not the product's task."""
@@ -359,7 +369,9 @@ class G14(Device):
         return [("ssh mac-mini then the G14 reachable", "g14-ok" in r.out)]
 
 
-DEVICES = {"omarchy": Omarchy, "mac-mini": MacMini, "g14": G14}
+DEVICES = {"omarchy": Omarchy, "mac-mini": MacMini, "work-mac": WorkMac, "g14": G14}
+MACS = ("mac-mini", "work-mac")
+LOCAL = ("omarchy", "work-mac")  # devices this driver runs on itself, so a dry run may read their preconditions
 
 
 # ------------------------------------------------------------------ recorder: one command = one saved file
@@ -563,7 +575,7 @@ def omarchy_cleanup(rec):
 # ------------------------------------------------------------------ Mac mini and G14 rows
 def desktop_hooks(dev):
     """Per-device pieces the shared Mac/Windows rows need."""
-    if dev.name == "mac-mini":
+    if dev.name in MACS:
         return dict(
             calc="Calculator", calc_app="Calculator", editor="TextEdit",
             calc_names={"clear": ["All Clear", "Clear", "AC"], "1": ["1"], "2": ["2"], "3": ["3"], "4": ["4"], "7": ["7"], "*": ["Multiply"], "=": ["Equals"]},
@@ -630,13 +642,18 @@ def desktop_rows(rec, dev):
         return any(text.lower() in ln.lower() for ln in windows()[1:])
 
     def foreground():
-        if not win:
-            r = rec.ui("focused window", "list-windows", save=False)
-            data = (r.env or {}).get("data") or []
-            return " ".join("%s %s" % (w.get("app_name", ""), w.get("title", "")) for w in data if w.get("is_focused"))
+        """The app in front, read from the system and not from the tool under test: the frontmost application (NSWorkspace) on a
+        Mac, the foreground window's title on Windows. (`ui list-windows` is_focused is not used: Calculator never sets it.)"""
         if win:
             return dev.s1(NATIVE_PS + "$s = New-Object Text.StringBuilder 256; [void][RadW]::GetWindowText([RadW]::GetForegroundWindow(), $s, 256); $s.ToString()").out.strip()
-        return dev.sh("osascript -e 'tell application \"System Events\" to get name of first application process whose frontmost is true'").out.strip()
+        return dev.sh("osascript -l JavaScript -e 'ObjC.import(\"AppKit\"); ObjC.unwrap($.NSWorkspace.sharedWorkspace.frontmostApplication.localizedName)'").out.strip()
+
+    def focus_front(rec, name):
+        """`focus NAME`, then wait until the system reports that app in front. `focus` only asks the app to come forward: a click or
+        a key sent before it is in front goes to whatever is in front still. Returns what the system reported."""
+        r = rec.ad("focus " + name, "focus", name)
+        expect(r.exit == 0, "focus %s exited %d: %s" % (name, r.exit, r.out.strip()[:200]))
+        return wait_for("%s to be the foreground window" % name, lambda: (lambda v: v if name.lower() in v.lower() else None)(foreground()), timeout=20)
 
     def pointer():
         if win:
@@ -732,20 +749,24 @@ def desktop_rows(rec, dev):
                 return n["ref_id"]
         raise Fail("no calculator control named %s in the snapshot" % "/".join(names))
 
-    def display(env):
-        return " | ".join(texts(env))
+    def calc_display(label="read display", save=True):
+        """What the calculator display shows now, e.g. '12 × 34 | 408' on a Mac. A Mac snapshot taken with -i leaves the display's text
+        out, so it is read from one taken without -i; and only from static text nodes, so a button named "7" is never the display.
+        Windows keeps its -i snapshot, where the display is the text 'Display is X'."""
+        r = snapshot_app(label, ["--app", hk["calc_app"]], "Calculator", save=save, interactive=win)
+        expect(r.exit == 0 and r.env and r.env.get("ok") is not False, "calculator snapshot failed (exit %d): %s" % (r.exit, r.out.strip()[:200]))
+        return " | ".join(texts(r.env) if win else statictext_values(r.env))
 
-    def display_value(env):
-        """The calculator's main display: 'Display is X' on Windows, the first static text value on the Mac."""
-        for t in texts(env):
+    def display_value(shown):
+        """The calculator's main display out of calc_display(): 'Display is X' on Windows, the first static text on a Mac."""
+        for t in shown.split(" | "):
             m = re.match(r"Display is (.*)$", t)
             if m:
                 return m.group(1).strip()
-        vals = []
-        walk(((env or {}).get("data") or {}).get("tree"), lambda n: vals.append(str(n["value"])) if n.get("role") == "statictext" and n.get("value") is not None else None)
-        if not vals:
-            vals = native_values(env)
-        return vals[0].strip() if vals else ""
+        return shown.split(" | ")[0].strip()
+
+    def shows(shown, number):
+        return re.search(r"(^|\D)%s(\D|$)" % re.escape(number), shown) is not None
 
     def ensure_apps(rec):
         if win:
@@ -757,15 +778,16 @@ def desktop_rows(rec, dev):
         if not has_window(hk["editor"]):
             open_editor()
 
-    def snapshot_app(label, extra, hint, save=True):
+    def snapshot_app(label, extra, hint, save=True, interactive=True):
         """snapshot --app NAME; when the tool cannot name the app (hosted windows), snapshot the window by id."""
-        r = rec.ui(label, "snapshot", *extra, "-i", "--compact", save=save)
+        flags = ["-i", "--compact"] if interactive else []
+        r = rec.ui(label, "snapshot", *extra, *flags, save=save)
         if r.exit == 0 and r.env and r.env.get("ok") is not False:
             return r
         lw = rec.ui("list windows for " + hint, "list-windows", save=save)
         wid = next((w.get("id") for w in ((lw.env or {}).get("data") or []) if hint.lower() in ("%s %s" % (w.get("app_name", ""), w.get("title", ""))).lower()), None)
         if wid:
-            return rec.ui(label + " by window id", "snapshot", "--window-id", wid, "-i", "--compact", save=save)
+            return rec.ui(label + " by window id", "snapshot", "--window-id", wid, *flags, save=save)
         return r
 
     # ----- rows
@@ -796,9 +818,7 @@ def desktop_rows(rec, dev):
     def j3(rec):
         ensure_apps(rec)
         for name in (hk["calc"], hk["editor"], hk["calc"]):
-            r = rec.ad("focus " + name, "focus", name)
-            expect(r.exit == 0, "focus %s exited %d: %s" % (name, r.exit, r.out.strip()[:200]))
-            fg = wait_for("%s to be the foreground window" % name, lambda n=name: (lambda v: v if n.lower() in v.lower() else None)(foreground()), timeout=20)
+            fg = focus_front(rec, name)
             rec.note("independent read after focus %s: foreground window" % name, fg)
 
     def j4(rec):
@@ -810,7 +830,7 @@ def desktop_rows(rec, dev):
 
     def j5(rec):
         ensure_apps(rec)
-        rec.ad("focus calculator", "focus", hk["calc"])
+        focus_front(rec, hk["calc"])
         env = calc_snapshot("snapshot for coordinates")
         ref = ref_of(env, "7")
         g = rec.ui("bounds of 7", "get", ref, "--property", "bounds")
@@ -819,9 +839,9 @@ def desktop_rows(rec, dev):
         cx, cy = centre(box)
         r = rec.ad("click left", "click", cx, cy, "left")
         expect(r.exit == 0, "click exited %d: %s" % (r.exit, r.out.strip()[:200]))
-        shown = wait_for("a 7 on the calculator display after the left click", lambda: (lambda d: d if "7" in d else None)(display(calc_snapshot("read display", save=False))), timeout=15)
+        shown = wait_for("a 7 on the calculator display after the left click", lambda: (lambda d: d if shows(d, "7") else None)(calc_display(save=False)), timeout=15)
         rec.note("calculator display after the left click", shown)
-        rec.ad("focus editor", "focus", hk["editor"])
+        focus_front(rec, hk["editor"])
         if win:
             r = rec.ad("click right", "click", 500, 340, "right")  # inside the pad (it sits at 300,200 and is 520x340)
             expect(r.exit == 0, "click right exited %d: %s" % (r.exit, r.out.strip()[:200]))
@@ -841,8 +861,7 @@ def desktop_rows(rec, dev):
 
     def j6(rec):
         ensure_apps(rec)
-        rec.ad("focus editor", "focus", hk["editor"])
-        wait_for("the editor in front", lambda: hk["editor"].lower() in foreground().lower(), timeout=20)
+        focus_front(rec, hk["editor"])
         r = rec.ad("type", "type", "hello agent-desktop")
         expect(r.exit == 0, "type exited %d: %s" % (r.exit, r.out.strip()[:200]))
         # TextEdit capitalises the first letter of a sentence, so 'hello' reads back 'Hello': compare without case
@@ -859,8 +878,7 @@ def desktop_rows(rec, dev):
 
     def j7(rec):
         ensure_apps(rec)
-        rec.ad("focus editor", "focus", hk["editor"])
-        wait_for("the editor in front", lambda: hk["editor"].lower() in foreground().lower(), timeout=20)
+        focus_front(rec, hk["editor"])
         before = editor_text()
         expect(before.strip(), "the editor has no text before select-all, so emptying it proves nothing (did J6 type nothing?)")
         rec.note("text in the editor before select-all", before)
@@ -905,7 +923,7 @@ def desktop_rows(rec, dev):
         for key in ("clear", "1", "2", "*", "3", "4", "="):
             r = rec.ui("click " + key, "click", ref_of(env, key))
             expect(r.exit == 0, "click %s exited %d: %s" % (key, r.exit, r.out.strip()[:200]))
-        shown = wait_for("408 on the display", lambda: (lambda d: d if re.search(r"(^|\D)408(\D|$)", d) else None)(display(calc_snapshot("read display", save=False))), timeout=15)
+        shown = wait_for("408 on the display", lambda: (lambda d: d if shows(d, "408") else None)(calc_display(save=False)), timeout=15)
         rec.note("calculator display", shown)
 
     def n2(rec):
@@ -927,8 +945,8 @@ def desktop_rows(rec, dev):
         r = rec.ui("click the old ref", "click", old)
         expect(r.exit != 0 or (r.env and r.env.get("ok") is False), "the old reference was accepted after the window was recreated (exit 0)")
         expect(re.search(r"STALE|NOT_FOUND|AMBIGUOUS", r.out), "the refusal does not name a stale/not-found reason: %s" % r.out.strip()[:200])
-        after = display_value(calc_snapshot("snapshot after"))
-        expect(after in ("0", ""), "the display shows %r after the refused click (wanted 0)" % after)
+        after = display_value(calc_display("snapshot after"))
+        expect(after == "0", "the display shows %r after the refused click (wanted 0)" % after)
 
     def n5(rec):
         ensure_apps(rec)
@@ -983,6 +1001,21 @@ def install_mac(rec, dev):
         "ls -l \"$HOME/.local/bin/agent-desktop\" \"$HOME/.local/share/agent-desktop/vercel\"" % sc
     )
     r = rec.sh("fresh install", script, timeout=600)
+    return {"fresh": rec.cmds[-1]}
+
+
+def install_work_mac(rec, dev):
+    """The same fresh install as the Mac mini, run in place from this working tree: no ssh, no copy. The work profile's 66 step
+    leaves out the kitty helper and its login item, so there is no launchd library to load and no helper to check."""
+    sc = dev.scratch
+    rec.sh("clean", 'rm -rf "$HOME/.local/bin/agent-desktop" "$HOME/.local/share/agent-desktop" %s; mkdir -p %s/shots' % (sc, sc))
+    script = (
+        "set -eu; D=%s; "
+        "chezmoi --source %s execute-template < %s/run_onchange_after_66_agent_desktop_macos.sh.tmpl > \"$D/66.sh\"; "
+        "sh \"$D/66.sh\"; test -x \"$HOME/.local/bin/agent-desktop\"; "
+        "ls -l \"$HOME/.local/bin/agent-desktop\" \"$HOME/.local/share/agent-desktop/vercel\"" % (sc, shlex.quote(str(ROOT)), shlex.quote(str(ROOT)))
+    )
+    rec.sh("fresh install", script, timeout=600)
     return {"fresh": rec.cmds[-1]}
 
 
@@ -1149,6 +1182,10 @@ def plan_lines(device):
     elif device == "mac-mini":
         lines += ["step install_fresh: remove ~/.local/bin/agent-desktop and ~/.local/share/agent-desktop, copy the branch to ~/.cache/agent-desktop-proof/src, render and run the 66 install step",
                   "uses: Calculator and TextEdit; osascript for the independent reads; `ui` for the N rows"]
+    elif device == "work-mac":
+        lines += ["runs on the Mac this is started on: no ssh, no copy; every command below runs here, in place",
+                  "step install_fresh: remove ~/.local/bin/agent-desktop and ~/.local/share/agent-desktop, render the 66 install step from this tree and run it (the work profile has no kitty helper)",
+                  "uses: Calculator and TextEdit; osascript for the independent reads; `ui` for the N rows; judged like the Mac mini (the same 14 rows)"]
     else:
         lines += ["step install_fresh: copy windows/ over, remove what the build installs, run windows/install.ps1",
                   "step install_second: run windows/install.ps1 again; the state fingerprint and the 'nothing changed' line must show no change",
@@ -1172,9 +1209,9 @@ def plan_lines(device):
 def dry_run(device, dev):
     print("\n".join(plan_lines(device)))
     print("preconditions (read only):")
-    for what, ok in dev.preflight() if device == "omarchy" else []:
+    for what, ok in dev.preflight() if device in LOCAL else []:
         print("  %s: %s" % (what, "ok" if ok else "MISSING"))
-    if device != "omarchy":
+    if device not in LOCAL:
         print("  the %s checks are made when the real run starts (this dry run does not touch the device)" % device)
     return 0
 
@@ -1216,7 +1253,7 @@ def main(argv):
             closers = [close_editor, close_calc]
         if not only and a.phase in ("all", "prepare"):
             rec.begin("install")
-            install = {"omarchy": install_omarchy, "mac-mini": install_mac, "g14": install_g14}[device](rec, dev)
+            install = {"omarchy": install_omarchy, "mac-mini": install_mac, "work-mac": install_work_mac, "g14": install_g14}[device](rec, dev)
             print("install: fresh exit %d" % install["fresh"]["exit"])
             if device == "g14":
                 print("install: second run changed=%s" % install["second"]["changed"])
@@ -1284,7 +1321,7 @@ def main(argv):
         print("stopping: %s" % e, file=sys.stderr)
         return 5
     finally:
-        if device == "mac-mini":
+        if device in MACS:
             rec.sh("remove scratch copy", "rm -rf %s" % dev.scratch, save=False)
         elif device == "g14":
             if a.phase in ("all", "rows") and not only:

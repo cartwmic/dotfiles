@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a saved live run of agent-desktop on one device (criteria c12, c13, c14).
 
-usage: check_record.py --device omarchy|mac-mini|g14 --record FILE
+usage: check_record.py --device omarchy|mac-mini|work-mac|g14 --record FILE
 
 Exit 0 and one stable line on stdout when the record is complete and was made against the source files that are in this
 tree now:
@@ -27,6 +27,7 @@ STATUSES = ("pass", "fail", "not_offered")
 REQUIRED = {  # rows that must pass
     "omarchy": ROWS[:9],
     "mac-mini": ROWS[:9] + ["N1", "N2"],
+    "work-mac": ROWS[:9] + ["N1", "N2"],  # judged like a Mac: the same rows as the Mac mini
     "g14": ROWS[:9] + ["N1", "N2"],
 }
 OMARCHY_NOT_OFFERED = ["N1", "N2", "N3", "N4"]
@@ -182,7 +183,7 @@ def check(device, record_path):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--device", required=True, choices=("omarchy", "mac-mini", "g14"))
+    ap.add_argument("--device", required=True, choices=("omarchy", "mac-mini", "work-mac", "g14"))
     ap.add_argument("--record", required=True)
     a = ap.parse_args(argv)
     try:

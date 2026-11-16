@@ -7,6 +7,7 @@ Devices and their files (paths are relative to the repo root, which is two level
   omarchy   dot_local/bin/executable_agent-desktop
   mac-mini  every file whose relative path has 'agent-desktop' or 'agent_desktop' in it, outside tests/, docs/ and windows/,
             plus .chezmoiignore
+  work-mac  the same files as mac-mini (a Mac is a Mac; the run is made on the Mac it is started on)
   g14       every file under windows/
 
 It reads the file system, not git: the same code runs in an old-tree copy that has no git. The digest is the sha256 of
@@ -19,14 +20,15 @@ import os
 import sys
 from pathlib import Path
 
-DEVICES = ("omarchy", "mac-mini", "g14")
+DEVICES = ("omarchy", "mac-mini", "work-mac", "g14")
+MACS = ("mac-mini", "work-mac")
 LINUX_SCRIPT = "dot_local/bin/executable_agent-desktop"
 SKIP_DIRS = {".git", "__pycache__", "node_modules"}
 MAC_EXCLUDED_TOP = {"tests", "docs", "windows"}
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 
 
-WHERE = {"omarchy": LINUX_SCRIPT, "mac-mini": "agent-desktop files outside tests/, docs/, windows/", "g14": "windows/ is empty or missing"}
+WHERE = {"omarchy": LINUX_SCRIPT, "mac-mini": "agent-desktop files outside tests/, docs/, windows/", "work-mac": "agent-desktop files outside tests/, docs/, windows/", "g14": "windows/ is empty or missing"}
 
 
 class NoSources(Exception):
@@ -45,7 +47,7 @@ def selected_files(device, root=DEFAULT_ROOT):
     root = Path(root)
     if device == "omarchy":
         files = [LINUX_SCRIPT] if (root / LINUX_SCRIPT).is_file() else []
-    elif device == "mac-mini":
+    elif device in MACS:
         files = []
         for rel in _walk(root):
             if rel == ".chezmoiignore":
@@ -58,7 +60,7 @@ def selected_files(device, root=DEFAULT_ROOT):
         raise ValueError("unknown device %r (one of %s)" % (device, ", ".join(DEVICES)))
     files = sorted(files)
     # .chezmoiignore alone is not a macOS source: with no agent-desktop file there is nothing to bind the run to
-    if device == "mac-mini" and files == [".chezmoiignore"]:
+    if device in MACS and files == [".chezmoiignore"]:
         files = []
     if not files:
         raise NoSources("no source files for %s (%s)" % (device, WHERE[device]))

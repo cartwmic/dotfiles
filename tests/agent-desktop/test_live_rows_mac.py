@@ -2,7 +2,11 @@
 
 A fake device answers the `agent-desktop` commands the rows send, the way the real mini did in the first full run:
   - TextEdit capitalises the first letter of what is typed (type 'hello x' reads back 'Hello x').
-  - Calculator shows a result only in the display's `native_id` (`StandardInputView;value:408`); the text child goes away.
+  - Calculator's display text (`12 × 34`, `408`) is in the snapshot only when it is taken without `-i`; with `-i` it is left out, and the
+    display's `native_id` value is null (macOS 26).
+  - `focus` only asks: the app is in front after `focus_lag` reads of the frontmost application. A click while another app is in front lands
+    on that app (`misdirected`), as it does on a real screen.
+  - `ui list-windows` never sets `is_focused` for Calculator.
   - Finder has no window an accessibility snapshot can read until something opens one.
 Each test runs one real row function from `desktop_rows` and says what the row must conclude.
 """
@@ -36,8 +40,9 @@ class FakeMini(lr.Device):
     name = "mac-mini"
     scratch = "/scratch"
 
-    def __init__(self, autocap=True, typing_works=True, finder_window=False, calc_text_child_after_equals=False):
+    def __init__(self, autocap=True, typing_works=True, finder_window=False, focus_lag=0):
         self.autocap, self.typing_works = autocap, typing_works
+        self.focus_lag, self.pending, self.lag_left, self.misdirected = focus_lag, None, 0, []
         self.apps = {"System Settings": True}
         self.finder_pre = finder_window
         if finder_window:
@@ -47,15 +52,24 @@ class FakeMini(lr.Device):
         self.selected = False
         self.entry, self.acc, self.op, self.shown = "", None, None, "0"
         self.calls = []
+        self.menu = False
+        self.stale_next = False
         self.finder_windows = 1 if finder_window else 0
 
     # ---- Device surface
     def sh(self, cmd, timeout=60, stdin=None):
         self.calls.append(cmd)
         argv = shlex.split(cmd)
+        if "frontmostApplication" in cmd:
+            if self.pending and self.lag_left <= 0:
+                self.focused, self.pending = self.pending, None
+            self.lag_left -= 1
+            return lr.Result(0, self.focused + "\n")
         if argv[:1] == ["agent-desktop"]:
             return self.agent_desktop(argv[1:])
         if argv[:2] == ["open", "-a"]:
+            if argv[2] == "Calculator" and "Calculator" not in self.apps:
+                self.entry, self.acc, self.op, self.shown = "", None, None, "0"
             self.apps[argv[2]] = True
             self.focused = argv[2]
             return lr.Result(0, "")
@@ -65,7 +79,9 @@ class FakeMini(lr.Device):
             self.focused = "Finder"
             return lr.Result(0, "")
         if argv[:1] == ["pkill"]:
-            self.apps.pop(argv[-1].replace(";", ""), None)
+            gone = argv[2].replace(";", "")
+            self.apps.pop(gone, None)
+            self.stale_next = self.stale_next or gone == "Calculator"
             return lr.Result(0, "")
         return lr.Result(0, "")
 
@@ -81,7 +97,19 @@ class FakeMini(lr.Device):
         if verb == "windows":
             return lr.Result(0, "app\ttitle\n" + "".join("%s\t%s\n" % (n, n) for n in self.apps))
         if verb == "focus":
-            self.focused = a[1]
+            if self.focus_lag:
+                self.pending, self.lag_left = a[1], self.focus_lag
+            else:
+                self.focused = a[1]
+            return lr.Result(0, "")
+        if verb == "click":
+            right = a[3:] == ["right"]
+            if right and self.focused == "TextEdit":
+                self.menu = True
+            elif not right and self.focused == "Calculator":
+                self.press(self.button_at(int(a[1]), int(a[2])))
+            else:
+                self.misdirected.append((self.focused, a[1:]))
             return lr.Result(0, "")
         if verb == "type":
             if self.focused == "TextEdit" and self.typing_works:
@@ -93,6 +121,8 @@ class FakeMini(lr.Device):
         if verb == "key":
             if a[1:3] == ["a", "cmd"]:
                 self.selected = True
+            elif a[1] == "escape":
+                self.menu = False
             elif a[1] == "delete" and self.focused == "TextEdit":
                 if self.selected:
                     self.text = ""
@@ -115,10 +145,12 @@ class FakeMini(lr.Device):
     def ui(self, a):
         verb = a[0]
         if verb == "list-windows":
-            data = [{"id": "w-%d" % i, "app_name": n, "title": n, "is_focused": n == self.focused} for i, n in enumerate(self.apps)]
+            data = [{"id": "w-%d" % i, "app_name": n, "title": n, "is_focused": n == self.focused and n != "Calculator"} for i, n in enumerate(self.apps)]
             return self.envelope(data)
         if verb == "snapshot":
             app = a[a.index("--app") + 1]
+            if "--surface" in a:
+                return self.envelope({"app": app, "tree": {"role": "menu", "children": [{"role": "menuitem", "name": "Copy", "ref_id": "@s:m1"}] if self.menu else []}})
             if app == "TextEdit":
                 return self.envelope({"app": app, "tree": {"role": "window", "children": [{"role": "textfield", "ref_id": "@s:e1", "available_actions": ["TypeText"]}]}})
             if app == "Finder":
@@ -129,18 +161,35 @@ class FakeMini(lr.Device):
                 return self.envelope({"app": app, "tree": {"role": "window", "children": [{"role": "button", "name": n, "ref_id": "@s:g%d" % i} for i, n in enumerate("abcdefg")]}})
             if app == "Calculator":
                 kids = [{"role": "button", "name": n, "ref_id": "@s:e%d" % i} for i, n in enumerate(BUTTONS, 3)]
-                inner = [{"role": "statictext", "name": self.shown, "value": self.shown}] if self.shown == "0" else []
-                disp = {"role": "scrollarea", "ref_id": "@s:e1", "native_id": {"kind": "ax_identifier", "value": "StandardInputView;value:%s" % self.shown}, "children": inner}
+                inner = [] if "-i" in a else [{"role": "statictext", "name": self.shown, "value": self.shown}]
+                disp = {"role": "scrollarea", "ref_id": "@s:e1", "native_id": {"kind": "ax_identifier", "value": "StandardInputView"}, "children": inner}
                 return self.envelope({"app": app, "tree": {"role": "window", "children": [disp] + kids}})
         if verb == "get":
+            if a[2:] == ["--property", "bounds"]:
+                m = re.match(r"@s:e(\d+)$", a[1])
+                if m and int(m.group(1)) >= 3:
+                    x, y = self.button_xy(BUTTONS[int(m.group(1)) - 3])
+                    return self.envelope({"bounds": {"x": x - 20, "y": y - 20, "width": 40, "height": 40}})
+                return self.envelope({"bounds": {"x": 200, "y": 200, "width": 300, "height": 200}})
             return self.envelope({"value": self.text})
         if verb == "click":
             ref = a[1]
+            if self.stale_next:  # the first click after Calculator was closed and opened again holds a reference to the old window
+                self.stale_next = False
+                return self.envelope(None, ok=False, code="STALE_REF")
             m = re.match(r"@s:e(\d+)$", ref)
             if m:
                 self.press(BUTTONS[int(m.group(1)) - 3])
             return self.envelope({"action": "click"})
         return self.envelope({})
+
+    @staticmethod
+    def button_xy(name):
+        i = BUTTONS.index(name)
+        return 100 + 50 * (i % 4), 100 + 50 * (i // 4)
+
+    def button_at(self, x, y):
+        return min(BUTTONS, key=lambda n: abs(self.button_xy(n)[0] - x) + abs(self.button_xy(n)[1] - y))
 
     def finder_readable(self):
         # the desktop is the only Finder window until a real folder window is opened
@@ -175,6 +224,45 @@ class Case(unittest.TestCase):
         rec.begin("T")
         rows, _close_editor, _close_calc = lr.desktop_rows(rec, mini)
         return dict(rows), rec
+
+
+class J5(Case):
+    def test_left_click_on_the_7_shows_a_7_on_the_display(self):
+        mini = FakeMini()
+        rows, rec = self.rows(mini)
+        rows["J5"](rec)
+        self.assertEqual(mini.shown, "7")
+        self.assertEqual(mini.misdirected, [])
+
+    def test_fails_when_the_click_does_not_register_even_though_a_button_is_named_7(self):
+        mini = FakeMini()
+        mini.press = lambda name: None
+        rows, rec = self.rows(mini)
+        with self.assertRaises(lr.Fail) as cm:
+            rows["J5"](rec)
+        self.assertIn("a 7 on the calculator display", str(cm.exception))
+
+    def test_clicks_only_once_calculator_is_in_front_when_focus_is_slow(self):
+        mini = FakeMini(focus_lag=3)
+        rows, rec = self.rows(mini)
+        rows["J5"](rec)
+        self.assertEqual(mini.misdirected, [])
+        self.assertEqual(mini.shown, "7")
+
+
+class J3(Case):
+    def test_reads_the_front_app_from_the_system_and_not_from_is_focused(self):
+        mini = FakeMini()
+        rows, rec = self.rows(mini)
+        rows["J3"](rec)
+        self.assertTrue(any("frontmostApplication" in c for c in mini.calls), mini.calls)
+
+    def test_fails_when_the_app_never_comes_to_the_front(self):
+        mini = FakeMini(focus_lag=10 ** 6)
+        rows, rec = self.rows(mini)
+        with self.assertRaises(lr.Fail) as cm:
+            rows["J3"](rec)
+        self.assertIn("foreground", str(cm.exception))
 
 
 class J6(Case):
@@ -254,7 +342,7 @@ class N1(Case):
 
 
 class N2N3(Case):
-    def test_reads_408_when_it_is_only_in_the_display_native_id(self):
+    def test_reads_408_from_a_snapshot_taken_without_i(self):
         mini = FakeMini()
         rows, rec = self.rows(mini)
         rows["N2"](rec)
@@ -275,14 +363,32 @@ class N2N3(Case):
         self.assertIn("408", str(cm.exception))
 
 
-class Helpers(unittest.TestCase):
-    def test_display_texts_reads_the_value_out_of_a_native_id(self):
-        env = {"data": {"tree": {"role": "scrollarea", "native_id": {"kind": "ax_identifier", "value": "StandardInputView;value:408"}}}}
-        self.assertIn("408", lr.texts(env))
+class N4(Case):
+    def test_passes_when_the_refused_click_leaves_the_display_at_0(self):
+        mini = FakeMini()
+        rows, rec = self.rows(mini)
+        rows["N4"](rec)
 
-    def test_native_id_without_a_value_adds_nothing(self):
-        env = {"data": {"tree": {"role": "group", "native_id": {"kind": "ax_identifier", "value": "main, SidebarNavigationSplitView"}}}}
-        self.assertEqual(lr.texts(env), [])
+    def test_fails_when_the_display_cannot_be_read(self):
+        mini = FakeMini()
+        rows, rec = self.rows(mini)
+        orig = mini.ui
+        mini.ui = lambda a: orig(a + ["-i"] if a[:1] == ["snapshot"] and "-i" not in a else a)  # a display read that gets the -i tree: no display text
+        with self.assertRaises(lr.Fail) as cm:
+            rows["N4"](rec)
+        self.assertIn("wanted 0", str(cm.exception))
+
+
+class Helpers(unittest.TestCase):
+    def test_statictext_values_never_include_a_button_name(self):
+        env = {"data": {"tree": {"role": "window", "children": [
+            {"role": "button", "name": "7", "ref_id": "@s:e1"},
+            {"role": "scrollarea", "children": [{"role": "statictext", "name": "12 × 34", "value": "12 × 34"}, {"role": "statictext", "name": "408", "value": "408"}]}]}}}
+        self.assertEqual(lr.statictext_values(env), ["12 × 34", "408"])
+
+    def test_a_null_native_id_value_adds_nothing(self):
+        env = {"data": {"tree": {"role": "scrollarea", "native_id": {"kind": "ax_identifier", "value": None}}}}
+        self.assertEqual(lr.statictext_values(env), [])
 
 
 if __name__ == "__main__":
