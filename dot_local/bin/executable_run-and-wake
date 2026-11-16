@@ -470,6 +470,12 @@ def recover():
         return 1 if undelivered else 0
 
 
+def wait_command(pid):
+    """The no-poll wait the builder Stop hook names for a job's pid (wait_hint in dot_local/share/agent-harness/hooks/stop_running_jobs.py).
+    tests/run-and-wake checks that the two agree."""
+    return "caffeinate -w %s" % pid if sys.platform == "darwin" else "tail --pid=%s -f /dev/null" % pid
+
+
 def main(argv):
     if argv[:1] == ["--"]:
         argv = argv[1:]
@@ -524,7 +530,10 @@ def main(argv):
         say("INFO", f"job {job} started, {started}, output {output}")
     else:
         say("ERROR", f"job {job} could not start: {started[7:] or 'unknown'}; output {output}")
-    if thread:
+    if thread and started.startswith("pid "):
+        pid = started.split()[1]
+        say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]. Builders: wait with `{wait_command(pid)}` in Bash (run_in_background), then t3_background_wait; the Stop hook refuses to stop while it runs. Other seats can end the turn.")
+    elif thread:
         say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]; you can end your turn")
     elif not pane:
         say("WARN", "no HERDR_PANE_ID: nothing will wake you when it ends")

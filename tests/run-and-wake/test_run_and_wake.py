@@ -5,6 +5,7 @@ answers `agent get` from files the test writes (one file per live pane, holding 
 and records each `agent prompt` it accepts. A fake `t3` does the same for `thread send` (argv and stdin). Everything is checked from outside: the launcher's output and exit code, the
 prompts herdr received, and the job log, read back as the replay of each job.
 """
+import importlib.util
 import json
 import os
 import secrets
@@ -21,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(os.environ.get("RUN_AND_WAKE_SCRIPT") or ROOT / "dot_local/bin/executable_run-and-wake")
 HEAVY_GATE = ROOT / "dot_local/bin/executable_heavy-gate"
+HOOK = ROOT / "dot_local/share/agent-harness/hooks/stop_running_jobs.py"  # the builder Stop hook, whose wait_hint the launcher's message must match
 sys.path.insert(0, str(ROOT / "tests/heavy-gate"))
 from test_heavy_gate import FAKES as GATE_FAKES, QUIET as GATE_QUIET  # noqa: E402  (the gate's scripted host figures)
 
@@ -455,6 +457,12 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual([records[0]["thread"], records[0]["pane"]], [THREAD, None])
+        spec = importlib.util.spec_from_file_location("stop_running_jobs", HOOK)
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        command = hook.wait_hint(records[0]["pid"]).split("`")[1]  # the wait the Stop hook names for this pid
+        self.assertIn(f"wait with `{command}` in Bash", result.stdout, "a builder is told to wait, with the hook's command")
+        self.assertIn("t3_background_wait", result.stdout)
         self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "sent"])
         sends = self.t3_sends()
         self.assertEqual(len(sends), 1, "exactly one send")
