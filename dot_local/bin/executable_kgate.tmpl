@@ -61,6 +61,7 @@ import os
 import posixpath
 import re
 import secrets
+import select
 import shutil
 import shlex
 import signal
@@ -126,6 +127,7 @@ CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 4 << 30)   # bytes of disk 
 CACHE_LOCK = ".kgate-use"    # a shared flock held by every running job, taken exclusively to trim; names that start ".kgate" are not cache entries
 CACHE_TRASH = ".kgate-trash"
 CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
+END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
 MSSQL_PORT = 1433
@@ -1752,15 +1754,28 @@ class Job:
         feeder = threading.Thread(target=lambda: self._send(proc, tar_bytes), daemon=True)
         feeder.start()
         markers = Markers(self.id)
+        self.cut = False
         try:
             with os.fdopen(read, "rb", buffering=0) as stream:
-                for chunk in iter(lambda: stream.read(65536), b""):
+                deadline = None
+                while True:
+                    if "end" in markers.seen:   # CMD is over; a process it left behind can keep the stream open for hours, so the stream gets END_GRACE_S to finish
+                        deadline = deadline or time.time() + END_GRACE_S
+                        if time.time() >= deadline or not select.select([stream], [], [], deadline - time.time())[0]:
+                            self.cut = True
+                            break
+                    chunk = stream.read(65536)
+                    if not chunk:
+                        break
                     self.emit(chunk)
                     markers.feed(chunk)
             self.flush()
             markers.close()
             feeder.join()
             self.exec_tail = markers.tail
+            if self.cut:   # the pod is deleted at the end of the job, and that ends what CMD left behind
+                self.note("CMD left a process holding the exec stream; not waiting for it (the pod is deleted next)")
+                proc.terminate()
             return markers.seen, proc.wait()
         finally:
             if proc.poll() is None:
@@ -1904,7 +1919,7 @@ class Job:
         if "running" not in seen or not m:
             raise Lost("lost the pod before CMD finished (kubectl exit %d); the result is unknown and the job is not rerun" % transport)
         code = int(m.group(1))
-        if transport != code:
+        if transport != code and not self.cut:   # a cut stream ends with kubectl terminated: CMD's own end line is the result
             raise Unavailable("kubectl exited %d but CMD reported %d; not trusted" % (transport, code))
         return code
 
