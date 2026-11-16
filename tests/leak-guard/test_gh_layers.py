@@ -202,11 +202,11 @@ class Layers(WrapperBase):
             self.assertIn("gh-wrapper: layer %s failed" % name, done.stderr)
 
     def test_a_signal_to_the_wrapper_reaches_gh_and_the_after_hooks_still_run(self):
-        """With an after hook the wrapper is gh's parent, not gh itself, so a timeout's SIGTERM or a hangup must be passed on: an orphaned `gh run watch`
-        would keep polling."""
+        """With an after hook the wrapper is gh's parent, not gh itself, so a timeout's SIGTERM, a hangup or an interrupt (SIGINT) sent to the wrapper must be
+        passed on to gh: an orphaned `gh run watch` would keep polling."""
         self.layer("gh_log", SEEING)
         self.budget("on")
-        for sig, code in ((signal.SIGTERM, 143), (signal.SIGHUP, 129)):
+        for sig, code in ((signal.SIGTERM, 143), (signal.SIGHUP, 129), (signal.SIGINT, 130)):
             with self.subTest(sig):
                 self.reset()
                 proc = subprocess.Popen([str(self.wbin / "gh"), "run", "watch", "9"], cwd=str(self.other_cwd), env=self.env({"FAKE_GH_SLEEP": "60"}), stdin=subprocess.DEVNULL,
