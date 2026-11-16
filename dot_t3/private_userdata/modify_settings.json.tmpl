@@ -63,7 +63,16 @@
 #                 seat-lead      window 200000  advisor OFF (CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1)
 #                 seat-builder   window 300000  advisor on
 #                 seat-planner   window 300000  advisor on
-#                 seat-reviewer  window 300000  advisor OFF
+#                 seat-reviewer  window 300000  advisor OFF  prompt cache 5 minutes (FORCE_PROMPT_CACHING_5M=1)  idleCompaction off
+#               seat-reviewer only: FORCE_PROMPT_CACHING_5M=1 in its `environment` makes Claude Code write the prompt cache with the 5-minute lifetime
+#               for every request of the session, subagents and helpers included, instead of 1 hour (installed 2.1.325 reads it in its cache-TTL
+#               chooser; `claude -p` with it wrote ephemeral_5m_input_tokens only, without it ephemeral_1h only). Audit-1116 proposal 2.2: 0.4% of
+#               reviewer requests come more than 5 minutes after the last, and 1-hour writes cost about $125-$296/week more. Lead, builder, planner,
+#               coordinator and the other instances keep 1 hour. T3 reads the lifetime from each turn's cache_creation usage (5m or 1h), so its idle
+#               compaction window is already [expiry - 2 min, expiry]: for a 5-minute reviewer that is about 3 minutes after the run ends, and a
+#               thread over 200K tokens would be compacted then, a wasted re-read of a thread nobody returns to. The reviewer instance therefore
+#               sets its own `config.idleCompaction` to "off" (T3's per-instance "Compact idle threads: Never"); the reviewer still auto-compacts at
+#               its window. A running session keeps the environment it started with, so this reaches new sessions only.
 #               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
 #               is deployed for it to point at.
 # CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and the four seats; an `environment` entry, merged by name so other entries stay):
@@ -104,11 +113,13 @@ set -eu
 {{- $want := dict }}
 {{- $owned := list "claude-hub" "codex-hub" }}
 {{- $fleet := printf "%s/.claude/fleet" $home }}
-{{- range $seat := list (dict "id" "lead" "window" "200000" "advisor" false) (dict "id" "builder" "window" "300000" "advisor" true) (dict "id" "planner" "window" "300000" "advisor" true) (dict "id" "reviewer" "window" "300000" "advisor" false) }}
+{{- range $seat := list (dict "id" "lead" "window" "200000" "advisor" false) (dict "id" "builder" "window" "300000" "advisor" true) (dict "id" "planner" "window" "300000" "advisor" true) (dict "id" "reviewer" "window" "300000" "advisor" false "cache5m" true) }}
 {{-   $inst := dict "driver" "claudeAgent" "displayName" (printf "Claude (%s)" $seat.id) "enabled" true
         "config" (dict "autoCompactWindow" $seat.window "launchArgs" (printf "--settings %s/seat-%s.json --strict-mcp-config --mcp-config %s/mcp.json" $fleet $seat.id $fleet)) }}
 {{-   $_ := set $inst "environment" (list $fizzy) }}
 {{-   if not $seat.advisor }}{{ $_ := set $inst "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy) }}{{ end }}
+{{- /* Reviewer seat only: 5-minute prompt cache writes and no idle compaction (see the seat-reviewer note in the header). */}}
+{{-   if hasKey $seat "cache5m" }}{{ $_ := set $inst "environment" (append (get $inst "environment") (dict "name" "FORCE_PROMPT_CACHING_5M" "value" "1" "sensitive" false)) }}{{ $_ := set (get $inst "config") "idleCompaction" "off" }}{{ end }}
 {{-   $want = set $want (printf "seat-%s" $seat.id) $inst }}
 {{-   $owned = append $owned (printf "seat-%s" $seat.id) }}
 {{- end }}

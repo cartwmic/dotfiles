@@ -35,6 +35,8 @@ SEAT_TABLE = (("seat-lead", "200000", False), ("seat-builder", "300000", True), 
 SEATS = tuple(i for i, _, _ in SEAT_TABLE)
 # T3 interrupts a running session to deliver a message; Claude Code then reports a call it skipped as a user decline unless this variable is set (see the template header). Restated here on purpose.
 FIZZY = {"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}
+# Reviewer seat only (audit-1116 proposal 2.2): 5-minute prompt cache writes, and no T3 idle compaction (a 5-minute cache would make it fire about 3 minutes after a run). Restated here on purpose.
+FIVE_MIN = {"name": "FORCE_PROMPT_CACHING_5M", "sensitive": False, "value": "1"}
 FIZZY_IDS = ("claudeAgent", "coordinator", "claude-hub") + SEATS  # every Claude instance the template owns or finds
 
 
@@ -47,6 +49,9 @@ def seat_instances(home):
                            "launchArgs": "--settings %s/%s.json --strict-mcp-config --mcp-config %s/mcp.json" % (fleet, sid, fleet)},
                 "displayName": "Claude (%s)" % sid.split("-", 1)[1], "driver": "claudeAgent", "enabled": True}
         inst["environment"] = ([] if advisor else [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}]) + [FIZZY]
+        if sid == "seat-reviewer":
+            inst["environment"].append(FIVE_MIN)
+            inst["config"]["idleCompaction"] = "off"
         out[sid] = inst
     return out
 
@@ -736,6 +741,14 @@ class SeatInstanceTest(unittest.TestCase):
         for i in SEATS:
             self.assertEqual(inst[i]["driver"], "claudeAgent")
             self.assertIn("--strict-mcp-config --mcp-config ", inst[i]["config"]["launchArgs"])
+
+    def test_only_the_reviewer_seat_gets_the_five_minute_cache(self):
+        script, _ = self.script("linux")
+        inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
+        for i in tuple(SEATS) + ("claudeAgent", "coordinator"):
+            names = [e["name"] for e in inst[i].get("environment", [])]
+            self.assertEqual("FORCE_PROMPT_CACHING_5M" in names, i == "seat-reviewer", i)
+            self.assertEqual(inst[i].get("config", {}).get("idleCompaction"), "off" if i == "seat-reviewer" else None, i)
 
     def test_the_default_and_coordinator_instances_are_not_given_seat_settings(self):
         script, _ = self.script("linux")
