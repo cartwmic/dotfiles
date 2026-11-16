@@ -77,10 +77,14 @@ class SkillTest(unittest.TestCase):
         self.assertIn("comments(last:20){totalCount nodes{author{login __typename}", flat)  # the query reads the replies
 
     def test_does_not_restate_the_shared_tests(self):
-        # The wording of the four tests lives in finding-triage.md; two copies drift.
+        # The wording of the four tests lives in finding-triage.md; two copies drift. No test's own sentence appears here.
         _, body = parts()
-        self.assertNotIn("Verify it against the code: reproduce it or read it", body)
-        self.assertNotIn("Fixing it is worth the change", body)
+        flat = " ".join(body.split())
+        shared = (ROOT / "dot_local/share/agent-harness/finding-triage.md").read_text()
+        sentences = [line.split("**", 2)[2].strip().split(". ")[0] for line in shared.splitlines()
+                     if re.match(r"\d\. \*\*", line)]
+        self.assertEqual(len(sentences), 4)
+        self.assertEqual([s for s in sentences if s and s in flat], [])
 
     def test_has_no_work_profile_content(self):
         text = SKILL.read_text()
