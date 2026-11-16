@@ -680,6 +680,9 @@ KEEP = {
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
+# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat); workflow-authoring stays on.
+BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
+               "plugin-authoring", "run", "security-review", "simplify", "update-config"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
 CANONICAL = sorted({p.parent.name for pat in ("*/SKILL.md", "*/SKILL.md.tmpl") for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat)})  # reviewing-prs ships SKILL.md.tmpl
@@ -863,18 +866,32 @@ class FleetFilesTest(unittest.TestCase):
                                      | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set()), (profile, seat))
                     self.assertEqual(f["permissions"], {"deny": ["Artifact"]})
                     self.assertIs(f["syncClaudeAiSkills"], False)
-                    self.assertIs(f["disableBundledSkills"], True)
+                    # bundled skills stay on so the Workflow tool keeps its short text (workflow-authoring carries the reference); every other bundled skill is off
+                    self.assertIs(f["disableBundledSkills"], False)
                     self.assertEqual(set(f["skillOverrides"].values()), {"off"})
-                    self.assertEqual(set(f["skillOverrides"]), (set(INSTALLED) | set(CANONICAL)) - keep, (profile, seat))
+                    self.assertNotIn("workflow-authoring", f["skillOverrides"])
+                    self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL)) - keep) | BUNDLED_OFF, (profile, seat))
                     self.assertNotIn("synced", f["skillOverrides"])
             finally:
                 env.close()
+
+    def test_no_seat_keeps_a_skill_named_like_a_bundled_one_that_every_seat_turns_off(self):
+        # skillOverrides is by name: a kept personal skill called "loop" or "run" would be switched off with the bundled one
+        for seat, keep in KEEP.items():
+            self.assertEqual(sorted(keep & BUNDLED_OFF), [], seat)
+        # and the template refuses to render it
+        env = fleet_env("personal")
+        try:
+            tmpl = REPO / ".chezmoitemplates/fleet_seat"
+            self.assertIn("which is also a Claude Code bundled skill", tmpl.read_text())
+        finally:
+            env.close()
 
     def test_a_kept_skill_that_is_not_installed_adds_nothing(self):
         env = Env(codex_active=False)
         try:
             # nothing under ~/.claude/skills yet: the seat file still lists the source tree's skills, and still not the kept ones
-            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), set(CANONICAL) - KEEP["planner"])
+            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), (set(CANONICAL) - KEEP["planner"]) | BUNDLED_OFF)
         finally:
             env.close()
 
