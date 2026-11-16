@@ -141,8 +141,10 @@ def kgate_jobs(thread):
     return found
 
 
-def wait_hint(pid):
-    return ("wait: run `tail --pid=%d -f /dev/null` with Bash run_in_background, then t3_background_wait on its task id (no sleep loop)" % pid)
+def wait_hint(pid, platform=None):
+    """How to wait for `pid` without polling. `tail --pid` is GNU only (BSD tail on macOS rejects it); macOS's `caffeinate -w <pid>` blocks until the pid exits."""
+    command = "caffeinate -w %d" % pid if (platform or sys.platform) == "darwin" else "tail --pid=%d -f /dev/null" % pid
+    return "wait: run `%s` with Bash run_in_background, then t3_background_wait on its task id (no sleep loop)" % command
 
 
 def reason(rw, kg):

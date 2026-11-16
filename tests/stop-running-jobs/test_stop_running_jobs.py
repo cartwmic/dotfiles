@@ -3,6 +3,7 @@
 The hook runs as a process, the way Claude Code runs it, against throwaway run-and-wake and kgate state folders and real child
 processes. A job is "running" only while its process is. The seat-file tests render the template through real chezmoi.
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -18,6 +19,9 @@ HOOK = ROOT / "dot_local/share/agent-harness/hooks/stop_running_jobs.py"
 MINE = "thread:me"
 OTHER = "thread:someone-else"
 LINUX = os.path.isdir("/proc/self")
+_spec = importlib.util.spec_from_file_location("stop_running_jobs", HOOK)
+MOD = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(MOD)
 
 
 class HookTest(unittest.TestCase):
@@ -48,6 +52,19 @@ class HookTest(unittest.TestCase):
     def start_process(self, seconds=120, **env):
         p = subprocess.Popen(["sleep", str(seconds)], env={**os.environ, **env}, start_new_session=True)
         self.procs.append(p)
+        if LINUX:   # between fork and exec the child still shows the test runner's command line and environment; record only the settled process
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    settled = Path("/proc/%d/cmdline" % p.pid).read_bytes().startswith(b"sleep\0") and all(
+                        ("%s=%s" % kv).encode() in Path("/proc/%d/environ" % p.pid).read_bytes().split(b"\0") for kv in env.items())
+                except OSError:
+                    settled = False
+                if settled:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("the test process never settled")
         return p
 
     def log(self, *records):
@@ -88,7 +105,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("20261116T180000Z-aaaaaa", done.stderr)
         self.assertIn("heavy-gate -- npm test", done.stderr)
-        self.assertIn("tail --pid=%d" % p.pid, done.stderr)
+        self.assertIn(MOD.wait_hint(p.pid), done.stderr)
         self.assertIn("t3_background_wait", done.stderr)
 
     def test_the_stop_is_allowed_once_the_job_has_ended(self):
@@ -133,7 +150,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("kgate job kgate-1794853578-111", done.stderr)
         self.assertIn("kgate cancel kgate-1794853578-111", done.stderr)
-        self.assertIn("tail --pid=%d" % p.pid, done.stderr)
+        self.assertIn(MOD.wait_hint(p.pid), done.stderr)
 
     def test_the_stop_is_allowed_when_the_kgate_client_is_gone_or_was_replaced(self):
         p = self.kgate_entry("kgate-1794853578-111")
@@ -183,6 +200,22 @@ class HookTest(unittest.TestCase):
         shutil.rmtree(self.rw)
         shutil.rmtree(self.kg)
         self.assertEqual(self.hook().returncode, 0)
+
+
+class WaitHintTest(unittest.TestCase):
+    """`tail --pid` is GNU only; the hint on macOS must be a command stock macOS has."""
+
+    def test_macos_hint_uses_caffeinate_and_not_the_gnu_only_tail_option(self):
+        hint = MOD.wait_hint(4242, "darwin")
+        self.assertIn("`caffeinate -w 4242`", hint)
+        self.assertNotIn("--pid", hint)
+        self.assertIn("t3_background_wait", hint)
+
+    def test_linux_hint_is_tail_pid(self):
+        self.assertIn("`tail --pid=4242 -f /dev/null`", MOD.wait_hint(4242, "linux"))
+
+    def test_the_default_follows_the_running_platform(self):
+        self.assertEqual(MOD.wait_hint(7), MOD.wait_hint(7, sys.platform))
 
 
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi needed")
