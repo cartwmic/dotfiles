@@ -415,18 +415,22 @@ class NodeCache(unittest.TestCase):
         self.assertEqual(K.trim_cache(str(self.root), 1, self.lock())[2], "another job is running on this node", "the job's lock is held")
         self.assertTrue(b.exists())
 
-    def test_the_last_job_to_finish_trims_and_one_that_is_not_last_does_not(self):
+    def test_a_job_that_ends_trims_nothing_so_the_end_line_is_the_last_thing_it_prints(self):
+        # dotfiles#493: a trim after the end line ran in the 10 s the client gives the stream to close, was cut off, and the client then blamed CMD for it
+        tree = self.tmp / "wt"
+        tree.mkdir()
+        (tree / "f").write_text("x")
         a, b = self.entry("u1000/home/a", 3000), self.entry("u1000/home/b", 10)
-        mine, other = K.hold_cache(str(self.root), 10 ** 9, lambda _: None), os.open(str(self.root / K.CACHE_LOCK), os.O_RDWR)
-        self.addCleanup(os.close, other)
-        fcntl.flock(other, fcntl.LOCK_SH)   # a second job is running
-        said = []
-        K.release_cache(str(self.root), self.size(b), mine, said.append)
-        self.assertEqual((a.exists(), b.exists(), said), (True, True, []), "another job still runs: nothing removed")
-        mine = K.hold_cache(str(self.root), 10 ** 9, lambda _: None)
-        fcntl.flock(other, fcntl.LOCK_UN)   # the other job is done: this is the last one
-        K.release_cache(str(self.root), self.size(b), mine, said.append)
-        self.assertEqual((a.exists(), b.exists(), len(said)), (False, True, 1))
+        stale = self.root / "u1000/home/stale"
+        job = {"id": "kgate-1-2", "root": str(tree), "cwd": str(tree), "files": ["f"], "tree": K.tree_hash(str(tree), ["f"]), "tools": {},
+               "argv": ["sh", "-c", "mkdir %s && head -c 65536 /dev/zero > %s/blob && touch -d '2000-01-01' %s/blob %s" % ((stale,) * 4)],
+               "uid": 1000, "gid": 1000, "own": [str(tree)], "head": None, "cache": {"root": str(self.root), "cap": self.size(a, b) + 1}}   # within the cap when the job starts
+        (self.tmp / "job.json").write_text(json.dumps(job))
+        done = subprocess.run([sys.executable, str(SCRIPT), "--pod", str(self.tmp / "job.json")], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(stale.exists(), "the entry CMD left over the cap is still there: it waits for the next job that starts on an idle node")
+        self.assertRegex(done.stdout.splitlines()[-1], r"^kgate\[kgate-1-2\]: end \d+ exit 0$", done.stdout)
+        self.assertNotIn("cache over", done.stdout)
 
     def test_no_cache_folder_is_no_trim(self):
         self.assertIsNone(K.hold_cache(str(self.tmp / "none"), 1, lambda _: None))
@@ -3987,6 +3991,15 @@ class LeftBehindProcess:
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertRegex(done.stdout, r"kgate\[[^\]]+\]: peak ")
         self.assertRegex(done.stdout, r"kgate\[[^\]]+\]: end \d+ exit 0")
+
+    def test_a_leftover_process_that_keeps_writing_after_the_end_line_is_still_cut_off(self):
+        # a stream that never goes quiet must not re-arm the grace: the cut is at END_GRACE_S after the end line, not after the last output
+        done, took = self.run_orphan("( while :; do echo noise; sleep 0.1; done ) & echo hi; exit 3")
+        self.assertEqual(done.returncode, 3, done.stdout)
+        self.assertLess(took, 25, "the job waited for the process CMD left behind: " + done.stdout[-400:])
+        self.assertRegex(done.stdout, r"kgate\[[^\]]+\]: end \d+ exit 3")
+        self.assertIn("CMD left a process holding the exec stream; not waiting for it", done.stdout)
+        self.assertIn(self.records()[-1]["id"], (self.fake / "deleted-pods").read_text().split(), "the pod was deleted")
 
     def test_a_command_that_leaves_nothing_behind_does_not_wait(self):
         done, took = self.run_orphan("exit 4")

@@ -845,12 +845,6 @@ def hold_cache(root, cap, say):
     return fd
 
 
-def release_cache(root, cap, fd, say):
-    """The job is done: let go of the shared lock and trim if this was the last job on the node, so a node that is always busy is still trimmed when its jobs drain."""
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    trim_idle(root, cap, fd, say)
-
-
 def prepare_user(job, euid=None, chown=os.lchown, root=""):
     """CMD should run as the profile's user, like on a developer's Mac, not as root (root passes chmod-based tests a user fails).
     The pod's exec starts as root: give that user the shipped tree, /out, a home and its own caches, and return how to start a process as it."""
@@ -882,7 +876,7 @@ def pod_main(jobfile):
         return 70
     out("kgate: hash ok %s\n" % found)
     cache = job.get("cache")
-    cache_lock = hold_cache(cache["root"], cache["cap"], out) if cache else None
+    cache_lock = hold_cache(cache["root"], cache["cap"], out) if cache else None   # held until this process exits, which lets go of it: nothing runs after the end line (dotfiles#493)
     as_user, env_user = prepare_user(job)
     env = {**os.environ, **env_user}
     for name, (version, cmd) in job["tools"].items():
@@ -906,8 +900,6 @@ def pod_main(jobfile):
     peak, source = meter.stop()
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
-    if cache_lock is not None:
-        release_cache(cache["root"], cache["cap"], cache_lock, out)   # after the end marker: the result is already known
     return code if code >= 0 else 128 - code
 
 
