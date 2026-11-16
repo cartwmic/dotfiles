@@ -14,19 +14,20 @@ a red main). Without --pr nothing changes. With it, a red main passes only under
 usual, followed by one "merge-gate:" line, and the exit is 0. Anything else exits 1 with the same stdout as without --pr; the
 reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's journal) is always refused.
 
-  Any repo but dotfiles: PR N passes when its own full-suite run on its exact head tree succeeded. That is a run of the same
+  Every repo: PR N passes when its own full-suite run on its exact head tree succeeded. That is a run of the same
   workflow whose failure made main red, on PR N's head commit or on a commit with the same tree. It counts only when every job
   that did not pass in main's red run ran in it and passed, and so did each step that failed there. A job or step that was
   skipped does not count: agent-kit's unit.yml skips `npm test` and the node-floor job on pull_request events, so a
   pull_request run is not a full-suite run and a workflow_dispatch run on the branch is. Runs are read newest first: one that
   skipped a red job or step is passed over, and the first one that ran them decides (a failed one refuses). The "merge-gate:"
-  line names the run (id and URL). No such run, a failed one, a run on another tree or one that skipped a red job refuses.
+  line names the run (id and URL). No such run, a failed one, a run still going, a run on another tree or one that skipped a red job refuses.
 
-  dotfiles (the pin-fix exception): a red main passes only when all three hold. (1) The red run's only failing step is the
-  "Release pins: ..." step (a new agent-kit or Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes
-  exactly the pin files: agent-kit's package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus
-  skills under the canonical skills tree). (3) PR N's own pull_request run succeeded and passed that step. Any other dotfiles red
-  has no --pr path.
+  dotfiles tries one more rule first (the pin fix), and falls back to the rule above when it does not apply: a red main passes
+  as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
+  Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
+  package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
+  tree). (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
+  so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
 
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
 `ci-main-status ... && pr-body-check ... && gh pr merge`.
@@ -415,11 +416,16 @@ def judge_run(repo, run, wanted):
     """How one run on the PR's tree answers main's red: ("skipped", why), ("bad", why) or ("good", None).
 
     skipped: the run did not run a job or step that failed in main (a pull_request run that skips the full suite), so it says nothing.
-    bad: it ran them and they did not all pass, or it is still going or did not succeed.
+    bad: it ran them and they did not all pass, or it did not succeed, or it is still going. A run that has not finished and has no
+    listing yet for a red job or step (queued, jobs not created) is still going and counts as bad; only a job or step GitHub lists
+    as skipped, or one missing from a finished run, counts as skipped.
     """
     jobs = {j["name"]: j for j in gh(["run", "view", str(run["databaseId"]), "-R", repo, "--json", "jobs"])["jobs"]}
     for name, step_names in wanted.items():
         job = jobs.get(name)
+        going = run["status"] != "completed"
+        if going and (job is None or (job["conclusion"] != "skipped" and any(s not in {x["name"] for x in job["steps"]} for s in step_names))):
+            return "bad", f"run {run['databaseId']} is {run['status']}, not success"
         if job is None or job["conclusion"] == "skipped":
             return "skipped", f"run {run['databaseId']} skipped job {name}"
         steps = {s["name"]: s for s in job["steps"]}
@@ -478,7 +484,9 @@ def fix_reason(name, spec, red, pr):
     """The "merge-gate:" line for PR `pr` as the fix for a red main, or None (the refusal went to stderr)."""
     if red.run_id is None:
         return refuse(pr, "the red verdict is not a GitHub run")
-    return (pin_fix_reason if name == "dotfiles" else red_fix_reason)(spec, red, pr)
+    if name == "dotfiles":   # the pin rule first (its own checks), then the rule every other repo gets
+        return pin_fix_reason(spec, red, pr) or red_fix_reason(spec, red, pr)
+    return red_fix_reason(spec, red, pr)
 
 
 def untested_line(name, sha, rec):

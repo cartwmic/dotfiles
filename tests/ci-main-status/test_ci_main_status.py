@@ -544,6 +544,9 @@ def steps(**conclusions):
             {"name": "Linux checks: scripts/ci-linux.sh", "conclusion": conclusions.get("linux", "success")}]
 
 
+NO_HEAD_RUN = run(3, "f" * 40, "success", event="pull_request", age=7)   # a run, but not of the PR head or of a commit with its tree
+
+
 class PinFixException(Fixture):
     """--merge-gate dotfiles --pr N: the fix PR for a red release-pins step may merge into that red main (issue 429).
 
@@ -552,18 +555,23 @@ class PinFixException(Fixture):
 
     def setUp(self):
         super().setUp()
+        git(self.src, "switch", "-q", "-c", "fix", self.c3)   # a real head, so the general rule the gate falls back to can read it
+        (self.src / "pins.txt").write_text("pins\n")
+        git(self.src, "add", "pins.txt")
+        self.head = commit(self.src, "the pin fix")
+        git(self.src, "switch", "-q", "main")
         self.set_world()
 
     def set_world(self, red_steps=None, red_extra_jobs=(), files=KIT_FILES, own_run=None, own_steps=None):
         """Run 2 on main's tip c3 is red; PR 7's head has its own pull_request run 3."""
-        own_run = own_run or run(3, PR_HEAD, "success", event="pull_request", age=7)
+        own_run = own_run or run(3, self.head, "success", event="pull_request", age=7, branch="fix")
         self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1), own_run])
         red_steps = red_steps or steps(pins="failure", linux="skipped")
         self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": red_steps},
                            {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
                      str(own_run["databaseId"]): [{"name": "tests", "conclusion": "success", "steps": own_steps or steps()},
                                                   {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
-        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": PR_HEAD}}
+        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": self.head, "headRefName": "fix"}}
 
     def gate(self, *extra):
         self.write_fixture()
@@ -590,7 +598,7 @@ class PinFixException(Fixture):
         self.assertEqual(err, "")
         calls = self.log.read_text().splitlines()
         self.assertIn("run view 2 -R cartwmic/dotfiles --attempt 1 --json jobs", calls, "the red run's own attempt is the one read")
-        self.assertTrue(any(c.startswith("run list") and f"--commit {PR_HEAD}" in c and "--event pull_request" in c for c in calls))
+        self.assertTrue(any(c.startswith("run list") and f"--commit {self.head}" in c and "--event pull_request" in c for c in calls))
 
     def test_pass_case_for_a_loop_engine_bump_the_mise_config_and_skills(self):
         self.set_world(files=LE_FILES)
@@ -605,11 +613,11 @@ class PinFixException(Fixture):
                          "without --pr nothing about a PR is read")
 
     def test_another_step_failed_in_the_red_run_stays_red(self):
-        self.set_world(red_steps=steps(other="failure", pins="skipped"))
+        self.set_world(red_steps=steps(other="failure", pins="skipped"), own_run=NO_HEAD_RUN)
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_the_pins_step_and_another_step_failed_stays_red(self):
-        self.set_world(red_steps=steps(pins="failure", linux="failure"))
+        self.set_world(red_steps=steps(pins="failure", linux="failure"), own_run=NO_HEAD_RUN)
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_another_job_failed_in_the_red_run_stays_red(self):
@@ -621,36 +629,36 @@ class PinFixException(Fixture):
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_an_extra_file_in_the_diff_stays_red(self):
-        self.set_world(files=KIT_FILES + ["README.md"])
+        self.set_world(files=KIT_FILES + ["README.md"], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files: " + ", ".join(KIT_FILES + ["README.md"]))
 
     def test_a_file_list_shorter_than_the_changed_file_count_stays_red(self):
-        self.set_world()
+        self.set_world(own_run=NO_HEAD_RUN)
         self.prs["7"]["changedFiles"] = 150   # gh returned the pin files but not the other 148
         self.assert_stays_red("gh listed 2 of its 150 changed files")
 
     def test_half_the_agent_kit_pin_files_stays_red(self):
-        self.set_world(files=KIT_FILES[:1])
+        self.set_world(files=KIT_FILES[:1], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files")
 
     def test_loop_engine_skills_without_the_mise_config_stays_red(self):
-        self.set_world(files=LE_FILES[1:])
+        self.set_world(files=LE_FILES[1:], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files")
 
     def test_a_loop_engine_diff_with_a_file_outside_the_skills_stays_red(self):
-        self.set_world(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"])
+        self.set_world(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"], own_run=NO_HEAD_RUN)
         self.assert_stays_red("its diff is not exactly the pin files")
 
     def test_the_prs_own_run_failing_the_pins_step_stays_red(self):
-        self.set_world(own_run=run(3, PR_HEAD, "failure", event="pull_request", age=7), own_steps=steps(pins="failure", linux="skipped"))
+        self.set_world(own_run=run(3, self.head, "failure", event="pull_request", age=7), own_steps=steps(pins="failure", linux="skipped"))
         self.assert_stays_red("its own run 3 is failure, not success")
 
     def test_the_prs_own_run_passing_the_step_but_failing_the_run_stays_red(self):
-        self.set_world(own_run=run(3, PR_HEAD, "failure", event="pull_request", age=7), own_steps=steps(linux="failure"))
+        self.set_world(own_run=run(3, self.head, "failure", event="pull_request", age=7), own_steps=steps(linux="failure"))
         self.assert_stays_red("its own run 3 is failure, not success")
 
     def test_the_prs_own_run_not_finished_stays_red(self):
-        self.set_world(own_run=run(3, PR_HEAD, status="in_progress", event="pull_request", age=7))
+        self.set_world(own_run=run(3, self.head, status="in_progress", event="pull_request", age=7))
         self.assert_stays_red("its own run 3 is in_progress, not success")
 
     def test_the_prs_own_run_without_the_pins_step_stays_red(self):
@@ -659,11 +667,32 @@ class PinFixException(Fixture):
 
     def test_a_run_on_another_commit_is_not_the_prs_own_run(self):
         self.set_world(own_run=run(3, "f" * 40, "success", event="pull_request", age=7))
-        self.assert_stays_red("no pull_request run of 81b6301")
+        self.assert_stays_red(f"no pull_request run of {self.head[:7]}")
 
-    def test_a_push_run_on_the_pr_head_is_not_the_prs_own_run(self):
-        self.set_world(own_run=run(3, PR_HEAD, "success", event="push", age=7))
-        self.assert_stays_red("no pull_request run of 81b6301")
+    def test_a_push_run_on_the_pr_head_is_not_the_prs_own_run_for_the_pin_rule_but_the_general_rule_takes_it(self):
+        self.set_world(own_run=run(3, self.head, "success", event="push", age=7))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("passed as a red-main fix", out)           # the general rule: any run of the workflow on the head
+        self.assertIn(f"no pull_request run of {self.head[:7]}", err)   # the pin rule said no first
+        self.assertNotIn("pin fix", out)
+
+    def test_every_pin_refusal_above_falls_through_to_the_general_rule_when_the_head_has_a_green_full_run(self):
+        """The refusals above hold only because those worlds give the head no run (NO_HEAD_RUN). With a green run on the head that ran
+        and passed what failed in main, the general rule passes the PR: the pin rule is an extra path, not a limit."""
+        worlds = {"another step failed": dict(red_steps=steps(other="failure", pins="skipped")),
+                  "pins step and another step failed": dict(red_steps=steps(pins="failure", linux="failure")),
+                  "extra file in the diff": dict(files=KIT_FILES + ["README.md"]),
+                  "half the agent-kit pin files": dict(files=KIT_FILES[:1]),
+                  "loop-engine skills without the mise config": dict(files=LE_FILES[1:]),
+                  "loop-engine diff with a file outside the skills": dict(files=LE_FILES + ["dot_local/bin/executable_pr-body-check"])}
+        for label, kwargs in worlds.items():
+            with self.subTest(label):
+                self.set_world(**kwargs)
+                rc, out, err = self.gate("--pr", "7")
+                self.assertEqual(rc, 0, out + err)
+                self.assertIn("passed as a red-main fix: its own full-suite run 3", out)
+                self.assertNotIn("pin fix", out)
 
     def test_a_gh_failure_in_the_check_stays_red_with_the_same_stdout(self):
         self.set_world()
@@ -714,7 +743,7 @@ def pull_request_jobs():
 
 
 class RedMainFix(Fixture):
-    """--merge-gate REPO --pr N for a repo that is not dotfiles: a red main passes when PR N's own full-suite run on its head tree passed.
+    """--merge-gate REPO --pr N: a red main passes when PR N's own full-suite run on its head tree passed.
 
     The shape is agent-kit on 2026-11-16: unit.yml fails main in `unit` and `node-floor`; the PR's pull_request run skips both
     (so it proves nothing) and its workflow_dispatch run is the full suite.
@@ -848,17 +877,68 @@ class RedMainFix(Fixture):
         self.runs = {self.WF: [run(1, self.c3, "success")]}
         self.assertEqual(self.gate("--pr", "7")[:2], self.gate()[:2])
 
-    def test_dotfiles_keeps_the_pin_rule_only(self):
-        """A red dotfiles main that is not the pin step has no --pr path, even with a green own run on the head tree."""
-        self.runs = {"cartwmic/dotfiles|ci.yml": [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1),
-                                                  run(3, self.head, "success", event="pull_request", age=7, branch="fix")]}
-        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": [{"name": "Some other step", "conclusion": "failure"}]}],
-                     "3": [{"name": "tests", "conclusion": "success", "steps": [{"name": "Some other step", "conclusion": "success"}]}]}
-        self.prs = {"7": {"files": [], "changedFiles": 0, "headRefOid": self.head, "headRefName": "fix"}}
+    def test_a_full_suite_run_still_queued_with_no_jobs_listed_is_going_not_skipped(self):
+        queued = run(6, self.head, status="queued", event="workflow_dispatch", age=6, branch="fix")
+        self.world(self.dispatch(4), (queued, []))
+        self.assert_stays_red("run 6 is queued, not success")
+
+    def test_a_pull_request_run_still_going_whose_red_job_is_listed_as_skipped_is_passed_over(self):
+        row, jobs = self.pull_request(5)
+        row.update(status="in_progress", conclusion="")
+        self.world(self.dispatch(4), (row, jobs))
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("run 4 (", out)
+
+    def dotfiles_world(self, *head_runs, red_step="Linux checks: scripts/ci-linux.sh"):
+        """Main's tip c3 is red in dotfiles' `tests` job on a step that is not the release-pins step. PR 7's diff is not the pin files."""
+        rows = [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]
+        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": [
+            {"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": "failure"}]}]}
+        for row, conclusion in head_runs:
+            rows.append(row)
+            self.jobs[str(row["databaseId"])] = [{"name": "tests", "conclusion": conclusion, "steps": [
+                {"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": conclusion}]}]
+        self.runs = {"cartwmic/dotfiles|ci.yml": rows}
+        self.prs = {"7": {"files": [{"path": "dot_local/bin/executable_ci-main-status"}], "changedFiles": 1,
+                          "headRefOid": self.head, "headRefName": "fix"}}
+
+    def test_dotfiles_red_on_another_step_passes_on_a_green_full_head_run_of_the_same_tree(self):
+        self.dotfiles_world((run(3, self.head, "success", event="pull_request", age=7, branch="fix"), "success"))
+        rc0, out0, _ = self.gate(repo="dotfiles")
+        self.assertEqual(rc0, 1, out0)
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 0, out + err)
+        self.assertTrue(out.startswith(out0), out)
+        self.assertIn("passed as a red-main fix: its own full-suite run 3", out)
+        self.assertNotIn("pin fix", out)
+        self.assertIn("failed on more than the release-pins step", err)   # the pin rule said no first
+
+    def test_dotfiles_red_on_another_step_stays_red_with_no_head_run(self):
+        self.dotfiles_world()
+        rc0, out0, _ = self.gate(repo="dotfiles")
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual((rc, out), (rc0, out0), err)
+        self.assertEqual(rc, 1)
+        self.assertIn("failed on more than the release-pins step", err)
+        self.assertIn("no ci.yml run of", err)
+
+    def test_dotfiles_red_on_another_step_stays_red_when_the_head_run_failed_that_step(self):
+        self.dotfiles_world((run(3, self.head, "failure", event="pull_request", age=7, branch="fix"), "failure"))
         rc, out, err = self.gate("--pr", "7", repo="dotfiles")
         self.assertEqual(rc, 1, out)
-        self.assertIn("failed on more than the release-pins step", err)
-        self.assertNotIn("merge-gate:", out)
+        self.assertIn("run 3 did not pass tests", err)
+
+    def test_dotfiles_pin_fix_still_gets_the_pin_line_not_the_general_one(self):
+        """The pin rule runs first: a pin fix is named as one even though its own run would also satisfy the general rule."""
+        pins = PINS_STEP_FULL
+        self.dotfiles_world((run(3, self.head, "success", event="pull_request", age=7, branch="fix"), "success"), red_step=pins)
+        self.prs["7"]["files"] = [{"path": f} for f in KIT_FILES]
+        self.prs["7"]["changedFiles"] = len(KIT_FILES)
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("is the pin fix for this red", out)
+        self.assertEqual(err, "")
 
 
 NOT_ACQUIRED = "The job was not acquired by Runner of type hosted even after multiple attempts"
