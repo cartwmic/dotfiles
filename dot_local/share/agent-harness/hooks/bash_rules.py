@@ -7,8 +7,10 @@
   kube        (personal only)  kubectl, helm, k9s, kubectx on a context other than the homelab's: a context flag, `kubectl config
               use-context`, `kubectx X`, or no flag while the current context (--kubeconfig, an inline KUBECONFIG=, the hook's KUBECONFIG,
               else ~/.kube/config) is another. kubectl inside an ssh string is not inspected. No kubeconfig or no current-context: allowed.
-  merge       (personal only)  `gh pr merge` unless BOTH `ci-main-status` and `pr-body-check` are joined to it by `&&` earlier in the
-              same and-list (any order); the refusal names
+  merge       (personal only)  `gh pr merge` unless BOTH gates, in their real form, are joined to it by `&&` earlier in the same and-list
+              (any order): `ci-main-status --merge-gate <repo> [--pr N]` (a bare one or `--tip` is not the gate) and
+              `pr-body-check <repo> <pr>` (two plain words; `pr-body-check --body-file F` is not the merge check, it never reads the PR's
+              head runs), with <pr> the PR number `gh pr merge` names when it names one (a branch or no PR cannot be matched); the refusal names
               `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...`:
               --merge-gate exits 0 for UNTESTED and 1 for RED, as playbook fab9b713 allows an untested merge; a bare `ci-main-status`
               exits 2 for UNTESTED and blocks it. `--match-head-commit <head sha>` makes the merge refuse unless the PR head is still
@@ -98,10 +100,12 @@ HEREDOC = (
     "An unquoted heredoc with a backtick is refused in agent sessions: the shell runs the backticked text as a command. "
     "Quote the delimiter (`<<'EOF'`), or escape each backtick."
 )
-MERGE_CHECKS = ("ci-main-status", "pr-body-check")
+CI_GATE = "ci-main-status --merge-gate"  # the gated entry for a real `ci-main-status --merge-gate <repo> [--pr N]`
+PR_CHECK = "pr-body-check PR "           # prefix of the gated entry for a real `pr-body-check <repo> <pr>`: PR_CHECK + the PR number
 BODY_FILE = "pr-body-check --body-file "  # prefix of the gated entry that names a file the body check already read
 MERGE_BARE = (
-    "`gh pr merge` without both gates is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
+    "`gh pr merge` without both gates in their real form is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
+    "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
     "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
@@ -125,6 +129,7 @@ PR_BODY_FILE = (
 MKTEMP_VALUE_OPTIONS = {"-p", "--tmpdir", "--suffix"}
 MKTEMP_MIN_X = 6
 MKTEMP_LITERAL = re.compile(r"\.(?=[A-Za-z0-9]*[0-9A-Z])[A-Za-z0-9]{%d,}$" % 6)
+MERGE_OTHER_PR = "`pr-body-check` checked PR %s, but `gh pr merge` merges PR %s: the check must name the PR that is merged. "
 MERGE_COORDINATOR = (
     "`gh pr merge` on cartwmic/coordinator is refused in agent sessions: " + MERGE_PR + " also runs the red-main gate and the decisions check. "
     "Use `" + MERGE_PR + " PR`."
@@ -234,19 +239,25 @@ class Walk:
 
     @staticmethod
     def _and_listed(scan, index):
-        """The merge checks (`ci-main-status`, `pr-body-check`) earlier in this command's and-list, joined to it only by `&&`, and for each
-        `pr-body-check --body-file F` the entry BODY_FILE + F."""
+        """The checks earlier in this command's and-list, joined to it only by `&&`: CI_GATE for a real `ci-main-status --merge-gate <repo>`,
+        PR_CHECK + N for a real `pr-body-check <repo> N`, and BODY_FILE + F for each `pr-body-check --body-file F` (which is not a merge check)."""
         found = set()
         j = index
         while j > 0 and scan.joins[j].strip() == "&&":
             j -= 1
             earlier = _command_words(scan.commands[j])
-            if earlier and _base(earlier[0]) in MERGE_CHECKS:
-                found.add(_base(earlier[0]))
-                if _base(earlier[0]) == "pr-body-check":
-                    body_file = _flag_value(earlier[1:], "--body-file")
-                    if body_file is not None:
-                        found.add(BODY_FILE + body_file)
+            if not earlier:
+                continue
+            name, args = _base(earlier[0]), earlier[1:]
+            if name == "ci-main-status" and _is_merge_gate(args):
+                found.add(CI_GATE)
+            elif name == "pr-body-check":
+                number = _is_pr_check(args)
+                if number:
+                    found.add(PR_CHECK + number)
+                body_file = _flag_value(args, "--body-file")
+                if body_file is not None:
+                    found.add(BODY_FILE + body_file)
         return frozenset(found)
 
     def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
@@ -309,6 +320,26 @@ def _resolve(target, cwd, home):
     if "$" in target or "`" in target:
         return None
     return target if os.path.isabs(target) or not cwd else os.path.join(cwd, target)
+
+
+def _is_merge_gate(args):
+    """True for `--merge-gate <repo>` with an optional `--pr N` (the words after ci-main-status): one repo, no `--tip`, no `--all`."""
+    if "--merge-gate" not in args or "--tip" in args:
+        return False
+    rest = [w for w in args if w != "--merge-gate"]
+    if "--pr" in rest:
+        k = rest.index("--pr")
+        if k + 1 >= len(rest) or not rest[k + 1].isdigit():
+            return False
+        del rest[k:k + 2]
+    return len(rest) == 1 and not rest[0].startswith("-")
+
+
+def _is_pr_check(args):
+    """The PR number of a real `pr-body-check <repo> <pr>` (the words after pr-body-check: two plain words, no flag), else None."""
+    if len(args) == 2 and not any(a.startswith("-") for a in args) and args[1].isdigit():
+        return str(int(args[1]))
+    return None
 
 
 def _flag_value(args, flag):
@@ -421,8 +452,12 @@ def merge_rule(walk, ctx):
         args = cmd.words[1:]
         if _base(cmd.words[0]) != "gh" or not any(a == "pr" and b == "merge" for a, b in zip(args, args[1:])):
             continue
-        if not set(MERGE_CHECKS) <= cmd.gated:
+        checked = {e[len(PR_CHECK):] for e in cmd.gated if e.startswith(PR_CHECK)}
+        if CI_GATE not in cmd.gated or not checked:
             return MERGE_BARE
+        merged = _pr_number(args, "merge", PR_MERGE_VALUE_FLAGS)  # None when it names a branch or no PR: the hook cannot see which
+        if merged and str(int(merged)) not in checked:
+            return MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE
         repo = _flag_value(args, "--repo")
         repo = _flag_value(args, "-R") if repo is None else repo
         if repo is None:
@@ -437,12 +472,15 @@ PR_EDIT_VALUE_FLAGS = {"-R", "--repo", "-b", "--body", "-F", "--body-file", "-t"
                        "--remove-reviewer", "-m", "--milestone"}
 
 
-def _pr_number(args):
-    """The PR number `gh pr edit` names (a number, or a .../pull/N URL), else None (a branch name, or none)."""
-    rest = args[args.index("edit") + 1:]
+PR_MERGE_VALUE_FLAGS = {"-R", "--repo", "-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit"}
+
+
+def _pr_number(args, verb="edit", value_flags=PR_EDIT_VALUE_FLAGS):
+    """The PR number `gh pr <verb>` names (a number, or a .../pull/N URL), else None (a branch name, or none)."""
+    rest = args[args.index(verb) + 1:]
     i = 0
     while i < len(rest):
-        if rest[i] in PR_EDIT_VALUE_FLAGS:
+        if rest[i] in value_flags:
             i += 2
         elif rest[i].startswith("-"):
             i += 1
