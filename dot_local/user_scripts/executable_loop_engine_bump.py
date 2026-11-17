@@ -21,6 +21,10 @@ anything. The steps, and the step a stop names:
   install  mise install for the five tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
 
+A PR that also carries agent-kit's two pin files (a combined bump, opened when two releases landed close together) is fine: the
+drift check and the apply here ignore those two files, and agent_kit_bump.py X.Y.Z --pr N applies them. Any other file outside
+the pins and skills still stops it at drift.
+
 Every later chezmoi command runs with a copy of the config that has no hooks, so no configured hook runs.
 A rerun picks up where it stopped. If the version is already pinned on origin/main and the import changes nothing, it
 does nothing. It prints the PR, the merge SHA and the installed versions, and appends one JSON line per step to
@@ -46,6 +50,9 @@ from pathlib import Path
 TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
 SKILLS = "dot_local/share/agent-harness/canonical/skills"
 MISE_CONFIG = "dot_config/mise/config.toml"
+# agent_kit_bump.py's two pin files (KIT, PIN_FILES there; tests/ci-main-status checks the copies match). One PR may carry both bumps
+# when two releases land close together: this script leaves these files to agent_kit_bump.py and still stops on any other outsider.
+AGENT_KIT_PINS = ("dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json")
 IMPORT_TOOL = "dot_local/user_scripts/executable_import_release_skills.py"
 HARNESS_TOOL = "dot_local/user_scripts/executable_apply_harness_config.sh"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -268,8 +275,11 @@ def merge(source, pr, log):
 
 
 def pr_targets(wt, sha):
-    """{destination: (source name, bytes before the PR or None, bytes after or None)} for every file the PR changed."""
-    names = [n for n in git(wt, "diff", "--name-only", "--no-renames", sha + "^", sha, step="drift").stdout.split("\n") if n]
+    """{destination: (source name, bytes before the PR or None, bytes after or None)} for every file the PR changed except agent-kit's two pins."""
+    names = [n for n in git(wt, "diff", "--name-only", "--no-renames", sha + "^", sha, step="drift").stdout.split("\n")
+             if n and n not in AGENT_KIT_PINS]
+    if not names:
+        raise Stop("drift", "the PR changes no Loop Engine pin or skill (agent-kit's pins are applied by agent_kit_bump.py)")
     outside = [n for n in names if n != MISE_CONFIG and not n.startswith(SKILLS + "/")]
     if outside:
         raise Stop("drift", "the PR changed files outside the pins and skills: %s" % ", ".join(outside))

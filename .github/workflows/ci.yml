@@ -1,12 +1,12 @@
 name: CI
 
-# Linux tests (job `tests`) and macOS mise tests (job `mise-tests`).
+# Linux tests (job `tests`), the release-pin check (job `release-pins`) and macOS mise tests (job `mise-tests`).
 # `tests` runs scripts/ci-linux.sh, which installs nothing: CI installs chezmoi and the apt packages first.
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 #
-# Every PR runs `tests` (the fast check). Main runs (push, and workflow_dispatch to start an untested main
-# by hand) run `tests` and `mise-tests`. `~/.local/bin/ci-main-status` (source: dot_local/bin/executable_ci-main-status)
+# Every PR runs `tests` (the fast check) and `release-pins`. Main runs (push, and workflow_dispatch to start an untested main
+# by hand) run `tests`, `release-pins` and `mise-tests`. `~/.local/bin/ci-main-status` (source: dot_local/bin/executable_ci-main-status)
 # reads the main runs.
 
 on:
@@ -18,7 +18,7 @@ on:
 
 permissions:
   contents: read
-  packages: read # check-release-pins.py reads the published versions of the private @cartwmic/agent-kit package
+  packages: read # job release-pins: check-release-pins.py reads the published versions of the private @cartwmic/agent-kit package
 
 # PR runs cancel the superseded run of the same PR. Main runs (push and workflow_dispatch both use
 # refs/heads/main) share one group that never cancels: GitHub keeps one running and one pending, and a
@@ -50,13 +50,28 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: apt packages for the Linux suites (zsh, lsof, rsync, openssh-server, bubblewrap)
         run: sudo apt-get install -y -qq zsh lsof rsync openssh-server bubblewrap >/dev/null
-      # Its own step, not in scripts/ci-linux.sh: it reads GitHub through gh, and kgate pods run ci-linux.sh with no gh login.
+      - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
+        run: scripts/ci-linux.sh
+
+  # Its own job, so a lagging pin turns the run red without stopping `tests` from running and reporting on its own merits
+  # (2026-11-17: two releases three minutes apart each blocked the other's bump PR, and every open PR's suites never ran).
+  # Not in scripts/ci-linux.sh: it reads GitHub through gh, and kgate pods run ci-linux.sh with no gh login.
+  # Main's run still reads red while a pin lags (ci-main-status sees the run, not one job). Branch protection requires
+  # `tests` only, so a PR with a lagging pin is not blocked from merging; the red main is what stops the next merge.
+  release-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      # ci-main-status matches this step name (PINS_STEP) to recognise the pin-fix PR; tests/ci-main-status checks the two match.
       - name: "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release (playbook 7c57de5a)"
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/check-release-pins.py
-      - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
-        run: scripts/ci-linux.sh
 
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.

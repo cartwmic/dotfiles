@@ -9,6 +9,7 @@ source or the real home directory.
     python3 -m unittest discover -s tests/release-skills -v
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from test_import_release_skills import FAKE_GH, GOOD_TREE, Fixture
 
@@ -510,6 +512,69 @@ class BumpTests(Fixture):
         self.assertEqual(self.load()["prs"][0]["state"], "MERGED")
         self.assert_nothing_applied()
         self.assertEqual(self.sh("git", "-C", self.checkout, "branch", "--show-current").strip(), "wip")
+
+
+@unittest.skipUnless(shutil.which("chezmoi") and shutil.which("git"), "needs chezmoi and git")
+class PrTargetsTests(unittest.TestCase):
+    """pr_targets on a merge commit with the files of dotfiles#573: the Loop Engine bump and the agent-kit pin in one PR."""
+
+    KIT = ("dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json")
+    LE = ("dot_config/mise/config.toml", SKILLS_SRC + "/using-x/SKILL.md")
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="le-pr-targets-"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.home = self.dir / "home"
+        self.home.mkdir()
+        self.repo = self.dir / "repo"
+        self.git_env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@example.test", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+        spec = importlib.util.spec_from_file_location("loop_engine_bump_under_test", SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def merge_commit(self, files):
+        """A repo whose last commit (the stand-in for the squash merge) writes `files`; returns its sha."""
+        env = {**os.environ, **self.git_env, "HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / ".config")}
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.repo), *args], env=env, check=True, capture_output=True, text=True).stdout.strip()
+        self.repo.mkdir()
+        git("init", "-q", "-b", "main")
+        (self.repo / "seed").write_text("seed\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "seed")
+        for name in files:
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text("changed %s\n" % name)
+        git("add", "-A")
+        git("commit", "-q", "-m", "the PR")
+        self.env = patch.dict(os.environ, env)
+        return git("rev-parse", "HEAD")
+
+    def targets(self, files):
+        sha = self.merge_commit(files)
+        with self.env:
+            return self.module.pr_targets(self.repo, sha)
+
+    def test_a_combined_pr_gives_the_loop_engine_files_and_leaves_the_agent_kit_pins_out(self):
+        targets = self.targets(self.LE + self.KIT)
+        self.assertEqual(sorted(name for name, _, _ in targets.values()), sorted(self.LE))
+
+    def test_a_third_file_in_a_combined_pr_still_stops_and_the_message_names_only_it(self):
+        with self.assertRaises(self.module.Stop) as stop:
+            self.targets(self.LE + self.KIT + ("dot_unrelated",))
+        self.assertEqual(stop.exception.step, "drift")
+        self.assertIn("outside the pins and skills: dot_unrelated", str(stop.exception))
+
+    def test_one_agent_kit_pin_file_is_skipped_but_any_other_agent_kit_file_stops(self):
+        with self.assertRaises(self.module.Stop) as stop:
+            self.targets(self.LE + (self.KIT[0], "dot_local/share/agent-kit/dot_npmrc"))
+        self.assertIn("outside the pins and skills: dot_local/share/agent-kit/dot_npmrc", str(stop.exception))
+
+    def test_a_pr_with_only_the_agent_kit_pins_stops(self):
+        with self.assertRaises(self.module.Stop) as stop:
+            self.targets(self.KIT)
+        self.assertIn("no Loop Engine pin or skill", str(stop.exception))
 
 
 class ReadmeTests(unittest.TestCase):

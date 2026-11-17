@@ -80,9 +80,17 @@ pr = [p for p in state["prs"] if p["number"] == int(args[2])][0]
 if verb == "checks":
     rounds = state["checks"]
     out(rounds.pop(0) if len(rounds) > 1 else rounds[0])
+if verb == "view" and "files" in args[-1]:  # the PR's changed files, read before anything is pushed
+    files = [f for f in git("diff", "--name-only", "main..." + pr["head"]).split("\n") if f]
+    out({"files": [{"path": f} for f in files], "changedFiles": pr.get("changedFiles", len(files)), "isCrossRepository": pr.get("fork", False)})
 if verb == "view":
+    head = git("rev-parse", "refs/heads/" + pr["head"])
+    stale = state.get("stale")  # GitHub lags: after a push, report the old head for `count` reads
+    if stale and head != stale["oid"] and stale["count"] > 0:
+        stale["count"] -= 1
+        head = stale["oid"]
     out({"number": pr["number"], "state": pr["state"], "url": pr["url"], "mergeCommit": pr["mergeCommit"],
-         "headRefOid": git("rev-parse", "refs/heads/" + pr["head"])})
+         "headRefOid": head, "headRefName": pr["head"]})
 if verb == "merge":
     head = git("rev-parse", "refs/heads/" + pr["head"])
     if "--match-head-commit" not in args or args[args.index("--match-head-commit") + 1] != head:
@@ -186,8 +194,8 @@ class AgentKitBumpTests(unittest.TestCase):
         self.sh("git", "-C", other, "commit", "-q", "-am", "unrelated")
         self.sh("git", "-C", other, "push", "-q", "origin", "main")
 
-    def bump(self, version=NEW):
-        return subprocess.run([sys.executable, str(SCRIPT), version, "--source", str(self.checkout)], env=self.env(),
+    def bump(self, version=NEW, *extra):
+        return subprocess.run([sys.executable, str(SCRIPT), version, "--source", str(self.checkout), *extra], env=self.env(),
                               capture_output=True, text=True, timeout=300)
 
     def live(self, path):
@@ -368,6 +376,167 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn("resuming PR #100 (MERGED)", again.stdout)
         self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
+
+    # --pr N: the pin goes onto a Loop Engine bump PR that already exists (two releases landed close together; dotfiles#573).
+    LE_BRANCH = "loop-engine-v9.9.9"
+    LE_FILES = {"dot_config/mise/config.toml": "[tools]\nloop-engine = \"9.9.9\"\n",
+                "dot_local/share/agent-harness/canonical/skills/using-x/SKILL.md": "a skill\n"}
+
+    def existing_pr(self, files=None, state="OPEN"):
+        """A PR #7 on a branch from main carrying `files` (default: the Loop Engine's mise config and one skill)."""
+        clone = self.dir / "le-clone"
+        self.sh("git", "clone", "-q", self.origin, clone)
+        self.sh("git", "-C", clone, "switch", "-q", "-c", self.LE_BRANCH)
+        for path, text in (self.LE_FILES if files is None else files).items():
+            (clone / path).parent.mkdir(parents=True, exist_ok=True)
+            (clone / path).write_text(text, encoding="utf-8")
+        self.sh("git", "-C", clone, "add", "-A")
+        self.sh("git", "-C", clone, "commit", "-q", "-m", "chore(loop-engine): import 9.9.9")
+        self.sh("git", "-C", clone, "push", "-q", "origin", self.LE_BRANCH)
+        self.gh_state.write_text(json.dumps({"prs": [{"number": 7, "state": state, "url": "https://example.test/pull/7",
+                                                      "head": self.LE_BRANCH, "title": "Loop Engine 9.9.9", "body": "", "mergeCommit": None}],
+                                             "checks": [[{"name": "tests", "bucket": "pass"}]]}), encoding="utf-8")
+
+    def branch_head(self):
+        return self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/" + self.LE_BRANCH).strip()
+
+    def test_pr_pins_onto_the_existing_pr_and_applies_only_the_agent_kit_files(self):
+        self.world()
+        self.existing_pr()
+        before = self.branch_head()
+        result = self.bump(NEW, "--pr", "7")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.prs()), 1, "no PR of its own")
+        self.assertFalse(any(c.startswith("gh pr create") for c in self.calls()))
+        self.assertEqual(self.sh("git", "--git-dir", self.origin, "branch", "--list", "agent-kit-*"), "")
+
+        # One plain commit of the two pin files on top of the PR's head (an ancestor check: a force push would not keep it).
+        after = self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/" + self.LE_BRANCH).strip()
+        self.assertNotEqual(before, after)
+        self.sh("git", "--git-dir", self.origin, "merge-base", "--is-ancestor", before, after)
+        pushed = self.sh("git", "--git-dir", self.origin, "diff", "--name-only", before, after).split()
+        self.assertEqual(sorted(pushed), sorted([KIT_SRC + "/package.json", KIT_SRC + "/package-lock.json"]))
+
+        # The merge names the pushed head; the checks that ran are the new head's.
+        calls = self.calls()
+        self.assertIn("--match-head-commit " + after, [c for c in calls if c.startswith("gh pr merge")][0])
+        self.assertEqual([c for c in calls if c.startswith("ci-main-status")], ["ci-main-status --merge-gate dotfiles --pr 7"])
+
+        # The kit pin is applied and installed; the Loop Engine files in the same PR are left to loop_engine_bump.py.
+        self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
+        self.assertEqual(json.loads((self.home / KIT_DEST / "node_modules" / PACKAGE / "package.json").read_text())["version"], NEW)
+        self.assertIsNone(self.live(".config/mise/config.toml"))
+        self.assertIsNone(self.live(".local/share/agent-harness/canonical/skills/using-x/SKILL.md"))
+        self.assertEqual([line["step"] for line in self.log_lines()],
+                         ["profile", "pr", "publish", "checks", "gates", "merge", "source", "drift", "apply", "install", "verify"])
+
+        # A rerun resumes the merged PR: no push, no second merge.
+        again = self.bump(NEW, "--pr", "7")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(self.branch_head(), after)
+        self.assertEqual(len([c for c in self.calls() if c.startswith("gh pr merge")]), 1)
+
+    def test_pr_with_the_pin_already_on_its_head_pushes_nothing(self):
+        self.world()
+        self.existing_pr()
+        self.gh_state.write_text(json.dumps({**json.loads(self.gh_state.read_text()), "checks": [[{"name": "tests", "bucket": "fail"}]]}))
+        self.assert_stopped(self.bump(NEW, "--pr", "7"), "checks", "red checks")
+        pinned = self.branch_head()  # the first run pushed the pin, then stopped on the red check
+        self.gh_state.write_text(json.dumps({**json.loads(self.gh_state.read_text()), "checks": [[{"name": "tests", "bucket": "pass"}]]}))
+        result = self.bump(NEW, "--pr", "7")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("already pins", result.stdout)
+        self.assertEqual(self.sh("git", "--git-dir", self.origin, "log", "--format=%s", "-n", "3", pinned).count("pin %s %s" % (PACKAGE, NEW)), 1)
+
+    def test_the_checks_wait_for_github_to_report_the_pushed_head(self):
+        self.world()
+        self.existing_pr()
+        before = self.branch_head()
+        state = json.loads(self.gh_state.read_text())
+        state["stale"] = {"oid": before, "count": 3}
+        self.gh_state.write_text(json.dumps(state))
+        result = self.bump(NEW, "--pr", "7")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        merge = next(i for i, c in enumerate(calls) if c.startswith("gh pr merge"))
+        self.assertIn("--match-head-commit " + self.branch_head(), calls[merge])
+        self.assertNotIn("--match-head-commit " + before, calls[merge])
+        # Four reads of the PR after the push (three stale, one current) came before the checks.
+        views = [i for i, c in enumerate(calls) if c.startswith("gh pr view 7 --json number")]
+        self.assertGreaterEqual(len([i for i in views if i < next(i for i, c in enumerate(calls) if c.startswith("gh pr checks"))]), 5)
+
+    def test_a_head_that_never_shows_the_push_stops_without_checks_or_merge(self):
+        self.world()
+        self.existing_pr()
+        state = json.loads(self.gh_state.read_text())
+        state["stale"] = {"oid": self.branch_head(), "count": 1000}
+        self.gh_state.write_text(json.dumps(state))
+        result = self.bump(NEW, "--pr", "7")
+        self.assert_stopped(result, "publish", "still reports head")
+        self.assertFalse(any(c.startswith(("gh pr checks", "gh pr merge")) for c in self.calls()))
+
+    def test_pr_closed_without_merging_stops(self):
+        self.world()
+        self.existing_pr(state="CLOSED")
+        before = self.branch_head()
+        self.assert_stopped(self.bump(NEW, "--pr", "7"), "pr", "was closed without merging")
+        self.assertEqual(self.branch_head(), before)
+        self.assert_nothing_applied()
+
+    def assert_refused_untouched(self, result, text):
+        """Refused before anything is pushed, merged or applied: the PR branch and main are as they were."""
+        before_main = self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/main").strip()
+        self.assert_stopped(result, "publish", text)
+        self.assertEqual(self.branch_head(), self.before_head)
+        self.assertEqual(self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/main").strip(), before_main)
+        self.assertFalse(any(c.startswith(("gh pr merge", "ci-main-status", "pr-body-check", "npm")) for c in self.calls()), self.calls())
+        self.assertEqual(self.prs()[0]["state"], "OPEN")
+        self.assert_nothing_applied()
+
+    def refused_pr(self, **kwargs):
+        self.world()
+        self.existing_pr(**kwargs)
+        self.before_head = self.branch_head()
+        return self.bump(NEW, "--pr", "7")
+
+    def test_a_pr_with_only_an_unrelated_file_is_refused_before_anything_is_pushed_or_merged(self):
+        # The reviewer's probe (dotfiles#575 round 1): a mistyped N must not merge an unrelated PR into main.
+        result = self.refused_pr(files={"dot_unrelated_feature": "not a pin\n"})
+        self.assert_refused_untouched(result, "outside the agent-kit pins and the Loop Engine pins and skills: dot_unrelated_feature")
+        self.assertNotIn("dot_unrelated_feature", self.sh("git", "--git-dir", self.origin, "ls-tree", "-r", "--name-only", "refs/heads/main"))
+
+    def test_a_third_file_beside_the_loop_engine_files_is_refused_before_anything_is_pushed(self):
+        result = self.refused_pr(files={**self.LE_FILES, "dot_unrelated_new": "not a pin\n"})
+        self.assert_refused_untouched(result, "outside the agent-kit pins and the Loop Engine pins and skills: dot_unrelated_new")
+
+    def test_a_pr_from_a_fork_is_refused_before_anything_is_pushed(self):
+        self.world()
+        self.existing_pr()
+        self.before_head = self.branch_head()
+        state = json.loads(self.gh_state.read_text())
+        state["prs"][0]["fork"] = True
+        self.gh_state.write_text(json.dumps(state))
+        self.assert_refused_untouched(self.bump(NEW, "--pr", "7"), "is from a fork")
+
+    def test_a_file_list_shorter_than_the_changed_file_count_is_refused(self):
+        self.world()
+        self.existing_pr()
+        self.before_head = self.branch_head()
+        state = json.loads(self.gh_state.read_text())
+        state["prs"][0]["changedFiles"] = 150  # gh listed the pages it got, not all 150
+        self.gh_state.write_text(json.dumps(state))
+        self.assert_refused_untouched(self.bump(NEW, "--pr", "7"), "gh listed 2 of PR #7's 150 changed files")
+
+    def test_a_pr_with_only_one_agent_kit_pin_file_stops_at_drift(self):
+        self.world()
+        self.existing_pr(files={KIT_SRC + "/package.json": json.dumps({"dependencies": {PACKAGE: NEW}}) + "\n"})
+        # --pr would add the second file; to see the one-file shape, merge it as a bare PR that this script did not touch.
+        state = json.loads(self.gh_state.read_text())
+        sha = self.branch_head()
+        self.sh("git", "--git-dir", self.origin, "update-ref", "refs/heads/main", sha)
+        state["prs"][0].update(state="MERGED", mergeCommit={"oid": sha})
+        self.gh_state.write_text(json.dumps(state))
+        self.assert_stopped(self.bump(NEW, "--pr", "7"), "drift", "must change both agent-kit pin files")
 
     def test_a_source_checkout_not_on_main_stops_before_apply(self):
         self.world()

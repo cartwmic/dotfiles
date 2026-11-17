@@ -26,7 +26,7 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
   Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
   package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
-  tree). (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
+  tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
 
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
@@ -356,11 +356,12 @@ def first_parent_walk(repo, tip, verdicts, trees=None):
 
 
 def pin_files_only(names):
-    """True when `names` (a PR's changed files) are exactly one bump's pin files: agent-kit's two, or the Loop Engine mise config plus skills."""
+    """True when `names` (a PR's changed files) are only bump pin files: agent-kit's two, the Loop Engine mise config plus skills, or both (one combined bump PR)."""
     names = set(names)
-    if names == AGENT_KIT_PIN_FILES:
-        return True
-    return LOOP_ENGINE_MISE_CONFIG in names and all(n == LOOP_ENGINE_MISE_CONFIG or n.startswith(LOOP_ENGINE_SKILLS) for n in names)
+    kit, rest = names & AGENT_KIT_PIN_FILES, names - AGENT_KIT_PIN_FILES
+    if not names or (kit and kit != AGENT_KIT_PIN_FILES):
+        return False
+    return not rest or (LOOP_ENGINE_MISE_CONFIG in rest and all(n == LOOP_ENGINE_MISE_CONFIG or n.startswith(LOOP_ENGINE_SKILLS) for n in rest))
 
 
 def not_ok(steps):
