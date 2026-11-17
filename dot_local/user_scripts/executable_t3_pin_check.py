@@ -301,22 +301,24 @@ def gitea_call(api, token, method, path, payload=None):
         raise Stop(EXIT_NOT_READ, "Gitea %s %s failed: %s" % (method, path, error))
 
 
-def is_bump(version, branch, title):
-    return branch == branch_of(version) or (title or "").startswith("t3 pin: %s" % version)
+def bump_branch(version):
+    """The one key that names a bump PR: its head branch. The branch the PR is made from and the test for an existing PR both come from here, so they cannot
+    disagree. The whole version is in it, compared for equality, so 0.1.10 never matches 0.1.10-nightly.N (or 0.1.1). The title is display only."""
+    return "t3-pin/" + version
 
 
-def branch_of(version):
-    return "t3-pin-" + version
+def is_bump(version, head_branch):
+    return head_branch == bump_branch(version)
 
 
 def open_bump_dotfiles(slug, version):
     prs = json.loads(run(["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "number,url,title,headRefName"]).stdout)
-    return [p["url"] for p in prs if is_bump(version, p["headRefName"], p["title"])]
+    return [p["url"] for p in prs if is_bump(version, p["headRefName"])]
 
 
 def open_bump_steward(api, token, version):
     prs = gitea_call(api, token, "GET", "/pulls?state=open&limit=50") or []
-    return [p["html_url"] for p in prs if is_bump(version, p["head"]["ref"], p["title"])]
+    return [p["html_url"] for p in prs if is_bump(version, p["head"]["ref"])]
 
 
 class Worktree:
@@ -336,8 +338,8 @@ class Worktree:
 
 
 def publish(repo, file, edit, version, sums, title, extra, dry_run=False):
-    """Commit the edit on t3-pin-<version> in a fresh worktree of origin/main and push it. Returns the branch. A dry run prints the diff and pushes nothing."""
-    branch = branch_of(version)
+    """Commit the edit on t3-pin/<version> in a fresh worktree of origin/main and push it. Returns the branch. A dry run prints the diff and pushes nothing."""
+    branch = bump_branch(version)
     with Worktree(repo) as wt:
         target = wt.path / file
         before = target.read_text()

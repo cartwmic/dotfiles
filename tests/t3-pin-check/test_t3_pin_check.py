@@ -13,6 +13,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from urllib.parse import parse_qs, urlparse
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -25,6 +26,10 @@ NEW = "0.1.10-nightly.20261117.4900"
 NEW_X64 = "a" * 63 + "1"
 NEW_ARM = "b" * 63 + "2"
 GITHUB_URL = "https://github.com/cartwmic/dotfiles.git"
+def branch(version):
+    return "t3-pin/" + version
+
+
 GITEA_URL = "https://gitea.example.test/cartwmic/budget-steward.git"
 
 # `gh pr list` reads gh-prs.json; a successful `gh pr create` adds its PR to that file (so the next run sees it open); the file gh-fail makes create fail.
@@ -34,7 +39,9 @@ args = sys.argv[1:]
 open(os.environ["FAKE_GH_LOG"], "a").write(" ".join(args) + "\\n")
 prs = os.environ["FAKE_GH_PRS"]
 if args[:2] == ["pr", "list"]:
-    print(open(prs).read() if os.path.exists(prs) else "[]")
+    want = args[args.index("--state") + 1] if "--state" in args else "open"   # like gh: open unless told otherwise
+    every = json.load(open(prs)) if os.path.exists(prs) else []
+    print(json.dumps([p for p in every if want == "all" or p.get("state", "open").lower() == want]))
 elif args[:2] == ["pr", "create"]:
     if os.path.exists(os.path.join(os.path.dirname(prs), "gh-fail")):
         print("gh: HTTP 401: Bad credentials", file=sys.stderr)
@@ -77,7 +84,8 @@ class FakeGitea(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        self._send(self.open_prs)
+        want = parse_qs(urlparse(self.path).query).get("state", ["open"])[0]
+        self._send([p for p in self.open_prs if want == "all" or p.get("state", "open") == want])
 
     def do_POST(self):
         if self.fail_post:
@@ -289,23 +297,23 @@ class OpenPrs(Case):
     def test_it_opens_one_pr_per_repo_with_the_shas_from_SHA256SUMS(self):
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        branch = "t3-pin-" + NEW
-        dot = self.show("dotfiles.git", ".chezmoidata.toml", branch)
+        br = branch(NEW)
+        dot = self.show("dotfiles.git", ".chezmoidata.toml", br)
         self.assertIn('version = "%s"' % NEW, dot)
         self.assertIn('sha256X64 = "%s"' % NEW_X64, dot)
         self.assertIn('sha256Arm64 = "%s"' % NEW_ARM, dot)
-        dock = self.show("steward.git", "Dockerfile", branch)
+        dock = self.show("steward.git", "Dockerfile", br)
         self.assertIn("t3_version=%s;" % NEW, dock)
         self.assertIn("t3_sha256=%s;;" % NEW_X64, dock)
         self.assertIn("t3_sha256=%s;;" % NEW_ARM, dock)
         # nothing else changed in either file
         for bare, path in (("dotfiles.git", ".chezmoidata.toml"), ("steward.git", "Dockerfile")):
-            diff = git(self.dir / bare, "diff", "--numstat", "main", branch, "--", path).split()
+            diff = git(self.dir / bare, "diff", "--numstat", "main", br, "--", path).split()
             self.assertEqual(diff[:2], ["3", "3"], diff)
         creates = [c for c in self.gh_calls() if c.startswith("pr create")]
         self.assertEqual(len(creates), 1)
         self.assertEqual(len(FakeGitea.created), 1)
-        self.assertEqual(FakeGitea.created[0]["head"], branch)
+        self.assertEqual(FakeGitea.created[0]["head"], br)
         self.assertIn("https://github.com/cartwmic/dotfiles/pull/100", r.stdout)
         self.assertIn("pulls/71", r.stdout)
 
@@ -364,7 +372,7 @@ class OpenPrs(Case):
 
     def test_an_open_dotfiles_bump_pr_is_done_and_only_the_steward_one_is_opened(self):
         (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "https://github.com/cartwmic/dotfiles/pull/5",
-                                                           "title": "t3 pin: " + NEW, "headRefName": "t3-pin-" + NEW}]))
+                                                           "title": "t3 pin: " + NEW, "headRefName": branch(NEW)}]))
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.creates(), [], "dotfiles already has its PR: no second one")
@@ -374,7 +382,7 @@ class OpenPrs(Case):
 
     def test_an_open_steward_bump_pr_is_done_and_only_the_dotfiles_one_is_opened(self):
         FakeGitea.open_prs = [{"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/3", "title": "t3 pin: " + NEW,
-                               "head": {"ref": "t3-pin-" + NEW}}]
+                               "head": {"ref": branch(NEW)}}]
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(len(self.creates()), 1)
@@ -384,9 +392,9 @@ class OpenPrs(Case):
 
     def test_both_already_open_is_the_refusal_and_opens_nothing(self):
         FakeGitea.open_prs = [{"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/3", "title": "t3 pin: " + NEW,
-                               "head": {"ref": "t3-pin-" + NEW}}]
+                               "head": {"ref": branch(NEW)}}]
         (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "https://github.com/cartwmic/dotfiles/pull/5",
-                                                           "title": "t3 pin: " + NEW, "headRefName": "t3-pin-" + NEW}]))
+                                                           "title": "t3 pin: " + NEW, "headRefName": branch(NEW)}]))
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
         self.assertIn("steward: PR open", r.stderr)
@@ -415,7 +423,7 @@ class OpenPrs(Case):
     def test_half_state_the_other_order_dotfiles_open_steward_missing(self):
         # the dotfiles PR exists (opened by hand, or by an earlier run); the steward one was never made
         (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "https://github.com/cartwmic/dotfiles/pull/5",
-                                                           "title": "t3 pin: " + NEW, "headRefName": "t3-pin-" + NEW}]))
+                                                           "title": "t3 pin: " + NEW, "headRefName": branch(NEW)}]))
         FakeGitea.fail_post = True
         r1 = self.run_check("--open-prs")
         self.assertEqual(r1.returncode, 3, r1.stdout + r1.stderr)
@@ -437,7 +445,7 @@ class OpenPrs(Case):
         self.assertEqual(len(FakeGitea.created), 1)
 
     def test_an_open_pr_for_another_version_does_not_block(self):
-        (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "u", "title": "t3 pin: 0.1.9", "headRefName": "t3-pin-0.1.9"}]))
+        (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "u", "title": "t3 pin: 0.1.9", "headRefName": branch("0.1.9")}]))
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
@@ -463,7 +471,99 @@ class OpenPrs(Case):
         git(self.steward, "push", "-q", "origin", "main")
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("t3_sha256=%s;;" % NEW_X64, self.show("steward.git", "Dockerfile", "t3-pin-" + NEW))
+        self.assertIn("t3_sha256=%s;;" % NEW_X64, self.show("steward.git", "Dockerfile", branch(NEW)))
+
+
+class WhichPrIsTheBump(Case):
+    """An open PR counts as the bump for a version only when its head branch is exactly t3-pin/<that version>. Titles are display."""
+    host = "0.1.10"
+    STABLE = "0.1.10"
+    STABLE_X64, STABLE_ARM = "c" * 63 + "3", "c" * 63 + "4"
+
+    def setUp(self):
+        super().setUp()
+        self.release(self.STABLE, self.STABLE_X64, self.STABLE_ARM)
+
+    def gh_pr(self, version, number, state="OPEN", title=None):
+        return {"number": number, "url": "https://github.com/cartwmic/dotfiles/pull/%d" % number, "state": state,
+                "title": title or "t3 pin: " + version, "headRefName": branch(version)}
+
+    def gitea_pr(self, version, number, state="open", title=None):
+        return {"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/%d" % number, "state": state,
+                "title": title or "t3 pin: " + version, "head": {"ref": branch(version)}}
+
+    def seed(self, gh=(), gitea=()):
+        (self.dir / "gh-prs.json").write_text(json.dumps(list(gh)))
+        FakeGitea.open_prs[:] = list(gitea)
+
+    def assert_both_opened_for(self, version, r):
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        creates = [c for c in self.gh_calls() if c.startswith("pr create")]
+        self.assertEqual(len(creates), 1, creates)
+        self.assertIn("--head " + branch(version) + " ", creates[0])
+        self.assertEqual([c["head"] for c in FakeGitea.created], [branch(version)])
+        self.assertIn(version, self.show("dotfiles.git", ".chezmoidata.toml", branch(version)))
+        self.assertIn("t3_version=%s;" % version, self.show("steward.git", "Dockerfile", branch(version)))
+
+    def test_an_open_nightly_pr_does_not_count_as_the_bump_for_the_stable_release_it_prefixes(self):
+        self.seed([self.gh_pr(OLD, 5, title="t3 pin: 0.1.10-nightly.20261117.4900")], [self.gitea_pr(OLD, 3, title="t3 pin: 0.1.10-nightly.20261117.4900")])
+        r = self.run_check("--open-prs")
+        self.assert_both_opened_for(self.STABLE, r)
+
+    def test_an_open_nightly_pr_in_one_repo_only_does_not_split_the_pins(self):
+        self.seed([self.gh_pr(OLD, 5)], [])
+        r = self.run_check("--open-prs")
+        self.assert_both_opened_for(self.STABLE, r)
+
+    def test_a_pr_for_a_version_that_is_a_prefix_of_the_target_does_not_count(self):
+        self.seed([self.gh_pr("0.1.1", 5)], [self.gitea_pr("0.1.1", 3)])
+        self.assert_both_opened_for(self.STABLE, self.run_check("--open-prs"))
+
+    def test_a_closed_pr_for_the_target_does_not_count(self):
+        self.seed([self.gh_pr(self.STABLE, 5, state="CLOSED")], [self.gitea_pr(self.STABLE, 3, state="closed")])
+        self.assert_both_opened_for(self.STABLE, self.run_check("--open-prs"))
+
+    def test_an_open_pr_for_exactly_the_target_does_count(self):
+        self.seed([self.gh_pr(self.STABLE, 5)], [self.gitea_pr(self.STABLE, 3)])
+        r = self.run_check("--open-prs")
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+
+    def test_the_title_is_display_only(self):
+        # the branch is the target's, the title is something else entirely: it still counts. A matching title on another branch does not.
+        self.seed([self.gh_pr(self.STABLE, 5, title="Bump the pods")], [self.gitea_pr(OLD, 3, title="t3 pin: " + self.STABLE)])
+        r = self.run_check("--open-prs")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("dotfiles: PR open", r.stdout)
+        self.assertIn("steward: opened", r.stdout)
+
+
+class WhichPrIsTheBumpReverse(WhichPrIsTheBump):
+    """The reverse: the target is a nightly and the open PR is for the stable release it is a prerelease of (or an older nightly, or a different version)."""
+    host = NEW
+
+    def setUp(self):
+        Case.setUp(self)
+
+    def test_an_open_pr_for_the_stable_release_does_not_count_for_a_nightly_target(self):
+        self.seed([self.gh_pr("0.1.10", 5)], [self.gitea_pr("0.1.10", 3)])
+        self.assert_both_opened_for(NEW, self.run_check("--open-prs"))
+
+    def test_an_open_pr_for_an_older_nightly_does_not_count(self):
+        older = "0.1.10-nightly.20261117.490"
+        self.seed([self.gh_pr(older, 5)], [self.gitea_pr(older, 3)])
+        self.assert_both_opened_for(NEW, self.run_check("--open-prs"))
+
+    def test_an_open_pr_for_an_older_release_does_not_count(self):
+        self.seed([self.gh_pr("0.1.9", 5)], [self.gitea_pr("0.1.9", 3)])
+        self.assert_both_opened_for(NEW, self.run_check("--open-prs"))
+
+    # the stable-target tests above do not apply to a nightly target
+    test_an_open_nightly_pr_does_not_count_as_the_bump_for_the_stable_release_it_prefixes = None
+    test_an_open_nightly_pr_in_one_repo_only_does_not_split_the_pins = None
+    test_a_pr_for_a_version_that_is_a_prefix_of_the_target_does_not_count = None
+    test_a_closed_pr_for_the_target_does_not_count = None
+    test_an_open_pr_for_exactly_the_target_does_count = None
+    test_the_title_is_display_only = None
 
 
 class NotRead(Case):
