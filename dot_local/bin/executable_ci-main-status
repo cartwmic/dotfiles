@@ -77,7 +77,9 @@ names the line and the tip that had the tree. Lines without "tree" match by tip 
 a flake, with "issue") is not red and not tested: plain mode and --tip both exit 2 for a flake with no later pass
 (start a run), because a deploy needs a pass on the tip.
 The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green,
-or once every commit with a verdict has been reached. WALK_CAP is a backstop.
+or once every commit with a verdict has been reached. WALK_CAP is a backstop. Commit reads use gh's 1-hour cache (a commit
+never changes); run list and branches/main are always read fresh.
+Every gh call carries GH_CALLER=ci-main-status. --merge-gate and --tip also set GH_URGENT=1; plain and --all add nothing.
 """
 import itertools
 import json
@@ -113,6 +115,8 @@ AGENT_KIT_PIN_FILES = {"dot_local/share/agent-kit/package.json", "dot_local/shar
 LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
 LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills/"
 WALK_CAP = 250
+CALLER = "ci-main-status"   # every gh call names its caller (GH_CALLER); the gh wrapper's log records it
+URGENT = False              # set by main(): --merge-gate and --tip reads are urgent (GH_URGENT=1)
 
 
 class Unreadable(Exception):
@@ -133,8 +137,11 @@ class Record:
 
 
 def gh(args):
+    env = {**os.environ, "GH_CALLER": CALLER}
+    if URGENT:
+        env["GH_URGENT"] = "1"
     try:
-        r = subprocess.run(["gh", *args], capture_output=True, text=True)
+        r = subprocess.run(["gh", *args], capture_output=True, text=True, env=env)
     except OSError as e:
         raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
     if r.returncode:
@@ -333,7 +340,7 @@ def first_parent_walk(repo, tip, verdicts, trees=None):
     trees = trees or {}
     walked, pending, cur = [], set(verdicts), tip
     while pending and cur and len(walked) < WALK_CAP:
-        c = gh(["api", f"repos/{repo}/commits/{cur}"])
+        c = gh(["api", f"repos/{repo}/commits/{cur}", "--cache", "1h"])   # a commit never changes, so the 1-hour cache is exact
         rec = verdict_of(cur, c["commit"].get("tree", {}).get("sha"), verdicts, trees)
         walked.append((cur, c["commit"]["message"].split("\n")[0], rec))
         pending.discard(cur)
@@ -580,8 +587,10 @@ def describe(name, tip_only=False, pr=None):
 
 
 def main(argv):
+    global URGENT
     tip_only = "--tip" in argv
     merge_gate = "--merge-gate" in argv
+    URGENT = tip_only or merge_gate
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
     pr = None
     if "--pr" in argv:
