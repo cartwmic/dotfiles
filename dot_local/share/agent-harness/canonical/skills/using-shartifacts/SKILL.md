@@ -39,6 +39,38 @@ command `shx-note-image`.
   for an edit that makes no choice.
 - `ledger publish-plan --help` has the rest.
 
+## Publish a large page
+
+`create_artifact` and `update_artifact` take the page as text inside the tool call, so a big page
+has to pass through you in full. If the page is already a file, or too long to write out in a
+tool call, send it from the shell instead. The same route serves scripts and cluster pods with
+no MCP. It needs no sign-in.
+
+```sh
+U=https://shartifacts.internal.cartwmic.com
+jq -n --rawfile c page.html '{title:"My page",kind:"html",content:$c}' |
+  curl --fail-with-body --silent --show-error -H 'Content-Type: application/json' \
+    --data-binary @- --url "$U/api/artifacts" | jq -r .id
+```
+
+It returns `201` and the response holds the whole page, so pipe it to `jq` as above and print
+only the `id`. Link `https://shartifacts.internal.cartwmic.com/view/<id>`.
+
+Update the same artifact in place (`$U` as above, `ID` the artifact id). `N` is the latest version, which `GET /api/artifacts/<id>`
+gives as the last entry of `revisions`. A stale `base_version` returns `409`: read it again and retry.
+
+```sh
+N=$(curl --fail-with-body --silent --show-error --url "$U/api/artifacts/$ID" | jq '.revisions[-1].version')
+jq -n --rawfile c page.html --argjson n "$N" '{base_version:$n,content:$c}' |
+  curl --fail-with-body --silent --show-error -X PUT -H 'Content-Type: application/json' \
+    --data-binary @- --url "$U/api/artifacts/$ID" | jq '.revisions[-1].version'
+```
+
+The POST does not lift the size limit. `content` over 2 MiB returns `400 content exceeds 2 MiB`,
+and so does any single `files` entry over 2 MiB. Above that, split the page into `files`
+(`"files":{"a.css":"..."}`, each under 2 MiB) or upload the big parts to `/api/media` and
+reference their `/media/` URLs.
+
 ## Charts, diagrams and pictures
 
 shartifacts is the only place to publish these.
@@ -55,11 +87,7 @@ shartifacts is the only place to publish these.
 
   It returns `{"id":...,"url":"/media/<id>.png",...}`. Give Michael the URL with the
   `https://shartifacts.internal.cartwmic.com` prefix.
-- A script or cluster pod with no MCP publishes over HTTP. `POST /api/artifacts` with JSON
-  `{"title","kind","content"}` returns `201` and the `id`. Update in place with
-  `PUT /api/artifacts/<id>` and `{"base_version": N, "content": ...}`, where N is the latest
-  version. A stale `base_version` returns `409`: read the artifact again and retry. The link
-  stays the same.
+- A script or cluster pod with no MCP publishes over HTTP; see "Publish a large page".
 
 ## Read his comments and drawings
 
