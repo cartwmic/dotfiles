@@ -9,7 +9,7 @@ round's brief.md:   review-intent --pr cartwmic/coordinator#782 >> round-1/brief
 
 Inputs: the PR body (--pr, read with gh), any text files (--body-file, repeatable), and ids given by hand. Read-only: it reads the ledger and prints.
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
-  every #N on a `Decisions:` line (decisions); every #N on an `Approved by:` line, and every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
+  every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
   the ask each collected decision names (its ask_id, and any `ask #N` in its why); and for each collected ask, the ask its workstream's creation why cites.
 An id the ledger does not know is an error (exit 1, each id named): fix the citation, do not drop it.
 Exit 0 the block is printed; 1 an id is unknown; 2 bad arguments, no ledger, or gh failed.
@@ -173,8 +173,6 @@ def build(texts, asks_given, decisions_given, ledger):
         t = without_block(t)
         for n in line_ids(t, "Decisions"):
             add(dec_why, n, "a Decisions: line")
-        for n in line_ids(t, "Approved by"):
-            add(ask_why, n, "an Approved by: line")
         for n in ask_refs(t):
             add(ask_why, n, "named in the text")
     errors, decisions, asks = [], {}, {}
