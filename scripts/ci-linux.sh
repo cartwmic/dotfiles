@@ -70,6 +70,7 @@ python3 scripts/ci-par.py \
   tests/agent-browser \
   tests/dotfiles-update \
   tests/agent-kill-guard \
+  tests/config-show \
   tests/stop-running-jobs \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
