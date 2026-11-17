@@ -15,7 +15,7 @@ NAMES = ("shx-note-image", "artifact_comments", "watch_artifacts", "stroke", "st
          "current", "ok", "lost", "unchecked", "kind: \"mermaid\"", "kind: \"svg\"", "/api/media",
          "/api/artifacts", "base_version", "409",
          "ledger publish-plan", "--artifact", "--title", "--no-new-choices", "<!-- Decisions:",
-         "<!-- Not on this page:")
+         "<!-- Not on this page:", "## Publish a large page", "--rawfile", "content exceeds 2 MiB", "revisions[-1].version")
 
 
 def parts():
