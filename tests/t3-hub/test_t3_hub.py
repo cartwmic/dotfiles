@@ -680,7 +680,10 @@ KEEP = {
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
-# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat); workflow-authoring stays on.
+# The tools the builder, planner and reviewer seat files deny (restated from .chezmoitemplates/fleet_seat); the lead and coordinator keep them.
+UNUSED_TOOLS = {"ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"}
+UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer"}
+# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on for the lead and the coordinator, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
@@ -864,13 +867,15 @@ class FleetFilesTest(unittest.TestCase):
                     # the builder seat also carries its Stop hook (tests/stop-running-jobs)
                     self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat == "builder" else set())
                                      | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set()), (profile, seat))
-                    self.assertEqual(f["permissions"], {"deny": ["Artifact"]})
+                    # builder, planner and reviewer also deny the four tools they never call; lead and coordinator keep them
+                    self.assertEqual(f["permissions"], {"deny": ["Artifact"] + (sorted(UNUSED_TOOLS) if seat in UNUSED_TOOL_SEATS else [])}, (profile, seat))
                     self.assertIs(f["syncClaudeAiSkills"], False)
                     # bundled skills stay on so the Workflow tool keeps its short text (workflow-authoring carries the reference); every other bundled skill is off
                     self.assertIs(f["disableBundledSkills"], False)
                     self.assertEqual(set(f["skillOverrides"].values()), {"off"})
-                    self.assertNotIn("workflow-authoring", f["skillOverrides"])
-                    self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL)) - keep) | BUNDLED_OFF, (profile, seat))
+                    # the worker seats deny the Workflow tool, so workflow-authoring is off for them; the lead and the coordinator keep both
+                    self.assertEqual("workflow-authoring" in f["skillOverrides"], seat in UNUSED_TOOL_SEATS, (profile, seat))
+                    self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL)) - keep) | BUNDLED_OFF | ({"workflow-authoring"} if seat in UNUSED_TOOL_SEATS else set()), (profile, seat))
                     self.assertNotIn("synced", f["skillOverrides"])
             finally:
                 env.close()
@@ -879,11 +884,29 @@ class FleetFilesTest(unittest.TestCase):
         # skillOverrides is by name: a kept personal skill called "loop" or "run" would be switched off with the bundled one
         for seat, keep in KEEP.items():
             self.assertEqual(sorted(keep & BUNDLED_OFF), [], seat)
-        # and the template refuses to render it
+        # and the template refuses to render a seat that keeps one: render a copy of fleet_seat whose planner keep-list adds "loop"
+        text = (REPO / ".chezmoitemplates/fleet_seat").read_text()
+        old = '"planner" (list "designing-the-smallest-version"'
+        self.assertIn(old, text)
+        clashing = text.replace(old, '"planner" (list "loop" "designing-the-smallest-version"')
         env = fleet_env("personal")
         try:
-            tmpl = REPO / ".chezmoitemplates/fleet_seat"
-            self.assertIn("which is also a Claude Code bundled skill", tmpl.read_text())
+            call = '{{ template "fleet_seat_clash" (dict "seat" "%s" "ctx" .) }}'
+            define = '{{ define "fleet_seat_clash" }}' + clashing + "{{ end }}"
+            with self.assertRaises(AssertionError) as raised:
+                env.chezmoi("execute-template", stdin=define + call % "planner")
+            self.assertIn('seat planner keeps "loop"', str(raised.exception))
+            # the same copy renders for a seat that does not keep "loop": the failure is the clash, not the copy
+            self.assertEqual(set(json.loads(env.chezmoi("execute-template", stdin=define + call % "reviewer"))["skillOverrides"]) >= BUNDLED_OFF, True)
+            # workflow-authoring is off for the worker seats, so the refusal covers it there (and only there: the lead keeps it listed)
+            wf = text.replace('"planner" (list "designing-the-smallest-version"', '"planner" (list "workflow-authoring" "designing-the-smallest-version"').replace(
+                '"lead" (list "coordinating-loop-engine"', '"lead" (list "workflow-authoring" "coordinating-loop-engine"')
+            wfdef = '{{ define "fleet_seat_clash" }}' + wf + "{{ end }}"
+            with self.assertRaises(AssertionError) as raised:
+                env.chezmoi("execute-template", stdin=wfdef + call % "planner")
+            self.assertIn('seat planner keeps "workflow-authoring"', str(raised.exception))
+            lead = json.loads(env.chezmoi("execute-template", stdin=wfdef + call % "lead"))
+            self.assertNotIn("workflow-authoring", lead["skillOverrides"])
         finally:
             env.close()
 
@@ -891,7 +914,7 @@ class FleetFilesTest(unittest.TestCase):
         env = Env(codex_active=False)
         try:
             # nothing under ~/.claude/skills yet: the seat file still lists the source tree's skills, and still not the kept ones
-            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), (set(CANONICAL) - KEEP["planner"]) | BUNDLED_OFF)
+            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), (set(CANONICAL) - KEEP["planner"]) | BUNDLED_OFF | {"workflow-authoring"})
         finally:
             env.close()
 
