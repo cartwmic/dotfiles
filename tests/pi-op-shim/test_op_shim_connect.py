@@ -8,9 +8,52 @@ The fallback cases are in test_op_shim_connect_fallback.py.
 import os
 import shutil
 import subprocess
+import threading
+import time
 import unittest
 
 from connect_support import DEFAULT_HOST, FAKE_CONNECT, FAKE_SA, SHIM, ShimCase
+
+
+class ConnectOutputStaysOffDisk(ShimCase):
+    """What op prints through Connect (a password, a whole item) is held in memory by the shim, never in a file under TMPDIR."""
+    MARKER = "marker-value-9f3a1c-for-the-no-disk-test"
+
+    def files_holding(self, text):
+        hits = []
+        for path in self.tmp.rglob("*"):
+            try:
+                if path.is_file() and text.encode() in path.read_bytes():
+                    hits.append(path.name)
+            except OSError:
+                pass
+        return hits
+
+    def test_the_value_is_in_no_file_while_the_shim_runs_or_after(self):
+        seen = []
+        done = threading.Event()
+
+        def watch():   # the fake op prints the value and then lingers, so a file written for it would be there to find
+            while not done.is_set():
+                seen.extend(self.files_holding(self.MARKER))
+                time.sleep(0.02)
+
+        watcher = threading.Thread(target=watch)
+        watcher.start()
+        try:
+            result = self.run_shim(["item", "get", "i", "--format", "json"], env={"OP_CONNECT_TOKEN": FAKE_CONNECT, "FAKE_CONNECT_OUT": self.MARKER, "FAKE_CONNECT_LINGER": "1"})
+        finally:
+            done.set()
+            watcher.join()
+        self.assertEqual((result.returncode, result.stdout), (0, self.MARKER), result.stderr)
+        self.assertEqual(seen, [])
+        self.assertEqual(self.files_holding(self.MARKER), [])
+
+    def test_the_output_comes_back_byte_for_byte_including_trailing_newlines_and_nothing(self):
+        for out in ("a\n", "a\n\n\n", "  spaced  "):
+            with self.subTest(out=out):
+                result = self.run_shim(["read", "op://v/i/f"], env={"OP_CONNECT_TOKEN": FAKE_CONNECT, "FAKE_CONNECT_OUT": out})
+                self.assertEqual((result.returncode, result.stdout), (0, out), result.stderr)
 
 
 class ConnectRouting(ShimCase):
