@@ -1,0 +1,89 @@
+{{- /*
+  Installs the gh wrapper on every desktop profile (personal and axon-work-computer; Termux is out of scope, docs/profiles.md). docs/gh-wrapper.md.
+  Writes ~/.local/share/gh-wrapper/bin/gh (scripts/gh-wrapper), ~/.local/share/gh-wrapper/lib/*.py (scripts/gh-wrapper-lib), ~/.config/gh-wrapper/budget
+  (`on` or `off`) and ~/.config/mise/conf.d/gh-wrapper.toml, and removes the leak-guard install this replaces when it carries the old mark.
+  Local chezmoi data, both optional:
+    ghBudget:
+      enabled: true|false             # the log, rewrite and budget layers; default true on personal, false on axon-work-computer
+    leakGuard:                        # axon-work-computer only: the guarded repositories (host/owner/name off github.com)
+      repos: [<owner/name>, ...]      # written to ~/.config/leak-guard/repos; with none, the wrapper's leak-guard check does nothing (docs/leak-guard.md)
+*/ -}}
+{{- if ne .profile "termux" -}}
+{{-   $repos := list -}}
+{{-   $workGuard := and (eq .profile "axon-work-computer") (hasKey . "leakGuard") -}}
+{{-   if $workGuard -}}
+{{-     $lg := .leakGuard -}}
+{{-     if not (kindIs "map" $lg) }}{{ fail "leakGuard must be a map with terms (a list) and context (a string)" }}{{ end -}}
+{{-     $repos = dig "repos" (list) $lg -}}
+{{-     if not (kindIs "slice" $repos) }}{{ fail "leakGuard.repos must be a list of owner/name strings" }}{{ end -}}
+{{-     range $r := $repos }}{{ if or (not (kindIs "string" $r)) (not (regexMatch "^([^/\\s]+/)?[^/\\s]+/[^/\\s]+$" $r)) }}{{ fail "leakGuard.repos must contain only owner/name (or host/owner/name) strings" }}{{ end }}{{ end -}}
+{{-   end -}}
+{{-   $gb := dig "ghBudget" (dict) . -}}
+{{-   if not (kindIs "map" $gb) }}{{ fail "ghBudget must be a map with enabled (true or false)" }}{{ end -}}
+{{-   range $k, $_ := $gb }}{{ if ne $k "enabled" }}{{ fail (printf "ghBudget.%s is not a setting (enabled)" $k) }}{{ end }}{{ end -}}
+{{-   $on := eq .profile "personal" -}}
+{{-   if hasKey $gb "enabled" -}}
+{{-     if not (kindIs "bool" (get $gb "enabled")) }}{{ fail "ghBudget.enabled must be true or false" }}{{ end -}}
+{{-     $on = get $gb "enabled" -}}
+{{-   end -}}
+#!/bin/sh
+# gh wrapper installer (docs/gh-wrapper.md). Edit scripts/gh-wrapper, scripts/gh-wrapper-lib and the chezmoi data, not the installed files.
+set -eu
+umask 077
+MARK="gh wrapper (managed by chezmoi"
+OLDMARK="leak-guard gh wrapper (managed by chezmoi"
+base="$HOME/.local/share/gh-wrapper"
+dir="$base/bin"
+lib="$base/lib"
+mkdir -p "$dir" "$lib" "$HOME/.config/gh-wrapper" "$HOME/.config/mise/conf.d"
+# The lib first, the wrapper last: the wrapper never exists without the files it imports.
+names=""
+{{- range $f := glob (printf "%s/scripts/gh-wrapper-lib/*.py" .chezmoi.sourceDir) }}
+printf '%s' {{ include (printf "scripts/gh-wrapper-lib/%s" (base $f)) | b64enc | quote }} | base64 -d > "$lib/{{ base $f }}.tmp"
+chmod 644 "$lib/{{ base $f }}.tmp"
+mv "$lib/{{ base $f }}.tmp" "$lib/{{ base $f }}"
+names="$names {{ base $f }} "
+{{- end }}
+for f in "$lib"/*.py; do
+  [ -e "$f" ] || continue
+  case "$names" in *" $(basename "$f") "*) ;; *) rm -f "$f" ;; esac      # a layer this version no longer ships
+done
+printf '%s\n' {{ if $on }}on{{ else }}off{{ end }} > "$HOME/.config/gh-wrapper/budget.tmp"
+mv "$HOME/.config/gh-wrapper/budget.tmp" "$HOME/.config/gh-wrapper/budget"
+installed=1
+if [ -e "$dir/gh" ] && ! grep -qF "$MARK" "$dir/gh"; then
+  installed=0
+  echo "gh-wrapper: WARNING: $dir/gh already exists and is not the gh wrapper's; left alone, so the gh wrapper is NOT installed" >&2
+else
+  printf '%s' {{ include "scripts/gh-wrapper" | b64enc | quote }} | base64 -d > "$dir/gh.tmp"
+  chmod 755 "$dir/gh.tmp"
+  mv "$dir/gh.tmp" "$dir/gh"
+fi
+conf="$HOME/.config/mise/conf.d/gh-wrapper.toml"
+if [ -e "$conf" ] && ! grep -qF "$MARK" "$conf"; then
+  echo "gh-wrapper: WARNING: $conf already exists and is not the gh wrapper's; left alone, so mise may put another gh ahead of the wrapper" >&2
+else
+  printf '# gh wrapper (managed by chezmoi; run_onchange_after_47_install-gh-wrapper)\n# Keeps the wrapper directory first in the PATH mise builds; mise puts its own tool directories ahead of anything a .zshrc adds.\n[env]\n_.path = ["%s"]\n' "$dir" > "$conf.tmp"
+  mv "$conf.tmp" "$conf"
+fi
+{{- if $repos }}
+mkdir -p "$HOME/.config/leak-guard"
+printf '%s' {{ (join "\n" $repos) | b64enc | quote }} | base64 -d > "$HOME/.config/leak-guard/repos.tmp"
+printf '\n' >> "$HOME/.config/leak-guard/repos.tmp"
+mv "$HOME/.config/leak-guard/repos.tmp" "$HOME/.config/leak-guard/repos"
+{{- else if $workGuard }}
+echo "gh-wrapper: NOTICE: leakGuard.repos is empty or missing, so the wrapper's leak-guard check does nothing (docs/leak-guard.md)" >&2
+{{- end }}
+# The install this one replaces (the work profile's leak-guard wrapper): removed once the new one is in place, and only when it carries the old mark.
+if [ "$installed" = 1 ]; then
+  old="$HOME/.local/share/leak-guard/bin/gh"
+  if [ -e "$old" ] && grep -qF "$OLDMARK" "$old"; then
+    rm -f "$old"
+    rmdir "$HOME/.local/share/leak-guard/bin" "$HOME/.local/share/leak-guard" 2>/dev/null || true
+  fi
+  oldconf="$HOME/.config/mise/conf.d/leak-guard-gh.toml"
+  if [ -e "$oldconf" ] && grep -qF "# $OLDMARK" "$oldconf"; then
+    rm -f "$oldconf"
+  fi
+fi
+{{ end -}}
