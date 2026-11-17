@@ -1141,8 +1141,10 @@ class RunAndWake(unittest.TestCase):
         out = other.communicate(timeout=10)[0]
         self.assertEqual(other.returncode, 0)
         self.assertIn(f"[run-and-wake k:{job}] job finished: exit 0", out, "the lead gets the result printed")
-        records = self.final_records(job, "read")
-        self.assertEqual([r["event"] for r in records], ["start", "end", "wake", "read"])
+        self.final_records(job, "read")
+        records = self.final_records(job, "wake")  # the waiter's `read` and the owner's `wake` are written by two processes: wait for both, in either order
+        self.assertEqual([r["event"] for r in records[:2]], ["start", "end"])
+        self.assertEqual(sorted(r["event"] for r in records[2:]), ["read", "wake"])
         sends = self.t3_sends()
         self.assertEqual([s["argv"][2] for s in sends], ["builder-thread"], "the thread that started the job is still woken")
         self.assertEqual([r["owner"] for r in self.records_of(job) if r["event"] == "read"], [False])

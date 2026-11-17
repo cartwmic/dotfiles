@@ -1,6 +1,6 @@
 # mistakes-report
 
-One script, run weekly by a systemd user timer, that publishes one page on shartifacts with two tables of repeated mistakes. No new service, no join to T3. The design is the "smallest first step" in the agent-traces audit (shartifacts page 05b4024e55201cca4768a408, section 5; insights 1 and 2).
+One script, run weekly by the coordinator's Retro lead keeper (schedule `mistakes-weekly`; since 2026-11-16 there is no systemd timer), that publishes one page on shartifacts with two tables of repeated mistakes. No new service, no join to T3. The design is the "smallest first step" in the agent-traces audit (shartifacts page 05b4024e55201cca4768a408, section 5; insights 1 and 2).
 
 Personal profile, Linux only (`docs/profiles.md`). Nothing is read on the work Mac.
 
@@ -45,12 +45,14 @@ This week is the 7 days up to the run; last week the 7 days before. After each r
 ```
 mistakes-report                 # classify, build, publish; prints tokens, cost and the page URL
 mistakes-report --no-publish    # write page.html in the state directory and stop; saves no snapshot
-systemctl --user start mistakes-report.service
-journalctl --user -u mistakes-report
 ```
 
 Tests: `python3 -m unittest discover -s tests/mistakes-report` (the model and shartifacts are replaced by fakes).
 
 ## Turning it off
 
-Set `mistakesReport.enabled: false` in the local chezmoi data and apply. The load script stops and disables `mistakes-report.timer` and removes its two units. The command, `~/.local/state/mistakes-report/` and the published page stay.
+Set `mistakesReport.enabled: false` in the local chezmoi data and apply: chezmoi stops managing the command and its code (they stay on disk). The keeper's schedule lives in the coordinator, not here.
+
+## The retired timer
+
+`mistakes-report.timer` and `mistakes-report.service` (Mondays 07:30) are gone. One apply on a host that still has them runs `run_onchange_after_78_retire_mistakes_report_timer.sh`: it runs `systemctl --user disable --now mistakes-report.timer`, removes both unit files and reloads systemd. `~/.local/state/mistakes-report/` and the published page stay. Prune that script, its `.chezmoiignore` lines and its test once every machine has applied.

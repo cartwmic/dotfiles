@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-# leak-guard gh wrapper (managed by chezmoi; run_onchange_after_47_install-leak-guard-gh). Edit scripts/leak-guard-gh in the dotfiles source, not this copy.
-"""gh, with leak-guard in front of every text a command sends to a guarded repository. Work machine only; docs/leak-guard.md.
+# gh wrapper (managed by chezmoi; run_onchange_after_47_install-gh-wrapper). Edit scripts/gh-wrapper in the dotfiles source, not this copy.
+"""The one gh wrapper, first on PATH on every profile (docs/gh-wrapper.md), with leak-guard in front of every text a command sends to a guarded
+repository (docs/leak-guard.md).
 
-The guarded repositories are the lines of ~/.config/leak-guard/repos (`owner/name`, or `host/owner/name` off github.com); with no such file this does
+Order: `gh auth ...` and `gh --version` go straight to the real gh. With ~/.config/gh-wrapper/budget saying `on`, the command is then classified
+(lib/gh_classify.py) and run through the layers in lib/ (lib/gh_layers.py: rewrite, budget, log, each present only when its file is). Then the leak-guard
+check below, then the real gh. With the budget file missing or `off`, nothing in lib/ is read.
+
+The guarded repositories are the lines of ~/.config/leak-guard/repos (`owner/name`, or `host/owner/name` off github.com); with no such file the check does
 nothing. For a command aimed at a guarded repository it gathers the text the command sends (titles, bodies, notes, comments, `gh api` fields and
 input), runs `leak-guard text` on it as a process, and runs the real gh only on a pass. It blocks, and does not run gh, on a hit, on any failure, on a
 write command it does not recognise, and on any flag that makes gh compose the text itself (--fill, --template, --editor, --web, ...).
@@ -18,12 +23,13 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 
-MARK = "leak-guard gh wrapper (managed by chezmoi"
+MARK = "gh wrapper (managed by chezmoi"      # also matches the "leak-guard gh wrapper (managed by chezmoi" mark of the files this one replaced
 
 # What each gh command group is, when it is aimed at a guarded repository.
 READ = {"pr": {"list", "view", "diff", "checks", "status", "checkout"}, "issue": {"list", "view", "status"},
@@ -742,49 +748,59 @@ def run_guard(texts, t0, name):
     return True, res.get("layer", "none"), res.get("findings", 0), res.get("verdict", "pass")
 
 
-def run_real(real, args, stdin_data, no_prompt=False):
-    """Run the real gh. For a guarded write, with GH_PROMPT_DISABLED=1: gh can then never ask for text at a prompt the wrapper cannot see."""
+def run_real(real, args, stdin_data, no_prompt=False, wait=False):
+    """Run the real gh. For a guarded write, with GH_PROMPT_DISABLED=1: gh can then never ask for text at a prompt the wrapper cannot see. With `wait`, or
+    with text read from standard input, gh runs as a child and its exit code comes back; otherwise gh replaces this process."""
     env = dict(os.environ, GH_PROMPT_DISABLED="1") if no_prompt else None
-    if stdin_data is None:
+    if stdin_data is None and not wait:
         if env is None:
             os.execv(real, ["gh"] + args)
         os.execve(real, ["gh"] + args, env)
-    rc = subprocess.run([real] + args, input=stdin_data, env=env).returncode
+    rc = run_child(real, args, stdin_data, env)
     return 128 - rc if rc < 0 else rc          # a gh killed by a signal exits as a shell reports it, 128 + the signal
 
 
-def main(argv):
-    t0 = time.time()
-    args = argv[1:]
-    real = real_gh()
-    if real is None:
-        print("leak-guard gh: no real gh found on PATH (only this wrapper); install gh", file=sys.stderr)
-        return 127
+def run_child(real, args, stdin_data, env):
+    """gh as a child, with its exit status. While it runs, SIGTERM and SIGHUP sent to this process go to gh too (a timeout kills only the process it started,
+    which would leave a `gh run watch` polling), and SIGINT is left to the terminal, which sends it to gh as well."""
+    proc = subprocess.Popen([real] + args, stdin=None if stdin_data is None else subprocess.PIPE, env=env)
+    saved = {n: signal.signal(n, (lambda num, _frame: proc.send_signal(num)) if n != signal.SIGINT else signal.SIG_IGN)
+             for n in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        proc.communicate(stdin_data)
+    finally:
+        for n, handler in saved.items():
+            signal.signal(n, handler)
+    return proc.returncode
+
+
+def checked_run(real, args, t0, wait):
+    """Check the texts a command sends to a guarded repository, then run the real gh. Returns the exit code (or replaces this process with gh)."""
     repos = guarded_repos()
     if not repos:
-        return run_real(real, args, None)
+        return run_real(real, args, None, wait=wait)
     command = command_name(args) or "unrecognised"
     skip = os.environ.get("LEAK_GUARD_SKIP", "").strip()
     texts = Texts()
     try:
         name, texts = decide(args, repos, texts, real)
         if not name:
-            return run_real(real, args, texts.stdin if texts else None)
+            return run_real(real, args, texts.stdin if texts else None, wait=wait)
         command = name
         if skip:
             log(command, "skip", "override", 0, t0)
             print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
-            return run_real(real, args, texts.stdin)
+            return run_real(real, args, texts.stdin, wait=wait)
         if not texts.items:
             log(command, "pass", "none", 0, t0)
-            return run_real(real, args, texts.stdin, True)
+            return run_real(real, args, texts.stdin, True, wait)
         ok, layer, findings, verdict = run_guard(texts, t0, command)
         if not ok:
             log(command, "block", layer, findings, t0)
             print("leak-guard gh: BLOCKED. `gh %s` was not run." % command, file=sys.stderr)
             return 1
         log(command, "pass", layer, findings, t0)
-        return run_real(real, args, texts.stdin, True)
+        return run_real(real, args, texts.stdin, True, wait)
     except Help as h:
         if h.note:
             print(h.note, flush=True)
@@ -793,11 +809,75 @@ def main(argv):
         if skip:
             log(command, "skip", "override", 0, t0)
             print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
-            return run_real(real, args, texts.stdin)
+            return run_real(real, args, texts.stdin, wait=wait)
         log(command, "block", "wrapper", 0, t0)
         shown = "command" if args and args[0].startswith("-") else args[0] if args and re.match(r"^[a-z][a-z-]*$", args[0]) and command == "unrecognised" else command      # the message names what was typed; the log only a safe name
         print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"<reason>\" gh ..." % (r, shown), file=sys.stderr)
         return 1
+
+
+# ---- the layers --------------------------------------------------------------------------------------------------------------------------------------
+# docs/gh-wrapper.md. Off unless ~/.config/gh-wrapper/budget says `on`: then nothing below the leak-guard check is imported or run.
+
+EXEMPT_GROUPS = {"auth"}      # git's credential helper runs `gh auth git-credential` for every git push or fetch, and it makes no API call. A subset of NOT_REPO
+
+
+def exempt(args):
+    return bool(args) and (args[0] in EXEMPT_GROUPS or args == ["--version"])
+
+
+def layers_on():
+    try:
+        with open(home(".config", "gh-wrapper", "budget")) as f:
+            return f.read().strip() == "on"
+    except OSError:
+        return False
+
+
+def api_facts(args):
+    """(method, path, mutation) for the `gh api` arguments, as gh_classify.classify_api reads them; None when they cannot be read. Reads no file: a GraphQL
+    query that comes from a file or from --input is not known to be a read."""
+    method, endpoint, fields, inputs, _, helped, unknown, missing = parse_api(args[1:])
+    if helped or unknown is not None or missing is not None:
+        return None
+    path = endpoint_path(endpoint)
+    mutation = None
+    if path in ("graphql", "api/graphql") and not inputs:
+        queries = [(typed, kv.partition("=")[2]) for typed, kv in fields if kv.partition("=")[0] == "query"]
+        if queries and not any(typed and val.startswith("@") for typed, val in queries):
+            mutation = any(is_mutation(val.encode()) for _, val in queries)
+    return (method or ("POST" if fields or inputs else "GET")).upper(), path, mutation
+
+
+def main(argv):
+    t0 = time.time()
+    args = argv[1:]
+    real = real_gh()
+    if real is None:
+        print("gh-wrapper: no real gh found on PATH (only this wrapper); install gh", file=sys.stderr)
+        return 127
+    if exempt(args) or not layers_on():
+        return checked_run(real, args, t0, False)
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+        import gh_classify
+        import gh_layers
+        name = command_name(args) or "unrecognised"
+        group, _, verb = name.partition(" ")
+        read = group == "search" or verb in READ.get(group, ())
+        call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args) if name == "api" else None))
+        layers = gh_layers.load()
+    except Exception as e:      # a lib that is missing or broken must not stop gh: the layers are an optimisation, the leak-guard check is not
+        print("gh-wrapper: the layers could not start (%s: %s); the call goes on without them" % (type(e).__name__, e), file=sys.stderr)
+        return checked_run(real, args, t0, False)
+    stop = gh_layers.before(layers, call)
+    if stop:
+        print(stop.message, file=sys.stderr)
+        rc = stop.rc
+    else:
+        rc = checked_run(real, call.args, t0, gh_layers.wants_exit(layers))
+    gh_layers.after(layers, call, rc)
+    return rc
 
 
 if __name__ == "__main__":

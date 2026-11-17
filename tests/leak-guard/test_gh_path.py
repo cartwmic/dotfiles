@@ -1,4 +1,4 @@
-"""On the work profile the wrapper is the `gh` that resolves first, in the shells agents use.
+"""On every desktop profile the wrapper is the `gh` that resolves first, in the shells agents use.
 
 Fresh zsh processes (empty environment) in a throwaway HOME: the repository's own dot_zshenv and dot_zprofile, the `mise activate zsh` line of the zshrc
 template, the real mise, and the installer's output. A mise-managed gh stands in for "the real gh that mise puts first". The tests are skipped where zsh,
@@ -47,13 +47,13 @@ class GhPath(unittest.TestCase):
         self.mise_cfg = self.home / ".config" / "mise"
         self.mise_cfg.mkdir(parents=True)
         shutil.copy(self.real_config / "config.toml", self.mise_cfg / "config.toml")
-        self.wrapper = self.home / ".local" / "share" / "leak-guard" / "bin" / "gh"
+        self.wrapper = self.home / ".local" / "share" / "gh-wrapper" / "bin" / "gh"
         self.proj = self.tmp / "proj"
         (self.proj / "bin").mkdir(parents=True)
         (self.proj / "mise.toml").write_text('[env]\n_.path = ["%s"]\n' % (self.proj / "bin"))
 
-    def install(self):
-        ran = run_script(self.tmp, render(self.tmp, DATA, home=self.home).stdout, self.home)
+    def install(self, profile="axon-work-computer", data=DATA):
+        ran = run_script(self.tmp, render(self.tmp, data, profile=profile, home=self.home).stdout, self.home)
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertTrue(self.wrapper.exists())
 
@@ -71,6 +71,12 @@ class GhPath(unittest.TestCase):
         for flags, command in (("-c", "command -v gh"), ("-lc", "command -v gh"), ("-ic", "command -v gh"), ("-lic", "command -v gh"), ("-ic", hook), ("-lic", hook)):
             with self.subTest(flags=flags, command=command):
                 self.assertEqual(self.zsh(flags, command), str(self.wrapper))
+
+    def test_the_personal_profile_with_no_data_gets_the_same_order(self):
+        self.install("personal", "")
+        for flags in ("-c", "-lc", "-ic", "-lic"):
+            with self.subTest(flags):
+                self.assertEqual(self.zsh(flags, "command -v gh"), str(self.wrapper))
 
     def test_the_wrapper_stays_first_after_a_cd_into_a_directory_whose_mise_toml_changes_path(self):
         self.install()
@@ -91,7 +97,7 @@ class GhPath(unittest.TestCase):
 
     def test_the_mise_file_is_what_keeps_it_first_where_mise_is_active(self):
         self.install()
-        (self.mise_cfg / "conf.d" / "leak-guard-gh.toml").unlink()
+        (self.mise_cfg / "conf.d" / "gh-wrapper.toml").unlink()
         self.assertEqual(self.zsh("-c", "command -v gh"), str(self.wrapper))      # zshenv alone covers a plain shell
         self.assertEqual(self.zsh("-ic", "command -v gh"), self.tool_gh)          # mise puts its own directories ahead of it without the file
 

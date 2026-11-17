@@ -95,6 +95,9 @@ class Log:
 
 
 def run(cmd, step, cwd=None, env=None, check=True, stdin_text=None):
+    # Every gh call here is on a merge path (reads too: pr list, pr checks, pr view). GH_URGENT=1 keeps the gh budget guard
+    # from refusing them; GH_CALLER names this script in the gh wrapper's log.
+    env = {**(os.environ if env is None else env), "GH_URGENT": "1", "GH_CALLER": NAME}
     kwargs = {"input": stdin_text} if stdin_text is not None else {"stdin": subprocess.DEVNULL}
     try:
         result = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, capture_output=True, text=True, **kwargs)

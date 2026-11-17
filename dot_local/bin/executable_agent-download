@@ -1,0 +1,93 @@
+#!/bin/sh
+# Find the file a browser click just downloaded. Browse (the agents' browser tool) has no download tool; Chrome puts the file in its
+# download folder, and this finds it (docs: agent-harness README, "Agent browser").
+#   mark=$(agent-download mark [--dir DIR])
+#       Remember which files are in the download folder now. Prints the handle: the path of a small file under
+#       ${XDG_STATE_HOME:-~/.local/state}/agent-download/marks (outside the download folder). Each call makes its own handle, so
+#       agents that share this Chrome never overwrite each other's. Handles older than a day are deleted.
+#   path=$(agent-download wait --mark HANDLE [--timeout SECONDS] [--dir DIR])
+#       Wait for a completed file that was not in the folder at the mark (or whose size differs from the marked one) and print its
+#       absolute path. Exit 0 with the path. Exit 1 if none appears within SECONDS (default 60). Exit 2 with no readable --mark.
+#       Completed: a regular, non-hidden file, not named *.crdownload or *.part, with no sibling NAME.crdownload, whose size is the same
+#       0.5 s later. Timestamps are not used (Chrome may stamp a file with the server's Last-Modified). Two downloads in one window: the
+#       first new file is returned to whichever wait asks first.
+# Folder: --dir, else AGENT_DOWNLOAD_DIR, else the one recorded at the mark, else the desktop's download folder (xdg-user-dir DOWNLOAD, else ~/Downloads).
+# Every mark and wait appends one line (UTC time, run id, elapsed, outcome, folder, file name) to
+# ${XDG_STATE_HOME:-~/.local/state}/agent-download/agent-download.log. File contents are never logged.
+set -eu
+
+SCRIPT_NAME="agent-download"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-download"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+START=$(date +%s)
+mkdir -p "$STATE/marks"
+
+record() {   # record OUTCOME DIR NAME
+  printf '%s run=%s elapsed=%ss %s %s dir=%s file=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$(($(date +%s) - START))" "$CMD" "$1" "$2" "$3" >> "$STATE/agent-download.log"
+}
+die() { echo "[$SCRIPT_NAME] ERROR: $2" >&2; exit "$1"; }
+
+# "name<TAB>size" for every regular, non-hidden file in $1.
+list() {
+  for f in "$1"/*; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\n' "${f##*/}" "$(wc -c < "$f" | tr -d ' ')"
+  done
+}
+
+CMD="${1:-}"
+[ $# -gt 0 ] && shift
+MARK=""; TIMEOUT=60; DIR="${AGENT_DOWNLOAD_DIR:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mark) MARK="${2:-}"; shift 2 ;;
+    --timeout) TIMEOUT="${2:-}"; shift 2 ;;
+    --dir) DIR="${2:-}"; shift 2 ;;
+    *) die 2 "unknown argument $1 (usage: agent-download mark | wait --mark HANDLE [--timeout SECONDS] [--dir DIR])" ;;
+  esac
+done
+
+default_dir() {
+  d=""
+  command -v xdg-user-dir >/dev/null 2>&1 && d="$(xdg-user-dir DOWNLOAD 2>/dev/null || true)"
+  echo "${d:-$HOME/Downloads}"
+}
+
+case "$CMD" in
+  mark)
+    [ -n "$DIR" ] || DIR="$(default_dir)"
+    find "$STATE/marks" -type f -mtime +0 -exec rm -f {} + 2>/dev/null || true
+    handle="$(mktemp "$STATE/marks/mark.XXXXXX")"
+    { printf '%s\n' "$DIR"; list "$DIR"; } > "$handle"
+    record marked "$DIR" -
+    echo "$handle"
+    ;;
+  wait)
+    [ -n "$MARK" ] && [ -r "$MARK" ] || die 2 "run agent-download mark before the click and pass its path: agent-download wait --mark HANDLE"
+    case "$TIMEOUT" in ''|*[!0-9]*) die 2 "--timeout must be a whole number of seconds" ;; esac
+    [ -n "$DIR" ] || DIR="$(sed -n 1p "$MARK")"
+    deadline=$((START + TIMEOUT))
+    while :; do
+      for f in "$DIR"/*; do
+        [ -f "$f" ] || continue
+        name="${f##*/}"
+        case "$name" in *.crdownload|*.part) continue ;; esac
+        size="$(wc -c < "$f" | tr -d ' ')"
+        # new: its name is not in the marked list, or its size differs from the marked one (the first mark line is the folder)
+        grep -qxF -e "$(printf '%s\t%s' "$name" "$size")" "$MARK" && continue
+        sleep 0.5
+        # completed: no sibling NAME.crdownload, and the size is unchanged 0.5 s later
+        [ -f "$f" ] && [ ! -e "$f.crdownload" ] && [ "$(wc -c < "$f" | tr -d ' ')" = "$size" ] || continue
+        record found "$DIR" "$name"
+        echo "$f"
+        exit 0
+      done
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        record timeout "$DIR" -
+        die 1 "no new file in $DIR within ${TIMEOUT}s; was the click a download?"
+      fi
+      sleep 0.2
+    done
+    ;;
+  *) die 2 "usage: agent-download mark [--dir DIR] | wait --mark HANDLE [--timeout SECONDS] [--dir DIR]" ;;
+esac
