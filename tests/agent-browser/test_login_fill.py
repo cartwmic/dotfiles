@@ -76,6 +76,11 @@ def item(id, title, *urls):
     return {"id": id, "title": title, "category": "LOGIN", "urls": [{"href": u} for u in urls]}
 
 
+# On GitHub's runner a missing Chrome or node is a failure, not a skip: a skipped suite proves nothing.
+if os.environ.get("GITHUB_ACTIONS") and skip_reason():
+    raise RuntimeError("agent-login tests cannot run on this runner: " + skip_reason())
+
+
 @unittest.skipIf(skip_reason(), skip_reason() or "")
 class LoginFillTest(unittest.TestCase):
     @classmethod
