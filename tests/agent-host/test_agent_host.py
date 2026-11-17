@@ -259,7 +259,7 @@ class SessionCopyScriptTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
         (self.tmp / "kubectl.sh").write_text(STUB)
-        for d in ("claude/-home-x", "pi/--x--", "codex/2026/11/15", "dest"):
+        for d in ("claude/-home-x", "pi/--x--", "codex/2026/11/15", "codex-archived", "dest"):
             (self.tmp / d).mkdir(parents=True)
         self.c = self.tmp / "claude/-home-x/s1.jsonl"
         self.c.write_text('{"a":1}\n')
@@ -268,12 +268,18 @@ class SessionCopyScriptTest(unittest.TestCase):
         self.x = self.tmp / "codex/2026/11/15/rollout-1.jsonl"
         self.x.write_text('{"x":1}\n')
         (self.tmp / "codex/2026/11/15/history.txt").write_text("not a transcript")
+        (self.tmp / "codex/2026/11/15/rollout-old.jsonl.zst").write_bytes(b"\x28\xb5\x2f\xfd zst")
+        self.a = self.tmp / "codex-archived/rollout-2.jsonl"
+        self.a.write_text('{"arch":1}\n')
+        (self.tmp / "codex-archived/rollout-3.jsonl.zst").write_bytes(b"\x28\xb5\x2f\xfd zst2")
+        (self.tmp / "codex-archived/notes.txt").write_text("not a transcript")
 
     def run_copy(self, *args, **env):
         e = dict(os.environ, XDG_RUNTIME_DIR=str(self.tmp), AGENT_SESSION_COPY_KUBECTL=str(self.tmp / "kubectl.sh"),
                  AGENT_SESSION_COPY_DEST=str(self.tmp / "dest"), AGENT_SESSION_COPY_CLAUDE_SRC=str(self.tmp / "claude"),
                  AGENT_SESSION_COPY_PI_SRC=str(self.tmp / "pi"),
-                 AGENT_SESSION_COPY_CODEX_SRC=str(self.tmp / "codex"), **env)
+                 AGENT_SESSION_COPY_CODEX_SRC=str(self.tmp / "codex"),
+                 AGENT_SESSION_COPY_CODEX_ARCHIVED_SRC=str(self.tmp / "codex-archived"), **env)
         return subprocess.run(["sh", str(REPO / "dot_local/bin/executable_agent-session-copy"), *args], capture_output=True, text=True, env=e, timeout=60)
 
     def test_copies_jsonl_with_the_same_bytes_and_only_what_changed_afterwards(self):
@@ -296,14 +302,34 @@ class SessionCopyScriptTest(unittest.TestCase):
     def test_codex_sessions_keep_their_year_month_day_tree_and_only_jsonl_moves(self):
         r = self.run_copy()
         self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
-        self.assertIn("codex: 1 file(s) sent", r.stdout)
+        self.assertIn("codex: 2 file(s) sent", r.stdout)
         got = self.tmp / "dest/codex/2026/11/15/rollout-1.jsonl"
         self.assertEqual(got.read_bytes(), self.x.read_bytes())
         self.assertFalse((self.tmp / "dest/codex/2026/11/15/history.txt").exists())
+        self.assertEqual((self.tmp / "dest/codex/2026/11/15/rollout-old.jsonl.zst").read_bytes(), b"\x28\xb5\x2f\xfd zst")
         self.assertIn("codex: 0 file(s) sent", self.run_copy().stdout)
         self.x.unlink()
         self.run_copy()
         self.assertTrue(got.exists())  # removed here, kept in the pod
+
+    def test_archived_codex_sessions_are_copied_flat_with_jsonl_and_zst_only(self):
+        r = self.run_copy()
+        self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+        self.assertIn("codex-archived: 2 file(s) sent", r.stdout)
+        self.assertEqual((self.tmp / "dest/codex-archived/rollout-2.jsonl").read_bytes(), self.a.read_bytes())
+        self.assertEqual((self.tmp / "dest/codex-archived/rollout-3.jsonl.zst").read_bytes(), b"\x28\xb5\x2f\xfd zst2")
+        self.assertFalse((self.tmp / "dest/codex-archived/notes.txt").exists())
+        self.assertIn("codex-archived: 0 file(s) sent", self.run_copy().stdout)
+        self.a.unlink()
+        self.run_copy()
+        self.assertTrue((self.tmp / "dest/codex-archived/rollout-2.jsonl").exists())  # removed here, kept in the pod
+
+    def test_claude_and_pi_still_send_jsonl_only(self):
+        (self.tmp / "claude/-home-x/old.jsonl.zst").write_bytes(b"z")
+        (self.tmp / "pi/--x--/old.jsonl.zst").write_bytes(b"z")
+        self.run_copy()
+        self.assertFalse((self.tmp / "dest/claude/-home-x/old.jsonl.zst").exists())
+        self.assertFalse((self.tmp / "dest/pi/--x--/old.jsonl.zst").exists())
 
     def test_dry_run_sends_nothing_and_nothing_is_ever_deleted_in_the_pod(self):
         r = self.run_copy("--dry-run")
