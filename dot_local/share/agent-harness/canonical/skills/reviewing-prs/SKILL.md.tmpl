@@ -57,6 +57,7 @@ Review the work, not the person.
    - Add one fresh-reviewer packet from `rubrics/conventions-and-shape.md`, and one from `rubrics/backend-hazards.md` when the diff has non-test Go files.
    - Run `<playbook>/bin/pr-preflight --repo <repo> --head <head> --base <base>` yourself (it is read-only) and put the output in each of these packets.
 7. **Do one pass per axis per head.** Do not repeat review until it comes back clean. A new head means a new review.
+8. **For a production cutover,** the `tests` and `correctness` reviewers check the caller journey, not just the parts. A production cutover is any PR that changes which model, parser, backend, endpoint or routing path serves an existing caller. Its proof (`Proven` section or equivalent) must exercise each affected caller's end-to-end journey against the new target — a live run, a recorded stand-in, or, when nothing can run before merge, the named first post-deploy check with its timing — including unchanged consumer configs and manifests that read the changed target. A PR that only tests the parts in isolation, or skips unchanged consumers, lacks this proof: raise it as a blocker.
 
 ## 3. Severity bar
 
@@ -65,7 +66,7 @@ Review the work, not the person.
 - **nit:** a preference. It fails test 2 in section 4.
 - **question:** the reviewer cannot tell.
 
-A blocker or should-fix must name the obligation, the evidence and the consequence. Without all three it is not a blocker or should-fix: it is a question if you cannot tell, otherwise it is declined. Do not comment on what CI or a formatter already enforces.
+A blocker or should-fix must name the obligation, the evidence and the consequence. Without all three it is not a blocker or should-fix: it is a question if you cannot tell, otherwise it is declined. Do not comment on what CI or a formatter already enforces. Missing caller-journey proof on a production cutover (section 2, step 8) meets the blocker bar: merging changes which target serves existing callers with no evidence that any caller's journey completes.
 
 A finding can be a blocker or should-fix only when its `scope` is `in` and its `covered by` is `none`. A finding with `scope` `out` (a problem the PR did not cause, especially one that existed before it) gets no severity: mark it **follow-up** (section 4). A defect the PR itself introduces is never `out`. A finding that something existing already handles is declined (section 4).
 
