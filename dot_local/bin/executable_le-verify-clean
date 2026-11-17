@@ -1,0 +1,75 @@
+#!/bin/sh
+# le-verify-clean: run `lean-change verify` for a Loop Engine run folder, with a /tmp of its own.
+#
+# Usage: le-verify-clean <run folder> <out.json>   (out.json is relative to the run folder, as in the old checks/verify-clean-env.sh)
+#
+# Why: journeys hard-code /tmp (scripts/journeys/lib/journey.ts: mkdtempSync("/tmp", "le-journey-<name>-")) and keep their scratch on
+# failure. The old per-run helper deleted every new /tmp/le-journey-* whose repo copy sat at the run's head or base. Runs share bases, so
+# it deleted another run's folders and voided that run's verify (2026-11-17). Here verify runs in bwrap with a private /tmp (a folder under
+# the run folder), so its scratch never reaches the shared /tmp, and the only thing deleted is that one recorded folder. No globs, no head
+# or base matching. Without bwrap this refuses to run; it never falls back to the shared /tmp.
+#
+# Like the old helper it cd's to the run folder, unsets T3* and CLAUDE* (journey 283 fails when they leak into its rig), runs
+# `lean-change verify < show-full.json > <out.json>`, forwards TERM and INT to it, and exits with verify's status. Before it removes the
+# private /tmp it copies the logs of any journey folder left in it (a failed journey) to <run folder>/logs/kept-<journey folder>/.
+# The run folder and lean-change must not sit under /tmp: verify sees the private root there instead (both are refused). Linux only (personal profile): .chezmoiignore, docs/profiles.md.
+set -eu
+
+die() { echo "le-verify-clean: $*" >&2; exit 1; }
+
+[ $# -eq 2 ] || die "usage: le-verify-clean <run folder> <out.json>"
+W=$(cd -- "$1" 2>/dev/null && pwd) || die "run folder $1 not found"
+OUT=$2
+case $W in /tmp|/tmp/*) die "run folder $W is under /tmp, which verify sees replaced by its private root; use a folder elsewhere" ;; esac
+case $(command -v lean-change) in /tmp/*) die "lean-change is under /tmp, which verify sees replaced by its private root; install it elsewhere" ;; esac
+command -v bwrap >/dev/null 2>&1 || die "bwrap is not installed; refusing to run verify in the shared /tmp (install bubblewrap)"
+cd -- "$W"
+[ -f show-full.json ] || die "$W/show-full.json not found"
+
+mkdir -p vtmp logs
+ROOT=$(mktemp -d "$W/vtmp/verify.XXXXXX") || die "cannot make a private /tmp under $W/vtmp"
+chmod 1777 "$ROOT"
+echo "le-verify-clean: private /tmp is $ROOT" >&2
+
+keep_logs() {
+  copied=0
+  for d in "$ROOT"/le-journey-*; do
+    [ -d "$d" ] || continue
+    dest="$W/logs/kept-${d##*/}"
+    if mkdir -p "$dest" && (cd "$d" && find . -type f -name '*.log' -exec cp --parents -t "$dest" '{}' +); then
+      rmdir "$dest" 2>/dev/null || echo "le-verify-clean: kept logs of ${d##*/} in $dest" >&2
+    else
+      echo "le-verify-clean: WARNING: could not copy the logs of ${d##*/} to $dest" >&2
+      copied=1
+    fi
+  done
+  return "$copied"
+}
+# Runs at every exit. It never changes the exit status (verify's, or 143 after a signal): a failed copy only keeps the root, with its evidence.
+cleanup() {
+  set +e
+  if keep_logs; then
+    rm -rf -- "$ROOT"
+    echo "le-verify-clean: removed $ROOT" >&2
+  else
+    echo "le-verify-clean: WARNING: left $ROOT in place, with the logs it failed to copy; remove it yourself once you have them" >&2
+  fi
+}
+VPID=
+trap cleanup EXIT
+# $VPID is bwrap, which does not pass TERM on (it dies and kills verify outright). Send it to verify, bwrap's child, then wait for bwrap to end.
+# bwrap runs under setsid, outside this script's process group, so a TERM to the whole group (timeout, a tree kill) reaches only this handler.
+forward() {
+  child=$(pgrep -P "$VPID" 2>/dev/null | head -n 1) || true
+  kill -TERM "${child:-$VPID}" 2>/dev/null || true
+  wait "$VPID" 2>/dev/null || true
+  exit 143
+}
+trap forward TERM INT
+
+for v in $(env | grep -oE '^(T3|CLAUDE)[A-Z0-9_]*=' | tr -d =); do unset "$v"; done
+setsid bwrap --dev-bind / / --bind "$ROOT" /tmp --die-with-parent -- lean-change verify < show-full.json > "$OUT" &
+VPID=$!
+status=0
+wait "$VPID" || status=$?
+exit "$status"
