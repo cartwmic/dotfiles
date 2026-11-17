@@ -162,7 +162,13 @@ def registry_admits(regs, ref):
     return any(ref.startswith(r + "/") or ("/" in r and repo == r) for r in regs)
 
 
-CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default"}
+CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default", "cache_cap"}
+# The kubectl pod's shared cache claim keeps the Go build cache and the pnpm store between jobs, and nothing trimmed them:
+# left alone they grow without bound, a shared claim can fill, and the next job dies with exit 69, "no space left on
+# device". The pod side now trims /cache/go-build and /cache/pnpm-store to
+# this cap each, least recently used first, like the homelab node cache cap (CACHE_CAP). gomod is not trimmed: a trimmed
+# module is downloaded again in full, so a cap there buys little and costs the proxy round trips.
+CACHE_CAP_KUBECTL_DEFAULT = 8 << 30   # bytes per cache, when the cluster file sets no cache_cap; 0 disables the trim
 CLUSTER_REQUIRED = ("kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s")
 MAX_RUN_S = 4 * 3600  # the homelab pod ends itself at this age: the hard bound on any job. The longest legitimate jobs on record ran 3 h (a 30-run journey repeat); it was 8 h, which two of the three 2026-11-16 orphans never reached
 UNAVAILABLE = 69
@@ -610,9 +616,17 @@ def load_cluster(name):
     claim = raw.get("cache_claim_default")
     if claim is not None and (not isinstance(claim, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", claim)):
         raise Unavailable("cluster file %s: cache_claim_default must be a claim name, got %r" % (path, claim))
+    cap = raw.get("cache_cap", CACHE_CAP_KUBECTL_DEFAULT)   # per cache (/cache/go-build, /cache/pnpm-store); 0 disables the trim
+    if isinstance(cap, str):
+        qty = parse_qty(cap)
+        if qty is None:
+            raise Unavailable("cluster file %s: cache_cap must be a quantity of bytes like 8Gi (or a whole number of bytes), got %r" % (path, cap))
+        cap = int(qty)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+        raise Unavailable("cluster file %s: cache_cap must be a quantity of bytes like 8Gi (or a whole number of bytes), got %r" % (path, cap))
     return {"name": name, "path": path, "kubeconfig": os.path.expanduser(raw["kubeconfig"]), "context": raw["context"], "namespace": raw["namespace"],
             "registries": raw["registries"], "tree_roots": raw["tree_roots"], "user": raw["user"], "deadline_s": raw["deadline_s"],
-            "pod_labels": raw.get("pod_labels", {}), "pod_annotations": raw.get("pod_annotations", {}), "cache_claim_default": claim}
+            "pod_labels": raw.get("pod_labels", {}), "pod_annotations": raw.get("pod_annotations", {}), "cache_claim_default": claim, "cache_cap": cap}
 
 
 def tree_roots_for(cfg, *paths):
@@ -714,7 +728,10 @@ def job_sh(job):
     """The job as a POSIX sh file for pod_sh: variables, the tool checks as kg_tools, the command as the positional parameters."""
     q = shlex.quote
     lines = ["ID=" + q(job["id"]), "ROOT=" + q(job["root"]), "CWD=" + q(job["cwd"]), "TREE=" + q(job["tree"]),
-             "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD", "kg_tools() {"]
+             "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD"]
+    if job.get("cache_cap") is not None:   # the pod side trims its Go build cache and pnpm store to this, LRU first
+        lines.append("CACHE_CAP=%d" % job["cache_cap"])
+    lines.append("kg_tools() {")
     lines += ["  kg_check %s %s %s || return" % (q(name), q(version), q(cmd or name + " --version")) for name, (version, cmd) in job["tools"].items()]
     lines += ["  :", "}", "set -- " + " ".join(q(a) for a in job["argv"])]
     return "\n".join(lines) + "\n"
@@ -730,6 +747,39 @@ trap 'rm -rf "$dir"' EXIT
 find "$(dirname "$dir")" -maxdepth 1 -name 'kgate-*' -mmin +1440 -exec rm -rf {} + 2>/dev/null
 say() { printf 'kgate[%s]: %s\n' "$ID" "$*"; }
 say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)"
+# The shared cache claim (cache_pvc) keeps the Go build cache and the pnpm store between jobs, and nothing trimmed them:
+# left alone they can fill it until a job dies with no space left on device. Before the job runs, trim each to
+# CACHE_CAP bytes (from job.sh; the cluster file's cache_cap, 8Gi by default), least recently used entries first, like the
+# homelab node cache cap. Only children of a cache are removed, never the directory itself; an entry that vanished or will
+# not delete is skipped; and any failure here is logged and the job goes on. KGATE_CACHE_ROOT exists for the tests and a
+# live proof only; a pod never sets it.
+trim_cache() {  # DIR CAP_KIB: delete the least recently used children of DIR until it fits CAP_KIB
+  d=$1 cap=$2
+  [ -d "$d" ] || return 0
+  [ "${cap:-0}" -gt 0 ] || return 0
+  used=$(du -sk "$d" 2>/dev/null | cut -f1)
+  [ "${used:-0}" -gt "$cap" ] || return 0
+  say "cache $d at ${used}KiB over the ${cap}KiB cap: trimming least recently used entries"
+  over=$((used - cap))
+  ls -1dtr "$d"/* 2>/dev/null > "$dir/trim.ls"   # oldest first; entries that appear later are left for the next trim
+  while IFS= read -r e; do
+    [ "$over" -gt 0 ] || break
+    [ -e "$e" ] || continue                       # another trim removed it first
+    sz=$(du -sk "$e" 2>/dev/null | cut -f1)
+    [ -n "$sz" ] || continue
+    rm -rf "$e" 2>/dev/null || continue           # owned by another job's user, or gone: skip it, keep trimming
+    over=$((over - sz))
+  done < "$dir/trim.ls"
+  rm -f "$dir/trim.ls" 2>/dev/null
+  after=$(du -sk "$d" 2>/dev/null | cut -f1)
+  say "cache $d trimmed to ${after:-?}KiB"
+}
+cache_root=${KGATE_CACHE_ROOT:-/cache}
+if [ -n "${CACHE_CAP:-}" ]; then
+  cap_kib=$((CACHE_CAP / 1024))
+  trim_cache "$cache_root/go-build" "$cap_kib"
+  trim_cache "$cache_root/pnpm-store" "$cap_kib"
+fi
 mkdir -p "$HOME" 2>/dev/null
 # A fresh one-commit repo at the tree root (no history is shipped), so tools find a HEAD. Its index holds exactly the shipped files, hashed as
 # bytes (no line-ending, filter or encoding conversion), and `git write-tree` of it is the tree hash. The commit is made only when it matches.
@@ -2120,7 +2170,7 @@ class Job:
                "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()},
                "cache": {"root": CACHE_ROOT, "cap": CACHE_CAP}}
         if self.cluster.kind == "kubectl":
-            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"]}).encode(),
+            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"], "cache_cap": self.kcfg["cache_cap"]}).encode(),
                        "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:
