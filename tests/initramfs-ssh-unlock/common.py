@@ -13,7 +13,7 @@ DROPIN = STAGE_SRC / "mkinitcpio.conf.d" / "zz-ssh-unlock.conf"
 CHECK_SCRIPT = ROOT / "dot_local" / "user_scripts" / "executable_ssh_unlock_check_image.sh"
 INSTALLER_TMPL = ROOT / "run_onchange_after_88_initramfs_ssh_unlock_linux.sh.tmpl"
 # The homelab key is written down in one place; the tests read it from there too.
-BLOB = re.search(r"BLOB='([^']+)'", (ROOT / "private_dot_ssh" / "modify_authorized_keys.tmpl").read_text()).group(1)
+BLOB = re.search(r"BLOB='([^']+)'", (ROOT / "private_dot_ssh" / "modify_private_authorized_keys.tmpl").read_text()).group(1)
 
 
 def write_exe(path: Path, body: str):

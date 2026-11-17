@@ -9,7 +9,7 @@
                          session files go from this desktop into the agent-host pod, for Retro; run_onchange_after_89_agent_session_copy_systemd.sh.tmpl).
                          The timer, its service and the command are installed on personal Linux either way, so the copy can be run by hand.
   podTunnelKey           The agent-host pod's ssh public key, one line "ssh-ed25519 <base64> [comment]". Default empty. Set, it makes
-                         private_dot_ssh/modify_authorized_keys.tmpl append one line to ~/.ssh/authorized_keys:
+                         private_dot_ssh/modify_private_authorized_keys.tmpl append one line to ~/.ssh/authorized_keys:
                          restrict,port-forwarding,permitopen="127.0.0.1:3773" <key>   (the pod's tunnel to omarchy's T3, and nothing else).
                          A public key, so it is local data, not a secret; it is not committed because the pod makes its own key.
 Personal profile only: it changes omarchy, the personal desktop. Any switch true, or a podTunnelKey, on any other profile fails the render, so a
