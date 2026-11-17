@@ -29,7 +29,7 @@ Service unit PATHs (t3code, coordinatord) are separate changes.
 2. **Layers off** (`~/.config/gh-wrapper/budget` missing, or anything but `on`): straight to the leak-guard check below. Nothing in the lib directory is read. This is the work Mac.
 3. **Layers on:** the command is classified, then each layer's `before` hook runs, then the leak-guard check, then the real gh, then each layer's `after` hook.
 4. **Leak-guard check:** exactly as [leak-guard.md](./leak-guard.md) says, and only where `~/.config/leak-guard/repos` exists. It fails closed as before.
-5. **Real gh:** found on PATH skipping any file with the mark, so the wrapper never finds itself. With no `after` hook anywhere, the wrapper replaces itself with gh (`exec`), as before. With one, it runs gh as a child and returns its exit code, standard input and output unchanged. While the child runs, SIGTERM and SIGHUP sent to the wrapper are passed on to gh (a timeout that kills only the process it started would otherwise leave a `gh run watch` polling), and the `after` hooks then see exit code 128 plus the signal. SIGINT from a terminal reaches gh directly.
+5. **Real gh:** found on PATH skipping any file with the mark, so the wrapper never finds itself. With no `after` hook anywhere, the wrapper replaces itself with gh (`exec`), as before. With one, it runs gh as a child and returns its exit code, standard input and output unchanged. While the child runs, SIGTERM, SIGHUP and SIGINT sent to the wrapper are passed on to gh (a timeout that kills only the process it started would otherwise leave a `gh run watch` polling, and an interrupt sent only to the wrapper would leave gh running), and the `after` hooks then see exit code 128 plus the signal. A terminal's Ctrl-C reaches the wrapper and gh both, so gh gets the interrupt twice.
 
 ## Classification (`gh_classify.py`)
 
@@ -63,6 +63,43 @@ Invariant: **the layers never stop a call by failing.** If the lib cannot be loa
 
 `~/.config/gh-wrapper/budget` holds `on` or `off`, written by the installer from the chezmoi data key `ghBudget.enabled` (`true` or `false`). Default: `on` on `personal`, `off` on `axon-work-computer`. A host with no file runs as off. The layers (log, watch interval and cache, budget guard) are all held by this one file.
 
+## The call log (`gh_log.py`)
+
+Runs only where the budget file says `on` (personal Linux and personal Mac). It writes `calls.jsonl` under `~/.local/state/gh-wrapper/` (under `$XDG_STATE_HOME` when that is set): one JSON line for each gh call, written when the call exits. A watch (`run watch`, or any command given `--watch`) also writes a start line before gh runs, so a watch killed before it exits still leaves a trace.
+
+| Field | Meaning |
+|---|---|
+| `event` | `exit`, or `start` (watches only; rc and dur_s are null on it) |
+| `utc` | UTC time, `2026-11-16T14:41:02Z` |
+| `id` | the wrapper's pid: a call's start and exit lines share it |
+| `class` | `<group> <verb>` (`pr view`), `api <METHOD> <path>` with ids and shas as `*`, or `unrecognised` |
+| `bucket` | `core`, `graphql`, `search` or `free` |
+| `urgent` | `write`, `env` (GH_URGENT set) or `no`. Left by the budget layer; null without it |
+| `budget` | the budget layer's result: `ok`, `refused`, `unread`, `skip` or `unchecked`. Null without it |
+| `budget_left` | calls left in the bucket, when the budget layer knew it. Null without it |
+| `action` | `pass`, `rewrite` or `refused` |
+| `rewrite` | what a rewrite layer changed, if one did |
+| `rc` | the exit code gh returned (or the refusal's code) |
+| `dur_s` | seconds from the wrapper's start to exit |
+| `who` | `$COORDINATOR_WHO`, else `$GH_CALLER`, else null |
+| `parent`, `grandparent` | the calling processes: the program's name, and the file name of the first argument when that argument is an existing file (a script, with or without an extension), e.g. `python3 ci-main-status`. A relative path is looked up in that process's own working directory on Linux, and in the wrapper's on a Mac (no cheap way to read another process's directory there) |
+| `cwd` | the working directory |
+| `interval` | watches only: the `--interval` gh gets, as a number (30 is 30 seconds) |
+
+Never in a record: arguments, bodies or tokens. The `class` is the command's name, and `parent` and `grandparent` never carry the rest of a command line. A shell that runs gh as `sh -c "<command>"` contributes `sh`.
+
+The budget layer leaves `urgent`, `budget` and `budget_left` in `call.notes`, and this layer writes them as found.
+
+**Rotation.** When the file reaches 5 MB it is renamed to `calls.jsonl.1`, replacing the one before. `GH_WRAPPER_LOG_MAX=<bytes>` sets the size (the tests and the proof use it).
+
+**Failure.** A write that fails is reported on standard error as `gh-wrapper: layer gh_log failed (...); the call goes on`. The call's exit code and output do not change.
+
+**Top callers.** The current file only, exit lines only, so a watch counts once:
+
+```sh
+jq -sr 'map(select(.event=="exit")) | group_by(.class,.who) | map({class:.[0].class,who:.[0].who,n:length,secs:(map(.dur_s)|add)}) | sort_by(-.n) | .[:10][] | @json' ~/.local/state/gh-wrapper/calls.jsonl
+```
+
 ## Profiles
 
 | Profile | Gets |
@@ -73,4 +110,4 @@ Invariant: **the layers never stop a call by failing.** If the lib cannot be loa
 
 ## Tests
 
-`python3 -m unittest discover -s tests/leak-guard`: `test_gh_layers.py` drives the classification, the exempt set and the seam through the installed layout (`bin/gh` next to `lib/`) with a fake real gh and fake layer modules; `test_gh_installer.py` runs the real template; `test_gh_path.py` the shells; `test_gh_wrapper.py` the leak-guard checks, unchanged.
+`python3 -m unittest discover -s tests/leak-guard`: `test_gh_layers.py` drives the classification, the exempt set and the seam through the installed layout (`bin/gh` next to `lib/`) with a fake real gh and fake layer modules; `test_gh_log.py` the call log's record and file through the installed wrapper; `test_gh_installer.py` runs the real template; `test_gh_path.py` the shells; `test_gh_wrapper.py` the leak-guard checks, unchanged.

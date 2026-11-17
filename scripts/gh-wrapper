@@ -761,10 +761,11 @@ def run_real(real, args, stdin_data, no_prompt=False, wait=False):
 
 
 def run_child(real, args, stdin_data, env):
-    """gh as a child, with its exit status. While it runs, SIGTERM and SIGHUP sent to this process go to gh too (a timeout kills only the process it started,
-    which would leave a `gh run watch` polling), and SIGINT is left to the terminal, which sends it to gh as well."""
+    """gh as a child, with its exit status. While it runs, SIGTERM, SIGHUP and SIGINT sent to this process go to gh too: a timeout kills only the process it
+    started, which would leave a `gh run watch` polling, and an interrupt sent only to the wrapper would leave gh running. The wrapper keeps running until gh
+    ends, so the after hooks still run. A terminal's Ctrl-C reaches the wrapper and gh both, so gh gets that interrupt twice."""
     proc = subprocess.Popen([real] + args, stdin=None if stdin_data is None else subprocess.PIPE, env=env)
-    saved = {n: signal.signal(n, (lambda num, _frame: proc.send_signal(num)) if n != signal.SIGINT else signal.SIG_IGN)
+    saved = {n: signal.signal(n, lambda num, _frame: proc.send_signal(num))
              for n in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
     try:
         proc.communicate(stdin_data)
