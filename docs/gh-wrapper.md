@@ -1,6 +1,6 @@
 # The gh wrapper
 
-One `gh` wrapper, first on PATH on every desktop profile. It is the leak-guard wrapper ([leak-guard.md](./leak-guard.md)) under a new name, with a seam for layers that save GitHub API calls. Every agent shares one GitHub account, and its core (REST) bucket of 5,000 calls an hour hit 0 twice on 2026-11-16. `gh run watch` alone costs about 4 REST calls per poll (run, jobs, workflow, annotations): 55 calls in 60 seconds at its default 3-second interval.
+One `gh` wrapper, first on PATH on every desktop profile. It is the leak-guard wrapper ([leak-guard.md](./leak-guard.md)) under a new name, with a seam for layers that save GitHub API calls. Every agent shares one GitHub account, and its core (REST) bucket of 5,000 calls an hour hit 0 twice on 2026-11-16. `gh run watch` alone costs about 4 REST calls per poll (run, jobs, workflow, annotations): 64 calls in 60 seconds at its default 3-second interval (measured with `-i 3`).
 
 This page is the contract of the base. The layers themselves (log, watch interval and `gh api` cache, budget guard) are separate changes that add files to the lib directory, and each documents itself here when it lands.
 
@@ -10,7 +10,7 @@ This page is the contract of the base. The layers themselves (log, watch interva
 |---|---|---|
 | the wrapper | `scripts/gh-wrapper` | `~/.local/share/gh-wrapper/bin/gh` (mode 755) |
 | the lib: classification and the layer seam, later the layers | `scripts/gh-wrapper-lib/*.py` | `~/.local/share/gh-wrapper/lib/` |
-| on/off switch for the layers | chezmoi data `ghBudget.enabled` | `~/.config/gh-wrapper/budget`, one word: `on` or `off` |
+| on/off switch for the layers | chezmoi data `ghBudget.enabled` | `~/.config/gh-wrapper/budget`, one word: `on` or `off` (read by the wrapper, not the installer) |
 | PATH for mise shells | | `~/.config/mise/conf.d/gh-wrapper.toml` (`_.path`) |
 
 `run_onchange_after_47_install-gh-wrapper.sh.tmpl` installs them: the lib first, then the budget file, then the wrapper, each by temp file and rename. It ships every `*.py` in `scripts/gh-wrapper-lib` and removes installed lib files the source no longer has, so adding a layer is adding a file, with no installer change. It renders on `personal` and `axon-work-computer`, not on Termux (out of scope in [profiles.md](./profiles.md)). A `gh` already at the wrapper path or a mise file already at its path that does not carry the mark `gh wrapper (managed by chezmoi` is left alone with a warning. Once the new wrapper is in place, the old install is removed when it carries the old mark: `~/.local/share/leak-guard/bin/gh` and `~/.config/mise/conf.d/leak-guard-gh.toml`.
@@ -26,7 +26,7 @@ Service unit PATHs (t3code, coordinatord) are separate changes.
 ## What a call goes through
 
 1. **Exempt:** `gh auth ...` and `gh --version` go straight to the real gh. Git's credential helper runs `gh auth git-credential` on every push and fetch (78 of 186 logged calls), and it makes no API call. Every exempt group is also in leak-guard's `NOT_REPO`, so skipping the check changes nothing (a test keeps it that way).
-2. **Layers off** (`~/.config/gh-wrapper/budget` missing, or anything but `on`): straight to the leak-guard check below. Nothing in the lib directory is read. This is the work Mac.
+2. **Layers off** (`~/.config/gh-wrapper/budget` missing, or anything but `on`): only the layers in `ALWAYS` run (`gh_rewrite`, whose watch-interval default is on every profile; its `gh api` cache waits for the budget file). The budget and log layers are not read. This is the work Mac.
 3. **Layers on:** the command is classified, then each layer's `before` hook runs, then the leak-guard check, then the real gh, then each layer's `after` hook.
 4. **Leak-guard check:** exactly as [leak-guard.md](./leak-guard.md) says, and only where `~/.config/leak-guard/repos` exists. It fails closed as before.
 5. **Real gh:** found on PATH skipping any file with the mark, so the wrapper never finds itself. With no `after` hook anywhere, the wrapper replaces itself with gh (`exec`), as before. With one, it runs gh as a child and returns its exit code, standard input and output unchanged. While the child runs, SIGTERM, SIGHUP and SIGINT sent to the wrapper are passed on to gh (a timeout that kills only the process it started would otherwise leave a `gh run watch` polling, and an interrupt sent only to the wrapper would leave gh running), and the `after` hooks then see exit code 128 plus the signal. A terminal's Ctrl-C reaches the wrapper and gh both, so gh gets the interrupt twice.
@@ -50,18 +50,18 @@ Pure functions: the wrapper parses the command line and hands the facts in. A ca
 
 ## The layer seam (`gh_layers.py`)
 
-A layer is a module in the lib directory. `LAYERS = ("gh_rewrite", "gh_budget", "gh_log")` fixes the order, and a name with no file is skipped. A layer may define:
+A layer is a module in the lib directory. `LAYERS = ("gh_rewrite", "gh_budget", "gh_log")` fixes the order, and a name with no file is skipped. `ALWAYS = ("gh_rewrite",)` names the layers that also run when the budget file is off. A layer may define:
 
 - `before(call)`: change `call.args`, set `call.action` (`pass`, `rewrite`, `refused`, `exempt`) and `call.rewrite`, or `raise Stop(rc, message)` to refuse the call: the message goes to standard error, the wrapper exits `rc`, gh does not run.
 - `after(call)`: runs once, in reverse order, whatever happened: gh's exit, a `Stop`, or a leak-guard block. `call.rc` is set.
 
-`call` carries `args`, `klass`, `bucket`, `write`, `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
+`call` carries `args`, `klass`, `bucket`, `write`, `budget_on` (whether the budget file says `on`), `parsed` (the flags of a `run watch`, `pr checks` or `gh api` call as the wrapper read them: `([(long name, value or None)], [positional arguments])`, or `None` for another command or flags it could not read), `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
 
-Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there.
+Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there. With the budget file off or missing (the work Mac), a lib that is not installed at all is silent, as it was before the layers existed; a lib that is there and broken still prints the line.
 
 ## The budget file
 
-`~/.config/gh-wrapper/budget` holds `on` or `off`, written by the installer from the chezmoi data key `ghBudget.enabled` (`true` or `false`). Default: `on` on `personal`, `off` on `axon-work-computer`. A host with no file runs as off. The layers (log, watch interval and cache, budget guard) are all held by this one file.
+`~/.config/gh-wrapper/budget` holds `on` or `off`, written by the installer from the chezmoi data key `ghBudget.enabled` (`true` or `false`). Default: `on` on `personal`, `off` on `axon-work-computer`. A host with no file runs as off. The log and budget layers and the `gh api` cache are held by this one file. The watch-interval default is not: it runs on every profile (see "Cheaper by default").
 
 ## The call log (`gh_log.py`)
 
@@ -106,8 +106,30 @@ jq -sr 'map(select(.event=="exit")) | group_by(.class,.who) | map({class:.[0].cl
 |---|---|
 | personal Linux | the wrapper, mise and shell PATH, the budget file `on` |
 | personal Mac | the same; PATH through mise and `.zshenv` |
-| work Mac | the same wrapper at the new path, leak-guard checks unchanged, the budget file `off`. A per-call log of directory and parent process, and refusing reads, are new on an employer machine, so Michael is asked before they are turned on there. |
+| work Mac | the same wrapper at the new path, leak-guard checks unchanged, the budget file `off`, and the watch-interval default (`gh run watch` and `gh pr checks --watch` poll every 60 s; Michael's decision #3242 on ask #1207). No log, no budget guard, no `gh api` cache there: a per-call log of directory and parent process, and refusing reads, are new on an employer machine, so Michael is asked before they are turned on there. |
 
 ## Tests
 
-`python3 -m unittest discover -s tests/leak-guard`: `test_gh_layers.py` drives the classification, the exempt set and the seam through the installed layout (`bin/gh` next to `lib/`) with a fake real gh and fake layer modules; `test_gh_log.py` the call log's record and file through the installed wrapper; `test_gh_installer.py` runs the real template; `test_gh_path.py` the shells; `test_gh_wrapper.py` the leak-guard checks, unchanged.
+`python3 -m unittest discover -s tests/leak-guard`: `test_gh_layers.py` drives the classification, the exempt set and the seam through the installed layout (`bin/gh` next to `lib/`) with a fake real gh and fake layer modules; `test_gh_log.py` the call log's record and file through the installed wrapper; `test_gh_rewrite.py` the rewrite layer (below); `test_gh_installer.py` runs the real template; `test_gh_path.py` the shells; `test_gh_wrapper.py` the leak-guard checks, unchanged.
+
+## Cheaper by default (`gh_rewrite.py`)
+
+Rewrites a call the caller did not ask to change. `plan()` is pure: the arguments in, the arguments out. The layer's `before` hook applies it.
+
+| Call | Rewrite | Runs on |
+|---|---|---|
+| `gh run watch`, with no `-i` or `--interval` | `--interval 60` | every profile, the work Mac included (Michael's decision #3242 on ask #1207) |
+| `gh pr checks --watch`, with no `-i` or `--interval` | `--interval 60` | every profile |
+| a non-urgent `gh api` GET read on the core or search bucket | `--cache 15s` | where the budget file says `on` (personal) |
+
+The cache rewrite is skipped for a call that names a method other than GET, sends fields (`-f`, `-F`, `--field`, `--raw-field`) or a body (`--input`), already has `--cache`, asks for help, or has no endpoint. `gh api rate_limit` (free) and GraphQL (`api POST graphql`) are never touched. `GH_URGENT=1` keeps a read fresh. Writes are never rewritten.
+
+A caller's `-i` or `--interval` is honoured and never clamped; for a repeated flag the last value counts, as gh keeps it. A call whose flags cannot be read (an unknown flag, a value flag with no value) is left as it is.
+
+Why 60 seconds: each `gh run watch` poll is about 4 REST calls, so the default 3-second poll costs about 64 calls a minute per watcher (measured: 16 polls in 60 seconds). The design had 30; 60 matches the agents' waiting rule. Why 15 seconds: `gh api --cache` is a plain time-to-live file cache. A second read of the same URL inside the window makes no network call. The cache key includes the request headers: a raw-`Accept` read of a file URL was not served the cached JSON for the same URL.
+
+What it exposes for the log layer: `call.action` is `rewrite` and `call.rewrite` is `interval 60` or `cache 15s` when the call changed. `call.notes["interval"]` is set on every watch call (`run watch`, and `pr checks --watch`): the interval gh polls at, the caller's own or the default, as an int when it is a number. The log layer should record `rewrite` and `interval` from these.
+
+Leak-guard sees the arguments after the rewrite: `checked_run` takes `call.args` after the layers ran, and `test_gh_rewrite.py` checks it with a test-only layer that adds text to a guarded comment. This layer's rewrites add flags to reads only, which leak-guard does not check, so no rewrite of this layer can change a guard verdict.
+
+Tests: `python3 -m unittest discover -s tests/leak-guard -p 'test_gh_rewrite.py'`. The planning is tested as pure functions on the wrapper's own parse, and the installed wrapper is run with the budget on, off and missing. The layer has no flag table: the wrapper parses `run watch`, `pr checks` and `gh api` with its `FLAGS` rows (`FOR_LAYERS` in `scripts/gh-wrapper`) and hands the result in as `call.parsed`. The tests fail when a watch row is missing from `FLAGS`, and when a flag added to a row is not read.

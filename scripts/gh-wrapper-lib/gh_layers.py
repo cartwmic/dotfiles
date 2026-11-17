@@ -15,6 +15,9 @@ import sys
 import time
 
 LAYERS = ("gh_rewrite", "gh_budget", "gh_log")
+# The layers that run when the budget file says off (the work Mac, docs/gh-wrapper.md). gh_rewrite is one: its watch-interval default runs on every profile,
+# and it reads call.budget_on for the rest. The others run only when the budget file says on.
+ALWAYS = ("gh_rewrite",)
 
 
 class Stop(Exception):
@@ -26,11 +29,16 @@ class Stop(Exception):
 
 
 class Call:
-    """One gh call as the layers see it. `args` are the arguments after `gh`; `klass`, `bucket` and `write` come from gh_classify."""
+    """One gh call as the layers see it. `args` are the arguments after `gh`; `klass`, `bucket` and `write` come from gh_classify. `budget_on` is whether
+    ~/.config/gh-wrapper/budget says on, which the wrapper reads once for every call. `parsed` is the call's flags as the wrapper read them, for the commands
+    it parses for the layers (FOR_LAYERS in the wrapper): ([(long name, value or None)], [positional arguments]) of the arguments after the group, or None
+    when the command is not one of them or its flags could not be read. A layer reads flags from here and keeps no flag table of its own."""
 
-    def __init__(self, args, classification):
+    def __init__(self, args, classification, budget_on=False, parsed=None):
         self.args = list(args)
         self.klass, self.bucket, self.write = classification
+        self.budget_on = budget_on
+        self.parsed = parsed
         self.id = os.getpid()
         self.t0 = time.time()
         self.action = "pass"      # pass | rewrite | refused | exempt
@@ -39,10 +47,10 @@ class Call:
         self.notes = {}      # anything a layer wants a later layer to log
 
 
-def load():
-    """The layer modules that exist, in order."""
+def load(names=LAYERS):
+    """The layer modules that exist, in order: `names`, by default all of them."""
     found = []
-    for name in LAYERS:
+    for name in names:
         try:
             found.append(importlib.import_module(name))
         except ModuleNotFoundError as e:
