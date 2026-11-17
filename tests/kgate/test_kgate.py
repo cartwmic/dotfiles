@@ -520,6 +520,34 @@ class Pieces(unittest.TestCase):
             meter.start()
             self.assertEqual(meter.stop(), (12345, "cgroup"))
 
+    def test_cpu_usec_reads_usage_usec_from_cpu_stat(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(K.read_cpu_usec(d), "no cpu.stat: null, not zero")
+            Path(d, "cpu.stat").write_text("usage_usec 123456\nuser_usec 100000\nsystem_usec 23456\n")
+            self.assertEqual(K.read_cpu_usec(d), 123456)
+            Path(d, "cpu.stat").write_text("user_usec 1\n")
+            self.assertIsNone(K.read_cpu_usec(d))
+
+    def test_the_pod_side_reports_cpu_and_the_commands_own_run_time(self):
+        tree = Path(tempfile.mkdtemp(prefix="kgate-pm-"))
+        self.addCleanup(shutil.rmtree, tree, True)
+        (tree / "f").write_text("x")
+        cg = tree / "cg"
+        cg.mkdir()
+        (cg / "cpu.stat").write_text("usage_usec 987654\n")
+        job = {"id": "kgate-1-2", "root": str(tree), "cwd": str(tree), "files": ["f"], "tree": K.tree_hash(str(tree), ["f"]), "argv": ["sleep", "1"],
+               "uid": os.getuid(), "gid": os.getgid(), "own": [], "head": None, "tools": {}}
+        (tree / "job.json").write_text(json.dumps(job))
+        done = subprocess.run([sys.executable, str(SCRIPT), "--pod", str(tree / "job.json")], capture_output=True, text=True, timeout=60,
+                              env={**os.environ, "KGATE_CGROUP": str(cg)})
+        m = K.Markers("kgate-1-2")
+        m.feed(done.stdout.encode())
+        m.close()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(m.seen["cpu"], "987654")
+        t0, t1 = (float(x) for x in m.seen["clock"].split())
+        self.assertTrue(1.0 <= t1 - t0 < 1.5, m.seen)
+
     def test_peak_meter_samples_when_the_kernel_has_no_peak(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "memory.current").write_text("777\n")
@@ -2086,6 +2114,10 @@ def sidecar_password():
 if a[0] == "logs":
     print("Error 18456: Login failed for user sa, password %s" % sidecar_password()); print("SQL Server is starting"); sys.exit(0)
 if a[0] == "exec" and "-c" in a and a[a.index("-c") + 1] == "mssql":
+    if "cpu.stat" in a[-1]:
+        if os.environ.get("FAKE_NO_SIDECAR_CPU"):
+            sys.exit(1)
+        print("usage_usec 4200000\nuser_usec 3000000\nsystem_usec 1200000"); sys.exit(0)
     print("734003200"); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     pod, script = a[2], a[-1]
@@ -2533,7 +2565,7 @@ class PodSh(unittest.TestCase):
     def test_markers_are_the_ones_the_mac_side_reads_even_after_output_without_a_newline(self):
         done, _ = self.run_sh(argv=("printf", "no newline"))
         seen = self.markers(done.stdout)
-        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "end"})
+        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "cpu", "clock", "end"})
         self.assertRegex(seen["start"], r"^\d+ node=n1 cpus=\d+$")
         self.assertRegex(seen["end"], r"^\d+ exit 0$")
 
@@ -2545,6 +2577,21 @@ class PodSh(unittest.TestCase):
     def test_no_memory_peak_is_reported_as_unknown_not_invented(self):
         done, _ = self.run_sh()
         self.assertEqual(self.markers(done.stdout)["peak"], "unknown")
+
+    def test_cpu_comes_from_cpu_stat_usage_usec(self):
+        (self.cg / "cpu.stat").write_text("usage_usec 7654321\nuser_usec 7000000\nsystem_usec 654321\nnr_periods 0\n")
+        done, _ = self.run_sh()
+        self.assertEqual(self.markers(done.stdout)["cpu"], "7654321")
+
+    def test_no_cpu_stat_is_reported_as_unknown_not_invented(self):
+        done, _ = self.run_sh()
+        self.assertEqual(self.markers(done.stdout)["cpu"], "unknown")
+
+    def test_the_commands_own_wall_time_is_the_two_clock_readings_around_it(self):
+        done, _ = self.run_sh(argv=("sleep", "1"))
+        t0, t1 = (float(x) for x in self.markers(done.stdout)["clock"].split())
+        self.assertGreaterEqual(t1 - t0, 1.0)
+        self.assertLess(t1 - t0, 1.5, "setup before CMD (unpack, tree hash, preflight) is not in it")
 
     def test_the_pod_side_builds_a_one_commit_repo_whose_tree_is_the_macs_hash(self):
         done, _ = self.run_sh(argv=("sh", "-c", "git rev-parse HEAD; git log --format=%an,%ae,%cn,%s | wc -l; git status --porcelain | wc -l; echo KGATE_HEAD=$KGATE_HEAD"))
@@ -3124,6 +3171,8 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual((rec["exit"], rec["services"], rec["service_peak_bytes"]), (0, ["mssql"], 734003200))
         self.assertIn("service_ready_s", rec)
         self.assertIn("pod_start_s", rec)
+        self.assertEqual(rec["service_cpu_usec"], 4200000)
+        self.assertIn("cpu mssql 4200000 usec", done.stdout)
         everything = done.stdout + (done.stderr or "") + "".join(p.read_text(errors="replace") for p in self.state.rglob("*") if p.is_file())
         self.assertNotIn(pw, everything, "the generated SA password is in the pod spec only")
         execs = [a for a in self.kubectl_args() if a[0] == "exec" and "-i" in a]
@@ -3544,6 +3593,26 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         rec = self.records()[-1]
         self.assertEqual((rec["peak_bytes"], rec["peak_source"]), (4242, "cgroup"))
+
+    def test_cpu_and_run_time_come_back_in_the_record(self):
+        (self.fake / "cg").mkdir()
+        (self.fake / "cg" / "cpu.stat").write_text("usage_usec 3141592\nuser_usec 3000000\nsystem_usec 141592\n")
+        done = self.run_kgate("--", "sleep", "1", env={"KGATE_CGROUP": str(self.fake / "cg")})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["cpu_usec"], 3141592)
+        self.assertTrue(1.0 <= rec["run_s"] < rec["duration_s"], rec)
+        self.assertIn("pod_start_s", rec)
+        self.assertNotEqual(rec["run_s"], rec["pod_start_s"], "run_s is the command alone; pod_start_s is the wait for the pod")
+
+    def test_cpu_is_null_in_the_record_when_cpu_stat_cannot_be_read(self):
+        (self.fake / "cg").mkdir()
+        done = self.run_kgate("--", "true", env={"KGATE_CGROUP": str(self.fake / "cg")})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertIn("cpu_usec", rec)
+        self.assertIsNone(rec["cpu_usec"])
+        self.assertIsInstance(rec["run_s"], float)
 
     # --- refusals: all exit 69 before anything is created
 
