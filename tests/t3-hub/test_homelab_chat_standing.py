@@ -5,7 +5,7 @@ chezmoi template (`dot_claude/fleet/seat-homelab-chat.json.tmpl`), the hook comm
 script. Nothing is a hand copy of the template output.
 
   1. the denial set (kubectl delete, git push, board add, `queue; rm -rf ~`, Edit, Write, delegate_task, schedule_task, t3_thread_send to another thread) is refused by that command
-  2. what the command allows, over every tool name and bot verb in the golden file's `seen` lists, equals the golden `allowed` list; the hook's own constants equal it too,
+  2. what the command allows, over every tool name, bot verb and other Bash command in the golden file's `seen` lists, equals the golden `allowed` list; the hook's own constants equal it too,
      so a tool, verb, thread or post flag added to the hook without a change to homelab_chat_allowed.golden.json fails; and the check fails on a hook that gained one (tested on a copy)
   3. the instance's launch arguments keep --strict-mcp-config and an MCP file that holds hindsight only
 
@@ -76,6 +76,10 @@ class Seat:
         probes = [(t, {"tool_name": t, "tool_input": {"query": "x"}}) for t in SEEN["tools"] if t not in ("Bash", SEND)]
         return self.which_allowed(probes + [(SEND, {"tool_name": SEND, "tool_input": {"threadId": COORDINATOR, "message": "m"}})])
 
+    def allowed_bash_commands(self):
+        """Every other Bash command in the golden file's `seen` list. The golden list allows none of them, so any that runs is a new command form."""
+        return self.which_allowed([(c, hub.bash_call(c)) for c in SEEN["bash_commands"]])
+
     def allowed_threads(self):
         probes = [COORDINATOR, "mcp:launch:someone-else", "", COORDINATOR + "x"]
         return self.which_allowed([(t, {"tool_name": SEND, "tool_input": {"threadId": t, "message": "m"}}) for t in probes])
@@ -98,6 +102,8 @@ def differences(seat):
                             ("bot verbs", seat.allowed_bot_verbs(), set(ALLOWED["bot_verbs"]))):
         found += ["%s: allowed but not in the golden list: %s" % (name, sorted(got - want))] * bool(got - want)
         found += ["%s: in the golden list but refused: %s" % (name, sorted(want - got))] * bool(want - got)
+    got = seat.allowed_bash_commands()
+    found += ["bash commands: allowed but not in the golden list: %s" % sorted(got)] * bool(got)
     flags, other = seat.allowed_post_flags()
     found += ["post flags: allowed %s, golden %s" % (sorted(flags), ALLOWED["post"]["flags"])] * (sorted(flags) != sorted(ALLOWED["post"]["flags"]))
     found += ["a post to another lead, or another coordinator lead command, is allowed"] * other
@@ -109,6 +115,22 @@ def hook_module(path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def launch_args(script):
+    """The seat instance's launch arguments, from the rendered T3 settings script."""
+    inst = json.loads(hub.run_script(script, hub.FIXTURE))["providerInstances"][hub.HOMELAB_CHAT]
+    return shlex.split(inst["config"]["launchArgs"])
+
+
+def launch_args_problems(args, home):
+    """What is wrong with the launch arguments; empty when --strict-mcp-config is there and the one MCP file is the seat's own."""
+    if args.count("--strict-mcp-config") != 1:
+        return ["no --strict-mcp-config: the seat would load every MCP server of the machine"]
+    if args.count("--mcp-config") != 1:
+        return ["not exactly one --mcp-config"]
+    mcp = Path(args[args.index("--mcp-config") + 1])
+    return [] if (mcp.name, str(mcp.parent)) == ("mcp-homelab-chat.json", "%s/.claude/fleet" % home) else ["the MCP file is %s, not the seat's own" % mcp]
 
 
 class StandingTest(unittest.TestCase):
@@ -143,7 +165,7 @@ class StandingTest(unittest.TestCase):
     def test_the_golden_file_is_consistent(self):
         self.assertTrue(set(ALLOWED["tools"]) | {SEND} <= set(SEEN["tools"]) | {SEND})
         self.assertTrue(set(ALLOWED["bot_verbs"]) <= set(SEEN["bot_verbs"]))
-        for names in (ALLOWED["tools"], ALLOWED["bot_verbs"], SEEN["tools"], SEEN["bot_verbs"]):
+        for names in (ALLOWED["tools"], ALLOWED["bot_verbs"], SEEN["tools"], SEEN["bot_verbs"], SEEN["bash_commands"]):
             self.assertEqual(len(names), len(set(names)))
 
     def test_the_check_fails_on_a_hook_that_gained_a_tool_a_verb_a_thread_or_a_flag(self):
@@ -155,7 +177,11 @@ class StandingTest(unittest.TestCase):
                 ("a thread", 'COORDINATOR_THREADS = ("mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56",)', 'COORDINATOR_THREADS = ("mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56", "mcp:launch:someone-else")',
                  "t3_thread_send threads: allowed but not in the golden list: ['mcp:launch:someone-else']"),
                 ("a post flag", 'POST_FLAGS = ("--key", "--text")', 'POST_FLAGS = ("--key", "--text", "--buttons")', "post flags: allowed ['--buttons', '--key', '--text']"),
-                ("an action", '"kube": ("get",', '"kube": ("delete", "get",', "bot verbs: allowed but not in the golden list: ['kube delete']")):
+                ("an action", '"kube": ("get",', '"kube": ("delete", "get",', "bot verbs: allowed but not in the golden list: ['kube delete']"),
+                ("a new Bash command form", '    raise Deny("Bash runs only homelab_bot.py calls', '    if words[:2] == ["kubectl", "get"]:\n        return "kubectl"\n    raise Deny("Bash runs only homelab_bot.py calls',
+                 "bash commands: allowed but not in the golden list: ['kubectl get pods', 'kubectl get pods -A']"),
+                ("a new rule for a tool outside the constants", '    if tool == "Bash":', '    if tool == "MultiEdit":\n        return tool, "multiedit"\n    if tool == "Bash":',
+                 "tools: allowed but not in the golden list: ['MultiEdit']")):
             with self.subTest(change=name):
                 self.assertIn(old, original)
                 seat = Seat(original.replace(old, new, 1))
@@ -166,12 +192,9 @@ class StandingTest(unittest.TestCase):
 
     def test_the_launch_arguments_keep_strict_mcp_config_and_a_hindsight_only_file(self):
         script, home = hub.LinuxSettingsTest().render("linux")
-        inst = json.loads(hub.run_script(script, hub.FIXTURE))["providerInstances"][hub.HOMELAB_CHAT]
-        args = shlex.split(inst["config"]["launchArgs"])
-        self.assertEqual(args.count("--strict-mcp-config"), 1, "without it the seat would load every MCP server of the machine")
-        self.assertEqual(args.count("--mcp-config"), 1)
+        args = launch_args(script)
+        self.assertEqual(launch_args_problems(args, home), [])
         mcp = Path(args[args.index("--mcp-config") + 1])
-        self.assertEqual((mcp.name, str(mcp.parent)), ("mcp-homelab-chat.json", "%s/.claude/fleet" % home))
         settings = Path(args[args.index("--settings") + 1])
         self.assertEqual(settings.name, "seat-homelab-chat.json")
         for profile in ("personal", "axon-work-computer"):
@@ -183,15 +206,11 @@ class StandingTest(unittest.TestCase):
                 env.close()
 
     def test_the_check_fails_on_launch_arguments_without_strict_mcp_config_or_with_a_wider_file(self):
-        script, _ = hub.LinuxSettingsTest().render("linux")
+        script, home = hub.LinuxSettingsTest().render("linux")
         for name, old, new in (("no strict flag", " --strict-mcp-config", ""), ("the shared file", "mcp-homelab-chat.json", "mcp.json")):
             with self.subTest(change=name):
                 self.assertIn(old, script)
-                broken = script.replace(old, new)
-                inst = json.loads(hub.run_script(broken, hub.FIXTURE))["providerInstances"][hub.HOMELAB_CHAT]
-                args = shlex.split(inst["config"]["launchArgs"])
-                ok = args.count("--strict-mcp-config") == 1 and Path(args[args.index("--mcp-config") + 1]).name == "mcp-homelab-chat.json"
-                self.assertFalse(ok)
+                self.assertNotEqual(launch_args_problems(launch_args(script.replace(old, new)), home), [])
 
 
 if __name__ == "__main__":
