@@ -21,11 +21,13 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_agent-login"
 SECRET = "s3cr3t-Pa55,with\"odd'chars"
 PAGE = b"""<!doctype html><title>login</title>
-<input id=user type=text><input id=pw type=password><input id=other type=text><input id=trunc type=text><button id=btn>go</button>
+<input id=user type=text><input id=pw type=password><input id=other type=text><input id=trunc type=text><input id=hop type=text><input id=keep type=text value=keepme><button id=btn>go</button>
 <script>
 const q = new URLSearchParams(location.search), t = q.get('t');
 const post = (path, body) => fetch(path, {method: 'POST', body: JSON.stringify(body)});
-for (const el of document.querySelectorAll('input')) el.addEventListener('input', () => { if (el.id === 'trunc') el.value = el.value.slice(0, 3); post('/value', {t, host: location.hostname, id: el.id, value: el.value}); });
+for (const el of document.querySelectorAll('input')) el.addEventListener('input', () => { if (el.id === 'trunc') el.value = el.value.slice(0, 3);
+  /* hop keeps 3 characters and moves focus on */ if (el.id === 'hop') { el.value = el.value.slice(0, 3); document.getElementById('keep').focus(); }
+  post('/value', {t, host: location.hostname, id: el.id, value: el.value}); });
 if (q.get('focus')) document.getElementById(q.get('focus')).focus();
 post('/loaded', {t, host: location.hostname});
 if (q.has('poll')) setInterval(async () => { const r = await (await fetch('/swap?t=' + t)).json(); if (r.to) location.href = r.to; }, 50);
@@ -49,6 +51,9 @@ elif args[:2] == ["item", "get"]:
     else:
         field = args[args.index("--fields") + 1]
         value = values[field]
+        if value.startswith("RAW:"):   # op answering with something that is not JSON
+            print(value)
+            sys.exit(0)
         if field == "password" and "--reveal" not in args:   # what the real op prints for a concealed field that was not revealed
             value = "[use 'op item get %s --reveal' to reveal]" % args[2]
         print(json.dumps({"id": field, "value": value}))
@@ -173,8 +178,8 @@ class LoginFillTest(unittest.TestCase):
         self.wait_for(lambda: self.events_of(token, "loaded"), "page %s to load" % token)
         return token
 
-    def login(self, field, part, items, values=None, *extra, trigger=None):
-        (self.tmp / "items.json").write_text(json.dumps(items))
+    def login(self, field, part, items, values=None, *extra, trigger=None, raw_items=None):
+        (self.tmp / "items.json").write_text(raw_items if raw_items is not None else json.dumps(items))
         (self.tmp / "values.json").write_text(json.dumps(values or {i["id"]: {"username": "u-" + i["id"], "password": SECRET, "otp": "123456"} for i in items}))
         env = {"PATH": "%s:%s" % (self.tmp / "bin", os.environ["PATH"]), "HOME": str(self.tmp), "XDG_STATE_HOME": str(self.tmp / "state"),
                "AGENT_CHROME_PORT": self.cdp_port, "FAKE_OP_DIR": str(self.tmp)}
@@ -289,6 +294,29 @@ class LoginFillTest(unittest.TestCase):
         self.assertIn("holds 3 characters after typing 6; it was cleared", r.stderr)
         self.assertNotIn("u-main", r.stderr + r.stdout)
         self.assertEqual(self.typed(token)[-1], ("trunc", ""))   # cleared
+
+    def test_a_clear_acts_on_the_field_that_was_typed_into_not_on_whatever_has_focus_after(self):
+        token = self.page(focus="hop")   # keeps 3 characters, then moves focus to a field that holds text
+        r = self.login("username", token, [item("main", "Main", "https://localhost/")])
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("it was cleared", r.stderr)
+        self.assertEqual(self.typed(token)[-1], ("hop", ""))
+        self.assertEqual([e for e in self.typed(token) if e[0] == "keep"], [])   # the other field was not touched
+
+    def test_op_output_that_is_not_json_is_never_quoted_in_the_error_or_the_log(self):
+        token = self.page(focus="pw")
+        r = self.login("password", token, [item("main", "Main", "https://localhost/")], {"main": {"username": "u", "password": "RAW:" + SECRET, "otp": "1"}})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("op did not return JSON for the password of Main", r.stderr)
+        self.assertEqual(self.typed(token), [])
+        self.assertNotIn(SECRET[:8], r.stdout + r.stderr + self.log())
+
+    def test_a_login_list_that_is_not_json_is_never_quoted(self):
+        token = self.page(focus="pw")
+        r = self.login("username", token, [], raw_items="token=tok-77aa not json")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("op did not return JSON for the login list", r.stderr)
+        self.assertNotIn("tok-77aa", r.stderr + self.log())
 
     # which page, which login
 

@@ -48,6 +48,11 @@ const op = (args) => new Promise((resolve, reject) => {
   });
 });
 
+// JSON.parse's own error quotes the start of its input, and op's output may be the value: a fixed message instead.
+const parseJson = (text, what) => {
+  try { return JSON.parse(text); } catch { throw new Refusal(`op did not return JSON for ${what}`); }
+};
+
 const hostOf = (href) => {
   for (const candidate of [href, `https://${href}`]) {
     try { return new URL(candidate).hostname.toLowerCase(); } catch {}
@@ -71,7 +76,7 @@ async function findPage(part) {
 }
 
 async function findLogin(host, wanted) {
-  const items = JSON.parse(await op(['item', 'list', '--vault', VAULT, '--categories', 'Login', '--format', 'json']));
+  const items = parseJson(await op(['item', 'list', '--vault', VAULT, '--categories', 'Login', '--format', 'json']), 'the login list');
   const matches = items.filter((i) => (i.urls || []).some((u) => hostOf(u.href) === host));
   if (!matches.length) throw new Refusal(`no login for ${host} in vault ${VAULT}`);
   const list = (xs) => xs.map((i) => `${i.title} (${i.id})`).join(', ');   // titles are not unique, so each comes with its id; never a URL (a stored URL can carry a token)
@@ -98,7 +103,7 @@ async function readValue(field, item) {
   // --format json: a plain single-field print can wrap a value with a comma or quote in CSV quotes. --reveal: a concealed field
   // (the password) is otherwise replaced by a notice.
   const args = field === 'password' ? [...base, '--fields', 'password', '--reveal', '--format', 'json'] : [...base, '--fields', 'username', '--format', 'json'];
-  return checked(JSON.parse(await op(args)).value, item, field);
+  return checked(parseJson(await op(args), `the ${field} of ${item.title}`).value, item, field);
 }
 
 function connect(url) {
@@ -126,24 +131,27 @@ function connect(url) {
   });
 }
 
-const FOCUS = `(() => { const a = document.activeElement; return { host: location.hostname.toLowerCase(), tag: a ? a.tagName : '', type: a && a.type ? String(a.type).toLowerCase() : '' }; })()`;
-
-const FIELD_LENGTH = `document.activeElement.value.length`;
-const CLEAR_FIELD = `(() => { const el = document.activeElement; el.select(); document.execCommand('delete'); if (el.value) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); } })()`;
+// The element is held by reference (a CDP object id), so the checks, the read-back and the clear all act on the one element that
+// was checked and typed into, whatever has focus by then (a split code box or an auto-advancing page moves focus after typing).
+const INSPECT = `function () { return { host: location.hostname.toLowerCase(), tag: this.tagName, type: this.type ? String(this.type).toLowerCase() : '' }; }`;
+const FIELD_LENGTH = `function () { return this.value.length; }`;
+const CLEAR_FIELD = `function () { this.select(); document.execCommand('delete'); if (this.value) { this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); } }`;
 
 async function type(page, field, host, value) {
   const cdp = await connect(page.webSocketDebuggerUrl);
   try {
-    const { result } = await cdp.call('Runtime.evaluate', { expression: FOCUS, returnByValue: true });
-    const now = result.value;
+    const { result: focused } = await cdp.call('Runtime.evaluate', { expression: 'document.activeElement' });
+    if (!focused.objectId) throw new Refusal('no input has focus (focused: nothing); click the field with Browse first');
+    const on = (functionDeclaration, returnByValue = true) => cdp.call('Runtime.callFunctionOn', { objectId: focused.objectId, functionDeclaration, returnByValue });
+    const now = (await on(INSPECT)).result.value;
     if (now.host !== host) throw new Refusal(`the page is now on ${now.host}, not ${host}`);
-    if (!['INPUT', 'TEXTAREA'].includes(now.tag)) throw new Refusal(`no input has focus (focused: ${now.tag.toLowerCase() || 'nothing'}); click the field with Browse first`);
+    if (!['INPUT', 'TEXTAREA'].includes(now.tag)) throw new Refusal(`no input has focus (focused: ${now.tag.toLowerCase()}); click the field with Browse first`);
     if (field === 'password' && now.type !== 'password') throw new Refusal(`the focused field is type=${now.type || 'text'}, not a password field`);
     await cdp.call('Input.insertText', { text: value });
     // The field must now hold exactly what was typed. If not, clear it and say only the two lengths.
-    const after = (await cdp.call('Runtime.evaluate', { expression: FIELD_LENGTH, returnByValue: true })).result.value;
+    const after = (await on(FIELD_LENGTH)).result.value;
     if (after !== value.length) {
-      await cdp.call('Runtime.evaluate', { expression: CLEAR_FIELD });
+      await on(CLEAR_FIELD, false);
       throw new Refusal(`the field holds ${after} characters after typing ${value.length}; it was cleared`);
     }
   } finally {

@@ -188,13 +188,19 @@ connect_or_service_account() {
   else
     : > "$work/stdin"
   fi
+  # op's output is kept in a shell variable, never in a file: it can be a secret (a password, a whole item), and a file in
+  # TMPDIR would hold it on disk until the EXIT trap ran (a killed shim would leave it). The trailing "x" keeps the command
+  # substitution from eating op's own trailing newlines; the status is read from the substitution itself. Only stderr and the
+  # stdin copy (an inject template, op:// references and no secrets) go to files.
   status=0
-  connect_op "$CONNECT_TIMEOUT_SECONDS" "$host" "$secret" "$@" < "$work/stdin" > "$work/out" 2> "$work/err" || status=$?
+  out=$(s=0; connect_op "$CONNECT_TIMEOUT_SECONDS" "$host" "$secret" "$@" < "$work/stdin" 2> "$work/err" || s=$?; printf x; exit "$s") || status=$?
+  out=${out%x}
   if [ "$status" -eq 0 ]; then
-    cat "$work/out"
+    printf '%s' "$out"
     cat "$work/err" >&2
     exit 0
   fi
+  unset out
   if [ "$status" -eq 124 ]; then
     reason="timed out after $CONNECT_TIMEOUT_SECONDS s"
   else
