@@ -21,7 +21,7 @@ ENTRY = {   # browser-harness, the work Mac's entry
     "env": {"BU_CDP_URL": "http://127.0.0.1:9333", "ANONYMIZED_TELEMETRY": "false", "BH_TELEMETRY": "0"},
 }
 BROWSE = {"command": "/Users/test/.local/share/mise/shims/browse", "args": ["mcp"]}
-PERSONAL_ONLY = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/share/agent-harness/canonical/skills/using-browse/SKILL.md"]
+PERSONAL_ONLY = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/bin/agent-login", ".local/share/agent-harness/canonical/skills/using-browse/SKILL.md"]
 WORK_ONLY = ".local/share/browser-harness-mcp/server.py"
 SEED = ".local/share/pi-mcp-lazy/seed/browser-harness.json"
 

@@ -303,9 +303,10 @@ Library/**
 {{- end }}
 
 {{- if ne .profile "personal" }}
-# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal only. A new Chrome extension with debugger access to every site is something the employer might care about, so it is asked before the work Mac gets it (rule 272f08d0). The pin, the download helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
+# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal only. A new Chrome extension with debugger access to every site is something the employer might care about, so it is asked before the work Mac gets it (rule 272f08d0). The pin, the download helper, the sign-in helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
 .config/mise/conf.d/browse.toml
 .local/bin/agent-download
+.local/bin/agent-login
 .local/share/agent-harness/canonical/skills/using-browse
 .local/share/agent-harness/canonical/skills/using-browse/**
 91_browse_setup.sh
@@ -518,6 +519,7 @@ Library/Preferences/pnpm/**
 .config/mise/conf.d/agentsview.toml
 .config/mise/conf.d/browse.toml
 .local/bin/agent-download
+.local/bin/agent-login
 .local/share/agent-harness/canonical/skills/using-browse
 .local/share/agent-harness/canonical/skills/using-browse/**
 .local/bin/qmd
