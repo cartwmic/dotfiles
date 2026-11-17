@@ -16,12 +16,13 @@ checkout exists, so it cannot read dotfiles' pin without fetching an unpinned re
 The pins are read from origin/main after a fetch, never from a working tree, which may be stale or hold other work.
 
 Without --open-prs it only reports, and prints `in step` or `drift: <what differs>`.
-Exit 0: in step (also: --open-prs opened the PRs; the drift stays until they merge). 1: drift. 3: a source could not be read (nothing is judged). 4: --open-prs refused because a bump PR is already open
+Exit 0: in step (also: --open-prs opened the PRs; the drift stays until they merge). 1: drift. 3: a source could not be read (nothing is judged). 4: --open-prs refused because every repo that is behind already has its bump PR
 (nothing was opened). 2: bad arguments.
 
 With --open-prs, when the pins are behind the host, it opens one PR per repo that needs it, and never merges:
   - the sha256s come from the release's SHA256SUMS (the linux lines), not from any file it downloaded;
-  - it refuses, opening nothing, if any bump PR for that version is already open in either repo;
+  - it decides per repo: a repo that already has an open bump PR for that version is done and gets no second one, a repo that is behind and has none gets one
+    (so a run that failed half way is finished by the next run); it refuses (exit 4) only when every repo that is behind already has its PR;
   - it never downgrades: if a pin is newer than the host's T3, it says so and opens nothing.
 --dry-run prints each diff and PR body and pushes and opens nothing. Each PR is made in a fresh worktree of origin/main, so a dirty checkout is not touched. The PR body carries the design-principles table and
 a Decisions line.
@@ -405,21 +406,26 @@ def open_prs(args, host, pins, report, log):
     steward_url = remote_of(args.steward_repo)
     api, token = gitea_api(steward_url), gitea_token(args.steward_repo, steward_url)
     already = {"dotfiles": open_bump_dotfiles(slug, host), "steward": open_bump_steward(api, token, host)}
-    clashes = [(r, u) for r in todo for u in already[r]]
-    if clashes:
-        for repo, url in clashes:
-            print("[%s] refused: a bump PR for %s is already open in %s: %s" % (NAME, host, repo, url), file=sys.stderr)
-        log("open-prs", "refused: bump PR already open: " + ", ".join(u for _, u in clashes))
+    # Decide per repo. A repo that already has its open bump PR for this version is done (a half-finished earlier run leaves exactly that); a repo that is
+    # behind and has none gets one. Only when every behind repo already has its PR is there nothing to do, and that is the refusal (exit 4).
+    states = {r: "PR open %s" % already[r][0] for r in todo if already[r]}
+    missing = [r for r in ("steward", "dotfiles") if r in todo and r not in states]
+    if not missing:
+        summary = "; ".join("%s: %s" % (r, states[r]) for r in sorted(states))
+        print("[%s] refused: a bump PR for %s is already open in every repo that is behind (%s)" % (NAME, host, summary), file=sys.stderr)
+        log("open-prs", "refused: " + summary)
         return EXIT_REFUSED
-    opened = []
-    # The Gitea call is the one that needs a token from the credential helper, so it goes first: a failure there leaves no GitHub PR that would make every rerun refuse.
-    if "steward" in todo:
-        opened.append(("steward", open_steward_pr(args.steward_repo, api, token, host, pins["steward"], sums, args.dry_run)))
-    if "dotfiles" in todo:
-        opened.append(("dotfiles", open_dotfiles_pr(args.dotfiles_source, slug, host, pins["dotfiles"], sums, args.dry_run)))
-    for repo, url in opened:
-        print("[%s] %s: %s" % (NAME, repo, url) if args.dry_run else "[%s] opened %s: %s" % (NAME, repo, url))
-    log("open-prs", ("dry run, would open " if args.dry_run else "opened ") + ", ".join("%s %s" % (r, u.splitlines()[0]) for r, u in opened))
+    # The Gitea call needs a token from the credential helper, so it goes first: a failure there leaves no GitHub PR. If the GitHub call then fails, the next run
+    # sees the steward PR as done and opens only the dotfiles one. Each result is printed as soon as it exists, so a later failure does not hide it.
+    openers = {"steward": lambda: open_steward_pr(args.steward_repo, api, token, host, pins["steward"], sums, args.dry_run),
+               "dotfiles": lambda: open_dotfiles_pr(args.dotfiles_source, slug, host, pins["dotfiles"], sums, args.dry_run)}
+    for repo in missing:
+        url = openers[repo]()
+        states[repo] = ("would open: " if args.dry_run else "opened ") + url
+        log("open-prs", "%s %s" % (repo, states[repo].splitlines()[0]))
+        print("[%s] %s: %s" % (NAME, repo, states[repo]))
+    for repo in sorted(r for r in states if r not in missing):
+        print("[%s] %s: %s" % (NAME, repo, states[repo]))
     return EXIT_IN_STEP
 
 
@@ -479,7 +485,9 @@ def main(argv=None):
         print(text)
         log("check", text)
         if args.notify:
-            outcome = notify_inbox(args.coordinator_state, "T3 pin " + text + ". Fix: t3_pin_check.py --open-prs", text)
+            # The key names the host's version and each pin's, so one drift posts once a day and a new release is a new post.
+            signature = "%s|%s" % (host, ",".join("%s=%s" % (r, p["version"]) for r, p in sorted(pins.items())))
+            outcome = notify_inbox(args.coordinator_state, "T3 pin " + text + ". Fix: t3_pin_check.py --open-prs", signature + "|" + text)
             print("[%s] %s" % (NAME, outcome))
             log("notify", outcome)
         if args.open_prs:

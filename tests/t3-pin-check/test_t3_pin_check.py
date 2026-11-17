@@ -27,13 +27,27 @@ NEW_ARM = "b" * 63 + "2"
 GITHUB_URL = "https://github.com/cartwmic/dotfiles.git"
 GITEA_URL = "https://gitea.example.test/cartwmic/budget-steward.git"
 
-FAKE_GH = """#!/bin/sh
-echo "$@" >> "$FAKE_GH_LOG"
-case "$1 $2" in
-  "pr list") cat "$FAKE_GH_PRS" 2>/dev/null || echo '[]' ;;
-  "pr create") echo "https://github.com/cartwmic/dotfiles/pull/999" ;;
-  *) echo "unexpected gh call: $*" >&2; exit 9 ;;
-esac
+# `gh pr list` reads gh-prs.json; a successful `gh pr create` adds its PR to that file (so the next run sees it open); the file gh-fail makes create fail.
+FAKE_GH = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+open(os.environ["FAKE_GH_LOG"], "a").write(" ".join(args) + "\\n")
+prs = os.environ["FAKE_GH_PRS"]
+if args[:2] == ["pr", "list"]:
+    print(open(prs).read() if os.path.exists(prs) else "[]")
+elif args[:2] == ["pr", "create"]:
+    if os.path.exists(os.path.join(os.path.dirname(prs), "gh-fail")):
+        print("gh: HTTP 401: Bad credentials", file=sys.stderr)
+        sys.exit(1)
+    current = json.load(open(prs)) if os.path.exists(prs) else []
+    number = 100 + len(current)
+    current.append({"number": number, "url": "https://github.com/cartwmic/dotfiles/pull/%d" % number, "title": args[args.index("--title") + 1],
+                    "headRefName": args[args.index("--head") + 1]})
+    json.dump(current, open(prs, "w"))
+    print("https://github.com/cartwmic/dotfiles/pull/%d" % number)
+else:
+    print("unexpected gh call: " + " ".join(args), file=sys.stderr)
+    sys.exit(9)
 """
 
 
@@ -73,7 +87,9 @@ class FakeGitea(BaseHTTPRequestHandler):
             return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.created.append(body)
-        self._send({"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/77"})
+        url = "https://gitea.example.test/cartwmic/budget-steward/pulls/%d" % (70 + len(self.created))
+        self.open_prs.append({"html_url": url, "title": body["title"], "head": {"ref": body["head"]}})
+        self._send({"html_url": url})
 
 
 class Inbox(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -290,8 +306,8 @@ class OpenPrs(Case):
         self.assertEqual(len(creates), 1)
         self.assertEqual(len(FakeGitea.created), 1)
         self.assertEqual(FakeGitea.created[0]["head"], branch)
-        self.assertIn("https://github.com/cartwmic/dotfiles/pull/999", r.stdout)
-        self.assertIn("pulls/77", r.stdout)
+        self.assertIn("https://github.com/cartwmic/dotfiles/pull/100", r.stdout)
+        self.assertIn("pulls/71", r.stdout)
 
     def test_a_dry_run_prints_the_diffs_and_pushes_and_opens_nothing(self):
         r = self.run_check("--open-prs", "--dry-run")
@@ -343,23 +359,82 @@ class OpenPrs(Case):
         self.assertEqual(r.returncode, 3)
         self.assertEqual(FakeGitea.created, [])
 
-    def test_an_open_dotfiles_bump_pr_for_that_version_refuses_both(self):
+    def creates(self):
+        return [c for c in self.gh_calls() if c.startswith("pr create")]
+
+    def test_an_open_dotfiles_bump_pr_is_done_and_only_the_steward_one_is_opened(self):
+        (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "https://github.com/cartwmic/dotfiles/pull/5",
+                                                           "title": "t3 pin: " + NEW, "headRefName": "t3-pin-" + NEW}]))
+        r = self.run_check("--open-prs")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.creates(), [], "dotfiles already has its PR: no second one")
+        self.assertEqual(len(FakeGitea.created), 1)
+        self.assertIn("dotfiles: PR open https://github.com/cartwmic/dotfiles/pull/5", r.stdout)
+        self.assertIn("steward: opened ", r.stdout)
+
+    def test_an_open_steward_bump_pr_is_done_and_only_the_dotfiles_one_is_opened(self):
+        FakeGitea.open_prs = [{"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/3", "title": "t3 pin: " + NEW,
+                               "head": {"ref": "t3-pin-" + NEW}}]
+        r = self.run_check("--open-prs")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.creates()), 1)
+        self.assertEqual(FakeGitea.created, [], "steward already has its PR: no second one")
+        self.assertIn("steward: PR open https://gitea.example.test/cartwmic/budget-steward/pulls/3", r.stdout)
+        self.assertIn("dotfiles: opened ", r.stdout)
+
+    def test_both_already_open_is_the_refusal_and_opens_nothing(self):
+        FakeGitea.open_prs = [{"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/3", "title": "t3 pin: " + NEW,
+                               "head": {"ref": "t3-pin-" + NEW}}]
         (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "https://github.com/cartwmic/dotfiles/pull/5",
                                                            "title": "t3 pin: " + NEW, "headRefName": "t3-pin-" + NEW}]))
         r = self.run_check("--open-prs")
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
-        self.assertIn("already open", r.stderr)
-        self.assertEqual([c for c in self.gh_calls() if c.startswith("pr create")], [])
-        self.assertEqual(FakeGitea.created, [], "refusing one repo refuses both: no half bump")
-        self.assertEqual(self.branches("steward.git"), ["main"])
+        self.assertIn("steward: PR open", r.stderr)
+        self.assertIn("dotfiles: PR open", r.stderr)
+        self.assertEqual(self.creates(), [])
+        self.assertEqual(FakeGitea.created, [])
 
-    def test_an_open_steward_bump_pr_for_that_version_refuses_both(self):
-        FakeGitea.open_prs = [{"html_url": "https://gitea.example.test/cartwmic/budget-steward/pulls/3", "title": "t3 pin: " + NEW,
-                               "head": {"ref": "t3-pin-" + NEW}}]
-        r = self.run_check("--open-prs")
-        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
-        self.assertEqual([c for c in self.gh_calls() if c.startswith("pr create")], [])
-        self.assertEqual(self.branches("dotfiles.git"), ["main"])
+    def test_half_state_gitea_opened_then_github_fails_is_finished_by_the_next_run_then_refused(self):
+        (self.dir / "gh-fail").write_text("")
+        r1 = self.run_check("--open-prs")
+        self.assertEqual(r1.returncode, 3, r1.stdout + r1.stderr)
+        self.assertEqual(len(FakeGitea.created), 1)
+        self.assertIn("steward: opened ", r1.stdout, "what was opened before the failure is still reported")
+        (self.dir / "gh-fail").unlink()
+        r2 = self.run_check("--open-prs")
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+        self.assertIn("steward: PR open", r2.stdout)
+        self.assertIn("dotfiles: opened ", r2.stdout)
+        self.assertEqual(len(FakeGitea.created), 1, "the steward PR is not opened twice")
+        r3 = self.run_check("--open-prs")
+        self.assertEqual(r3.returncode, 4, r3.stdout + r3.stderr)
+        self.assertEqual(len(FakeGitea.created), 1)
+        self.assertEqual(len([c for c in self.creates()]), 2, "one failed create and one good one; nothing after")
+        self.assertEqual(len(json.loads((self.dir / "gh-prs.json").read_text())), 1)
+
+    def test_half_state_the_other_order_dotfiles_open_steward_missing(self):
+        # the dotfiles PR exists (opened by hand, or by an earlier run); the steward one was never made
+        (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "https://github.com/cartwmic/dotfiles/pull/5",
+                                                           "title": "t3 pin: " + NEW, "headRefName": "t3-pin-" + NEW}]))
+        FakeGitea.fail_post = True
+        r1 = self.run_check("--open-prs")
+        self.assertEqual(r1.returncode, 3, r1.stdout + r1.stderr)
+        FakeGitea.fail_post = False
+        r2 = self.run_check("--open-prs")
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+        self.assertIn("dotfiles: PR open", r2.stdout)
+        self.assertIn("steward: opened ", r2.stdout)
+        r3 = self.run_check("--open-prs")
+        self.assertEqual(r3.returncode, 4, r3.stdout + r3.stderr)
+        self.assertEqual(len(FakeGitea.created), 1)
+        self.assertEqual(self.creates(), [])
+        self.assertEqual(len(json.loads((self.dir / "gh-prs.json").read_text())), 1)
+
+    def test_no_duplicates_however_many_times_it_runs(self):
+        for _ in range(4):
+            self.run_check("--open-prs")
+        self.assertEqual(len(self.creates()), 1)
+        self.assertEqual(len(FakeGitea.created), 1)
 
     def test_an_open_pr_for_another_version_does_not_block(self):
         (self.dir / "gh-prs.json").write_text(json.dumps([{"number": 5, "url": "u", "title": "t3 pin: 0.1.9", "headRefName": "t3-pin-0.1.9"}]))
@@ -428,6 +503,22 @@ class Notify(Case):
         r = self.run_check("--notify")
         self.assertEqual(r.returncode, 1)
         self.assertIn("not posted to the coordinator inbox", r.stdout)
+
+    def test_the_dedupe_key_is_stable_for_the_same_drift_and_day_and_differs_for_another_version(self):
+        sock = self.dir / "inbox.sock"
+        Inbox.events = []
+        server = Inbox(str(sock), Inbox.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.run_check("--notify", state=self.dir)
+        self.run_check("--notify", state=self.dir)
+        self.set_host("0.1.11-nightly.20261118.5000")
+        self.run_check("--notify", state=self.dir)
+        keys = [e["external_key"] for e in Inbox.events]
+        self.assertEqual(len(keys), 3)
+        self.assertEqual(keys[0], keys[1], "the inbox drops the repeat because the key repeats")
+        self.assertNotEqual(keys[0], keys[2])
 
     def test_a_source_that_cannot_be_read_is_posted_too(self):
         sock = self.dir / "inbox.sock"
