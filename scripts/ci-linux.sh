@@ -45,6 +45,7 @@ python3 scripts/ci-par.py \
   tests/instructions-profile \
   tests/pi-settings-render \
   tests/release-skills \
+  tests/pr-body-check \
   'dot_local/share/session-recap:test_*.py' \
   tests/pi-op-shim \
   tests/seed-op-connect-token \
