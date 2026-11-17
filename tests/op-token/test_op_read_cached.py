@@ -4,10 +4,12 @@ The real script runs as a real process with a fake `op` first on PATH. The fake 
 token in its environment is the expected one. Checked from outside: exit status, stdout, stderr, and whether op ran at all.
 Run: python3 -m unittest discover -s tests/op-token -v
 """
+import hashlib
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -45,6 +47,21 @@ class OpReadCached(unittest.TestCase):
             env["OP_SERVICE_ACCOUNT_TOKEN"] = token_env
         return subprocess.run(["sh", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=60)
 
+    def cache_entry(self):
+        """The one cached value file, wherever the layout puts it."""
+        files = [p for p in (self.tmp / "cache").rglob("*") if p.is_file()]
+        self.assertEqual(len(files), 1, files)
+        return files[0]
+
+    def make_age(self, path, seconds):
+        old = os.stat(path).st_mtime - seconds
+        os.utime(path, (old, old))
+
+    def slow_tool(self, name):
+        """A stand-in for `name` first on PATH that logs its call and hangs: a hit must never reach it."""
+        (self.bin / name).write_text('#!/bin/sh\necho "%s $*" >> "$FAKE_CALLS"\nexec sleep 30\n' % name)  # exec: one process, like the real op binary
+        (self.bin / name).chmod(0o755)
+
     def op_calls(self):
         return self.calls.read_text().splitlines() if self.calls.exists() else []
 
@@ -73,7 +90,7 @@ class OpReadCached(unittest.TestCase):
 
     def test_no_token_serves_a_stale_cached_value_and_still_never_calls_op(self):
         self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)  # a miss: caches the value
-        cache = next((self.tmp / "cache").iterdir())
+        cache = self.cache_entry()
         old = os.stat(cache).st_mtime - 3 * 24 * 3600  # three days old: past the 12 h TTL, so a miss
         os.utime(cache, (old, old))
         self.calls.unlink()
@@ -97,7 +114,7 @@ class OpReadCached(unittest.TestCase):
 
     def test_a_stale_serve_is_recorded_as_stale_served(self):
         self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)
-        cache = next((self.tmp / "cache").iterdir())
+        cache = self.cache_entry()
         old = os.stat(cache).st_mtime - 3 * 24 * 3600
         os.utime(cache, (old, old))
         self.assertEqual(self.run_script(REF, token_env="").returncode, 0)
@@ -109,6 +126,60 @@ class OpReadCached(unittest.TestCase):
         done = self.run_script(REF, token_env="")
         self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
         self.assertEqual(len(self.op_calls()), 1, "the hit did not call op again")
+
+    def test_a_fresh_hit_reads_the_file_without_op_hashing_or_the_token(self):
+        self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)  # a miss: caches the value
+        self.calls.unlink()
+        for name in ("op", "shasum", "sha256sum"):
+            self.slow_tool(name)  # each hangs 30 s: a hit that touched one would blow the bound below
+        start = time.monotonic()
+        done = self.run_script(REF, token_env="", token_file="unreadable-on-purpose")
+        took = time.monotonic() - start
+        self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
+        self.assertEqual(self.op_calls(), [], "a hit ran none of op, shasum or sha256sum")
+        self.assertLess(took, 2.0, "a hit must stay far under pi's 10 s limit")
+
+    def test_the_cache_path_is_built_from_the_reference(self):
+        self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)
+        self.assertEqual(self.cache_entry(), self.tmp / "cache/ref/developer/item/password")
+        self.assertEqual(oct(os.stat(self.tmp / "cache/ref").st_mode & 0o777), "0o700")
+
+    def test_unsafe_reference_paths_are_refused(self):
+        for bad in ("op://", "op://vault/../../etc/passwd", "op://vault//field", "op://vault/item/"):
+            done = self.run_script(bad, token_env=TOKEN)
+            self.assertEqual(done.returncode, 2, (bad, done.stderr))
+            self.assertEqual(self.op_calls(), [], bad)
+
+    def test_an_entry_in_the_older_hashed_layout_is_used_and_keeps_its_age(self):
+        cache = self.tmp / "cache"
+        cache.mkdir(mode=0o700)
+        legacy = cache / hashlib.sha256(REF.encode()).hexdigest()
+        legacy.write_text("legacy-value")
+        self.make_age(legacy, 3600)
+        done = self.run_script(REF, token_env=TOKEN)
+        self.assertEqual((done.returncode, done.stdout), (0, "legacy-value"), done.stderr)
+        self.assertEqual(self.op_calls(), [], "a fresh legacy entry needs no op")
+        moved = cache / "ref/developer/item/password"
+        self.assertEqual(moved.read_text(), "legacy-value")
+        self.assertAlmostEqual(os.stat(moved).st_mtime, os.stat(legacy).st_mtime, delta=2)
+
+    def test_a_hung_op_on_a_miss_serves_the_stale_value_inside_pis_10s_limit(self):
+        self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)
+        self.make_age(self.cache_entry(), 3 * 24 * 3600)  # past the TTL: a miss
+        self.calls.unlink()
+        self.slow_tool("op")
+        start = time.monotonic()
+        done = self.run_script(REF, token_env=TOKEN)
+        took = time.monotonic() - start
+        self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
+        self.assertLess(took, 9.5, "the default op bound must leave pi time to get the stale value")
+        self.assertEqual([l for l in self.records() if "op-failed-stale-served" in l].__len__(), 1, self.records())
+
+    def test_a_failed_read_with_no_cache_is_recorded(self):
+        (self.bin / "op").write_text("#!/bin/sh\nexit 1\n")
+        done = self.run_script(REF, token_env=TOKEN)
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual([l for l in self.records() if '"event":"op-failed"' in l].__len__(), 1, self.records())
 
 
 if __name__ == "__main__":

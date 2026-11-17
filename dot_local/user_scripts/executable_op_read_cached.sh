@@ -33,6 +33,15 @@
 # Environment:
 #   OP_READ_CACHE_TTL_MINUTES  cache lifetime in minutes (default 720 = 12h)
 #   OP_READ_CACHE_DIR          cache location (default ~/.cache/agent-harness/secrets)
+#   OP_READ_TIMEOUT_SECONDS    how long `op read` may run on a miss (default 8, under pi's 10s, so a stale value
+#                              still reaches pi in time)
+#
+# A fresh cache hit is the hot path (pi runs this on every model request), so it
+# runs first and does as little as it can: no `op` lookup, no token read, no
+# hashing. The entry lives at $cache_dir/ref/<vault>/<item>/<field>, a path built
+# from the reference with shell expansion only, and the hit costs one `find` (the
+# age check) and one `cat`. Entries from the older layout ($cache_dir/<sha256 of
+# the reference>) are copied to the new path, with their age, on first use.
 #
 # Exit 69 when a read would need `op` and there is no service-account token (OP_SERVICE_ACCOUNT_TOKEN, else the token
 # file): `op` is not run, because without the token it would fall back to the desktop app.
@@ -107,6 +116,35 @@ op://*) ;;
 	;;
 esac
 
+ref_path="${ref#op://}"
+case "$ref_path" in
+"" | /* | */ | *//* | *..* | *"
+"*)
+	log "ERROR: secret reference has an empty or unsafe path: $ref"
+	exit 2
+	;;
+esac
+
+cache_dir="${OP_READ_CACHE_DIR:-$HOME/.cache/agent-harness/secrets}"
+ttl_minutes="${OP_READ_CACHE_TTL_MINUTES:-720}"
+cache_file="$cache_dir/ref/$ref_path"
+
+# `find -mmin` is portable across BSD and GNU find; `stat` format flags are not.
+cache_is_fresh() {
+	[ -s "$cache_file" ] || return 1
+	[ -n "$(find "$cache_file" -prune -mmin -"$ttl_minutes" 2>/dev/null)" ]
+}
+
+emit_cache() {
+	cat "$cache_file"
+}
+
+# The hot path: a fresh hit, before anything else.
+if [ "$refresh" = false ] && cache_is_fresh; then
+	emit_cache
+	exit 0
+fi
+
 if ! command -v op >/dev/null 2>&1; then
 	log "ERROR: 1Password CLI (op) not found on PATH"
 	exit 1
@@ -123,10 +161,7 @@ if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && [ -r "$HOME/.config/agent-harness/o
 	export OP_SERVICE_ACCOUNT_TOKEN
 fi
 
-cache_dir="${OP_READ_CACHE_DIR:-$HOME/.cache/agent-harness/secrets}"
-ttl_minutes="${OP_READ_CACHE_TTL_MINUTES:-720}"
-
-# Portable sha256 across macOS (shasum) and Ubuntu (sha256sum).
+# Portable sha256 across macOS (shasum) and Ubuntu (sha256sum). Only used to find an entry in the older layout.
 hash_ref() {
 	if command -v shasum >/dev/null 2>&1; then
 		printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
@@ -138,26 +173,21 @@ hash_ref() {
 	fi
 }
 
-cache_file="$cache_dir/$(hash_ref "$ref")"
+(umask 077 && mkdir -p "${cache_file%/*}")
 
-# `find -mmin` is portable across BSD and GNU find; `stat` format flags are not.
-cache_is_fresh() {
-	[ -s "$cache_file" ] || return 1
-	[ -n "$(find "$cache_dir" -name "${cache_file##*/}" -mmin -"$ttl_minutes" 2>/dev/null)" ]
-}
-
-emit_cache() {
-	cat "$cache_file"
-}
-
-if [ "$refresh" = false ] && cache_is_fresh; then
-	emit_cache
-	exit 0
+# Older layout: copy the entry, keeping its age, so the TTL still counts from when it was read.
+if [ ! -e "$cache_file" ]; then
+	legacy_file="$cache_dir/$(hash_ref "$ref")"
+	if [ -s "$legacy_file" ]; then
+		(umask 077 && cp -p "$legacy_file" "$cache_file")
+		if [ "$refresh" = false ] && cache_is_fresh; then
+			emit_cache
+			exit 0
+		fi
+	fi
 fi
 
-(umask 077 && mkdir -p "$cache_dir")
-
-# One line per refusal or stale serve, in $XDG_STATE_HOME/agent-harness/op-read-cached.jsonl: a time, the event and the
+# One line per refusal, stale serve or failed read, in $XDG_STATE_HOME/agent-harness/op-read-cached.jsonl: a time, the event and the
 # reference. Never a value. Best effort: a write that fails does not change the outcome.
 record_event() {
 	state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
@@ -202,7 +232,7 @@ op_sa() {
 
 # Never let a wedged `op` hang the caller: kill it after a bound and fall
 # through to the stale-cache path below.
-op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-20}"
+op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-8}"
 run_bounded() {
 	"$@" &
 	cmd_pid=$!
@@ -226,9 +256,11 @@ fi
 
 if [ -s "$cache_file" ]; then
 	log "WARN: op read failed for $ref; serving stale cached value"
+	record_event op-failed-stale-served "$ref"
 	emit_cache
 	exit 0
 fi
 
 log "ERROR: op read failed for $ref and no cached value is available"
+record_event op-failed "$ref"
 exit 1
