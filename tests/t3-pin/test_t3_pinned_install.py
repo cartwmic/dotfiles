@@ -22,24 +22,30 @@ TEMPLATE = ROOT / "run_onchange_after_05_container_tools.sh.tmpl"
 PIN = "0.1.10-nightly.20261116.4800"
 ARCH = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}[os.uname().machine]
 ARCHIVE = f"t3-{PIN}-linux-{ARCH}.tar.gz"
-# The stand-in installer. Like the real one it skips a version that is marked complete and writes the launcher; FAKE_REDOWNLOAD makes it fetch the release
-# itself instead (as the real one would if its layout changed); FAKE_REEXTRACT unpacks the same bytes again into the same folder (a fresh folder, so any
-# file added to it is gone); FAKE_RELOCATE unpacks different bytes in another folder and points the launcher there; FAKE_INSTALLS makes the launcher
-# report another version.
+# The stand-in installer. Like the real one it works in $T3CODE_HOME (made absolute, no trailing slash), skips a version that is marked complete and writes the
+# launcher. FAKE_MODE makes it behave badly, the ways a changed upstream installer might:
+#   redownload  fetches the release itself: different bytes written over t3 in the checked folder
+#   reextract   unpacks the same bytes again into a fresh folder (so anything else in the folder is gone)
+#   relocate    unpacks different bytes in another folder and points the launcher there
+#   wrong       writes a launcher that runs something else
+#   suffix      writes the right launcher line followed by more text on the same line
 INSTALLER = '''#!/bin/sh
 echo "installer version=${T3CODE_VERSION:-}" >> "$CALLS"
-dir=${T3CODE_HOME:-$HOME/.t3}/runtime/versions/$T3CODE_VERSION
-if [ -n "${FAKE_REEXTRACT:-}" ]; then cp "$dir/t3" /tmp/same-t3.$$; rm -rf "$dir"; mkdir -p "$dir"; mv /tmp/same-t3.$$ "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"; fi
-if [ -n "${FAKE_RELOCATE:-}" ]; then
-  dir=${T3CODE_HOME:-$HOME/.t3}/runtime/v2/versions/$T3CODE_VERSION
-  mkdir -p "$dir"; printf '#!/bin/sh\\necho "t3 v%s"\\n# unchecked bytes\\n' "$T3CODE_VERSION" > "$dir/t3"; chmod 755 "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"
-fi
-if [ -n "${FAKE_REDOWNLOAD:-}" ] || [ "$(cat "$dir/.install-complete" 2>/dev/null)" != "$T3CODE_VERSION" ]; then
-  mkdir -p "$dir"; printf '#!/bin/sh\\necho "t3 v%s"\\n# other bytes\\n' "$T3CODE_VERSION" > "$dir/t3"; chmod 755 "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"
-fi
+h=${T3CODE_HOME:-$HOME/.t3}; case "$h" in /*) ;; *) h=$(pwd -P)/$h ;; esac; while [ "${h%/}" != "$h" ]; do h=${h%/}; done
+dir=$h/runtime/versions/$T3CODE_VERSION
+unpack() { mkdir -p "$1"; printf '#!/bin/sh\\necho "t3 v%s"\\n# %s\\n' "$T3CODE_VERSION" "$2" > "$1/t3"; chmod 755 "$1/t3"; echo "$T3CODE_VERSION" > "$1/.install-complete"; }
+case "${FAKE_MODE:-good}" in
+  reextract) cp "$dir/t3" "$dir.t3"; rm -rf "$dir"; mkdir -p "$dir"; mv "$dir.t3" "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete" ;;
+  relocate) dir=$h/runtime/v2/versions/$T3CODE_VERSION; unpack "$dir" "unchecked bytes" ;;
+  redownload) unpack "$dir" "other bytes" ;;
+  *) [ "$(cat "$dir/.install-complete" 2>/dev/null)" = "$T3CODE_VERSION" ] || unpack "$dir" "downloaded" ;;
+esac
 mkdir -p "$HOME/.local/bin"
-if [ -n "${FAKE_INSTALLS:-}" ]; then printf '#!/bin/sh\\necho "t3 v%s"\\n' "$FAKE_INSTALLS" > "$HOME/.local/bin/t3"
-else printf "#!/bin/sh\\nexec '%s/t3' \\"\\$@\\"\\n" "$dir" > "$HOME/.local/bin/t3"; fi
+case "${FAKE_MODE:-good}" in
+  wrong) printf '#!/bin/sh\\necho "t3 v0.1.9"\\n' > "$HOME/.local/bin/t3" ;;
+  suffix) printf "#!/bin/sh\\nexec '%s/t3' \\"\\$@\\" ; true\\n" "$dir" > "$HOME/.local/bin/t3" ;;
+  *) printf "#!/bin/sh\\nexec '%s/t3' \\"\\$@\\"\\n" "$dir" > "$HOME/.local/bin/t3" ;;
+esac
 chmod 755 "$HOME/.local/bin/t3"
 '''
 
@@ -93,6 +99,10 @@ class PinnedInstall(unittest.TestCase):
     def version(self):
         return subprocess.run([str(self.home / ".local/bin/t3"), "--version"], capture_output=True, text=True).stdout.strip()
 
+    def stamp(self):
+        t3 = (self.versions / PIN / "t3").read_bytes()
+        return f"{PIN} {hashlib.sha256(t3).hexdigest()}"
+
     def test_a_pod_on_an_older_version_is_moved_to_the_pin(self):
         self.have_t3("0.1.9")
         r = self.run_script()
@@ -107,38 +117,89 @@ class PinnedInstall(unittest.TestCase):
         self.assertEqual(self.version(), f"t3 v{PIN}")
 
     def test_the_installed_bytes_are_the_bytes_that_were_checked(self):
-        # The installer here downloads nothing: what runs is the unpacked archive that passed the sha256 check.
+        # The installer here downloads nothing: what runs is the unpacked archive that passed the sha256 check, and the stamp records its hash.
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
         self.assertEqual((self.versions / PIN / ".install-complete").read_text().strip(), PIN)
+        self.assertEqual((self.versions / PIN / ".verified-by-install_t3").read_text().strip(), self.stamp())
 
-    def test_an_installer_that_replaces_the_checked_binary_fails(self):
-        r = self.run_script(FAKE_REDOWNLOAD="1")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("replaced the checked files", r.stdout)
+    def test_a_good_install_followed_by_a_rerun_is_a_quiet_no_op(self):
+        self.assertEqual(self.run_script().returncode, 0)
+        self.calls.write_text("")
+        shutil.rmtree(self.mirror)   # a download would fail
+        r = self.run_script(T3_INSTALL_URL="file:///nonexistent")
+        self.assertEqual((r.returncode, r.stdout, r.stderr, self.installed()), (0, "", "", []))
 
-    def test_an_installer_that_installs_somewhere_else_fails(self):
-        # The launcher would run bytes the sha256 never covered; the checked copy is left untouched, so only the launcher check can see it.
-        self.have_t3("0.1.9")
-        r = self.run_script(FAKE_RELOCATE="1")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("put T3 somewhere else", r.stdout)
-        self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+    BAD_INSTALLERS = {
+        "redownload": "replaced the checked t3 in the same folder",
+        "reextract": "re-extracted the same bytes into a fresh folder",
+        "relocate": "unpacked elsewhere and pointed the launcher there",
+        "wrong": "wrote a launcher that runs something else",
+        "suffix": "wrote the launcher line with more on the same line",
+    }
 
-    def test_an_installer_that_unpacks_the_same_bytes_again_fails(self):
-        # t3 is identical afterwards, so only the marker written into the checked folder shows that the folder was replaced.
-        r = self.run_script(FAKE_REEXTRACT="1")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("replaced the checked files", r.stdout)
+    def test_a_bad_installer_fails_the_first_run_and_every_later_one(self):
+        # A pod restart runs the script again. The second run must not find "already on the pin" and exit 0 on bytes that were never checked.
+        for mode, what in self.BAD_INSTALLERS.items():
+            with self.subTest(mode=mode, installer=what):
+                shutil.rmtree(self.home / ".t3", ignore_errors=True)
+                self.have_t3("0.1.9")
+                for n in (1, 2, 3):
+                    r = self.run_script(FAKE_MODE=mode)
+                    self.assertEqual(r.returncode, 1, f"run {n}: {r.stdout}{r.stderr}")
+                    self.assertIn("did not use the checked copy", r.stdout, f"run {n}")
 
-    def test_the_marker_is_gone_after_a_good_install(self):
+    def test_after_a_bad_installer_a_good_run_repairs_to_the_checked_bytes(self):
+        for mode in self.BAD_INSTALLERS:
+            with self.subTest(mode=mode):
+                shutil.rmtree(self.home / ".t3", ignore_errors=True)
+                self.have_t3("0.1.9")
+                self.assertEqual(self.run_script(FAKE_MODE=mode).returncode, 1)
+                r = self.run_script()
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+                self.assertIn(f"exec '{self.versions / PIN / 't3'}'", (self.home / ".local/bin/t3").read_text())
+
+    def test_a_pod_on_the_pin_from_before_the_stamp_existed_is_installed_again_through_the_checked_path(self):
+        # What a pod looks like after the earlier version of this script: the pin installed, the launcher right, but no stamp. Its bytes were never
+        # checked against the pinned sha256 here, so they are replaced, not trusted.
+        folder = self.versions / PIN
+        folder.mkdir(parents=True)
+        write_exec(folder / "t3", f'#!/bin/sh\necho "t3 v{PIN}"\n# unchecked\n')
+        (folder / ".install-complete").write_text(PIN + "\n")
+        write_exec(self.home / ".local/bin/t3", f"#!/bin/sh\nexec '{folder / 't3'}' \"$@\"\n")
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertFalse((self.versions / PIN / ".checked-by-install_t3").exists())
+        self.assertEqual(self.installed(), [f"installer version={PIN}"])
+        self.assertEqual((folder / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+        self.assertEqual((folder / ".verified-by-install_t3").read_text().strip(), self.stamp())
+        self.calls.write_text("")
+        self.assertEqual((self.run_script().returncode, self.installed()), (0, []))
+
+    def test_a_checked_t3_that_was_changed_afterwards_is_replaced(self):
+        self.assertEqual(self.run_script().returncode, 0)
+        (self.versions / PIN / "t3").write_text('#!/bin/sh\necho "t3 v' + PIN + '"\n# edited\n')
+        self.calls.write_text("")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.installed(), [f"installer version={PIN}"])
+        self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+
+    def test_a_t3_home_with_a_trailing_slash_or_a_relative_path_works_as_the_installer_reads_it(self):
+        r = self.run_script(T3CODE_HOME=str(self.home / ".t3") + "//")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        shutil.rmtree(self.home / ".t3")
+        self.calls.write_text("")
+        r = subprocess.run(["/bin/sh", str(SCRIPT)], cwd=self.home, capture_output=True, text=True, timeout=60, env={
+            "PATH": f"{Path(self.tmp.name) / 'bin'}:/usr/bin:/bin", "HOME": str(self.home), "T3CODE_HOME": ".t3", "CALLS": str(self.calls), "T3_PIN_VERSION": PIN,
+            "T3_PIN_SHA256_X64": self.sha, "T3_PIN_SHA256_ARM64": self.sha, "T3CODE_RELEASE_BASE_URL": f"file://{self.mirror}", "T3_INSTALL_URL": f"file://{self.installer}"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((self.versions / PIN / ".verified-by-install_t3").exists())
 
     def test_a_pod_already_on_the_pin_downloads_and_installs_nothing(self):
-        self.have_t3(PIN)
+        self.assertEqual(self.run_script().returncode, 0)
+        self.calls.write_text("")
         shutil.rmtree(self.mirror)   # a download would fail
         r = self.run_script(T3_INSTALL_URL="file:///nonexistent")
         self.assertEqual((r.returncode, self.installed()), (0, []), r.stdout + r.stderr)
@@ -167,11 +228,13 @@ class PinnedInstall(unittest.TestCase):
         # Right for the running CPU and wrong for the other: installs. The reverse (a swapped pair) must fail. Both CPUs, on any machine.
         for cpu in ("x64", "arm64"):
             with self.subTest(cpu=cpu):
+                shutil.rmtree(self.home / ".t3", ignore_errors=True)
                 self.calls.write_text("")
                 self.have_t3("0.1.9")
                 r = self.run_with(cpu, self.sha, self.other)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertEqual(self.version(), f"t3 v{PIN}")
+                shutil.rmtree(self.home / ".t3", ignore_errors=True)
                 self.calls.write_text("")
                 self.have_t3("0.1.9")
                 r = self.run_with(cpu, self.other, self.sha)
@@ -191,12 +254,6 @@ class PinnedInstall(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("could not download", r.stdout)
         self.assertEqual(self.installed(), [])
-
-    def test_a_launcher_that_does_not_run_the_checked_copy_fails(self):
-        self.have_t3("0.1.9")
-        r = self.run_script(FAKE_INSTALLS="0.1.9")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("does not run the checked", r.stdout)
 
 
 class PinInTheTools(unittest.TestCase):
