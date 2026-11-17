@@ -96,7 +96,8 @@ KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
 # cartwmic-g14-wsl is schedulable again (2026-11-06). Its clock steps were fixed by homelab#101 (9f6ef66, 2026-11-05). It now follows the Windows clock, which slews up to 8% for ~15 s about every 9 h, and it reads up to ~2 s ahead of other nodes.
 # ubuntu-server-k8s-agent-4 is the GPU node (frigate and the GPU services run there) and a gate bursts to 8 to 16 cores,
 # so it takes kgate jobs only as overflow: eligible, but it scores lowest. 2026-11-08, Michael, ask 742.
-NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker")
+# ubuntu-server-k8s-agent-3 is the GitHub CI runners' node: kgate pods reserved the CPU the runners need and stalled CI (coordinator decision #3311).
+NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3")
 OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 # The homelab pod's PriorityClass (homelab repo `k8s/kgate/priorityclass.yaml`, value -100, preemptionPolicy Never): below every app and system pod, so a pending app pod
 # may preempt a job and a kgate pod never preempts anything. It orders scheduling, preemption and eviction only; it gives a pod no CPU share at run time.
@@ -142,7 +143,7 @@ CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that h
 END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
-SLOT_CPU = 4                 # the nodes' CPU is split into slots of this many CPUs that kgate pods and the pinned GitHub CI runners share (homelab ask 1187). A homelab pod's CPU request is a whole number of slots
+SLOT_CPU = 4                 # the nodes' CPU is split into slots of this many CPUs (homelab ask 1187; the runners' share of it moved to agent-3, which kgate never uses: decision #3311). A homelab pod's CPU request is a whole number of slots
 MSSQL_PORT = 1433
 MSSQL_UID = 10001            # the SQL Server image's own user
 SERVICE_READY_S = 300        # how long a sidecar has to pass its startup probe

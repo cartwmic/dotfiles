@@ -288,12 +288,12 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["cpu"], "3")
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate")
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "da6cb6e2c3c4deae6c245415ab3a3774d8cbeb08e53a36f77c65d660c7fe21db"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "96deff24cd96afadc077b8d55ab7501a29627f45206397da8e148f9230450406"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
              "82325df3b64380ec1b1f67a731a07a8d656b4a938c53a6a2183cd6d3bc568634"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "9f907d48a21f710cdb8368fc3c764946f74b732b5e62cea32494a8458b9502bd"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "418ee9be5326a850ccf6b38b51c9f2328a054a41afbd60b8d6d8a0c416bc8e26"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -302,7 +302,7 @@ class PodSpec(unittest.TestCase):
         pod, _ = self.pod()
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
         notin = next(e for e in exprs if e["operator"] == "NotIn")
-        self.assertEqual(notin["values"], ["ubuntu-server-k8s-master-1", "mac-mini-worker"])
+        self.assertEqual(notin["values"], ["ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3"])
         self.assertIn({"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}, exprs)
 
     def test_g14_is_preferred_and_the_gpu_node_is_overflow_only(self):
@@ -333,7 +333,7 @@ class PodSpec(unittest.TestCase):
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
         self.assertEqual(exprs, [
             {"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
-            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker"]}])
+            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3"]}])
 
     def test_prefer_and_overflow_nodes_do_not_overlap(self):
         self.assertFalse(set(K.PREFER_NODES) & set(K.OVERFLOW_NODES))
@@ -1289,6 +1289,11 @@ class Black(unittest.TestCase):
 
     def test_never_node_is_refused(self):
         done = self.kgate("--node", "mac-mini-worker", "--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("excluded", done.stdout)
+
+    def test_the_runner_node_agent_3_is_refused(self):
+        done = self.kgate("--node", "ubuntu-server-k8s-agent-3", "--", "true")
         self.assertEqual(done.returncode, 69)
         self.assertIn("excluded", done.stdout)
 
@@ -2378,7 +2383,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "da6cb6e2c3c4deae6c245415ab3a3774d8cbeb08e53a36f77c65d660c7fe21db"  # the same pin as test_default_render_is_byte_identical
+        want = "96deff24cd96afadc077b8d55ab7501a29627f45206397da8e148f9230450406"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
