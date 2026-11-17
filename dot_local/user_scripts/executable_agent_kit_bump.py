@@ -10,8 +10,9 @@ The steps, and the step a stop names (the same shape as loop_engine_bump.py):
   pr       find the PR for branch agent-kit-vX.Y.Z; an open or merged one is resumed. With --pr N use PR N instead.
   publish  fresh worktree from origin/main: set the exact pin in package.json and regenerate package-lock.json; commit, push and
            open the PR. Nothing to do when origin/main already pins X.Y.Z.
-           With --pr N: the same two files on the head of open PR N (a Loop Engine bump PR, say), committed and pushed there
-           with no force. Nothing is committed when its head already has the pin. A merged PR N goes straight to drift.
+           With --pr N: PR N is read first and refused (nothing pushed or merged) if it is from a fork or changes any file other
+           than the two pin files and the Loop Engine mise config and skills. Then the same two files go on the head of open PR N
+           (a Loop Engine bump PR, say), committed and pushed there with no force. Nothing is committed when its head already has the pin. A merged PR N goes straight to drift.
   checks   wait for the PR's checks; a red one stops it with the PR left open
   gates    ci-main-status --merge-gate dotfiles --pr <pr>, then pr-body-check dotfiles <pr>; either one stops the merge.
            --pr lets this pin-fix PR merge into a main that is red only because this pin lags (ci-main-status docstring)
@@ -242,16 +243,38 @@ def publish(source, version, branch, log):
     return pr
 
 
+def stop_on_outside(names, step):
+    """Stop on any changed file that is not an agent-kit pin file or a Loop Engine pin or skill. The one rule for both the pre-push read of --pr N and pr_targets."""
+    pins = ["%s/%s" % (KIT, name) for name in PIN_FILES]
+    outside = [n for n in names if n not in pins and n != LOOP_ENGINE_MISE_CONFIG and not n.startswith(LOOP_ENGINE_SKILLS + "/")]
+    if outside:
+        raise Stop(step, "the PR changed files outside the agent-kit pins and the Loop Engine pins and skills: %s" % ", ".join(outside))
+
+
+def check_pr_before_push(source, number):
+    """Refuse PR `number` unless it is from this repository and changes only pins and skills. Runs before anything is pushed or merged,
+    so a wrong N cannot merge an unrelated PR."""
+    pull = json.loads(run(["gh", "pr", "view", str(number), "--json", "files,changedFiles,isCrossRepository"], "publish", cwd=source).stdout)
+    if pull["isCrossRepository"]:
+        raise Stop("publish", "PR #%d is from a fork; the pin is pushed only to a branch of this repository" % number)
+    names = [f["path"] for f in pull["files"]]
+    if pull["changedFiles"] != len(names):  # gh lists a PR's files in pages and may return only the first
+        raise Stop("publish", "gh listed %d of PR #%d's %d changed files, so they cannot all be checked" % (len(names), number, pull["changedFiles"]))
+    stop_on_outside(names, "publish")
+
+
 def pin_pr(source, version, number, poll, log):
     """Put the pin on the head of PR `number` and return the PR as it reads after the push.
 
-    A merged or closed PR is returned as it is. An open PR's head gets one commit of the two pin files pushed with no force (a
+    A merged or closed PR is returned as it is. An open PR is first checked (check_pr_before_push): same repository, and only the pins
+    and skills changed; otherwise it stops with nothing pushed. Then its head gets one commit of the two pin files pushed with no force (a
     rejected push stops it), unless the head already has the pin. The return waits until GitHub reports the pushed commit as the
     head, so the checks that follow are the new head's, not the old one's.
     """
     pr = view_pr(source, number, "publish")
     if pr["state"] != "OPEN":
         return pr
+    check_pr_before_push(source, number)
     branch = pr["headRefName"]
     git(source, "fetch", "-q", "origin", branch, step="publish")
     with Worktree(source, pr["headRefOid"], "publish") as wt:
@@ -328,9 +351,7 @@ def pr_targets(wt, sha, dest):
     """
     names = [n for n in git(wt, "diff", "--name-only", "--no-renames", sha + "^", sha, step="drift").stdout.split("\n") if n]
     pins = sorted("%s/%s" % (KIT, name) for name in PIN_FILES)
-    outside = [n for n in names if n not in pins and n != LOOP_ENGINE_MISE_CONFIG and not n.startswith(LOOP_ENGINE_SKILLS + "/")]
-    if outside:
-        raise Stop("drift", "the PR changed files outside the agent-kit pins and the Loop Engine pins and skills: %s" % ", ".join(outside))
+    stop_on_outside(names, "drift")
     if sorted(n for n in names if n in pins) != pins:
         raise Stop("drift", "the PR must change both agent-kit pin files (%s); it changed %s" % (", ".join(pins), ", ".join(names) or "nothing"))
     return {dest / KIT_DEST / Path(n).name: (n, git_bytes(wt, "%s^:%s" % (sha, n)), git_bytes(wt, "%s:%s" % (sha, n))) for n in pins}

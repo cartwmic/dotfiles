@@ -679,12 +679,6 @@ class PinFixException(Fixture):
         self.set_world(red_steps=steps(other="failure", pins="skipped"), own_run=NO_HEAD_RUN)
         self.assert_stays_red("failed on more than the release-pins step")
 
-    def test_the_release_pins_job_and_the_tests_job_both_failed_stays_red(self):
-        """A lagging pin plus a real suite failure is not the pin fix: `tests` ran and failed on its own merits."""
-        self.set_world(red_steps=steps(pins="failure", linux="failure"), own_run=NO_HEAD_RUN)
-        self.assertEqual([(j["name"], j["conclusion"]) for j in self.jobs["2"][:2]], [("tests", "failure"), ("release-pins", "failure")])
-        self.assert_stays_red("failed on more than the release-pins step")
-
     def test_the_pins_step_and_another_step_failed_stays_red(self):
         self.set_world(red_steps=steps(pins="failure", linux="failure"), own_run=NO_HEAD_RUN)
         self.assert_stays_red("failed on more than the release-pins step")
