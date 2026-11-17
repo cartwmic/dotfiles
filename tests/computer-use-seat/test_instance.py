@@ -119,8 +119,8 @@ class SeatComputerInstanceTest(unittest.TestCase):
 
 
 class SeatComputerFilesTest(unittest.TestCase):
-    def test_mcp_file_personal_has_browse_and_work_mac_has_browser_harness(self):
-        for profile, os_name, browser in (("personal", "linux", "browse"), ("personal", "darwin", "browse"), ("axon-work-computer", "darwin", "browser-harness")):
+    def test_mcp_file_has_browse_on_both_profiles(self):
+        for profile, os_name, browser in (("personal", "linux", "browse"), ("personal", "darwin", "browse"), ("axon-work-computer", "darwin", "browse")):
             h = Home(profile=profile)
             try:
                 servers = json.loads(h.render("dot_claude/fleet/mcp-computer.json.tmpl", os_name))["mcpServers"]

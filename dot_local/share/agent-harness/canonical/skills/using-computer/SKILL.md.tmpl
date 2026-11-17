@@ -22,10 +22,10 @@ On a Mac, `agent-desktop` has no `save` or `restore`. Keep Chrome in the backgro
 
 ## Which tool
 Drive only the agent Chrome (CDP port 9333) and only with these tools. Never start another browser or browser tool.
-- Browser tool: {{ if $work }}the `browser-harness` MCP server (agent-harness README, "browser-harness"){{ else }}Browse, the `browse` MCP server; load the `using-browse` skill{{ end }}.
+- Browser tool: Browse, the `browse` MCP server; load the `using-browse` skill.
 - Chrome: `agent-chrome` starts the agent Chrome when it is not running. `agent-chrome focus URLPART` makes the tab of one page the active one.
-{{- if not $work }}
 - Downloads: `agent-download`.
+{{- if not $work }}
 - Sign-in: `agent-login username|password|otp URLPART` types a login's field into the field Browse has clicked. The steps and the one-host rule are in `using-browse`.
 {{- end }}
 - Outside the page (a dialog, a prompt, a screenshot): `agent-desktop` (docs/agent-desktop.md). Use screen input only when the page needs it. `agent-desktop shot` needs no focus, so prefer it to anything that moves focus.

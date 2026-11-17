@@ -1,7 +1,7 @@
 """Render the using-computer skill with the real chezmoi for each profile and OS, and check what each reader gets.
 
-The skill is one template for both profiles. The browser-tool line is the only line that names `browser-harness`,
-so PR 545 removing that server later changes one line. Fails (does not skip) when chezmoi is not installed.
+The skill is one template for both profiles. Browse is the browser tool on both (browser-harness is retired); `agent-download`
+is on both profiles and `agent-login` is personal only (.chezmoiignore). Fails (does not skip) when chezmoi is not installed.
 
     python3 -m unittest discover -s tests/computer-use-seat -p test_skill.py -v
 """
@@ -62,18 +62,18 @@ class UsingComputerSkillTests(unittest.TestCase):
         self.assertNotIn("agent-desktop save", text)
         self.assertNotIn("agent-desktop restore", text)
 
-    def test_work_mac_names_browser_harness_and_stops_on_fastpass(self):
+    def test_work_mac_names_browse_and_stops_on_fastpass(self):
         text = render("axon-work-computer", "darwin")
-        self.assertIn("browser-harness", text)
-        self.assertNotIn("Browse, the `browse` MCP server", text)
-        self.assertNotIn("using-browse", text)
+        self.assertIn("Browse, the `browse` MCP server", text)
+        self.assertIn("`using-browse`", text)
+        self.assertNotIn("browser-harness", text)
         self.assertIn("FastPass", text)
         self.assertRegex(text, r"(?i)stop and ask your lead")
         self.assertNotIn("agent-desktop save", text)
         self.assertNotIn("agent-desktop restore", text)
         self.assertNotIn("1Password", text)
 
-    def test_personal_tool_list_names_every_tool_it_has(self):
+    def test_personal_tool_list_names_every_tool_it_has(self):  # personal has agent-login and agent-download
         for chezmoi_os in ("linux", "darwin"):
             with self.subTest(os=chezmoi_os):
                 section = tool_section(render("personal", chezmoi_os))
@@ -82,16 +82,32 @@ class UsingComputerSkillTests(unittest.TestCase):
 
     def test_work_tool_list_names_only_tools_the_work_profile_installs(self):
         section = tool_section(render("axon-work-computer", "darwin"))
-        self.assertIn("browser-harness", section)
+        self.assertIn("the `browse` MCP server", section)
         self.assertIn("agent-chrome", section)
         self.assertIn("agent-desktop", section)
-        self.assertNotIn("agent-download", section)  # .chezmoiignore leaves it out on work
+        self.assertIn("agent-download", section)     # PR 545 ships it on work too (.chezmoiignore)
         self.assertNotIn("agent-login", section)     # .chezmoiignore leaves it out on work
+        self.assertNotIn("browser-harness", section)
 
-    def test_only_one_template_line_names_browser_harness(self):
-        lines = [l for l in SKILL.read_text(encoding="utf-8").splitlines() if "browser-harness" in l]
-        self.assertEqual(len(lines), 1, lines)
-        self.assertTrue(lines[0].startswith("- Browser tool:"))
+    def test_the_template_does_not_name_browser_harness(self):
+        self.assertNotIn("browser-harness", SKILL.read_text(encoding="utf-8"))
+
+    def test_skill_tool_list_matches_chezmoi_ignore_for_each_profile(self):
+        """The skill may name a helper on a profile only if .chezmoiignore deploys it there."""
+        for profile, chezmoi_os in (("personal", "linux"), ("personal", "darwin"), ("axon-work-computer", "darwin")):
+            with self.subTest(profile=profile):
+                data = json.dumps({"profile": profile, "chezmoi": {"os": chezmoi_os}})
+                with tempfile.TemporaryDirectory() as home:
+                    config = Path(home) / "chezmoi.yaml"
+                    config.write_text("{}\n")
+                    ignore = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "execute-template", "--override-data", data],
+                                            input=(ROOT / ".chezmoiignore").read_text(encoding="utf-8"), capture_output=True, text=True, timeout=120)
+                self.assertEqual(ignore.returncode, 0, ignore.stderr)
+                ignored = ignore.stdout.splitlines()
+                section = tool_section(render(profile, chezmoi_os))
+                for helper in ("agent-download", "agent-login", "agent-chrome"):
+                    if ".local/bin/%s" % helper in ignored:
+                        self.assertNotIn(helper, section, "%s is ignored on %s but the skill names it" % (helper, profile))
 
     def test_every_render_has_the_seat_sections(self):
         for profile, chezmoi_os in (("personal", "linux"), ("personal", "darwin"), ("axon-work-computer", "darwin")):

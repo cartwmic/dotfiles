@@ -9,8 +9,8 @@
 {{- else if eq .profile "axon-work-computer" }}
 # Hash (work QMD pin): {{ include "dot_config/mise/conf.d/qmd.toml" | sha256sum }}
 {{- end }}
-{{- if eq .profile "personal" }}
-# Hash (personal-only Browse pin): {{ include "dot_config/mise/conf.d/browse.toml" | sha256sum }}
+{{- if or (eq .profile "personal") (eq .profile "axon-work-computer") }}
+# Hash (Browse pin): {{ include "dot_config/mise/conf.d/browse.toml" | sha256sum }}
 {{- end }}
 {{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") (eq .chezmoi.hostname "cartwmic-server") }}
 # Hash (Mac mini Spotify task): {{ include "dot_config/mise/conf.d/spotify.toml" | sha256sum }}

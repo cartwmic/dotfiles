@@ -367,7 +367,7 @@ for name, cfg in servers.items():
         lines.append(f"log {json.dumps(f'Skipping unsupported MCP server shape for {name}')}")
 
 # Servers dropped from canonical: Claude keeps a stored entry until it is removed, so remove it here (a no-op once it is gone).
-# browser-harness is retired on the personal profile only (Browse replaced it, ask 1192); the work profile still renders it, and the check below skips a name canonical has.
+# browser-harness is retired on both profiles (Browse replaced it: ask 1192 on personal, ask 1215 on the work Mac); the check below skips a name canonical has.
 RETIRED = ("playwright", "browser-harness")  # playwright: the Playwright MCP server, retired (Michael, ask #1040)
 for name in RETIRED:
     if name not in servers:

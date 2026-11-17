@@ -17,7 +17,7 @@ TMPL = ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "mcp" / "s
 LIST = ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "servers.list.tmpl"
 SEED = ROOT / "dot_local" / "share" / "pi-mcp-lazy" / "seed"
 STANDIN = ROOT / "dot_local" / "bin" / "executable_pi-mcp-lazy"
-LAZY = ("rea",)  # the local server every desktop profile lists (the personal profile's browse is not lazy; browser-harness is work-only)
+LAZY = ("rea",)  # the local server every desktop profile lists (browse is not lazy on either profile)
 IDLE = {"rea": "600"}
 SECRET_MARK = "SECRET-HEADER-VALUE-DO-NOT-LOG"
 
@@ -329,8 +329,8 @@ class JiraTests(unittest.TestCase):
 
     def test_list_renders_per_profile(self):
         names = lambda p: [l for l in render_list(p).splitlines() if l and not l.startswith("#")]
-        self.assertEqual(names("personal"), ["rea"])   # browser-harness is the work Mac's; the personal profile uses browse, which is not lazy
-        self.assertEqual(names("axon-work-computer"), ["rea", "browser-harness 604800"])   # jira left the list: remote HTTP now, nothing to wrap
+        self.assertEqual(names("personal"), ["rea"])   # browse, the browser tool on both profiles, is not lazy
+        self.assertEqual(names("axon-work-computer"), ["rea"])   # jira left the list: remote HTTP now, nothing to wrap
 
     def test_chezmoi_renders_the_same_list_for_both_profiles(self):
         if not shutil.which("chezmoi"):
@@ -341,36 +341,16 @@ class JiraTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout, render_list(profile), profile)
 
-    def test_work_profile_keeps_browser_harness_lazy_for_all_three_harnesses_with_its_env(self):   # unchanged by the personal move to Browse
+    def test_work_profile_runs_browse_plain_in_all_three_harnesses_and_has_no_browser_harness(self):
         w = self.world()
         r = w.run("claude", "codex", "pi", extra={"JIRA_MCP_URL": JIRA_URL})
         self.assertEqual(r.returncode, 0, r.stderr)
         c = w.canonical["mcpServers"]
-        self.assertNotIn("browse", c)
+        self.assertNotIn("browser-harness", c)
         for harness, s in (("claude", w.claude_servers()), ("codex", w.codex_servers()), ("pi", w.pi_servers())):
-            want = {"command": str(w.bin), "args": ["browser-harness", "604800", "--", c["browser-harness"]["command"], *c["browser-harness"]["args"]]}
-            self.assertEqual((s["browser-harness"]["command"], s["browser-harness"]["args"]), (want["command"], want["args"]), harness)
-            self.assertEqual(s["browser-harness"]["env"], c["browser-harness"]["env"], harness)  # the stand-in passes it on to the server
-        script = w.generated("claude", "setup-mcp.sh")
-        self.assertIn('"browser-harness" -e "BU_CDP_URL=http://127.0.0.1:9333"', script)
-        self.assertIn('-- "%s" "browser-harness" "604800" "--" "uvx"' % w.bin, script)
-        self.assertNotIn("mcp remove -s user \"browser-harness\"", script)   # canonical has it, so the retirement step leaves it
-
-    def test_work_profile_browser_harness_refresh_failure_is_named_and_still_wrapped(self):
-        w = self.world()
-        r = w.run("claude", "codex", "pi", fail="browser-harness", extra={"JIRA_MCP_URL": JIRA_URL})
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("refresh of browser-harness failed", r.stdout)
-        for s in (w.claude_servers(), w.codex_servers(), w.pi_servers()):
-            self.assertEqual(s["browser-harness"]["command"], str(w.bin))
-
-    def test_work_profile_browser_harness_with_no_saved_list_stays_as_rendered(self):
-        w = self.world()
-        r = w.run("claude", "codex", "pi", extra={"JIRA_MCP_URL": JIRA_URL, "FAKE_CHECK_FAIL": "browser-harness"})
-        self.assertEqual(r.returncode, 0, r.stderr)
-        c = w.canonical["mcpServers"]
-        self.assertEqual(w.claude_servers()["browser-harness"], c["browser-harness"])
-        self.assertEqual(w.codex_servers()["browser-harness"]["command"], "uvx")
+            self.assertEqual((s["browse"]["command"], s["browse"]["args"]), (c["browse"]["command"], c["browse"]["args"]), harness)  # not wrapped, not lazy
+            self.assertNotIn("browser-harness", s, harness)
+        self.assertNotIn("browser-harness", w.refreshed())
 
     def test_jira_is_a_remote_http_server_for_every_harness(self):
         w = self.world()

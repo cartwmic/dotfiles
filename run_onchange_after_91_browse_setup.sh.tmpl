@@ -1,10 +1,10 @@
 #!/bin/sh
-# Browse setup (personal profile only; .chezmoiignore leaves it out elsewhere and in container mode). Runs when the pin changes.
+# Browse setup (both profiles; .chezmoiignore leaves it out in container mode). Runs when the pin changes.
 #   1. Turns Browse's automatic updates off. The relay would otherwise check hourly and run `npm install -g`, which fights the mise pin.
 #      The mode is saved in Browse's state folder and survives a relay restart (agent-harness README, "Agent browser").
 #   2. Removes ~/.local/bin/browse. `browse install` writes a second, self-updating binary there; it sits ahead of the mise shim and
 #      defeats the pin. Pairing needs only `browse pair`, so nothing here runs `browse install`.
-#   3. Removes what browser-harness left on this machine (the profile no longer uses it; .chezmoiignore stops deploying these, and a
+#   3. Removes what browser-harness left on this machine (neither profile uses it any more; .chezmoiignore stops deploying these, and a
 #      .chezmoiremove entry would lose to that ignore): the MCP server folder, its pi-mcp-lazy seed and state copy.
 # pin: {{ include "dot_config/mise/conf.d/browse.toml" | sha256sum }}
 set -eu
@@ -28,6 +28,6 @@ fi
 for leftover in "$HOME/.local/share/browser-harness-mcp" "$HOME/.local/share/pi-mcp-lazy/seed/browser-harness.json" "$HOME/.local/state/pi-mcp-lazy/browser-harness.json"; do
   if [ -e "$leftover" ]; then
     rm -rf "$leftover"
-    log INFO "removed $leftover (browser-harness, retired on the personal profile)"
+    log INFO "removed $leftover (browser-harness, retired on both profiles)"
   fi
 done

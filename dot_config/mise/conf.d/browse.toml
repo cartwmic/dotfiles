@@ -1,5 +1,5 @@
 # OpenCode Browse (npm @opencode/browse, github.com/anomalyco/browse): the agents' default browser tool. It drives the agent Chrome
-# (127.0.0.1:9333) through its Chrome extension; the `browse` MCP server is `browse mcp`. Personal profile only (docs/profiles.md).
+# (127.0.0.1:9333) through its Chrome extension; the `browse` MCP server is `browse mcp`. Both profiles (docs/profiles.md).
 # Pinned exactly. 0.1.0 is `latest` (2026-11-16); `dev` is not used. The npm package is a small Node launcher over a native binary
 # (@opencode/browse-linux-arm64, @opencode/browse-darwin-arm64). Bump: change the version, apply, restart agent sessions.
 # allow_low_downloads: mise refuses a package under its download threshold (this one is new), so the pin carries the exception (ledger #3148).

@@ -3,10 +3,4 @@
 # pi-only (wrapped for Pi, left as rendered for Claude Code and Codex; #1890). A name this
 # profile does not render is skipped. Remove a line and re-apply to roll that server back to the harness's normal
 # start-at-session-start behaviour.
-{{ if eq .profile "axon-work-computer" -}}
-# browser-harness is never stopped (a week): stopping it would close the agent's own Chrome tab.
-{{ end -}}
 rea
-{{ if eq .profile "axon-work-computer" -}}
-browser-harness 604800
-{{ end -}}

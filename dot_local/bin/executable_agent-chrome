@@ -1,5 +1,5 @@
 #!/bin/sh
-# Start the dedicated Chrome that the agent browser tools drive: Browse on the personal profile, browser-harness on the work Mac (docs: agent-harness README, "Agent browser").
+# Start the dedicated Chrome that the agent browser tools drive: Browse on both profiles (docs: agent-harness README, "Agent browser").
 # Own profile directory, remote debugging on 127.0.0.1:9333. Does nothing if that port already answers.
 # Every run appends its outcome to ${XDG_STATE_HOME:-~/.local/state}/agent-chrome/agent-chrome.log; Chrome's own output goes to chrome.log.
 #   agent-chrome              start Chrome in the background and wait for the port (hand use).
