@@ -336,6 +336,11 @@ Library/**
 .local/share/agentsview/**
 {{- end }}
 
+{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
+# Spotify desktop app (docs/profiles.md): personal macOS only. Spotify has no arm64 Linux build, and the work Mac is left out. The mise task that runs `brew install --cask spotify`.
+.config/mise/conf.d/spotify.toml
+{{- end }}
+
 {{- if or (and (ne .profile "personal") (ne .profile "axon-work-computer")) (ne .chezmoi.os "darwin") }}
 # Scheduled QMD refresh: launchd, so macOS on personal and work. On/off and interval: data qmd.refresh (docs/qmd.md); off renders the plist empty.
 Library/LaunchAgents/local.qmd-refresh.plist
