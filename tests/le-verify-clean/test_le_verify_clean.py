@@ -7,7 +7,7 @@ wait, sleep or exit with a chosen status. Everything is checked from outside: th
 The class this guards: the old per-run helper deleted /tmp/le-journey-* folders by matching their repo copy's head or base, so it deleted
 another run's folders (2026-11-17). test_old_helper_deletes_another_runs_folder runs that helper (old-verify-clean-env.sh, verbatim) against
 the same decoy and shows it deleting it; test_other_runs_folder_survives shows le-verify-clean leaves it.
-bwrap-dependent tests skip where bwrap cannot start (a host without user namespaces).
+bwrap-dependent tests skip where bwrap cannot start (a host without user namespaces), except on GitHub Actions, where they fail.
 Run: python3 -m unittest discover -s tests/le-verify-clean
 """
 import glob
@@ -42,7 +42,10 @@ if [ -n "${FAKE_WAIT_FOR:-}" ]; then
   while [ ! -e "$FAKE_RUN/$FAKE_WAIT_FOR" ]; do sleep 0.05; done
 fi
 echo '{"verify":"ran"}'
-[ -z "${FAKE_SLEEP:-}" ] || exec sleep 600
+if [ -n "${FAKE_SLEEP:-}" ]; then
+  trap ': > "$FAKE_RUN/got-term"; exit 0' TERM
+  while :; do sleep 0.05; done
+fi
 exit "${FAKE_EXIT:-0}"
 '''
 
@@ -54,8 +57,8 @@ def bwrap_works():
         return False
 
 
-HAVE_BWRAP = bwrap_works()
-needs_bwrap = unittest.skipUnless(HAVE_BWRAP, "bwrap cannot start here")
+# On GitHub Actions a bwrap that cannot start is a failure, not a skip: the guard tests must run there.
+needs_bwrap = unittest.skipUnless(bwrap_works() or os.environ.get("GITHUB_ACTIONS"), "bwrap cannot start here")
 
 
 FIXED = {"GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z"}
@@ -177,7 +180,7 @@ class LeVerifyCleanTest(Base):
         self.assertEqual(list((self.run_dir / "vtmp").iterdir()), [])
         self.assertEqual((self.run_dir / "verify.json").read_text().strip(), '{"verify":"ran"}')
 
-    def test_term_is_forwarded_and_scratch_removed(self):
+    def test_term_reaches_verify_itself_and_scratch_is_removed(self):
         proc = subprocess.Popen(["sh", str(SCRIPT), str(self.run_dir), "verify.json"], env=dict(self.env, FAKE_SLEEP="1"),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         wait_for(self.run_dir / "started")
@@ -185,6 +188,7 @@ class LeVerifyCleanTest(Base):
         proc.send_signal(signal.SIGTERM)
         proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 143)
+        self.assertTrue((self.run_dir / "got-term").exists(), "verify was killed, not sent TERM (bwrap does not pass TERM on)")
         deadline = time.time() + 10
         while alive(pid) and time.time() < deadline:
             time.sleep(0.05)
@@ -208,6 +212,15 @@ class RefusalAndPastMistakeTest(Base):
         self.assertFalse((self.run_dir / "verify.json").exists())
         self.assertFalse((self.run_dir / "vtmp").exists())
         self.assertEqual(self.shared_journey_dirs(), [])
+
+    def test_run_folder_under_tmp_is_refused(self):
+        under_tmp = Path(tempfile.mkdtemp(prefix="le-verify-clean-under-tmp-", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, under_tmp, True)
+        shutil.copy(self.run_dir / "show-full.json", under_tmp)
+        r = self.helper(str(under_tmp), "verify.json")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("under /tmp", r.stderr)
+        self.assertFalse((self.run_dir / "started").exists())
 
     def test_old_helper_deletes_another_runs_folder(self):
         # The recorded mistake (2026-11-17): two runs share a base, a folder of the other run appears in the shared /tmp during this run's
