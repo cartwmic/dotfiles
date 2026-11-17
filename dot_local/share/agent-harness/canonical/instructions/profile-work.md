@@ -1,3 +1,4 @@
+{{ $_ := includeTemplate "require_work_data" . -}}
 ## Work computer
 
 Never merge or deploy without my explicit approval for that change.
@@ -8,15 +9,15 @@ Each agent seat has a model. This is a rule, not a mechanism: there is no launch
 
 | Seat | Model |
 |---|---|
-| Coordinator | Opus 5.5 medium |
-| Lead | Opus 5.5 medium |
-| Planner | Sonnet 5.5 high |
-| Reviewer | Opus 5.5 medium |
-| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |
-| Browser work | Sonnet 5.5 high |
+| Coordinator | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |
+| Lead | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |
+| Planner | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
+| Reviewer | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |
+| Builder | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
+| Browser work | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
 
 - Every brief's first line names the seat and the model.
-- The builder executes a plan. Haiku 5.5 xhigh builds small mechanical work. Sonnet 5.5 high builds anything long or ambiguous, and takes over on any failure. Opus plans and reviews; it does not build.
+- Coordinator, leads, and reviewers use Cursor (`gemini-4-hydrogen`, `high` reasoning effort). Planners, builders, and browser work use Pi (`work-glm/{{ .workGlmModelId }}`).
 - Sessions I open myself are not covered by this table. Their default is set separately.
 - No OpenAI models for now.
-- If you are unsure of a model ID for a harness, use the human names above. Agents read this table; nothing parses it.
+- If you are unsure of a model ID for a harness, use the human names above.

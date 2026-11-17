@@ -20,7 +20,6 @@ PLAYBOOK_TEMPLATE = ROOT / "dot_local" / "share" / "agent-harness" / "canonical"
 
 INSTR = ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instructions"
 # Profile rule fragments, each included for one profile right after the playbook position.
-WORK_RULE = (INSTR / "profile-work.md").read_text(encoding="utf-8").rstrip("\n") + "\n\n"
 PERSONAL_RULE = (INSTR / "profile-personal.md").read_text(encoding="utf-8").rstrip("\n") + "\n\n"
 
 RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person software: good enough
@@ -65,8 +64,9 @@ def render(profile, template=None):
     return result.stdout
 
 
-# The playbook fragment as the work profile renders it (no workGitHost set), included right after the heading block.
+# The playbook and work-profile fragments as the work profile renders them, included right after the heading block.
 PLAYBOOK_SECTION = render("axon-work-computer", PLAYBOOK_TEMPLATE).rstrip("\n") + "\n\n"
+WORK_RULE = render("axon-work-computer", INSTR / "profile-work.md").rstrip("\n") + "\n\n"
 
 
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi not installed")

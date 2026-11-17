@@ -26,7 +26,7 @@ Tool calls (Claude Code; the same calls fail every week otherwise):
 {{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl" .ctx -}}
 {{ end -}}
 {{ if eq .ctx.profile "axon-work-computer" }}
-{{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" -}}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/profile-work.md" .ctx -}}
 {{ end -}}
 {{ if eq .ctx.profile "personal" }}
 {{ include "dot_local/share/agent-harness/canonical/instructions/profile-personal.md" -}}
