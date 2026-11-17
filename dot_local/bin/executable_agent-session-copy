@@ -1,13 +1,15 @@
 #!/bin/sh
-# agent-session-copy: copy new and changed agent session files (Claude Code and Pi) from this desktop into the live agent-host pod, so Retro
+# agent-session-copy: copy new and changed agent session files (Claude Code, Pi and Codex) from this desktop into the live agent-host pod, so Retro
 # (the lead that reviews how agents worked) can read the sessions that still run here. Started every 30 minutes by agent-session-copy.timer
 # (~/.config/systemd/user), which is shipped disabled until the pod exists (agentHost.sessionCopy, docs/profiles.md). Personal Linux only.
 #
 #   agent-session-copy [--dry-run]
 #
-# What moves (only *.jsonl transcripts; rsync sends a file again when its size or mtime changed, nothing else):
+# What moves (only *.jsonl transcripts, plus *.jsonl.zst from the two Codex sources, which compresses some old sessions; rsync sends a file again when its size or mtime changed, nothing else):
 #   ~/.claude/projects      -> <pod>:/home/agent/desktop-sessions/claude/
 #   ~/.pi/agent/sessions    -> <pod>:/home/agent/desktop-sessions/pi/
+#   ~/.codex/sessions       -> <pod>:/home/agent/desktop-sessions/codex/   (kept as YYYY/MM/DD/)
+#   ~/.codex/archived_sessions -> <pod>:/home/agent/desktop-sessions/codex-archived/   (Codex moves archived threads here, flat)
 # How: rsync over `kubectl exec` through lane M's scripts/agent-host/kubectl.sh (admin kubeconfig fetched at run time, ledger grant #21).
 # Nothing on the desktop is changed or deleted, and nothing in the pod is deleted: a session removed here stays in the pod.
 # The first run sends everything (about 13 GB); later runs send what changed since.
@@ -17,6 +19,7 @@
 #   AGENT_SESSION_COPY_CONTAINER  t3                AGENT_SESSION_COPY_DEST       /home/agent/desktop-sessions
 #   AGENT_SESSION_COPY_KUBECTL    ~/git/cartwmic-homelab-v2/scripts/agent-host/kubectl.sh
 #   AGENT_SESSION_COPY_CLAUDE_SRC ~/.claude/projects   AGENT_SESSION_COPY_PI_SRC     ~/.pi/agent/sessions
+#   AGENT_SESSION_COPY_CODEX_SRC  ~/.codex/sessions    AGENT_SESSION_COPY_CODEX_ARCHIVED_SRC ~/.codex/archived_sessions
 # Reproduce: install rsync, check out the homelab repo at the path above, and apply the dotfiles with agentHost.sessionCopy true.
 # Exit: 0 copied (or nothing to copy), 69 pod unreachable, other rsync's own code. Log lines: [agent-session-copy] LEVEL: message.
 set -eu
@@ -37,6 +40,8 @@ DEST=${AGENT_SESSION_COPY_DEST:-/home/agent/desktop-sessions}
 KUBECTL=${AGENT_SESSION_COPY_KUBECTL:-${HOME:?HOME is not set}/git/cartwmic-homelab-v2/scripts/agent-host/kubectl.sh}
 CLAUDE_SRC=${AGENT_SESSION_COPY_CLAUDE_SRC:-$HOME/.claude/projects}
 PI_SRC=${AGENT_SESSION_COPY_PI_SRC:-$HOME/.pi/agent/sessions}
+CODEX_SRC=${AGENT_SESSION_COPY_CODEX_SRC:-$HOME/.codex/sessions}
+CODEX_ARCHIVED_SRC=${AGENT_SESSION_COPY_CODEX_ARCHIVED_SRC:-$HOME/.codex/archived_sessions}
 
 command -v rsync >/dev/null 2>&1 || { log ERROR "rsync is not installed here"; exit 1; }
 [ -r "$KUBECTL" ] || { log ERROR "$KUBECTL not found (the homelab repo's scripts/agent-host/kubectl.sh)"; exit 1; }
@@ -59,26 +64,29 @@ chmod 700 "$work/rsh"
 
 pod() { sh "$KUBECTL" -n "$NS" exec -i "$TARGET" -c "$CONTAINER" -- "$@"; }
 
-if ! pod mkdir -p "$DEST/claude" "$DEST/pi" </dev/null >"$work/mkdir.log" 2>&1; then
+if ! pod mkdir -p "$DEST/claude" "$DEST/pi" "$DEST/codex" "$DEST/codex-archived" </dev/null >"$work/mkdir.log" 2>&1; then
   log ERROR "cannot reach $TARGET (container $CONTAINER) in namespace $NS: $(tr '\n' ' ' <"$work/mkdir.log" | cut -c1-300)"
   exit 69
 fi
 
-copy() { # name source
+copy() { # name source [zst]: a third argument also sends *.jsonl.zst
   name=$1 src=$2
+  set -- --include='*/' --include='*.jsonl' ${3:+--include='*.jsonl.zst'}
   if [ ! -d "$src" ]; then log INFO "$name: $src does not exist here; skipped"; return 0; fi
   # --out-format lists only files actually sent. -rt: recurse, keep mtimes (so the next run sees "unchanged"); perms/owner are the pod's.
   # --partial: a cut connection resumes; --timeout: a stalled link fails the run instead of hanging the timer.
   if ! rsync -rt --no-perms --no-owner --no-group --partial --timeout=300 $dry \
-        --include='*/' --include='*.jsonl' --exclude='*' --prune-empty-dirs \
+        "$@" --exclude='*' --prune-empty-dirs \
         --out-format='%n' -e "$work/rsh" "$src/" "pod:$DEST/$name/" >"$work/$name.sent"; then
     log ERROR "$name: rsync from $src failed"
     return 1
   fi
-  log INFO "$name: $(grep -c '\.jsonl$' "$work/$name.sent" || true) file(s) ${dry:+would be }sent from $src to $DEST/$name/"
+  log INFO "$name: $(grep -cE '\.jsonl(\.zst)?$' "$work/$name.sent" || true) file(s) ${dry:+would be }sent from $src to $DEST/$name/"
 }
 
 status=0
 copy claude "$CLAUDE_SRC" || status=1
 copy pi "$PI_SRC" || status=1
+copy codex "$CODEX_SRC" zst || status=1
+copy codex-archived "$CODEX_ARCHIVED_SRC" zst || status=1
 exit "$status"
