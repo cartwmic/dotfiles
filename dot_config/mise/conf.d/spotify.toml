@@ -1,0 +1,20 @@
+# Spotify desktop app on macOS (docs/profiles.md): personal profile only, and .chezmoiignore leaves this file out on the work profile and off macOS.
+# Spotify has no arm64 Linux build, so the task also skips on Linux. Run by run_onchange_after_10_mise_bootstrap.sh.tmpl after `mise run bootstrap`.
+# Reproduce by hand: `brew install --cask spotify`, or `mise run install-spotify`. Settings and sign-in are not touched.
+[tasks."install-spotify"]
+description = "Install the Spotify desktop app on macOS (personal profile)"
+run = '''
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    if [ -d "${SPOTIFY_APP_DIR:-/Applications/Spotify.app}" ]; then
+      echo "Spotify already installed"
+    else
+      brew install --cask spotify
+    fi
+    ;;
+  *)
+    echo "Skipping Spotify on $OS"
+    ;;
+esac
+'''

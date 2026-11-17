@@ -12,6 +12,9 @@
 {{- if eq .profile "personal" }}
 # Hash (personal-only Browse pin): {{ include "dot_config/mise/conf.d/browse.toml" | sha256sum }}
 {{- end }}
+{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") (eq .chezmoi.hostname "cartwmic-server") }}
+# Hash (Mac mini Spotify task): {{ include "dot_config/mise/conf.d/spotify.toml" | sha256sum }}
+{{- end }}
 {{- if and (eq .chezmoi.os "linux") (ne .profile "termux") }}
 # Hash (Linux-only mise settings): {{ include "dot_config/mise/conf.d/linux.toml" | sha256sum }}
 {{- end }}
@@ -109,6 +112,11 @@ export HERDR_PALETTE_APPLY_PROFILE={{ .profile | quote }}
 
 # Run the bootstrap task which includes all custom installations
 mise run bootstrap
+{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") (eq .chezmoi.hostname "cartwmic-server") }}
+
+# Mac mini only (hostname cartwmic-server): the Spotify desktop app (conf.d/spotify.toml; .chezmoiignore leaves the file out elsewhere).
+mise run install-spotify
+{{- end }}
 
 log_info "mise bootstrap complete!"
 log_info "Please restart your shell or run: exec zsh"
