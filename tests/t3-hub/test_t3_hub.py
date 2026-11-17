@@ -883,11 +883,20 @@ class FleetFilesTest(unittest.TestCase):
         # skillOverrides is by name: a kept personal skill called "loop" or "run" would be switched off with the bundled one
         for seat, keep in KEEP.items():
             self.assertEqual(sorted(keep & BUNDLED_OFF), [], seat)
-        # and the template refuses to render it
+        # and the template refuses to render a seat that keeps one: render a copy of fleet_seat whose planner keep-list adds "loop"
+        text = (REPO / ".chezmoitemplates/fleet_seat").read_text()
+        old = '"planner" (list "designing-the-smallest-version"'
+        self.assertIn(old, text)
+        clashing = text.replace(old, '"planner" (list "loop" "designing-the-smallest-version"')
         env = fleet_env("personal")
         try:
-            tmpl = REPO / ".chezmoitemplates/fleet_seat"
-            self.assertIn("which is also a Claude Code bundled skill", tmpl.read_text())
+            call = '{{ template "fleet_seat_clash" (dict "seat" "%s" "ctx" .) }}'
+            define = '{{ define "fleet_seat_clash" }}' + clashing + "{{ end }}"
+            with self.assertRaises(AssertionError) as raised:
+                env.chezmoi("execute-template", stdin=define + call % "planner")
+            self.assertIn('seat planner keeps "loop"', str(raised.exception))
+            # the same copy renders for a seat that does not keep "loop": the failure is the clash, not the copy
+            self.assertEqual(set(json.loads(env.chezmoi("execute-template", stdin=define + call % "reviewer"))["skillOverrides"]) >= BUNDLED_OFF, True)
         finally:
             env.close()
 
