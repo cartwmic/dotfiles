@@ -133,7 +133,7 @@ class AgentHostSwitchTest(unittest.TestCase):
             r = chezmoi("axon-work-computer", "managed", data={"agentHost": {key: value}})
             self.assertNotEqual(r.returncode, 0, key)
             self.assertIn("personal profile only", r.stderr, key)
-            r = template("axon-work-computer", (REPO / "private_dot_ssh/modify_authorized_keys.tmpl").read_text(), {"agentHost": {key: value}})
+            r = template("axon-work-computer", (REPO / "private_dot_ssh/modify_private_authorized_keys.tmpl").read_text(), {"agentHost": {key: value}})
             self.assertNotEqual(r.returncode, 0, key)
 
     def test_work_profile_with_the_switches_false_renders_as_before(self):
@@ -148,11 +148,11 @@ FOREIGN = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIForeignForeignForeignForeignFore
 
 
 class PodTunnelKeyTest(unittest.TestCase):
-    """private_dot_ssh/modify_authorized_keys.tmpl with agentHost.podTunnelKey: the pod's line, restricted to the tunnel to omarchy's T3."""
+    """private_dot_ssh/modify_private_authorized_keys.tmpl with agentHost.podTunnelKey: the pod's line, restricted to the tunnel to omarchy's T3."""
 
     @classmethod
     def setUpClass(cls):
-        text = (REPO / "private_dot_ssh/modify_authorized_keys.tmpl").read_text()
+        text = (REPO / "private_dot_ssh/modify_private_authorized_keys.tmpl").read_text()
         cls.tmp = Path(tempfile.mkdtemp())
         with ThreadPoolExecutor() as pool:
             jobs = {"off": pool.submit(template, "personal", text), "on": pool.submit(template, "personal", text, {"agentHost": {"podTunnelKey": POD}}),

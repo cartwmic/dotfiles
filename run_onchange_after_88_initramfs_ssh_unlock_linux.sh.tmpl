@@ -27,8 +27,8 @@ die() { log ERROR "$1"; exit 1; }
 ROOT=${SSH_UNLOCK_ROOT:-}
 STAGE=$HOME/.local/share/initramfs-ssh-unlock
 CHECK=${SSH_UNLOCK_CHECK:-$HOME/.local/user_scripts/ssh_unlock_check_image.sh}
-# The one place the homelab key is written down is private_dot_ssh/modify_authorized_keys.tmpl; this blob is read from it when the script is rendered.
-BLOB='{{ regexFind "BLOB='[^']+'" (include "private_dot_ssh/modify_authorized_keys.tmpl") | trimPrefix "BLOB='" | trimSuffix "'" }}'
+# The one place the homelab key is written down is private_dot_ssh/modify_private_authorized_keys.tmpl; this blob is read from it when the script is rendered.
+BLOB='{{ regexFind "BLOB='[^']+'" (include "private_dot_ssh/modify_private_authorized_keys.tmpl") | trimPrefix "BLOB='" | trimSuffix "'" }}'
 HOMELAB_PUB=$HOME/.ssh/homelab.pub
 KEYDIR=$ROOT/etc/initcpio/ssh-unlock
 HOOK=$ROOT/etc/initcpio/install/sd-ssh-unlock
@@ -76,7 +76,7 @@ cleanup() {
 trap cleanup EXIT
 
 [ -f "$HOMELAB_PUB" ] || die "$HOMELAB_PUB is missing; run the dotfiles apply that provisions the homelab key first"
-grep -qF "$BLOB" "$HOMELAB_PUB" || die "$HOMELAB_PUB is not the homelab key listed in private_dot_ssh/modify_authorized_keys.tmpl"
+grep -qF "$BLOB" "$HOMELAB_PUB" || die "$HOMELAB_PUB is not the homelab key listed in private_dot_ssh/modify_private_authorized_keys.tmpl"
 printf 'command="/usr/bin/systemd-tty-ask-password-agent --watch" %s\n' "$(cat "$HOMELAB_PUB")" > "$tmp/authorized_keys"
 
 check() { $as_root env SSH_UNLOCK_DIR="$KEYDIR" "$CHECK" "$1"; }
