@@ -33,10 +33,10 @@ SEAT_ROWS = {
         "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
     ),
     "axon-work-computer": (
-        "| Coordinator | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |",
-        "| Lead | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |",
+        "| Coordinator | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
+        "| Lead | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
         "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Reviewer | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |",
+        "| Reviewer | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
         "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
         "| Browser work | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
     ),
