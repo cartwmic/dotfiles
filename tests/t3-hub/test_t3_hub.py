@@ -688,6 +688,8 @@ BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-re
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
+# The skills the seat files name from the source because this apply links them later: the archive external (.chezmoiexternal.toml) review-map; model-fit only where the coordinator checkout has it (these tests have none).
+FROM_SOURCE = {"review-map"}
 CANONICAL = sorted({p.parent.name for pat in ("*/SKILL.md", "*/SKILL.md.tmpl") for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat)})  # reviewing-prs ships SKILL.md.tmpl
 
 
@@ -852,6 +854,38 @@ class FizzyGroveTest(unittest.TestCase):
         self.assertNotIn("coordinator", out)
 
 
+class SeatFilesFirstApplyTest(unittest.TestCase):
+    """One apply is enough for the seat files. chezmoi writes ~/.claude/fleet/seat-*.json before run script 20 links the skills into
+    ~/.claude/skills, so a file that read only that folder came out one skill short on a first apply (review-map, model-fit) and `chezmoi status`
+    showed it until the next apply. This applies the files only (no run scripts, no externals) into an empty home, then runs the real skill-link
+    step of script 20 (apply_harness_config.sh skills), then asks chezmoi what is still different."""
+
+    def test_a_first_apply_leaves_the_seat_files_clean(self):
+        for profile in ("personal", "axon-work-computer"):
+            env = Env(profile=profile, codex_active=False)
+            if profile == "axon-work-computer":
+                env.cfg.write_text(env.cfg.read_text() + "".join("  %s: %s\n" % kv for kv in WORK_DATA.items()))
+            try:
+                home = env.home
+                for d in (".claude/skills", ".claude/fleet", ".local/share/agent-harness"):
+                    (home / d).mkdir(parents=True)
+                # what lives outside this source: the coordinator checkout's skill (model-fit) and the review-map archive external, as chezmoi extracts it
+                for skill, root in (("model-fit", home / ("coordinator-work" if profile == "axon-work-computer" else "git/coordinator") / "skills"),
+                                    ("review-map", home / ".local/share/agent-harness/external-skills/accountable-review/skills")):
+                    (root / skill).mkdir(parents=True)
+                    (root / skill / "SKILL.md").write_text("---\nname: %s\n---\n" % skill)
+                targets = [str(home / (".claude/fleet/seat-%s.json" % seat)) for seat in KEEP] + [str(home / ".local/share/agent-harness/canonical"), str(home / ".local/share/agent-harness/external-skills/coordinator")]
+                env.chezmoi("apply", "--no-tty", "--exclude", "scripts,externals", *targets)
+                link = subprocess.run(["sh", str(REPO / "dot_local/user_scripts/executable_apply_harness_config.sh"), "skills"],
+                                      capture_output=True, text=True, env=dict(os.environ, HOME=str(home)))
+                self.assertEqual(link.returncode, 0, link.stderr)
+                linked = {p.name for p in (home / ".claude/skills").iterdir()}
+                self.assertTrue({"review-map", "model-fit"} <= linked, linked)
+                self.assertEqual(env.chezmoi("status", "--no-tty", *targets[:len(KEEP)]), "", profile)
+            finally:
+                env.close()
+
+
 class FleetFilesTest(unittest.TestCase):
     """~/.claude/fleet/*.json and ~/.claude/agents/reader.md, rendered for both desktop profiles."""
 
@@ -875,7 +909,7 @@ class FleetFilesTest(unittest.TestCase):
                     self.assertEqual(set(f["skillOverrides"].values()), {"off"})
                     # the worker seats deny the Workflow tool, so workflow-authoring is off for them; the lead and the coordinator keep both
                     self.assertEqual("workflow-authoring" in f["skillOverrides"], seat in UNUSED_TOOL_SEATS, (profile, seat))
-                    self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL)) - keep) | BUNDLED_OFF | ({"workflow-authoring"} if seat in UNUSED_TOOL_SEATS else set()), (profile, seat))
+                    self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL) | FROM_SOURCE) - keep) | BUNDLED_OFF | ({"workflow-authoring"} if seat in UNUSED_TOOL_SEATS else set()), (profile, seat))
                     self.assertNotIn("synced", f["skillOverrides"])
             finally:
                 env.close()
@@ -914,7 +948,7 @@ class FleetFilesTest(unittest.TestCase):
         env = Env(codex_active=False)
         try:
             # nothing under ~/.claude/skills yet: the seat file still lists the source tree's skills, and still not the kept ones
-            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), (set(CANONICAL) - KEEP["planner"]) | BUNDLED_OFF | {"workflow-authoring"})
+            self.assertEqual(set(self.render(env, "seat-planner.json")["skillOverrides"]), (set(CANONICAL) | FROM_SOURCE) - KEEP["planner"] | BUNDLED_OFF | {"workflow-authoring"})
         finally:
             env.close()
 
