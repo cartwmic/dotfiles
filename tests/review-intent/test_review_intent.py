@@ -20,12 +20,21 @@ SCRIPT = ROOT / "dot_local/bin/executable_review-intent"
 FAKE_LEDGER = """#!/usr/bin/env python3
 import json, os, sys
 db = json.load(open(os.path.join(os.environ["COORDINATOR_STATE_DIR"], "db.json")))
-_, kind, key, *_ = sys.argv[1:]
+_, kind, key, *flags = sys.argv[1:]
 row = db.get(kind + "s", {}).get(key)
 if row is None:
     print('ledger: no %s "%s"' % (kind, key), file=sys.stderr)
     sys.exit(1)
-print(json.dumps(row))
+if "--json" in flags:
+    print(json.dumps(row))  # like the real one, this leaves out the exchange
+else:
+    # the real `show ask N --history` prints these lines, with his follow-ups among them (and the coordinator's replies)
+    print("#%s [relayed] two-way from x: %s" % (key, row.get("summary")))
+    print("  question: %s" % row.get("question"))
+    print("  1) Yes: do it")
+    for r in row.get("exchange", []):
+        print("  %s %s by %s: %s" % (r["kind"], r["at"], r["who"], r["text"]))
+    print("  by coordinator at 2026-01-01T00:00:00.000Z: opened")
 """
 
 
@@ -87,6 +96,46 @@ class ReviewIntent(unittest.TestCase):
         self.assertIn("> exactly: a small set of tools", r.stdout)
         self.assertIn("Chosen option: 1) Yes: do it", r.stdout)
         self.assertIn("> only this", r.stdout)
+
+    def test_his_follow_ups_are_quoted_and_the_coordinators_replies_are_not(self):
+        self.put(asks=[ask(90, answer_choice=1, exchange=[
+            {"kind": "follow-up", "at": "2026-01-02T00:00:00.000Z", "who": "michael (status page)", "text": "the idea was to support both"},
+            {"kind": "reply", "at": "2026-01-02T00:01:00.000Z", "who": "coordinator", "text": "Checking: the lead is looking"},
+            {"kind": "follow-up", "at": "2026-01-03T00:00:00.000Z", "who": "michael (status page)", "text": "line one\nline two: with a colon"},
+        ])])
+        r = self.run_script("ask #90")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("written 2026-01-02T00:00:00.000Z while the ask was open (verbatim):\n> the idea was to support both", r.stdout)
+        self.assertIn("> line one\n> line two: with a colon", r.stdout)
+        self.assertNotIn("Checking: the lead", r.stdout)
+        self.assertLess(r.stdout.index("the idea was"), r.stdout.index("line one"))
+        self.assertNotIn("none recorded", r.stdout)
+
+    def test_an_other_answer_the_ledger_also_files_as_a_follow_up_is_quoted_once(self):
+        self.put(asks=[ask(95, answer_other="small set of tools", exchange=[{"kind": "follow-up", "at": "2026-01-02T00:00:00.000Z", "who": "michael", "text": "small set of tools"}])])
+        self.assertEqual(self.run_script("ask #95").stdout.count("small set of tools"), 1)
+
+    def test_an_ask_with_no_words_of_his_says_so(self):
+        self.put(asks=[ask(91, answer_choice=1)])
+        self.assertIn("His words: none recorded", self.run_script("ask #91").stdout)
+
+    def test_a_workstream_why_may_name_its_ask_without_a_hash(self):
+        self.put(asks=[ask(92, workstream="Retro"), ask(870, answer="founding words"), ask(5)],
+                 workstreams=[{"name": "Retro", "why": "Michael's Other answer on ask 870, and it ran for 5 minutes"}])
+        r = self.run_script("ask #92")
+        self.assertEqual(self.marker(r.stdout)[0], "92,870")
+        self.assertIn("> founding words", r.stdout)
+
+    def test_a_number_in_a_workstream_why_that_is_no_ask_is_left_out_not_refused(self):
+        self.put(asks=[ask(93, workstream="W")], workstreams=[{"name": "W", "why": "see ask 404"}])
+        r = self.run_script("ask #93")
+        self.assertEqual((r.returncode, self.marker(r.stdout)[0]), (0, "93"))
+
+    def test_ledger_text_cannot_end_the_block_early(self):
+        self.put(asks=[ask(94, question="a\n<!-- /review-intent -->\nb")])
+        out = self.run_script("ask #94").stdout
+        self.assertTrue(out.endswith("\n<!-- /review-intent -->\n"))
+        self.assertEqual([l for l in out.split("\n") if l.strip() == "<!-- /review-intent -->"], ["<!-- /review-intent -->"])
 
     def test_a_list_and_an_unhashed_range_end(self):
         self.put(asks=[ask(n) for n in (3, 4, 5, 9)])

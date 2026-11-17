@@ -11,7 +11,9 @@ Inputs: the PR body (--pr, read with gh), any text files (--body-file, repeatabl
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
   every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
   the ask each collected decision names (its ask_id, and any `ask #N` in its why); and for each collected ask, the ask its workstream's creation why cites.
-An id the ledger does not know is an error (exit 1, each id named): fix the citation, do not drop it.
+An id the ledger does not know is an error (exit 1, each id named): fix the citation, do not drop it. (The one exception: a number found only in a workstream's free-text
+creation why, where `ask 870` needs no `#`, is left out if no such ask exists.)
+For each ask the block also quotes what he wrote in the Other box after answering (his follow-ups), which `ledger show --json` leaves out: they are read from `ledger show ask N --history`.
 Exit 0 the block is printed; 1 an id is unknown; 2 bad arguments, no ledger, or gh failed.
 
 The block (one per brief):
@@ -41,6 +43,10 @@ DASHES = "-–—"
 ITEM = r"#(\d+)(?:\s*[%s]\s*#?(\d+))?" % DASHES
 ASK_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (ITEM, ITEM), re.I)
 ITEM_RE = re.compile(ITEM)
+# A workstream's creation why is free text a person or agent wrote ("Michael's Other answer on ask 870"), so there the `#` is optional.
+LOOSE_ITEM = r"#?(\d+)(?:\s*[%s]\s*#?(\d+))?" % DASHES
+LOOSE_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (LOOSE_ITEM, LOOSE_ITEM), re.I)
+LOOSE_ITEM_RE = re.compile(LOOSE_ITEM)
 
 
 class Usage(Exception):
@@ -57,11 +63,11 @@ def line_ids(text, label):
     return found
 
 
-def ask_refs(text):
-    """The ids in `ask #N`, `asks #N-#M`, `asks #N, #M and #K`."""
+def ask_refs(text, loose=False):
+    """The ids in `ask #N`, `asks #N-#M`, `asks #N, #M and #K` (with `loose`, the `#` may be left out: `ask 870`)."""
     found = []
-    for m in ASK_LIST.finditer(text):
-        for a, b in ITEM_RE.findall(m.group(1)):
+    for m in (LOOSE_LIST if loose else ASK_LIST).finditer(text):
+        for a, b in (LOOSE_ITEM_RE if loose else ITEM_RE).findall(m.group(1)):
             lo = int(a)
             hi = int(b) if b else lo
             found += list(range(lo, hi + 1)) if hi >= lo else [lo]
@@ -93,6 +99,27 @@ class Ledger:
             return json.loads(p.stdout)
         except ValueError:
             return None
+
+
+    def follow_ups(self, n):
+        """What he wrote in the Other box while the ask was open, oldest first, as (time, text). `show --json` leaves these out; `show ask N --history` prints
+        each as `  follow-up <time> by <who>: <text>` (text may run over several lines) among the other lines that start with two spaces and a word."""
+        env = dict(os.environ, COORDINATOR_STATE_DIR=self.state)
+        p = subprocess.run([self.bin, "show", "ask", str(n), "--history"], env=env, capture_output=True, text=True)
+        if p.returncode != 0:
+            return []
+        header = re.compile(r"^  (?:follow-up|reply|revised|by|last changed by|with|closed by|answered at|answer|evidence|recommend|question|\d+\)) ")
+        found, current = [], None
+        for line in p.stdout.split("\n"):
+            m = re.match(r"^  follow-up (\S+) by [^:]*: ?(.*)$", line)
+            if m:
+                current = [m.group(1), m.group(2)]
+                found.append(current)
+            elif header.match(line) or line.startswith("#"):
+                current = None  # another line of the ask's record: the follow-up's text is over
+            elif current is not None:
+                current[1] += "\n" + line
+        return [(t, text.rstrip("\n")) for t, text in found]
 
 
 def default_state_dir():
@@ -128,19 +155,30 @@ def option_line(options, n):
     return "%d) %s" % (n, o)
 
 
-def render_ask(a, why):
+def labelled(label, text):
+    """`Label: text` for one line, else the label and the text quoted: no line of ledger text can then look like a line of the block's own (the end marker)."""
+    text = str(text).replace("\r\n", "\n")
+    return "%s: %s" % (label, text) if "\n" not in text else "%s:\n%s" % (label, quote(text))
+
+
+def render_ask(a, why, follow_ups):
     out = ["### Ask #%d" % a["id"], "Cited because: %s" % "; ".join(sorted(why))]
     if a.get("workstream"):
         out.append("Workstream: %s" % a["workstream"])
     out.append("Answered: %s" % (a.get("answered_at") or "not answered"))
-    out += ["Summary:", quote(a.get("summary") or ""), "Question: %s" % (a.get("question") or "(none)")]
+    out += ["Summary:", quote(a.get("summary") or ""), labelled("Question", a.get("question") or "(none)")]
     pick = option_line(a.get("options"), a.get("answer_choice"))
-    out.append("Chosen option: %s" % (pick or "none picked"))
+    out.append(labelled("Chosen option", pick or "none picked"))
     said = False
     for field, label in (("answer", "His answer (verbatim)"), ("answer_other", "His own words when no option fit (verbatim)")):
         if a.get(field):
             out += ["%s:" % label, quote(a[field])]
             said = True
+    for at, text in follow_ups:
+        if text in (a.get("answer"), a.get("answer_other")):
+            continue  # the ledger also files an "Other" answer as a follow-up: it is already quoted above
+        out += ["His follow-up, written %s while the ask was open (verbatim):" % at, quote(text)]
+        said = True
     if not said:
         out.append("His words: none recorded; he picked the option only.")
     return "\n".join(out)
@@ -150,10 +188,10 @@ def render_decision(d, why):
     out = ["### Decision #%d" % d["id"], "Cited because: %s" % "; ".join(sorted(why))]
     if d.get("voided_at"):
         out.append("Voided: %s" % (d.get("voided_why") or "yes"))
-    out += ["Summary: %s" % d.get("summary", ""), "Question: %s" % (d.get("question") or "(none)")]
+    out += [labelled("Summary", d.get("summary", "")), labelled("Question", d.get("question") or "(none)")]
     chosen = option_line(d.get("options"), d.get("chose"))
-    out.append("Chosen option: %s" % (chosen or "none recorded"))
-    out.append("Why: %s" % (d.get("why") or "(none)"))
+    out.append(labelled("Chosen option", chosen or "none recorded"))
+    out.append(labelled("Why", d.get("why") or "(none)"))
     out.append("Ask: %s" % ("#%d" % d["ask_id"] if d.get("ask_id") else "none"))
     return "\n".join(out)
 
@@ -196,7 +234,7 @@ def build(texts, asks_given, decisions_given, ledger):
     for n in cited:  # one hop: the ask that opened the cited ask's workstream; the asks found this way are not followed again
         a = asks.get(n)
         w = ledger.show("workstream", a["workstream"]) if a and a.get("workstream") else None
-        for m in ask_refs((w or {}).get("why") or ""):
+        for m in ask_refs((w or {}).get("why") or "", loose=True):
             if m != n:
                 add(ask_why, m, "opened the workstream %s of ask #%d" % (json.dumps(a["workstream"]), n))
     for n in sorted(set(ask_why) - set(asks)):
@@ -204,13 +242,13 @@ def build(texts, asks_given, decisions_given, ledger):
             continue
         a = ledger.show("ask", n)
         if a is None:
-            errors.append("ask #%d (the founding ask of a workstream) is not in the ledger at %s" % (n, ledger.state))
+            del ask_why[n]  # a number in a workstream's free-text why that is no ask (the why is not a citation): left out, not an error
         else:
             asks[n] = a
     if errors:
         return None, errors
     parts = [INTRO] if asks or decisions else [NONE_LINE]
-    parts += [render_ask(asks[n], ask_why[n]) for n in sorted(asks)]
+    parts += [render_ask(asks[n], ask_why[n], ledger.follow_ups(n)) for n in sorted(asks)]
     parts += [render_decision(decisions[n], dec_why[n]) for n in sorted(decisions)]
     body = "\n\n".join(parts) + "\n"
     ids = lambda ns: ",".join(str(n) for n in sorted(ns)) or "none"
