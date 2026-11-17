@@ -3,6 +3,10 @@
 
     python3 scripts/check-release-pins.py [--mise-config FILE] [--agent-kit-package FILE]
 
+CI runs it as its own job, `release-pins`, so a lagging pin turns the run red without stopping the `tests` job.
+When two releases land close together, put both pins in one PR (agent_kit_bump.py X.Y.Z --pr N on the Loop Engine bump PR); a
+PR that moves one pin still fails here while the other lags.
+
 Exit 0: every checked pin equals its latest release. Exit 1: a pin lags (one line per pin). Exit 2: a latest release
 could not be read, so the check could not run; the message names the source and the cause. Nothing is skipped.
 
@@ -98,7 +102,7 @@ def main():
                            "loop_engine_bump.py v%s (playbook 7c57de5a)" % (tool, version, le_latest, le_latest))
     if kit_pin != kit_latest:
         lagging.append("agent-kit pin %s lags the latest release %s (cartwmic/agent-kit); bump it with "
-                       "agent_kit_bump.py v%s (playbook 7c57de5a)" % (kit_pin, kit_latest, kit_latest))
+                       "agent_kit_bump.py v%s, or with --pr N on a Loop Engine bump PR if that pin lags too (playbook 7c57de5a)" % (kit_pin, kit_latest, kit_latest))
 
     if lagging:
         print("\n".join(lagging))

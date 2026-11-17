@@ -1,23 +1,32 @@
 #!/usr/bin/env python3
 """Bump the pinned agent-kit (the agent-traces CLI install) to a release in one command: PR, checks, merge, scoped apply and install on this machine.
 
-    agent_kit_bump.py X.Y.Z [--source DIR] [--poll SECONDS]
+    agent_kit_bump.py X.Y.Z [--pr N] [--source DIR] [--poll SECONDS]
 
 Playbook rule 7c57de5a: each agent-kit release bumps this pin. Personal profile only: it refuses on any other profile before it does anything.
 The steps, and the step a stop names (the same shape as loop_engine_bump.py):
 
   profile  chezmoi's profile must be personal (read with dump-config, which runs no hook)
-  pr       find the PR for branch agent-kit-vX.Y.Z; an open or merged one is resumed
+  pr       find the PR for branch agent-kit-vX.Y.Z; an open or merged one is resumed. With --pr N use PR N instead.
   publish  fresh worktree from origin/main: set the exact pin in package.json and regenerate package-lock.json; commit, push and
            open the PR. Nothing to do when origin/main already pins X.Y.Z.
+           With --pr N: the same two files on the head of open PR N (a Loop Engine bump PR, say), committed and pushed there
+           with no force. Nothing is committed when its head already has the pin. A merged PR N goes straight to drift.
   checks   wait for the PR's checks; a red one stops it with the PR left open
   gates    ci-main-status --merge-gate dotfiles --pr <pr>, then pr-body-check dotfiles <pr>; either one stops the merge.
            --pr lets this pin-fix PR merge into a main that is red only because this pin lags (ci-main-status docstring)
   merge    gh pr merge --squash --match-head-commit <the head read before the checks>; read the merge SHA
-  drift    the PR changes only the two pin files; stop on any live change the PR did not make; print the diff of the targets
+  drift    the PR changes both pin files and, at most, the Loop Engine's pins and skills (a combined bump; loop_engine_bump.py
+           applies those); any other file stops it. Only the two pin files are targets. Stop on any live change the PR
+           did not make; print the diff of the targets
   apply    chezmoi apply of exactly those two files (scripts excluded), then the install: the 65 install template rendered
            from the merge commit and run once (chezmoi apply of explicit targets runs no script)
   verify   the version of @cartwmic/agent-kit installed under ~/.local/share/agent-kit is X.Y.Z
+
+--pr N is for two releases that land close together: check-release-pins.py fails any PR while either pin lags, so each bump PR
+would block the other. Open loop_engine_bump.py's PR, then run this with --pr N on it, so one PR carries both pins. Run the Loop
+Engine bump on that PR too (it ignores the two agent-kit files). The push restarts the PR's checks. Do not run both scripts at
+once on the same PR: each merges it.
 
 Needs git, an authenticated gh (run from the source checkout, whose origin is the dotfiles repo), chezmoi, node and npm. Python 3
 standard library. It prints the PR, the merge SHA and the installed version, and appends one JSON line per step to
@@ -41,6 +50,9 @@ from pathlib import Path
 KIT = "dot_local/share/agent-kit"  # the pin's source directory
 KIT_DEST = ".local/share/agent-kit"  # where chezmoi puts it
 PIN_FILES = ("package.json", "package-lock.json")
+# loop_engine_bump.py's files (MISE_CONFIG, SKILLS there; tests/ci-main-status checks the copies match). A combined PR carries them too.
+LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
+LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills"
 INSTALL = "run_onchange_after_65_agent_kit_install.sh.tmpl"
 PACKAGE = "@cartwmic/agent-kit"
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
@@ -189,7 +201,7 @@ def find_pr(source, branch):
 
 def view_pr(source, number, step):
     """The PR as it is now, with its head commit: the head the merge must still match."""
-    return json.loads(run(["gh", "pr", "view", str(number), "--json", "number,state,url,mergeCommit,headRefOid"], step, cwd=source).stdout)
+    return json.loads(run(["gh", "pr", "view", str(number), "--json", "number,state,url,mergeCommit,headRefOid,headRefName"], step, cwd=source).stdout)
 
 
 def set_pin(kit_dir, version):
@@ -228,6 +240,36 @@ def publish(source, version, branch, log):
         raise Stop("publish", "gh pr create succeeded but no PR is listed for %s" % branch)
     log.record("publish", "ok", "PR #%d %s" % (pr["number"], pr["url"]))
     return pr
+
+
+def pin_pr(source, version, number, poll, log):
+    """Put the pin on the head of PR `number` and return the PR as it reads after the push.
+
+    A merged or closed PR is returned as it is. An open PR's head gets one commit of the two pin files pushed with no force (a
+    rejected push stops it), unless the head already has the pin. The return waits until GitHub reports the pushed commit as the
+    head, so the checks that follow are the new head's, not the old one's.
+    """
+    pr = view_pr(source, number, "publish")
+    if pr["state"] != "OPEN":
+        return pr
+    branch = pr["headRefName"]
+    git(source, "fetch", "-q", "origin", branch, step="publish")
+    with Worktree(source, pr["headRefOid"], "publish") as wt:
+        set_pin(wt.path / KIT, version)
+        if not git(wt.path, "status", "--porcelain", step="publish").stdout.strip():
+            log.record("publish", "ok", "PR #%d (%s) already pins %s %s" % (number, branch, PACKAGE, version))
+            return pr
+        git(wt.path, "add", KIT, step="publish")
+        git(wt.path, "commit", "-q", "-m", "chore(agent-kit): pin %s %s" % (PACKAGE, version), step="publish")
+        pushed = git(wt.path, "rev-parse", "HEAD", step="publish").stdout.strip()
+        git(wt.path, "push", "-q", "origin", "HEAD:refs/heads/" + branch, step="publish")
+    for _ in range(20):
+        pr = view_pr(source, number, "publish")
+        if pr["headRefOid"] == pushed:
+            log.record("publish", "ok", "pinned %s %s on PR #%d (%s) at %s" % (PACKAGE, version, number, branch, pushed))
+            return pr
+        time.sleep(poll)
+    raise Stop("publish", "pushed %s to %s but PR #%d still reports head %s" % (pushed, branch, number, pr["headRefOid"]))
 
 
 def wait_for_checks(source, pr, poll, log):
@@ -279,12 +321,19 @@ def merge(source, pr, log):
 
 
 def pr_targets(wt, sha, dest):
-    """{destination: (source name, bytes before the PR or None, bytes after or None)} for the PR's two pin files; any other file stops."""
+    """{destination: (source name, bytes before the PR or None, bytes after or None)} for the PR's two pin files.
+
+    The PR may also carry the Loop Engine's pins and skills (a combined bump); loop_engine_bump.py applies those, so they are not
+    targets. Any other file stops it.
+    """
     names = [n for n in git(wt, "diff", "--name-only", "--no-renames", sha + "^", sha, step="drift").stdout.split("\n") if n]
-    expected = sorted("%s/%s" % (KIT, name) for name in PIN_FILES)
-    if sorted(names) != expected:
-        raise Stop("drift", "the PR changed %s; it must change only %s" % (", ".join(names) or "nothing", ", ".join(expected)))
-    return {dest / KIT_DEST / Path(n).name: (n, git_bytes(wt, "%s^:%s" % (sha, n)), git_bytes(wt, "%s:%s" % (sha, n))) for n in names}
+    pins = sorted("%s/%s" % (KIT, name) for name in PIN_FILES)
+    outside = [n for n in names if n not in pins and n != LOOP_ENGINE_MISE_CONFIG and not n.startswith(LOOP_ENGINE_SKILLS + "/")]
+    if outside:
+        raise Stop("drift", "the PR changed files outside the agent-kit pins and the Loop Engine pins and skills: %s" % ", ".join(outside))
+    if sorted(n for n in names if n in pins) != pins:
+        raise Stop("drift", "the PR must change both agent-kit pin files (%s); it changed %s" % (", ".join(pins), ", ".join(names) or "nothing"))
+    return {dest / KIT_DEST / Path(n).name: (n, git_bytes(wt, "%s^:%s" % (sha, n)), git_bytes(wt, "%s:%s" % (sha, n))) for n in pins}
 
 
 def check_drift(wt, dest, targets, log):
@@ -388,25 +437,29 @@ def bump_personal(args, dest, log):
     source, version = Path(args.source), args.version
     branch = "agent-kit-v" + version
     git(source, "fetch", "-q", "origin", step="pr")
-    found = find_pr(source, branch)
-    if found is not None:
-        log.record("pr", "ok", "resuming PR #%d (%s)" % (found["number"], found["state"]))
-        number = found["number"]
+    if args.pr is not None:
+        log.record("pr", "ok", "using PR #%d" % args.pr)
+        pr = pin_pr(source, version, args.pr, args.poll, log)  # the head it returns is the one the checks must run on
     else:
-        log.record("pr", "ok", "no PR for %s yet" % branch)
-        published = publish(source, version, branch, log)
-        if published is None:
-            installed = installed_version(dest)
-            if installed != version:
-                raise Stop("apply", "origin/main already pins %s %s by a PR this script did not make, and this machine has %s; apply it by hand"
-                           % (PACKAGE, version, installed))
-            log.record("verify", "ok", "%s %s is already pinned and installed; nothing to do" % (PACKAGE, version))
-            print("nothing to do: origin/main already pins %s %s and it is installed here" % (PACKAGE, version))
-            return 0
-        number = published["number"]
-    pr = view_pr(source, number, "pr")  # read the head now: the merge must match the head the checks ran on
+        found = find_pr(source, branch)
+        if found is not None:
+            log.record("pr", "ok", "resuming PR #%d (%s)" % (found["number"], found["state"]))
+            number = found["number"]
+        else:
+            log.record("pr", "ok", "no PR for %s yet" % branch)
+            published = publish(source, version, branch, log)
+            if published is None:
+                installed = installed_version(dest)
+                if installed != version:
+                    raise Stop("apply", "origin/main already pins %s %s by a PR this script did not make, and this machine has %s; "
+                               "apply it with --pr N for that PR" % (PACKAGE, version, installed))
+                log.record("verify", "ok", "%s %s is already pinned and installed; nothing to do" % (PACKAGE, version))
+                print("nothing to do: origin/main already pins %s %s and it is installed here" % (PACKAGE, version))
+                return 0
+            number = published["number"]
+        pr = view_pr(source, number, "pr")  # read the head now: the merge must match the head the checks ran on
     if pr["state"] == "CLOSED":
-        raise Stop("pr", "PR #%d for %s was closed without merging: %s" % (pr["number"], branch, pr["url"]))
+        raise Stop("pr", "PR #%d (%s) was closed without merging: %s" % (pr["number"], pr["headRefName"], pr["url"]))
     if pr["state"] == "OPEN":
         wait_for_checks(source, pr, args.poll, log)
         gates(source, pr, log)
@@ -418,6 +471,9 @@ def bump_personal(args, dest, log):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("version", help="agent-kit release, X.Y.Z")
+    parser.add_argument("--pr", type=int, metavar="N",
+                        help="put the pin on this existing PR (a Loop Engine bump PR, say) instead of opening agent-kit-vX.Y.Z; "
+                             "after its merge apply and install from it")
     parser.add_argument("--source", default=os.environ.get("CHEZMOI_SOURCE_DIR") or str(Path.home() / ".local/share/chezmoi"),
                         help="chezmoi source checkout (default: CHEZMOI_SOURCE_DIR, else ~/.local/share/chezmoi)")
     parser.add_argument("--poll", type=float, default=float(os.environ.get("AGENT_KIT_BUMP_POLL_SECONDS", "30")),

@@ -585,11 +585,21 @@ PR_HEAD = "81b63016555d0346d97e03934ced3abe0e7dc93f"
 
 
 def steps(**conclusions):
-    """A `tests` job's steps. Keys: pins, linux (the step after it), other (an earlier step)."""
+    """The steps of one run, as ci_jobs splits them between the two jobs. Keys: pins, linux (the step after it), other (an earlier step)."""
     return [{"name": "Set up job", "conclusion": "success"},
             {"name": "Some other step", "conclusion": conclusions.get("other", "success")},
             {"name": PINS_STEP_FULL, "conclusion": conclusions.get("pins", "success")},
             {"name": "Linux checks: scripts/ci-linux.sh", "conclusion": conclusions.get("linux", "success")}]
+
+
+def ci_jobs(step_list):
+    """ci.yml's jobs for those steps: the release-pins step in its own job `release-pins`, every other step in `tests`."""
+    def job(name, job_steps):
+        failed = any(s["conclusion"] not in ("success", "skipped") for s in job_steps)
+        return {"name": name, "conclusion": "failure" if failed else "success", "steps": job_steps}
+    pins = [s for s in step_list if s["name"] == PINS_STEP_FULL]
+    jobs = [job("tests", [s for s in step_list if s not in pins])]
+    return jobs + [job("release-pins", pins)] if pins else jobs
 
 
 NO_HEAD_RUN = run(3, "f" * 40, "success", event="pull_request", age=7)   # a run, but not of the PR head or of a commit with its tree
@@ -615,10 +625,8 @@ class PinFixException(Fixture):
         own_run = own_run or run(3, self.head, "success", event="pull_request", age=7, branch="fix")
         self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1), own_run])
         red_steps = red_steps or steps(pins="failure", linux="skipped")
-        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": red_steps},
-                           {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
-                     str(own_run["databaseId"]): [{"name": "tests", "conclusion": "success", "steps": own_steps or steps()},
-                                                  {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
+        self.jobs = {"2": [*ci_jobs(red_steps), {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
+                     str(own_run["databaseId"]): [*ci_jobs(own_steps or steps()), {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
         self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": self.head, "headRefName": "fix"}}
 
     def gate(self, *extra):
@@ -652,6 +660,13 @@ class PinFixException(Fixture):
         self.set_world(files=LE_FILES)
         self.assertEqual(self.gate("--pr", "7")[0], 0)
 
+    def test_pass_case_for_a_combined_bump_both_agent_kit_pins_and_the_loop_engine_files(self):
+        """dotfiles#573: one PR carried the Loop Engine bump and the agent-kit pin, so neither blocked the other."""
+        self.set_world(files=LE_FILES + KIT_FILES)
+        rc, out, err = self.gate("--pr", "7")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("is the pin fix for this red", out)
+
     def test_no_pr_given_stays_red(self):
         rc, out, err = self.gate()
         self.assertEqual(rc, 1, out)
@@ -662,6 +677,12 @@ class PinFixException(Fixture):
 
     def test_another_step_failed_in_the_red_run_stays_red(self):
         self.set_world(red_steps=steps(other="failure", pins="skipped"), own_run=NO_HEAD_RUN)
+        self.assert_stays_red("failed on more than the release-pins step")
+
+    def test_the_release_pins_job_and_the_tests_job_both_failed_stays_red(self):
+        """A lagging pin plus a real suite failure is not the pin fix: `tests` ran and failed on its own merits."""
+        self.set_world(red_steps=steps(pins="failure", linux="failure"), own_run=NO_HEAD_RUN)
+        self.assertEqual([(j["name"], j["conclusion"]) for j in self.jobs["2"][:2]], [("tests", "failure"), ("release-pins", "failure")])
         self.assert_stays_red("failed on more than the release-pins step")
 
     def test_the_pins_step_and_another_step_failed_stays_red(self):
@@ -947,14 +968,12 @@ class RedMainFix(Fixture):
         self.assertIn("run 4 (", out)
 
     def dotfiles_world(self, *head_runs, red_step="Linux checks: scripts/ci-linux.sh"):
-        """Main's tip c3 is red in dotfiles' `tests` job on a step that is not the release-pins step. PR 7's diff is not the pin files."""
+        """Main's tip c3 is red in dotfiles' `tests` job on a step that is not the release-pins step (that step is its own job). PR 7's diff is not the pin files."""
         rows = [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]
-        self.jobs = {"2": [{"name": "tests", "conclusion": "failure", "steps": [
-            {"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": "failure"}]}]}
+        self.jobs = {"2": ci_jobs([{"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": "failure"}])}
         for row, conclusion in head_runs:
             rows.append(row)
-            self.jobs[str(row["databaseId"])] = [{"name": "tests", "conclusion": conclusion, "steps": [
-                {"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": conclusion}]}]
+            self.jobs[str(row["databaseId"])] = ci_jobs([{"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": conclusion}])
         self.runs = {"cartwmic/dotfiles|ci.yml": rows}
         self.prs = {"7": {"files": [{"path": "dot_local/bin/executable_ci-main-status"}], "changedFiles": 1,
                           "headRefOid": self.head, "headRefName": "fix"}}
@@ -1188,7 +1207,14 @@ class PinFixCopiesMatchTheirSources(unittest.TestCase):
         self.assertEqual(gate.AGENT_KIT_PIN_FILES, {f"{kit.KIT}/{name}" for name in kit.PIN_FILES})
         self.assertEqual(gate.LOOP_ENGINE_MISE_CONFIG, engine.MISE_CONFIG)
         self.assertEqual(gate.LOOP_ENGINE_SKILLS, engine.SKILLS + "/")
-        self.assertIn(f"name: \"{gate.PINS_STEP} (playbook 7c57de5a)\"", (REPO / ".github/workflows/ci.yml").read_text())
+        # Each bump script also carries a copy of the other's files, for a combined bump PR.
+        self.assertEqual(set(engine.AGENT_KIT_PINS), gate.AGENT_KIT_PIN_FILES)
+        self.assertEqual(kit.LOOP_ENGINE_MISE_CONFIG, engine.MISE_CONFIG)
+        self.assertEqual(kit.LOOP_ENGINE_SKILLS, engine.SKILLS)
+        workflow = (REPO / ".github/workflows/ci.yml").read_text()
+        self.assertIn(f"name: \"{gate.PINS_STEP} (playbook 7c57de5a)\"", workflow)
+        self.assertIn("\n  release-pins:\n", workflow)   # the step lives in its own job, which `tests` does not wait for or depend on
+        self.assertNotIn(gate.PINS_STEP, workflow.split("\n  release-pins:\n")[0].split("\n  tests:\n")[1])
 
 
 class AllAndHomelab(Fixture):
