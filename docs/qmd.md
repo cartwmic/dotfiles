@@ -63,11 +63,16 @@ owner asked, can also run it by hand.
 - One refresh at a time: an `flock(2)` on `~/.local/state/qmd-refresh/lock`, taken before heavy-gate starts and inherited by
   every process of the job. A second run exits 75. The kernel drops the lock when the last process of the job exits, so there is
   no pid file to go stale or be reused, and a wrapper killed with SIGKILL does not free the lock while its job still runs.
-- TERM, INT or HUP: the wrapper polls (no blocking wait, so a signal at any moment is handled), sends TERM leaves first, re-snapshots
-  the job's tree for up to `QMD_REFRESH_GRACE` seconds (default 10), then KILLs it, and exits 143. It has to do this because
-  heavy-gate runs its job in the foreground and would otherwise defer the signal until a 45-minute embed ended. Not handled: a
-  SIGKILL of the wrapper itself, or a process that escapes the tree; the job lives on and keeps the lock until it is gone
-  (the wrapper says so when it sees a survivor).
+- TERM, INT or HUP: the job runs as its own process group (the lock helper calls `setpgrp`, so the group is led by the pid the wrapper
+  holds). The wrapper polls (no blocking wait, so a signal at any moment is handled), sends TERM to the whole group and, leaves first,
+  to the process tree, re-lists both for up to `QMD_REFRESH_GRACE` seconds (default 10), then KILLs every process it found and
+  signals KILL to the group, and exits 143. A group signal reaches every process of the job, also one whose parent already
+  exited (a tree walk alone is a snapshot and misses it). It has to do this because heavy-gate runs its job in the foreground and
+  would otherwise defer the signal until a 45-minute embed ended. A hand run in a terminal: Ctrl-C goes to the wrapper only (the job
+  is not in the terminal's foreground group), and the wrapper stops the whole job as above. Ctrl-Z also goes to the wrapper only: it
+  pauses the wrapper and the job keeps running (and keeps the lock); `fg` resumes the wrapper, and a TERM to a paused wrapper is
+  handled once it is resumed. Not handled: a SIGKILL of the wrapper itself (the job lives on and keeps the lock until it is gone;
+  the wrapper says so when it sees a survivor), or a job process that leaves the group on its own (`setsid`, `setpgid`).
 - qmd has no offline switch and downloads a missing model by itself, and which model it picks depends on `QMD_EMBED_MODEL`,
   `index.yml` and a project-local config. So embed runs only for the **pinned** model
   (`embeddinggemma-300M-Q8_0`, as in `index.yml.tmpl`): if `QMD_EMBED_MODEL` is set or `index.yml` names another embed model,
@@ -103,7 +108,7 @@ Both keys are optional; the defaults are `true` and `60`. Change a value and run
 or, when disabled, removes the plist and loads nothing. If launchd does not end up as the setting asks (the unload or load fails;
 loading needs a GUI login session, so an apply over ssh alone fails here), the script fails the apply and chezmoi runs it again on the
 next apply. Any other value (`5`, `90.5`, `hourly`, `enabled: "yes"`) fails the render,
-so a typo applies nothing rather than scheduling something else. A bootout stops a run in progress (qmd-refresh stops its job tree
+so a typo applies nothing rather than scheduling something else. A bootout stops a run in progress (qmd-refresh stops its job, all its processes,
 on TERM); the next run starts one interval after the load.
 
 | Piece | Does |
