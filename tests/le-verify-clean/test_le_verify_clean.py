@@ -43,7 +43,7 @@ if [ -n "${FAKE_WAIT_FOR:-}" ]; then
 fi
 echo '{"verify":"ran"}'
 if [ -n "${FAKE_SLEEP:-}" ]; then
-  trap ': > "$FAKE_RUN/got-term"; exit 0' TERM
+  trap 'sleep 0.3; : > "$FAKE_RUN/got-term"; exit 0' TERM  # a handler that takes a moment, as verify's cleanup does
   while :; do sleep 0.05; done
 fi
 exit "${FAKE_EXIT:-0}"
@@ -196,6 +196,32 @@ class LeVerifyCleanTest(Base):
         self.assertEqual(list((self.run_dir / "vtmp").iterdir()), [])
 
 
+    def test_group_term_reaches_the_helper_and_verify_finishes_its_handler(self):
+        # timeout and tree kills send TERM to the whole process group. bwrap must not be in it, or it dies and SIGKILLs verify mid-handler.
+        proc = subprocess.Popen(["sh", str(SCRIPT), str(self.run_dir), "verify.json"], env=dict(self.env, FAKE_SLEEP="1"),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        wait_for(self.run_dir / "started")
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 143)
+        self.assertTrue((self.run_dir / "got-term").exists(), "verify was killed before its TERM handler finished")
+        self.assertEqual(list((self.run_dir / "vtmp").iterdir()), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes to a read-only folder")
+    def test_failed_log_copy_keeps_verifys_status_and_the_root(self):
+        (self.run_dir / "logs").mkdir()
+        (self.run_dir / "logs").chmod(0o555)
+        self.addCleanup((self.run_dir / "logs").chmod, 0o755)
+        r = self.helper(str(self.run_dir), "verify.json", env={"FAKE_EXIT": "7"})
+        self.assertEqual(r.returncode, 7, r.stderr)  # verify's status, not the copy's
+        roots = list((self.run_dir / "vtmp").iterdir())
+        self.assertEqual(len(roots), 1, "the root with the uncopied logs must stay")
+        self.assertEqual(len(list(roots[0].glob("le-journey-*/server.log"))), 1)
+        self.assertIn("WARNING", r.stderr)
+        self.assertIn(str(roots[0]), r.stderr)
+        self.assertNotIn("removed " + str(roots[0]), r.stderr)
+
+
 class RefusalAndPastMistakeTest(Base):
     def test_missing_bwrap_is_refused_and_verify_never_runs(self):
         # PATH holds the fake lean-change and the tools the script uses, and no bwrap.
@@ -220,6 +246,15 @@ class RefusalAndPastMistakeTest(Base):
         r = self.helper(str(under_tmp), "verify.json")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("under /tmp", r.stderr)
+        self.assertFalse((self.run_dir / "started").exists())
+
+    def test_lean_change_under_tmp_is_refused(self):
+        in_tmp = Path(tempfile.mkdtemp(prefix="le-verify-clean-bin-", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, in_tmp, True)
+        shutil.copy(self.bin / "lean-change", in_tmp / "lean-change")
+        r = self.helper(str(self.run_dir), "verify.json", env={"PATH": "%s:%s" % (in_tmp, os.environ["PATH"])})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("lean-change is under /tmp", r.stderr)
         self.assertFalse((self.run_dir / "started").exists())
 
     def test_old_helper_deletes_another_runs_folder(self):

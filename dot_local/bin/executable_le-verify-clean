@@ -12,7 +12,7 @@
 # Like the old helper it cd's to the run folder, unsets T3* and CLAUDE* (journey 283 fails when they leak into its rig), runs
 # `lean-change verify < show-full.json > <out.json>`, forwards TERM and INT to it, and exits with verify's status. Before it removes the
 # private /tmp it copies the logs of any journey folder left in it (a failed journey) to <run folder>/logs/kept-<journey folder>/.
-# The run folder and lean-change must not sit under /tmp: verify sees the private root there instead. Linux only (personal profile): .chezmoiignore, docs/profiles.md.
+# The run folder and lean-change must not sit under /tmp: verify sees the private root there instead (both are refused). Linux only (personal profile): .chezmoiignore, docs/profiles.md.
 set -eu
 
 die() { echo "le-verify-clean: $*" >&2; exit 1; }
@@ -21,6 +21,7 @@ die() { echo "le-verify-clean: $*" >&2; exit 1; }
 W=$(cd -- "$1" 2>/dev/null && pwd) || die "run folder $1 not found"
 OUT=$2
 case $W in /tmp|/tmp/*) die "run folder $W is under /tmp, which verify sees replaced by its private root; use a folder elsewhere" ;; esac
+case $(command -v lean-change) in /tmp/*) die "lean-change is under /tmp, which verify sees replaced by its private root; install it elsewhere" ;; esac
 command -v bwrap >/dev/null 2>&1 || die "bwrap is not installed; refusing to run verify in the shared /tmp (install bubblewrap)"
 cd -- "$W"
 [ -f show-full.json ] || die "$W/show-full.json not found"
@@ -31,22 +32,33 @@ chmod 1777 "$ROOT"
 echo "le-verify-clean: private /tmp is $ROOT" >&2
 
 keep_logs() {
+  copied=0
   for d in "$ROOT"/le-journey-*; do
     [ -d "$d" ] || continue
     dest="$W/logs/kept-${d##*/}"
-    mkdir -p "$dest"
-    (cd "$d" && find . -type f -name '*.log' -exec cp --parents -t "$dest" '{}' +) || true
-    rmdir "$dest" 2>/dev/null || echo "le-verify-clean: kept logs of ${d##*/} in $dest" >&2
+    if mkdir -p "$dest" && (cd "$d" && find . -type f -name '*.log' -exec cp --parents -t "$dest" '{}' +); then
+      rmdir "$dest" 2>/dev/null || echo "le-verify-clean: kept logs of ${d##*/} in $dest" >&2
+    else
+      echo "le-verify-clean: WARNING: could not copy the logs of ${d##*/} to $dest" >&2
+      copied=1
+    fi
   done
+  return "$copied"
 }
+# Runs at every exit. It never changes the exit status (verify's, or 143 after a signal): a failed copy only keeps the root, with its evidence.
 cleanup() {
-  keep_logs
-  rm -rf -- "$ROOT"
-  echo "le-verify-clean: removed $ROOT" >&2
+  set +e
+  if keep_logs; then
+    rm -rf -- "$ROOT"
+    echo "le-verify-clean: removed $ROOT" >&2
+  else
+    echo "le-verify-clean: WARNING: left $ROOT in place, with the logs it failed to copy; remove it yourself once you have them" >&2
+  fi
 }
 VPID=
 trap cleanup EXIT
 # $VPID is bwrap, which does not pass TERM on (it dies and kills verify outright). Send it to verify, bwrap's child, then wait for bwrap to end.
+# bwrap runs under setsid, outside this script's process group, so a TERM to the whole group (timeout, a tree kill) reaches only this handler.
 forward() {
   child=$(pgrep -P "$VPID" 2>/dev/null | head -n 1) || true
   kill -TERM "${child:-$VPID}" 2>/dev/null || true
@@ -56,7 +68,7 @@ forward() {
 trap forward TERM INT
 
 for v in $(env | grep -oE '^(T3|CLAUDE)[A-Z0-9_]*=' | tr -d =); do unset "$v"; done
-bwrap --dev-bind / / --bind "$ROOT" /tmp --die-with-parent -- lean-change verify < show-full.json > "$OUT" &
+setsid bwrap --dev-bind / / --bind "$ROOT" /tmp --die-with-parent -- lean-change verify < show-full.json > "$OUT" &
 VPID=$!
 status=0
 wait "$VPID" || status=$?
