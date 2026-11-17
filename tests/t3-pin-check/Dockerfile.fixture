@@ -1,0 +1,12 @@
+FROM node:24-bookworm-slim
+ARG TARGETARCH
+# A stand-in for the T3 install step of an image Dockerfile: the pin is these three values.
+RUN set -eux; \
+ case "$TARGETARCH" in \
+   amd64) t3_arch=x64; t3_sha256=1111111111111111111111111111111111111111111111111111111111111111;; \
+   arm64) t3_arch=arm64; t3_sha256=2222222222222222222222222222222222222222222222222222222222222222;; \
+   *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1;; \
+ esac; \
+ t3_version=0.1.10-nightly.20261116.4800; \
+ curl -fsSL -o /tmp/t3.tar.gz "https://example.test/v${t3_version}/t3-${t3_version}-linux-${t3_arch}.tar.gz"; \
+ echo "${t3_sha256}  /tmp/t3.tar.gz" | sha256sum -c -

@@ -1,0 +1,13 @@
+# A stand-in for dotfiles' .chezmoidata.toml: a version key in an earlier table, then [t3Pin].
+[playwrightChromium]
+version = "0.1.99"
+build = "1248"
+
+# a comment mentioning [t3Pin] and version = "x" must not confuse the edit
+[t3Pin]
+version = "0.1.10-nightly.20261116.4800"
+sha256X64 = "1111111111111111111111111111111111111111111111111111111111111111"
+sha256Arm64 = "2222222222222222222222222222222222222222222222222222222222222222"
+
+[other]
+version = "0.1.5"
