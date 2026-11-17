@@ -5,7 +5,7 @@
 #
 # Installs nothing. It assumes these are on PATH: chezmoi (the render tests), zsh, lsof and rsync (the
 # agent-scratch, zshenv and agent-docker tests), node, and python3 (3.14). tests/omarchy-remote-unlock also
-# needs sshd (openssh-server) and skips without it. CI installs chezmoi and the
+# needs sshd (openssh-server) and skips without it; tests/le-verify-clean needs bwrap (bubblewrap) and skips without it. CI installs chezmoi and the
 # apt packages first. On another Linux host, install them yourself, then run this from the repo.
 #
 # Usage: scripts/ci-linux.sh   (from any directory; it cd's to the repo root). Exit 1 if any step fails.
@@ -61,6 +61,7 @@ python3 scripts/ci-par.py \
   tests/schedules-check \
   tests/agent-events \
   tests/mistakes-report \
+  tests/le-verify-clean \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \

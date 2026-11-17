@@ -193,6 +193,11 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 .local/bin/agent-chrome
 {{- end }}
 
+{{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
+# le-verify-clean (header of the script): runs a Loop Engine run's `lean-change verify` in bwrap with a private /tmp. Loop Engine runs are driven from the personal Linux host; macOS has no bwrap.
+.local/bin/le-verify-clean
+{{- end }}
+
 {{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
 # browser-harness (the work Mac's browser tool): its MCP server launcher and its pi-mcp-lazy seed. The MCP entry is gated the same way in servers.json.tmpl. The personal profile uses Browse instead (docs/profiles.md).
 .local/share/browser-harness-mcp
@@ -508,6 +513,7 @@ Library/Preferences/pnpm/**
 .local/bin/agent-session-copy
 .local/bin/heavy-gate-watchdog
 .local/bin/ntfy-zellij-notify.sh
+.local/bin/le-verify-clean
 .local/bin/mistakes-report
 .local/bin/session-cost
 .local/share/initramfs-ssh-unlock
