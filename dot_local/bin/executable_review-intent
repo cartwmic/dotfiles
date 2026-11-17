@@ -163,17 +163,21 @@ LEADS_FILE = re.compile(r"^leads/([\w-]+)\.[A-Za-z]+$")
 
 
 def pr_approvals(spec):
-    """For a PR that touches `leads/<type>.*`: [(type, [ask ids])] from `approved_by` in `leads/<type>.json` at the PR head. A file or key that is not there is skipped."""
+    """For a PR that touches `leads/<type>.*`: [(type, [ask ids])] from `approved_by` in `leads/<type>.json` at the PR head. A type with no such file at the head (gh says 404), or no usable key, is
+    skipped; any other gh failure is an error (a founding ask must not drop out because a call failed)."""
     repo, n = pr_ref(spec)
     what = "%s#%s" % (repo, n)
-    info = json.loads(gh(["pr", "view", n, "--repo", repo, "--json", "files,headRefOid"], what) or "{}")
-    types = sorted({m.group(1) for f in info.get("files") or [] for m in [LEADS_FILE.match(f.get("path", ""))] if m})
+    head = gh(["pr", "view", n, "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"], what).strip()
+    names = gh(["api", "--paginate", "repos/%s/pulls/%s/files" % (repo, n), "--jq", ".[].filename"], what + " (its files)").split("\n")  # every file, not the first page
+    types = sorted({m.group(1) for name in names for m in [LEADS_FILE.match(name.strip())] if m})
     found = []
     for t in types:
-        p = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw+json", "repos/%s/contents/leads/%s.json?ref=%s" % (repo, t, info.get("headRefOid", ""))],
+        p = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw+json", "repos/%s/contents/leads/%s.json?ref=%s" % (repo, t, head)],
                            env=dict(os.environ, GH_CALLER="review-intent"), capture_output=True, text=True)
         if p.returncode != 0:
-            continue  # the PR has no leads/<type>.json at its head (a README, or a deleted type)
+            if "404" in p.stderr:
+                continue  # the PR has no leads/<type>.json at its head (a README, or a deleted type)
+            raise Usage("review-intent: gh could not read leads/%s.json at %s of %s: %s" % (t, head[:8], what, p.stderr.strip()))
         try:
             ids = json.loads(p.stdout).get("approved_by")
         except (ValueError, AttributeError):

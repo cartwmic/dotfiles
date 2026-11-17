@@ -39,17 +39,20 @@ else:
 """
 
 FAKE_GH = """#!/usr/bin/env python3
-import base64, json, os, sys
+import json, os, sys
 d = json.load(open(os.path.join(os.environ["FAKE_GH_DIR"], "gh.json")))
 a = sys.argv[1:]
 if a[:2] == ["pr", "view"]:
-    if "body" in a:
-        print(d["body"])
-    else:
-        print(json.dumps({"files": [{"path": p} for p in d["files"]], "headRefOid": d["head"]}))
+    print(d["body"] if "body" in a else d["head"])
+elif a[0] == "api" and "--paginate" in a:
+    for p in d["files"]:
+        print(p)
 elif a[0] == "api":
     path = a[-1]
     name, ref = path.split("/contents/", 1)[1].split("?ref=")
+    if name in d.get("fail", {}):
+        print(d["fail"][name], file=sys.stderr)
+        sys.exit(1)
     if ref != d["head"] or name not in d["contents"]:
         print("gh: Not Found (HTTP 404)", file=sys.stderr)
         sys.exit(1)
@@ -102,8 +105,8 @@ class ReviewIntent(unittest.TestCase):
         env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir))
         return subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
 
-    def put_pr(self, *, files, contents, body="", head="abc123"):
-        (self.dir / "gh.json").write_text(json.dumps({"body": body, "files": files, "contents": contents, "head": head}), encoding="utf-8")
+    def put_pr(self, *, files, contents, body="", head="abc123", fail=None):
+        (self.dir / "gh.json").write_text(json.dumps({"body": body, "files": files, "contents": contents, "head": head, "fail": fail or {}}), encoding="utf-8")
 
     @staticmethod
     def marker(out):
@@ -191,7 +194,7 @@ class ReviewIntent(unittest.TestCase):
     ]
 
     def test_the_workstream_why_table(self):
-        ids = {1175, 1176, 1177, 5, 3, 2, 12, 30, 10}
+        ids = {1175, 1176, 1177, 5, 3, 2, 12, 30, 10, 2026, 11, 9}
         for i, (why, want) in enumerate(self.WHY_TABLE):
             with self.subTest(why=why):
                 self.put(asks=[ask(n, answer="a%d" % n) for n in ids] + [ask(500 + i, workstream="W%d" % i)],
@@ -209,6 +212,15 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(self.marker(r.stdout)[0], "7,1109,1233")
         self.assertIn("Cited because: approved_by of the lead type retro (leads/retro.json at the PR head)", r.stdout)
         self.assertIn("> a small set of tools", r.stdout)
+
+    def test_a_gh_failure_other_than_not_found_is_an_error_not_a_skip(self):
+        self.put(asks=[ask(1109), ask(1233), ask(7)])
+        self.put_pr(files=["leads/retro.json"], contents={"leads/retro.json": self.LEADS}, body="ask #7", fail={"leads/retro.json": "gh: API rate limit exceeded (HTTP 403)"})
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#4")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("could not read leads/retro.json", r.stderr)
+        self.assertIn("HTTP 403", r.stderr)
+        self.assertEqual(r.stdout, "")
 
     def test_a_pr_that_touches_no_lead_type_adds_nothing(self):
         self.put(asks=[ask(1109), ask(7)])
