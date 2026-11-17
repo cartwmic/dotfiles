@@ -48,8 +48,8 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: apt packages for the Linux suites (zsh, lsof, rsync, openssh-server)
-        run: sudo apt-get install -y -qq zsh lsof rsync openssh-server >/dev/null
+      - name: apt packages for the Linux suites (zsh, lsof, rsync, openssh-server, bubblewrap)
+        run: sudo apt-get install -y -qq zsh lsof rsync openssh-server bubblewrap >/dev/null
       - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
 
