@@ -1084,6 +1084,10 @@ class WorkerInstructionsTest(unittest.TestCase):
 # --- the homelab chat seat: instance, settings file, MCP file, and the hook command's fail-closed shape (the hook's own rules are tests/homelab-chat) ---
 
 HOOK_SCRIPT = REPO / "dot_local/share/agent-harness/hooks/homelab_chat_allowlist.py"
+def bash_call(command):
+    return {"tool_name": "Bash", "tool_input": {"command": command}}
+
+
 ALLOWED_CALL = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "python3 ~/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py queue"}}
 DENIED_CALL = {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "/x", "old_string": "a", "new_string": "b"}}
 

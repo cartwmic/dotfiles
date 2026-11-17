@@ -51,8 +51,8 @@ class HookCase(unittest.TestCase):
 class BashTest(HookCase):
     def test_every_listed_bot_verb_passes_in_both_path_forms(self):
         verbs = ["sonarr lookup 'Graham Norton'", "sonarr add --tvdb-id 80660", "sonarr monitor 5 --all-seasons", "sonarr episodes 5 --season 2", "sonarr episode-search 11 12",
-                 "radarr lookup Dune", "radarr add --tmdb-id 5", "radarr monitor 3 --search", "readarr lookup --kind ebook 'The Good Daughter'", "readarr add --foreign-id 1",
-                 "queue", "download status", "download status --title Dune", "jellyfin search Dune",
+                 "radarr lookup Dune", "radarr add --tmdb-id 5", "radarr monitor 3 --search", "readarr lookup --kind ebook 'The Good Daughter'", "readarr add --kind ebook --foreign-book-id 1",
+                 "queue", "download status", "download status Dune", "jellyfin search Dune",
                  "kube get pods -n sonarr", "kube describe pod x -n sonarr", "kube logs x -n sonarr --tail 50", "kube top pods", "kube events -n sonarr"]
         for path in (BOT, BOT_ABS):
             for verb in verbs:

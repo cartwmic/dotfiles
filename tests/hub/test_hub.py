@@ -504,8 +504,8 @@ class ApplyPathTest(unittest.TestCase):
         settled["worktreesDirectory"] = "/Volumes/Workshop/macbook/t3-worktrees" if sys.platform == "darwin" else "%s/t3-worktrees" % self.home
         # the four seat-* instances are there too (tests/t3-hub covers them); everything else is byte for byte what the hub-off script leaves
         no_seats = json.loads(baseline[".t3/userdata/settings.json"])
-        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer") + (("pi", "pi-lead") if sys.platform == "linux" else ()):
-            self.assertIn(sid, no_seats["providerInstances"])  # pi and pi-lead are the Linux-only instances
+        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer") + (("pi", "pi-lead", "seat-homelab-chat") if sys.platform == "linux" else ()):
+            self.assertIn(sid, no_seats["providerInstances"])  # pi, pi-lead and seat-homelab-chat are the Linux-only instances
             del no_seats["providerInstances"][sid]
         self.assertEqual(json.dumps(no_seats, indent=2, ensure_ascii=False), json.dumps(settled, indent=2, ensure_ascii=False))
         self.assertEqual(baseline[".codex/config.toml"], self.CODEX_BASE)
