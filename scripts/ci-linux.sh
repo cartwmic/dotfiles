@@ -73,6 +73,7 @@ python3 scripts/ci-par.py \
   tests/agent-kill-guard \
   tests/config-show \
   tests/stop-running-jobs \
+  tests/homelab-chat \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
   tests/shx \
