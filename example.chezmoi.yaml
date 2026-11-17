@@ -35,10 +35,18 @@ data:
   #   enabled: true
   #   machine: work    # the machine label on every series: personal / work by default
   #   endpoint: https://otel-collector.internal.cartwmic.com/v1/metrics
+  #   export: false    # build the local database but send nothing (a machine whose launchd node cannot reach the collector: macOS Local Network block, symptom EHOSTUNREACH); default true
   #   engine: ts       # ts is the only engine (agent-events runs the agent-kit port); kept so existing data files render. python fails the render. ts needs agentKit.enabled
   # Pinned agent-kit install for the agent-traces CLI (~/.local/bin/agent-traces; dot_local/share/agent-kit). On by default on personal only.
   # The install is `npm ci` from GitHub Packages with `gh auth token`. enabled: false (or any other profile) leaves the wrapper exiting 3.
   # agentKit:
+  #   enabled: true
+  # gh wrapper (docs/gh-wrapper.md): the one gh wrapper is installed on both desktop profiles. enabled switches its layers (call log, watch interval, budget guard).
+  # Default: true on personal, false on axon-work-computer. leakGuard (axon-work-computer only; docs/leak-guard.md) lists the repositories its text check guards.
+  # ghBudget:
+  #   enabled: true
+  # A personal Mac with no Workshop SSD (docs/agent-scratch.md) sets enabled: false; every other machine leaves it out (default true).
+  # workshop:
   #   enabled: true
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}

@@ -76,6 +76,10 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(env_of(text), {"AGENT_EVENTS_OTLP_ENDPOINT": "https://x.example/v1/metrics", "AGENT_EVENTS_MACHINE": "work-laptop",
                                         "AGENT_TRACES_ALLOW_PRODUCTION_WRITE": "1"})
 
+    def test_export_false_leaves_the_endpoint_out(self):
+        text = render(SERVICE, data="agentEvents: {export: false}")[0].stdout
+        self.assertEqual(env_of(text), {"AGENT_EVENTS_MACHINE": "personal", "AGENT_TRACES_ALLOW_PRODUCTION_WRITE": "1"})
+
     def test_the_settings_match_the_launch_agent_for_the_same_data(self):
         # One source of the values: the unit never spells the endpoint or the label itself.
         self.assertNotIn("otel-collector", SERVICE.read_text().split("\n", 1)[1].replace("{{", ""), "no endpoint hard-coded in the unit")

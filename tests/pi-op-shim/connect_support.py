@@ -3,7 +3,7 @@
 The real shim runs as a process. A fake op is first on PATH after the shim's own directory. For each call it appends a block
 to FAKE_OP_LOG: a 'call' line, then key=value lines (HOME, cwd, token, connect, connect_host, stdin), then one arg= line per
 argument. The token and Connect token are recorded as match, other or unset, never as a value. FAKE_CONNECT_MODE says what a
-call with a Connect token does: ok (print FAKE_CONNECT_OUT), fail (print FAKE_CONNECT_PARTIAL, an error, exit
+call with a Connect token does: ok (print FAKE_CONNECT_OUT, then wait FAKE_CONNECT_LINGER seconds if set), fail (print FAKE_CONNECT_PARTIAL, an error, exit
 FAKE_CONNECT_EXIT) or hang (sleep). A call without one prints FAKE_SA_OUT and exits FAKE_SA_EXIT.
 
 Every test points OP_CONNECT_TOKEN_FILE at a file that does not exist unless the test writes one, so the real home's
@@ -42,7 +42,7 @@ FAKE_OP = r"""#!/bin/sh
 } >> "$FAKE_OP_LOG"
 if [ -n "${OP_CONNECT_TOKEN-}" ]; then
   case "${FAKE_CONNECT_MODE:-ok}" in
-    ok) printf '%s' "${FAKE_CONNECT_OUT:-from-connect}"; exit 0 ;;
+    ok) printf '%s' "${FAKE_CONNECT_OUT:-from-connect}"; [ -z "${FAKE_CONNECT_LINGER-}" ] || sleep "$FAKE_CONNECT_LINGER"; exit 0 ;;
     fail)
       printf '%s' "${FAKE_CONNECT_PARTIAL-}"
       echo "[ERROR] ${FAKE_CONNECT_ERROR:-connection refused}" >&2

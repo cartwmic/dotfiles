@@ -37,6 +37,8 @@ def save():
 save()
 with open(os.environ["FAKE_CALL_LOG"], "a") as call_log:  # one ordered log shared with the scripted gates
     call_log.write(" ".join(["gh"] + args) + "\n")
+with open(os.environ["FAKE_GH_ENV_LOG"], "a") as env_log:  # what each gh call's environment said: the urgency test reads it
+    env_log.write(json.dumps({"args": args, "urgent": os.environ.get("GH_URGENT"), "caller": os.environ.get("GH_CALLER")}) + "\n")
 if args[0] == "pr":
     prs = state.setdefault("prs", [])
     def opt(name):
@@ -156,8 +158,8 @@ class BumpTests(Fixture):
                 "XDG_CONFIG_HOME": str(self.home / ".config"), "XDG_CACHE_HOME": str(self.home / ".cache"),
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_GH_STATE": str(self.state_path),
                 "FAKE_MISE_STATE": str(self.dir / "mise.json"), "LOOP_ENGINE_BUMP_POLL_SECONDS": "0",
-                "FAKE_CALL_LOG": str(self.dir / "calls.log"), "FAKE_GATE_REFUSE": self.refuse,
-                "TMPDIR": str(self.dir), **self.git_env}
+                "FAKE_CALL_LOG": str(self.dir / "calls.log"), "FAKE_GH_ENV_LOG": str(self.dir / "gh-env.jsonl"),
+                "FAKE_GATE_REFUSE": self.refuse, "TMPDIR": str(self.dir), **self.git_env}
 
     def sh(self, *cmd, cwd=None):
         result = subprocess.run([str(c) for c in cmd], cwd=cwd, env=self.env(), capture_output=True, text=True, timeout=120)
@@ -237,6 +239,18 @@ class BumpTests(Fixture):
         self.assertEqual(self.log_lines()[-1]["outcome"], "stopped")
 
     # d1 -------------------------------------------------------------------------------------------
+
+    def test_every_gh_call_of_a_bump_is_urgent_and_names_the_script(self):
+        # Reads too (pr list, pr checks, pr view, release view), not only the merge: the gh budget guard never refuses a
+        # GH_URGENT=1 call, and GH_CALLER names the script in the gh wrapper's log.
+        self.world()
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in (self.dir / "gh-env.jsonl").read_text().splitlines()]
+        verbs = {tuple(c["args"][:2]) for c in calls}
+        for verb in (("pr", "list"), ("pr", "checks"), ("pr", "create"), ("pr", "view"), ("pr", "merge")):
+            self.assertIn(verb, verbs)
+        self.assertEqual({(c["urgent"], c["caller"]) for c in calls}, {("1", "loop_engine_bump")})
 
     def test_d1_happy_path_one_pr_one_merge_only_the_pr_targets_applied(self):
         self.world()

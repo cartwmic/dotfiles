@@ -1,11 +1,14 @@
 {{- /*
   The Claude Code settings file for one agent seat (~/.claude/fleet/seat-<seat>.json). Call:
     {{ includeTemplate "fleet_seat" (dict "seat" "lead" "ctx" .) }}
-  Every seat: the Artifact tool is denied, claude.ai skills and Claude Code's bundled skills are off, and every personal skill is "off"
-  unless this seat keeps it. The skills are the union of two listings, each a directory with a SKILL.md: the canonical skills in this source tree
-  (dot_local/share/agent-harness/canonical/skills) and what is under ~/.claude/skills at apply time. The source listing is there because chezmoi
-  writes this file BEFORE apply_harness_config.sh (a run_onchange_after script) links a newly added canonical skill into ~/.claude/skills; with only
-  the second listing, a skill added by the same pull was missing from every seat file until the next apply, and `chezmoi diff` kept showing it.
+  Every seat: the Artifact tool is denied, claude.ai skills are off, Claude Code's bundled skills are off except workflow-authoring on the lead and coordinator (see $bundledOff below), and every personal skill is "off"
+  unless this seat keeps it. The skills are the union of three listings, each a directory with a SKILL.md: the canonical skills in this source tree
+  (dot_local/share/agent-harness/canonical/skills), the skills this source links in later (archive externals and model-fit, below), and what is under
+  ~/.claude/skills at apply time. The first two are there because chezmoi writes this file BEFORE apply_harness_config.sh (a run_onchange_after script)
+  links them into ~/.claude/skills; with only the last listing, a skill added by the same pull, or any skill on a first apply, was missing from every
+  seat file until the next apply, and `chezmoi diff` kept showing it. What the last listing still supplies exists before any apply: the skills the
+  OS or the desktop installs (omarchy's, superwhisper) and hand installs. The work profile's private playbook skills are named in a private repo, so
+  they still show from the second apply.
   skillOverrides has no wildcard. A skill that arrives some other way (the review-map external, the private playbook's skills, a hand install)
   shows in the listing until the next apply.
   Keep-lists: the skills the seat called at least once between 2026-11-11 18:00Z and 2026-11-13 (tool-call counts in the token baseline),
@@ -21,7 +24,8 @@
       "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "hill-climb" "no-ai-slop" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
       "builder" (list "correcting-repeated-mistakes" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "designing-the-smallest-version" "no-ai-slop")
-      "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine") -}}
+      "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine")
+      "homelab-chat" (list) -}}
 {{- /* The seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs (SkillRequiresTest). */ -}}
 {{- range $seat := list "lead" "builder" -}}{{- $_ := set $keeps $seat (concat (get $keeps $seat) (list "reviewing-prs" "triaging-automated-review")) -}}{{- end -}}
 {{- if not (hasKey $keeps .seat) -}}{{ fail (printf "fleet_seat: unknown seat %q" .seat) }}{{- end -}}
@@ -33,6 +37,15 @@
 {{-   $name := base (dir $f) -}}
 {{-   if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
 {{- end -}}
+{{- /* The skills this same apply links into ~/.claude/skills later (apply_harness_config.sh, run script 20), named from the source so a first apply renders the same file as a second one:
+  archive externals (the skills/<name> globs in the "include" lines of .chezmoiexternal.toml) and the coordinator's model-fit (a source symlink into the coordinator checkout, linked only where that checkout has the skill). */ -}}
+{{- range $name := regexFindAll `include = \["\*/skills/([a-z0-9-]+)/\*\*"\]` (include ".chezmoiexternal.toml") -1 -}}
+{{-   $name = regexReplaceAll `^.*/skills/([a-z0-9-]+)/.*$` $name "${1}" -}}
+{{-   if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
+{{- end -}}
+{{- if stat (joinPath (includeTemplate "instance_repo" (dict "root" .ctx "name" "coordinator")) "skills/model-fit/SKILL.md") -}}
+{{-   if not (has "model-fit" $keep) -}}{{- $_ := set $off "model-fit" "off" -}}{{- end -}}
+{{- end -}}
 {{- /* ~/.claude/skills: a directory or a symlink to one (omarchy's skills are symlinks, which a glob through them would not match) */ -}}
 {{- range $p := glob (joinPath .ctx.chezmoi.homeDir ".claude/skills/*") -}}
 {{-   if stat (joinPath $p "SKILL.md") -}}
@@ -40,9 +53,35 @@
 {{-     if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
 {{-   end -}}
 {{- end -}}
-{{- $seatFile := dict "permissions" (dict "deny" (list "Artifact")) "syncClaudeAiSkills" false "disableBundledSkills" true "skillOverrides" $off -}}
+{{- /* Claude Code's bundled skills stay ON, with every one but workflow-authoring turned off below. With disableBundledSkills true the Workflow tool's definition carries the whole
+  authoring reference (20.3K chars, about 8.3K tokens in every request); with bundled skills on, that reference is the bundled skill workflow-authoring and the tool text
+  is 3.5K chars. Measured 2026-11-16 on the seat-builder file, first-request input tokens: disableBundledSkills true 40,352; false with all bundled skills on 36,322; false with the
+  names below off and workflow-authoring on 34,064; false with workflow-authoring off too 40,255 (so it has to stay listed, about 0.1K, on the seats that keep the Workflow tool; the worker seats deny the tool and turn it off).
+  The names are the ones the installed binary (2.1.325) lists to the model with bundled skills on. A bundled skill added by a later Claude Code shows in every seat until
+  its name is added here: tests/t3-hub test_every_bundled_skill_is_off_or_workflow_authoring runs the binary and fails naming it. */ -}}
+{{- $bundledOff := list "artifact-design" "artifact-diagramming" "claude-api" "code-review" "dataviz" "fewer-permission-prompts" "init" "keybindings-help" "loop" "plugin-authoring" "run" "security-review" "simplify" "update-config" -}}
+{{- /* Builder, planner and reviewer deny the Workflow tool (below), so they have no use for workflow-authoring: it goes in their off list. The lead and the coordinator keep the tool, so they keep the skill listed. */ -}}
+{{- if has .seat (list "builder" "planner" "reviewer") -}}{{- $bundledOff = append $bundledOff "workflow-authoring" -}}{{- end -}}
+{{- range $name := $bundledOff -}}{{- if has $name $keep -}}{{ fail (printf "fleet_seat: seat %s keeps %q, which is also a Claude Code bundled skill turned off above; rename the kept skill or drop the name from $bundledOff" $.seat $name) }}{{- end -}}{{- $_ := set $off $name "off" -}}{{- end -}}
+{{- /* Builder, planner and reviewer: four tools they do not use are denied, which takes them out of the tools array (4,898 tokens, measured in every request). ReportFindings (typed review findings for a host UI),
+  ScheduleWakeup (/loop pacing; sleeping and polling are against the rules), ListAgents, and Workflow (needs an explicit opt-in; 1,993 tokens even with workflow-authoring on). Counts 2026-11-14..16, main sessions:
+  none of the four called in the planner and reviewer seats; the builder called ScheduleWakeup 8 times and ListAgents 3 times (polling and a listing it can do without), Workflow once. The lead and the coordinator
+  keep all four: leads drive workflows and loops. Probe and numbers: coordinator-workspace token-efficiency/build-1116/L5/PROBE.md. */ -}}
+{{- $deny := list "Artifact" -}}
+{{- if has .seat (list "builder" "planner" "reviewer") -}}{{- $deny = concat $deny (list "ListAgents" "ReportFindings" "ScheduleWakeup" "Workflow") -}}{{- end -}}
+{{- $seatFile := dict "permissions" (dict "deny" $deny) "syncClaudeAiSkills" false "disableBundledSkills" false "skillOverrides" $off -}}
+{{- /* Builder, planner and reviewer only: ~/.claude/CLAUDE.md (with the hindsight memory guide) is not loaded; the same text without the guide comes from the worker folder (claudeMdExcludes only skips this one file). The T3 instance adds --add-dir and CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 (modify_settings.json.tmpl) and tests/t3-hub keeps the three halves together: an exclude without them would leave the seat with no user instructions at all. */ -}}
+{{- if has .seat (list "builder" "planner" "reviewer") -}}
+{{-   $_ := set $seatFile "claudeMdExcludes" (list (joinPath .ctx.chezmoi.homeDir ".claude" "CLAUDE.md")) -}}
+{{- end -}}
 {{- /* Builder only: a Stop hook that refuses to stop while a run-and-wake or kgate job this thread started still runs (hooks/stop_running_jobs.py; Retro proposal 12, playbook rule 19e13f7b). It fails open: a missing script or python3 allows the stop. */ -}}
 {{- if eq .seat "builder" -}}
 {{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" `g="$HOME/.local/share/agent-harness/hooks/stop_running_jobs.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0`))))) -}}
+{{- end -}}
+{{- /* Homelab chat seat only: a PreToolUse hook on every tool that allows the calls on the seat's list and denies the rest (hooks/homelab_chat_allowlist.py; Michael's requirement, ledger asks #1228). In Claude Code only exit 2 blocks a call, so the command turns a missing script, a missing python3 and any crash into exit 2. The seat keeps no skills; the hook denies the Skill tool in any case. */ -}}
+{{- if eq .seat "homelab-chat" -}}
+{{-   $script := joinPath .ctx.chezmoi.homeDir ".local/share/agent-harness/hooks/homelab_chat_allowlist.py" -}}
+{{-   $command := printf `g=%q; [ -r "$g" ] || { echo "homelab-chat tool list: the hook script is missing; every tool call is denied" >&2; exit 2; }; python3 -I "$g"; [ $? -eq 0 ] || exit 2` $script -}}
+{{-   $_ := set $seatFile "hooks" (dict "PreToolUse" (list (dict "matcher" "*" "hooks" (list (dict "type" "command" "command" $command))))) -}}
 {{- end -}}
 {{- $seatFile | toPrettyJson }}

@@ -20,6 +20,9 @@ if launchctl bootstrap "gui/$uid" "$plist"; then
 else
   log WARN "could not load the agent (no GUI session?); load it later: launchctl bootstrap gui/$uid $plist"
 fi
+{{- if hasKey (includeTemplate "agent_events_config" . | fromJson) "export" }}
+log INFO "agentEvents.export is false: the tick builds the local database and sends nothing (no endpoint is set); agent-events status says so"
+{{- end }}
 {{- else }}
 # agentEvents.enabled is false: .chezmoiignore leaves the plist alone, so this script unloads the job, then removes the plist.
 # A failed unload fails the apply and keeps the plist, so the next apply runs this again.

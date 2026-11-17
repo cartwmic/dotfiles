@@ -45,6 +45,8 @@ python3 scripts/ci-par.py \
   tests/instructions-profile \
   tests/pi-settings-render \
   tests/release-skills \
+  tests/pr-body-check \
+  tests/review-intent \
   'dot_local/share/session-recap:test_*.py' \
   tests/pi-op-shim \
   tests/seed-op-connect-token \
@@ -71,7 +73,9 @@ python3 scripts/ci-par.py \
   tests/agent-browser \
   tests/dotfiles-update \
   tests/agent-kill-guard \
+  tests/config-show \
   tests/stop-running-jobs \
+  tests/homelab-chat \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
   tests/shx \
@@ -80,9 +84,11 @@ python3 scripts/ci-par.py \
   tests/t3-hook \
   tests/agent-host \
   tests/t3-hub \
+  tests/t3-service \
   tests/pi-lead \
   tests/hub \
   tests/pnpm-store \
+  tests/workshop-enabled \
   tests/leak-guard \
   tests/agent-docker \
   tests/ssh-probe \

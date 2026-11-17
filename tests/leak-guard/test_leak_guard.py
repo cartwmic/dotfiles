@@ -29,6 +29,13 @@ if mode == "clean":
     result('{"leak": false, "findings": []}')
 elif mode == "leak":
     result('{"leak": true, "findings": [{"file": "notes.txt", "line": 1, "text": "the pretend employer", "why": "names the employer"}]}')
+elif mode == "flagnames":
+    # A judge that reports every FAKE_FLAG name it finds in the change, as the real one reports a name that looks like a work detail.
+    # FAKE_REPORT names are reported whether or not the change holds them. FAKE_NONAME leaves the "name" key out.
+    seen = open(os.path.join(fake, "stdin.txt")).read()
+    names = [n for n in os.environ.get("FAKE_FLAG", "").split(",") if n and n in seen] + [n for n in os.environ.get("FAKE_REPORT", "").split(",") if n]
+    found = [{"file": "notes.txt", "line": 1, "text": "mentions " + n, "why": "looks like a work detail", **({} if os.environ.get("FAKE_NONAME") else {"name": n})} for n in names]
+    result(json.dumps({"leak": bool(found), "findings": found}))
 elif mode == "contradict":
     result('{"leak": false, "findings": [{"file": "notes.txt", "line": 1, "text": "x", "why": "looks like the employer"}]}')
 elif mode == "badfindings":
@@ -1087,6 +1094,115 @@ class PrePush(Base):
         self.assertEqual(run("ls-remote", "--heads", str(self.remote), "feature").stdout.strip(), "", "nothing reached the remote")
         ok = run("push", "-q", "origin", "feature", "--no-verify")
         self.assertEqual(ok.returncode, 0, ok.stderr)
+
+
+class NamesTheRepoAlreadyHolds(Base):
+    """Layer 2 judges names, and a name the repository already publishes is not a new leak. Halcyon is invented: it is not a layer-1 term, so only layer 2 can object to it.
+    The fake judge reports every FAKE_FLAG name it sees, so whether a report blocks is decided by the guard."""
+
+    def setUp(self):
+        super().setUp()
+        self.remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)], check=True)
+        self.git("remote", "add", "origin", str(self.remote))
+        self.holds("docs.txt", "The Halcyon tools live here\nand fooco is a pretend term\n")
+
+    def holds(self, name, text):
+        """Commit a file to main and publish it: the repository now holds its words."""
+        (self.repo / name).write_text(text)
+        self.git("add", name)
+        self.git("commit", "-q", "-m", "docs", "--no-verify")
+        self.git("push", "-q", "origin", "main", "--no-verify")
+
+    def judge(self, *flag, **more):
+        return {"FAKE_CLAUDE": "flagnames", "FAKE_FLAG": ",".join(flag), **more}
+
+    def push(self, tip):
+        return self.guard("pre-push", "origin", str(self.remote), stdin="refs/heads/feature %s refs/heads/feature %s\n" % (tip, ZERO), env=self.env)
+
+    def test_a_name_the_head_already_holds_is_not_a_leak_and_is_reported_as_skipped(self):
+        self.stage("notes.txt", "see the Halcyon docs\n")
+        done = self.guard("pre-commit", env=self.judge("Halcyon"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("skipped, its name is already in the repository: notes.txt:1: Halcyon", done.stderr)
+        rec = self.log()[-1]
+        self.assertEqual((rec["verdict"], rec["layer"], rec["findings"], rec["known_skipped"]), ("pass", 2, 0, 1))
+        self.assertNotIn("Halcyon", (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text())
+
+    def test_a_name_the_head_does_not_hold_still_blocks(self):
+        self.stage("notes.txt", "see the Zephyrine docs\n")
+        done = self.guard("pre-commit", env=self.judge("Zephyrine"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("BLOCKED by Claude (layer 2): 1 finding(s)", done.stderr)
+        self.assertNotIn("skipped", done.stderr)
+
+    def test_a_known_and_a_new_name_in_one_change_block_on_the_new_one_only(self):
+        self.stage("notes.txt", "Halcyon and Zephyrine\n")
+        done = self.guard("pre-commit", env=self.judge("Halcyon", "Zephyrine"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("BLOCKED by Claude (layer 2): 1 finding(s)", done.stderr)
+        self.assertIn("skipped, its name is already in the repository: notes.txt:1: Halcyon", done.stderr)
+        self.assertEqual(self.log()[-1]["known_skipped"], 1)
+
+    def test_a_name_added_by_this_same_commit_is_new(self):
+        self.stage("one.txt", "Zephyrine\n")
+        self.stage("notes.txt", "see Zephyrine\n")
+        self.assertEqual(self.guard("pre-commit", env=self.judge("Zephyrine")).returncode, 1)
+
+    def test_a_finding_with_no_name_or_a_name_the_change_does_not_hold_blocks(self):
+        self.stage("notes.txt", "see the Halcyon docs\n")
+        self.assertEqual(self.guard("pre-commit", env=self.judge("Halcyon", FAKE_NONAME="1")).returncode, 1)
+        self.assertEqual(self.guard("pre-commit", env={"FAKE_CLAUDE": "flagnames", "FAKE_REPORT": "Halcyon"}).returncode, 0, "control: the change holds Halcyon")
+        self.stage("notes.txt", "a quiet sentence\n")
+        done = self.guard("pre-commit", env={"FAKE_CLAUDE": "flagnames", "FAKE_REPORT": "Halcyon"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertEqual(self.guard("pre-commit", env={"FAKE_CLAUDE": "leak"}).returncode, 1, "a finding with no name field at all")
+
+    def test_a_layer_1_term_the_repository_holds_still_blocks(self):
+        self.stage("notes.txt", "fooco again\n")
+        done = self.guard("pre-commit", env=self.judge("fooco"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("BLOCKED by the terms list (layer 1)", done.stderr)
+        self.assertEqual(self.calls(), 0)
+
+    def test_text_mode_has_no_base_so_a_flagged_name_blocks(self):
+        (self.tmp / "body.md").write_text("see the Halcyon docs\n")
+        done = self.guard("text", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+
+    def test_a_push_skips_a_name_the_remote_already_holds(self):
+        self.git("checkout", "-q", "-b", "feature")
+        (self.repo / "notes.txt").write_text("see the Halcyon docs\n")
+        self.git("add", "notes.txt")
+        self.git("commit", "-q", "-m", "mention", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        self.env = self.judge("Halcyon")
+        done = self.push(tip)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("skipped, its name is already in the repository: notes.txt:1: Halcyon", done.stderr)
+
+    def test_a_push_blocks_a_name_an_earlier_unpushed_commit_added(self):
+        self.git("checkout", "-q", "-b", "feature")
+        for name, text in (("one.txt", "Zephyrine\n"), ("two.txt", "see Zephyrine\n")):
+            (self.repo / name).write_text(text)
+            self.git("add", name)
+            self.git("commit", "-q", "-m", "add " + name, "--no-verify")
+        self.env = self.judge("Zephyrine")
+        done = self.push(self.git("rev-parse", "HEAD").stdout.strip())
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("BLOCKED by Claude (layer 2)", done.stderr)
+
+    def test_a_push_does_not_count_a_name_only_in_the_local_checkout(self):
+        self.git("checkout", "-q", "-b", "feature")
+        (self.repo / "local.txt").write_text("Quillon\n")
+        self.git("add", "local.txt")
+        self.git("commit", "-q", "-m", "local", "--no-verify")
+        self.git("reset", "-q", "--hard", "HEAD~1")        # gone from the branch, and the remote never had it
+        (self.repo / "notes.txt").write_text("see Quillon\n")
+        self.git("add", "notes.txt")
+        self.git("commit", "-q", "-m", "mention", "--no-verify")
+        self.env = self.judge("Quillon")
+        self.assertEqual(self.push(self.git("rev-parse", "HEAD").stdout.strip()).returncode, 1)
 
 
 if __name__ == "__main__":

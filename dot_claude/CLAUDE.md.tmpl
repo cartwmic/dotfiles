@@ -1,16 +1,1 @@
-# User-level instructions for Claude Code
-
-These apply across every project. Project-level `CLAUDE.md` files override
-or extend these as usual.
-
-{{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
-{{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" -}}
-{{ if eq .profile "axon-work-computer" }}
-{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl" . -}}
-{{ end -}}
-{{ if eq .profile "axon-work-computer" }}
-{{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" -}}
-{{ end -}}
-{{ if eq .profile "personal" }}
-{{ include "dot_local/share/agent-harness/canonical/instructions/profile-personal.md" -}}
-{{ end -}}
+{{ includeTemplate "claude_instructions" (dict "ctx" . "guide" true) -}}

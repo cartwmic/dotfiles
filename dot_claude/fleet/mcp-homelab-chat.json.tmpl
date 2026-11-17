@@ -1,0 +1,3 @@
+{{- /* The homelab chat seat's MCP servers: hindsight only (Michael's tool list, ledger decision #3441), taken from the canonical file so the URL and headers have one home. The instance starts Claude with --strict-mcp-config --mcp-config this file; T3 adds its own t3-code server. */ -}}
+{{- $all := includeTemplate "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl" . | fromJson -}}
+{{- dict "mcpServers" (pick $all.mcpServers "hindsight") | toPrettyJson }}

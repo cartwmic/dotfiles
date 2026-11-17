@@ -4,4 +4,5 @@
 [Service]
 # SHELL: the user manager took SHELL=/bin/bash from passwd before chsh, and agents' Bash tool runs $SHELL; the 1Password service-account token and the op shim live in ~/.zshenv, which only zsh reads.
 Environment=SHELL=/usr/bin/zsh
-Environment=PATH={{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin
+# The gh wrapper's bin directory comes first, so gh calls from this unit and its agents reach the wrapper before the real gh.
+Environment=PATH={{ $home }}/.local/share/gh-wrapper/bin:{{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin

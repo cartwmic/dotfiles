@@ -189,10 +189,17 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (or (eq .chezmoi.os "darwin") (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}
-# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher and the MCP server launcher; the MCP entry is gated the same way in servers.json.tmpl.
+# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher that Browse (personal) and browser-harness (work) drive.
 .local/bin/agent-chrome
+{{- end }}
+
+{{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
+# browser-harness (the work Mac's browser tool): its MCP server launcher and its pi-mcp-lazy seed. The MCP entry is gated the same way in servers.json.tmpl. The personal profile uses Browse instead (docs/profiles.md).
 .local/share/browser-harness-mcp
 .local/share/browser-harness-mcp/**
+{{- end }}
+{{- if ne .profile "axon-work-computer" }}
+.local/share/pi-mcp-lazy/seed/browser-harness.json
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
@@ -273,6 +280,9 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 .local/share/instances/systemd
 .local/share/instances/systemd/**
 .local/user_scripts/instances_reconcile_systemd.sh
+# The unit's PATH drop-in (the gh wrapper's bin directory first): personal Linux, with the unit.
+.config/systemd/user/coordinatord.service.d
+.config/systemd/user/coordinatord.service.d/**
 {{- end }}
 
 {{- if and (ne .chezmoi.os "darwin") (not (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}
@@ -305,6 +315,16 @@ Library/**
 {{- end }}
 
 {{- if ne .profile "personal" }}
+# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal only. A new Chrome extension with debugger access to every site is something the employer might care about, so it is asked before the work Mac gets it (rule 272f08d0). The pin, the download helper, the sign-in helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
+.config/mise/conf.d/browse.toml
+.local/bin/agent-download
+.local/bin/agent-login
+.local/share/agent-harness/canonical/skills/using-browse
+.local/share/agent-harness/canonical/skills/using-browse/**
+91_browse_setup.sh
+{{- end }}
+
+{{- if ne .profile "personal" }}
 # agentsview session viewer (README, "AI Tools"): personal only. Session browsing on the work Mac is asked first (docs/profiles.md).
 .config/mise/conf.d/agentsview.toml
 .local/share/agentsview
@@ -325,6 +345,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .local/user_scripts/loop_engine_bump.py
 # pr-body-check runs the coordinator checkout's script for the personal-only merge and PR-body rules (docs/profiles.md).
 .local/bin/pr-body-check
+# The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).
+.local/bin/coordinator
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
 .pi/agent/extensions/claude-compat-guard
@@ -362,6 +384,24 @@ Library/Preferences/pnpm/**
 .local/share/agent-scratch/**
 # video-rename: a personal media task on the personal Mac (README.md, "video-rename").
 .local/bin/video-rename
+{{- end }}
+
+{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") (not (includeTemplate "workshop_config" . | fromJson).enabled) }}
+# A personal Mac with no Workshop SSD (local data workshop.enabled: false, docs/profiles.md): none of the Workshop pieces. The pnpm store files, the agent
+# scratch env file (dot_zshenv sources it only when it exists), its create script and move script, the cargo shim that puts target dirs under AGENT_TMP,
+# the Spotlight script and heavy-gate's volumes file.
+.config/pnpm
+.config/pnpm/**
+Library/Preferences/pnpm
+Library/Preferences/pnpm/**
+.config/agent-scratch
+.config/agent-scratch/**
+81_agent_scratch_workshop.sh
+80_spotlight_off_workshop.sh
+.local/user_scripts/agent_tmp_move.py
+.local/share/agent-scratch
+.local/share/agent-scratch/**
+.config/heavy-gate/volumes
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
@@ -468,8 +508,6 @@ Library/Preferences/pnpm/**
 .local/bin/ntfy-zellij-notify.sh
 .local/bin/mistakes-report
 .local/bin/session-cost
-.local/share/browser-harness-mcp
-.local/share/browser-harness-mcp/**
 .local/share/initramfs-ssh-unlock
 .local/share/initramfs-ssh-unlock/**
 .local/share/mistakes-report
@@ -493,6 +531,11 @@ Library/Preferences/pnpm/**
 .config/mise/conf.d/linux.toml
 .config/mise/conf.d/qmd.toml
 .config/mise/conf.d/agentsview.toml
+.config/mise/conf.d/browse.toml
+.local/bin/agent-download
+.local/bin/agent-login
+.local/share/agent-harness/canonical/skills/using-browse
+.local/share/agent-harness/canonical/skills/using-browse/**
 .local/bin/qmd
 .local/bin/qmd-export
 .local/bin/qmd-refresh

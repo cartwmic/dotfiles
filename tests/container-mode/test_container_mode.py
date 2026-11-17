@@ -23,7 +23,8 @@ URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
 LEFT_OUT = [".codex", ".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
             ".config/mise/config.toml", ".config/mise/conf.d/linux.toml", ".local/bin/agent-chrome", ".local/bin/agent-desktop", ".local/bin/agent-session-copy",
-            ".local/share/browser-harness-mcp", ".local/share/initramfs-ssh-unlock"]
+            ".local/share/browser-harness-mcp", ".local/share/initramfs-ssh-unlock",
+            ".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/bin/agent-login", ".local/share/agent-harness/canonical/skills/using-browse"]
 HOOK_PRINT = json.dumps({"schema": 1, "entries": [{"event": "PreToolUse", "matcher": "^AskUserQuestion$", "args": [], "failClosed": False, "t3Only": False}]})
 HOOK = "console.log(process.argv.includes('--print-settings-json') ? %s : '');\n" % json.dumps(HOOK_PRINT)
 IMAGE_TOOLS = ("sh bash cat sed awk grep egrep tr head tail cut sort uniq dirname basename mktemp rm mkdir cp mv chmod ln wc tee uname env date sleep tar gzip find xargs "

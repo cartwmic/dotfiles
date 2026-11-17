@@ -1,4 +1,4 @@
-"""The gh wrapper (scripts/leak-guard-gh), as a process.
+"""The gh wrapper (scripts/gh-wrapper), as a process.
 
 The wrapper is copied to a bin directory as `gh`, ahead of a fake real `gh` on PATH. leak-guard is the real script and `claude` is a fake one.
 Every term and repository is invented: "fooco" is term 1, "bar.*baz" term 2, and `fooco-dev/guarded` the one guarded repository.
@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import pty
+import select
 import shutil
 import stat
 import subprocess
@@ -20,7 +21,8 @@ from unittest import mock
 from test_leak_guard import FAKE_CLAUDE
 
 ROOT = Path(__file__).resolve().parents[2]
-WRAPPER = ROOT / "scripts/leak-guard-gh"
+WRAPPER = ROOT / "scripts/gh-wrapper"
+LIB = ROOT / "scripts/gh-wrapper-lib"
 GUARD = ROOT / "dot_local/bin/executable_leak-guard"
 GUARDED = "fooco-dev/guarded"
 PLANTED = "an invented sentence naming fooco here"
@@ -35,6 +37,11 @@ d = os.environ["FAKE"]
 stdin = sys.stdin.read() if os.environ.get("FAKE_GH_STDIN") else ""
 with open(os.path.join(d, "gh-calls.jsonl"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin, "prompt_disabled": os.environ.get("GH_PROMPT_DISABLED")}) + "\\n")
+if os.environ.get("FAKE_GH_SLEEP"):
+    with open(os.path.join(d, "gh.pid"), "w") as f:
+        f.write(str(os.getpid()))
+    import time
+    time.sleep(float(os.environ["FAKE_GH_SLEEP"]))
 if os.environ.get("FAKE_GH_SIGNAL"):
     os.kill(os.getpid(), int(os.environ["FAKE_GH_SIGNAL"]))
 sys.stdout.write("real gh out\\n")
@@ -43,10 +50,28 @@ sys.exit(int(os.environ.get("FAKE_GH_EXIT", "0")))
 ''' % sys.executable
 
 
+def lib_copy(dest):
+    """The wrapper's lib directory, where the installed wrapper looks for it: ../lib next to its bin directory."""
+    shutil.copytree(LIB, dest, ignore=shutil.ignore_patterns("__pycache__"))
+
+
 def script_copy(src, dest):
     text = src.read_text().split("\n", 1)
     dest.write_text("#!%s\n%s" % (sys.executable, text[1]))
     dest.chmod(0o755)
+
+
+def spawn_ready(test, argv, timeout=20, **kw):
+    """Start a process and return it once it has said `ready` on its standard output, which it prints after it has started its program.
+    Read /proc/<pid> or ps for a process only after this: until its exec finishes, the kernel gives it no command line (it reads as empty) and no
+    environment. The process is killed and reaped when the test ends. A process that says nothing within `timeout` seconds fails the test."""
+    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kw)
+    test.addCleanup(child.stdout.close)
+    test.addCleanup(child.wait)
+    test.addCleanup(child.kill)
+    if not select.select([child.stdout], [], [], timeout)[0] or child.stdout.readline().strip() != "ready":
+        test.fail("%s never said ready within %ss" % (argv, timeout))
+    return child
 
 
 def load_wrapper():
@@ -86,6 +111,7 @@ class WrapperBase(unittest.TestCase):
         for d in (self.wbin, self.realbin, self.cbin, self.fake):
             d.mkdir()
         script_copy(WRAPPER, self.wbin / "gh")
+        lib_copy(self.tmp / "lib")
         script_copy(GUARD, self.tmp / "leak-guard")
         (self.realbin / "gh").write_text(FAKE_GH)
         (self.realbin / "gh").chmod(0o755)

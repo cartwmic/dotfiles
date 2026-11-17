@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Regenerate FLAGS and FLAGS_FROM_GH in scripts/leak-guard-gh from the installed gh. Work machine only; docs/leak-guard.md, Flag tables.
+"""Regenerate FLAGS and FLAGS_FROM_GH in scripts/gh-wrapper from the installed gh. A development tool (docs/leak-guard.md, Flag tables).
 
     leak-guard-gh-flags [--check] [--gh PATH] [--wrapper FILE]
 
-For every command already in the FLAGS table (the commands whose text the wrapper reads, and the command groups) it runs `gh <command> --help`, rewrites that
+For every command already in the FLAGS table (the commands whose text the wrapper reads, the commands whose flags it hands to the layers, and the command groups) it runs `gh <command> --help`, rewrites that
 command's row and sets FLAGS_FROM_GH to `gh --version`. It never adds or drops a command: a new command that carries text needs its entries in TEXT, COMPOSED
-and READ/NOTEXT by hand. For each command it prints the flags gh added and removed since the table was written. Classify every added flag before committing:
+and READ/NOTEXT by hand, and one a layer reads flags of needs its FOR_LAYERS entry. For each command it prints the flags gh added and removed since the table was written. Classify every added flag before committing:
 one that carries text goes in TEXT, one that makes gh write the text itself in COMPOSED, one that uploads a file (as --attach does) in the refusals of
 parse_text, because a flag in the table is accepted and its text read, and a flag that is not in it is refused for a guarded repository.
 
@@ -21,8 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-WRAPPER = Path(__file__).resolve().parent / "leak-guard-gh"
-MARK = b"leak-guard gh wrapper"
+WRAPPER = Path(__file__).resolve().parent / "gh-wrapper"
+MARK = b"gh wrapper (managed by chezmoi"
 FLAGS_BLOCK = re.compile(r"^FLAGS = \{\n.*?\n\}$", re.S | re.M)
 RELEASE_LINE = re.compile(r'^FLAGS_FROM_GH = ".*"$', re.M)
 

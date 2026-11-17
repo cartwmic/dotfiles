@@ -1,6 +1,6 @@
 {{- /* instance_repo: the checkout an instance runs from. Args: dict "root" . "name" "coordinator". Local data instances.<name>.repo wins. Dotfiles never clones it. */ -}}
 {{- $defaults := dict "coordinator" "/Volumes/Workshop/macbook/git/coordinator" -}}
-{{- if eq .root.chezmoi.os "linux" -}}
+{{- if or (eq .root.chezmoi.os "linux") (not (includeTemplate "workshop_config" .root | fromJson).enabled) -}}
 {{-   $defaults = dict "coordinator" (printf "%s/git/coordinator" .root.chezmoi.homeDir) -}}
 {{- end -}}
 {{- if eq .root.profile "axon-work-computer" -}}

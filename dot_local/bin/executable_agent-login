@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+// Type a login's username, password or one-time code into the field that has focus in the agent Chrome, without the 1Password
+// browser extension (docs: agent-harness README, "Agent browser"). Browse cannot reach the extension's popup; this reads the value
+// from the `developer` vault (through the op shim) and types it over the Chrome debug port.
+//   agent-login username|password|otp URLPART [--item ID_OR_TITLE]
+// The agent clicks the field with Browse first, so it has focus, then runs this.
+//   1. The one page of the agent Chrome (127.0.0.1:9333, AGENT_CHROME_PORT) whose URL contains URLPART. Not exactly one: exit 1, URLs listed.
+//   2. The Login in vault `developer` with a URL whose hostname is exactly that page's hostname (discord.com is not canary.discord.com).
+//      Only the URL's hostname counts (path and query are ignored, and never printed). Not exactly one: exit 1, titles with ids listed;
+//      --item (an id, or a title that is unique among them) picks one of several (it must still match the host).
+//   3. The value comes from `op item get`. Then, over the page's own debug socket, location.hostname must still equal the login's
+//      host and the focused element must be an input or textarea (a type=password input, for password). Only then Input.insertText.
+//      Any failed check types nothing and exits 1 with the reason. A value that is empty, ends with a newline or is op's "[use '..." notice
+//      is refused before anything is typed; after typing, the field's length must equal the value's, else the field is cleared and exit is 1.
+// The value is held in memory only: it is never printed, logged, put in a child's argv or environment, or written to disk. Stdout
+// says what was typed and where. Every run appends one line (UTC time, run id, elapsed, outcome, field, host, item title) to
+// ${XDG_STATE_HOME:-~/.local/state}/agent-login/agent-login.log.
+'use strict';
+const { execFile } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const VAULT = 'developer';
+const PORT = process.env.AGENT_CHROME_PORT || '9333';
+const USAGE = 'usage: agent-login username|password|otp URLPART [--item ID_OR_TITLE]';
+const RUN_ID = `${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}-${process.pid}`;
+const START = Date.now();
+const STATE = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state'), 'agent-login');
+
+class Refusal extends Error {}
+
+const seen = { field: '-', host: '-', item: '-' };   // what the log line names; filled in as the run learns it
+
+const record = (outcome) => {
+  const { field, host, item: title } = seen;
+  const line = `${new Date().toISOString()} run=${RUN_ID} elapsed=${Math.round((Date.now() - START) / 1000)}s ${outcome} field=${field} host=${host} item=${title}\n`;
+  try {
+    fs.mkdirSync(STATE, { recursive: true });
+    fs.appendFileSync(path.join(STATE, 'agent-login.log'), line);
+  } catch {}
+};
+
+const op = (args) => new Promise((resolve, reject) => {
+  execFile('op', args, { encoding: 'utf8', maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
+    if (err) reject(new Refusal(`op ${args.slice(0, 2).join(' ')} failed: ${(stderr || err.message).trim().split('\n')[0]}`));
+    else resolve(stdout);
+  });
+});
+
+// JSON.parse's own error quotes the start of its input, and op's output may be the value: a fixed message instead.
+const parseJson = (text, what) => {
+  try { return JSON.parse(text); } catch { throw new Refusal(`op did not return JSON for ${what}`); }
+};
+
+const hostOf = (href) => {
+  for (const candidate of [href, `https://${href}`]) {
+    try { return new URL(candidate).hostname.toLowerCase(); } catch {}
+  }
+  return null;
+};
+
+async function findPage(part) {
+  let targets;
+  try {
+    targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+  } catch {
+    throw new Refusal(`the agent Chrome does not answer on 127.0.0.1:${PORT} (start it: agent-chrome)`);
+  }
+  const pages = targets.filter((t) => t.type === 'page' && t.url.includes(part));
+  if (pages.length !== 1) {
+    const open = targets.filter((t) => t.type === 'page').map((t) => t.url);
+    throw new Refusal(`${pages.length} pages contain "${part}" (need exactly 1). ${pages.length ? 'Matching' : 'Open'} pages:\n  ${(pages.length ? pages.map((t) => t.url) : open).join('\n  ')}`);
+  }
+  return pages[0];
+}
+
+async function findLogin(host, wanted) {
+  const items = parseJson(await op(['item', 'list', '--vault', VAULT, '--categories', 'Login', '--format', 'json']), 'the login list');
+  const matches = items.filter((i) => (i.urls || []).some((u) => hostOf(u.href) === host));
+  if (!matches.length) throw new Refusal(`no login for ${host} in vault ${VAULT}`);
+  const list = (xs) => xs.map((i) => `${i.title} (${i.id})`).join(', ');   // titles are not unique, so each comes with its id; never a URL (a stored URL can carry a token)
+  const chosen = wanted ? matches.filter((i) => i.id === wanted || i.title === wanted) : matches;
+  if (wanted && !chosen.length) throw new Refusal(`--item ${wanted} is not one of the ${matches.length} logins for ${host}: ${list(matches)}`);
+  if (chosen.length !== 1) {
+    throw new Refusal(`${chosen.length} logins for ${host} in vault ${VAULT}: ${list(chosen)} (pick one with --item ID)`);
+  }
+  return chosen[0];
+}
+
+// A value that is not the credential must never be typed: op prints a notice where a concealed field was not revealed.
+function checked(value, item, field) {
+  if (typeof value !== 'string' || !value) throw new Refusal(`${item.title} has an empty ${field}`);
+  if (value.startsWith("[use '")) throw new Refusal(`op returned its notice instead of the ${field} of ${item.title} (the field was not revealed)`);
+  if (value.endsWith('\n')) throw new Refusal(`the ${field} of ${item.title} ends with a newline`);
+  return value;
+}
+
+async function readValue(field, item) {
+  const base = ['item', 'get', item.id, '--vault', VAULT];
+  // Exactly one trailing newline is op's own line end; anything else is the value's and is checked, not trimmed.
+  if (field === 'otp') return checked((await op([...base, '--otp'])).replace(/\n$/, ''), item, field);
+  // --format json: a plain single-field print can wrap a value with a comma or quote in CSV quotes. --reveal: a concealed field
+  // (the password) is otherwise replaced by a notice.
+  const args = field === 'password' ? [...base, '--fields', 'password', '--reveal', '--format', 'json'] : [...base, '--fields', 'username', '--format', 'json'];
+  return checked(parseJson(await op(args), `the ${field} of ${item.title}`).value, item, field);
+}
+
+function connect(url) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    const pending = new Map();
+    let n = 0;
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      if (m.error) p.reject(new Refusal(`Chrome refused ${p.method}: ${m.error.message}`));
+      else p.resolve(m.result);
+    };
+    ws.onerror = () => reject(new Refusal('could not attach to the page'));
+    ws.onclose = () => pending.forEach((p) => p.reject(new Refusal('the page closed')));
+    ws.onopen = () => resolve({
+      call: (method, params) => new Promise((res, rej) => {
+        pending.set(++n, { method, resolve: res, reject: rej });
+        ws.send(JSON.stringify({ id: n, method, params }));
+      }),
+      close: () => ws.close(),
+    });
+  });
+}
+
+// The element is held by reference (a CDP object id), so the checks, the read-back and the clear all act on the one element that
+// was checked and typed into, whatever has focus by then (a split code box or an auto-advancing page moves focus after typing).
+const INSPECT = `function () { return { host: location.hostname.toLowerCase(), tag: this.tagName, type: this.type ? String(this.type).toLowerCase() : '' }; }`;
+const FIELD_LENGTH = `function () { return this.value.length; }`;
+const CLEAR_FIELD = `function () { this.select(); document.execCommand('delete'); if (this.value) { this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); } }`;
+
+async function type(page, field, host, value) {
+  const cdp = await connect(page.webSocketDebuggerUrl);
+  try {
+    const { result: focused } = await cdp.call('Runtime.evaluate', { expression: 'document.activeElement' });
+    if (!focused.objectId) throw new Refusal('no input has focus (focused: nothing); click the field with Browse first');
+    const on = (functionDeclaration, returnByValue = true) => cdp.call('Runtime.callFunctionOn', { objectId: focused.objectId, functionDeclaration, returnByValue });
+    const now = (await on(INSPECT)).result.value;
+    if (now.host !== host) throw new Refusal(`the page is now on ${now.host}, not ${host}`);
+    if (!['INPUT', 'TEXTAREA'].includes(now.tag)) throw new Refusal(`no input has focus (focused: ${now.tag.toLowerCase()}); click the field with Browse first`);
+    if (field === 'password' && now.type !== 'password') throw new Refusal(`the focused field is type=${now.type || 'text'}, not a password field`);
+    await cdp.call('Input.insertText', { text: value });
+    // The field must now hold exactly what was typed. If not, clear it and say only the two lengths.
+    const after = (await on(FIELD_LENGTH)).result.value;
+    if (after !== value.length) {
+      await on(CLEAR_FIELD, false);
+      throw new Refusal(`the field holds ${after} characters after typing ${value.length}; it was cleared`);
+    }
+  } finally {
+    cdp.close();
+  }
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const field = argv[0];
+  let part = null;
+  let wanted = null;
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i] === '--item') wanted = argv[++i];
+    else if (part === null) part = argv[i];
+    else throw new Refusal(USAGE);
+  }
+  if (!['username', 'password', 'otp'].includes(field) || !part || wanted === undefined) throw new Refusal(USAGE);
+  seen.field = field;
+
+  const page = await findPage(part);
+  const host = seen.host = hostOf(page.url);
+  if (!host) throw new Refusal(`cannot read a hostname from ${page.url}`);
+  const item = await findLogin(host, wanted);
+  seen.item = item.title;
+  await type(page, field, host, await readValue(field, item));
+  record('typed');
+  console.log(`typed ${field} for ${item.title} on ${host}`);
+}
+
+main().then(() => process.exit(0), (e) => {
+  if (!(e instanceof Refusal)) e = new Refusal(e.message);
+  record(`refused: ${e.message.split('\n')[0]}`);
+  console.error(`[agent-login] ERROR: ${e.message}`);
+  process.exit(e.message === USAGE ? 2 : 1);
+});

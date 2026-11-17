@@ -116,9 +116,9 @@ install a service, set a password or read a secret. Any change to the
 personal helper or the 60 script reruns it on every personal host, which
 restarts `rustdesk.service`; say so before applying such a change.
 
-SSH: `private_dot_ssh/modify_authorized_keys.tmpl` is append-safe and must stay
+SSH: `private_dot_ssh/modify_private_authorized_keys.tmpl` is append-safe and must stay
 non-destructive to foreign keys. It appends the dotfiles key on every OS,
-Linux included (Michael, ask 845).
+Linux included (Michael, ask 845). The `private_` after `modify_` in the file name keeps the target at mode `0600` on every machine (`modify_private_authorized_keys.tmpl`; `private_modify_...` would make a stray `modify_authorized_keys` target instead).
 
 Agent harness: canonical skills and MCP live under
 `dot_local/share/agent-harness/`. Adapters project into Claude, Codex, and

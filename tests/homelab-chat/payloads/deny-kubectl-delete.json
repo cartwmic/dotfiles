@@ -1,0 +1,12 @@
+{
+ "session_id": "17b51c00-c782-406d-b125-c57004267664",
+ "transcript_path": "17b51c00-c782-406d-b125-c57004267664.jsonl",
+ "cwd": "/home/cartwmic/.local/share/coordinator-workspace",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "kubectl delete pod x",
+  "description": "x"
+ },
+ "tool_use_id": "toolu_01QsND8uLnb6zJM3KCfpNxSe"
+}

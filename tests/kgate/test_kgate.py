@@ -288,12 +288,12 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["cpu"], "3")
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate")
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "da6cb6e2c3c4deae6c245415ab3a3774d8cbeb08e53a36f77c65d660c7fe21db"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "96deff24cd96afadc077b8d55ab7501a29627f45206397da8e148f9230450406"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
              "82325df3b64380ec1b1f67a731a07a8d656b4a938c53a6a2183cd6d3bc568634"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "9f907d48a21f710cdb8368fc3c764946f74b732b5e62cea32494a8458b9502bd"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "418ee9be5326a850ccf6b38b51c9f2328a054a41afbd60b8d6d8a0c416bc8e26"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -302,7 +302,7 @@ class PodSpec(unittest.TestCase):
         pod, _ = self.pod()
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
         notin = next(e for e in exprs if e["operator"] == "NotIn")
-        self.assertEqual(notin["values"], ["ubuntu-server-k8s-master-1", "mac-mini-worker"])
+        self.assertEqual(notin["values"], ["ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3"])
         self.assertIn({"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}, exprs)
 
     def test_g14_is_preferred_and_the_gpu_node_is_overflow_only(self):
@@ -333,7 +333,7 @@ class PodSpec(unittest.TestCase):
         exprs = pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchExpressions"]
         self.assertEqual(exprs, [
             {"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
-            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker"]}])
+            {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3"]}])
 
     def test_prefer_and_overflow_nodes_do_not_overlap(self):
         self.assertFalse(set(K.PREFER_NODES) & set(K.OVERFLOW_NODES))
@@ -520,6 +520,34 @@ class Pieces(unittest.TestCase):
             meter.start()
             self.assertEqual(meter.stop(), (12345, "cgroup"))
 
+    def test_cpu_usec_reads_usage_usec_from_cpu_stat(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(K.read_cpu_usec(d), "no cpu.stat: null, not zero")
+            Path(d, "cpu.stat").write_text("usage_usec 123456\nuser_usec 100000\nsystem_usec 23456\n")
+            self.assertEqual(K.read_cpu_usec(d), 123456)
+            Path(d, "cpu.stat").write_text("user_usec 1\n")
+            self.assertIsNone(K.read_cpu_usec(d))
+
+    def test_the_pod_side_reports_cpu_and_the_commands_own_run_time(self):
+        tree = Path(tempfile.mkdtemp(prefix="kgate-pm-"))
+        self.addCleanup(shutil.rmtree, tree, True)
+        (tree / "f").write_text("x")
+        cg = tree / "cg"
+        cg.mkdir()
+        (cg / "cpu.stat").write_text("usage_usec 987654\n")
+        job = {"id": "kgate-1-2", "root": str(tree), "cwd": str(tree), "files": ["f"], "tree": K.tree_hash(str(tree), ["f"]), "argv": ["sleep", "1"],
+               "uid": os.getuid(), "gid": os.getgid(), "own": [], "head": None, "tools": {}}
+        (tree / "job.json").write_text(json.dumps(job))
+        done = subprocess.run([sys.executable, str(SCRIPT), "--pod", str(tree / "job.json")], capture_output=True, text=True, timeout=60,
+                              env={**os.environ, "KGATE_CGROUP": str(cg)})
+        m = K.Markers("kgate-1-2")
+        m.feed(done.stdout.encode())
+        m.close()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(m.seen["cpu"], "987654")
+        t0, t1 = (float(x) for x in m.seen["clock"].split())
+        self.assertTrue(1.0 <= t1 - t0 < 1.5, m.seen)
+
     def test_peak_meter_samples_when_the_kernel_has_no_peak(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "memory.current").write_text("777\n")
@@ -591,16 +619,33 @@ if a[:2] == ["get", "namespace"]:
     print("namespace/kgate"); sys.exit(0)
 if a[0] == "delete":
     sys.exit(fake_delete(fake, a[1:]))
+if a[:2] == ["get", "pods"] and os.environ.get("FAKE_PODS_FAIL"):
+    sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
+if a[:2] == ["get", "pods"] and os.environ.get("FAKE_PODS") and os.path.exists(os.environ["FAKE_PODS"]):   # the kgate pods the cluster holds: a file the test writes (and empties when room appears)
+    print(open(os.environ["FAKE_PODS"]).read()); sys.exit(0)
 if a[:2] == ["get", "pods"] or a[:2] == ["get", "secrets"]:
     print(json.dumps({"items": []})); sys.exit(0)
 if a[:2] == ["create", "-f"]:
     manifest = json.load(sys.stdin)
     log({"manifest": manifest})
+    if os.environ.get("FAKE_CREATE_PENDING"):   # the cluster is full: the pod just created is listed as waiting for room, for the jobs that look next
+        pod = manifest["items"][-1]
+        pod["metadata"]["creationTimestamp"] = "2026-11-16T12:00:00Z"
+        pod["status"] = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/7 nodes are available: 7 Insufficient cpu."}]}
+        path = os.environ["FAKE_PODS"]
+        items = json.load(open(path))["items"] if os.path.exists(path) else []
+        json.dump({"items": items + [pod]}, open(path, "w"))
     sys.exit(0)
 if a[:2] == ["get", "pod"] and any(x.startswith("jsonpath=") for x in a):
     print(os.environ.get("FAKE_LABEL", "kgate"), end=""); sys.exit(0)
 if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL"):   # the API server times out on every read of the pod
     sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
+if a[:2] == ["get", "pod"] and os.environ.get("FAKE_GET_FAIL_FIRST") and "json" in a:   # ... on the first N reads only, then it recovers
+    count_file = os.path.join(fake, "get-pod-reads")
+    reads = int(open(count_file).read()) if os.path.exists(count_file) else 0
+    open(count_file, "w").write(str(reads + 1))
+    if reads < int(os.environ["FAKE_GET_FAIL_FIRST"]):
+        sys.stderr.write("Error from server: etcdserver: request timed out\n"); sys.exit(1)
 if a[:2] == ["get", "events"]:   # the kubelet's Evicted event for a pod that died (FAKE_EVICT_EVENT) outlives the pod
     items = [{"reason": "Killing", "message": "Stopping container job"}] if os.environ.get("FAKE_EVICT_EVENT") and os.path.exists(os.path.join(fake, "died")) else []   # "-": the pod is gone and no event says why
     if items and os.environ["FAKE_EVICT_EVENT"] != "-":
@@ -644,6 +689,8 @@ if a[0] == "exec" and "-i" in a:
         if os.environ.get("FAKE_DIE") and b"]: running" in line:
             proc.kill(); open(os.path.join(fake, "died"), "w").write("x"); sys.stderr.write("error: lost connection to pod\n"); sys.exit(255)
     sys.exit(proc.wait())
+if a[0] == "exec" and a[-1] == "/sys/fs/cgroup/memory.events":   # the container's cgroup, read after the pod was lost
+    print("low 0\nhigh 0\nmax 0\noom 0\noom_kill %s" % os.environ.get("FAKE_OOM_KILLS", "0")); sys.exit(0)
 if a[0] == "exec":
     out = os.path.join(fake, "out")
     os.makedirs(out, exist_ok=True)
@@ -1165,12 +1212,12 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         res = self.pod_spec_sent()["containers"][0]["resources"]
         self.assertNotIn("cpu", res["limits"])
-        self.profile(extra="cpu_limit = 2")
+        self.profile(extra="cpu_limit = 6")
         (self.fake / "calls.jsonl").unlink()
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
         res = self.pod_spec_sent()["containers"][0]["resources"]
-        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("2", "2"))
+        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("4", "6"))
 
     def test_the_pod_line_and_the_record_name_the_priority_class_and_the_cpu_limit_when_set(self):
         done = self.kgate("--", "true")
@@ -1180,18 +1227,18 @@ class Black(unittest.TestCase):
         rec = self.records()[-1]
         self.assertEqual(rec["priority_class"], "kgate")
         self.assertNotIn("cpu_limit", rec)
-        self.profile(extra='priority_class = "kgate-first"\ncpu_limit = 3')
+        self.profile(extra='priority_class = "kgate-first"\ncpu_limit = 5')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertIn("memory request, 3 cpu limit, priority class kgate-first\n", done.stdout)
+        self.assertIn("memory request, 5 cpu limit, priority class kgate-first\n", done.stdout)
         rec = self.records()[-1]
-        self.assertEqual((rec["priority_class"], rec["cpu_limit"]), ("kgate-first", 3))
+        self.assertEqual((rec["priority_class"], rec["cpu_limit"]), ("kgate-first", 5))
 
     def test_a_homelab_cpu_limit_below_the_request_is_refused_before_any_pod(self):
-        self.profile(extra="cpu_limit = 1")
+        self.profile(extra="cpu_limit = 1")   # checked against the raised request (2 -> 4), the one the pod would ask for
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 69, done.stdout)
-        self.assertIn("cpu_limit (1) must be at least cpu (2)", self.records()[-1]["reason"])
+        self.assertIn("cpu_limit (1) must be at least cpu (4)", self.records()[-1]["reason"])
         self.assertFalse(any("manifest" in c for c in self.calls()))
 
     def test_a_command_that_prints_marker_lines_cannot_fake_the_outcome(self):
@@ -1270,6 +1317,11 @@ class Black(unittest.TestCase):
 
     def test_never_node_is_refused(self):
         done = self.kgate("--node", "mac-mini-worker", "--", "true")
+        self.assertEqual(done.returncode, 69)
+        self.assertIn("excluded", done.stdout)
+
+    def test_the_runner_node_agent_3_is_refused(self):
+        done = self.kgate("--node", "ubuntu-server-k8s-agent-3", "--", "true")
         self.assertEqual(done.returncode, 69)
         self.assertIn("excluded", done.stdout)
 
@@ -1466,7 +1518,7 @@ class Black(unittest.TestCase):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
         c = manifest["items"][-1]["spec"]["containers"][0]
         self.assertEqual(c["resources"]["limits"], {"memory": "2Gi", "ephemeral-storage": "12Gi"})
-        self.assertEqual(c["resources"]["requests"], {"cpu": "3", "memory": "2Gi", "ephemeral-storage": "4Gi"})
+        self.assertEqual(c["resources"]["requests"], {"cpu": "4", "memory": "2Gi", "ephemeral-storage": "4Gi"})   # 3 is raised to the slot
 
     def pod_resources(self):
         manifest = next(c["manifest"] for c in self.calls() if "manifest" in c)
@@ -1476,7 +1528,7 @@ class Black(unittest.TestCase):
         self.profile(memory="256Mi", extra='memory_limit = "512Mi"')
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "256Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "512Mi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "256Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "512Mi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("256Mi", "512Mi"))
         self.assertIn("256Mi memory request, 512Mi limit", done.stdout)
@@ -1484,7 +1536,7 @@ class Black(unittest.TestCase):
     def test_without_memory_limit_the_limit_is_the_request(self):
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "12Gi"}})
         rec = self.records()[-1]
         self.assertEqual((rec["mem"], rec["mem_limit"]), ("1Gi", "1Gi"))
         self.assertIn("1Gi memory request, priority class kgate\n", done.stdout)
@@ -1509,7 +1561,7 @@ class Black(unittest.TestCase):
     def test_mem_sets_the_request_and_the_profile_limit_stays(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
         self.assertEqual(self.kgate("--mem", "512Mi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "512Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "2Gi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "512Mi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "2Gi", "ephemeral-storage": "12Gi"}})
 
     def test_mem_above_the_profile_limit_is_refused(self):
         self.profile(memory="1Gi", extra='memory_limit = "2Gi"')
@@ -1520,7 +1572,58 @@ class Black(unittest.TestCase):
 
     def test_mem_limit_flag_sets_the_limit(self):
         self.assertEqual(self.kgate("--mem-limit", "3Gi", "--", "true").returncode, 0)
-        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "2", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "3Gi", "ephemeral-storage": "12Gi"}})
+        self.assertEqual(self.pod_resources(), {"requests": {"cpu": "4", "memory": "1Gi", "ephemeral-storage": "4Gi"}, "limits": {"memory": "3Gi", "ephemeral-storage": "12Gi"}})
+
+    # -- a homelab pod's CPU request is a whole number of 4-cpu slots (the nodes are split into slots that kgate pods and the pinned CI runners share)
+
+    def sent_cpu(self):
+        res = self.pod_resources()
+        env = {e["name"]: e.get("value") for e in next(c["manifest"] for c in self.calls() if "manifest" in c)["items"][-1]["spec"]["containers"][0]["env"]}
+        return res["requests"]["cpu"], (env["CARGO_BUILD_JOBS"], env["RAYON_NUM_THREADS"], env["MAKEFLAGS"])
+
+    def test_a_request_below_a_slot_is_raised_to_four_and_the_build_parallelism_follows(self):
+        for asked in (1, 2, 3):
+            (self.fake / "calls.jsonl").unlink(missing_ok=True)
+            done = self.kgate("--cpu", str(asked), "--", "true")
+            self.assertEqual(done.returncode, 0, done.stdout)
+            self.assertEqual(self.sent_cpu(), ("4", ("4", "4", "-j4")), "asked %d" % asked)
+            self.assertEqual(self.records()[-1]["cpu"], 4)
+            self.assertEqual(done.stdout.count("cpu request raised from"), 1)
+            self.assertIn("kgate: cpu request raised from %d to 4: a homelab pod takes whole 4-cpu slots\n" % asked, done.stdout)
+            self.assertIn(" 4 cpu, ", done.stdout)   # the pod line says what the pod asks for
+
+    def test_a_request_of_exactly_a_slot_is_unchanged_and_says_nothing(self):
+        done = self.kgate("--cpu", "4", "--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(self.sent_cpu(), ("4", ("4", "4", "-j4")))
+        self.assertNotIn("raised", done.stdout)
+
+    def test_a_request_above_a_slot_is_rounded_up_to_whole_slots(self):
+        for asked, got in ((5, 8), (6, 8), (8, 8), (12, 12)):
+            (self.fake / "calls.jsonl").unlink(missing_ok=True)
+            done = self.kgate("--cpu", str(asked), "--", "true")
+            self.assertEqual(done.returncode, 0, done.stdout)
+            self.assertEqual(self.sent_cpu(), (str(got), (str(got), str(got), "-j%d" % got)), "asked %d" % asked)
+            self.assertEqual(self.records()[-1]["cpu"], got)
+            self.assertEqual("raised" in done.stdout, got != asked, "asked %d" % asked)
+
+    def test_a_profile_cpu_is_raised_the_same_way_as_the_flag(self):
+        self.profile(extra="")   # cpu = 2 in the test profile
+        self.assertEqual(self.kgate("--", "true").returncode, 0)
+        self.assertEqual(self.sent_cpu()[0], "4")
+
+    def test_a_cpu_limit_at_or_above_the_raised_request_is_kept(self):
+        self.profile(extra="cpu_limit = 4")
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        res = self.pod_resources()
+        self.assertEqual((res["requests"]["cpu"], res["limits"]["cpu"]), ("4", "4"))
+
+    def test_the_slot_total_counts_service_containers_and_the_job_container_takes_the_rise(self):
+        self.assertEqual(K.SLOT_CPU, 4)
+        for job, services, want in ((1, 0, 4), (4, 0, 4), (6, 0, 8), (12, 0, 12), (1, 2, 2), (2, 2, 2), (3, 2, 6), (4, 2, 6), (1, 5, 3)):
+            self.assertEqual(K.slot_cpu(job, services), want, (job, services))
+            self.assertEqual((want + services) % K.SLOT_CPU, 0, (job, services))
 
     def test_mem_limit_flag_below_the_request_is_refused(self):
         done = self.kgate("--mem-limit", "512Mi", "--", "true")
@@ -2016,6 +2119,10 @@ def sidecar_password():
 if a[0] == "logs":
     print("Error 18456: Login failed for user sa, password %s" % sidecar_password()); print("SQL Server is starting"); sys.exit(0)
 if a[0] == "exec" and "-c" in a and a[a.index("-c") + 1] == "mssql":
+    if "cpu.stat" in a[-1]:
+        if os.environ.get("FAKE_NO_SIDECAR_CPU"):
+            sys.exit(1)
+        print("usage_usec 4200000\nuser_usec 3000000\nsystem_usec 1200000"); sys.exit(0)
     print("734003200"); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     pod, script = a[2], a[-1]
@@ -2308,7 +2415,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "da6cb6e2c3c4deae6c245415ab3a3774d8cbeb08e53a36f77c65d660c7fe21db"  # the same pin as test_default_render_is_byte_identical
+        want = "96deff24cd96afadc077b8d55ab7501a29627f45206397da8e148f9230450406"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
@@ -2463,7 +2570,7 @@ class PodSh(unittest.TestCase):
     def test_markers_are_the_ones_the_mac_side_reads_even_after_output_without_a_newline(self):
         done, _ = self.run_sh(argv=("printf", "no newline"))
         seen = self.markers(done.stdout)
-        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "end"})
+        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "cpu", "clock", "end"})
         self.assertRegex(seen["start"], r"^\d+ node=n1 cpus=\d+$")
         self.assertRegex(seen["end"], r"^\d+ exit 0$")
 
@@ -2475,6 +2582,21 @@ class PodSh(unittest.TestCase):
     def test_no_memory_peak_is_reported_as_unknown_not_invented(self):
         done, _ = self.run_sh()
         self.assertEqual(self.markers(done.stdout)["peak"], "unknown")
+
+    def test_cpu_comes_from_cpu_stat_usage_usec(self):
+        (self.cg / "cpu.stat").write_text("usage_usec 7654321\nuser_usec 7000000\nsystem_usec 654321\nnr_periods 0\n")
+        done, _ = self.run_sh()
+        self.assertEqual(self.markers(done.stdout)["cpu"], "7654321")
+
+    def test_no_cpu_stat_is_reported_as_unknown_not_invented(self):
+        done, _ = self.run_sh()
+        self.assertEqual(self.markers(done.stdout)["cpu"], "unknown")
+
+    def test_the_commands_own_wall_time_is_the_two_clock_readings_around_it(self):
+        done, _ = self.run_sh(argv=("sleep", "1"))
+        t0, t1 = (float(x) for x in self.markers(done.stdout)["clock"].split())
+        self.assertGreaterEqual(t1 - t0, 1.0)
+        self.assertLess(t1 - t0, 1.5, "setup before CMD (unpack, tree hash, preflight) is not in it")
 
     def test_the_pod_side_builds_a_one_commit_repo_whose_tree_is_the_macs_hash(self):
         done, _ = self.run_sh(argv=("sh", "-c", "git rev-parse HEAD; git log --format=%an,%ae,%cn,%s | wc -l; git status --porcelain | wc -l; echo KGATE_HEAD=$KGATE_HEAD"))
@@ -2766,6 +2888,27 @@ class Archive(unittest.TestCase):
         self.assertNotIn(victim.lstrip("/"), names)
         self.assertIn((common + "/config").lstrip("/"), names)
 
+    def test_a_git_folder_deleted_while_it_is_read_is_left_out_with_what_it_held(self):
+        # 2026-11-16 01:51Z: a job died on `.git/worktrees/proof-main-old`, a linked worktree's folder removed between the stat and the listing
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        gone = os.path.join(common, "objects", "pack-gone")
+        os.makedirs(gone)
+        Path(gone, "inside").write_text("x")
+        real_listdir = os.listdir
+
+        def listdir(path="."):
+            if os.fspath(path) == gone:
+                raise FileNotFoundError(2, "No such file or directory", gone)
+            return real_listdir(path)
+        with mock.patch("os.listdir", listdir):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            names = tar.getnames()
+        self.assertNotIn((gone + "/inside").lstrip("/"), names)
+        self.assertIn((common + "/HEAD").lstrip("/"), names)
+
     def lean_repo(self):
         """A repo with a second worktree, an rr-cache entry, reflogs and metadata for two linked worktrees (own, other)."""
         main, own = self.repo_and_linked()
@@ -3033,6 +3176,8 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual((rec["exit"], rec["services"], rec["service_peak_bytes"]), (0, ["mssql"], 734003200))
         self.assertIn("service_ready_s", rec)
         self.assertIn("pod_start_s", rec)
+        self.assertEqual(rec["service_cpu_usec"], 4200000)
+        self.assertIn("cpu mssql 4200000 usec", done.stdout)
         everything = done.stdout + (done.stderr or "") + "".join(p.read_text(errors="replace") for p in self.state.rglob("*") if p.is_file())
         self.assertNotIn(pw, everything, "the generated SA password is in the pod spec only")
         execs = [a for a in self.kubectl_args() if a[0] == "exec" and "-i" in a]
@@ -3251,6 +3396,17 @@ class KubectlBlack(unittest.TestCase):
         self.run_kgate("--", "true")
         self.assertEqual(self.records()[-1]["quota_wait_s"], 0)
 
+    def test_a_kubectl_cluster_asks_for_exactly_the_cpu_it_is_given(self):   # the 4-cpu slot is the homelab's; this adapter is unchanged
+        for asked in (1, 3, 6):
+            shutil.rmtree(self.fake / "podgit", True)   # the fake pod keeps its repo between runs
+            self.assertEqual(self.run_kgate("--cpu", str(asked), "--", "true").returncode, 0)
+            c = [c["manifest"] for c in self.kcalls() if "manifest" in c][-1]["items"][0]["spec"]["containers"][0]
+            env = {e["name"]: e.get("value") for e in c["env"]}
+            self.assertEqual((c["resources"]["requests"]["cpu"], env["CARGO_BUILD_JOBS"]), (str(asked), str(asked)))
+            self.assertEqual(self.records()[-1]["cpu"], asked)
+        shutil.rmtree(self.fake / "podgit", True)
+        self.assertNotIn("raised", self.run_kgate("--cpu", "1", "--", "true").stdout)
+
     def test_cpu_limit_sizes_the_burst_and_the_build_jobs_not_the_request(self):
         self.profile(extra="cpu_limit = 5")
         self.assertEqual(self.run_kgate("--", "true").returncode, 0)
@@ -3442,6 +3598,26 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         rec = self.records()[-1]
         self.assertEqual((rec["peak_bytes"], rec["peak_source"]), (4242, "cgroup"))
+
+    def test_cpu_and_run_time_come_back_in_the_record(self):
+        (self.fake / "cg").mkdir()
+        (self.fake / "cg" / "cpu.stat").write_text("usage_usec 3141592\nuser_usec 3000000\nsystem_usec 141592\n")
+        done = self.run_kgate("--", "sleep", "1", env={"KGATE_CGROUP": str(self.fake / "cg")})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual(rec["cpu_usec"], 3141592)
+        self.assertTrue(1.0 <= rec["run_s"] < rec["duration_s"], rec)
+        self.assertIn("pod_start_s", rec)
+        self.assertNotEqual(rec["run_s"], rec["pod_start_s"], "run_s is the command alone; pod_start_s is the wait for the pod")
+
+    def test_cpu_is_null_in_the_record_when_cpu_stat_cannot_be_read(self):
+        (self.fake / "cg").mkdir()
+        done = self.run_kgate("--", "true", env={"KGATE_CGROUP": str(self.fake / "cg")})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertIn("cpu_usec", rec)
+        self.assertIsNone(rec["cpu_usec"])
+        self.assertIsInstance(rec["run_s"], float)
 
     # --- refusals: all exit 69 before anything is created
 
@@ -3933,7 +4109,7 @@ class KubectlBlack(unittest.TestCase):
                 done = self.lose("1:" + kind)
                 self.assertEqual(done.returncode, 69, done.stdout)
                 rec = self.records()[-1]
-                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun", "today's text")
+                self.assertTrue(rec["reason"].startswith("lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun"), rec["reason"])   # the end reason follows it
                 self.assertNotIn("rerunning", done.stdout)
                 self.assertEqual([p["metadata"]["name"] for p in self.pods_created() if p["metadata"]["labels"]["kgate-job"] == rec["id"]], [rec["id"]])
                 self.assertNotIn("evicted", rec)
@@ -3946,7 +4122,7 @@ class KubectlBlack(unittest.TestCase):
                 done = self.lose("1:" + kind)
                 self.assertEqual(done.returncode, 69, done.stdout)
                 rec = self.records()[-1]
-                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+                self.assertTrue(rec["reason"].startswith("lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun"), rec["reason"])   # the end reason follows it
                 self.assertNotIn("rerunning", done.stdout)
                 self.assertNotIn("evicted", rec)
                 self.assertEqual((rec["attempts"], rec["ran"]), (1, True))
@@ -3969,7 +4145,7 @@ class KubectlBlack(unittest.TestCase):
                 done = self.lose("1:reason=" + reason)
                 self.assertEqual(done.returncode, 69, done.stdout)
                 rec = self.records()[-1]
-                self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+                self.assertTrue(rec["reason"].startswith("lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun"), rec["reason"])   # the end reason follows it
                 self.assertNotIn("rerunning", done.stdout)
                 self.assertNotIn("evicted", rec)
                 self.assertEqual([s for s in self.steps() if s[0] == "create"][-1:], [("create", rec["id"])])
@@ -3989,7 +4165,7 @@ class KubectlBlack(unittest.TestCase):
         done = self.lose("1:event", env={"FAKE_EVENTS_FAIL": "1"})
         self.assertEqual(done.returncode, 69, done.stdout)
         rec = self.records()[-1]
-        self.assertEqual(rec["reason"], "lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun")
+        self.assertTrue(rec["reason"].startswith("lost the pod before CMD finished (kubectl exit 0); the result is unknown and the job is not rerun"), rec["reason"])   # the end reason follows it
         self.assertIn(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + rec["id"], "-o", "json"], self.kubectl_args())
         self.assertNotIn("evicted", rec)
         self.assertEqual([s for s in self.steps() if s[0] == "create"], [("create", rec["id"])])
@@ -4103,6 +4279,7 @@ ORPHAN_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
                  "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                  "loader.exec_module(K)\n"
                  "K.CLEANUP_FIRST_DELAY, K.CLEANUP_MAX_DELAY, K.CLEANUP_RETRY_S, K.CLEANUP_ATTEMPT_S = 0.05, 0.1, 3, 1\n"   # the delete retry waits, shortened
+                 "K.POLL_RETRY_S = 1\n"                                                                                     # and the retry of a failed read of the pod
                  "sys.exit(K.main(sys.argv[2:]))\n")
 
 
@@ -4187,6 +4364,277 @@ class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
 
     def unreachable_env(self):
         return {"FAKE_DELETE_FAIL": "always", "FAKE_CANI": "no"}
+
+
+# ---------------------------------------------------------------- a job waits in a local queue while the cluster is full (dotfiles: kgate queue)
+
+QUEUE_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
+                "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                "loader.exec_module(K)\n"
+                "K.QUEUE_POLL_S, K.QUEUE_LOCAL_POLL_S = 0.2, 0.1\n"      # the queue's look at the cluster, shortened
+                "K.QUEUE_QUIET_S = %s\n"      # a wait on a neighbour is reported at once unless a test says otherwise
+                "sys.exit(K.main(sys.argv[2:]))\n")
+
+
+class QueueHomelab(unittest.TestCase):
+    """The job profile asks 2 cpu, 1Gi and the default 4Gi of disk. A pod that waits for room and asks no more than that, and is at least as urgent, means the
+    cluster has no room for this job either, so the job queues instead of creating a pod that would sit Unschedulable until --sched-wait gives 75."""
+    for _name in ("kgate", "kgate_popen", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def launcher(self):
+        stub = self.tmp / "queue_launch.py"
+        stub.write_text(QUEUE_LAUNCH % getattr(self, "quiet", 0))
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def waiting(self, name="other", cpu="2", memory="1Gi", disk="4Gi", cls="kgate", pin=None, message="0/7 nodes are available: 7 Insufficient cpu."):
+        required = [{"key": "kubernetes.io/hostname", "operator": "In", "values": [pin]}] if pin else [{"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}]
+        return {"metadata": {"name": name, "creationTimestamp": "2026-11-16T12:00:00Z"},
+                "spec": {"priorityClassName": cls, "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [{"matchExpressions": required}]}}},
+                         "containers": [{"resources": {"requests": {"cpu": cpu, "memory": memory, "ephemeral-storage": disk}}}]},
+                "status": {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": message}]}}
+
+    def full(self, *pods):
+        path = self.tmp / "pods.json"
+        path.write_text(json.dumps({"items": list(pods)}))
+        return {"FAKE_PODS": str(path)}
+
+    def creates(self):
+        return sum(1 for c in self.calls() if "manifest" in c)
+
+    def read_until(self, proc, text):
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if text in line:
+                break
+        self.assertIn(text, seen)
+        return seen
+
+    def start(self, *args, env=None):
+        proc = self.kgate_popen(*args, env=env)
+        self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
+        return proc
+
+    def test_a_job_submitted_to_a_full_cluster_waits_then_runs_and_does_not_exit_75(self):
+        env = self.full(self.waiting())
+        proc = self.start("--", "sh", "-c", "echo ran-after-the-queue", env=env)
+        seen = self.read_until(proc, "queued: ")
+        time.sleep(1)
+        self.assertEqual(self.creates(), 0, "no pod while the cluster is full")
+        self.assertIsNone(proc.poll())
+        (self.tmp / "pods.json").unlink()   # room appears
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("ran-after-the-queue", seen)
+        self.assertIn("the cluster is full: 1 kgate pod already waits for room", seen)
+        self.assertIn("left the queue after", seen)
+        self.assertEqual(self.creates(), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (0, True))
+        self.assertGreater(rec["queue_wait_s"], 0.5)
+
+    def test_a_job_with_no_waiting_pod_creates_its_pod_at_once_and_is_not_queued(self):
+        done = self.kgate("--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout)
+        self.assertNotIn("queue_wait_s", self.records()[-1])
+
+    def test_the_queue_counts_against_wait_and_ends_as_69_unschedulable_with_no_pod(self):
+        done = self.kgate("--wait", "2", "--", "true", env=self.full(self.waiting()))
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertTrue(rec["reason"].startswith("pod did not start within 2s: Unschedulable (queued, the cluster is full"), rec["reason"])
+        self.assertEqual((self.creates(), rec["ran"]), (0, False))
+
+    def test_a_waiting_pod_that_asks_more_does_not_hold_the_job_back(self):
+        for pod in (self.waiting(cpu="6"), self.waiting(memory="3Gi"), self.waiting(disk="20Gi")):
+            done = self.kgate("--", "true", env=self.full(pod))
+            self.assertEqual(done.returncode, 0, done.stdout)
+            self.assertNotIn("queued", done.stdout)
+
+    def test_a_waiting_pod_that_is_not_out_of_room_does_not_hold_the_job_back(self):
+        done = self.kgate("--", "true", env=self.full(self.waiting(message="0/7 nodes are available: 7 node(s) didn't match Pod's node affinity/selector.")))
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout)
+
+    def test_a_pod_pinned_to_one_node_holds_back_only_a_job_pinned_to_that_node(self):
+        pinned = self.full(self.waiting(pin="cartwmic-g14-wsl"))
+        free = self.kgate("--", "true", env=pinned)
+        self.assertEqual(free.returncode, 0, free.stdout)
+        self.assertNotIn("queued", free.stdout)
+        same = self.kgate("--wait", "1", "--node", "cartwmic-g14-wsl", "--", "true", env=pinned)
+        self.assertIn("queued: ", same.stdout)
+        other = self.kgate("--node", "ubuntu-server-k8s-agent-1", "--", "true", env=pinned)
+        self.assertEqual(other.returncode, 0, other.stdout)
+        self.assertNotIn("queued", other.stdout)
+        unpinned_waits = self.kgate("--wait", "1", "--node", "cartwmic-g14-wsl", "--", "true", env=self.full(self.waiting()))   # nothing fits anywhere, so nothing fits there
+        self.assertIn("queued: ", unpinned_waits.stdout)
+
+    def test_the_main_run_is_not_held_back_by_a_waiting_pr_gate_but_a_pr_gate_is_held_by_the_main_run(self):
+        main = self.kgate("--", "true", env={**self.full(self.waiting(cls="kgate")), "KGATE_PRIORITY_CLASS": "kgate-main"})
+        self.assertEqual(main.returncode, 0, main.stdout)
+        self.assertNotIn("queued", main.stdout)
+        first = self.kgate("--", "true", env={**self.full(self.waiting(cls="kgate")), "KGATE_PRIORITY_CLASS": "kgate-first"})
+        self.assertEqual(first.returncode, 0, first.stdout)
+        gate = self.kgate("--wait", "1", "--", "true", env=self.full(self.waiting(cls="kgate-main")))
+        self.assertIn("queued: ", gate.stdout)
+        self.assertEqual(self.creates(), 2)
+
+    def test_two_clients_started_together_create_one_pod_while_the_cluster_is_full(self):
+        env = {"FAKE_PODS": str(self.tmp / "pods.json"), "FAKE_CREATE_PENDING": "1", "FAKE_POD": "pending"}   # the first pod made fills the cluster
+        first = self.start("--wait", "6", "--", "true", env=env)
+        second = self.start("--wait", "6", "--", "true", env=env)
+        out1, _ = first.communicate(timeout=60)
+        out2, _ = second.communicate(timeout=60)
+        self.assertEqual(self.creates(), 1, out1 + out2)
+        queued = [o for o in (out1, out2) if "queued: " in o]
+        self.assertEqual(len(queued), 1, out1 + out2)
+        self.assertEqual(sorted((first.returncode, second.returncode)), [69, 69])
+
+    def test_a_job_that_is_stopped_while_queued_ends_143_creates_no_pod_and_leaves_no_ticket(self):
+        proc = self.start("--", "true", env=self.full(self.waiting()))
+        self.read_until(proc, "queued: ")
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 143, out)
+        self.assertEqual(self.creates(), 0)
+        self.assertEqual(list((self.state / "kgate" / "queue").glob("kgate-*.json")), [])
+
+    def test_a_job_that_cannot_read_the_waiting_pods_creates_its_pod(self):
+        done = self.kgate("--", "true", env={"FAKE_PODS_FAIL": "1"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("could not read the waiting pods", done.stdout)
+        self.assertEqual(self.creates(), 1)
+
+    def ticket(self, name, pid, priority=-100, t=1.0, pidns="same"):
+        queue = self.state / "kgate" / "queue"
+        queue.mkdir(parents=True, exist_ok=True)
+        ident = K.proc_identity(pid)
+        (queue / (name + ".json")).write_text(json.dumps({"id": name, "pid": pid, "start": ident[0] if ident else "gone", "pidns": K.pid_namespace(), "t": t,
+                                                         "shape": {"cpu": 2.0, "mem": float(1 << 30), "disk": float(4 << 30), "pin": None, "priority": priority}}))
+        return queue / (name + ".json")
+
+    def test_an_older_live_ticket_that_asks_no_more_holds_the_job_back_until_it_goes(self):
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        path = self.ticket("kgate-1-1", holder.pid)
+        proc = self.start("--", "true")
+        self.read_until(proc, "queued: behind kgate-1-1")
+        self.assertEqual(self.creates(), 0)
+        path.unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertEqual(self.creates(), 1)
+
+    def test_a_lower_priority_ticket_does_not_hold_back_the_main_run_and_a_dead_one_holds_nobody(self):
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        self.ticket("kgate-1-1", holder.pid)
+        main = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate-main"})
+        self.assertEqual(main.returncode, 0, main.stdout)
+        self.assertNotIn("queued", main.stdout)
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        ghost = self.ticket("kgate-2-2", dead.pid)
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate-first"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        plain = self.kgate("--wait", "1", "--", "true")
+        self.assertIn("queued: behind kgate-1-1", plain.stdout)
+        self.assertNotIn("kgate-2-2", plain.stdout)
+        self.assertFalse(ghost.exists(), "a dead client's ticket is removed")
+
+
+    def test_a_ticket_past_its_clients_wait_is_cleared_even_when_the_client_looks_alive(self):
+        # another pid namespace (the pid cannot be checked) or a stopped client: its ticket must not hold later jobs until their --wait ends
+        queue = self.state / "kgate" / "queue"
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        foreign = self.ticket("kgate-1-1", 4194000)
+        foreign.write_text(json.dumps({**json.loads(foreign.read_text()), "pidns": "pid:[4026539999]", "deadline": time.time() - 1000}))
+        stopped = self.ticket("kgate-2-2", holder.pid)
+        stopped.write_text(json.dumps({**json.loads(stopped.read_text()), "deadline": time.time() - 1000}))
+        done = self.kgate("--", "true", env={"KGATE_PRIORITY_CLASS": "kgate-first"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout)
+        self.assertEqual((self.creates(), foreign.exists(), stopped.exists()), (1, False, False))
+        self.assertEqual(list(queue.glob("kgate-*.json")), [])
+
+    def test_a_foreign_ticket_still_inside_its_wait_holds_the_job_back_and_never_longer_than_that_wait(self):
+        foreign = self.ticket("kgate-1-1", 4194000)
+        foreign.write_text(json.dumps({**json.loads(foreign.read_text()), "pidns": "pid:[4026539999]", "deadline": time.time() + 1.5 - K.QUEUE_STALE_S}))
+        done = self.kgate("--wait", "30", "--", "true")   # the grace is added to the deadline: the ticket is stale in 1.5 s
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual((self.creates(), foreign.exists()), (1, False))
+
+    def test_a_job_ticket_carries_its_own_wait_deadline(self):
+        proc = self.start("--wait", "100", "--", "true", env=self.full(self.waiting()))
+        self.read_until(proc, "queued: ")
+        (path,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        deadline = json.loads(path.read_text())["deadline"]
+        self.assertTrue(time.time() + 80 < deadline < time.time() + 101, deadline)
+
+    def test_jobs_started_together_on_a_cluster_with_room_do_not_report_a_queue(self):
+        # a job that only waits for a neighbour's placement is not reported (the real quiet time), and polls the local queue every 0.1 s here, 0.3 s in the client, not every 3 s
+        self.quiet = K.QUEUE_QUIET_S
+        procs = [self.start("--", "true") for _ in range(3)]
+        outs = [p.communicate(timeout=60)[0] for p in procs]
+        for proc, out in zip(procs, outs):
+            self.assertEqual(proc.returncode, 0, out)
+            self.assertNotIn("queued", out)
+            self.assertNotIn("left the queue", out)
+        self.assertEqual(self.creates(), 3)
+        self.assertTrue(all("queue_wait_s" not in r for r in self.records()), self.records())
+
+    def test_a_wait_on_a_neighbour_that_lasts_is_reported_after_the_quiet_time(self):
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        self.ticket("kgate-1-1", holder.pid)
+        self.quiet = 1.5
+        done = self.kgate("--wait", "4", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("queued: behind kgate-1-1", done.stdout)
+        self.assertEqual(self.creates(), 0)
+
+
+class PodLostReason(unittest.TestCase):
+    """dotfiles: 86 jobs in a week were lost pods with no reason printed. The reason is read from the cluster before the pod is deleted."""
+    for _name in ("kgate", "launcher", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def test_a_pod_lost_by_the_oom_killer_says_so(self):
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1", "FAKE_OOM_KILLS": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertTrue(rec["reason"].startswith("lost the pod before CMD finished (kubectl exit 255); the result is unknown and the job is not rerun; pod end reason: "), rec["reason"])
+        self.assertIn("memory cgroup killed 1 process(es) for running out of memory", rec["reason"])
+        self.assertIn("container still running", rec["reason"])
+        self.assertEqual(rec["lost_pod"], rec["reason"].split("pod end reason: ")[1])
+        self.assertIn("pod end reason: ", done.stdout)
+
+    def test_a_pod_that_is_gone_says_so_and_names_the_events(self):
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1", "FAKE_EVICT_EVENT": "-", "FAKE_EVICT_GONE": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        reason = self.records()[-1]["reason"]
+        self.assertIn("pod end reason: the pod is gone (Error from server (NotFound)", reason)
+        self.assertIn("event Killing: Stopping container job", reason)
+
+    def test_a_failed_read_of_the_pod_while_waiting_is_retried_and_the_job_runs(self):
+        # the API server times out on the first two reads of the pod (the first is the queue's own look after the create), then recovers
+        done = self.kgate("--", "true", env={"FAKE_GET_FAIL_FIRST": "2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"], rec["reason"]), (0, True, None))
+        reads = [c for c in self.calls() if c.get("kubectl", [])[:2] == ["get", "pod"] and "json" in c["kubectl"]]
+        self.assertGreaterEqual(len(reads), 3)
+
+    def test_a_lost_pod_with_nothing_wrong_to_read_still_keeps_todays_text_first(self):
+        done = self.kgate("--", "sh", "-c", "echo started; sleep 1", env={"FAKE_DIE": "1"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertTrue(self.records()[-1]["reason"].startswith("lost the pod before CMD finished (kubectl exit 255); the result is unknown and the job is not rerun"))
+        self.assertNotIn("oom", self.records()[-1]["reason"].lower())
 
 
 # ---------------------------------------------------------------- a process CMD leaves behind does not keep the job alive

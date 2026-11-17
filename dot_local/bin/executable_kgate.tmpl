@@ -18,7 +18,7 @@ Contract
   (On a kubectl cluster no .git is shipped: the pod builds a one-commit repo from the files, and the Mac's HEAD is in $KGATE_HEAD.)
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
-- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
+- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu (homelab: rounded up to whole 4-CPU slots, 1-3 -> 4, 6 -> 8; the client says so when it does), memory (the request),
   memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), cpu_limit (optional, at least cpu; the pod's CPU limit, default none),
   priority_class (homelab, optional: kgate, kgate-first or kgate-main; env KGATE_PRIORITY_CLASS overrides it), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
@@ -28,6 +28,7 @@ Contract
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
   after --sched-wait SECONDS (default 1800, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. An evicted homelab pod is 69 with the reason `evicted: <the kubelet's message>`, read from the pod's status before it is deleted. kgate NEVER runs CMD on this Mac and never
   reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
+  When the homelab has no room, a job waits in a local queue (`kgate: queued: ...`, counted in --wait) instead of making a pod that would sit Unschedulable until 75; a lost pod's reason ends with `pod end reason: ...`. See docs/kgate.md.
 {{ if eq .profile "personal" -}}
 - 1Password reads (profile secrets and the pull token) call `op` by name. When `op` is the op shim and a Connect token is set, the shim sends them to the homelab Connect server; otherwise they use the service-account token: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. Without a service-account token the job exits 69 before `op` runs, whatever the Connect token; `op` never reaches the desktop app.
@@ -95,7 +96,8 @@ KEY = os.environ.get("KGATE_SSH_KEY", os.path.expanduser("~/.ssh/homelab"))
 # cartwmic-g14-wsl is schedulable again (2026-11-06). Its clock steps were fixed by homelab#101 (9f6ef66, 2026-11-05). It now follows the Windows clock, which slews up to 8% for ~15 s about every 9 h, and it reads up to ~2 s ahead of other nodes.
 # ubuntu-server-k8s-agent-4 is the GPU node (frigate and the GPU services run there) and a gate bursts to 8 to 16 cores,
 # so it takes kgate jobs only as overflow: eligible, but it scores lowest. 2026-11-08, Michael, ask 742.
-NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker")
+# ubuntu-server-k8s-agent-3 is the GitHub CI runners' node: kgate pods reserved the CPU the runners need and stalled CI (coordinator decision #3311).
+NEVER_NODES = ("ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3")
 OVERFLOW_NODES = ("ubuntu-server-k8s-agent-4",)
 # The homelab pod's PriorityClass (homelab repo `k8s/kgate/priorityclass.yaml`, value -100, preemptionPolicy Never): below every app and system pod, so a pending app pod
 # may preempt a job and a kgate pod never preempts anything. It orders scheduling, preemption and eviction only; it gives a pod no CPU share at run time.
@@ -141,6 +143,7 @@ CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that h
 END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
+SLOT_CPU = 4                 # the nodes' CPU is split into slots of this many CPUs (homelab ask 1187; the runners' share of it moved to agent-3, which kgate never uses: decision #3311). A homelab pod's CPU request is a whole number of slots
 MSSQL_PORT = 1433
 MSSQL_UID = 10001            # the SQL Server image's own user
 SERVICE_READY_S = 300        # how long a sidecar has to pass its startup probe
@@ -166,6 +169,15 @@ UNAVAILABLE = 69
 USAGE = 64
 NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the whole scheduling deadline. Nothing else in kgate uses 75.
 SCHED_WAIT_S = 1800  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
+# The PriorityClass values (the homelab repo's k8s/kgate/priorityclass*.yaml), for a pod whose spec has no resolved `priority` yet and for this job's own pod.
+PRIORITY_VALUES = {"kgate": -100, "kgate-first": -50, "kgate-main": -40}
+QUEUE_POLL_S = 3      # a queued job looks at the local queue (and, when it is first in line, at the cluster) this often
+QUEUE_LOCAL_POLL_S = 0.3   # while only another client on this machine is ahead (a local file read, no cluster call)
+QUEUE_QUIET_S = 5     # a wait on a neighbour's placement is not reported until it lasts this long; a full cluster is reported at once
+QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or in a pid namespace this one cannot see
+QUEUE_SETTLE_S = 20   # after it creates its pod, a job holds its place until the scheduler has answered for the pod (placed or Unschedulable), for at most this long
+POLL_RETRY_S = 60     # a failed read of the pod while waiting for it is tried again for this long (an etcd timeout or a dropped ssh does not last), unless the pod is NotFound
+LOST_READ_S = 20      # each read of why a pod was lost is cut off here
 CANCELLED = "cancelled by kgate cancel"
 CLEANUP_RETRY_S = 60       # how long a client that gave up on a pod keeps trying to delete it (an API timeout or a lost ssh is transient); under `kgate cancel`'s default --wait of 120
 MUX_PERSIST_S = 120        # the ssh master outlives the longest gap between two calls of a job (the delete retries wait up to 30 s); close() ends it earlier
@@ -440,6 +452,30 @@ def evicted_message(status):
     return None
 
 
+def pod_shape(pod):
+    """What makes one kgate pod's wait say something about another's: what it requests, the node it is pinned to, and its priority."""
+    spec = pod.get("spec") or {}
+    requests = (((spec.get("containers") or [{}])[0].get("resources") or {}).get("requests")) or {}
+    pin = None
+    required = ((spec.get("affinity") or {}).get("nodeAffinity") or {}).get("requiredDuringSchedulingIgnoredDuringExecution") or {}
+    for term in required.get("nodeSelectorTerms") or []:
+        for e in term.get("matchExpressions") or []:
+            if e.get("key") == "kubernetes.io/hostname" and e.get("operator") == "In" and e.get("values"):
+                pin = e["values"][0]
+    priority = spec.get("priority")
+    if not isinstance(priority, int):
+        priority = PRIORITY_VALUES.get(spec.get("priorityClassName"), PRIORITY_VALUES[PRIORITY_CLASS])
+    return {"cpu": parse_qty(str(requests.get("cpu", "0"))) or 0, "mem": parse_qty(str(requests.get("memory", "0"))) or 0,
+            "disk": parse_qty(str(requests.get("ephemeral-storage", "0"))) or 0, "pin": pin, "priority": priority}
+
+
+def blocks(ahead, mine):
+    """True when a pod of shape `ahead` that cannot be placed means `mine` cannot be placed either, and it would be placed first once room appears: it asks no more
+    of any resource, it is pinned to no node or to the node `mine` is pinned to, and its priority is at least `mine`'s (a lower one is placed after `mine`)."""
+    return (ahead["priority"] >= mine["priority"] and ahead["pin"] in (None, mine["pin"])
+            and all(ahead[k] <= mine[k] for k in ("cpu", "mem", "disk")))
+
+
 def mem_bytes(size):
     return int(size[:-2]) << (20 if size.endswith("Mi") else 30)
 
@@ -468,6 +504,14 @@ def check_cpu_limit(prof, cpu):
     """A profile's cpu_limit (a pod's CPU limit) may not be below the request."""
     if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
         raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
+
+
+def slot_cpu(cpu, service_cpu=0):
+    """The job container's CPU request on the homelab: the pod's total request is rounded up to a whole number of SLOT_CPU slots (1 to 3 -> 4, 4 -> 4, 6 -> 8, 12 -> 12), so no CPU is left stranded.
+    `cpu` is what the profile or --cpu asks for, `service_cpu` the service containers' requests, which stay as they are: the job container takes the rise
+    (no homelab profile can have a service today, so the caller passes 0; the sidecar case is here for the day one can)."""
+    total = cpu + service_cpu
+    return -(-total // SLOT_CPU) * SLOT_CPU - service_cpu
 
 
 def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None):
@@ -721,18 +765,24 @@ kg_check() {
 kg_tools || exit 71
 say "preflight ok $n tools"
 cg=${KGATE_CGROUP:-/sys/fs/cgroup}
+up0=; { read up0 _ < /proc/uptime; } 2>/dev/null
 say "running $*"
 ( cd "$CWD" && exec "$@" )
 code=$?
+up1=; { read up1 _ < /proc/uptime; } 2>/dev/null
+cpu=unknown
+if [ -r "$cg/cpu.stat" ]; then while read k v; do [ "$k" = usage_usec ] && cpu=$v; done < "$cg/cpu.stat"; fi
 peak=unknown
 [ -r "$cg/memory.peak" ] && peak="$(cat "$cg/memory.peak") cgroup"
 printf '\n'; say "peak $peak"
+say "cpu $cpu"
+[ -n "$up0" ] && [ -n "$up1" ] && say "clock $up0 $up1"
 say "end $(date +%s) exit $code"
 exit "$code"
 """
 
 
-MARKER = r"kgate\[%s\]: (start|running|peak|end|hash|commit|image|preflight)\b(.*)"
+MARKER = r"kgate\[%s\]: (start|running|peak|cpu|clock|end|hash|commit|image|preflight)\b(.*)"
 
 
 class Markers:
@@ -769,6 +819,24 @@ def read_int(path):
         with open(path) as f:
             return int(f.read().strip())
     except (OSError, ValueError):
+        return None
+
+
+def cpu_stat_usec(text):
+    """`usage_usec` from the text of a cgroup's cpu.stat (CPU time, in microseconds, used by every process in it since it started), or None."""
+    for line in (text or "").splitlines():
+        key, _, value = line.partition(" ")
+        if key == "usage_usec" and value.strip().isdigit():
+            return int(value)
+    return None
+
+
+def read_cpu_usec(base="/sys/fs/cgroup"):
+    """This container's CPU time so far, from the cgroup's cpu.stat; None when it cannot be read."""
+    try:
+        with open(base + "/cpu.stat") as f:
+            return cpu_stat_usec(f.read())
+    except OSError:
         return None
 
 
@@ -923,14 +991,19 @@ def pod_main(jobfile):
     out("kgate: preflight ok %d tools\n" % len(job["tools"]))
     meter = PeakMeter()
     meter.start()
+    t0 = time.monotonic()
     out("kgate: running %s\n" % json.dumps(job["argv"]))
     try:
         code = subprocess.call(job["argv"], cwd=job["cwd"], env=env, **as_user)
     except OSError as e:
         out("kgate: cannot start %s: %s\n" % (job["argv"][0], e))
         code = 127
+    t1 = time.monotonic()
+    cpu = read_cpu_usec(os.environ.get("KGATE_CGROUP") or "/sys/fs/cgroup")
     peak, source = meter.stop()
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
+    out("kgate: cpu %s\n" % (cpu if cpu is not None else "unknown"))
+    out("kgate: clock %.3f %.3f\n" % (t0, t1))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
     return code if code >= 0 else 128 - code
 
@@ -1520,7 +1593,7 @@ class Job:
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
-                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "ran": False,
+                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "cpu_usec": None, "run_s": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log", "priority_class": None}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
@@ -1623,6 +1696,9 @@ class Job:
         if self.kcfg:
             self.use_kubectl(image, prof, cpu)
         else:
+            asked, cpu = cpu, slot_cpu(cpu)
+            if cpu != asked:
+                self.note("cpu request raised from %d to %d: a homelab pod takes whole %d-cpu slots" % (asked, cpu, SLOT_CPU))
             check_cpu_limit(prof, cpu)
             self.rec["priority_class"] = prof["priority_class"] or PRIORITY_CLASS   # the class the pod runs in; a kubectl cluster's own policy decides there, so the record stays null
             if prof["cpu_limit"] is not None:
@@ -1738,18 +1814,140 @@ class Job:
         if waited_from:
             self.rec["quota_wait_s"] = round(base + time.time() - waited_from, 1)
 
+    def place(self, manifests, deadline):
+        """Create the pod. The homelab first waits in the local queue while the cluster has no room (see admit()); a kubectl cluster has its own autoscaler and quota wait."""
+        if self.cluster.kind == "kubectl":
+            self.create_pod(manifests, deadline)
+        else:
+            self.admit(manifests, deadline)
+
+    def admit(self, manifests, deadline):
+        """Homelab: create the pod only when the cluster has room for it, so it does not sit Unschedulable until --sched-wait ends it with 75 (344 jobs in a week).
+        The scheduler says whether there is room: a pod of this client or another that waits for room (PodScheduled False, Unschedulable, Insufficient ...) and
+        asks no more than this one, and is at least as urgent (blocks()), means there is none, and the job waits here, in the local queue, and says so.
+        Two things order the clients on this machine: a ticket in <state>/queue/ (a ticket ahead that blocks this job holds it back, so the kgate-main run is
+        not made to wait behind PR gates), and one flock around "look, create, wait for the scheduler's answer", so two clients never both see room that only one
+        of them gets. A job that cannot read the waiting pods creates its pod as before. The wait counts against --wait."""
+        mine = pod_shape(next(i for i in manifests["items"] if i["kind"] == "Pod"))
+        queue = os.path.join(self.state, "queue")
+        os.makedirs(queue, exist_ok=True)
+        ticket = os.path.join(queue, self.id + ".json")
+        ident = proc_identity(os.getpid())
+        write_json_atomic(ticket, {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": deadline, "shape": mine})
+        t_wait, last, noted = None, None, False
+        with open(os.path.join(queue, ".lock"), "a") as lock:
+            try:
+                while True:
+                    why = self.queued_behind(queue, mine)
+                    if not why:
+                        try:
+                            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except OSError:
+                            why = "another job is being placed"
+                        else:
+                            try:
+                                why = self.cluster_full(mine)
+                                if not why:
+                                    self.create_pod(manifests, deadline)
+                                    self.settle()
+                                    break
+                            finally:
+                                fcntl.flock(lock, fcntl.LOCK_UN)
+                    t_wait = t_wait or time.time()
+                    local = why.startswith(("behind ", "another job"))   # a neighbour on this machine is being placed: usually seconds, and the cluster has room
+                    if why != last and why != "another job is being placed" and (not local or time.time() - t_wait >= QUEUE_QUIET_S or noted):
+                        self.note("queued: " + why)
+                        last, noted = why, True
+                    if noted:
+                        self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
+                    if time.time() >= deadline:
+                        raise Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
+                    time.sleep(max(0, min(QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S, deadline - time.time())))
+            finally:
+                forget(ticket)
+        if noted:
+            self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
+            self.note("left the queue after %.0fs; creating the pod" % self.rec["queue_wait_s"])
+
+    def queued_behind(self, queue, mine):
+        """What holds this job back among the clients on this machine: a live ticket made before this one (the higher priority first, then the older) that blocks it. None when there is none."""
+        order = lambda t: (-t["shape"]["priority"], t["t"], t["id"])
+        tickets = []
+        for name in os.listdir(queue):
+            path = os.path.join(queue, name)
+            try:
+                with open(path) as f:
+                    t = json.load(f)
+            except (OSError, ValueError):
+                continue   # not a ticket, or one that is being written or removed
+            if t.get("pidns") == pid_namespace() and (proc_identity(t["pid"]) or [None])[0] != t.get("start"):
+                forget(path)   # its client died without removing it
+                continue
+            if t.get("deadline") and time.time() > t["deadline"] + QUEUE_STALE_S:
+                forget(path)   # a client that is stopped, or in a pid namespace this one cannot check, is past its own --wait: it cannot still be waiting
+                continue
+            tickets.append(t)
+        mine_key = (-mine["priority"], self.t0, self.id)
+        ahead = next((t for t in sorted(tickets, key=order) if order(t) < mine_key and blocks(t["shape"], mine)), None)
+        return "behind %s, which asks no more of the cluster and was first" % ahead["id"] if ahead else None
+
+    def cluster_full(self, mine):
+        """The reason this job should wait, or None when it may create its pod: pods already waiting for room that ask no more than this job. Unreadable: None."""
+        try:
+            got = self.cluster.run(["get", "pods", "-l", "app=kgate", "-o", "json"], timeout=30)
+            items = json.loads(got.stdout)["items"] if got.returncode == 0 else None
+        except (subprocess.TimeoutExpired, ValueError, KeyError):
+            items = None
+        if items is None:
+            self.note("could not read the waiting pods; creating the pod without queueing")
+            return None
+        waiting = []
+        for pod in items:
+            status = pod.get("status") or {}
+            sched = next((c for c in status.get("conditions") or [] if c.get("type") == "PodScheduled" and c.get("status") == "False"), None)
+            if (pod["metadata"]["name"] != self.pod and status.get("phase") == "Pending" and sched and sched.get("reason") == "Unschedulable"
+                    and "Insufficient" in (sched.get("message") or "") and blocks(pod_shape(pod), mine)):
+                waiting.append((pod["metadata"].get("creationTimestamp", ""), pod["metadata"]["name"], " ".join((sched.get("message") or "").split())[:200]))
+        if not waiting:
+            return None
+        oldest = min(waiting)
+        return "the cluster is full: %d kgate pod%s already wait%s for room and ask no more than this job (%s: %s)" % (
+            len(waiting), "" if len(waiting) == 1 else "s", "s" if len(waiting) == 1 else "", oldest[1], oldest[2])
+
+    def settle(self):
+        """After the create: wait until the scheduler has answered for the pod (placed, or Unschedulable), so the next job's look at the cluster counts it. Best effort."""
+        end = time.time() + QUEUE_SETTLE_S
+        while time.time() < end:
+            try:
+                got = self.cluster.run(["get", "pod", self.pod, "-o", "json"], timeout=30)
+                if got.returncode != 0:
+                    return   # best effort: the pod wait that follows reads and retries it
+                status = json.loads(got.stdout).get("status", {})
+            except (subprocess.TimeoutExpired, ValueError):
+                return
+            if status.get("phase", "Pending") != "Pending" or any(c.get("type") == "PodScheduled" for c in status.get("conditions") or []):
+                return
+            time.sleep(0.3)
+
     def start_pod(self, manifests, cold=None):
         """Create the pod and wait until it runs. `cold`: the same pod without the cache claim. If the claim is held by another job
         (ReadWriteOncePod: the pod stays Pending for CACHE_BUSY_S), the pod is deleted and `cold` is created in its place."""
         deadline = self.t0 + self.o.wait
-        self.create_pod(manifests, deadline)
+        self.place(manifests, deadline)
         sched_deadline = time.time() + self.o.sched_wait   # homelab only: another cluster's autoscaler can take longer to add a node
         busy_since = None
         last = None
+        failing_since = None
         while True:
             done = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
             if done.returncode != 0:
-                raise Unavailable("lost the pod while waiting for it: " + done.stderr.decode(errors="replace").strip())
+                err = done.stderr.decode(errors="replace").strip()
+                failing_since = failing_since or time.time()
+                if "NotFound" not in err and time.time() - failing_since < POLL_RETRY_S:   # the API server or the ssh hiccuped (etcd timeouts, 2026-11-16): the pod is probably fine
+                    time.sleep(2)
+                    continue
+                raise Unavailable("lost the pod while waiting for it: " + err + (self.end_reason_text() if "NotFound" in err else ""))
+            failing_since = None
             status = json.loads(done.stdout).get("status", {})
             cs = (status.get("containerStatuses") or [{}])[0]
             if self.mssql:
@@ -1820,6 +2018,14 @@ class Job:
         if read.returncode == 0 and value.isdigit():
             self.rec["service_peak_bytes"] = int(value)
             self.note("peak mssql %s cgroup" % value)
+
+    def sidecar_cpu(self):
+        """CPU time of the sidecar's own cgroup (cpu.stat usage_usec), read after CMD ends. Best effort: null in the record when it cannot be read."""
+        read = self.cluster.run(["exec", self.pod, "-c", "mssql", "--", "sh", "-c", "cat /sys/fs/cgroup/cpu.stat 2>/dev/null"])
+        value = cpu_stat_usec(read.stdout.decode(errors="replace")) if read.returncode == 0 else None
+        if value is not None:
+            self.rec["service_cpu_usec"] = value
+            self.note("cpu mssql %d usec" % value)
 
     def execute(self, tar_bytes):
         """One exec: unpack, verify, run. Returns (markers, transport exit)."""
@@ -1959,15 +2165,15 @@ class Job:
         while True:
             try:
                 return self.attempt(manifests, cold, tar_bytes)
-            except Lost:
+            except Lost as lost:
                 if self.cluster.kind != "kubectl":
                     gone = self.evicted()
                     if gone:   # read before cleanup deletes the pod; the result is still unknown (CMD may have had effects), so exit 69 and no rerun
                         raise Unavailable("evicted: " + gone)
-                    raise
+                    raise Lost(str(lost) + self.end_reason_text())
                 why = self.eviction()
                 if not why:
-                    raise      # no sign that the cluster took the pod: the result is unknown and CMD may have had effects, so it is not rerun
+                    raise Lost(str(lost) + self.end_reason_text())   # no sign that the cluster took the pod: the result is unknown and CMD may have had effects, so it is not rerun
                 manifests, cold = self.rerun(why, make)
                 self.rec["cache"] = "pvc" if cold else "none"   # the record names the cache of the pod that ends the job: the rerun pod starts with the claim again
 
@@ -1982,10 +2188,19 @@ class Job:
         seen, transport = self.execute(tar_bytes)
         if self.mssql:
             self.sidecar_peak()
+            self.sidecar_cpu()
         self.rec["ran"] = self.rec["ran"] or "running" in seen     # CMD started in some attempt
         peak = seen.get("peak", "").split()
         if peak and peak[0].isdigit():
             self.rec["peak_bytes"], self.rec["peak_source"] = int(peak[0]), (peak[1] if len(peak) > 1 else None)
+        if seen.get("cpu", "").isdigit():
+            self.rec["cpu_usec"] = int(seen["cpu"])
+        clock = seen.get("clock", "").split()
+        if len(clock) == 2:   # two readings of one monotonic clock in the pod, taken just before CMD started and just after it ended
+            try:
+                self.rec["run_s"] = round(max(float(clock[1]) - float(clock[0]), 0.0), 2)
+            except ValueError:
+                pass
         if "hash" in seen and seen["hash"].startswith("MISMATCH"):
             raise Unavailable("tree hash differs: " + seen["hash"].replace("MISMATCH", "").strip() + " (CMD not run)")
         if seen.get("image", "").startswith("FAILED"):
@@ -2003,6 +2218,58 @@ class Job:
         if transport != code and not self.cut:   # a cut stream ends with kubectl terminated: CMD's own end line is the result
             raise Unavailable("kubectl exited %d but CMD reported %d; not trusted" % (transport, code))
         return code
+
+    def end_reason_text(self):
+        """"; pod end reason: ..." for a pod that was lost, or "" when nothing could be read. Read from the cluster before the pod is deleted: the pod's status and the
+        state of its container, whether the node is Ready, the pod's events, and the OOM kills the container's cgroup counted (CMD runs under `tini -- sleep infinity`:
+        a memory kill of CMD leaves the pod Running and the container fine, so only the cgroup says so). Best effort, each read cut off after LOST_READ_S; never raises."""
+        def ask(argv):
+            try:
+                return self.cluster.run(argv, timeout=LOST_READ_S)
+            except (subprocess.TimeoutExpired, OSError):
+                return None
+
+        def load(done):
+            try:
+                return json.loads(done.stdout) if done is not None and done.returncode == 0 else None
+            except ValueError:
+                return None
+        bits = []
+        try:
+            got = ask(["get", "pod", self.pod, "-o", "json"])
+            pod = load(got)
+            if pod is None:
+                bits.append("the pod is gone (%s)" % ((got.stderr.decode(errors="replace").strip() if got is not None else "the cluster did not answer") or "no message")[:120])
+            else:
+                status = pod.get("status") or {}
+                text = " ".join(("phase " + str(status.get("phase")), str(status.get("reason") or ""), " ".join((status.get("message") or "").split())[:120])).strip()
+                bits.append(text + ("; being deleted" if (pod.get("metadata") or {}).get("deletionTimestamp") else ""))
+                cs = (status.get("containerStatuses") or [{}])[0]
+                done = (cs.get("state") or {}).get("terminated") or (cs.get("lastState") or {}).get("terminated")
+                if done:
+                    bits.append("container terminated: %s exit code %s" % (done.get("reason") or "no reason", done.get("exitCode")))
+                elif "running" in (cs.get("state") or {}):
+                    bits.append("container still running")
+                node = (pod.get("spec") or {}).get("nodeName")
+                node_status = load(ask(["get", "node", node, "-o", "json"])) if node else None
+                ready = next((c for c in ((node_status or {}).get("status") or {}).get("conditions") or [] if c.get("type") == "Ready"), None)
+                if ready and ready.get("status") != "True":
+                    bits.append("node %s is not Ready: %s" % (node, " ".join((ready.get("message") or ready.get("reason") or "").split())[:120]))
+                if status.get("phase") == "Running" and "running" in (cs.get("state") or {}):
+                    mem = ask(["exec", self.pod] + self.job_container() + ["--", "cat", "/sys/fs/cgroup/memory.events"])
+                    kills = re.search(r"^oom_kill (\d+)$", mem.stdout.decode(errors="replace"), re.M) if mem is not None and mem.returncode == 0 else None
+                    if kills and int(kills.group(1)) > 0:
+                        bits.append("the container's memory cgroup killed %s process(es) for running out of memory (memory.events oom_kill)" % kills.group(1))
+            healthy = pod is not None and (pod.get("status") or {}).get("phase") == "Running" and not (pod.get("metadata") or {}).get("deletionTimestamp")
+            events = None if healthy else load(ask(["get", "events", "--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + self.pod, "-o", "json"]))   # a pod that is Running and not being deleted has nothing in its events about its end
+            notable = [e for e in (events or {}).get("items") or [] if e.get("type") != "Normal" or e.get("reason") in ("Killing", "Preempted", "Evicted")]
+            for e in notable[-4:]:
+                bits.append("event %s: %s" % (e.get("reason"), " ".join((e.get("message") or "").split())[:120]))
+        except Exception as e:   # a read that goes wrong must not hide the lost pod it was explaining
+            bits.append("could not read all of it (%s: %s)" % (type(e).__name__, e))
+        text = "; ".join(b for b in bits if b)[:700]
+        self.rec["lost_pod"] = text
+        return "; pod end reason: " + text if text else ""
 
     def evicted(self):
         """The kubelet's message when the node evicted the pod, else None. The pod's own status first (phase Failed, reason Evicted). On the 2026-11-16 live run the pod was
@@ -2127,6 +2394,7 @@ USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SI
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate cluster-setup NAME --from-context CTX [--namespace NS]   write a one-context kubeconfig and a cluster-file skeleton (profiles with cluster = NAME)\n" \
+             "cpu (--cpu or the profile) is rounded up to whole 4-cpu slots on the homelab (1-3 -> 4, 6 -> 8); the client prints a line when it does.\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 1800 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
 

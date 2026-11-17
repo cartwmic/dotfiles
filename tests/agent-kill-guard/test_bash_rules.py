@@ -1,4 +1,4 @@
-"""The seven bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout): what each refuses and what it lets through.
+"""The eight bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -205,16 +205,53 @@ class Merge(unittest.TestCase):
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
-        # The pin-fix exception (issue 429) adds `--pr N` to the gate; the hook reads the command name, so this still merges.
+        # The pin-fix exception (issue 429) adds `--pr N` to the gate; `--merge-gate <repo> --pr N` is still the real gate form, so this still merges.
         self.assertIsNone(check("ci-main-status --merge-gate dotfiles --pr 5 && pr-body-check dotfiles 5 && gh pr merge 5 --squash -R cartwmic/dotfiles"))
         self.assertIsNone(check("pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && gh pr merge 5 --squash -R cartwmic/dotfiles"))
-        # The documented chain pins the head the checks read; the hook reads only the command name.
+        # The documented chain pins the head the checks read; the hook ignores `--match-head-commit` and reads only the gate shapes and the PR number.
         self.assertIsNone(check("ci-main-status --merge-gate X --pr 5 && pr-body-check X 5 && gh pr merge 5 --squash --match-head-commit " + "a" * 40))
         self.assertIn("--match-head-commit <head sha>", check("gh pr merge 12"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")
         self.assertIsNotNone(message)
         self.assertIn("merge-pr.sh", message)
+
+    def test_a_body_file_check_does_not_satisfy_the_merge_rule(self):
+        # `pr-body-check --body-file F` is the PR-body create/edit check; it never reads the PR's head runs.
+        for text in ["ci-main-status --merge-gate dotfiles && pr-body-check --body-file /tmp/b && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 --body-file /tmp/b && gh pr merge 5 -R cartwmic/dotfiles"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("pr-body-check <repo> <pr>", message)
+                self.assertIn("a `pr-body-check` with `--body-file` is not the merge check", message)
+
+    def test_a_bare_ci_main_status_is_not_the_merge_gate(self):
+        for text in ["ci-main-status dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status --tip dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status --merge-gate && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status --merge-gate --all && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles"]:
+            with self.subTest(text=text):
+                self.assertIn("A bare `ci-main-status` (or `--tip`) is not the gate", check(text))
+
+    def test_the_full_form_passes_with_or_without_pr_and_for_every_way_gh_names_the_pr(self):
+        for text in ["ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 --squash -R cartwmic/dotfiles",
+                     "ci-main-status --merge-gate dotfiles --pr 5 && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status --merge-gate --pr 5 dotfiles && pr-body-check dotfiles 05 && gh pr merge -R cartwmic/dotfiles 5",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge --squash --match-head-commit abc1234 5",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge https://github.com/cartwmic/dotfiles/pull/5",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge my-branch",  # a branch: the hook cannot see the PR
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge --squash"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_a_pr_body_check_for_another_pr_is_refused(self):
+        for text in ["ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 7 && gh pr merge 5 -R cartwmic/dotfiles",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 7 && gh pr merge -R cartwmic/dotfiles --subject 7 5",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 7 && gh pr merge https://github.com/cartwmic/dotfiles/pull/5"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("checked PR 7, but `gh pr merge` merges PR 5", message)
+                self.assertIn("pr-body-check <repo> <pr>", message)
 
     def test_the_refusal_names_a_command_that_satisfies_both_gates(self):
         # The command the refusal prints, with <repo>/<pr> filled in, must itself pass the hook.
@@ -223,15 +260,15 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 12 && gh pr merge 12"))
 
     def test_both_checks_first_allow_a_repo_that_is_not_the_coordinator(self):
-        for text in ["ci-main-status homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "pr-body-check homelab 182 && ci-main-status homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "ci-main-status dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
-                     "pr-body-check dotfiles 5 && ci-main-status dotfiles && pr-body-check dotfiles 1 && gh pr merge 5 -R cartwmic/dotfiles --merge",
-                     "cd /tmp && ci-main-status homelab && pr-body-check homelab 182 && gh pr merge 182 --squash",
-                     "ci-main-status homelab && pr-body-check homelab 182 &&\n gh pr merge 182",
-                     "ci-main-status homelab && pr-body-check homelab 182 && cd /tmp && gh pr merge 182",
-                     "ci-main-status homelab && pr-body-check homelab 182 && sh -c 'gh pr merge 182'",
-                     "ci-main-status homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/homelab"]:
+        for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
+                     "pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 1 && gh pr merge 5 -R cartwmic/dotfiles --merge",
+                     "cd /tmp && ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 --squash",
+                     "ci-main-status --merge-gate homelab && pr-body-check homelab 182 &&\n gh pr merge 182",
+                     "ci-main-status --merge-gate homelab && pr-body-check homelab 182 && cd /tmp && gh pr merge 182",
+                     "ci-main-status --merge-gate homelab && pr-body-check homelab 182 && sh -c 'gh pr merge 182'",
+                     "ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/homelab"]:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
 
@@ -250,29 +287,29 @@ class Merge(unittest.TestCase):
                 self.assertIn("ecd63156, 385acc43 and ccc6c94b", message)
 
     def test_the_coordinator_is_refused_even_after_ci_main_status(self):
-        for text in ["ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R cartwmic/coordinator --merge",
-                     "ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo cartwmic/coordinator",
-                     "ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo=cartwmic/coordinator.git",
-                     "ci-main-status coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R https://github.com/cartwmic/coordinator"]:
+        for text in ["ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R cartwmic/coordinator --merge",
+                     "ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo cartwmic/coordinator",
+                     "ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo=cartwmic/coordinator.git",
+                     "ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R https://github.com/cartwmic/coordinator"]:
             with self.subTest(text=text):
                 self.assertIn("merge-pr.sh", check(text))
 
     def test_the_directory_decides_when_there_is_no_repo_flag(self):
         origins = {"/repos/coord": "git@github.com:cartwmic/coordinator.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git",
                    "/work": "https://github.com/cartwmic/coordinator"}
-        self.assertIn("merge-pr.sh", check("cd /repos/coord && ci-main-status coordinator && pr-body-check coordinator 1 && gh pr merge 1", origins=origins))
-        self.assertIn("merge-pr.sh", check("ci-main-status coordinator && pr-body-check coordinator 1 && gh pr merge 1", origins=origins))  # the hook cwd
-        self.assertIsNone(check("cd /repos/other && ci-main-status dotfiles && pr-body-check dotfiles 1 && gh pr merge 1", origins=origins))
-        self.assertIsNone(check("cd /repos/coord && ci-main-status coordinator && pr-body-check coordinator 1 && cd /repos/other && gh pr merge 1", origins=origins))
-        self.assertIsNone(check("ci-main-status x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=origins))  # -R decides, not the cwd
-        self.assertIsNone(check("cd /nowhere && ci-main-status x && pr-body-check x 1 && gh pr merge 1", origins=origins))
-        self.assertIsNone(check("cd $d && ci-main-status x && pr-body-check x 1 && gh pr merge 1", origins=origins))
+        self.assertIn("merge-pr.sh", check("cd /repos/coord && ci-main-status --merge-gate coordinator && pr-body-check coordinator 1 && gh pr merge 1", origins=origins))
+        self.assertIn("merge-pr.sh", check("ci-main-status --merge-gate coordinator && pr-body-check coordinator 1 && gh pr merge 1", origins=origins))  # the hook cwd
+        self.assertIsNone(check("cd /repos/other && ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 1 && gh pr merge 1", origins=origins))
+        self.assertIsNone(check("cd /repos/coord && ci-main-status --merge-gate coordinator && pr-body-check coordinator 1 && cd /repos/other && gh pr merge 1", origins=origins))
+        self.assertIsNone(check("ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=origins))  # -R decides, not the cwd
+        self.assertIsNone(check("cd /nowhere && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1", origins=origins))
+        self.assertIsNone(check("cd $d && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1", origins=origins))
 
     def test_a_real_checkout_whose_origin_is_the_coordinator(self):
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["git", "-C", tmp, "init", "-q"], check=True)
             subprocess.run(["git", "-C", tmp, "remote", "add", "origin", "https://github.com/cartwmic/coordinator.git"], check=True)
-            self.assertIn("merge-pr.sh", bash_rules.check("cd %s && ci-main-status coordinator && pr-body-check coordinator 1 && gh pr merge 1" % tmp,
+            self.assertIn("merge-pr.sh", bash_rules.check("cd %s && ci-main-status --merge-gate coordinator && pr-body-check coordinator 1 && gh pr merge 1" % tmp,
                                                         bash_rules.Context(profile="personal", env={}, cwd="/")))
             self.assertIsNone(bash_rules.origin_of(os.path.join(tmp, "missing")))
             self.assertIsNone(bash_rules.origin_of(None))
@@ -715,6 +752,100 @@ class LiveGit(unittest.TestCase):
         self.assertTrue(check("git -C $HOME/git/coordinator merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
 
 
+class Credential(unittest.TestCase):
+    """Credential config read raw, or hidden by a line regex, is refused on every profile; the reader and checks that print no value are not.
+    REFUSED holds the command shapes of 2026-11-16 (retro proposal 10): RustDesk key and password bytes printed after a regex redaction."""
+    READER = "~/.local/share/agent-harness/bin/config-show"
+
+    REFUSED = [
+        'cat ~/.config/rustdesk/RustDesk.toml | sed -E "s/(password|salt|enc_id|key_pair|id) *=.*/\\1 = <hidden>/" | head -20',
+        'sed -E "s/(password|key)( *=).*/\\1\\2 <hidden>/" ~/.config/rustdesk/peers/74320507.toml | head -30',
+        "sed -E 's/(password|key|id)[^=]*=.*/\\1 = <redacted>/I' ~/.config/rustdesk/peers/1171670957.toml | head -50",
+        'grep -i -E "keyboard|view_style" ~/.config/rustdesk/*.toml 2>/dev/null | grep -v -i -E "password|key_pair|enc_id" | head',
+        'grep -n -E "^\\[|^[a-z_]+ *=" ~/.config/rustdesk/peers/1171670957.toml | grep -v -i -E "password|key" | head -30',
+        "grep -i keyboard ~/.config/rustdesk/RustDesk2.toml",
+        # other readers, other credential files, other ways to name the path
+        "cat ~/.config/rclone/rclone.conf",
+        "cat $HOME/.config/rustdesk/RustDesk.toml",
+        'cat "${HOME}/.config/rustdesk/RustDesk.toml"',
+        "cat /home/u/.config/rustdesk/peers/1.toml",
+        "cat < ~/.config/rclone/rclone.conf",
+        "cd ~/.config/rustdesk && cat peers/1.toml",
+        "cd ~/.config/rustdesk/peers && head -5 1.toml",
+        "cat ~/Library/Preferences/com.carriez.RustDesk/RustDesk.toml",
+        "cat 'C:\\Windows\\ServiceProfiles\\LocalService\\AppData\\Roaming\\RustDesk\\config\\RustDesk.toml'",
+        "cat .env", "cat app/.env.production", "tail -n 20 prod.env", "cat ~/.netrc", "head ~/.git-credentials", "less ~/.aws/credentials",
+        "cat ~/.docker/config.json", "jq . ~/.config/gh/hosts.yml", "yq .token secrets.yaml", "awk '{print $2}' ~/.config/rclone/rclone.conf",
+        "bat ~/.config/agent-harness/op-service-token", "sort ~/.pgpass", "strings ~/.npmrc",
+        "sudo cat ~/.config/rustdesk/RustDesk.toml", "timeout 5 cat ~/.config/rustdesk/RustDesk.toml", "sh -c 'cat ~/.config/rustdesk/RustDesk.toml'",
+        "echo $(cat ~/.config/rustdesk/RustDesk.toml)", "find ~ -name x -exec cat ~/.netrc {} \\;",
+        "grep -rn password ~/.config/rclone", "grep -v '^#' ~/.config/rclone/rclone.conf",
+        # the pattern is skipped, the files after it still count; a `<` input counts; an -e pattern leaves every word a file
+        "grep -rn token .env", "grep -e token -e key .env", "grep -A3 token ~/.netrc", "rg -g '*.toml' key ~/.config/rustdesk",
+        "jq .x ~/.config/gh/hosts.yml", "jq --arg a b .x secrets.json", "grep token < .env", "cat <.env", "sed 's/a/b/' < ~/.netrc",
+        "cat foo > out.txt .env", "diff .env.example .env", "cat -- .env",
+        # a regex redaction of secret words, on any input
+        "cat app.log | sed -E 's/(token|password)=[^ ]*/\\1=<hidden>/g'",
+        "env | sed 's/\\(.*KEY.*=\\).*/\\1***/'",
+        "perl -pe 's/(secret\\s*=\\s*).*/$1<redacted>/' out.txt",
+        "awk '{gsub(/password=[^ ]+/, \"password=XXXX\")}1' out.txt",
+        "pwsh -c \"(Get-Content f.txt) -replace '(password|key)=.*','$1=<hidden>'\"",
+    ]
+    ALLOWED = [
+        READER + " ~/.config/rustdesk/RustDesk.toml",
+        READER + " ~/.config/rustdesk/peers/1.toml --show view_style",
+        "config-show ~/.config/rclone/rclone.conf --format ini",
+        "ls ~/.config/rustdesk ~/.config/rustdesk/peers", "stat ~/.config/rustdesk/RustDesk.toml", "wc -l ~/.config/rclone/rclone.conf",
+        "grep -l keyboard ~/.config/rustdesk/*", "grep -c password ~/.config/rustdesk/RustDesk.toml", "grep -q token .env",
+        "grep -rl token ~/.config/rclone", "test -f ~/.netrc", "cp ~/.config/rclone/rclone.conf /tmp/backup.conf", "chmod 600 ~/.netrc",
+        "rm ~/.config/rustdesk/RustDesk2.toml", "sed -i 's/token/TOKEN/' ~/.netrc", "sed -i.bak 's/a=1/a=2/' .env",
+        "cat README.md", "cat .env.example", "cat .env.sample", "cat config.toml", "cat ~/.config/hypr/hyprland.lua", "sed -n 1,5p ~/git/foo/main.py",
+        "grep -rn password src/", "grep -n token docs/auth.md", "jq .name package.json", "yq .version Chart.yaml", "cat environment.md",
+        "git commit -m \"never sed s/password/<hidden>/ a config\"", "sed -i 's/password/<password>/' app.py",
+        "sed 's/foo/bar/' ~/git/x/config.toml", "sed -E 's/token/TOKEN/' notes.txt", "sed 's/password/passphrase/' doc.md",
+        "cat > pr.md <<'EOF'\nrefused: sed 's/password/<hidden>/' ~/.config/rustdesk/RustDesk.toml\nEOF",
+        "echo cat ~/.config/rustdesk/RustDesk.toml", "grep pkill ~/git/notes.md",
+        # a search pattern, filter or script that names a credential file is not a file read (review round 1, f1)
+        "grep -rn '\\.env' src/", "grep -rn rclone.conf docs/", "rg RustDesk.toml ~/notes", "jq .env package.json",
+        "grep -rn 'credentials.json' .", "grep -n -e .netrc README.md", "rg -g '*.env' token src/", "sed -n '/.env/p' notes.md",
+        "awk '/rclone.conf/' notes.md", "yq .env.example config.yaml", "grep -rn -A3 .pgpass docs/", "jq --arg f .env '.x' package.json",
+        # a `>` or `>>` target is written, not read (f2)
+        "cat > .env <<'EOF'\nA=1\nEOF", "cat foo.txt > .env", "cat > ~/.netrc", "cat foo >> .env", "cat foo >.env", "cat foo 2>/dev/null >> ~/.netrc",
+        "cat foo &> ~/.config/rclone/rclone.conf", "cat <<'EOF' >.env\nA=1\nEOF", "echo hi | tee .env", "sed 's/a/b/' in.txt > ~/.config/rclone/rclone.conf",
+    ]
+
+    def test_refused_shapes_name_the_reader_on_every_profile(self):
+        for profile in ("personal", "axon-work-computer", None):
+            for text in self.REFUSED:
+                with self.subTest(profile=profile, text=text):
+                    message = check(text, profile=profile, env={"HOME": "/home/u"})
+                    self.assertTrue(message)
+                    self.assertIn("refused in agent sessions", message)
+                    self.assertIn(self.READER + " FILE", message)
+
+    def test_allowed_shapes_pass_on_every_profile(self):
+        for profile in ("personal", "axon-work-computer", None):
+            for text in self.ALLOWED:
+                with self.subTest(profile=profile, text=text):
+                    self.assertIsNone(check(text, profile=profile, env={"HOME": "/home/u"}))
+
+    def test_the_refusal_suggests_diffing_two_reader_outputs(self):
+        self.assertIn("diff their `config-show` outputs", check("diff .env.example .env", env={"HOME": "/home/u"}))
+
+    def test_the_read_refusal_names_the_file_and_the_show_flag(self):
+        message = check("cat ~/.config/rustdesk/RustDesk.toml", env={"HOME": "/home/u"})
+        self.assertIn("`cat` on credential config (RustDesk.toml)", message)
+        self.assertIn("--show KEY", message)
+
+    def test_the_refusal_never_repeats_a_secret_from_the_command(self):
+        message = check("sed -E 's/(password)=hunter2/\\1=<hidden>/' ~/.config/rustdesk/RustDesk.toml", env={"HOME": "/home/u"})
+        self.assertNotIn("hunter2", message)
+
+    def test_a_relative_path_uses_the_commands_directory(self):
+        self.assertTrue(check("cat peers/1.toml", cwd="/home/u/.config/rustdesk"))
+        self.assertIsNone(check("cat peers/1.toml", cwd="/home/u/git/app"))
+
+
 class Hook(unittest.TestCase):
     """The real script, copied beside a `profile` file in a temp dir."""
 
@@ -778,7 +909,8 @@ class Hook(unittest.TestCase):
         for command, profile in [("until ok; do sleep 1; done", None), ("cat <<EOF\n`x`\nEOF", None), ("gh pr merge 1", "personal"),
                                  ("gh pr create --body-file b.md", "personal"),
                                  ("kubectl --context a get no", "personal"), ("pkill x", None),
-                                 ("cd ~/git/coordinator && git merge origin/main", None)] + (
+                                 ("cd ~/git/coordinator && git merge origin/main", None),
+                                 ("cat ~/.config/rustdesk/RustDesk.toml", None)] + (
                 [("docker build .", "personal")] if sys.platform.startswith("linux") else []):
             with self.subTest(command=command):
                 run = self.run_hook(command, profile=profile)
@@ -856,6 +988,25 @@ class Hook(unittest.TestCase):
     def test_the_fixture_home_decides_not_the_machine_it_runs_on(self):
         run = self.run_fixture("live-git-merge-cd.json", home="/Users/mac")
         self.assertEqual(run.returncode, 0)  # that command names /home/cartwmic/git/coordinator, which is no checkout of /Users/mac
+
+    def test_the_real_rustdesk_commands_are_refused_through_the_real_script(self):
+        """2026-11-16 (retro proposal 10): agents printed RustDesk key and password bytes after a line-regex redaction. The fixtures hold the
+        command texts as the sessions ran them (no values in them), in the hook's PreToolUse JSON shape."""
+        names = ("credential-rustdesk-cat-sed.json", "credential-rustdesk-sed-peer.json", "credential-rustdesk-grep-v.json",
+                 "credential-powershell-replace.json")
+        for profile in ("personal", "axon-work-computer"):
+            for name in names:
+                with self.subTest(fixture=name, profile=profile):
+                    run = self.run_fixture(name, profile=profile)
+                    self.assertEqual(run.returncode, 2)
+                    self.assertIn("refused in agent sessions", run.stderr)
+                    self.assertIn("agent-harness/bin/config-show FILE", run.stderr)
+
+    def test_the_reader_and_an_ordinary_read_pass_through_the_real_script(self):
+        for command in ("~/.local/share/agent-harness/bin/config-show ~/.config/rustdesk/RustDesk.toml", "cat README.md", "grep -l key ~/.config/rustdesk/*"):
+            with self.subTest(command=command):
+                run = self.run_hook(command, profile="personal")
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
 
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()

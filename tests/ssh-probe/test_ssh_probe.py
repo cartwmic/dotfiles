@@ -73,7 +73,7 @@ def authorized_keys(chezmoi_os, existing, profile="personal"):
         cfg = Path(tmp) / "c.yaml"
         cfg.write_text("{}\n")
         script = subprocess.run([CHEZMOI, "--source", str(ROOT), "--config", str(cfg), "execute-template", "--override-data", json.dumps(data)],
-                                input=(ROOT / "private_dot_ssh/modify_authorized_keys.tmpl").read_text(), text=True, capture_output=True, timeout=60, check=True).stdout
+                                input=(ROOT / "private_dot_ssh/modify_private_authorized_keys.tmpl").read_text(), text=True, capture_output=True, timeout=60, check=True).stdout
         return subprocess.run(["sh", "-c", script], input=existing, text=True, capture_output=True, timeout=30, check=True).stdout
 
 
@@ -92,6 +92,24 @@ class AuthorizedKeysTests(unittest.TestCase):
         out = authorized_keys("linux", FOREIGN.rstrip("\n"))
         self.assertEqual(out.splitlines()[0] + "\n", FOREIGN)
         self.assertEqual(out.count(OURS), 1)
+
+    def test_an_apply_leaves_authorized_keys_at_mode_0600(self):
+        # The source file name carries `private_` (`modify_private_authorized_keys.tmpl`), so a 0644 file becomes 0600.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "src/private_dot_ssh").mkdir(parents=True)
+            shutil.copy(ROOT / "private_dot_ssh/modify_private_authorized_keys.tmpl", tmp / "src/private_dot_ssh/")
+            shutil.copytree(ROOT / ".chezmoitemplates", tmp / "src/.chezmoitemplates")
+            (tmp / "c.yaml").write_text("data:\n  profile: personal\n")
+            ssh = tmp / "home/.ssh"
+            ssh.mkdir(parents=True)
+            target = ssh / "authorized_keys"
+            target.write_text(FOREIGN)
+            target.chmod(0o644)
+            subprocess.run([CHEZMOI, "--source", str(tmp / "src"), "--destination", str(tmp / "home"), "--config", str(tmp / "c.yaml"),
+                            "--persistent-state", str(tmp / "state.db"), "apply", "--force"], text=True, capture_output=True, timeout=60, check=True)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(target.read_text().count(OURS), 1)
 
 
 if __name__ == "__main__":

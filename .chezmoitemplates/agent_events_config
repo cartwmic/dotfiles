@@ -1,10 +1,15 @@
-{{- /* agent_events_config: the always-on agent-events exporter's settings as JSON {"enabled", "machine", "endpoint"} plus "engine" when it is "ts"
+{{- /* agent_events_config: the always-on agent-events exporter's settings as JSON {"enabled", "machine", "endpoint"} plus "engine" when it is "ts" and "export" when it is false
 (dot_local/share/agent-events/README.md). Local chezmoi data agentEvents:
   enabled   true or false. Default: true on the personal profile, false everywhere else (the work Mac sends nothing until it is set there).
   machine   the machine label on every series: a lowercase letter, then up to 31 lowercase letters, digits or hyphens.
             Default: personal on the personal profile, work on axon-work-computer, none elsewhere (then required when enabled).
   endpoint  the collector's OTLP/HTTP metrics URL, http or https, ending in /v1/metrics.
             Default: http://otel-collector.internal.cartwmic.com/v1/metrics
+  export    true or false. Default: true. false: the tick still builds the local database but sends nothing (no AGENT_EVENTS_OTLP_ENDPOINT is
+            set, which the kit reads as "this machine does not send": `agent-events status` says so and the tick exits 0). For a machine whose
+            scheduled node cannot reach the collector: macOS blocks a launchd-run node from the local network until it is granted in System
+            Settings, and the failed send made the job exit 1 every 2 minutes. The JSON carries "export" only when it is false, so the
+            load script's "# setting:" line is what it was on every machine that does not set it.
   engine    ts is the only engine: ~/.local/bin/agent-events always runs the agent-kit port (agent-traces pi ...). The key is kept so a
             data file that already says engine: ts still renders. engine: python fails the render: the Python collector was retired on
             2026-11-07 (git tag agent-events-python-final). Default: ts on the personal profile, no key elsewhere.
@@ -17,11 +22,11 @@ agentHost.disableTimers (agent_host_config) forces enabled to false whatever ena
 Used by the plist, its load script and .chezmoiignore. Any other key or value fails the whole render, so a typo applies nothing. */ -}}
 {{- $raw := dig "agentEvents" dict . -}}
 {{- if not (kindIs "map" $raw) -}}
-{{-   fail (printf "agentEvents must be a map with enabled, machine, endpoint and engine, got %q" (printf "%v" $raw)) -}}
+{{-   fail (printf "agentEvents must be a map with enabled, machine, endpoint, export and engine, got %q" (printf "%v" $raw)) -}}
 {{- end -}}
 {{- range $k, $_ := $raw -}}
-{{-   if not (has $k (list "enabled" "machine" "endpoint" "engine")) -}}
-{{-     fail (printf "agentEvents.%s is not a setting (enabled, machine, endpoint, engine)" $k) -}}
+{{-   if not (has $k (list "enabled" "machine" "endpoint" "export" "engine")) -}}
+{{-     fail (printf "agentEvents.%s is not a setting (enabled, machine, endpoint, export, engine)" $k) -}}
 {{-   end -}}
 {{- end -}}
 {{- $profile := printf "%v" (dig "profile" "" .) -}}
@@ -32,6 +37,11 @@ Used by the plist, its load script and .chezmoiignore. Any other key or value fa
 {{- if hasKey $raw "machine" -}}{{- $machine = printf "%v" (get $raw "machine") -}}{{- end -}}
 {{- $endpoint := "http://otel-collector.internal.cartwmic.com/v1/metrics" -}}
 {{- if hasKey $raw "endpoint" -}}{{- $endpoint = printf "%v" (get $raw "endpoint") -}}{{- end -}}
+{{- $export := "true" -}}
+{{- if hasKey $raw "export" -}}{{- $export = printf "%v" (get $raw "export") -}}{{- end -}}
+{{- if not (has $export (list "true" "false")) -}}
+{{-   fail (printf "agentEvents.export must be true or false, got %q" $export) -}}
+{{- end -}}
 {{- $engine := "" -}}
 {{- if eq $profile "personal" -}}{{- $engine = "ts" -}}{{- end -}}
 {{- if hasKey $raw "engine" -}}{{- $engine = printf "%v" (get $raw "engine") -}}{{- end -}}
@@ -58,4 +68,5 @@ Used by the plist, its load script and .chezmoiignore. Any other key or value fa
 {{- end -}}
 {{- $out := dict "enabled" (eq $on "true") "machine" $machine "endpoint" $endpoint -}}
 {{- if eq $engine "ts" -}}{{- $_ := set $out "engine" "ts" -}}{{- end -}}
+{{- if eq $export "false" -}}{{- $_ := set $out "export" false -}}{{- end -}}
 {{- $out | toJson -}}
