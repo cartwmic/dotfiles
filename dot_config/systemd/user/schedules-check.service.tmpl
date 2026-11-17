@@ -1,0 +1,15 @@
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | replace "%" "%%" -}}
+{{- $home := .chezmoi.homeDir | replace "%" "%%" -}}
+# Daily: `coordinator schedules check` reads every scheduler (kit jobs, T3 tasks, timers, CronJobs, TrueNAS, GitHub Actions) and fails on anything
+# with no approval row. Started by schedules-check.timer. Output goes to the journal: journalctl --user -u schedules-check. Personal Linux only (.chezmoiignore).
+# It runs the coordinator CLI (src/coordinatord/cli.ts) from the coordinator checkout, the same way coordinatord.service runs the daemon.
+[Unit]
+Description=schedules-check (coordinator schedules check: every schedule against the approval list)
+
+[Service]
+Type=oneshot
+Nice=10
+WorkingDirectory=%h
+# node, git, op and gh must be found from here (the mise shims, then the user's bin directories); a user service has no shell PATH.
+Environment=PATH={{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --experimental-strip-types --disable-warning=ExperimentalWarning {{ $repo }}/src/coordinatord/cli.ts schedules check

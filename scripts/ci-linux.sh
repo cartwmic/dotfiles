@@ -58,6 +58,7 @@ python3 scripts/ci-par.py \
   tests/worktree-reap \
   tests/workstream-rank \
   tests/session-cost \
+  tests/schedules-check \
   tests/agent-events \
   tests/mistakes-report \
   tests/instances \

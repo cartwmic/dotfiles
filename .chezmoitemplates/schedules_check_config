@@ -1,0 +1,13 @@
+{{- /* schedules_check_config: "true" or "false": whether the daily schedules-check timer is installed.
+Local chezmoi data schedulesCheck.enabled (true or false). Default: true on the personal profile on Linux, false everywhere else
+(the work profile has no coordinator checkout of this kind and nothing here is asked of it). Used by .chezmoiignore and its load script.
+Any other value fails the render, so a typo applies nothing. */ -}}
+{{- $on := and (eq (printf "%v" (dig "profile" "" .)) "personal") (eq .chezmoi.os "linux") -}}
+{{- $set := printf "%v" (dig "schedulesCheck" "enabled" "" .) -}}
+{{- if ne $set "" -}}
+{{-   if not (has $set (list "true" "false")) -}}
+{{-     fail (printf "schedulesCheck.enabled must be true or false, got %q" $set) -}}
+{{-   end -}}
+{{-   $on = eq $set "true" -}}
+{{- end -}}
+{{- $on -}}

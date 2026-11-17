@@ -241,6 +241,18 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 86_session_cost_systemd.sh
 {{- end }}
 
+{{- $schedulesCheck := eq (includeTemplate "schedules_check_config" .) "true" }}
+{{- if not $schedulesCheck }}
+# schedules-check (the daily `coordinator schedules check`): the timer units. chezmoi data schedulesCheck.enabled, default true on personal Linux only:
+# the coordinator checkout and its approval list live on that host and the work profile has none of it.
+# Disabled: chezmoi leaves the units alone; the load script below stops the timer and removes them.
+.config/systemd/user/schedules-check.service
+.config/systemd/user/schedules-check.timer
+{{- end }}
+{{- if and (not $schedulesCheck) (not (stat (joinPath (toString .chezmoi.destDir) ".config/systemd/user/schedules-check.timer"))) }}
+91_schedules_check_systemd.sh
+{{- end }}
+
 {{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
 # Coordinator LaunchAgent unit (cartwmic/coordinator): personal macOS.
 # They are inert copies; only the reconcile script puts a unit in ~/Library/LaunchAgents, and only for an opted-in instance.
