@@ -45,6 +45,48 @@ if ! command -v mise >/dev/null 2>&1; then
   fi
 fi
 
+# mise must be recent enough to install the tools in its config. 2026.3.9 looked for a pnpm asset named pnpm-macos-arm64 and failed the pnpm install;
+# 2026.11.8 is the version that worked, so it is the floor. Nothing runs when mise is already at or above it.
+MISE_MIN="2026.11.8"
+
+mise_version() {
+  mise --version 2>/dev/null | awk '$1 ~ /^[0-9]/ { print $1; exit }'
+}
+
+# version_lt A B: true when A is an older dotted number than B (field by field, numerically).
+version_lt() {
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    na = split(a, x, "."); nb = split(b, y, "."); n = (na > nb ? na : nb)
+    for (i = 1; i <= n; i++) { if (x[i] + 0 < y[i] + 0) exit 0; if (x[i] + 0 > y[i] + 0) exit 1 }
+    exit 1
+  }'
+}
+
+# Upgrade the way mise was installed: mise.run installs update themselves; a Homebrew install refuses self-update and goes through brew;
+# a distro package (self-update refused, no brew) is left for the package manager.
+upgrade_mise() {
+  if mise self-update --yes >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+    brew upgrade mise
+    return
+  fi
+  return 1
+}
+
+mise_now="$(mise_version)"
+if [ -z "$mise_now" ]; then
+  log_info "WARN: could not read the mise version; not checking it against $MISE_MIN"
+elif version_lt "$mise_now" "$MISE_MIN"; then
+  log_info "mise $mise_now is older than $MISE_MIN; upgrading it"
+  if upgrade_mise; then
+    log_info "mise is now $(mise_version)"
+  else
+    log_info "WARN: could not upgrade mise $mise_now; update it the way it was installed (the pnpm install needs $MISE_MIN or later)"
+  fi
+fi
+
 log_info "mise version: $(mise --version)"
 
 # IMPORTANT: Run setup-ubuntu-essentials FIRST to install build tools

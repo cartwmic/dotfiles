@@ -2,10 +2,13 @@
   The Claude Code settings file for one agent seat (~/.claude/fleet/seat-<seat>.json). Call:
     {{ includeTemplate "fleet_seat" (dict "seat" "lead" "ctx" .) }}
   Every seat: the Artifact tool is denied, claude.ai skills are off, Claude Code's bundled skills are off except workflow-authoring on the lead and coordinator (see $bundledOff below), and every personal skill is "off"
-  unless this seat keeps it. The skills are the union of two listings, each a directory with a SKILL.md: the canonical skills in this source tree
-  (dot_local/share/agent-harness/canonical/skills) and what is under ~/.claude/skills at apply time. The source listing is there because chezmoi
-  writes this file BEFORE apply_harness_config.sh (a run_onchange_after script) links a newly added canonical skill into ~/.claude/skills; with only
-  the second listing, a skill added by the same pull was missing from every seat file until the next apply, and `chezmoi diff` kept showing it.
+  unless this seat keeps it. The skills are the union of three listings, each a directory with a SKILL.md: the canonical skills in this source tree
+  (dot_local/share/agent-harness/canonical/skills), the skills this source links in later (archive externals and model-fit, below), and what is under
+  ~/.claude/skills at apply time. The first two are there because chezmoi writes this file BEFORE apply_harness_config.sh (a run_onchange_after script)
+  links them into ~/.claude/skills; with only the last listing, a skill added by the same pull, or any skill on a first apply, was missing from every
+  seat file until the next apply, and `chezmoi diff` kept showing it. What the last listing still supplies exists before any apply: the skills the
+  OS or the desktop installs (omarchy's, superwhisper) and hand installs. The work profile's private playbook skills are named in a private repo, so
+  they still show from the second apply.
   skillOverrides has no wildcard. A skill that arrives some other way (the review-map external, the private playbook's skills, a hand install)
   shows in the listing until the next apply.
   Keep-lists: the skills the seat called at least once between 2026-11-11 18:00Z and 2026-11-13 (tool-call counts in the token baseline),
@@ -33,6 +36,15 @@
 {{- range $f := concat (glob (joinPath $canonical "*/SKILL.md")) (glob (joinPath $canonical "*/SKILL.md.tmpl")) -}}
 {{-   $name := base (dir $f) -}}
 {{-   if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
+{{- end -}}
+{{- /* The skills this same apply links into ~/.claude/skills later (apply_harness_config.sh, run script 20), named from the source so a first apply renders the same file as a second one:
+  archive externals (the skills/<name> globs in the "include" lines of .chezmoiexternal.toml) and the coordinator's model-fit (a source symlink into the coordinator checkout, linked only where that checkout has the skill). */ -}}
+{{- range $name := regexFindAll `include = \["\*/skills/([a-z0-9-]+)/\*\*"\]` (include ".chezmoiexternal.toml") -1 -}}
+{{-   $name = regexReplaceAll `^.*/skills/([a-z0-9-]+)/.*$` $name "${1}" -}}
+{{-   if not (has $name $keep) -}}{{- $_ := set $off $name "off" -}}{{- end -}}
+{{- end -}}
+{{- if stat (joinPath (includeTemplate "instance_repo" (dict "root" .ctx "name" "coordinator")) "skills/model-fit/SKILL.md") -}}
+{{-   if not (has "model-fit" $keep) -}}{{- $_ := set $off "model-fit" "off" -}}{{- end -}}
 {{- end -}}
 {{- /* ~/.claude/skills: a directory or a symlink to one (omarchy's skills are symlinks, which a glob through them would not match) */ -}}
 {{- range $p := glob (joinPath .ctx.chezmoi.homeDir ".claude/skills/*") -}}
