@@ -80,6 +80,8 @@ BAD = (
     "agentEvents: {machine: Work}", "agentEvents: {machine: my mac}", "agentEvents: {machine: ''}", "agentEvents: {machine: -x}",
     "agentEvents: {machine: 1mac}", "agentEvents: {machine: work_mac}", "agentEvents: {machine: mac.local}",
     "agentEvents: {machine: %s}" % ("a" * 33), "agentEvents: {machine: '<x>'}", "agentEvents: {machine: null}",
+    # export
+    "agentEvents: {export: maybe}", "agentEvents: {export: ''}", "agentEvents: {export: null}",
     # endpoint
     "agentEvents: {endpoint: 'otel-collector.internal.cartwmic.com/v1/metrics'}",
     "agentEvents: {endpoint: 'ftp://otel-collector.internal.cartwmic.com/v1/metrics'}",
@@ -153,6 +155,30 @@ class SettingTest(unittest.TestCase):
         self.assertEqual(render(CONFIG, data='agentEvents: {enabled: "false"}')[0].stdout,
                          '{"enabled":false,"endpoint":"%s","engine":"ts","machine":"personal"}' % DEFAULT_ENDPOINT)
         self.assertEqual(render(CONFIG, data="agentEvents: {engine: ts}")[0].stdout, out, "engine: ts is the personal default spelled out")
+
+
+class ExportTest(unittest.TestCase):
+    """agentEvents.export: false builds the database and sends nothing: no AGENT_EVENTS_OTLP_ENDPOINT in the job's environment, which the kit reads as
+    "this machine does not send". It exists for a machine whose launchd-run node cannot reach the collector (macOS Local Network block, EHOSTUNREACH).
+    The JSON carries "export" only when it is false, so the "# setting:" line of every machine that does not set it stays what it was."""
+
+    def test_export_false_leaves_the_endpoint_out_and_keeps_the_machine_label(self):
+        env = plist(data="agentEvents: {export: false}")[0]["EnvironmentVariables"]
+        self.assertEqual(env, {"AGENT_EVENTS_MACHINE": "personal"})
+        self.assertEqual(plist(WORK, "agentEvents: {enabled: true, machine: w, export: 'false'}")[0]["EnvironmentVariables"], {"AGENT_EVENTS_MACHINE": "w"})
+
+    def test_export_true_is_the_default_spelled_out(self):
+        self.assertEqual(render(CONFIG, data="agentEvents: {export: true}")[0].stdout, render(CONFIG)[0].stdout)
+        self.assertEqual(plist(data="agentEvents: {export: true}")[0]["EnvironmentVariables"]["AGENT_EVENTS_OTLP_ENDPOINT"], DEFAULT_ENDPOINT)
+
+    def test_the_json_carries_export_only_when_it_is_false(self):
+        self.assertEqual(render(CONFIG, data="agentEvents: {export: false}")[0].stdout,
+                         '{"enabled":true,"endpoint":"%s","engine":"ts","export":false,"machine":"personal"}' % DEFAULT_ENDPOINT)
+        self.assertNotIn("export", render(CONFIG)[0].stdout)
+
+    def test_the_load_script_says_why_it_sends_nothing(self):
+        self.assertIn("agentEvents.export is false", render(LOADER, data="agentEvents: {export: false}")[0].stdout)
+        self.assertNotIn("agentEvents.export", render(LOADER)[0].stdout)
 
 
 WORK_TS = "agentEvents: {enabled: true, machine: work, endpoint: 'https://otel-collector.internal.cartwmic.com/v1/metrics', engine: ts}\nagentKit: {enabled: true}"

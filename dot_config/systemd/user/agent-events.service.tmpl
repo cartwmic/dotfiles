@@ -9,7 +9,9 @@ Description=agent-events exporter (Pi session metrics to the homelab OTel collec
 [Service]
 Type=oneshot
 Nice=10
+{{- if not (hasKey $agentEvents "export") }}
 Environment="AGENT_EVENTS_OTLP_ENDPOINT={{ $agentEvents.endpoint }}"
+{{- end }}
 Environment="AGENT_EVENTS_MACHINE={{ $agentEvents.machine }}"
 # The kit refuses a `run` on the production database unless it is the launchd job (XPC_SERVICE_NAME) or this override is exactly 1.
 # This unit is the scheduled job on Linux, so without it every tick exits 0 and builds and exports nothing.
