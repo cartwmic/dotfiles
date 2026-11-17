@@ -84,6 +84,7 @@ python3 scripts/ci-par.py \
   tests/t3-hook \
   tests/agent-host \
   tests/t3-hub \
+  tests/t3-pin \
   tests/t3-service \
   tests/pi-lead \
   tests/hub \

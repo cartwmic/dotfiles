@@ -21,3 +21,13 @@ enabled = true
 [playwrightChromium]
 version = "1.64.1"
 build = "1248"
+
+# The T3 release that container mode (the agent host pods) installs: `05_container_tools.sh` passes it to install_t3.sh, which reinstalls when
+# `t3 --version` differs. T3 refuses a link between two T3s whose versions differ, so keep it equal to the T3 on the machine that links to the pods
+# (omarchy's `t3 --version`) and to the pin in the budget-steward Dockerfile. sha256: the linux lines of
+# https://github.com/pingdotgg/t3code/releases/download/v<version>/SHA256SUMS. Changing any value reruns script 05 on the next pod start; a wrong
+# sha256 fails that apply, and the pod does not start. Host installs (script 74) ignore this table.
+[t3Pin]
+version = "0.1.10-nightly.20261116.4800"
+sha256X64 = "b55a3c723a30ea4d16b965c426d1bf87b0bb4cfbbdfed5edf5bcfd2fba632f8a"
+sha256Arm64 = "8567dc1b5756cac178cf6f688d8faf2382e340eefda14e14b7a91a1aef97e866"
