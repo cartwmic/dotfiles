@@ -11,11 +11,13 @@
 # against the pinned sha256 (a mismatch exits 1 and installs nothing), unpack that same file into the installer's own layout
 # ($T3CODE_HOME/runtime/versions/<pin>, marked .install-complete), then run the installer with T3CODE_VERSION set: it finds the version already
 # downloaded and only writes the `t3` launcher (over the old one, which it replaces when it made it). So the bytes that run are the bytes the pinned
-# sha256 covers; the installer downloads nothing. If the installer replaces the checked binary anyway (its layout changed and it downloaded the
-# release itself), the script exits 1. Older versions stay on disk.
+# sha256 covers; the installer downloads nothing. If the installer does not use the checked folder (its layout changed and it downloaded the
+# release itself), the script exits 1: after it, the launcher must run exactly versions/<pin>/t3, the t3 binary must be unchanged, and a marker file
+# written into the folder before the installer ran must still be there (the installer deletes the whole folder when it unpacks again). Older versions
+# stay on disk.
 #
-# Exit 0: t3 is on PATH (pinned: at the pin). Exit 1: the download, the sha256 check or the installer failed, or t3 is not at the expected version
-# after it (a message says which).
+# Exit 0: t3 is on PATH (pinned: at the pin). Exit 1: the download, the sha256 check or the installer failed, or (pinned) the installer did not leave
+# the checked copy in place (a message says which).
 # Test hooks: T3_INSTALL_URL, and T3CODE_RELEASE_BASE_URL (the installer's own release mirror variable, used here for the archive download; it
 # must be an http(s) URL for the real installer, which rejects file://).
 set -eu
@@ -56,6 +58,7 @@ if [ -n "$pin" ]; then
   rm -rf "${versions:?}/$pin"
   mv "$staging" "$versions/$pin"
   checked=$(sha256sum "$versions/$pin/t3")
+  : > "$versions/$pin/.checked-by-install_t3"
 fi
 
 [ -z "$pin" ] || export T3CODE_VERSION=$pin
@@ -63,7 +66,11 @@ log INFO "installing T3${pin:+ $pin} (https://t3.codes/install.sh)"
 curl -fsSL "${T3_INSTALL_URL:-https://t3.codes/install.sh}" -o "$installer" || { log ERROR "T3 install failed: could not download the installer"; exit 1; }
 sh "$installer" || { log ERROR "T3 install failed"; exit 1; }
 command -v t3 >/dev/null 2>&1 || { log ERROR "t3 is still not on PATH after the install"; exit 1; }
-[ -z "$pin" ] || [ "$(sha256sum "$versions/$pin/t3")" = "$checked" ] \
-  || { log ERROR "T3 install failed: the installer replaced the checked t3 in $versions/$pin"; exit 1; }
-[ -z "$pin" ] || [ "$(t3 --version 2>/dev/null || true)" = "t3 v$pin" ] \
-  || { log ERROR "t3 prints \"$(t3 --version 2>&1 | head -n 1)\" after the install, not \"t3 v$pin\""; exit 1; }
+if [ -n "$pin" ]; then
+  launcher=$(command -v t3)
+  grep -qxF "exec '$versions/$pin/t3' \"\$@\"" "$launcher" \
+    || { log ERROR "T3 install failed: $launcher does not run the checked $versions/$pin/t3 (the installer put T3 somewhere else)"; exit 1; }
+  [ "$(sha256sum "$versions/$pin/t3")" = "$checked" ] && [ -e "$versions/$pin/.checked-by-install_t3" ] \
+    || { log ERROR "T3 install failed: the installer replaced the checked files in $versions/$pin"; exit 1; }
+  rm -f "$versions/$pin/.checked-by-install_t3"
+fi

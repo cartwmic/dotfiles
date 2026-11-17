@@ -23,10 +23,17 @@ PIN = "0.1.10-nightly.20261116.4800"
 ARCH = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}[os.uname().machine]
 ARCHIVE = f"t3-{PIN}-linux-{ARCH}.tar.gz"
 # The stand-in installer. Like the real one it skips a version that is marked complete and writes the launcher; FAKE_REDOWNLOAD makes it fetch the release
-# itself instead (as the real one would if its layout changed); FAKE_INSTALLS makes the launcher report another version.
+# itself instead (as the real one would if its layout changed); FAKE_REEXTRACT unpacks the same bytes again into the same folder (a fresh folder, so any
+# file added to it is gone); FAKE_RELOCATE unpacks different bytes in another folder and points the launcher there; FAKE_INSTALLS makes the launcher
+# report another version.
 INSTALLER = '''#!/bin/sh
 echo "installer version=${T3CODE_VERSION:-}" >> "$CALLS"
 dir=${T3CODE_HOME:-$HOME/.t3}/runtime/versions/$T3CODE_VERSION
+if [ -n "${FAKE_REEXTRACT:-}" ]; then cp "$dir/t3" /tmp/same-t3.$$; rm -rf "$dir"; mkdir -p "$dir"; mv /tmp/same-t3.$$ "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"; fi
+if [ -n "${FAKE_RELOCATE:-}" ]; then
+  dir=${T3CODE_HOME:-$HOME/.t3}/runtime/v2/versions/$T3CODE_VERSION
+  mkdir -p "$dir"; printf '#!/bin/sh\\necho "t3 v%s"\\n# unchecked bytes\\n' "$T3CODE_VERSION" > "$dir/t3"; chmod 755 "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"
+fi
 if [ -n "${FAKE_REDOWNLOAD:-}" ] || [ "$(cat "$dir/.install-complete" 2>/dev/null)" != "$T3CODE_VERSION" ]; then
   mkdir -p "$dir"; printf '#!/bin/sh\\necho "t3 v%s"\\n# other bytes\\n' "$T3CODE_VERSION" > "$dir/t3"; chmod 755 "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"
 fi
@@ -109,7 +116,26 @@ class PinnedInstall(unittest.TestCase):
     def test_an_installer_that_replaces_the_checked_binary_fails(self):
         r = self.run_script(FAKE_REDOWNLOAD="1")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("replaced the checked t3", r.stdout)
+        self.assertIn("replaced the checked files", r.stdout)
+
+    def test_an_installer_that_installs_somewhere_else_fails(self):
+        # The launcher would run bytes the sha256 never covered; the checked copy is left untouched, so only the launcher check can see it.
+        self.have_t3("0.1.9")
+        r = self.run_script(FAKE_RELOCATE="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("put T3 somewhere else", r.stdout)
+        self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+
+    def test_an_installer_that_unpacks_the_same_bytes_again_fails(self):
+        # t3 is identical afterwards, so only the marker written into the checked folder shows that the folder was replaced.
+        r = self.run_script(FAKE_REEXTRACT="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("replaced the checked files", r.stdout)
+
+    def test_the_marker_is_gone_after_a_good_install(self):
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.versions / PIN / ".checked-by-install_t3").exists())
 
     def test_a_pod_already_on_the_pin_downloads_and_installs_nothing(self):
         self.have_t3(PIN)
@@ -166,11 +192,11 @@ class PinnedInstall(unittest.TestCase):
         self.assertIn("could not download", r.stdout)
         self.assertEqual(self.installed(), [])
 
-    def test_an_install_that_leaves_a_different_version_fails(self):
+    def test_a_launcher_that_does_not_run_the_checked_copy_fails(self):
         self.have_t3("0.1.9")
         r = self.run_script(FAKE_INSTALLS="0.1.9")
         self.assertEqual(r.returncode, 1)
-        self.assertIn(f'not "t3 v{PIN}"', r.stdout)
+        self.assertIn("does not run the checked", r.stdout)
 
 
 class PinInTheTools(unittest.TestCase):
