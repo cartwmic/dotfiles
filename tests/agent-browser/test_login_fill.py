@@ -21,16 +21,16 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_agent-login"
 SECRET = "s3cr3t-Pa55,with\"odd'chars"
 PAGE = b"""<!doctype html><title>login</title>
-<input id=user type=text><input id=pw type=password><input id=other type=text><button id=btn>go</button>
+<input id=user type=text><input id=pw type=password><input id=other type=text><input id=trunc type=text><button id=btn>go</button>
 <script>
 const q = new URLSearchParams(location.search), t = q.get('t');
 const post = (path, body) => fetch(path, {method: 'POST', body: JSON.stringify(body)});
-for (const el of document.querySelectorAll('input')) el.addEventListener('input', () => post('/value', {t, host: location.hostname, id: el.id, value: el.value}));
+for (const el of document.querySelectorAll('input')) el.addEventListener('input', () => { if (el.id === 'trunc') el.value = el.value.slice(0, 3); post('/value', {t, host: location.hostname, id: el.id, value: el.value}); });
 if (q.get('focus')) document.getElementById(q.get('focus')).focus();
 post('/loaded', {t, host: location.hostname});
 if (q.has('poll')) setInterval(async () => { const r = await (await fetch('/swap?t=' + t)).json(); if (r.to) location.href = r.to; }, 50);
 </script>"""
-FAKE_OP = """#!%s
+FAKE_OP = """#!PYTHON
 import json, os, sys, urllib.request
 d = os.environ["FAKE_OP_DIR"]
 args = sys.argv[1:]
@@ -48,11 +48,13 @@ elif args[:2] == ["item", "get"]:
         print(values["otp"])
     else:
         field = args[args.index("--fields") + 1]
-        assert (field == "password") == ("--reveal" in args)
-        print(json.dumps({"id": field, "value": values[field]}))
+        value = values[field]
+        if field == "password" and "--reveal" not in args:   # what the real op prints for a concealed field that was not revealed
+            value = "[use 'op item get %s --reveal' to reveal]" % args[2]
+        print(json.dumps({"id": field, "value": value}))
 else:
     sys.exit("unexpected " + " ".join(args))
-""" % sys.executable
+""".replace("PYTHON", sys.executable)
 
 
 def skip_reason():
@@ -250,6 +252,43 @@ class LoginFillTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("now on canary.localhost, not localhost", r.stderr)
         self.assertEqual(self.typed(token), [])
+
+    # a value that is not the credential, and a field that did not take it
+
+    def refused_value(self, field, value, focus, reason):
+        token = self.page(focus=focus)
+        r = self.login(field, token, [item("main", "Main", "https://localhost/")], {"main": {"username": "u", "password": "p", "otp": "1", field: value}})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn(reason, r.stderr)
+        self.assertEqual(self.typed(token), [])
+        return r
+
+    def test_op_notice_text_in_place_of_the_value_is_refused_before_anything_is_typed(self):
+        self.refused_value("password", "[use 'op item get abc --reveal' to reveal]", "pw", "op returned its notice")
+
+    def test_a_password_is_read_revealed_so_op_does_not_answer_with_its_notice(self):   # the fake op answers a non-revealed password with the notice
+        token = self.page(focus="pw")
+        r = self.login("password", token, [item("main", "Main", "https://localhost/")])
+        self.assertEqual((r.returncode, self.typed(token)[-1]), (0, ("pw", SECRET)), r.stderr)
+        self.assertIn("--reveal", [c["argv"] for c in self.op_calls() if "--fields" in c["argv"]][0])
+
+    def test_an_empty_value_is_refused(self):
+        self.refused_value("username", "", "user", "empty username")
+
+    def test_a_value_with_a_trailing_newline_is_refused_and_op_s_own_line_end_is_not(self):
+        self.refused_value("password", "abc\n", "pw", "ends with a newline")
+        self.refused_value("otp", "123456\n", "other", "ends with a newline")   # the fake op prints a line end after the value; only that one is stripped
+        token = self.page(focus="other")
+        r = self.login("otp", token, [item("main", "Main", "https://localhost/")])
+        self.assertEqual((r.returncode, self.typed(token)), (0, [("other", "123456")]), r.stderr)
+
+    def test_a_field_that_did_not_take_the_whole_value_is_cleared_and_only_the_two_lengths_are_printed(self):
+        token = self.page(focus="trunc")   # this input keeps three characters
+        r = self.login("username", token, [item("main", "Main", "https://localhost/")])
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("holds 3 characters after typing 6; it was cleared", r.stderr)
+        self.assertNotIn("u-main", r.stderr + r.stdout)
+        self.assertEqual(self.typed(token)[-1], ("trunc", ""))   # cleared
 
     # which page, which login
 

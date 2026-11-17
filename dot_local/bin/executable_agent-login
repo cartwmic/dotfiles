@@ -10,7 +10,8 @@
 //      --item (an id, or a title that is unique among them) picks one of several (it must still match the host).
 //   3. The value comes from `op item get`. Then, over the page's own debug socket, location.hostname must still equal the login's
 //      host and the focused element must be an input or textarea (a type=password input, for password). Only then Input.insertText.
-//      Any failed check types nothing and exits 1 with the reason.
+//      Any failed check types nothing and exits 1 with the reason. A value that is empty, ends with a newline or is op's "[use '..." notice
+//      is refused before anything is typed; after typing, the field's length must equal the value's, else the field is cleared and exit is 1.
 // The value is held in memory only: it is never printed, logged, put in a child's argv or environment, or written to disk. Stdout
 // says what was typed and where. Every run appends one line (UTC time, run id, elapsed, outcome, field, host, item title) to
 // ${XDG_STATE_HOME:-~/.local/state}/agent-login/agent-login.log.
@@ -82,14 +83,22 @@ async function findLogin(host, wanted) {
   return chosen[0];
 }
 
+// A value that is not the credential must never be typed: op prints a notice where a concealed field was not revealed.
+function checked(value, item, field) {
+  if (typeof value !== 'string' || !value) throw new Refusal(`${item.title} has an empty ${field}`);
+  if (value.startsWith("[use '")) throw new Refusal(`op returned its notice instead of the ${field} of ${item.title} (the field was not revealed)`);
+  if (value.endsWith('\n')) throw new Refusal(`the ${field} of ${item.title} ends with a newline`);
+  return value;
+}
+
 async function readValue(field, item) {
   const base = ['item', 'get', item.id, '--vault', VAULT];
-  if (field === 'otp') return (await op([...base, '--otp'])).trim();
-  // --format json: a plain single-field print can wrap a value with a comma or quote in CSV quotes.
+  // Exactly one trailing newline is op's own line end; anything else is the value's and is checked, not trimmed.
+  if (field === 'otp') return checked((await op([...base, '--otp'])).replace(/\n$/, ''), item, field);
+  // --format json: a plain single-field print can wrap a value with a comma or quote in CSV quotes. --reveal: a concealed field
+  // (the password) is otherwise replaced by a notice.
   const args = field === 'password' ? [...base, '--fields', 'password', '--reveal', '--format', 'json'] : [...base, '--fields', 'username', '--format', 'json'];
-  const value = JSON.parse(await op(args)).value;
-  if (typeof value !== 'string' || !value) throw new Refusal(`${item.title} has no ${field}`);
-  return value;
+  return checked(JSON.parse(await op(args)).value, item, field);
 }
 
 function connect(url) {
@@ -119,6 +128,9 @@ function connect(url) {
 
 const FOCUS = `(() => { const a = document.activeElement; return { host: location.hostname.toLowerCase(), tag: a ? a.tagName : '', type: a && a.type ? String(a.type).toLowerCase() : '' }; })()`;
 
+const FIELD_LENGTH = `document.activeElement.value.length`;
+const CLEAR_FIELD = `(() => { const el = document.activeElement; el.select(); document.execCommand('delete'); if (el.value) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); } })()`;
+
 async function type(page, field, host, value) {
   const cdp = await connect(page.webSocketDebuggerUrl);
   try {
@@ -128,6 +140,12 @@ async function type(page, field, host, value) {
     if (!['INPUT', 'TEXTAREA'].includes(now.tag)) throw new Refusal(`no input has focus (focused: ${now.tag.toLowerCase() || 'nothing'}); click the field with Browse first`);
     if (field === 'password' && now.type !== 'password') throw new Refusal(`the focused field is type=${now.type || 'text'}, not a password field`);
     await cdp.call('Input.insertText', { text: value });
+    // The field must now hold exactly what was typed. If not, clear it and say only the two lengths.
+    const after = (await cdp.call('Runtime.evaluate', { expression: FIELD_LENGTH, returnByValue: true })).result.value;
+    if (after !== value.length) {
+      await cdp.call('Runtime.evaluate', { expression: CLEAR_FIELD });
+      throw new Refusal(`the field holds ${after} characters after typing ${value.length}; it was cleared`);
+    }
   } finally {
     cdp.close();
   }
