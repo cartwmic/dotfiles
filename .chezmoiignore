@@ -343,6 +343,8 @@ Library/LaunchAgents/local.qmd-refresh.plist
 .local/user_scripts/configure_rustdesk.sh
 # The Loop Engine bump applies on this machine without asking; an agent applies on the work Mac only with Michael's confirmation for that action (docs/profiles.md).
 .local/user_scripts/loop_engine_bump.py
+# The T3 pin check reads the personal coordinator's inbox and the budget-steward checkout and runs from the personal Linux schedules-check unit (docs/profiles.md).
+.local/user_scripts/t3_pin_check.py
 # pr-body-check runs the coordinator checkout's script for the personal-only merge and PR-body rules (docs/profiles.md).
 .local/bin/pr-body-check
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).

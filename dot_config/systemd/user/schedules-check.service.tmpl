@@ -13,3 +13,7 @@ WorkingDirectory=%h
 # node, git, op and gh must be found from here (the mise shims, then the user's bin directories); a user service has no shell PATH.
 Environment=PATH={{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:{{ $home }}/.t3/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env node --experimental-strip-types --disable-warning=ExperimentalWarning {{ $repo }}/src/coordinatord/cli.ts schedules check
+# The T3 pin check runs after every run of this unit, whether `schedules check` passed or failed (ExecStopPost; an ExecStartPost would be skipped on a failure).
+# It compares this machine's T3, dotfiles' [t3Pin] and the budget-steward Dockerfile pin, posts drift to the coordinator inbox (--notify) and fails the unit, so
+# `journalctl --user -u schedules-check` shows it. It reports only; it opens no PR here (`t3_pin_check.py --open-prs` is run by hand). No new timer.
+ExecStopPost=/usr/bin/env python3 {{ $home }}/.local/user_scripts/t3_pin_check.py --notify
