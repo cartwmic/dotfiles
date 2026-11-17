@@ -23,16 +23,23 @@ TEMPLATES = {
 WORK = "Never merge or deploy without my explicit approval for that change."
 PERSONAL = "Merging and deploying approved work is yours to do: if checks pass and it keeps the product requirements, ship it and tell me after."
 SEAT_HEADING = "## Agent seats and models"
-SEAT_ROWS = (
-    "| Coordinator | Opus 5.5 medium |",
-    "| Lead | Opus 5.5 medium |",
-    "| Planner | Sonnet 5.5 high |",
-    "| Reviewer | Opus 5.5 medium |",
-    "| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |",
-)
-BROWSER = {
-    "personal": "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
-    "axon-work-computer": "| Browser work | Sonnet 5.5 high |",
+SEAT_ROWS = {
+    "personal": (
+        "| Coordinator | Opus 5.5 medium |",
+        "| Lead | Opus 5.5 medium |",
+        "| Planner | Sonnet 5.5 high |",
+        "| Reviewer | Opus 5.5 medium |",
+        "| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |",
+        "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
+    ),
+    "axon-work-computer": (
+        "| Coordinator | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |",
+        "| Lead | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |",
+        "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+        "| Reviewer | Gemini 4 Hydrogen high, Cursor (gemini-4-hydrogen) |",
+        "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+        "| Browser work | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+    ),
 }
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
@@ -130,10 +137,9 @@ class InstructionProfileTests(unittest.TestCase):
                         self.assertNotIn(SEAT_HEADING, text)
                         continue
                     self.assertEqual(text.count(SEAT_HEADING), 1)
-                    for row in SEAT_ROWS:
+                    for row in SEAT_ROWS[profile]:
                         self.assertEqual(text.count(row), 1)
                     self.assertEqual(text.count("| Browser work |"), 1)
-                    self.assertEqual(text.count(BROWSER[profile]), 1)
                     self.assertEqual(("Terra" in text), profile == "personal")
 
     def test_scheduling_rule_is_personal_only(self):

@@ -1,0 +1,76 @@
+#!/bin/sh
+# Install or update the coordinator's Cursor T3 hooks in ~/.cursor/hooks.json (both desktop profiles: personal and axon-work-computer).
+# Reads the hook entries from <repo>/src/t3-hook/hook.ts --print-cursor-hooks-json at apply time, strips any prior t3-hook/t3-coordinator
+# entries, preserves unrelated user/team hooks, and leaves existing entries untouched if the checkout does not support --print-cursor-hooks-json yet.
+set -eu
+
+{{- $t3repo := "" }}
+{{- $t3state := "" }}
+{{- if eq .profile "personal" }}
+{{-   $t3repo = includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
+{{-   $t3state = "$HOME/.local/share/coordinator" }}
+{{- else if eq .profile "axon-work-computer" }}
+{{-   $t3repo = includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
+{{-   $t3state = "$HOME/.local/share/coordinator-work" }}
+{{- end }}
+{{- $t3hook := printf "%s/src/t3-hook/hook.ts" $t3repo }}
+{{- $t3printed := "" }}
+{{- if (includeTemplate "agent_host_config" . | fromJson).removeCoordinatorHook }}
+T3_WANT=false
+{{- else if and $t3repo (stat $t3hook) }}
+{{-   $t3printed = output "sh" "-c" `node --experimental-strip-types --disable-warning=ExperimentalWarning "$1" --print-cursor-hooks-json </dev/null 2>/dev/null || true` "sh" $t3hook }}
+T3_WANT=true
+{{- else }}
+T3_WANT=false
+{{- end }}
+T3_REPO={{ includeTemplate "shquote" $t3repo }}
+T3_STATE={{ includeTemplate "shquote" $t3state }}
+T3_PRINTED={{ includeTemplate "shquote" $t3printed }}
+
+T3_MODE=off
+T3_JSON=null
+if [ "$T3_WANT" = true ]; then
+  if [ -n "$T3_PRINTED" ] && printf '%s' "$T3_PRINTED" | jq -e '.schema == 1 and (.entries | type == "array")' >/dev/null 2>&1; then
+    T3_MODE=set
+    T3_JSON=$T3_PRINTED
+  else
+    T3_MODE=keep
+    printf '[modify_hooks] WARN: %s/src/t3-hook/hook.ts did not print Cursor hooks (no --print-cursor-hooks-json, or it did not run here); ~/.cursor/hooks.json left as it is\n' "$T3_REPO" >&2
+  fi
+fi
+
+exec jq -s --arg mode "$T3_MODE" --argjson printed "$T3_JSON" --arg repo "$T3_REPO" --arg state "$T3_STATE" '
+  def sq: "\u0027" + gsub("\u0027"; "\u0027\\\u0027\u0027") + "\u0027";
+  def ours: ((.command? // "") | (contains("src/t3-hook/hook.ts") or contains("src/t3-coordinator/hook.ts")));
+  def strip_ours:
+    if (.hooks | type) == "object" then
+      .hooks |= (with_entries(
+        if (.value | type) == "array"
+        then .value |= map(select(ours | not)) | select(.value != [])
+        else . end
+      ))
+      | if (.hooks | length) == 0 then del(.hooks) else . end
+    else . end;
+  def target_path($t): if $t == "coordinator" then ($repo + "/src/t3-coordinator/hook.ts") else ($repo + "/src/t3-hook/hook.ts") end;
+  def entry_cmd($e):
+    ("COORDINATOR_STATE_DIR=\"" + $state + "\" node --experimental-strip-types --disable-warning=ExperimentalWarning " + (target_path($e.target) | sq)
+     + (if ($e.args | length) > 0 then " " + ($e.args | join(" ")) else "" end));
+  def entry_obj($e):
+    {command: entry_cmd($e)}
+    + (if $e.matcher != null then {matcher: $e.matcher} else {} end)
+    + (if $e.failClosed then {failClosed: true} else {} end);
+  def add_ours:
+    .version = (.version // 1)
+    | .hooks = (.hooks // {})
+    | reduce $printed.entries[] as $e (.; .hooks[$e.event] = ((.hooks[$e.event] // []) + [entry_obj($e)]));
+  if length == 0 then
+    {}
+  elif length == 1 and (.[0] | type) == "object" then
+    .[0]
+  else
+    error("~/.cursor/hooks.json must be a JSON object")
+  end
+  | if $mode == "keep" then .
+    else (strip_ours | if $mode == "set" then add_ours else .version = (.version // 1) end)
+    end
+'

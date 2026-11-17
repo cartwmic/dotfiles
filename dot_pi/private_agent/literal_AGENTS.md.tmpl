@@ -7,7 +7,7 @@
 {{- end }}
 {{- if eq .profile "axon-work-computer" }}
 
-{{ include "dot_local/share/agent-harness/canonical/instructions/profile-work.md" | trimSuffix "\n" }}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/profile-work.md" . | trimSuffix "\n" }}
 {{- end }}
 {{- if eq .profile "personal" }}
 

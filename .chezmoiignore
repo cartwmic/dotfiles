@@ -79,6 +79,8 @@ herdr-mcp/**
 .claude/**
 .codex
 .codex/**
+.cursor
+.cursor/**
 .config
 .config/**
 .local/*
@@ -533,6 +535,8 @@ Library/Preferences/pnpm/**
 # Tools the container does not install (Codex too: there is no OpenAI model in the pod, so Codex is out of scope): their config and the pins that install them.
 .codex
 .codex/**
+.cursor
+.cursor/**
 .config/nvim
 .config/nvim/**
 .config/lazygit
