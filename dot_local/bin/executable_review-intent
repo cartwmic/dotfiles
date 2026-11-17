@@ -10,6 +10,7 @@ round's brief.md:   review-intent --pr cartwmic/coordinator#782 >> round-1/brief
 Inputs: the PR body (--pr, read with gh), any text files (--body-file, repeatable), and ids given by hand. Read-only: it reads the ledger and prints.
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
   every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
+  for a PR that touches `leads/<type>.*`, the ask ids in `approved_by` of `leads/<type>.json` at the PR head (when the file has the key; --pr only);
   the ask each collected decision names (its ask_id, and any `ask #N` in its why); and for each collected ask, the ask its workstream's creation why cites.
 An id the ledger does not know is an error (exit 1, each id named): fix the citation, do not drop it. (The one exception: a number found only in a workstream's free-text
 creation why, where `ask 870` needs no `#`, is left out if no such ask exists.)
@@ -48,7 +49,7 @@ ITEM_RE = re.compile(ITEM)
 # A `#N` is always an id, unless a digit or a time follows ("#5:30"); a bare N is not when a time or a unit follows ("ask 5 minutes", "ask 5pm", "ask 3 times").
 UNITS = r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|times?)"
 RANGE_END = r"(?:\s*[%s]\s*#?(\d+))?" % DASHES
-LOOSE_FIRST = r"(?:#(\d+)(?!\d|:\d)%s|(\d+)(?!\d|:|\s*%s\b|\s*[ap]m\b|h\b)%s)" % (RANGE_END, UNITS, RANGE_END)
+LOOSE_FIRST = r"(?:#(\d+)(?!\d|:\d)%s|(\d+)(?!\d|:|\s*%s\b|\s*[ap]m\b|[hms]\b)%s)" % (RANGE_END, UNITS, RANGE_END)
 LOOSE_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (LOOSE_FIRST, ITEM), re.I)
 LOOSE_ITEM_RE = re.compile(r"(?:%s)|(?:%s)" % (LOOSE_FIRST, ITEM))
 
@@ -139,16 +140,47 @@ def default_state_dir():
     return os.path.join(home, ".local/share/coordinator")
 
 
-def pr_body(spec):
+def gh(args, what):
+    p = subprocess.run(["gh", *args], env=dict(os.environ, GH_CALLER="review-intent"), capture_output=True, text=True)
+    if p.returncode != 0:
+        raise Usage("review-intent: gh could not read %s: %s" % (what, p.stderr.strip()))
+    return p.stdout
+
+
+def pr_ref(spec):
     m = re.match(r"^(?:([\w.-]+)/)?([\w.-]+)#(\d+)$", spec)
     if not m:
         raise Usage("review-intent: --pr takes OWNER/REPO#N (or REPO#N for cartwmic/REPO), got %r" % spec)
-    repo = "%s/%s" % (m.group(1) or "cartwmic", m.group(2))
-    env = dict(os.environ, GH_CALLER="review-intent")
-    p = subprocess.run(["gh", "pr", "view", m.group(3), "--repo", repo, "--json", "body", "--jq", ".body"], env=env, capture_output=True, text=True)
-    if p.returncode != 0:
-        raise Usage("review-intent: gh could not read %s#%s: %s" % (repo, m.group(3), p.stderr.strip()))
-    return p.stdout
+    return "%s/%s" % (m.group(1) or "cartwmic", m.group(2)), m.group(3)
+
+
+def pr_body(spec):
+    repo, n = pr_ref(spec)
+    return gh(["pr", "view", n, "--repo", repo, "--json", "body", "--jq", ".body"], "%s#%s" % (repo, n))
+
+
+LEADS_FILE = re.compile(r"^leads/([\w-]+)\.[A-Za-z]+$")
+
+
+def pr_approvals(spec):
+    """For a PR that touches `leads/<type>.*`: [(type, [ask ids])] from `approved_by` in `leads/<type>.json` at the PR head. A file or key that is not there is skipped."""
+    repo, n = pr_ref(spec)
+    what = "%s#%s" % (repo, n)
+    info = json.loads(gh(["pr", "view", n, "--repo", repo, "--json", "files,headRefOid"], what) or "{}")
+    types = sorted({m.group(1) for f in info.get("files") or [] for m in [LEADS_FILE.match(f.get("path", ""))] if m})
+    found = []
+    for t in types:
+        p = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw+json", "repos/%s/contents/leads/%s.json?ref=%s" % (repo, t, info.get("headRefOid", ""))],
+                           env=dict(os.environ, GH_CALLER="review-intent"), capture_output=True, text=True)
+        if p.returncode != 0:
+            continue  # the PR has no leads/<type>.json at its head (a README, or a deleted type)
+        try:
+            ids = json.loads(p.stdout).get("approved_by")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(ids, list) and ids and all(isinstance(i, int) and not isinstance(i, bool) and i > 0 for i in ids):
+            found.append((t, sorted(set(ids))))
+    return found
 
 
 def option_line(options, n):
@@ -202,7 +234,7 @@ def render_decision(d, why):
     return "\n".join(out)
 
 
-def build(texts, asks_given, decisions_given, ledger):
+def build(texts, asks_given, decisions_given, ledger, approvals=()):
     """Returns (block, errors). `texts` are the PR body and body files; each id keeps the reasons it was collected for."""
     ask_why, dec_why = {}, {}
 
@@ -213,6 +245,9 @@ def build(texts, asks_given, decisions_given, ledger):
         add(ask_why, n, "--ask")
     for n in decisions_given:
         add(dec_why, n, "--decision")
+    for t, ids in approvals:
+        for n in ids:
+            add(ask_why, n, "approved_by of the lead type %s (leads/%s.json at the PR head)" % (t, t))
     for t in texts:
         t = without_block(t)
         for n in line_ids(t, "Decisions"):
@@ -300,7 +335,8 @@ def main(argv):
                 raise Usage("review-intent: cannot read %s: %s" % (f, e.strerror))
         if o["pr"]:
             texts.append(pr_body(o["pr"]))
-        block, errors = build(texts, o["asks"], o["decisions"], Ledger(o["state"] or default_state_dir()))
+        approvals = pr_approvals(o["pr"]) if o["pr"] else []
+        block, errors = build(texts, o["asks"], o["decisions"], Ledger(o["state"] or default_state_dir()), approvals)
     except Usage as e:
         print(e, file=sys.stderr)
         return 2

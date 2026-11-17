@@ -7,6 +7,7 @@ real ledger and nothing reaches GitHub.
 """
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,6 +38,26 @@ else:
     print("  by coordinator at 2026-01-01T00:00:00.000Z: opened")
 """
 
+FAKE_GH = """#!/usr/bin/env python3
+import base64, json, os, sys
+d = json.load(open(os.path.join(os.environ["FAKE_GH_DIR"], "gh.json")))
+a = sys.argv[1:]
+if a[:2] == ["pr", "view"]:
+    if "body" in a:
+        print(d["body"])
+    else:
+        print(json.dumps({"files": [{"path": p} for p in d["files"]], "headRefOid": d["head"]}))
+elif a[0] == "api":
+    path = a[-1]
+    name, ref = path.split("/contents/", 1)[1].split("?ref=")
+    if ref != d["head"] or name not in d["contents"]:
+        print("gh: Not Found (HTTP 404)", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(d["contents"][name])
+else:
+    sys.exit(2)
+"""
+
 
 def ask(n, **kw):
     row = {"id": n, "summary": "summary %d" % n, "question": "question %d?" % n, "options": [{"title": "Yes", "consequence": "do it"}, {"title": "No", "consequence": "do not"}],
@@ -58,6 +79,9 @@ class ReviewIntent(unittest.TestCase):
         (self.dir / "pane-bin").mkdir()
         (self.dir / "pane-bin/ledger").write_text(FAKE_LEDGER, encoding="utf-8")
         (self.dir / "pane-bin/ledger").chmod(0o755)
+        (self.dir / "bin").mkdir()
+        (self.dir / "bin/gh").write_text(FAKE_GH, encoding="utf-8")
+        (self.dir / "bin/gh").chmod(0o755)
         self.db = {"asks": {}, "decisions": {}, "workstreams": {}}
 
     def put(self, *, asks=(), decisions=(), workstreams=()):
@@ -75,7 +99,11 @@ class ReviewIntent(unittest.TestCase):
             f = self.dir / "body.md"
             f.write_text(text, encoding="utf-8")
             argv += ["--body-file", str(f)]
-        return subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir))
+        return subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
+
+    def put_pr(self, *, files, contents, body="", head="abc123"):
+        (self.dir / "gh.json").write_text(json.dumps({"body": body, "files": files, "contents": contents, "head": head}), encoding="utf-8")
 
     @staticmethod
     def marker(out):
@@ -143,6 +171,63 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(self.marker(self.run_script("ask #96").stdout)[0], "96,1175")
         self.assertEqual(self.marker(self.run_script("ask #98").stdout)[0], "5,98")
         self.assertEqual(self.marker(self.run_script("ask #100").stdout)[0], "100")
+
+    WHY_TABLE = [  # what a workstream's creation why gives: (why, the asks it names)
+        ("Michael on ask #1175, 22:09Z: do it", [1175]),
+        ("Michael on ask #1175: approve the audit", [1175]),
+        ("ask #1175; then more", [1175]),
+        ("ask #5 minutes later", [5]),
+        ("(ask 1175)", [1175]),
+        ("Michael approved ask 1175", [1175]),
+        ("asks 1175-1176", [1175, 1176]),
+        ("asks #1175, #1176 and #1177", [1175, 1176, 1177]),
+        ("ask 1175, 2026-11-09", [1175]),
+        ("it waited ask 5 minutes", []),
+        ("ask 3 times and ask 2 weeks", []),
+        ("ask 5pm, ask 5 pm, ask 12h, ask 30s", []),
+        ("ask 10:30Z", []),
+        ("asked 1175 questions", []),
+        ("decision #1175 and PR #1176", []),
+    ]
+
+    def test_the_workstream_why_table(self):
+        ids = {1175, 1176, 1177, 5, 3, 2, 12, 30, 10}
+        for i, (why, want) in enumerate(self.WHY_TABLE):
+            with self.subTest(why=why):
+                self.put(asks=[ask(n, answer="a%d" % n) for n in ids] + [ask(500 + i, workstream="W%d" % i)],
+                         workstreams=[{"name": "W%d" % i, "why": why}])
+                got = sorted(int(x) for x in self.marker(self.run_script("ask #%d" % (500 + i)).stdout)[0].split(",") if int(x) != 500 + i)
+                self.assertEqual(got, want)
+
+    LEADS = '{"name":"retro","approved_by":[1109,1233]}'
+
+    def test_a_pr_touching_a_lead_type_cites_that_types_approved_by_asks(self):
+        self.put(asks=[ask(1109, answer="a small set of tools"), ask(1233, answer="accepted"), ask(7)])
+        self.put_pr(files=["leads/retro.md", "src/x.ts"], contents={"leads/retro.json": self.LEADS}, body="Does a thing. ask #7")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#782")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[0], "7,1109,1233")
+        self.assertIn("Cited because: approved_by of the lead type retro (leads/retro.json at the PR head)", r.stdout)
+        self.assertIn("> a small set of tools", r.stdout)
+
+    def test_a_pr_that_touches_no_lead_type_adds_nothing(self):
+        self.put(asks=[ask(1109), ask(7)])
+        self.put_pr(files=["src/x.ts", "docs/leads/retro.md"], contents={"leads/retro.json": self.LEADS}, body="ask #7")
+        self.assertEqual(self.marker(self.run_script(None, "--pr", "cartwmic/coordinator#1").stdout)[0], "7")
+
+    def test_a_lead_type_without_approved_by_or_without_a_file_at_the_head_is_skipped(self):
+        self.put(asks=[ask(7)])
+        self.put_pr(files=["leads/old.json", "leads/gone.md", "leads/README.md", "leads/bad.json", "leads/neg.json"],
+                    contents={"leads/old.json": '{"name":"old"}', "leads/bad.json": "{not json", "leads/neg.json": '{"approved_by":[0,"x"]}'}, body="ask #7")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#2")
+        self.assertEqual((r.returncode, self.marker(r.stdout)[0]), (0, "7"), r.stderr)
+
+    def test_an_approved_by_ask_the_ledger_lacks_is_an_error(self):
+        self.put(asks=[ask(1109)])
+        self.put_pr(files=["leads/retro.json"], contents={"leads/retro.json": self.LEADS}, body="")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#3")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ask #1233 is not in the ledger", r.stderr)
 
     def test_a_follow_up_is_labelled_with_who_wrote_it(self):
         self.put(asks=[ask(97, exchange=[{"kind": "follow-up", "at": "2026-01-02T00:00:00.000Z", "who": "coordinator", "text": "in its own words"},
