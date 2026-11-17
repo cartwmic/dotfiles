@@ -67,12 +67,16 @@ class PinnedInstall(unittest.TestCase):
         # The release archive: one folder holding the t3 binary (the installer unpacks it with --strip-components=1).
         build = root / "build" / f"t3-{PIN}-linux-{ARCH}"
         write_exec(build / "t3", f'#!/bin/sh\necho "t3 v{PIN}"\n')
+        (build / "lib").mkdir()
+        (build / "lib" / "data.bin").write_bytes(b"library bytes" * 100)   # what the real archive holds besides t3: client/, lib/, node_modules/
         self.mirror = root / "mirror"
         (self.mirror / f"v{PIN}").mkdir(parents=True)
         subprocess.run(["tar", "-czf", str(self.mirror / f"v{PIN}" / ARCHIVE), "-C", str(build.parent), build.name], check=True)
         self.sha = hashlib.sha256((self.mirror / f"v{PIN}" / ARCHIVE).read_bytes()).hexdigest()
         other_arch = "arm64" if ARCH == "x64" else "x64"   # the same bytes under the other CPU's name, so either CPU can be tested on any machine
         shutil.copy(self.mirror / f"v{PIN}" / ARCHIVE, self.mirror / f"v{PIN}" / f"t3-{PIN}-linux-{other_arch}.tar.gz")
+        # `date` that never repeats, so two moves-aside in the same second get different names (as they would minutes apart on a restarting pod).
+        write_exec(root / "bin" / "date", '#!/bin/sh\nn=$(cat "$DATE_COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "$DATE_COUNTER"; printf "2026111700%04d\\n" $n\n')
         write_exec(root / "bin" / "uname", '#!/bin/sh\n[ "$1" = -m ] && [ -n "${FAKE_UNAME_M:-}" ] && echo "$FAKE_UNAME_M" || exec /usr/bin/uname "$@"\n')
         self.other = "1" * 64   # a well-formed sha256 that matches nothing
         write_exec(root / "installer.sh", INSTALLER)
@@ -83,7 +87,7 @@ class PinnedInstall(unittest.TestCase):
         write_exec(self.home / ".local/bin/t3", f'#!/bin/sh\necho "t3 v{version}"\n')
 
     def run_script(self, x64=None, arm64=None, **extra):
-        env = {"PATH": f"{Path(self.tmp.name) / 'bin'}:/usr/bin:/bin", "HOME": str(self.home), "T3CODE_HOME": str(self.home / ".t3"), "CALLS": str(self.calls), "T3_PIN_VERSION": PIN,
+        env = {"PATH": f"{Path(self.tmp.name) / 'bin'}:/usr/bin:/bin", "HOME": str(self.home), "T3CODE_HOME": str(self.home / ".t3"), "CALLS": str(self.calls), "DATE_COUNTER": str(Path(self.tmp.name) / "date-counter"), "T3_PIN_VERSION": PIN,
                "T3_PIN_SHA256_X64": self.sha if x64 is None else x64, "T3_PIN_SHA256_ARM64": self.sha if arm64 is None else arm64,
                "T3CODE_RELEASE_BASE_URL": f"file://{self.mirror}", "T3_INSTALL_URL": f"file://{self.installer}", **extra}
         return subprocess.run(["/bin/sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
@@ -100,8 +104,19 @@ class PinnedInstall(unittest.TestCase):
         return subprocess.run([str(self.home / ".local/bin/t3"), "--version"], capture_output=True, text=True).stdout.strip()
 
     def stamp(self):
-        t3 = (self.versions / PIN / "t3").read_bytes()
-        return f"{PIN} {hashlib.sha256(t3).hexdigest()}"
+        folder = self.versions / PIN
+        files = [f for f in folder.rglob("*") if f.is_file() and f.name != ".verified-by-install_t3"]
+        return f"{PIN} {hashlib.sha256((folder / 't3').read_bytes()).hexdigest()} {len(files)} {sum(f.stat().st_size for f in files)}"
+
+    def asides(self):
+        return sorted(p.name for p in self.versions.glob(f"{PIN}.corrupt-*"))
+
+    def assert_checked_copy_in_place(self, r):
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+        self.assertEqual((self.versions / PIN / "lib/data.bin").read_bytes(), b"library bytes" * 100)
+        self.assertEqual((self.versions / PIN / ".verified-by-install_t3").read_text().strip(), self.stamp())
+        self.assertEqual(self.version(), f"t3 v{PIN}")
 
     def test_a_pod_on_an_older_version_is_moved_to_the_pin(self):
         self.have_t3("0.1.9")
@@ -149,6 +164,7 @@ class PinnedInstall(unittest.TestCase):
                     r = self.run_script(FAKE_MODE=mode)
                     self.assertEqual(r.returncode, 1, f"run {n}: {r.stdout}{r.stderr}")
                     self.assertIn("did not use the checked copy", r.stdout, f"run {n}")
+                self.assertLessEqual(len(self.asides()), 1, "a pod that restarts again and again keeps one bad copy, not one per start")
 
     def test_after_a_bad_installer_a_good_run_repairs_to_the_checked_bytes(self):
         for mode in self.BAD_INSTALLERS:
@@ -176,6 +192,50 @@ class PinnedInstall(unittest.TestCase):
         self.assertEqual((folder / ".verified-by-install_t3").read_text().strip(), self.stamp())
         self.calls.write_text("")
         self.assertEqual((self.run_script().returncode, self.installed()), (0, []))
+
+    def test_a_folder_cut_short_by_an_unclean_detach_is_moved_aside_and_replaced(self):
+        # What an unclean volume detach left on agent-host: .install-complete and the launcher are there, t3 is truncated, other files are zero bytes.
+        # The installer would call this "already downloaded"; here it is never accepted, and the bad folder is kept, not deleted.
+        folder = self.versions / PIN
+        (folder / "lib").mkdir(parents=True)
+        write_exec(folder / "t3", '#!/bin/sh\necho "t3 v')   # cut short
+        (folder / "lib/data.bin").write_bytes(b"")           # zero bytes
+        (folder / ".install-complete").write_text(PIN + "\n")
+        write_exec(self.home / ".local/bin/t3", f"#!/bin/sh\nexec '{folder / 't3'}' \"$@\"\n")
+        r = self.run_script()
+        self.assert_checked_copy_in_place(r)
+        self.assertEqual(self.installed(), [f"installer version={PIN}"])
+        aside = self.asides()
+        self.assertEqual(len(aside), 1, aside)
+        self.assertEqual((self.versions / aside[0] / "t3").read_text(), '#!/bin/sh\necho "t3 v')
+        self.calls.write_text("")
+        self.assertEqual((self.run_script().returncode, self.installed(), self.asides()), (0, [], aside))
+
+    def test_a_stamped_folder_that_is_damaged_afterwards_is_replaced_whatever_file_it_is(self):
+        # The stamp is checked against the folder every time: a cut-short t3, a zeroed library file and a missing file each fail it.
+        damages = {
+            "t3 cut short": lambda f: (f / "t3").write_bytes((f / "t3").read_bytes()[:10]),
+            "library zeroed": lambda f: (f / "lib/data.bin").write_bytes(b""),
+            "library file missing": lambda f: (f / "lib/data.bin").unlink(),
+            "library cut short": lambda f: (f / "lib/data.bin").write_bytes(b"library"),
+        }
+        for what, damage in damages.items():
+            with self.subTest(damage=what):
+                shutil.rmtree(self.home / ".t3", ignore_errors=True)
+                self.assertEqual(self.run_script().returncode, 0)
+                damage(self.versions / PIN)
+                self.calls.write_text("")
+                r = self.run_script()
+                self.assert_checked_copy_in_place(r)
+                self.assertEqual(self.installed(), [f"installer version={PIN}"])
+                self.assertEqual(len(self.asides()), 1)
+
+    def test_a_folder_that_is_fine_is_not_moved_aside_when_the_installer_keeps_failing(self):
+        # A good checked copy is replaced in place; only an unverified folder is kept aside, so a pod that restarts again and again does not fill the volume.
+        self.have_t3("0.1.9")
+        for _ in range(3):
+            self.assertEqual(self.run_script(FAKE_MODE="relocate").returncode, 1)
+        self.assertEqual(self.asides(), [])
 
     def test_a_checked_t3_that_was_changed_afterwards_is_replaced(self):
         self.assertEqual(self.run_script().returncode, 0)
