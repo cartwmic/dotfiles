@@ -1,5 +1,5 @@
 #!/bin/sh
-# Browse setup (both profiles; .chezmoiignore leaves it out in container mode). Runs when the pin changes.
+# Browse setup (both desktop profiles; .chezmoiignore leaves it out in container mode and on Termux). Runs when the pin changes.
 #   1. Turns Browse's automatic updates off. The relay would otherwise check hourly and run `npm install -g`, which fights the mise pin.
 #      The mode is saved in Browse's state folder and survives a relay restart (agent-harness README, "Agent browser").
 #   2. Removes ~/.local/bin/browse. `browse install` writes a second, self-updating binary there; it sits ahead of the mise shim and
