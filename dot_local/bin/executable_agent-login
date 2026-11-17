@@ -6,7 +6,8 @@
 // The agent clicks the field with Browse first, so it has focus, then runs this.
 //   1. The one page of the agent Chrome (127.0.0.1:9333, AGENT_CHROME_PORT) whose URL contains URLPART. Not exactly one: exit 1, URLs listed.
 //   2. The Login in vault `developer` with a URL whose hostname is exactly that page's hostname (discord.com is not canary.discord.com).
-//      Not exactly one: exit 1, titles listed; --item picks one of several (it must still match the host).
+//      Only the URL's hostname counts (path and query are ignored, and never printed). Not exactly one: exit 1, titles with ids listed;
+//      --item (an id, or a title that is unique among them) picks one of several (it must still match the host).
 //   3. The value comes from `op item get`. Then, over the page's own debug socket, location.hostname must still equal the login's
 //      host and the focused element must be an input or textarea (a type=password input, for password). Only then Input.insertText.
 //      Any failed check types nothing and exits 1 with the reason.
@@ -72,12 +73,11 @@ async function findLogin(host, wanted) {
   const items = JSON.parse(await op(['item', 'list', '--vault', VAULT, '--categories', 'Login', '--format', 'json']));
   const matches = items.filter((i) => (i.urls || []).some((u) => hostOf(u.href) === host));
   if (!matches.length) throw new Refusal(`no login for ${host} in vault ${VAULT}`);
+  const list = (xs) => xs.map((i) => `${i.title} (${i.id})`).join(', ');   // titles are not unique, so each comes with its id; never a URL (a stored URL can carry a token)
   const chosen = wanted ? matches.filter((i) => i.id === wanted || i.title === wanted) : matches;
-  if (wanted && chosen.length !== 1) {
-    throw new Refusal(`--item ${wanted} is not one of the ${matches.length} logins for ${host}: ${matches.map((i) => i.title).join(', ')}`);
-  }
+  if (wanted && !chosen.length) throw new Refusal(`--item ${wanted} is not one of the ${matches.length} logins for ${host}: ${list(matches)}`);
   if (chosen.length !== 1) {
-    throw new Refusal(`${chosen.length} logins for ${host} in vault ${VAULT}: ${chosen.map((i) => i.title).join(', ')} (pick one with --item)`);
+    throw new Refusal(`${chosen.length} logins for ${host} in vault ${VAULT}: ${list(chosen)} (pick one with --item ID)`);
   }
   return chosen[0];
 }

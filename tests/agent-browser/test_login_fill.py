@@ -199,6 +199,18 @@ class LoginFillTest(unittest.TestCase):
         self.assertEqual(self.typed(token), [("pw", "u-main")])
         self.assertEqual([c["argv"][2] for c in self.op_calls() if c["argv"][:2] == ["item", "get"]], ["main"])
 
+    def test_only_the_hostname_of_a_login_url_counts_and_the_url_is_never_printed(self):
+        token = self.page("localhost")
+        secret_url = "https://localhost/login?access_token=tok-9f8e7d#frag"
+        r = self.login("username", token, [item("main", "Main", secret_url)])
+        self.assertEqual(r.returncode, 0, r.stderr)   # path, query and fragment are ignored
+        again = self.login("username", "no-such-page-xyz", [item("main", "Main", secret_url)])
+        other = self.page("canary.localhost")
+        none = self.login("username", other, [item("main", "Main", secret_url), item("twin", "Main", secret_url)])
+        for out in (r.stdout + r.stderr, again.stderr, none.stderr, self.log()):
+            self.assertNotIn("tok-9f8e7d", out)
+        self.assertNotIn("tok-9f8e7d", self.login("username", token, [item("a", "A", secret_url), item("b", "B", secret_url)]).stderr)   # several matches
+
     def test_a_login_for_the_parent_domain_does_not_fill_a_subdomain_and_a_subdomain_login_does_not_fill_the_parent(self):
         for page_host, login_host in (("canary.localhost", "localhost"), ("localhost", "canary.localhost")):
             with self.subTest(page=page_host, login=login_host):
@@ -246,7 +258,7 @@ class LoginFillTest(unittest.TestCase):
         items = [item("a", "Work account", "https://localhost/"), item("b", "Personal account", "https://localhost/a"), item("c", "Elsewhere", "https://example.com/")]
         r = self.login("username", token, items)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("Work account, Personal account", r.stderr)
+        self.assertIn("Work account (a), Personal account (b)", r.stderr)
         self.assertNotIn("Elsewhere", r.stderr)
         self.assertEqual(self.typed(token), [])
         for pick, expected in (("b", "u-b"), ("Work account", "u-a")):   # by id and by title
@@ -255,6 +267,14 @@ class LoginFillTest(unittest.TestCase):
                 r = self.login("username", fresh, items, None, "--item", pick)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual(self.typed(fresh), [("user", expected)])
+        twins = [item("t1", "Twin", "https://localhost/"), item("t2", "Twin", "https://localhost/")]   # titles are not unique: the id picks
+        fresh = self.page(focus="user")
+        r = self.login("username", fresh, twins, None, "--item", "Twin")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Twin (t1), Twin (t2)", r.stderr)
+        self.assertEqual(self.typed(fresh), [])
+        r = self.login("username", fresh, twins, None, "--item", "t2")
+        self.assertEqual((r.returncode, self.typed(fresh)), (0, [("user", "u-t2")]), r.stderr)
         fresh = self.page(focus="user")
         r = self.login("username", fresh, items, None, "--item", "Elsewhere")   # a login for another host cannot be picked
         self.assertEqual(r.returncode, 1)

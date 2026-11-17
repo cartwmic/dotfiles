@@ -32,7 +32,7 @@ Browse has no download tool. Use `agent-download`:
 
 ## Sign in: `agent-login`
 Sign in without the 1Password extension. For each field: click it with Browse (so it has focus), then run `agent-login username <part of the page URL>`, and the same with `password` and `otp`. Then submit with Browse.
-It types the value from the `developer` vault login whose URL has exactly that page's host, and prints only what it typed. If it refuses, it says why (no login for that host, several logins: pick one with `--item`, no field has focus: click the field again).
+It types the value from the `developer` vault login whose URL has exactly that page's host, and prints only what it typed. If it refuses, it says why (no login for that host, several logins: it lists each title with its id; pick one with `--item <id>`, no field has focus: click the field again).
 Use the 1Password popup (next section) only for passkeys, or when `agent-login` says there is no login for that host.
 
 ## Outside the page: `agent-desktop`
