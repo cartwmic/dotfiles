@@ -259,17 +259,21 @@ class SessionCopyScriptTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
         (self.tmp / "kubectl.sh").write_text(STUB)
-        for d in ("claude/-home-x", "pi/--x--", "dest"):
+        for d in ("claude/-home-x", "pi/--x--", "codex/2026/11/15", "dest"):
             (self.tmp / d).mkdir(parents=True)
         self.c = self.tmp / "claude/-home-x/s1.jsonl"
         self.c.write_text('{"a":1}\n')
         (self.tmp / "claude/-home-x/notes.txt").write_text("not a transcript")
         (self.tmp / "pi/--x--/p1.jsonl").write_text('{"p":1}\n')
+        self.x = self.tmp / "codex/2026/11/15/rollout-1.jsonl"
+        self.x.write_text('{"x":1}\n')
+        (self.tmp / "codex/2026/11/15/history.txt").write_text("not a transcript")
 
     def run_copy(self, *args, **env):
         e = dict(os.environ, XDG_RUNTIME_DIR=str(self.tmp), AGENT_SESSION_COPY_KUBECTL=str(self.tmp / "kubectl.sh"),
                  AGENT_SESSION_COPY_DEST=str(self.tmp / "dest"), AGENT_SESSION_COPY_CLAUDE_SRC=str(self.tmp / "claude"),
-                 AGENT_SESSION_COPY_PI_SRC=str(self.tmp / "pi"), **env)
+                 AGENT_SESSION_COPY_PI_SRC=str(self.tmp / "pi"),
+                 AGENT_SESSION_COPY_CODEX_SRC=str(self.tmp / "codex"), **env)
         return subprocess.run(["sh", str(REPO / "dot_local/bin/executable_agent-session-copy"), *args], capture_output=True, text=True, env=e, timeout=60)
 
     def test_copies_jsonl_with_the_same_bytes_and_only_what_changed_afterwards(self):
@@ -288,6 +292,18 @@ class SessionCopyScriptTest(unittest.TestCase):
         self.assertIn("claude: 1 file(s) sent", third)
         self.assertIn("pi: 0 file(s) sent", third)
         self.assertEqual(got.read_bytes(), self.c.read_bytes())
+
+    def test_codex_sessions_keep_their_year_month_day_tree_and_only_jsonl_moves(self):
+        r = self.run_copy()
+        self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+        self.assertIn("codex: 1 file(s) sent", r.stdout)
+        got = self.tmp / "dest/codex/2026/11/15/rollout-1.jsonl"
+        self.assertEqual(got.read_bytes(), self.x.read_bytes())
+        self.assertFalse((self.tmp / "dest/codex/2026/11/15/history.txt").exists())
+        self.assertIn("codex: 0 file(s) sent", self.run_copy().stdout)
+        self.x.unlink()
+        self.run_copy()
+        self.assertTrue(got.exists())  # removed here, kept in the pod
 
     def test_dry_run_sends_nothing_and_nothing_is_ever_deleted_in_the_pod(self):
         r = self.run_copy("--dry-run")

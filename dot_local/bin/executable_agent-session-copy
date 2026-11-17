@@ -1,5 +1,5 @@
 #!/bin/sh
-# agent-session-copy: copy new and changed agent session files (Claude Code and Pi) from this desktop into the live agent-host pod, so Retro
+# agent-session-copy: copy new and changed agent session files (Claude Code, Pi and Codex) from this desktop into the live agent-host pod, so Retro
 # (the lead that reviews how agents worked) can read the sessions that still run here. Started every 30 minutes by agent-session-copy.timer
 # (~/.config/systemd/user), which is shipped disabled until the pod exists (agentHost.sessionCopy, docs/profiles.md). Personal Linux only.
 #
@@ -8,6 +8,7 @@
 # What moves (only *.jsonl transcripts; rsync sends a file again when its size or mtime changed, nothing else):
 #   ~/.claude/projects      -> <pod>:/home/agent/desktop-sessions/claude/
 #   ~/.pi/agent/sessions    -> <pod>:/home/agent/desktop-sessions/pi/
+#   ~/.codex/sessions       -> <pod>:/home/agent/desktop-sessions/codex/   (kept as YYYY/MM/DD/*.jsonl)
 # How: rsync over `kubectl exec` through lane M's scripts/agent-host/kubectl.sh (admin kubeconfig fetched at run time, ledger grant #21).
 # Nothing on the desktop is changed or deleted, and nothing in the pod is deleted: a session removed here stays in the pod.
 # The first run sends everything (about 13 GB); later runs send what changed since.
@@ -17,6 +18,7 @@
 #   AGENT_SESSION_COPY_CONTAINER  t3                AGENT_SESSION_COPY_DEST       /home/agent/desktop-sessions
 #   AGENT_SESSION_COPY_KUBECTL    ~/git/cartwmic-homelab-v2/scripts/agent-host/kubectl.sh
 #   AGENT_SESSION_COPY_CLAUDE_SRC ~/.claude/projects   AGENT_SESSION_COPY_PI_SRC     ~/.pi/agent/sessions
+#   AGENT_SESSION_COPY_CODEX_SRC  ~/.codex/sessions
 # Reproduce: install rsync, check out the homelab repo at the path above, and apply the dotfiles with agentHost.sessionCopy true.
 # Exit: 0 copied (or nothing to copy), 69 pod unreachable, other rsync's own code. Log lines: [agent-session-copy] LEVEL: message.
 set -eu
@@ -37,6 +39,7 @@ DEST=${AGENT_SESSION_COPY_DEST:-/home/agent/desktop-sessions}
 KUBECTL=${AGENT_SESSION_COPY_KUBECTL:-${HOME:?HOME is not set}/git/cartwmic-homelab-v2/scripts/agent-host/kubectl.sh}
 CLAUDE_SRC=${AGENT_SESSION_COPY_CLAUDE_SRC:-$HOME/.claude/projects}
 PI_SRC=${AGENT_SESSION_COPY_PI_SRC:-$HOME/.pi/agent/sessions}
+CODEX_SRC=${AGENT_SESSION_COPY_CODEX_SRC:-$HOME/.codex/sessions}
 
 command -v rsync >/dev/null 2>&1 || { log ERROR "rsync is not installed here"; exit 1; }
 [ -r "$KUBECTL" ] || { log ERROR "$KUBECTL not found (the homelab repo's scripts/agent-host/kubectl.sh)"; exit 1; }
@@ -59,7 +62,7 @@ chmod 700 "$work/rsh"
 
 pod() { sh "$KUBECTL" -n "$NS" exec -i "$TARGET" -c "$CONTAINER" -- "$@"; }
 
-if ! pod mkdir -p "$DEST/claude" "$DEST/pi" </dev/null >"$work/mkdir.log" 2>&1; then
+if ! pod mkdir -p "$DEST/claude" "$DEST/pi" "$DEST/codex" </dev/null >"$work/mkdir.log" 2>&1; then
   log ERROR "cannot reach $TARGET (container $CONTAINER) in namespace $NS: $(tr '\n' ' ' <"$work/mkdir.log" | cut -c1-300)"
   exit 69
 fi
@@ -81,4 +84,5 @@ copy() { # name source
 status=0
 copy claude "$CLAUDE_SRC" || status=1
 copy pi "$PI_SRC" || status=1
+copy codex "$CODEX_SRC" || status=1
 exit "$status"
