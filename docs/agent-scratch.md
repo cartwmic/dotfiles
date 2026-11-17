@@ -14,6 +14,10 @@ Agent scratch (work dirs, review checkouts, build targets, dumps) fills the inte
 
 New scratch goes under `$AGENT_TMP`. `~/tmp` stays as the name every note and ledger entry already uses (qmd is the exception: it does not follow links, see "Launchd jobs"): each subtree that moves leaves a link at its old path. `~/tmp` itself stays a real directory holding those links and is not meant to become a link: the qmd config (docs/qmd.md) is the same in every state only while it is a directory.
 
+## No Workshop SSD on this Mac
+
+A personal Mac that has no Workshop SSD at all (the Mac mini) sets `workshop.enabled: false` in the `data:` block of `~/.config/chezmoi/chezmoi.yaml` (docs/profiles.md, Optional keys). The apply then leaves out everything on this page, so no shell has `AGENT_TMP` or `NPM_CONFIG_CACHE` and nothing needs `/Volumes/Workshop`. Turning the key off does not remove files an earlier apply wrote (`~/.config/agent-scratch/workshop.env`, for one): move them away by hand. Reproduce: set the key, `chezmoi apply`. Undo: remove the key and apply.
+
 ## Workshop not mounted
 
 Nothing falls back to the internal disk.

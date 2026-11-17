@@ -44,6 +44,9 @@ data:
   # Default: true on personal, false on axon-work-computer. leakGuard (axon-work-computer only; docs/leak-guard.md) lists the repositories its text check guards.
   # ghBudget:
   #   enabled: true
+  # A personal Mac with no Workshop SSD (docs/agent-scratch.md) sets enabled: false; every other machine leaves it out (default true).
+  # workshop:
+  #   enabled: true
   # axon-work-computer only: clone the private Axon agents playbook (placeholder; use your own account's URL). Omit the key and nothing is cloned.
   # axonPlaybook: {repo: "https://github.com/<account>/axon-agents-playbook.git"}
   # Machine-specific names and addresses. Placeholders only; the full list per profile is docs/profiles.md, "Local data keys".

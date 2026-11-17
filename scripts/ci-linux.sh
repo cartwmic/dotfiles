@@ -85,6 +85,7 @@ python3 scripts/ci-par.py \
   tests/pi-lead \
   tests/hub \
   tests/pnpm-store \
+  tests/workshop-enabled \
   tests/leak-guard \
   tests/agent-docker \
   tests/ssh-probe \

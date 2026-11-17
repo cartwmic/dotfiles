@@ -370,6 +370,24 @@ Library/Preferences/pnpm/**
 # video-rename: a personal media task on the personal Mac (README.md, "video-rename").
 .local/bin/video-rename
 {{- end }}
+
+{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") (not (includeTemplate "workshop_config" . | fromJson).enabled) }}
+# A personal Mac with no Workshop SSD (local data workshop.enabled: false, docs/profiles.md): none of the Workshop pieces. The pnpm store files, the agent
+# scratch env file (dot_zshenv sources it only when it exists), its create script and move script, the cargo shim that puts target dirs under AGENT_TMP,
+# the Spotlight script and heavy-gate's volumes file.
+.config/pnpm
+.config/pnpm/**
+Library/Preferences/pnpm
+Library/Preferences/pnpm/**
+.config/agent-scratch
+.config/agent-scratch/**
+81_agent_scratch_workshop.sh
+80_spotlight_off_workshop.sh
+.local/user_scripts/agent_tmp_move.py
+.local/share/agent-scratch
+.local/share/agent-scratch/**
+.config/heavy-gate/volumes
+{{- end }}
 {{- if ne .profile "axon-work-computer" }}
 # Anthropic stalls are only seen on the work profile.
 .pi/agent/extensions/anthropic-stall-retry
