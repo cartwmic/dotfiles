@@ -82,7 +82,7 @@ Runs only where the budget file says `on` (personal Linux and personal Mac). It 
 | `rc` | the exit code gh returned (or the refusal's code) |
 | `dur_s` | seconds from the wrapper's start to exit |
 | `who` | `$COORDINATOR_WHO`, else `$GH_CALLER`, else null |
-| `parent`, `grandparent` | the calling processes: the program's name, and the script's file name when the script is the first argument |
+| `parent`, `grandparent` | the calling processes: the program's name, and the file name of the first argument when that argument is an existing file (a script, with or without an extension), e.g. `python3 ci-main-status` |
 | `cwd` | the working directory |
 | `interval` | watches only: the `--interval` gh gets, as a number (30 is 30 seconds) |
 

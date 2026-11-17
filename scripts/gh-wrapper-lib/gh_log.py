@@ -5,12 +5,12 @@ A layer for lib/gh_layers.py. It writes the log and changes nothing else: a writ
 goes on. The budget layer's facts (urgent, budget, budget_left) come from call.notes; with no budget layer they are null.
 
 Never the arguments, the bodies or the tokens. `class` is the command's name (gh_classify masks the ids in an API path). A calling process is its program
-name, plus the name of the script it runs when that script is its first argument, and nothing else from its command line.
+name, plus the file name of its first argument when that argument is an existing file (a script it runs, with or without an extension), and nothing
+else from its command line.
 """
 import datetime
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -18,7 +18,6 @@ import time
 LOG_NAME = "calls.jsonl"
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 WATCH_CLASSES = ("run watch",)
-SCRIPT_FILE = re.compile(r"[^\s=-][^\s=]*\.(py|sh|js|mjs|ts|rb|pl)")
 
 
 def log_path(environ=os.environ):
@@ -33,7 +32,7 @@ def max_bytes(environ=os.environ):
         return DEFAULT_MAX_BYTES
 
 
-# ---- the record: reads the clock, the working directory and the environment, and writes nothing; proc() reads the calling processes ------------------------------------------------------------------------------
+# ---- the record: reads the clock, the working directory, the environment and whether argv[1] is a file, and writes nothing; proc() reads the calling processes ----------------------------------------
 
 def is_watch(call):
     return call.klass in WATCH_CLASSES or "--watch" in call.args
@@ -53,11 +52,11 @@ def interval_of(args):
 
 
 def caller(argv):
-    """A calling process as the log names it: its program, and its first argument when that is a script file. Never its other arguments."""
+    """A calling process as the log names it: its program, and the file name of its first argument when that argument is an existing file that is not an option. Never its other arguments."""
     if not argv:
         return None
     names = [os.path.basename(argv[0])]
-    if len(argv) > 1 and SCRIPT_FILE.fullmatch(argv[1]):
+    if len(argv) > 1 and not argv[1].startswith("-") and os.path.isfile(argv[1]):
         names.append(os.path.basename(argv[1]))
     return " ".join(names)
 

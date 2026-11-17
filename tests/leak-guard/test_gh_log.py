@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from collections import namedtuple
@@ -30,12 +31,19 @@ def call(args, klass, bucket="core", write=False):
 
 
 class Pure(unittest.TestCase):
-    def test_a_calling_process_is_its_program_and_a_script_given_first_and_nothing_else(self):
+    def test_a_calling_process_is_its_program_and_an_existing_file_given_first_and_nothing_else(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        run_sh, ci = os.path.join(tmp, "run.sh"), os.path.join(tmp, "ci-main-status")
+        for path in (run_sh, ci):
+            open(path, "w").close()
         for argv, want in (
                 (["zsh", "-c", "gh api -f body=MARKER repos/a/b/issues; true"], "zsh"),
-                (["sh", "/home/u/bin/run.sh", "--token=abc"], "sh run.sh"),
+                (["sh", run_sh, "--token=abc"], "sh run.sh"),
                 (["node", "--enable-source-maps", "/x/index.js", "--token=abc"], "node"),
-                (["python3", "merge-pr.py"], "python3 merge-pr.py"),
+                (["python3", ci, "--token=abc"], "python3 ci-main-status"),      # no extension, still a script
+                (["python3", os.path.join(tmp, "merge-pr.py")], "python3"),      # not an existing file
+                (["python3", tmp], "python3"),                                   # a directory
                 (["bash", "./deploy.sh x y"], "bash"),
                 (["bash", "--rcfile", "x.sh"], "bash"),
                 ([], None)):
@@ -70,6 +78,20 @@ class Pure(unittest.TestCase):
         ppid, argv = G.proc(os.getpid())
         self.assertEqual(ppid, os.getppid())
         self.assertTrue(argv and argv[0])
+
+    def test_a_real_extensionless_script_parent_is_named_by_its_file_name_and_nothing_else(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        script = os.path.join(tmp, "ci-main-status")
+        with open(script, "w") as f:
+            f.write("#!%s\nimport time\ntime.sleep(60)\n" % sys.executable)
+        os.chmod(script, 0o755)
+        child = subprocess.Popen([script, "--token=MARKER"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        ppid, argv = G.proc(child.pid)                  # the child ran the script: argv is the interpreter, the script, the token
+        self.assertEqual(ppid, os.getpid())
+        self.assertEqual(G.caller(argv), os.path.basename(sys.executable) + " ci-main-status")
 
     def test_on_macos_the_parent_comes_from_ps_and_only_its_program_is_kept(self):
         done = subprocess.CompletedProcess([], 0, stdout="  4242 zsh -c gh api -f body=MARKER\n", stderr="")
