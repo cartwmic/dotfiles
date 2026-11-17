@@ -1,4 +1,4 @@
-"""What the installed Claude Code lists to the model under each seat file: only workflow-authoring may be a bundled skill, and the four unused tools are absent from the worker seats.
+"""What the installed Claude Code lists to the model under each seat file: only workflow-authoring may be a bundled skill (lead and coordinator; the worker seats list none), and the four unused tools are absent from the worker seats.
 
 .chezmoitemplates/fleet_seat keeps Claude Code's bundled skills on (with disableBundledSkills true the Workflow tool carries its whole 20K-char
 authoring reference in every request) and turns every bundled skill but workflow-authoring off by name, because skillOverrides has no wildcard.
@@ -94,10 +94,13 @@ class BundledSkillsBinaryTest(unittest.TestCase):
                 request = first_request(binary, seat_file)
                 names, workflow_chars = listed_skills(request)
                 # the throwaway HOME has no personal skills, so whatever is listed is a bundled (or built-in) skill
-                extra = sorted(set(names) - {"workflow-authoring"})
+                # the lead and the coordinator keep the Workflow tool, so workflow-authoring stays listed for them; the worker seats deny the tool and turn the skill off
+                allowed = set() if seat in UNUSED_TOOL_SEATS else {"workflow-authoring"}
+                extra = sorted(set(names) - allowed)
                 self.assertEqual(extra, [], "Claude Code %s lists %s to a %s seat. Add each to $bundledOff in .chezmoitemplates/fleet_seat and to BUNDLED_OFF in "
                                  "tests/t3-hub/test_t3_hub.py (a bundled skill nobody turned off is a listing in every request of every seat)." % (binary, extra, seat))
-                self.assertIn("workflow-authoring", names, "workflow-authoring must stay listed: without it the Workflow tool carries its whole 20K-char reference (seat %s)" % seat)
+                if seat not in UNUSED_TOOL_SEATS:
+                    self.assertIn("workflow-authoring", names, "workflow-authoring must stay listed: without it the Workflow tool carries its whole 20K-char reference (seat %s)" % seat)
                 tools = {t["name"] for t in request["tools"]}
                 if seat in UNUSED_TOOL_SEATS:
                     self.assertEqual(sorted(tools & UNUSED_TOOLS), [], "seat %s still has tools it never calls in the first request; the seat file denies them" % seat)
