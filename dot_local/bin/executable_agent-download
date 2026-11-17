@@ -74,7 +74,7 @@ case "$CMD" in
         case "$name" in *.crdownload|*.part) continue ;; esac
         size="$(wc -c < "$f" | tr -d ' ')"
         # new: its name is not in the marked list, or its size differs from the marked one (the first mark line is the folder)
-        grep -qxF "$(printf '%s\t%s' "$name" "$size")" "$MARK" && continue
+        grep -qxF -e "$(printf '%s\t%s' "$name" "$size")" "$MARK" && continue
         sleep 0.5
         # completed: no sibling NAME.crdownload, and the size is unchanged 0.5 s later
         [ -f "$f" ] && [ ! -e "$f.crdownload" ] && [ "$(wc -c < "$f" | tr -d ' ')" = "$size" ] || continue

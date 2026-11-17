@@ -9,7 +9,7 @@ Browse (`browse` MCP server) drives the agent Chrome (the one at 127.0.0.1:9333,
 start another browser or tool. Personal accounts only; never the work Mac.
 
 ## Start
-1. Call the `status` tool. It lists connected browsers, pairing, tabs, and `nextStep` if something is missing. If no browser is connected: check `systemctl --user status agent-chrome`
+1. Call the `status` tool. It lists connected browsers, pairing, tabs, and `nextStep` if something is missing. The relay starts on the first Browse call, and the extension reconnects about 1-2 seconds later. So if `status` says the browser is not connected or `paired-offline` right after that first call, wait about 5 seconds and call `status` again, up to 3 times. If no browser is connected after that: check `systemctl --user status agent-chrome`
    (or run `agent-chrome`), then pairing (agent-harness README, "Agent browser" > "Pair Browse"). Do not ask Michael until you have tried that.
 2. Open a page: `execute` with `await page.goto("https://...")`. The result starts with `tab: <id>`.
 
