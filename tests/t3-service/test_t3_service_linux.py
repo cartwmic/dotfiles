@@ -160,7 +160,7 @@ class DropInShell(unittest.TestCase):
     def test_the_drop_in_sets_shell_to_zsh_and_keeps_the_path(self):
         out = chezmoi_render(DROPIN)
         self.assertEqual(re.findall(r"^Environment=SHELL=(.*)$", out, re.M), ["/usr/bin/zsh"])
-        self.assertIn("Environment=PATH=/home/test/.local/share/mise/shims:", out)
+        self.assertIn("Environment=PATH=/home/test/.local/share/gh-wrapper/bin:/home/test/.local/share/mise/shims:", out)
         self.assertEqual(out.count("[Service]"), 1)
 
     def test_changing_the_drop_in_changes_the_install_scripts_hash_so_chezmoi_reruns_it(self):
