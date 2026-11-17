@@ -15,7 +15,9 @@
   <key>EnvironmentVariables</key>
   <dict>
     <!-- chezmoi data agentEvents (.chezmoitemplates/agent_events_config) -->
+{{- if not (hasKey $agentEvents "export") }}
     <key>AGENT_EVENTS_OTLP_ENDPOINT</key><string>{{ $agentEvents.endpoint }}</string>
+{{- end }}
     <key>AGENT_EVENTS_MACHINE</key><string>{{ $agentEvents.machine }}</string>
   </dict>
   <key>StandardOutPath</key><string>{{ .chezmoi.homeDir }}/.local/state/agent-events/launchd.out</string>

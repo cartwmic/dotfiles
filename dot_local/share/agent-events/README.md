@@ -10,6 +10,12 @@ and `agent-events status` is `agent-traces pi status`.
   load script are `Library/LaunchAgents/local.agent-events.plist.tmpl` and
   `run_onchange_after_70_agent_events_launchd.sh.tmpl`; the settings are chezmoi data `agentEvents`
   (`.chezmoitemplates/agent_events_config`).
+- `agentEvents.export: false` (chezmoi data) makes a machine build the database and send nothing: the plist and the systemd unit leave out
+  `AGENT_EVENTS_OTLP_ENDPOINT`, which the kit reads as "this machine does not send", and the tick exits 0. It is for a machine whose scheduled node
+  cannot reach the collector. On macOS a launchd-run node is blocked from the local network until it is granted in System Settings (Privacy &
+  Security > Local Network); the symptom is `could not reach the collector (EHOSTUNREACH)` and a job that exits 1 every 2 minutes, while curl or an
+  ssh session on the same machine reaches the collector. The grant is per node binary and the mise path carries the node version, so it breaks on
+  each node upgrade. Default: true.
 - On Linux (personal) `agent-events.timer` starts `agent-events.service` every 2 minutes with the same settings: units
   `dot_config/systemd/user/agent-events.{service.tmpl,timer}`, load script `run_onchange_after_77_agent_events_systemd.sh.tmpl`.
   Logs: `journalctl --user -u agent-events`. The load script skips WSL.
