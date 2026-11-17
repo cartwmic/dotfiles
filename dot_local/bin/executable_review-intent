@@ -44,9 +44,11 @@ ITEM = r"#(\d+)(?:\s*[%s]\s*#?(\d+))?" % DASHES
 ASK_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (ITEM, ITEM), re.I)
 ITEM_RE = re.compile(ITEM)
 # A workstream's creation why is free text a person or agent wrote ("Michael's Other answer on ask 870"), so there the `#` is optional.
-# Only the first item of a list may leave it out ("ask 870", "asks 1113-1115"); a later item needs it ("ask #1175, 22:09Z" is one ask and a time), and a number that is
-# followed by a time or a unit is not an ask id.
-LOOSE_FIRST = r"#?(\d+)(?![\d:]|\s*(?:minutes?|hours?|days?)\b)(?:\s*[%s]\s*#?(\d+))?" % DASHES
+# Only the first item of a list may leave it out ("ask 870", "asks 1113-1115"); a later item needs it ("ask #1175, 22:09Z" is one ask and a time).
+# A `#N` is always an id, unless a digit or a time follows ("#5:30"); a bare N is not when a time or a unit follows ("ask 5 minutes", "ask 5pm", "ask 3 times").
+UNITS = r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|times?)"
+RANGE_END = r"(?:\s*[%s]\s*#?(\d+))?" % DASHES
+LOOSE_FIRST = r"(?:#(\d+)(?!\d|:\d)%s|(\d+)(?!\d|:|\s*%s\b|\s*[ap]m\b|h\b)%s)" % (RANGE_END, UNITS, RANGE_END)
 LOOSE_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (LOOSE_FIRST, ITEM), re.I)
 LOOSE_ITEM_RE = re.compile(r"(?:%s)|(?:%s)" % (LOOSE_FIRST, ITEM))
 

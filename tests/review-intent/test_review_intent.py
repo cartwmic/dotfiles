@@ -133,6 +133,17 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(self.marker(r.stdout)[0], "96,1175")
         self.assertNotIn("unrelated", r.stdout)
 
+    def test_a_colon_or_a_unit_after_a_hashed_ask_still_counts_and_a_bare_unit_does_not(self):
+        self.put(asks=[ask(96, workstream="A"), ask(98, workstream="B"), ask(99, workstream="C"), ask(100, workstream="D"),
+                       ask(1175, answer="colon"), ask(5, answer="five"), ask(3, answer="three"), ask(2, answer="two"), ask(12, answer="twelve")],
+                 workstreams=[{"name": "A", "why": "Michael on ask #1175: approve the audit"},
+                              {"name": "B", "why": "ask #5 minutes later; ask 3 times; ask 2 weeks; ask 5pm; ask 12h"},
+                              {"name": "C", "why": "asks #1175-#1175"},
+                              {"name": "D", "why": "ask #5:30"}])
+        self.assertEqual(self.marker(self.run_script("ask #96").stdout)[0], "96,1175")
+        self.assertEqual(self.marker(self.run_script("ask #98").stdout)[0], "5,98")
+        self.assertEqual(self.marker(self.run_script("ask #100").stdout)[0], "100")
+
     def test_a_follow_up_is_labelled_with_who_wrote_it(self):
         self.put(asks=[ask(97, exchange=[{"kind": "follow-up", "at": "2026-01-02T00:00:00.000Z", "who": "coordinator", "text": "in its own words"},
                                          {"kind": "follow-up", "at": "2026-01-03T00:00:00.000Z", "who": "michael (status page)", "text": "his words"}])])
