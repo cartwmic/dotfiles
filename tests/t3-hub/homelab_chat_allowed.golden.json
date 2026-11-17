@@ -1,5 +1,5 @@
 {
- "_about": "The homelab chat seat's allowed calls, pinned. This is Michael's requirement (ledger ask #1228; tool set decision #3441). The hook (hooks/homelab_chat_allowlist.py) must allow exactly these and nothing else, so a change to the hook that adds a tool, a bot verb, a thread, a post flag or a Bash command form fails tests/t3-hub/test_homelab_chat_standing.py until this file changes too. Change this file only with Michael's approval. 'seen' lists every tool name, bot verb and other Bash command the test also probes (tools and Bash commands must all be refused unless 'allowed' lists them), so a hook change that lets one of them through is caught by what the hook does, not only by its constants.",
+ "_about": "The homelab chat seat's allowed calls, pinned. This is Michael's requirement (ledger ask #1228; tool set decision #3441). The hook (hooks/homelab_chat_allowlist.py) must allow exactly these and nothing else, so a change to the hook that adds a tool, a bot verb, a thread, a post flag, or lets through a Bash command listed under 'seen' fails tests/t3-hub/test_homelab_chat_standing.py until this file changes too. Change this file only with Michael's approval. 'seen' lists every tool name, bot verb and other Bash command the test also probes (tools and Bash commands must all be refused unless 'allowed' lists them), so a hook change that lets one of them through is caught by what the hook does, not only by its constants.",
  "allowed": {
   "tools": [
    "ToolSearch",
@@ -196,7 +196,18 @@
    "rm -rf ~",
    "chezmoi apply",
    "claude",
-   "t3 thread list"
+   "t3 thread list",
+   "helm list",
+   "kubectl exec x -- sh",
+   "kubectl apply -f x",
+   "jq . x",
+   "wget https://example.com",
+   "docker ps",
+   "python3 -m http.server",
+   "node -e 1",
+   "perl -e 1",
+   "find / -name x",
+   "grep -r x ."
   ]
  }
 }
