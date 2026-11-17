@@ -336,8 +336,8 @@ Library/**
 .local/share/agentsview/**
 {{- end }}
 
-{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}
-# Spotify desktop app (docs/profiles.md): personal macOS only. Spotify has no arm64 Linux build, and the work Mac is left out. The mise task that runs `brew install --cask spotify`.
+{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") (ne .chezmoi.hostname "cartwmic-server") }}
+# Spotify desktop app (docs/profiles.md): the personal Mac mini (hostname cartwmic-server) only, per decision #3834. The MacBook and the work Mac are left out. The mise task that runs `brew install --cask spotify`.
 .config/mise/conf.d/spotify.toml
 {{- end }}
 

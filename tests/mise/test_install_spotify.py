@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 MISE = shutil.which("mise")
+CHEZMOI = shutil.which("chezmoi")
 CONF = ROOT / "dot_config/mise/conf.d/spotify.toml"
 
 
@@ -60,15 +61,36 @@ class InstallSpotifyTests(unittest.TestCase):
         self.assertEqual(brew, [])
         self.assertIn("Skipping", result.stdout)
 
-    def test_only_personal_macos_gets_the_file_and_the_step(self):
-        ignore = (ROOT / ".chezmoiignore").read_text()
-        self.assertIn('{{- if or (ne .profile "personal") (ne .chezmoi.os "darwin") }}\n'
-                      "# Spotify desktop app", ignore)
-        self.assertIn(".config/mise/conf.d/spotify.toml", ignore)
-        script = (ROOT / "run_onchange_after_10_mise_bootstrap.sh.tmpl").read_text()
-        self.assertIn('{{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") }}\n\n'
-                      "# Personal macOS only: the Spotify desktop app", script)
-        self.assertIn("mise run install-spotify", script)
+    def render(self, name, profile, os_name, hostname):
+        """Render a template the way chezmoi does for this profile, OS and hostname (real chezmoi, scratch config and HOME)."""
+        with tempfile.TemporaryDirectory(prefix="spotify-render-") as temporary:
+            cfg = Path(temporary) / "chezmoi.yaml"
+            cfg.write_text("data:\n  profile: %s\n" % profile)
+            data = json.dumps({"chezmoi": {"os": os_name, "hostname": hostname}})
+            completed = subprocess.run(
+                [CHEZMOI, "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "--destination", temporary,
+                 "execute-template", "--override-data", data],
+                input=(ROOT / name).read_text(), text=True, capture_output=True, timeout=60, env=dict(os.environ, HOME=temporary))
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return completed.stdout
+
+    CASES = (  # profile, os, hostname, gets the file and the step
+        ("personal", "darwin", "cartwmic-server", True),    # the Mac mini
+        ("personal", "darwin", "Michaels-MacBook-Pro", False),
+        ("axon-work-computer", "darwin", "axon-work-computer", False),
+        ("axon-work-computer", "darwin", "cartwmic-server", False),
+        ("personal", "linux", "cartwmic-server", False),
+    )
+
+    @unittest.skipUnless(CHEZMOI, "chezmoi is required")
+    def test_only_the_personal_mac_mini_gets_the_file_and_the_step(self):
+        for profile, os_name, hostname, gets in self.CASES:
+            with self.subTest(profile=profile, os=os_name, host=hostname):
+                ignored = self.render(".chezmoiignore", profile, os_name, hostname).splitlines()
+                self.assertEqual(".config/mise/conf.d/spotify.toml" in ignored, not gets)
+                script = self.render("run_onchange_after_10_mise_bootstrap.sh.tmpl", profile, os_name, hostname).splitlines()
+                self.assertEqual("mise run install-spotify" in script, gets)
+                self.assertEqual(any(line.startswith("# Hash (Mac mini Spotify task)") for line in script), gets)
 
     def test_not_in_the_shared_config(self):
         config = tomllib.loads((ROOT / "dot_config/mise/config.toml").read_text())
