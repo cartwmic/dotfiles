@@ -1,8 +1,9 @@
 """install_t3.sh in pinned mode (container mode, run_onchange_after_05_container_tools.sh.tmpl): install exactly the pinned T3 release.
 
-The real script runs in a private HOME with the real curl and sha256sum against a file:// mirror of the release (T3CODE_RELEASE_BASE_URL, the installer's
-own variable) and a stand-in for https://t3.codes/install.sh (T3_INSTALL_URL) that records what it was asked for and installs a `t3` that prints
-`t3 v<T3CODE_VERSION>`. Unpinned mode (script 74) is covered by tests/t3-service.
+The real script runs in a private HOME with the real curl, tar and sha256sum against a file:// mirror of the release (T3CODE_RELEASE_BASE_URL, the
+installer's own variable; the real installer needs http(s), the stand-in does not download) and a stand-in for https://t3.codes/install.sh
+(T3_INSTALL_URL). The stand-in behaves like the real one for a version that is already unpacked and marked .install-complete: it writes the `t3` launcher
+and downloads nothing. Unpinned mode (script 74) is covered by tests/t3-service.
 """
 import hashlib
 import json
@@ -21,12 +22,17 @@ TEMPLATE = ROOT / "run_onchange_after_05_container_tools.sh.tmpl"
 PIN = "0.1.10-nightly.20261116.4800"
 ARCH = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}[os.uname().machine]
 ARCHIVE = f"t3-{PIN}-linux-{ARCH}.tar.gz"
-# What the stand-in installer does: note it ran and with which version, then write the launcher the real one writes (a `t3` that reports that version).
+# The stand-in installer. Like the real one it skips a version that is marked complete and writes the launcher; FAKE_REDOWNLOAD makes it fetch the release
+# itself instead (as the real one would if its layout changed); FAKE_INSTALLS makes the launcher report another version.
 INSTALLER = '''#!/bin/sh
 echo "installer version=${T3CODE_VERSION:-}" >> "$CALLS"
+dir=${T3CODE_HOME:-$HOME/.t3}/runtime/versions/$T3CODE_VERSION
+if [ -n "${FAKE_REDOWNLOAD:-}" ] || [ "$(cat "$dir/.install-complete" 2>/dev/null)" != "$T3CODE_VERSION" ]; then
+  mkdir -p "$dir"; printf '#!/bin/sh\\necho "t3 v%s"\\n# other bytes\\n' "$T3CODE_VERSION" > "$dir/t3"; chmod 755 "$dir/t3"; echo "$T3CODE_VERSION" > "$dir/.install-complete"
+fi
 mkdir -p "$HOME/.local/bin"
-v=${FAKE_INSTALLS:-${T3CODE_VERSION:-stable}}
-printf '#!/bin/sh\\necho "t3 v%s"\\n' "$v" > "$HOME/.local/bin/t3"
+if [ -n "${FAKE_INSTALLS:-}" ]; then printf '#!/bin/sh\\necho "t3 v%s"\\n' "$FAKE_INSTALLS" > "$HOME/.local/bin/t3"
+else printf "#!/bin/sh\\nexec '%s/t3' \\"\\$@\\"\\n" "$dir" > "$HOME/.local/bin/t3"; fi
 chmod 755 "$HOME/.local/bin/t3"
 '''
 
@@ -45,23 +51,34 @@ class PinnedInstall(unittest.TestCase):
         self.home, self.calls = root / "home", root / "calls"
         self.home.mkdir()
         self.calls.write_text("")
-        mirror = root / "mirror" / f"v{PIN}"
-        mirror.mkdir(parents=True)
-        (mirror / ARCHIVE).write_bytes(b"the release archive")
-        self.sha = hashlib.sha256(b"the release archive").hexdigest()
+        # The release archive: one folder holding the t3 binary (the installer unpacks it with --strip-components=1).
+        build = root / "build" / f"t3-{PIN}-linux-{ARCH}"
+        write_exec(build / "t3", f'#!/bin/sh\necho "t3 v{PIN}"\n')
         self.mirror = root / "mirror"
+        (self.mirror / f"v{PIN}").mkdir(parents=True)
+        subprocess.run(["tar", "-czf", str(self.mirror / f"v{PIN}" / ARCHIVE), "-C", str(build.parent), build.name], check=True)
+        self.sha = hashlib.sha256((self.mirror / f"v{PIN}" / ARCHIVE).read_bytes()).hexdigest()
+        other_arch = "arm64" if ARCH == "x64" else "x64"   # the same bytes under the other CPU's name, so either CPU can be tested on any machine
+        shutil.copy(self.mirror / f"v{PIN}" / ARCHIVE, self.mirror / f"v{PIN}" / f"t3-{PIN}-linux-{other_arch}.tar.gz")
+        write_exec(root / "bin" / "uname", '#!/bin/sh\n[ "$1" = -m ] && [ -n "${FAKE_UNAME_M:-}" ] && echo "$FAKE_UNAME_M" || exec /usr/bin/uname "$@"\n')
+        self.other = "1" * 64   # a well-formed sha256 that matches nothing
         write_exec(root / "installer.sh", INSTALLER)
         self.installer = root / "installer.sh"
+        self.versions = self.home / ".t3/runtime/versions"
 
     def have_t3(self, version):
         write_exec(self.home / ".local/bin/t3", f'#!/bin/sh\necho "t3 v{version}"\n')
 
-    def run_script(self, sha=None, **extra):
-        sha = self.sha if sha is None else sha
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "CALLS": str(self.calls), "T3_PIN_VERSION": PIN,
-               "T3_PIN_SHA256_X64": sha, "T3_PIN_SHA256_ARM64": sha,
+    def run_script(self, x64=None, arm64=None, **extra):
+        env = {"PATH": f"{Path(self.tmp.name) / 'bin'}:/usr/bin:/bin", "HOME": str(self.home), "T3CODE_HOME": str(self.home / ".t3"), "CALLS": str(self.calls), "T3_PIN_VERSION": PIN,
+               "T3_PIN_SHA256_X64": self.sha if x64 is None else x64, "T3_PIN_SHA256_ARM64": self.sha if arm64 is None else arm64,
                "T3CODE_RELEASE_BASE_URL": f"file://{self.mirror}", "T3_INSTALL_URL": f"file://{self.installer}", **extra}
         return subprocess.run(["/bin/sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
+
+    def run_with(self, cpu, cpu_sha, other_cpu_sha, **extra):
+        """Run as CPU `cpu` (x64 or arm64) with `cpu_sha` pinned for it and `other_cpu_sha` for the other one."""
+        pair = {"x64": cpu_sha, "arm64": other_cpu_sha} if cpu == "x64" else {"x64": other_cpu_sha, "arm64": cpu_sha}
+        return self.run_script(FAKE_UNAME_M={"x64": "x86_64", "arm64": "aarch64"}[cpu], **pair, **extra)
 
     def installed(self):
         return self.calls.read_text().splitlines()
@@ -82,22 +99,62 @@ class PinnedInstall(unittest.TestCase):
         self.assertEqual(self.installed(), [f"installer version={PIN}"])
         self.assertEqual(self.version(), f"t3 v{PIN}")
 
+    def test_the_installed_bytes_are_the_bytes_that_were_checked(self):
+        # The installer here downloads nothing: what runs is the unpacked archive that passed the sha256 check.
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.versions / PIN / "t3").read_text(), f'#!/bin/sh\necho "t3 v{PIN}"\n')
+        self.assertEqual((self.versions / PIN / ".install-complete").read_text().strip(), PIN)
+
+    def test_an_installer_that_replaces_the_checked_binary_fails(self):
+        r = self.run_script(FAKE_REDOWNLOAD="1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("replaced the checked t3", r.stdout)
+
     def test_a_pod_already_on_the_pin_downloads_and_installs_nothing(self):
         self.have_t3(PIN)
         shutil.rmtree(self.mirror)   # a download would fail
         r = self.run_script(T3_INSTALL_URL="file:///nonexistent")
         self.assertEqual((r.returncode, self.installed()), (0, []), r.stdout + r.stderr)
 
+    def test_a_version_that_only_starts_with_the_pin_is_not_the_pin(self):
+        # A substring or prefix compare would treat these as already installed and skip the install.
+        for installed in (PIN + "1", PIN + "-rc1", "9" + PIN):
+            with self.subTest(installed=installed):
+                self.calls.write_text("")
+                self.have_t3(installed)
+                r = self.run_script()
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(self.installed(), [f"installer version={PIN}"])
+                self.assertEqual(self.version(), f"t3 v{PIN}")
+
     def test_an_archive_that_does_not_match_the_pinned_sha256_installs_nothing_and_fails(self):
         self.have_t3("0.1.9")
-        r = self.run_script(sha="0" * 64)
+        r = self.run_script(x64="0" * 64, arm64="0" * 64)
         self.assertEqual(r.returncode, 1)
         self.assertIn("does not match the pinned sha256", r.stdout)
         self.assertEqual(self.installed(), [])
+        self.assertFalse(self.versions.exists() and any(self.versions.iterdir()), "nothing is unpacked")
         self.assertEqual(self.version(), "t3 v0.1.9")
 
+    def test_the_sha256_for_this_cpu_is_the_one_that_counts(self):
+        # Right for the running CPU and wrong for the other: installs. The reverse (a swapped pair) must fail. Both CPUs, on any machine.
+        for cpu in ("x64", "arm64"):
+            with self.subTest(cpu=cpu):
+                self.calls.write_text("")
+                self.have_t3("0.1.9")
+                r = self.run_with(cpu, self.sha, self.other)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(self.version(), f"t3 v{PIN}")
+                self.calls.write_text("")
+                self.have_t3("0.1.9")
+                r = self.run_with(cpu, self.other, self.sha)
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("does not match the pinned sha256", r.stdout)
+                self.assertEqual((self.installed(), self.version()), ([], "t3 v0.1.9"))
+
     def test_a_cpu_with_no_pinned_sha256_fails_rather_than_installing_unchecked(self):
-        r = self.run_script(sha="", T3_PIN_SHA256_X64="", T3_PIN_SHA256_ARM64="")
+        r = self.run_script(x64="", arm64="")
         self.assertEqual(r.returncode, 1)
         self.assertIn("no sha256 pinned", r.stdout)
         self.assertEqual(self.installed(), [])
