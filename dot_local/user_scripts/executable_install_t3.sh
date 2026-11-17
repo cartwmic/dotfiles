@@ -7,28 +7,63 @@
 #
 # Pinned (T3_PIN_VERSION set, the container tools script): install exactly that release, so a pod's T3 matches the other T3s it links to (T3
 # refuses a link between two versions that differ). The pin is in .chezmoidata.toml ([t3Pin]), with the sha256 of the release's linux archive for
-# each CPU (T3_PIN_SHA256_X64, T3_PIN_SHA256_ARM64). When `t3 --version` already prints the pin, do nothing. Otherwise download the archive the
-# installer would fetch, check it against the pinned sha256 (a mismatch exits 1 and installs nothing), and only then run the installer with
-# T3CODE_VERSION set. The installer fetches the archive itself, from the same URL, and checks it against the release's own SHA256SUMS; the pinned
-# sha256 is the extra check that the release still holds the bytes the pin was made from. The installer then writes the `t3` launcher over the
-# old one (it replaces a launcher of its own making) and leaves older versions on disk.
+# each CPU (T3_PIN_SHA256_X64, T3_PIN_SHA256_ARM64). To install it: download the archive, check it against the pinned sha256 (a mismatch exits 1 and
+# installs nothing), unpack that same file into the installer's own layout ($T3CODE_HOME/runtime/versions/<pin>, marked .install-complete), write a
+# stamp into that folder (see below), then run the installer with T3CODE_VERSION set: it finds the version already downloaded and only
+# writes the `t3` launcher (over the old one, which it replaces when it made it). The installer downloads nothing.
 #
-# Exit 0: t3 is on PATH (pinned: at the pin). Exit 1: the download, the sha256 check or the installer failed, or t3 is not at the expected version
-# after it (a message says which).
-# Test hooks: T3_INSTALL_URL, and T3CODE_RELEASE_BASE_URL (the installer's own release mirror variable, used for the sha256 download too).
+# One check, pin_verified, decides every pinned exit 0: the `t3` on PATH is a launcher that runs exactly versions/<pin>/t3, and that folder is the
+# checked copy. The stamp in the folder is the proof ("<pin> <sha256 of t3> <file count> <total bytes>"): this script writes it only after the sha256
+# check, and the check recomputes it, so a truncated or zeroed file (an unclean volume detach leaves .install-complete behind a half-written folder),
+# a missing file or a rewritten t3 all fail it. It hashes t3 and only counts and sizes the other files, which stays fast for a folder of thousands of
+# files. The installer deletes the whole folder (stamp included) when it unpacks again. pin_verified gates the early exit (so a pod that is already on
+# the pin stays quiet, and one that is not verified is installed again through the checked path, never trusted) and the end of an install. A folder
+# that fails the check is moved aside (versions/<pin>.corrupt-<time>; the latest one is kept) before the checked copy is put in its place, so the
+# installer never finds a bad folder marked complete. If the installer does not use the checked folder (its layout changed and it downloaded the
+# release itself), the script exits 1 on that run and on every later one; it never exits 0 on bytes the sha256 did not cover. A pod on the pin from
+# before the stamp existed has no stamp, so it is installed again once. Older versions stay on disk.
+#
+# Exit 0: t3 is on PATH (pinned: pin_verified). Exit 1: the download, the sha256 check or the installer failed, or (pinned) the install is not the
+# checked copy (a message says which).
+# Test hooks: T3_INSTALL_URL, and T3CODE_RELEASE_BASE_URL (the installer's own release mirror variable, used here for the archive download; it
+# must be an http(s) URL for the real installer, which rejects file://).
 set -eu
 log() { printf '[install_t3] %s: %s\n' "$1" "$2"; }
 
 export PATH="$HOME/.local/bin:$PATH"
 pin=${T3_PIN_VERSION:-}
-if [ -z "$pin" ]; then
+
+if [ -n "$pin" ]; then
+  # The folder the installer unpacks into, written the way install.sh writes it (absolute, no trailing slash), so the launcher line below matches.
+  t3_home=${T3CODE_HOME:-$HOME/.t3}
+  case "$t3_home" in /*) ;; *) t3_home=$(pwd -P)/$t3_home ;; esac
+  while [ "${t3_home%/}" != "$t3_home" ] && [ "$t3_home" != / ]; do t3_home=${t3_home%/}; done
+  versions=$t3_home/runtime/versions
+
+  # What the stamp holds for folder $1: the pin, the sha256 of its t3, and how many files and bytes it has besides the stamp.
+  folder_id() {
+    printf '%s %s %s\n' "$pin" "$(sha256sum "$1/t3" | cut -d' ' -f1)" \
+      "$(find "$1" -type f ! -name .verified-by-install_t3 -printf '%s\n' | awk '{ n++; s += $1 } END { print n + 0, s + 0 }')"
+  }
+  folder_ok() { [ -f "$1/t3" ] && [ "$(cat "$1/.verified-by-install_t3" 2>/dev/null)" = "$(folder_id "$1")" ]; }
+
+  # 0 when the pinned T3 is the checked one; otherwise 1, with the reason in $why.
+  pin_verified() {
+    launcher=$(command -v t3 2>/dev/null) || { why="t3 is not on PATH"; return 1; }
+    grep -qxF "exec '$versions/$pin/t3' \"\$@\"" "$launcher" \
+      || { why="$launcher does not run $versions/$pin/t3"; return 1; }
+    folder_ok "$versions/$pin" || { why="$versions/$pin is not the checked copy (no stamp, a file is missing, changed or cut short)"; return 1; }
+  }
+  why=
+  if pin_verified; then exit 0; fi
+  [ -z "$why" ] || log INFO "T3 at the pin is not verified ($why)"
+else
   command -v t3 >/dev/null 2>&1 && exit 0
-elif [ "$(t3 --version 2>/dev/null || true)" = "t3 v$pin" ]; then
-  exit 0
 fi
 
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/t3-install.XXXXXX")
-trap 'rm -rf "$workdir"' EXIT
+staging=
+trap 'rm -rf "$workdir" "$staging"' EXIT
 installer=$workdir/install.sh
 
 if [ -n "$pin" ]; then
@@ -44,13 +79,27 @@ if [ -n "$pin" ]; then
     || { log ERROR "T3 install failed: could not download $archive"; exit 1; }
   echo "$want  $workdir/$archive" | sha256sum -c - >/dev/null 2>&1 \
     || { log ERROR "T3 install failed: $archive does not match the pinned sha256 $want (the release changed, or the pin is wrong)"; exit 1; }
-  rm -f "$workdir/$archive"
+  mkdir -p "$versions"
+  staging=$(mktemp -d "$versions/.staging-XXXXXX")
+  tar -xzf "$workdir/$archive" -C "$staging" --strip-components=1 || { log ERROR "T3 install failed: could not unpack $archive"; exit 1; }
+  "$staging/t3" --version >/dev/null 2>&1 || { log ERROR "T3 install failed: the unpacked t3 does not run"; exit 1; }
+  printf '%s\n' "$pin" > "$staging/.install-complete"
+  folder_id "$staging" > "$staging/.verified-by-install_t3"
+  if [ -e "$versions/$pin" ] && ! folder_ok "$versions/$pin"; then
+    rm -rf "$versions/$pin".corrupt-*   # only the latest one is kept, so a pod that restarts again and again cannot fill the volume
+    aside=$versions/$pin.corrupt-$(date -u +%Y%m%dT%H%M%SZ)
+    mv "$versions/$pin" "$aside" || { log ERROR "T3 install failed: could not move $versions/$pin aside"; exit 1; }
+    log INFO "moved the unverified $versions/$pin aside to $aside (the latest one is kept)"
+  fi
+  rm -rf "${versions:?}/$pin"
+  mv "$staging" "$versions/$pin"
+  export T3CODE_VERSION=$pin
 fi
 
-[ -z "$pin" ] || export T3CODE_VERSION=$pin
 log INFO "installing T3${pin:+ $pin} (https://t3.codes/install.sh)"
 curl -fsSL "${T3_INSTALL_URL:-https://t3.codes/install.sh}" -o "$installer" || { log ERROR "T3 install failed: could not download the installer"; exit 1; }
 sh "$installer" || { log ERROR "T3 install failed"; exit 1; }
 command -v t3 >/dev/null 2>&1 || { log ERROR "t3 is still not on PATH after the install"; exit 1; }
-[ -z "$pin" ] || [ "$(t3 --version 2>/dev/null || true)" = "t3 v$pin" ] \
-  || { log ERROR "t3 prints \"$(t3 --version 2>&1 | head -n 1)\" after the install, not \"t3 v$pin\""; exit 1; }
+if [ -n "$pin" ]; then
+  pin_verified || { log ERROR "T3 install failed: $why (the installer did not use the checked copy)"; exit 1; }
+fi
