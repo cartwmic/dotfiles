@@ -6,7 +6,8 @@ goes on. The budget layer's facts (urgent, budget, budget_left) come from call.n
 
 Never the arguments, the bodies or the tokens. `class` is the command's name (gh_classify masks the ids in an API path). A calling process is its program
 name, plus the file name of its first argument when that argument is an existing file (a script it runs, with or without an extension), and nothing
-else from its command line.
+else from its command line. A relative first argument is looked up in the calling process's own working directory (/proc/<pid>/cwd on Linux; on a Mac
+there is no cheap equivalent, so it is looked up in this process's).
 """
 import datetime
 import json
@@ -51,12 +52,13 @@ def interval_of(args):
     return None
 
 
-def caller(argv):
-    """A calling process as the log names it: its program, and the file name of its first argument when that argument is an existing file that is not an option. Never its other arguments."""
+def caller(argv, cwd=None):
+    """A calling process as the log names it: its program, and the file name of its first argument when that argument is an existing file that is not an option. Never its other arguments.
+    `cwd` is the process's working directory, where a relative first argument is looked up; None looks it up in this process's."""
     if not argv:
         return None
     names = [os.path.basename(argv[0])]
-    if len(argv) > 1 and not argv[1].startswith("-") and os.path.isfile(argv[1]):
+    if len(argv) > 1 and not argv[1].startswith("-") and os.path.isfile(os.path.join(cwd or "", argv[1])):
         names.append(os.path.basename(argv[1]))
     return " ".join(names)
 
@@ -96,11 +98,27 @@ def proc(pid):
         return None, []
 
 
+def proc_cwd(pid):
+    """The working directory of a process, from /proc on Linux; None elsewhere or when it cannot be read."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        return os.readlink("/proc/%d/cwd" % pid)
+    except OSError:
+        return None
+
+
+def named(pid):
+    """(parent pid, caller() name) of a process, its relative script looked up in its own working directory."""
+    ppid, argv = proc(pid)
+    return ppid, caller(argv, proc_cwd(pid) if argv else None)
+
+
 def ancestry():
     """(parent, grandparent) of this process, each as caller() names it."""
-    grand_pid, parent_argv = proc(os.getppid())
-    _, grand_argv = proc(grand_pid) if grand_pid else (None, [])
-    return caller(parent_argv), caller(grand_argv)
+    grand_pid, parent = named(os.getppid())
+    _, grandparent = named(grand_pid) if grand_pid else (None, None)
+    return parent, grandparent
 
 
 def append(entry, environ=os.environ):

@@ -82,7 +82,7 @@ Runs only where the budget file says `on` (personal Linux and personal Mac). It 
 | `rc` | the exit code gh returned (or the refusal's code) |
 | `dur_s` | seconds from the wrapper's start to exit |
 | `who` | `$COORDINATOR_WHO`, else `$GH_CALLER`, else null |
-| `parent`, `grandparent` | the calling processes: the program's name, and the file name of the first argument when that argument is an existing file (a script, with or without an extension), e.g. `python3 ci-main-status` |
+| `parent`, `grandparent` | the calling processes: the program's name, and the file name of the first argument when that argument is an existing file (a script, with or without an extension), e.g. `python3 ci-main-status`. A relative path is looked up in that process's own working directory on Linux, and in the wrapper's on a Mac (no cheap way to read another process's directory there) |
 | `cwd` | the working directory |
 | `interval` | watches only: the `--interval` gh gets, as a number (30 is 30 seconds) |
 

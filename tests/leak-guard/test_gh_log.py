@@ -1,9 +1,11 @@
 """The call log of the gh wrapper (scripts/gh-wrapper-lib/gh_log.py), driven the way a caller drives it: the installed wrapper runs a fake real gh and writes
 its log under a throwaway HOME. The pure tests check the record's rules alone. The data is invented (test_gh_wrapper's guarded repository and markers).
 """
+import ast
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -15,7 +17,7 @@ from collections import namedtuple
 from pathlib import Path
 from unittest import mock
 
-from test_gh_wrapper import LIB, ROOT, WrapperBase
+from test_gh_wrapper import LIB, ROOT, WrapperBase, spawn_ready
 
 sys.path.insert(0, str(LIB))
 import gh_layers as L      # noqa: E402
@@ -30,12 +32,32 @@ def call(args, klass, bucket="core", write=False):
     return L.Call(args, Class(klass, bucket, write))
 
 
+READS = re.compile(r"\bG\.(?:proc|named|proc_cwd)\((\w+)\.pid\)")
+
+
+def unready_reads(source):
+    """The functions in `source` that read the process table for a process they started and did not get from spawn_ready()."""
+    bad = []
+    for fn in ast.walk(ast.parse(source)):
+        if isinstance(fn, ast.FunctionDef):
+            text = ast.get_source_segment(source, fn)
+            bad += [fn.name for m in READS.finditer(text) if not re.search(r"\b%s = spawn_ready\(" % m.group(1), text)]
+    return bad
+
+
+OLD_SHAPE = """
+def test_a_real_extensionless_script_parent():
+    child = subprocess.Popen([script, "--token=MARKER"], stdin=subprocess.DEVNULL)
+    ppid, argv = G.proc(child.pid)
+"""
+
+
 class Pure(unittest.TestCase):
     def test_a_calling_process_is_its_program_and_an_existing_file_given_first_and_nothing_else(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp)
         run_sh, ci = os.path.join(tmp, "run.sh"), os.path.join(tmp, "ci-main-status")
-        for path in (run_sh, ci):
+        for path in (run_sh, ci, os.path.join(tmp, "-x")):      # "-x" is a file, and still an option
             open(path, "w").close()
         for argv, want in (
                 (["zsh", "-c", "gh api -f body=MARKER repos/a/b/issues; true"], "zsh"),
@@ -46,9 +68,11 @@ class Pure(unittest.TestCase):
                 (["python3", tmp], "python3"),                                   # a directory
                 (["bash", "./deploy.sh x y"], "bash"),
                 (["bash", "--rcfile", "x.sh"], "bash"),
+                (["bash", "-x"], "bash"),                                        # an option, though a file of that name exists
+                (["python3", "ci-main-status"], "python3 ci-main-status"),       # relative: looked up in the caller's directory
                 ([], None)):
             with self.subTest(argv):
-                self.assertEqual(G.caller(argv), want)
+                self.assertEqual(G.caller(argv, tmp), want)
 
     def test_the_interval_is_the_number_gh_gets(self):
         self.assertEqual(G.interval_of(["run", "watch", "9", "--interval", "30"]), 30)
@@ -84,14 +108,29 @@ class Pure(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp)
         script = os.path.join(tmp, "ci-main-status")
         with open(script, "w") as f:
-            f.write("#!%s\nimport time\ntime.sleep(60)\n" % sys.executable)
+            f.write("#!%s\nimport time\nprint('ready', flush=True)\ntime.sleep(60)\n" % sys.executable)
         os.chmod(script, 0o755)
-        child = subprocess.Popen([script, "--token=MARKER"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(child.wait)
-        self.addCleanup(child.kill)
-        ppid, argv = G.proc(child.pid)                  # the child ran the script: argv is the interpreter, the script, the token
+        child = spawn_ready(self, [script, "--token=MARKER"])
+        ppid, name = G.named(child.pid)                 # the child ran the script: argv is the interpreter, the script, the token
         self.assertEqual(ppid, os.getpid())
-        self.assertEqual(G.caller(argv), os.path.basename(sys.executable) + " ci-main-status")
+        self.assertEqual(name, os.path.basename(sys.executable) + " ci-main-status")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the calling process's directory comes from /proc")
+    def test_a_relative_script_is_looked_up_in_the_calling_processs_directory_not_the_wrappers(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        with open(os.path.join(tmp, "merge-pr.py"), "w") as f:
+            f.write("import time\nprint('ready', flush=True)\ntime.sleep(60)\n")
+        child = spawn_ready(self, [sys.executable, "merge-pr.py", "--token=MARKER"], cwd=tmp)
+        _, argv = G.proc(child.pid)
+        self.assertEqual(G.caller(argv), os.path.basename(sys.executable))           # from here the file is not there
+        self.assertEqual(G.named(child.pid)[1], os.path.basename(sys.executable) + " merge-pr.py")
+
+    def test_a_test_reads_the_process_table_for_a_process_it_started_only_after_spawn_ready(self):
+        self.assertEqual(unready_reads(OLD_SHAPE), ["test_a_real_extensionless_script_parent"])
+        for path in sorted(Path(__file__).parent.glob("test_gh_*.py")):
+            with self.subTest(path.name):
+                self.assertEqual(unready_reads(path.read_text()), [], "start the process with spawn_ready(): until its exec finishes /proc/<pid>/cmdline reads as empty")
 
     def test_on_macos_the_parent_comes_from_ps_and_only_its_program_is_kept(self):
         done = subprocess.CompletedProcess([], 0, stdout="  4242 zsh -c gh api -f body=MARKER\n", stderr="")

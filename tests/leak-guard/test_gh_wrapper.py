@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import pty
+import select
 import shutil
 import stat
 import subprocess
@@ -58,6 +59,19 @@ def script_copy(src, dest):
     text = src.read_text().split("\n", 1)
     dest.write_text("#!%s\n%s" % (sys.executable, text[1]))
     dest.chmod(0o755)
+
+
+def spawn_ready(test, argv, timeout=20, **kw):
+    """Start a process and return it once it has said `ready` on its standard output, which it prints after it has started its program.
+    Read /proc/<pid> or ps for a process only after this: until its exec finishes, the kernel gives it no command line (it reads as empty) and no
+    environment. The process is killed and reaped when the test ends. A process that says nothing within `timeout` seconds fails the test."""
+    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kw)
+    test.addCleanup(child.stdout.close)
+    test.addCleanup(child.wait)
+    test.addCleanup(child.kill)
+    if not select.select([child.stdout], [], [], timeout)[0] or child.stdout.readline().strip() != "ready":
+        test.fail("%s never said ready within %ss" % (argv, timeout))
+    return child
 
 
 def load_wrapper():
