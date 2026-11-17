@@ -100,8 +100,26 @@ mise run setup-ubuntu-essentials
 
 log_info "Installing tools from mise config..."
 
+# mise reads GITHUB_TOKEN and ignores GH_TOKEN. Without either, its GitHub release lookups share the 60-requests-an-hour anonymous limit and
+# `mise install` can stop on a rate-limit error. Give that one call a token when none is set: GH_TOKEN, else `gh auth token`. With neither, run as is.
+mise_install() {
+  token=""
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    token="${GH_TOKEN:-}"
+    if [ -z "$token" ] && command -v gh >/dev/null 2>&1; then
+      token="$(gh auth token 2>/dev/null || true)"
+    fi
+  fi
+  if [ -n "$token" ]; then
+    log_info "using a GitHub token from GH_TOKEN or gh for mise install"
+    GITHUB_TOKEN="$token" mise install
+  else
+    mise install
+  fi
+}
+
 # Install all tools defined in [tools] section
-mise install
+mise_install
 
 log_info "Running mise bootstrap tasks..."
 
