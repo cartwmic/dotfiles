@@ -37,6 +37,8 @@ SEATS = tuple(i for i, _, _ in SEAT_TABLE)
 FIZZY = {"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}
 # Reviewer seat only (audit-1116 proposal 2.2): 5-minute prompt cache writes, and no T3 idle compaction (a 5-minute cache would make it fire about 3 minutes after a run). Restated here on purpose.
 FIVE_MIN = {"name": "FORCE_PROMPT_CACHING_5M", "sensitive": False, "value": "1"}
+# The durable lead that answers #homelab: a seat-like instance on personal Linux only (where the coordinator runs), with a hook-enforced tool list. Restated here on purpose.
+HOMELAB_CHAT = "seat-homelab-chat"
 FIZZY_IDS = ("claudeAgent", "coordinator", "claude-hub") + SEATS  # every Claude instance the template owns or finds
 # The builder, planner and reviewer seats load their user instructions from ~/.claude/fleet/worker (the same text without the hindsight guide, plus the skill that holds it)
 # instead of ~/.claude/CLAUDE.md. The instance adds the folder and the variable that makes Claude Code read CLAUDE.md from an added folder; the seat file excludes CLAUDE.md.
@@ -586,8 +588,8 @@ class LinuxSettingsTest(unittest.TestCase):
         before = json.loads(FIXTURE)["providerInstances"]
         out = json.loads(run_script(script, FIXTURE))["providerInstances"]
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
-        self.assertEqual(list(out), list(before) + [*SEATS, "pi", "pi-lead"])
-        self.assertEqual({k: v for k, v in out.items() if k not in ("pi", "pi-lead", *SEATS)}, with_window({"providerInstances": before})["providerInstances"])
+        self.assertEqual(list(out), list(before) + [*SEATS, "pi", "pi-lead", HOMELAB_CHAT])
+        self.assertEqual({k: v for k, v in out.items() if k not in ("pi", "pi-lead", HOMELAB_CHAT, *SEATS)}, with_window({"providerInstances": before})["providerInstances"])
 
     def test_pi_lead_is_written_with_the_wrapper_path(self):
         """pi-lead is a pi-driver instance whose binaryPath is the wrapper under the (rendered) home directory; pi stays as it was."""
@@ -640,7 +642,7 @@ class LinuxSettingsTest(unittest.TestCase):
         data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False, "config": {"launchArgs": "--x"}}
         out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": True})
-        self.assertEqual(list(out), list(data["providerInstances"]) + [*SEATS, "pi-lead"])
+        self.assertEqual(list(out), list(data["providerInstances"]) + [*SEATS, "pi-lead", HOMELAB_CHAT])
         gone = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
         self.assertNotIn("pi", gone)
         self.assertEqual(list(gone), list(json.loads(FIXTURE)["providerInstances"]))
@@ -1113,3 +1115,102 @@ class WorkerInstructionsTest(unittest.TestCase):
             finally:
                 env.close()
 
+
+
+# --- the homelab chat seat: instance, settings file, MCP file, and the hook command's fail-closed shape (the hook's own rules are tests/homelab-chat) ---
+
+HOOK_SCRIPT = REPO / "dot_local/share/agent-harness/hooks/homelab_chat_allowlist.py"
+def bash_call(command):
+    return {"tool_name": "Bash", "tool_input": {"command": command}}
+
+
+ALLOWED_CALL = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "python3 ~/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py queue"}}
+DENIED_CALL = {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "/x", "old_string": "a", "new_string": "b"}}
+
+
+class HomelabChatSeatTest(unittest.TestCase):
+    """seat-homelab-chat: one instance on personal Linux only, a settings file whose hook command denies when anything is wrong, an MCP file with hindsight only."""
+
+    def instance(self, os_name):
+        script, home = LinuxSettingsTest().render(os_name)
+        return json.loads(run_script(script, FIXTURE))["providerInstances"], home, script
+
+    def test_the_instance_is_written_on_personal_linux_exactly(self):
+        inst, home, script = self.instance("linux")
+        fleet = "%s/.claude/fleet" % home
+        self.assertEqual(inst[HOMELAB_CHAT], {
+            "config": {"autoCompactWindow": "200000",
+                       "launchArgs": "--settings %s/seat-homelab-chat.json --strict-mcp-config --mcp-config %s/mcp-homelab-chat.json" % (fleet, fleet)},
+            "displayName": "Claude (homelab-chat)", "driver": "claudeAgent", "enabled": True,
+            "environment": [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}, FIZZY]})
+        self.assertIn(HOMELAB_CHAT, json.loads(script.split("OWNED='")[1].split("'")[0]))
+
+    def test_neither_mac_gets_the_instance(self):
+        inst, _, script = self.instance("darwin")
+        self.assertNotIn(HOMELAB_CHAT, inst)
+        self.assertNotIn(HOMELAB_CHAT, script.split("WANT=")[1].split("\n")[0])
+        self.assertNotIn(HOMELAB_CHAT, json.loads(script.split("OWNED='")[1].split("'")[0]))
+
+    def test_a_stale_entry_goes_back_to_ours_and_dropping_it_removes_it(self):
+        inst, _, script = self.instance("linux")
+        data = json.loads(FIXTURE)
+        data["providerInstances"][HOMELAB_CHAT] = {"driver": "claudeAgent", "enabled": False, "config": {"launchArgs": "--dangerously-skip-permissions"}}
+        out = json.loads(run_script(script, json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(out[HOMELAB_CHAT], inst[HOMELAB_CHAT])
+        gone = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
+        self.assertNotIn(HOMELAB_CHAT, gone)
+
+    def test_the_seat_file_and_the_mcp_file_deploy_on_both_profiles_with_the_hook_in_the_seat_file_only(self):
+        for profile in ("personal", "axon-work-computer"):
+            env = fleet_env(profile)
+            try:
+                managed = set(env.chezmoi("managed", "--include=files").split())
+                self.assertTrue({".claude/fleet/seat-homelab-chat.json", ".claude/fleet/mcp-homelab-chat.json", ".local/share/agent-harness/hooks/homelab_chat_allowlist.py"} <= managed, profile)
+                seat = json.loads(env.render("dot_claude/fleet/seat-homelab-chat.json.tmpl"))
+                self.assertEqual(set(seat), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides", "hooks"}, profile)
+                self.assertEqual(set(seat["skillOverrides"].values()), {"off"})
+                self.assertTrue(set(INSTALLED) <= set(seat["skillOverrides"]), "the seat keeps no skill")
+                groups = seat["hooks"]["PreToolUse"]
+                self.assertEqual([g["matcher"] for g in groups], ["*"], "one hook group, on every tool")
+                self.assertEqual([h["type"] for h in groups[0]["hooks"]], ["command"])
+                self.assertEqual(set(seat["hooks"]), {"PreToolUse"})
+                for other in ("lead", "builder", "planner", "reviewer"):
+                    self.assertNotIn("PreToolUse", json.loads(env.render("dot_claude/fleet/seat-%s.json.tmpl" % other)).get("hooks", {}))
+                mcp = json.loads(env.render("dot_claude/fleet/mcp-homelab-chat.json.tmpl"))["mcpServers"]
+                self.assertEqual(set(mcp), {"hindsight"}, profile)
+                self.assertEqual(mcp["hindsight"], json.loads(env.render("dot_claude/fleet/mcp.json.tmpl"))["mcpServers"]["hindsight"])
+            finally:
+                env.close()
+
+    def run_hook_command(self, command, payload, path=None, home=None):
+        r = subprocess.run(["/bin/sh", "-c", command], input=json.dumps(payload), capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, PATH=path if path is not None else os.environ["PATH"], HOMELAB_CHAT_HOOK_LOG=str(Path(home or tempfile.gettempdir()) / "hook.jsonl")))
+        return r.returncode, r.stderr
+
+    def test_the_hook_command_denies_when_the_script_python_or_the_input_is_wrong(self):
+        """In Claude Code only exit 2 blocks a tool call. The command from the rendered seat file must exit 2 whenever it cannot say yes."""
+        env = fleet_env("personal")
+        try:
+            command = json.loads(env.render("dot_claude/fleet/seat-homelab-chat.json.tmpl"))["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            home = env.home
+            target = home / ".local/share/agent-harness/hooks/homelab_chat_allowlist.py"
+            self.assertIn(str(target), command)
+            # no script on disk
+            rc, err = self.run_hook_command(command, ALLOWED_CALL, home=home)
+            self.assertEqual(rc, 2, err)
+            self.assertIn("hook script is missing", err)
+            # the real script: allows the call on the list, denies one off it
+            target.parent.mkdir(parents=True)
+            shutil.copy(HOOK_SCRIPT, target)
+            self.assertEqual(self.run_hook_command(command, ALLOWED_CALL, home=home)[0], 0)
+            rc, err = self.run_hook_command(command, DENIED_CALL, home=home)
+            self.assertEqual((rc, "not on the homelab-chat tool list" in err), (2, True), err)
+            # no python3 on PATH (the shell finds nothing: exit 127 from the child becomes 2)
+            self.assertEqual(self.run_hook_command(command, ALLOWED_CALL, path="/nonexistent", home=home)[0], 2)
+            # a script that crashes, and one that cannot be parsed
+            target.write_text("raise SystemExit(1)\n")
+            self.assertEqual(self.run_hook_command(command, ALLOWED_CALL, home=home)[0], 2)
+            target.write_text("def broken(:\n")
+            self.assertEqual(self.run_hook_command(command, ALLOWED_CALL, home=home)[0], 2)
+        finally:
+            env.close()

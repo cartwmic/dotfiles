@@ -1,0 +1,12 @@
+{
+ "session_id": "17b51c00-c782-406d-b125-c57004267664",
+ "transcript_path": "17b51c00-c782-406d-b125-c57004267664.jsonl",
+ "cwd": "/home/cartwmic/.local/share/coordinator-workspace",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "mcp__t3-code__t3_thread_send",
+ "tool_input": {
+  "threadId": "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56",
+  "message": "need the Homelab lead for X"
+ },
+ "tool_use_id": "toolu_01QsND8uLnb6zJM3KCfpNxSe"
+}

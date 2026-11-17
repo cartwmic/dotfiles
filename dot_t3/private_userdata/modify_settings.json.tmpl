@@ -14,6 +14,10 @@
 #               replaces a variable (it cannot prepend PATH), so the binary is a wrapper (dot_local/user_scripts/executable_pi_lead.sh) that runs the
 #               real `pi` with the coordinator's pane-bin first on PATH and COORDINATOR_STATE_DIR set to <home>/.local/share/coordinator. A thread on it
 #               can run `ledger` and the other pane-bin commands. The work profile has no T3 settings file here (.chezmoiignore), so it gets none.
+# seat-homelab-chat  Linux only, outside container mode (where the coordinator runs; the personal Mac and the work Mac get none). The durable lead that answers
+#               #homelab, with a fixed tool list held by configuration: launchArgs `--settings <home>/.claude/fleet/seat-homelab-chat.json --strict-mcp-config
+#               --mcp-config <home>/.claude/fleet/mcp-homelab-chat.json`; the settings file registers a PreToolUse hook (hooks/homelab_chat_allowlist.py)
+#               that denies every call not on the list, and the MCP file holds hindsight only. Window 200000, advisor off, like seat-lead.
 # Default-provider switch hub.enabled (personal profile on macOS and Linux; one switch with Claude and Codex; t3Hub.enabled stays separate and owns only the two ids above):
 #   codex       the T3 `codex` instance is managed (its own CODEX_HOME), so it ignores ~/.codex. While hub.enabled is on it becomes
 #               setupMode existing with T3's downloaded Codex binary (same active.json lookup as codex-hub), so it reads ~/.codex and
@@ -139,6 +143,12 @@ set -eu
 {{- $want = set $want "pi" (dict "driver" "pi" "enabled" true) }}
 {{- $want = set $want "pi-lead" (dict "driver" "pi" "displayName" "Pi (lead)" "enabled" true "config" (dict "binaryPath" (printf "%s/.local/user_scripts/pi_lead.sh" $home))) }}
 {{- $owned = append (append $owned "pi") "pi-lead" }}
+{{- /* seat-homelab-chat: the durable lead that answers #homelab, with a fixed tool list held by a PreToolUse hook in its settings file (docs/profiles.md, "Agent seat instances"). Rendered only where the coordinator runs, personal Linux outside container mode (the same condition as Pi above); the personal Mac and the work Mac get no instance. Same window and environment as seat-lead (no advisor); its MCP file holds hindsight only. */}}
+{{- $homelabChat := dict "driver" "claudeAgent" "displayName" "Claude (homelab-chat)" "enabled" true
+      "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy)
+      "config" (dict "autoCompactWindow" "200000" "launchArgs" (printf "--settings %s/seat-homelab-chat.json --strict-mcp-config --mcp-config %s/mcp-homelab-chat.json" $fleet $fleet)) }}
+{{- $want = set $want "seat-homelab-chat" $homelabChat }}
+{{- $owned = append $owned "seat-homelab-chat" }}
 {{- end }}
 # WANT stays on one line so a test can swap it. The codex binary is T3's own download, found through ~/.t3/tools/codex/active.json
 # at apply time (T3 does not keep a version-free path); without that file binaryPath is left out.

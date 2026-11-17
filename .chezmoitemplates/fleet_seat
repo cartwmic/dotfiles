@@ -24,7 +24,8 @@
       "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "hill-climb" "no-ai-slop" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
       "builder" (list "correcting-repeated-mistakes" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "designing-the-smallest-version" "no-ai-slop")
-      "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine") -}}
+      "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine")
+      "homelab-chat" (list) -}}
 {{- /* The seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs (SkillRequiresTest). */ -}}
 {{- range $seat := list "lead" "builder" -}}{{- $_ := set $keeps $seat (concat (get $keeps $seat) (list "reviewing-prs" "triaging-automated-review")) -}}{{- end -}}
 {{- if not (hasKey $keeps .seat) -}}{{ fail (printf "fleet_seat: unknown seat %q" .seat) }}{{- end -}}
@@ -76,5 +77,11 @@
 {{- /* Builder only: a Stop hook that refuses to stop while a run-and-wake or kgate job this thread started still runs (hooks/stop_running_jobs.py; Retro proposal 12, playbook rule 19e13f7b). It fails open: a missing script or python3 allows the stop. */ -}}
 {{- if eq .seat "builder" -}}
 {{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" `g="$HOME/.local/share/agent-harness/hooks/stop_running_jobs.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0`))))) -}}
+{{- end -}}
+{{- /* Homelab chat seat only: a PreToolUse hook on every tool that allows the calls on the seat's list and denies the rest (hooks/homelab_chat_allowlist.py; Michael's requirement, ledger asks #1228). In Claude Code only exit 2 blocks a call, so the command turns a missing script, a missing python3 and any crash into exit 2. The seat keeps no skills; the hook denies the Skill tool in any case. */ -}}
+{{- if eq .seat "homelab-chat" -}}
+{{-   $script := joinPath .ctx.chezmoi.homeDir ".local/share/agent-harness/hooks/homelab_chat_allowlist.py" -}}
+{{-   $command := printf `g=%q; [ -r "$g" ] || { echo "homelab-chat tool list: the hook script is missing; every tool call is denied" >&2; exit 2; }; python3 -I "$g"; [ $? -eq 0 ] || exit 2` $script -}}
+{{-   $_ := set $seatFile "hooks" (dict "PreToolUse" (list (dict "matcher" "*" "hooks" (list (dict "type" "command" "command" $command))))) -}}
 {{- end -}}
 {{- $seatFile | toPrettyJson }}
