@@ -1,0 +1,22 @@
+{{- /* workshop_config: whether this machine has the Workshop SSD (/Volumes/Workshop) as JSON {"enabled"}. Local chezmoi data workshop:
+  enabled   true or false. Default: true, so every machine renders as it did before the key existed. Set false on a personal Mac that has no
+            Workshop SSD (the Mac mini): .chezmoiignore then leaves out every Workshop piece (agent scratch, the npm cache variable, the pnpm
+            store, the Spotlight and create scripts, heavy-gate's volumes file), and the qmd collections, T3 worktrees directory and coordinator
+            checkout default to paths under the home directory. Other profiles and Linux never deploy the Workshop pieces whatever this says.
+Used by .chezmoiignore, dot_config/qmd/index.yml.tmpl, dot_t3/private_userdata/modify_settings.json.tmpl and .chezmoitemplates/instance_repo.
+Any other key or value fails the whole render, so a typo applies nothing. */ -}}
+{{- $raw := dig "workshop" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "workshop must be a map with enabled, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if ne $k "enabled" -}}
+{{-     fail (printf "workshop.%s is not a setting (enabled)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- $on := "true" -}}
+{{- if hasKey $raw "enabled" -}}{{- $on = printf "%v" (get $raw "enabled") -}}{{- end -}}
+{{- if not (has $on (list "true" "false")) -}}
+{{-   fail (printf "workshop.enabled must be true or false, got %q" $on) -}}
+{{- end -}}
+{{- dict "enabled" (eq $on "true") | toJson -}}
