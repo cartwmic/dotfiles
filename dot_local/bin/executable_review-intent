@@ -44,9 +44,11 @@ ITEM = r"#(\d+)(?:\s*[%s]\s*#?(\d+))?" % DASHES
 ASK_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (ITEM, ITEM), re.I)
 ITEM_RE = re.compile(ITEM)
 # A workstream's creation why is free text a person or agent wrote ("Michael's Other answer on ask 870"), so there the `#` is optional.
-LOOSE_ITEM = r"#?(\d+)(?:\s*[%s]\s*#?(\d+))?" % DASHES
-LOOSE_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (LOOSE_ITEM, LOOSE_ITEM), re.I)
-LOOSE_ITEM_RE = re.compile(LOOSE_ITEM)
+# Only the first item of a list may leave it out ("ask 870", "asks 1113-1115"); a later item needs it ("ask #1175, 22:09Z" is one ask and a time), and a number that is
+# followed by a time or a unit is not an ask id.
+LOOSE_FIRST = r"#?(\d+)(?![\d:]|\s*(?:minutes?|hours?|days?)\b)(?:\s*[%s]\s*#?(\d+))?" % DASHES
+LOOSE_LIST = re.compile(r"\basks?\s+(%s(?:\s*(?:,|and|&)\s*%s)*)" % (LOOSE_FIRST, ITEM), re.I)
+LOOSE_ITEM_RE = re.compile(r"(?:%s)|(?:%s)" % (LOOSE_FIRST, ITEM))
 
 
 class Usage(Exception):
@@ -67,7 +69,8 @@ def ask_refs(text, loose=False):
     """The ids in `ask #N`, `asks #N-#M`, `asks #N, #M and #K` (with `loose`, the `#` may be left out: `ask 870`)."""
     found = []
     for m in (LOOSE_LIST if loose else ASK_LIST).finditer(text):
-        for a, b in (LOOSE_ITEM_RE if loose else ITEM_RE).findall(m.group(1)):
+        for groups in (LOOSE_ITEM_RE if loose else ITEM_RE).findall(m.group(1)):
+            a, b = next((groups[i], groups[i + 1]) for i in range(0, len(groups), 2) if groups[i])
             lo = int(a)
             hi = int(b) if b else lo
             found += list(range(lo, hi + 1)) if hi >= lo else [lo]
@@ -111,15 +114,15 @@ class Ledger:
         header = re.compile(r"^  (?:follow-up|reply|revised|by|last changed by|with|closed by|answered at|answer|evidence|recommend|question|\d+\)) ")
         found, current = [], None
         for line in p.stdout.split("\n"):
-            m = re.match(r"^  follow-up (\S+) by [^:]*: ?(.*)$", line)
+            m = re.match(r"^  follow-up (\S+) by ([^:]*): ?(.*)$", line)
             if m:
-                current = [m.group(1), m.group(2)]
+                current = [m.group(1), m.group(3), m.group(2)]
                 found.append(current)
             elif header.match(line) or line.startswith("#"):
                 current = None  # another line of the ask's record: the follow-up's text is over
             elif current is not None:
                 current[1] += "\n" + line
-        return [(t, text.rstrip("\n")) for t, text in found]
+        return [(t, text.rstrip("\n"), who) for t, text, who in found]
 
 
 def default_state_dir():
@@ -174,10 +177,11 @@ def render_ask(a, why, follow_ups):
         if a.get(field):
             out += ["%s:" % label, quote(a[field])]
             said = True
-    for at, text in follow_ups:
+    for at, text, who in follow_ups:
         if text in (a.get("answer"), a.get("answer_other")):
             continue  # the ledger also files an "Other" answer as a follow-up: it is already quoted above
-        out += ["His follow-up, written %s while the ask was open (verbatim):" % at, quote(text)]
+        mine = who.lower().startswith("michael")
+        out += ["%s, written %s while the ask was open (verbatim):" % ("His follow-up" if mine else "Follow-up by %s" % who, at), quote(text)]
         said = True
     if not said:
         out.append("His words: none recorded; he picked the option only.")

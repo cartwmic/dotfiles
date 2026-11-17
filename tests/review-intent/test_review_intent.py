@@ -126,6 +126,20 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(self.marker(r.stdout)[0], "92,870")
         self.assertIn("> founding words", r.stdout)
 
+    def test_a_clock_time_after_an_ask_in_a_workstream_why_is_not_an_ask(self):
+        self.put(asks=[ask(96, workstream="Audit"), ask(1175, answer="real founding"), ask(22, answer="unrelated"), ask(9, answer="nine")],
+                 workstreams=[{"name": "Audit", "why": "Michael on ask #1175, 22:09Z: do it; waited ask 9 minutes; ask #1175 and 22"}])
+        r = self.run_script("ask #96")
+        self.assertEqual(self.marker(r.stdout)[0], "96,1175")
+        self.assertNotIn("unrelated", r.stdout)
+
+    def test_a_follow_up_is_labelled_with_who_wrote_it(self):
+        self.put(asks=[ask(97, exchange=[{"kind": "follow-up", "at": "2026-01-02T00:00:00.000Z", "who": "coordinator", "text": "in its own words"},
+                                         {"kind": "follow-up", "at": "2026-01-03T00:00:00.000Z", "who": "michael (status page)", "text": "his words"}])])
+        out = self.run_script("ask #97").stdout
+        self.assertIn("Follow-up by coordinator, written 2026-01-02", out)
+        self.assertIn("His follow-up, written 2026-01-03", out)
+
     def test_a_number_in_a_workstream_why_that_is_no_ask_is_left_out_not_refused(self):
         self.put(asks=[ask(93, workstream="W")], workstreams=[{"name": "W", "why": "see ask 404"}])
         r = self.run_script("ask #93")
