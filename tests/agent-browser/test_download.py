@@ -47,6 +47,12 @@ class DownloadTest(unittest.TestCase):
         self.assertEqual(r.stdout, "")
         self.assertIn("no new file in %s within 1s" % self.dl, r.stderr)
 
+    def test_an_old_file_whose_name_starts_with_a_dash_is_not_new(self):   # the mark line starts with the name: grep must not read it as an option
+        (self.dl / "-old.zip").write_bytes(b"old")
+        mark = self.mark()
+        r = self.run_cli("wait", "--mark", mark, "--timeout", "1")
+        self.assertEqual((r.returncode, r.stdout), (1, ""), r.stderr)
+
     def test_a_file_with_the_same_name_but_a_new_size_counts_as_new(self):   # the same download saved over an older one
         (self.dl / "a.zip").write_bytes(b"1")
         mark = self.mark()

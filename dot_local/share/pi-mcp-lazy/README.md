@@ -6,7 +6,7 @@ session held its own `rea` and `browser-harness`). `pi-mcp-lazy` (deployed to `~
 local server so it runs only once a session first uses it.
 
 The harnesses' MCP clients are unchanged. Each still reads its own config (`~/.pi/agent/mcp.json`, Claude's `~/.claude.json`,
-`~/.codex/config.toml`) and still starts one stdio process per server, but for `rea` and `browser-harness` that process is the
+`~/.codex/config.toml`) and still starts one stdio process per server, but for `rea` (both profiles) and `browser-harness` (work profile only) that process is the
 stand-in. The apply script writes the same wrapped command into all three. The rest of this file says "Pi" where the first client
 was Pi; it holds for Claude Code and Codex unless a line says otherwise.
 
@@ -33,13 +33,14 @@ was Pi; it holds for Claude Code and Codex unless a line says otherwise.
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` and `browser-harness` on both profiles, plus `jira` on
-`axon-work-computer`; the source is `servers.list.tmpl`, which renders the `jira` line only on that profile). One server per line,
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on both profiles; `browser-harness` and `jira` on
+`axon-work-computer` only; the source is `servers.list.tmpl`, which renders those lines only on that profile). One server per line,
 optionally followed by that server's idle seconds and the word `pi-only`. `jira` is `pi-only`: Claude Code and Codex keep it as
 rendered, and only Pi runs it lazily (#1890). `browser-harness` is `604800` (a week, so never stopped): stopping it would
 close the agent's own Chrome tab. A listed name that the profile does not render is skipped: `browser-harness` is not rendered on
 Linux with the work profile, which has no Linux machine. The remote HTTP servers (`hindsight`, `context7`, `ticktick`, and the
-work servers) are not touched.
+work servers) are not touched. On the personal profile the browser server is `browse` (OpenCode Browse). It has no line in
+`servers.list`, so it is not wrapped: it starts at session start, as any server not listed does.
 
 ### jira (work profile)
 

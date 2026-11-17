@@ -11,6 +11,7 @@ Nothing here reads or writes the real home, the real chezmoi state or the real s
 """
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -21,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 UNIT_TEMPLATE = ROOT / "dot_local" / "share" / "instances" / "systemd" / "coordinatord.service.tmpl"
+DROP_IN = ROOT / "dot_config" / "systemd" / "user" / "coordinatord.service.d" / "10-path.conf.tmpl"
 WRAPPER = ROOT / "run_after_75_instances_reconcile.sh.tmpl"
 SCRIPT = Path(os.environ.get("INSTANCES_SYSTEMD_SCRIPT_UNDER_TEST") or ROOT / "dot_local" / "user_scripts" / "executable_instances_reconcile_systemd.sh")
 GOLDEN = HERE / "golden" / "coordinatord.service"
@@ -54,6 +56,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Restart=on-failure\n", text)                     # KeepAlive SuccessfulExit=false
         self.assertIn("RestartSec=10\n", text)                          # ThrottleInterval 10
         self.assertIn("WantedBy=default.target\n", text)
+
+    def test_the_coordinator_drop_in_puts_the_gh_wrapper_first_then_the_units_path(self):
+        # The drop-in replaces the unit's whole PATH, so the two must not drift: the wrapper's bin directory, then the template's PATH.
+        unit = re.findall(r"^Environment=PATH=(.*)$", render(UNIT_TEMPLATE, {"profile": "personal"}), re.M)
+        drop_in = re.findall(r"^Environment=PATH=(.*)$", render(DROP_IN, {"profile": "personal"}), re.M)
+        self.assertEqual(drop_in, ["/home/test/.local/share/gh-wrapper/bin:" + unit[0]])
 
     def test_local_data_changes_only_the_checkout_path(self):
         data = {"profile": "personal", "instances": {"coordinator": {"repo": "/srv/co"}}}

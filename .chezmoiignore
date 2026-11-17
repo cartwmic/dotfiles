@@ -268,6 +268,9 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 .local/share/instances/systemd
 .local/share/instances/systemd/**
 .local/user_scripts/instances_reconcile_systemd.sh
+# The unit's PATH drop-in (the gh wrapper's bin directory first): personal Linux, with the unit.
+.config/systemd/user/coordinatord.service.d
+.config/systemd/user/coordinatord.service.d/**
 {{- end }}
 
 {{- if and (ne .chezmoi.os "darwin") (not (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}

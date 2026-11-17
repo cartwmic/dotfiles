@@ -1,4 +1,4 @@
-"""The chezmoi step that installs the gh wrapper (run_onchange_after_47_install-leak-guard-gh.sh.tmpl), and a journey through what it installs.
+"""The chezmoi step that installs the gh wrapper on every desktop profile (run_onchange_after_47_install-gh-wrapper.sh.tmpl), and a journey through what it installs.
 
 Renders the real template with `chezmoi execute-template` against a throwaway config, then runs the rendered script with a throwaway HOME. The data is
 invented ("fooco-dev/guarded" is a pretend guarded repository, "fooco" a pretend employer term).
@@ -13,11 +13,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_gh_wrapper import CLEAN, FAKE_GH, GUARD, GUARDED, PLANTED, script_copy
+from test_gh_wrapper import CLEAN, FAKE_GH, GUARD, GUARDED, LIB, PLANTED, script_copy
 from test_leak_guard import FAKE_CLAUDE
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE = ROOT / "run_onchange_after_47_install-leak-guard-gh.sh.tmpl"
+TEMPLATE = ROOT / "run_onchange_after_47_install-gh-wrapper.sh.tmpl"
+OLD_MARK = "# leak-guard gh wrapper (managed by chezmoi; old)\n"
 DATA = '  leakGuard:\n    terms: ["fooco"]\n    context: "Fooco is the pretend employer."\n    repos:\n      - "%s"\n' % GUARDED
 
 
@@ -35,89 +36,152 @@ def run_script(tmp, script, home):
     return subprocess.run(["sh", str(path)], capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=30)
 
 
+LIB_FILES = sorted(p.name for p in LIB.glob("*.py"))
+
+
 class GhInstaller(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="gi-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = self.tmp / "home"
         self.home.mkdir()
-        self.bin = self.home / ".local" / "share" / "leak-guard" / "bin"
+        self.base = self.home / ".local" / "share" / "gh-wrapper"
+        self.bin = self.base / "bin"
+        self.conf = self.home / ".config" / "mise" / "conf.d" / "gh-wrapper.toml"
 
-    def test_no_leak_guard_data_renders_nothing_and_writes_nothing(self):
-        done = render(self.tmp, "")
-        self.assertEqual((done.returncode, done.stdout.strip()), (0, ""), done.stderr)
-        self.assertEqual(list(self.home.iterdir()), [])
-
-    def test_another_profile_renders_nothing_even_with_data(self):
-        for profile in ("personal", "termux"):
-            with self.subTest(profile):
-                done = render(self.tmp, DATA, profile=profile)
-                self.assertEqual((done.returncode, done.stdout.strip()), (0, ""), done.stderr)
-        self.assertEqual(list(self.home.iterdir()), [])
-
-    def test_the_work_profile_with_repos_installs_the_wrapper_the_repos_file_and_the_mise_file(self):
-        done = render(self.tmp, DATA)
+    def install(self, data="", profile="personal"):
+        done = render(self.tmp, data, profile=profile)
         self.assertEqual(done.returncode, 0, done.stderr)
         ran = run_script(self.tmp, done.stdout, self.home)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        gh = self.bin / "gh"
-        self.assertEqual(gh.read_text(), (ROOT / "scripts/leak-guard-gh").read_text())
-        self.assertEqual(stat.S_IMODE(gh.stat().st_mode), 0o755)
+        return ran
+
+    def budget(self):
+        return (self.home / ".config" / "gh-wrapper" / "budget").read_text()
+
+    def test_every_desktop_profile_installs_the_wrapper_the_lib_and_the_mise_file(self):
+        for profile, data in (("personal", ""), ("axon-work-computer", ""), ("axon-work-computer", DATA)):
+            with self.subTest(profile=profile, data=bool(data)):
+                shutil.rmtree(self.home)
+                self.home.mkdir()
+                self.install(data, profile)
+                gh = self.bin / "gh"
+                self.assertEqual(gh.read_text(), (ROOT / "scripts/gh-wrapper").read_text())
+                self.assertEqual(stat.S_IMODE(gh.stat().st_mode), 0o755)
+                self.assertEqual(sorted(p.name for p in (self.base / "lib").iterdir()), LIB_FILES)
+                for name in LIB_FILES:
+                    self.assertEqual((self.base / "lib" / name).read_text(), (LIB / name).read_text())
+                conf = self.conf.read_text()
+                self.assertIn("[env]", conf)
+                self.assertIn('_.path = ["%s"]' % self.bin, conf)
+                self.assertFalse((self.home / ".local" / "bin" / "gh").exists())
+        self.assertIn("gh_classify.py", LIB_FILES)
+
+    def test_termux_gets_nothing(self):
+        done = render(self.tmp, "", profile="termux")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, ""), done.stderr)
+
+    def test_the_budget_file_is_on_for_personal_off_for_work_and_the_data_overrides_it(self):
+        for profile, data, want in (("personal", "", "on"), ("axon-work-computer", "", "off"), ("personal", "  ghBudget:\n    enabled: false\n", "off"),
+                                    ("axon-work-computer", "  ghBudget:\n    enabled: true\n", "on")):
+            with self.subTest(profile=profile, data=data):
+                self.install(data, profile)
+                self.assertEqual(self.budget(), want + "\n")
+
+    def test_bad_budget_data_fails_the_render(self):
+        for bad in ("  ghBudget: true\n", "  ghBudget:\n    enabled: yes please\n", "  ghBudget:\n    enabled: 1\n", "  ghBudget:\n    floor: 600\n"):
+            with self.subTest(bad):
+                done = render(self.tmp, bad)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("ghBudget", done.stderr)
+
+    def test_the_repos_file_is_written_on_the_work_profile_only_and_with_repos(self):
+        self.install(DATA, "axon-work-computer")
         repos = self.home / ".config" / "leak-guard" / "repos"
         self.assertEqual(repos.read_text(), GUARDED + "\n")
         self.assertEqual(stat.S_IMODE(repos.stat().st_mode), 0o600)
-        conf = (self.home / ".config" / "mise" / "conf.d" / "leak-guard-gh.toml").read_text()
-        self.assertIn("[env]", conf)
-        self.assertIn('_.path = ["%s"]' % self.bin, conf)
-        self.assertFalse((self.home / ".local" / "bin" / "gh").exists())
+        shutil.rmtree(self.home)
+        self.home.mkdir()
+        self.install(DATA, "personal")      # the leakGuard data is the work profile's: another profile ignores it
+        self.assertFalse((self.home / ".config" / "leak-guard").exists())
 
-    def test_empty_or_missing_repos_install_nothing_and_print_a_notice(self):
+    def test_empty_or_missing_repos_still_install_the_wrapper_and_print_a_notice_on_the_work_profile(self):
         for data in (DATA.replace('    repos:\n      - "%s"\n' % GUARDED, "    repos: []\n"), DATA.replace('    repos:\n      - "%s"\n' % GUARDED, "")):
             with self.subTest(data):
-                done = render(self.tmp, data)
-                self.assertEqual(done.returncode, 0, done.stderr)
-                ran = run_script(self.tmp, done.stdout, self.home)
-                self.assertEqual(ran.returncode, 0, ran.stderr)
+                ran = self.install(data, "axon-work-computer")
                 self.assertIn("NOTICE: leakGuard.repos is empty or missing", ran.stderr)
-                self.assertEqual(list(self.home.iterdir()), [])
+                self.assertTrue((self.bin / "gh").exists())
+                self.assertFalse((self.home / ".config" / "leak-guard").exists())
+        shutil.rmtree(self.home)
+        self.home.mkdir()
+        self.assertEqual(self.install("", "axon-work-computer").stderr, "")      # no leakGuard data at all: nothing to say
 
     def test_a_gh_that_is_not_ours_at_the_wrapper_path_is_left_alone_with_a_warning(self):
         self.bin.mkdir(parents=True)
         (self.bin / "gh").write_text("#!/bin/sh\necho mine\n")
-        done = render(self.tmp, DATA)
-        ran = run_script(self.tmp, done.stdout, self.home)
-        self.assertEqual(ran.returncode, 0, ran.stderr)
+        ran = self.install()
         self.assertEqual((self.bin / "gh").read_text(), "#!/bin/sh\necho mine\n")
-        self.assertIn("already exists and is not leak-guard's", ran.stderr)
+        self.assertIn("already exists and is not the gh wrapper's", ran.stderr)
         self.assertIn("NOT installed", ran.stderr)
 
     def test_a_mise_file_that_is_not_ours_is_left_alone_with_a_warning(self):
-        conf = self.home / ".config" / "mise" / "conf.d" / "leak-guard-gh.toml"
-        conf.parent.mkdir(parents=True)
-        conf.write_text("[env]\nFOO = 'mine'\n")
-        ran = run_script(self.tmp, render(self.tmp, DATA).stdout, self.home)
-        self.assertEqual(conf.read_text(), "[env]\nFOO = 'mine'\n")
-        self.assertIn("already exists and is not leak-guard's", ran.stderr)
+        self.conf.parent.mkdir(parents=True)
+        self.conf.write_text("[env]\nFOO = 'mine'\n")
+        ran = self.install()
+        self.assertEqual(self.conf.read_text(), "[env]\nFOO = 'mine'\n")
+        self.assertIn("already exists and is not the gh wrapper's", ran.stderr)
         self.assertTrue((self.bin / "gh").exists())
 
     def test_an_existing_gh_in_the_home_local_bin_is_never_touched(self):
         (self.home / ".local" / "bin").mkdir(parents=True)
         (self.home / ".local" / "bin" / "gh").write_text("#!/bin/sh\necho mine\n")
-        run_script(self.tmp, render(self.tmp, DATA).stdout, self.home)
+        self.install()
         self.assertEqual((self.home / ".local" / "bin" / "gh").read_text(), "#!/bin/sh\necho mine\n")
 
-    def test_changed_data_rewrites_the_repos_file_and_our_own_wrapper_is_replaced(self):
+    def test_changed_data_rewrites_the_repos_file_and_our_own_wrapper_and_lib_are_replaced(self):
         for repo in ("fooco-dev/guarded", "fooco-dev/other"):
-            run_script(self.tmp, render(self.tmp, DATA.replace(GUARDED, repo)).stdout, self.home)
+            self.install(DATA.replace(GUARDED, repo), "axon-work-computer")
             self.assertEqual((self.home / ".config" / "leak-guard" / "repos").read_text(), repo + "\n")
-        (self.bin / "gh").write_text("# leak-guard gh wrapper (managed by chezmoi; old)\nold\n")
-        run_script(self.tmp, render(self.tmp, DATA).stdout, self.home)
-        self.assertEqual((self.bin / "gh").read_text(), (ROOT / "scripts/leak-guard-gh").read_text())
+        (self.bin / "gh").write_text("# gh wrapper (managed by chezmoi; old)\nold\n")
+        (self.base / "lib" / "gh_classify.py").write_text("old\n")
+        (self.base / "lib" / "gh_gone.py").write_text("a layer this version no longer ships\n")
+        self.install(DATA, "axon-work-computer")
+        self.assertEqual((self.bin / "gh").read_text(), (ROOT / "scripts/gh-wrapper").read_text())
+        self.assertEqual(sorted(p.name for p in (self.base / "lib").iterdir()), LIB_FILES)
+        self.assertEqual((self.base / "lib" / "gh_classify.py").read_text(), (LIB / "gh_classify.py").read_text())
+
+    def test_the_old_leak_guard_install_is_removed_when_it_carries_the_old_mark(self):
+        old = self.home / ".local" / "share" / "leak-guard" / "bin"
+        oldconf = self.home / ".config" / "mise" / "conf.d" / "leak-guard-gh.toml"
+        old.mkdir(parents=True)
+        (old / "gh").write_text("#!/usr/bin/env python3\n# leak-guard gh wrapper (managed by chezmoi; run_onchange_after_47_install-leak-guard-gh).\n")
+        oldconf.parent.mkdir(parents=True)
+        oldconf.write_text("# leak-guard gh wrapper (managed by chezmoi; run_onchange_after_47_install-leak-guard-gh)\n[env]\n_.path = [\"x\"]\n")
+        self.install(DATA, "axon-work-computer")
+        self.assertFalse((self.home / ".local" / "share" / "leak-guard").exists())
+        self.assertFalse(oldconf.exists())
+        self.assertTrue((self.bin / "gh").exists())
+
+    def test_an_old_path_file_without_the_old_mark_is_left_alone(self):
+        old = self.home / ".local" / "share" / "leak-guard" / "bin"
+        old.mkdir(parents=True)
+        (old / "gh").write_text("#!/bin/sh\necho mine\n")
+        self.install(DATA, "axon-work-computer")
+        self.assertEqual((old / "gh").read_text(), "#!/bin/sh\necho mine\n")
+
+    def test_the_old_install_stays_when_the_new_wrapper_could_not_be_installed(self):
+        old = self.home / ".local" / "share" / "leak-guard" / "bin"
+        old.mkdir(parents=True)
+        (old / "gh").write_text("# leak-guard gh wrapper (managed by chezmoi; old)\n")
+        self.bin.mkdir(parents=True)
+        (self.bin / "gh").write_text("#!/bin/sh\necho mine\n")
+        self.install(DATA, "axon-work-computer")
+        self.assertTrue((old / "gh").exists())
 
     def test_bad_repos_data_fails_the_render(self):
         for bad in ('    repos: "fooco-dev/guarded"\n', "    repos: [1]\n", '    repos: ["noslash"]\n', '    repos: ["a/b/c/d"]\n'):
             with self.subTest(bad):
-                done = render(self.tmp, DATA.replace('    repos:\n      - "%s"\n' % GUARDED, bad))
+                done = render(self.tmp, DATA.replace('    repos:\n      - "%s"\n' % GUARDED, bad), profile="axon-work-computer")
                 self.assertNotEqual(done.returncode, 0)
                 self.assertIn("leakGuard.repos", done.stderr)
 
@@ -147,7 +211,7 @@ class GhJourney(unittest.TestCase):
         self.cwd.mkdir()
         subprocess.run(["git", "-C", str(self.cwd), "init", "-q"], check=True)
         subprocess.run(["git", "-C", str(self.cwd), "remote", "add", "origin", "git@github.com:%s.git" % GUARDED], check=True)
-        self.path = "%s:%s:%s:/usr/bin:/bin" % (self.home / ".local" / "share" / "leak-guard" / "bin", self.realbin, self.cbin)
+        self.path = "%s:%s:%s:/usr/bin:/bin" % (self.home / ".local" / "share" / "gh-wrapper" / "bin", self.realbin, self.cbin)
 
     def gh(self, *args):
         env = {k: v for k, v in os.environ.items() if k not in ("LEAK_GUARD_BIN", "LEAK_GUARD_SKIP", "GH_REPO", "XDG_STATE_HOME", "FAKE_CLAUDE")}

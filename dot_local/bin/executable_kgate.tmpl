@@ -18,7 +18,7 @@ Contract
   (On a kubectl cluster no .git is shipped: the pod builds a one-commit repo from the files, and the Mac's HEAD is in $KGATE_HEAD.)
 - Tree hash: the git tree hash of the shipped files is computed here and again in the pod after unpacking. A
   difference fails the job before CMD runs.
-- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu, memory (the request),
+- Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu (homelab: rounded up to whole 4-CPU slots, 1-3 -> 4, 6 -> 8; the client says so when it does), memory (the request),
   memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), cpu_limit (optional, at least cpu; the pod's CPU limit, default none),
   priority_class (homelab, optional: kgate, kgate-first or kgate-main; env KGATE_PRIORITY_CLASS overrides it), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
@@ -142,6 +142,7 @@ CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that h
 END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
+SLOT_CPU = 4                 # the nodes' CPU is split into slots of this many CPUs that kgate pods and the pinned GitHub CI runners share (homelab ask 1187). A homelab pod's CPU request is a whole number of slots
 MSSQL_PORT = 1433
 MSSQL_UID = 10001            # the SQL Server image's own user
 SERVICE_READY_S = 300        # how long a sidecar has to pass its startup probe
@@ -502,6 +503,14 @@ def check_cpu_limit(prof, cpu):
     """A profile's cpu_limit (a pod's CPU limit) may not be below the request."""
     if prof["cpu_limit"] is not None and prof["cpu_limit"] < cpu:
         raise Unavailable("cpu_limit (%d) must be at least cpu (%d)" % (prof["cpu_limit"], cpu))
+
+
+def slot_cpu(cpu, service_cpu=0):
+    """The job container's CPU request on the homelab: the pod's total request is rounded up to a whole number of SLOT_CPU slots (1 to 3 -> 4, 4 -> 4, 6 -> 8, 12 -> 12), so no CPU is left stranded.
+    `cpu` is what the profile or --cpu asks for, `service_cpu` the service containers' requests, which stay as they are: the job container takes the rise
+    (no homelab profile can have a service today, so the caller passes 0; the sidecar case is here for the day one can)."""
+    total = cpu + service_cpu
+    return -(-total // SLOT_CPU) * SLOT_CPU - service_cpu
 
 
 def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None):
@@ -1657,6 +1666,9 @@ class Job:
         if self.kcfg:
             self.use_kubectl(image, prof, cpu)
         else:
+            asked, cpu = cpu, slot_cpu(cpu)
+            if cpu != asked:
+                self.note("cpu request raised from %d to %d: a homelab pod takes whole %d-cpu slots" % (asked, cpu, SLOT_CPU))
             check_cpu_limit(prof, cpu)
             self.rec["priority_class"] = prof["priority_class"] or PRIORITY_CLASS   # the class the pod runs in; a kubectl cluster's own policy decides there, so the record stays null
             if prof["cpu_limit"] is not None:
@@ -2335,6 +2347,7 @@ USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SI
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate cluster-setup NAME --from-context CTX [--namespace NS]   write a one-context kubeconfig and a cluster-file skeleton (profiles with cluster = NAME)\n" \
+             "cpu (--cpu or the profile) is rounded up to whole 4-cpu slots on the homelab (1-3 -> 4, 6 -> 8); the client prints a line when it does.\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 1800 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
 

@@ -4,6 +4,9 @@
 # Runs the script in the deployed coordinator checkout. The agent-harness Bash hook requires `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr>`
 # before `gh pr merge` on every repo except cartwmic/coordinator (which uses merge-pr.sh), and `pr-body-check --body-file F && gh pr create|edit ... --body-file F`
 # before a PR body is set, with F made by `F=$(mktemp /tmp/pr-N-body.XXXXXX)` (a fixed name such as /tmp/pr-body.md is refused; an edit needs N in the name). Personal profile only (docs/profiles.md).
+# The gh calls are made by pr-body-check.ts, started below, so they inherit these. They are merge-chain reads: GH_URGENT=1 keeps the
+# gh budget guard from refusing them, and GH_CALLER names this check in the gh wrapper's log.
+export GH_URGENT=1 GH_CALLER=pr-body-check
 script="$HOME/git/coordinator/scripts/pr-body-check.ts"
 if [ ! -f "$script" ]; then
   echo "pr-body-check: $script is missing: pull ~/git/coordinator (the check ships there) and run again" >&2

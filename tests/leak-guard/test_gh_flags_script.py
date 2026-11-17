@@ -1,4 +1,4 @@
-"""scripts/leak-guard-gh-flags: regenerates FLAGS and FLAGS_FROM_GH in scripts/leak-guard-gh from `gh <command> --help`.
+"""scripts/leak-guard-gh-flags: regenerates FLAGS and FLAGS_FROM_GH in scripts/gh-wrapper from `gh <command> --help`.
 
 Run against a fake gh that prints canned help, so the result does not depend on which gh release the machine has; one test also runs it against the
 installed gh when that is the release the wrapper's tables came from.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/leak-guard-gh-flags"
-WRAPPER = ROOT / "scripts/leak-guard-gh"
+WRAPPER = ROOT / "scripts/gh-wrapper"
 
 HELP = {
     ("pr", "create"): "FLAGS\n  -b, --body string         Body for the pull request\n  -d, --draft               Mark as draft\n"

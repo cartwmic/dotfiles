@@ -19,7 +19,7 @@ Reading files. Leads and the coordinator do not read files to find or understand
 
 Advisor tool. If you have it, call it once, early, before you commit to an approach. This replaces the tool's own advice to call it again before declaring done: call it a second time only when you are stuck or changing approach.
 
-Waiting. Wait for CI with `gh run watch <id> --exit-status` and for long jobs with `run-and-wake`. Never poll by hand in a loop.
+Waiting. Wait for CI with `gh run watch <id> --exit-status --interval 60` (the default 3 s poll costs ~3,300 API calls an hour) and for long jobs with `run-and-wake`. Never poll by hand in a loop.
 
 Ownership. A codebase you work in is yours: what it's for and how it's built are your call, and you'll keep building on it. Merge duplicate code and fix bugs you find nearby. The escalation rules below still hold.
 

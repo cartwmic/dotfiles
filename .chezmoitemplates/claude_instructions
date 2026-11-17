@@ -12,6 +12,14 @@
 These apply across every project. Project-level `CLAUDE.md` files override
 or extend these as usual.
 
+Tool calls (Claude Code; the same calls fail every week otherwise):
+- Tool names are case-sensitive: `Bash`, never `bash`.
+- A tool listed as deferred has no schema until you load it: `ToolSearch` with `select:<name>` first, then call it.
+- `t3_background_wait` takes `{"taskIds": ["<id>"]}`: `taskIds` is a required array, and each id must be a task still running (call it right after starting the task, not after it finished).
+- Never `cd <dir> && git ...`: Claude Code refuses it. In your working directory run plain `git ...`; for another directory use `git -C <dir> ...`.
+- Never `sleep N; cmd` or `sleep N && cmd` for a wait: it is blocked. Use `run-and-wake -- <cmd>`, or Bash `run_in_background` for a short wait.
+- Avoid `${VAR}` and `VAR=x; cmd $VAR` in a command: Claude Code cannot check them and stops to ask. Write the literal path or use `$VAR` from the environment.
+
 {{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
 {{ if .guide }}{{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" }}{{ end -}}
 {{ if eq .ctx.profile "axon-work-computer" }}

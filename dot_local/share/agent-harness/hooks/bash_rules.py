@@ -1,4 +1,4 @@
-"""Seven refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Eight refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -46,6 +46,16 @@
               docs/deploy.md), fetch, `stash list|show`, worktree add/remove/prune, every read-only git. The place is the command's directory
               (the session's, a `cd` or `pushd`, each `-C`) or a `--git-dir`, `--work-tree`, GIT_DIR, GIT_WORK_TREE; `~`, `$HOME` and `${HOME}`
               are the Context's HOME. The refusal names `git worktree add ~/tmp-home/<name> origin/main`.
+  credential  (both profiles)  a command that reads credential config raw, or hides its secrets with a line regex. Credential config is a path
+              list (below), not content sniffing: RustDesk's config directory and RustDesk*.toml, rclone.conf, .env and .env.* (not
+              .env.example), .netrc, .git-credentials, .pgpass, .npmrc, .pypirc, .aws/credentials, .docker/config.json, gh's hosts.yml,
+              credentials/secrets files, the 1Password service-account token. A reader (cat, head, tail, less, bat, grep, sed, awk, cut,
+              sort, strings, jq, yq, ...) with one of those as an argument or `<` input is refused; `grep -l/-L/-c/-q`, `sed -i`, ls, stat, cp,
+              wc and the reader itself pass. Also refused, on any input: a sed, perl, awk or PowerShell `-replace` substitution whose pattern
+              names a secret word (password, key, token, salt, ...) and whose replacement is a mask (`<hidden>`, `***`). The refusal names
+              `~/.local/share/agent-harness/bin/config-show FILE [--show KEY]`, which parses the file and masks every value whole.
+              Not covered: the sign-in code leak (decision #2330): a code reaches the transcript from a browser page or a message tool, not
+              from a file or a shell command, so the hook has nothing to match.
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
 wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
@@ -180,6 +190,7 @@ class Walk:
         self.home = home or os.path.expanduser("~")  # what `~`, `$HOME` and `${HOME}` mean in a `cd` or `git -C` target
         self.cmds = []    # Cmd: words from the command position (wrappers unwrapped), the assignments before it,
         self.scans = []   # in a polling loop, under run-and-wake, the merge checks run earlier by && (a frozenset), working directory
+        self.text = text
         self.mktemps = {}  # variable name -> the mktemp template of the last `VAR=$(mktemp TEMPLATE)` in the text (nested texts included)
         self._text(text, cwd, False, False, frozenset(), 0)
 
@@ -588,10 +599,185 @@ def live_git_rule(walk, ctx):
     return None
 
 
+CONFIG_SHOW = "~/.local/share/agent-harness/bin/config-show"
+CREDENTIAL_READ = (
+    "`%s` on credential config (%s) is refused in agent sessions: it prints the secret values into the transcript, and a line regex does not "
+    "make that safe (it misses a renamed key, a wrapped value or the next field). Print the structure with every value masked: `" + CONFIG_SHOW + " FILE`; "
+    "add `--show KEY` for a key you know is safe to show (`--show options.view_style`), `--format toml|ini|json|yaml|env` if the name "
+    "does not say the format. A check that needs no value (`grep -l`, `grep -c`, `ls`, `stat`) is fine. To compare two configs, diff their "
+    "`config-show` outputs."
+)
+CREDENTIAL_REDACT = (
+    "A regex that redacts secrets line by line (`%s`) is refused in agent sessions: it hides only the keys it names, and a miss prints the "
+    "secret. For a config file use `" + CONFIG_SHOW + " FILE [--show KEY]`, which masks every value whole. For other text, print only "
+    "what you need (a count, a length, a yes or no), not the text."
+)
+# Paths that hold credentials, matched on the whole path string with `/` separators and no case ($HOME, ~, a glob or a relative path all pass).
+CREDENTIAL_PATHS = re.compile(
+    r"(?:^|/)(?:"
+    r"\.config/rustdesk(?:/|$)|rustdesk/config(?:/|$)|com\.carriez\.rustdesk(?:/|$)|rustdesk[\w-]*\.toml$|"
+    r"\.config/rclone(?:/|$)|rclone\.conf$|"
+    r"\.netrc$|_netrc$|\.git-credentials$|\.pgpass$|\.my\.cnf$|\.npmrc$|\.pypirc$|\.dockercfg$|\.vault-token$|"
+    r"\.aws/credentials$|\.docker/config\.json$|\.config/gh/hosts\.ya?ml$|op-service-token$|"
+    r"\.env(?:\.(?!example$|sample$|template$|dist$)[\w.-]+)?$|[\w-]+\.env$|"
+    r"(?:credentials?|secrets?)(?:\.[\w-]+)?\.(?:json|ya?ml|toml|ini|conf|cfg|env)$"
+    r")",
+    re.I,
+)
+# Commands that print what they read. Not here: ls, stat, wc, file, cp, mv, rm, chmod, the reader itself.
+CREDENTIAL_READERS = {"cat", "tac", "nl", "head", "tail", "less", "more", "bat", "batcat", "sed", "awk", "gawk", "mawk", "cut", "sort", "uniq",
+                      "tr", "strings", "xxd", "od", "hexdump", "base64", "column", "paste", "fold", "rev", "diff", "jq", "yq", "tomlq", "xq",
+                      "grep", "egrep", "fgrep", "rg", "ag", "ack"}
+GREP_QUIET = {"-l", "-L", "-c", "-q", "--files-with-matches", "--files-without-match", "--count", "--quiet", "--silent"}
+# The secret words a redaction pattern names, and what a mask replacement looks like.
+SECRET_WORD = re.compile(r"pass(?:word|wd)?|pwd|secret|token|key|salt|\bpk\b|enc_id|credential|cookie|bearer|auth", re.I)
+MASK_WORD = re.compile(r"<[^<>\s]*>|\*{3,}|redact|hidden|mask|x{3,}|\.\.\.|removed|censor", re.I)
+SED_SUBST = re.compile(r"(?:^|[;{\s])s([/|#,:@!%])((?:\\.|(?!\1).)+)\1((?:\\.|(?!\1).)*)\1[a-zA-Z]*")
+AWK_SUBST = re.compile(r"\bg?sub\(\s*/((?:\\.|[^/])+)/\s*,\s*([\"'])(.*?)\2")
+PS_REPLACE = re.compile(r"(?:get-content|\bgc\b|select-string|\btype\b|\bcat\b)[^\n]*?-i?replace\s+(['\"])((?:(?!\1).)*)\1\s*,\s*(['\"])((?:(?!\3).)*)\3", re.I)
+
+
+# Which words of a reader are files it reads. A search pattern (grep, rg), a filter (jq, yq) or a script (sed, awk) is not a file, and a `>`
+# or `>>` target is written, not read; a `<` input is read.
+OUT_REDIRECT = re.compile(r"(?:\d*|&)>>?\|?$|\d*>&$")  # `>`, `>>`, `2>`, `&>`, `>|`: the next word is the target
+OUT_ATTACHED = re.compile(r"(?:\d*|&)>")               # `>f`, `2>/dev/null`, `2>&1`, `&>f`: the target is in the word
+# command -> (letters of short options that take the next word as a value, long options that do, how many words each long one takes,
+#             short and long options that supply the pattern or script, so every operand is a file)
+SCRIPT_FIRST = {
+    "grep": ("efmABCdD", {"--regexp": 1, "--file": 1, "--max-count": 1, "--after-context": 1, "--before-context": 1, "--context": 1, "--include": 1,
+                          "--exclude": 1, "--exclude-dir": 1, "--exclude-from": 1, "--label": 1}, "ef", {"--regexp", "--file"}),
+    "rg": ("efgtTmABCjMrEd", {"--regexp": 1, "--file": 1, "--glob": 1, "--iglob": 1, "--type": 1, "--type-not": 1, "--max-count": 1,
+                              "--replace": 1, "--threads": 1, "--max-columns": 1, "--max-depth": 1, "--sort": 1, "--sortr": 1, "--context": 1,
+                              "--after-context": 1, "--before-context": 1}, "ef", {"--regexp", "--file"}),
+    "sed": ("efl", {"--expression": 1, "--file": 1, "--line-length": 1}, "ef", {"--expression", "--file"}),
+    "awk": ("fvF", {"--file": 1, "--assign": 1, "--field-separator": 1}, "f", {"--file"}),
+    "jq": ("fL", {"--arg": 2, "--argjson": 2, "--slurpfile": 2, "--rawfile": 2, "--from-file": 1, "--indent": 1}, "f", {"--from-file"}),
+    "yq": ("poIf", {"--input-format": 1, "--output-format": 1, "--indent": 1, "--from-file": 1}, "f", {"--from-file"}),
+}
+for _alias, _name in (("egrep", "grep"), ("fgrep", "grep"), ("ag", "grep"), ("ack", "grep"), ("gawk", "awk"), ("mawk", "awk"), ("tomlq", "jq"),
+                      ("xq", "jq")):
+    SCRIPT_FIRST[_alias] = SCRIPT_FIRST[_name]
+
+
+def _redirects(args):
+    """(the words that are not redirects, the `<` inputs) of a command's arguments: an output target is dropped, an input kept."""
+    operands, inputs, i = [], [], 0
+    while i < len(args):
+        word = args[i]
+        if OUT_REDIRECT.match(word):
+            i += 2
+        elif OUT_ATTACHED.match(word):
+            i += 1
+        elif word == "<":
+            if i + 1 < len(args) and not args[i + 1].startswith("<"):
+                inputs.append(args[i + 1])
+                i += 1
+            i += 1
+        elif word.startswith("<<"):
+            i += 1
+        elif word.startswith("<"):
+            inputs.append(word[1:])
+            i += 1
+        else:
+            operands.append(word)
+            i += 1
+    return operands, inputs
+
+
+def _files_read(name, args):
+    """The words of `name args` that name files it reads (a `<` input included), leaving out the pattern, filter or script and `>` targets."""
+    operands, inputs = _redirects(args)
+    spec = SCRIPT_FIRST.get(name)
+    if spec is None:
+        return operands + inputs
+    letters, long_values, supplies, long_supplies = spec
+    positional, supplied, i = [], False, 0
+    while i < len(operands):
+        word = operands[i]
+        i += 1
+        if word == "--":
+            positional += operands[i:]
+            break
+        if word.startswith("--"):
+            flag = word.split("=", 1)[0]
+            supplied = supplied or flag in long_supplies
+            if "=" not in word:
+                i += long_values.get(flag, 0)
+        elif word.startswith("-") and word != "-":
+            for k, letter in enumerate(word[1:]):
+                if letter in letters:
+                    supplied = supplied or letter in supplies
+                    if k == len(word) - 2:  # the value is the next word; otherwise it is attached (`-A3`)
+                        i += 1
+                    break
+        else:
+            positional.append(word)
+    return (positional if supplied else positional[1:]) + inputs
+
+
+def _credential_path(word, cwd):
+    """The word as a path with `/` separators when it names credential config, else None."""
+    if not word or word.startswith("-") and "=" not in word:
+        return None
+    path = word.split("=", 1)[1] if word.startswith("-") else word
+    path = path.replace("\\", "/")
+    if not path.startswith(("/", "~", "$")) and cwd:
+        path = os.path.join(cwd, path)
+    return path if CREDENTIAL_PATHS.search(path) else None
+
+
+def _prints_value(name, args):
+    """False for a use of a reader that prints no file text (grep -l/-c/-q, sed -i, python or perl that only run a script)."""
+    flags = [a for a in args if a.startswith("-") and a != "-"]
+    if name in ("grep", "egrep", "fgrep", "rg", "ag", "ack"):
+        short = {c for a in flags if not a.startswith("--") for c in a[1:]}
+        return not (set(flags) & GREP_QUIET or short & set("lLcq"))
+    if name == "sed":
+        return not any(a == "--in-place" or a.startswith("--in-place=") or (not a.startswith("--") and "i" in a[1:] and "e" not in a[1:]) for a in flags)
+    return True
+
+
+def _redaction(words):
+    """The substitution (`s/.../<hidden>/`) in a sed, perl or awk command that masks a secret word, else None."""
+    name = _base(words[0])
+    if name not in ("sed", "perl", "awk", "gawk", "mawk") or not _prints_value(name, words[1:]):  # `sed -i` edits a file and prints nothing
+        return None
+    for word in words[1:]:
+        if name in ("awk", "gawk", "mawk"):
+            found = [(m.group(1), m.group(3)) for m in AWK_SUBST.finditer(word)]
+        else:
+            found = [(m.group(2), m.group(3)) for m in SED_SUBST.finditer(word)]
+        for pattern, replacement in found:
+            if SECRET_WORD.search(pattern) and MASK_WORD.search(replacement):
+                return "%s ... %s" % (name, (word[:60] + "..." if len(word) > 60 else word))
+    return None
+
+
+def credential_rule(walk, ctx):
+    for cmd in walk.cmds:
+        name = _base(cmd.words[0])
+        if name not in CREDENTIAL_READERS:
+            continue
+        args = cmd.words[1:]
+        paths = [p for p in (_credential_path(a, cmd.cwd) for a in _files_read(name, args)) if p]
+        if paths and _prints_value(name, args):
+            return CREDENTIAL_READ % (name, os.path.basename(paths[0].rstrip("/")) or paths[0])
+    for cmd in walk.cmds:
+        spelled = _redaction(cmd.words)
+        if spelled:
+            return CREDENTIAL_REDACT % spelled
+    texts = [body for scan in walk.scans for _quoted, body in scan.documents] + [" ".join(cmd.words) for cmd in walk.cmds]
+    for text in texts:
+        for match in PS_REPLACE.finditer(text):
+            if SECRET_WORD.search(match.group(2)) and MASK_WORD.search(match.group(4)):
+                return CREDENTIAL_REDACT % ("Get-Content ... -replace '%s', '%s'" % (match.group(2)[:40], match.group(4)[:20]))
+    return None
+
+
 def check(text, ctx):
     """The refusal message for the command text, or None."""
     walk = Walk(text, ctx.cwd, (ctx.env or {}).get("HOME"))
-    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, live_git_rule):
+    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, live_git_rule, credential_rule):
         message = rule(walk, ctx)
         if message:
             return message
