@@ -869,8 +869,10 @@ class SeatFilesFirstApplyTest(unittest.TestCase):
                 home = env.home
                 for d in (".claude/skills", ".claude/fleet", ".local/share/agent-harness"):
                     (home / d).mkdir(parents=True)
-                # what lives outside this source: the coordinator checkout's skill (model-fit) and the review-map archive external, as chezmoi extracts it
-                for skill, root in (("model-fit", home / ("coordinator-work" if profile == "axon-work-computer" else "git/coordinator") / "skills"),
+                # what lives outside this source: the coordinator checkout's skill (model-fit) and the review-map archive external, as chezmoi extracts it.
+                # The checkout is named in the data, because its default path depends on the OS (a Mac with a Workshop SSD defaults to /Volumes/Workshop).
+                env.cfg.write_text(env.cfg.read_text() + "  instances:\n    coordinator:\n      repo: %s\n" % (home / "coordinator-stub"))
+                for skill, root in (("model-fit", home / "coordinator-stub" / "skills"),
                                     ("review-map", home / ".local/share/agent-harness/external-skills/accountable-review/skills")):
                     (root / skill).mkdir(parents=True)
                     (root / skill / "SKILL.md").write_text("---\nname: %s\n---\n" % skill)
