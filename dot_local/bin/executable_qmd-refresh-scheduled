@@ -17,7 +17,7 @@
 #    emptied at the start of a run when over the same size.
 #  - what is logged: qmd-refresh's own lines and qmd's counts and collection paths. No document text, no environment, no secrets.
 #
-# TERM, INT or HUP (launchctl bootout, logout) are passed to qmd-refresh, which stops its job tree. Exit: qmd-refresh's status.
+# TERM, INT or HUP (launchctl bootout, logout) are passed to qmd-refresh, which stops the whole job (its process group). Exit: qmd-refresh's status.
 set -eu
 
 prog=qmd-refresh-scheduled
