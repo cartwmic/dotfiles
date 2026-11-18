@@ -22,8 +22,8 @@ ZSHENV = REPO / "dot_zshenv"
 ZSH = shutil.which("zsh")
 LINUX = Path("/proc").is_dir()   # session.sh decides liveness from /proc/<pid>
 TOOLS = ("hyprctl", "wlrctl", "wtype", "grim")
-# Real tools the script and the fakes run. python3 is needed by `windows`, `save` and `restore`.
-REAL = ("cat", "date", "mkdir", "python3", "rm")
+# Real tools the script and the fakes run. python3 is needed by `windows`, `save` and `restore`; tr by the record name.
+REAL = ("cat", "date", "mkdir", "python3", "rm", "tr")
 
 FAKE = """#!/bin/sh
 name=${0##*/}
@@ -166,8 +166,9 @@ class DesktopTest(unittest.TestCase):
         body = "" if address == "" else "{}" if address is None else json.dumps({"address": address, "class": "x", "pid": pid})
         (self.fixtures / "activewindow.json").write_text(body)
 
-    def saved_file(self):
-        return self.home / ".state" / "agent-desktop" / "saved-focus"
+    def saved_file(self, caller=None):
+        """The record: with no caller the shared one, otherwise the caller's own (the key goes after a dot)."""
+        return self.home / ".state" / "agent-desktop" / ("saved-focus" if caller is None else f"saved-focus.{caller}")
 
     def set_cursor(self, x, y):
         (self.fixtures / "cursorpos").write_text(f"{x}, {y}\n")
@@ -693,6 +694,85 @@ class DesktopTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.dispatches("hl.dsp."), [MOVE_CURSORPOS])
         self.assertIn("no active window", r.stdout)
+
+    # one record per caller: two agents running save and restore at the same time do not touch each other's record
+    def as_caller(self, key, *args, **extra):
+        return self.run_script(*args, T3CODE_THREAD_ID=key, **extra)
+
+    def focus_dispatch(self, address):
+        return f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{address}"}})]'
+
+    def test_two_callers_each_get_their_own_window_back(self):
+        self.set_active(WIN_A)
+        self.assertEqual(self.as_caller("thread-one", "save").returncode, 0)
+        self.set_active(WIN_B)
+        r = self.as_caller("thread-two", "save")
+        self.assertEqual((r.returncode, r.stdout), (0, f"saved window {WIN_B} pointer 961,553\n"), "the second caller's save is its own")
+        self.set_active(WIN_CHROME)   # both agents' work moved focus
+        self.calls_file.unlink()
+        r = self.as_caller("thread-one", "restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp.focus"), [self.focus_dispatch(WIN_A)])
+        self.assertTrue(self.saved_file("thread-two").exists(), "the first caller's restore left the second caller's record")
+        self.set_active(WIN_CHROME)
+        self.calls_file.unlink()
+        r = self.as_caller("thread-two", "restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp.focus"), [self.focus_dispatch(WIN_B)])
+        self.assertFalse(self.saved_file("thread-one").exists())
+        self.assertFalse(self.saved_file("thread-two").exists())
+
+    def test_a_caller_with_no_record_of_its_own_gets_nothing_saved(self):
+        self.assertEqual(self.as_caller("thread-one", "save").returncode, 0)
+        self.calls_file.unlink()
+        r = self.as_caller("thread-two", "restore")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("nothing saved", r.stderr)
+        self.assertEqual(self.calls(), [], "the second caller's restore acted on the first caller's record")
+        self.assertTrue(self.saved_file("thread-one").exists())
+
+    def test_a_second_save_by_the_same_caller_keeps_its_first_record(self):
+        self.assertEqual(self.as_caller("thread-one", "save").returncode, 0)
+        self.set_active(WIN_CHROME)
+        r = self.as_caller("thread-one", "save")   # a separate call of the same agent: same thread id
+        self.assertRegex(r.stdout, r"^already saved \d+s ago; first record kept\n$")
+
+    def test_focus_and_move_note_the_agent_in_the_callers_own_record(self):
+        self.assertEqual(self.as_caller("thread-one", "save").returncode, 0)
+        self.assertEqual(self.as_caller("thread-two", "save").returncode, 0)
+        self.set_active(WIN_B)
+        self.assertEqual(self.as_caller("thread-one", "focus", "Steam").returncode, 0)
+        self.assertEqual(self.as_caller("thread-one", "move", "10", "20").returncode, 0)
+        one = self.saved_file("thread-one").read_text().splitlines()
+        self.assertIn(f"agent_window={WIN_B}", one)
+        self.assertIn("agent_pointer=10,20", one)
+        two = self.saved_file("thread-two").read_text()
+        self.assertNotIn("agent_", two, "thread-one's focus and move were written into thread-two's record")
+
+    def test_a_caller_and_a_plain_call_do_not_share_a_record(self):
+        self.assertEqual(self.run_script("save").returncode, 0)   # no key: the shared record
+        self.assertEqual(self.as_caller("thread-one", "save").returncode, 0)
+        self.assertTrue(self.saved_file().exists())
+        self.assertTrue(self.saved_file("thread-one").exists())
+        self.assertEqual(self.run_script("restore").returncode, 0)
+        self.assertTrue(self.saved_file("thread-one").exists(), "a plain restore removed a caller's record")
+
+    def test_the_claude_code_session_is_the_key_when_there_is_no_t3_thread(self):
+        r = self.run_script("save", CLAUDE_CODE_SESSION_ID="sess-1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.saved_file("sess-1").exists())
+        self.assertEqual(self.run_script("restore", CLAUDE_CODE_SESSION_ID="sess-1").returncode, 0)
+        r = self.run_script("save", T3CODE_THREAD_ID="thread-one", CLAUDE_CODE_SESSION_ID="sess-1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.saved_file("thread-one").exists(), "the T3 thread comes first, as in kill-mine")
+        self.assertFalse(self.saved_file("sess-1").exists())
+
+    def test_a_key_with_slashes_and_colons_stays_one_file_in_the_state_folder(self):
+        key = "mcp:launch:../../x/y z"
+        self.assertEqual(self.as_caller(key, "save").returncode, 0)
+        files = sorted(p.name for p in (self.home / ".state" / "agent-desktop").iterdir() if p.name.startswith("saved-focus"))
+        self.assertEqual(files, ["saved-focus.mcp_launch_.._.._x_y_z"])
+        self.assertEqual(self.as_caller(key, "restore").returncode, 0)
 
     def test_focus_move_and_click_write_no_record_when_nothing_is_saved(self):
         for args in (("focus", "Steam"), ("move", "10", "20"), ("click", "10", "20")):

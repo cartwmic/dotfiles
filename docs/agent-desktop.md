@@ -78,7 +78,7 @@ agent-desktop save      remember the active window (by address) and the pointer 
 agent-desktop restore   put back what the agent moved: focus the remembered window and move the pointer back, then forget the record
 ```
 
-Call `agent-desktop save` first, before anything that touches Chrome or the screen, and `agent-desktop restore` last. The record is one file, `~/.local/state/agent-desktop/saved-focus` (under `$XDG_STATE_HOME` when it is set), holding the address, the pointer and the time. 
+Call `agent-desktop save` first, before anything that touches Chrome or the screen, and `agent-desktop restore` last. The record is one file per caller, `~/.local/state/agent-desktop/saved-focus.KEY` (under `$XDG_STATE_HOME` when it is set), holding the address, the pointer and the time. KEY is the caller's `$T3CODE_THREAD_ID`, else its `$CLAUDE_CODE_SESSION_ID` (the same pair `kill-mine` uses), with every character outside `A-Za-z0-9._-` turned into `_`. Every call one agent makes carries the same value and two agents carry different ones, so two agents can `save` and `restore` at the same time and each `restore` reads only its own record. With neither variable set (a plain terminal) the file is `saved-focus` with no key, shared by whoever calls without one; one agent or Michael alone gets the old behaviour. A record left by an agent that never restored is only ever seen by that same thread, and its next `save` keeps it (first record wins). 
 
 `restore` puts back only what the agent moved, and leaves the rest. While a record exists, `focus` notes the window it focused (`agent_window=`) and `move` and `click` note the point (`agent_pointer=`, the last one counts); with no record they write nothing. `restore` refocuses the saved window only when the active window is the agent's: one it focused, or one of the agent Chrome profile's processes. If Michael switched to another window, that window keeps focus and `restore` says so. It moves the pointer back only when it refocused or the pointer is still where the agent's last `move` or `click` put it. It focuses first and moves the pointer second, because changing workspace warps the pointer; it then checks focus once more after every pointer move, because `follow_mouse` may hand focus to whatever is under the pointer: the window that had focus before the move gets it back (the saved window when `restore` refocused it or it was already active, otherwise the window that kept focus).
 
@@ -91,11 +91,12 @@ Cases:
 | the saved window no longer exists, and Michael's own window is active | `restore` keeps that window and exits 0; it never asks for the saved window, so it cannot find it gone |
 | no window is active when `restore` runs (for example an empty workspace) | `restore` says there is no active window, does not refocus the saved window (an empty workspace Michael chose looks the same), moves the pointer back only if the agent moved it, exit 0 |
 | no window was active at `save` | `save` succeeds; `restore` moves the pointer only (when the agent moved it), says there is no window to refocus, exit 0 |
-| `save` twice | the second keeps the first record, prints `already saved <N>s ago; first record kept`, exit 0 |
+| `save` twice by one caller | the second keeps the first record, prints `already saved <N>s ago; first record kept`, exit 0 |
+| two callers `save` and `restore` at once | each has its own record: each `restore` puts back the window its own `save` found, and a caller with no record of its own gets `nothing saved` (exit 1) even when another caller's record exists |
 | the saved window is already active | `restore` makes no focus dispatch; the pointer goes back only if the agent moved it |
 | the active window is neither the saved one nor the agent's | `restore` leaves focus there, says it kept focus on that window, exit 0 |
 
-Each of the two writes one line to `agent-desktop.log` with the run id and the outcome. Tests: `tests/agent-desktop/test_agent_desktop.py` (`test_save_*`, `test_restore_*`).
+Each of the two writes one line to `agent-desktop.log` with the run id and the outcome. Tests: `tests/agent-desktop/test_agent_desktop.py` (`test_save_*`, `test_restore_*`, and the per-caller ones: `test_two_callers_*`, `test_a_caller_*`, `test_a_second_save_*`, `test_the_claude_code_session_*`, `test_a_key_with_*`).
 
 Reproduce: `chezmoi apply ~/.local/bin/agent-desktop` (after the preflight in `AGENTS.md`), then `agent-desktop cursor`. Tests: `python3 -m unittest discover -s tests/agent-desktop -v`.
 
