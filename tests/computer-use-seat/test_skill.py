@@ -75,7 +75,8 @@ class UsingComputerSkillTests(unittest.TestCase):
         for profile, chezmoi_os in (("personal", "linux"), ("personal", "darwin"), ("axon-work-computer", "darwin")):
             with self.subTest(profile=profile, os=chezmoi_os):
                 text = render(profile, chezmoi_os)
-                for heading in ("## Order", "## Which tool", "agent-download", "agent-desktop shot"):
+                for heading in ("## Order", "## Which tool", "agent-download", "agent-desktop shot",
+                                "Never start another browser or browser tool."):
                     self.assertIn(heading, text)
                 self.assertIsNone(re.search(r"\{\{|\}\}", text))
 
