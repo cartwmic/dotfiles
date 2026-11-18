@@ -55,15 +55,14 @@ Rules:
 - `rea` starts straight from a mise-installed, pinned npm package (`npm:rea-agents` in `dot_config/mise/config.toml`, the only place
   the version lives); the canonical entry names the mise shim (`~/.local/share/mise/shims/rea`), so the server is one process with no
   `npm exec` wrapper beside it. To bump it, change the pin in `config.toml`, apply, and regenerate the pi-mcp-lazy seed. `mise install`
-  must have run before a harness starts it (the apply's bootstrap does it). Still launched through a package runner: `jira` (work,
-  unpinned `npx -y mcp-remote`, its URL and sign-in exist only on the work Mac) and `browser-harness` (work Mac only; `uvx`, pinned, patched launcher). The personal profile's browser server is `browse` (a pinned mise install, below).
+  must have run before a harness starts it (the apply's bootstrap does it). Still launched through a package runner: `browser-harness` (work Mac only; `uvx`, pinned, patched launcher). The personal profile's browser server is `browse` (a pinned mise install, below). `jira` (work) is a remote HTTP server in the canonical file, so no harness launches anything for it.
 - The Playwright MCP server (`@playwright/mcp`) is retired (Michael, ask #1040): browser work goes through Browse (personal) or `browser-harness` (work Mac). The
   Claude apply step removes a leftover `playwright` registration from `~/.claude.json`; Codex's block and Pi's `mcp.json` drop it
   on the same apply. (The Chromium wrapper `~/.local/bin/chromium`, which uses Playwright's Chrome for Testing build for Pi's
   `launch_browser`, is a different thing and stays.)
 - The Claude, Codex and Pi adapters wrap the local `rea` entry (and `browser-harness` on the work profile) in `~/.local/bin/pi-mcp-lazy` (names in
   `~/.local/share/pi-mcp-lazy/servers.list`) so a session starts each server on first use, not at session start. `rea` stops when idle;
-  `browser-harness` is never stopped. `browse` is not wrapped: `browse mcp` is a 3.5 MiB stdio proxy and its relay is shared and manages itself. (`jira` on the work profile is lazy in Pi only.) See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
+  `browser-harness` is never stopped. `browse` is not wrapped: `browse mcp` is a 3.5 MiB stdio proxy and its relay is shared and manages itself. See [`pi-mcp-lazy`](../pi-mcp-lazy/README.md).
 - `adapters/` may contain harness-specific metadata needed to project canonical sources into a given harness.
 - Do not put harness-specific semantics into canonical files unless the open standard itself requires them.
 

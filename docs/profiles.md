@@ -94,7 +94,7 @@ Prompt cache lifetime: only `seat-reviewer` has `FORCE_PROMPT_CACHING_5M=1` in i
 | Planner | `seat-planner` | 300000 (about 267K) | on | hindsight, shartifacts, t3-code | designing-the-smallest-version, no-ai-slop |
 | Reviewer | `seat-reviewer` | 300000 (about 267K), prompt cache written for 5 minutes, T3 idle compaction off | off | hindsight, shartifacts, t3-code | designing-the-smallest-version, review-plans, reviewing-prs, using-lean-change-provider, using-loop-engine |
 | Computer use | `seat-computer` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, browse, t3-code | using-computer, using-browse |
-| Coordinator | `coordinator` (owned by the coordinator repo; its launch arguments are not written here) | 200000 (about 167K) | on | to change in the coordinator repo | same as lead, without hill-climb; file `~/.claude/fleet/seat-coordinator.json` is deployed for it to use |
+| Coordinator | `coordinator` (owned by the coordinator repo; its launch arguments are not written here) | 200000 (about 167K), carried by `~/.claude/fleet/seat-coordinator.json` (`autoCompactWindow`), which the daemon copies into its `--settings` file | on | to change in the coordinator repo | same as lead, without hill-climb; file `~/.claude/fleet/seat-coordinator.json` is deployed for it to use |
 
 The lead and builder seats also keep `reviewing-prs` and `triaging-automated-review` (the PR review-bot loop, whose last step runs `reviewing-prs`). The coordinator does not, so its "same as lead" row leaves them out.
 

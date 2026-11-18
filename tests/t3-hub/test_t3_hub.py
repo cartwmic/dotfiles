@@ -903,9 +903,12 @@ class FleetFilesTest(unittest.TestCase):
             try:
                 for seat, keep in KEEP.items():
                     f = self.render(env, "seat-%s.json" % seat)
-                    # the builder seat also carries its Stop hook (tests/stop-running-jobs)
+                    # the builder seat also carries its Stop hook (tests/stop-running-jobs); the coordinator seat carries its auto-compact window
                     self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat in ("builder", "computer") else set())
-                                     | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set()), (profile, seat))
+                                     | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set())
+                                     | ({"autoCompactWindow"} if seat == "coordinator" else set()), (profile, seat))
+                    if seat == "coordinator":
+                        self.assertEqual(f["autoCompactWindow"], 200000, profile)
                     # builder, planner and reviewer also deny the four tools they never call; lead and coordinator keep them
                     self.assertEqual(f["permissions"], {"deny": ["Artifact"] + (sorted(UNUSED_TOOLS) if seat in UNUSED_TOOL_SEATS else [])}, (profile, seat))
                     self.assertIs(f["syncClaudeAiSkills"], False)

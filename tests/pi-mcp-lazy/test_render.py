@@ -315,7 +315,7 @@ JIRA_URL = "https://jira.example.invalid/mcp/SECRET-JIRA-URL-DO-NOT-LOG"
 
 
 class JiraTests(unittest.TestCase):
-    """jira is lazy on the work profile only, and an unseeded or failed one falls back to starting at session start."""
+    """jira is a remote HTTP server on the work profile (no local process to start), so the stand-in does not wrap it."""
 
     def world(self, profile="axon-work-computer", **k):
         w = World(profile=profile, **k)
@@ -330,7 +330,7 @@ class JiraTests(unittest.TestCase):
     def test_list_renders_per_profile(self):
         names = lambda p: [l for l in render_list(p).splitlines() if l and not l.startswith("#")]
         self.assertEqual(names("personal"), ["rea"])   # browser-harness is the work Mac's; the personal profile uses browse, which is not lazy
-        self.assertEqual(names("axon-work-computer"), ["rea", "browser-harness 604800", "jira pi-only"])
+        self.assertEqual(names("axon-work-computer"), ["rea", "browser-harness 604800"])   # jira left the list: remote HTTP now, nothing to wrap
 
     def test_chezmoi_renders_the_same_list_for_both_profiles(self):
         if not shutil.which("chezmoi"):
@@ -372,37 +372,18 @@ class JiraTests(unittest.TestCase):
         self.assertEqual(w.claude_servers()["browser-harness"], c["browser-harness"])
         self.assertEqual(w.codex_servers()["browser-harness"]["command"], "uvx")
 
-    def test_work_profile_wraps_and_refreshes_jira(self):
-        w = self.world()
-        r = self.run_work(w)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        s = w.pi_servers()
-        c = w.canonical["mcpServers"]["jira"]
-        self.assertEqual(s["jira"]["command"], str(w.bin))
-        self.assertEqual(s["jira"]["args"], ["jira", "600", "--", "npx", "-y", "mcp-remote", JIRA_URL])
-        self.assertEqual(c["command"], "npx")
-        self.assertIn("--refresh jira", w.log.read_text())
-        self.assertIn("refreshed jira", r.stdout)
-        self.assertNotIn(JIRA_URL, r.stdout + r.stderr)
-
-    def test_work_profile_keeps_jira_raw_for_claude_and_codex_but_lazy_for_pi(self):
+    def test_jira_is_a_remote_http_server_for_every_harness(self):
         w = self.world()
         r = w.run("claude", "codex", "pi", extra={"JIRA_MCP_URL": JIRA_URL})
         self.assertEqual(r.returncode, 0, r.stderr)
-        raw = {"command": "npx", "args": ["-y", "mcp-remote", JIRA_URL]}
-        self.assertEqual(w.claude_servers()["jira"], raw)
-        self.assertEqual({k: v for k, v in w.codex_servers()["jira"].items() if k in raw}, raw)
-        self.assertEqual(w.pi_servers()["jira"]["args"], ["jira", "600", "--", "npx", "-y", "mcp-remote", JIRA_URL])
-        self.assertEqual(w.refreshed().count("jira"), 1)  # refreshed once, for Pi
-        for name in ("rea", "browser-harness"):  # the other two stay wrapped for all three
-            self.assertEqual(w.claude_servers()[name]["command"], str(w.bin), name)
-            self.assertEqual(w.codex_servers()[name]["command"], str(w.bin), name)
+        want = {"type": "http", "url": JIRA_URL}
+        self.assertEqual(w.claude_servers()["jira"], want)
+        self.assertEqual(w.codex_servers()["jira"], {"url": JIRA_URL})
+        self.assertEqual(w.pi_servers()["jira"], want)
+        self.assertNotIn("jira", w.refreshed())   # nothing to wrap: no local process, no refresh
+        script = w.generated("claude", "setup-mcp.sh")
+        self.assertIn('--transport http "jira"', script)
         self.assertNotIn(JIRA_URL, r.stdout + r.stderr)
-
-    def test_jira_is_not_refreshed_when_only_claude_and_codex_are_applied(self):
-        w = self.world()
-        self.assertEqual(w.run("claude", "codex", extra={"JIRA_MCP_URL": JIRA_URL}).returncode, 0)
-        self.assertNotIn("jira", w.refreshed())
 
     def test_personal_profile_has_no_jira(self):
         w = self.world(profile="personal")
@@ -411,32 +392,13 @@ class JiraTests(unittest.TestCase):
             self.assertNotIn("jira", s)
         self.assertEqual(sorted(w.refreshed()), sorted(LAZY))
 
-    def test_unseeded_and_failed_refresh_leaves_jira_eager_and_hides_the_url(self):
+    def test_jira_without_its_url_stays_literal_like_the_other_url_servers(self):
         w = self.world()
-        r = self.run_work(w, fail="jira", extra={"FAKE_CHECK_FAIL": "jira"})
+        r = w.run("claude", "codex", "pi")  # JIRA_MCP_URL unset and no secrets adapter: the placeholder stays literal, as for slack and the rest
         self.assertEqual(r.returncode, 0, r.stderr)
-        s = w.pi_servers()
-        self.assertEqual(s["jira"], {"command": "npx", "args": ["-y", "mcp-remote", JIRA_URL]})
-        self.assertIn("jira has no saved tool list; left as rendered", r.stdout)
-        self.assertIn("refresh of jira failed", r.stdout)
-        self.assertNotIn(JIRA_URL, r.stdout + r.stderr)
-        self.assertNotIn("SECRET-JIRA", r.stdout + r.stderr)
-        for name in ("rea",):
-            self.assertEqual(s[name]["command"], str(w.bin), name)
-
-    def test_failed_refresh_with_an_existing_saved_list_still_wraps(self):
-        w = self.world()
-        r = self.run_work(w, fail="jira")  # the fake --check passes: a state copy or seed exists
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(w.pi_servers()["jira"]["command"], str(w.bin))
-        self.assertIn("refresh of jira failed", r.stdout)
-        self.assertNotIn("left as rendered", r.stdout)
-
-    def test_jira_missing_from_the_work_render_is_skipped(self):
-        w = self.world()
-        r = w.run("pi")  # JIRA_MCP_URL unset and no secrets adapter: the placeholder stays literal
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("jira", w.pi_servers())
+        self.assertEqual(w.claude_servers()["jira"], {"type": "http", "url": "${JIRA_MCP_URL}"})
+        self.assertEqual(w.codex_servers()["jira"], {"url": "${JIRA_MCP_URL}"})   # the Codex block records the url only
+        self.assertEqual(w.pi_servers()["jira"], {"type": "http", "url": "${JIRA_MCP_URL}"})
 
 
 class CheckModeTests(unittest.TestCase):
