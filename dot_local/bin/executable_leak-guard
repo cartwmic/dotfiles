@@ -17,9 +17,10 @@ skip them, as git always allows). Two layers, cheapest first, on the ADDED lines
   2. Claude. `claude -p` with Haiku, no tools, no MCP servers, is given ~/.config/leak-guard/context (what counts as a work detail), the added
      lines, and the names the target branch already publishes that the change also holds (so they are not reported), and must answer one JSON object
      {"leak": true|false, "findings": [{"file", "line", "text", "why", "name"}]}, where name is the exact word or phrase of the change that is the work
-     detail. leak true blocks, unless every finding's name is already in the files the repository publishes (pre-push: the remote's tracking refs;
-     pre-commit: HEAD; text: the target repository's, and only when a remote of the checkout the command runs in fetches from that target — the gh
-     wrapper names it with --repo; commit-msg: no base, so nothing is skipped); those are printed as skipped and counted in the log. A finding with no
+     detail. leak true blocks, unless every finding's name is already in the files the repository publishes (pre-push: the remote's default branch and
+     the pushed branches it already has; pre-commit: HEAD; text: the target repository's default branch, and only when a remote of the checkout the
+     command runs in fetches from that target — the gh wrapper names it with --repo; commit-msg: no base, so nothing is skipped); those are printed as
+     skipped and counted in the log. A finding with no
      usable name counts as new. So does an answer that is not that JSON.
 
 It fails closed: a missing claude CLI, no sign-in, no network, a timeout (120 s), a non-zero exit, a missing terms or context file, a pre-commit diff over
@@ -390,8 +391,37 @@ def remote_repo(url):
     return host, (m.group(2) + "/" + m.group(3)).lower()
 
 
+def default_tracking_ref(name):
+    """The tracking ref of the remote's default branch: refs/remotes/<name>/HEAD resolved, else <name>/main, else <name>/master; None when the remote
+    has none of them (an empty remote, or one whose default branch was never fetched)."""
+    sym = git("symbolic-ref", "-q", "refs/remotes/%s/HEAD" % name, check=False).strip()
+    for ref in ([sym] if sym.startswith("refs/remotes/%s/" % name) else []) + ["refs/remotes/%s/main" % name, "refs/remotes/%s/master" % name]:
+        if run_git(["rev-parse", "--verify", "-q", ref]).returncode == 0:
+            return ref
+    return None
+
+
+def published_trees(name, pushed_refs=()):
+    """The commits of the tracking refs that name what the remote already publishes: its default branch, plus — for a push — the tracking ref of each
+    pushed branch the remote already has. The remote's every other branch is not a published base: a name only a side branch holds is new here, which
+    fails safe. This is also what keeps the 'already published' greps cheap on a remote with hundreds of branches: two or three trees, never all of them."""
+    refs = []
+    default = default_tracking_ref(name)
+    if default:
+        refs.append(default)
+    for ref in pushed_refs:
+        if ref.startswith("refs/heads/"):
+            refs.append("refs/remotes/%s/%s" % (name, ref[len("refs/heads/"):]))
+    out = []
+    for ref in dict.fromkeys(refs):
+        done = run_git(["rev-parse", "--verify", "-q", ref])
+        if done.returncode == 0:
+            out.append(done.stdout.decode(errors="replace").strip())
+    return list(dict.fromkeys(out))
+
+
 def text_trees(target):
-    """The commits of every remote tracking ref of the remotes here that fetch from the target repository: what the target already publishes, the text
+    """The commit of the default branch of each remote here that fetches from the target repository: what the target already publishes, the text
     mode's 'already published' base. Without a target, or when no remote here fetches from the target — a checkout of some other repository, or no
     repository at all — there is nothing, and the text is judged with no repo context: another checkout's names are never named as published."""
     if not target:
@@ -404,7 +434,7 @@ def text_trees(target):
             names.append(name)
     out = []
     for name in names:
-        out += git("for-each-ref", "--format=%(objectname)", "refs/remotes/%s/" % name, check=False).split()
+        out += published_trees(name)
     return list(dict.fromkeys(out))
 
 
@@ -559,7 +589,7 @@ def prepush(stdin_lines, remote, url):
     """(lines, binary, notes, trees) for a push: both layers' material for every commit the remote's tracking refs do not have, in ONE pass:
         git rev-list <pushed tips> --not --remotes=<remote> [<each remote sha present locally>] | git diff-tree --stdin -r -p --cc --root --pretty=raw ...
     so a commit any remote branch already has is never rechecked, a commit shared by two pushed refs is checked once, and a merge shows only its own hunks.
-    `trees` are the remote's tracking refs, the files layer 2 treats as already published."""
+    `trees` are the remote's default branch plus the tracking ref of each pushed branch it already has: what the remote publishes, as layer 2's already-published base."""
     pushes = []
     for raw in stdin_lines:
         parts = raw.split()
@@ -582,7 +612,7 @@ def prepush(stdin_lines, remote, url):
                 known.append(remote_sha)
             else:
                 notes.append(("remote_sha_unknown", "remote sha unknown for %s (the remote is ahead of what is fetched): run git fetch %s; checking everything the tracking refs lack" % (remote_ref, name)))
-    trees = list(dict.fromkeys(git("for-each-ref", "--format=%(objectname)", "refs/remotes/%s/" % name, check=False).split()))     # what the remote already publishes
+    trees = published_trees(name, [p[1] for p in pushes])     # what the remote already publishes
     revs = git("rev-list", *tips, "--not", "--remotes=" + name, *known)
     if revs.split():
         done = run_git(["diff-tree", "--stdin", "-r", "-p", "--cc", "--root", "--always", "--no-renames", "--no-textconv", "--no-ext-diff", "--pretty=raw", "-U0"],
