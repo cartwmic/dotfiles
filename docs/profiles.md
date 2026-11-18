@@ -190,6 +190,16 @@ Known gaps:
 
 The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the zshrc warning block.
 
+### pi key from the environment (work profile)
+
+pi resolves a `!command` apiKey on every model request, through `execSync` with a hard 10 s timeout. When the machine stalls under memory pressure the key command is killed before it starts, and the turn fails with "Failed to resolve API key". So on the work profile the work-glm key is read once, at pi's launch:
+
+- `~/.local/bin/pi` (`dot_local/bin/executable_pi.tmpl`, work only; elsewhere it stays pi's installer symlink) reads the key with `op_read_cached.sh` and the `workGlmKeyRef` data key, with no 10 s limit, exports `WORK_GLM_API_KEY`, and execs pi's own launcher, `~/.pi/agent/bin/pi`.
+- models.json names the work-glm key as `"$WORK_GLM_API_KEY"`. pi reads it from its own environment on each request: no subprocess.
+- If the read fails, pi still starts (its other providers need no work key) with a warning. A work-glm request then fails at once with pi's own missing-variable error. A key already in the environment is kept.
+- A rotated key needs pi sessions restarted.
+- The trade-off (the owner's choice): every tool command a pi session runs inherits the variable, so an agent that dumps its environment prints the key. The leak guard's terms hold the key's prefix, so it is blocked from commits and from posts to guarded repositories.
+
 ### Environment for the Mac-side phone helpers
 
 `termux/router-phone.py`, `termux/wireguard-phone.py` and `termux/update-phone-alias.py` are not templates, so they read the network from the environment. Export these in the shell that runs them. A missing or invalid value stops the helper with a message naming it. `update-phone-alias.py` prints the new `sshHosts.sshPhone` entry as YAML; it edits nothing and applies nothing.
