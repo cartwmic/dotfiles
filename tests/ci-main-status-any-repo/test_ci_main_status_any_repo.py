@@ -483,6 +483,25 @@ class Gate(Fixture):
         self.assertNotIn("GREEN", out)
         self.assertIn("b (not reported)", out)
 
+    def test_pr_a_required_check_skipped_by_its_job_condition_passes(self):
+        # Classic protection requires six checks. The PR touches none of the files one job builds, so that job is
+        # skipped by its condition and its check run concludes skipped. GitHub's merge box passes a skipped
+        # required check, so the gate must too: GREEN, not RED. Unrequired skipped runs on the head are ignored.
+        required = ["lint", "unit tests", "integration tests", "validate", "pr-title", "ui build"]
+        runs = [check_row(n, rid=i + 10) for i, n in enumerate(required[:-1])]
+        runs += [check_row("ui build", "skipped", rid=20), check_row("path filter", rid=21),
+                 check_row("extra tests", "skipped", rid=22), check_row("pr-title", rid=23)]
+        self.repos["example-org/example-repo"] = {
+            "branches": {"main": classic(contexts=required)},
+            "rules": {"main": []},
+            "pulls": {"190": {"base": {"ref": "main"}, "head": {"sha": HEAD}}},
+            "pr_checks": {"190": {"rows": [{"name": n} for n in required]}},
+            "check_runs": {HEAD: runs},
+        }
+        rc, out = self.status("--merge-gate", "example-org/example-repo", "--pr", "190")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  all 6 required checks passed on PR #190 head " + HEAD[:7], out)
+
     def test_pr_a_rollup_name_the_computed_set_lacks_is_error(self):
         # gh pr checks --required lists c, which the computed set for the base lacks: an under-report -> ERROR.
         self.repos["example-org/example-repo"] = {

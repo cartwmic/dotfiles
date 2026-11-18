@@ -1839,11 +1839,22 @@ class AnyRepo(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": lint", out)
 
-    def test_a_skipped_required_check_fails_closed(self):
-        self.set_tip_checks(self.check_row("tests"), self.check_row("lint", "skipped", rid=2))
-        rc, out = self.status(self.any_repo)
-        self.assertEqual(rc, 1, out)
-        self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": lint", out)
+    def test_skipped_and_neutral_required_checks_pass_as_github_passes_them(self):
+        # GitHub's merge box accepts a required check whose run concluded success, skipped or neutral.
+        for conclusion in ("skipped", "neutral"):
+            with self.subTest(conclusion):
+                self.set_tip_checks(self.check_row("tests"), self.check_row("lint", conclusion, rid=2))
+                rc, out = self.status(self.any_repo)
+                self.assertEqual(rc, 0, out)
+                self.assertIn("GREEN  all 2 required checks passed on main tip " + self.c3[:7], out)
+
+    def test_other_completed_conclusions_fail_a_required_check(self):
+        for conclusion in ("failure", "cancelled", "timed_out", "action_required", "stale", "startup_failure"):
+            with self.subTest(conclusion):
+                self.set_tip_checks(self.check_row("tests"), self.check_row("lint", conclusion, rid=2))
+                rc, out = self.status(self.any_repo)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": lint", out)
 
     def test_tip_flag_is_a_usage_error(self):
         self.set_tip_checks()
