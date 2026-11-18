@@ -39,7 +39,7 @@ BOT_PATHS = ("~/" + BOT_SCRIPT, "/home/cartwmic/" + BOT_SCRIPT)
 BOT_VERBS = {
     "sonarr": ("lookup", "add", "monitor", "episodes", "episode-search"),
     "radarr": ("lookup", "add", "monitor"),
-    "readarr": ("lookup", "add"),
+    "readarr": ("lookup", "add", "kindle"),
     "queue": None,
     "download": ("status",),
     "jellyfin": ("search",),
