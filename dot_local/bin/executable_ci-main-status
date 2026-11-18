@@ -4,6 +4,7 @@
 usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward)
        ci-main-status [--tip | --merge-gate] --all
        ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below)
+       ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
@@ -28,6 +29,14 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+
+Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the required
+status checks on its default branch, read from branch protection, else from the repo's active rulesets. All of them
+passed on the tip: GREEN, 0. One failed: RED, 1. One is queued, running or has not reported: UNTESTED, 2 (0 under
+--merge-gate, like the table repos). --pr N (only with --merge-gate) checks the PR's head commit instead of the
+tip. A skipped required check counts as passing, as it does for GitHub's own mergeability. When the required
+checks cannot be read at all (none required, or no permission to read them), it says so and exits 1: no silent
+pass. --tip is not for these repos (a deploy pulls a sha of a repo on this machine).
 
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
 `ci-main-status ... && pr-body-check ... && gh pr merge`.
@@ -136,7 +145,9 @@ class Record:
         return Record(sha, "pass", f"{self.label} (tip {self.tip[:7]}, same tree)", tree=self.tree, line=self.line)
 
 
-def gh(args):
+def gh(args, soft=False):
+    """One gh call's JSON. soft: GitHub answering there is nothing to read (404) or no permission (403) gives None,
+    for the caller to decide; any other failure still raises."""
     env = {**os.environ, "GH_CALLER": CALLER}
     if URGENT:
         env["GH_URGENT"] = "1"
@@ -145,6 +156,8 @@ def gh(args):
     except OSError as e:
         raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
     if r.returncode:
+        if soft and ("HTTP 404" in r.stderr or "HTTP 403" in r.stderr):
+            return None
         raise Unreadable(f"gh {' '.join(args[:2])} failed: {r.stderr.strip() or r.stdout.strip()}")
     try:
         return json.loads(r.stdout)
@@ -154,6 +167,94 @@ def gh(args):
 
 def main_tip(repo):
     return gh(["api", f"repos/{repo}/branches/main"])["commit"]["sha"]
+
+
+def required_contexts(repo, branch):
+    """The check names `branch` requires: branch protection's required status checks, else the repo's active
+    rulesets'. None when GitHub answers that it can read none (no protection, or no permission): the caller fails closed."""
+    prot = gh(["api", f"repos/{repo}/branches/{branch}/protection/required_status_checks"], soft=True)
+    if prot is not None:
+        names = [c["context"] for c in prot.get("checks") or []] or list(prot.get("contexts") or [])
+        return names or None
+    names = []
+    for ruleset in gh(["api", f"repos/{repo}/rulesets"], soft=True) or []:
+        if ruleset.get("enforcement") != "active":
+            continue
+        full = gh(["api", f"repos/{repo}/rulesets/{ruleset['id']}"], soft=True) or {}
+        for rule in full.get("rules") or []:
+            if rule.get("type") == "required_status_checks":
+                names += [c["context"] for c in (rule.get("parameters") or {}).get("required_status_checks") or []]
+    return names or None
+
+
+def check_verdicts(repo, sha, contexts):
+    """{context: (verdict, detail)} for the required checks on `sha`: verdict "pass", "fail" or "pending", and the
+    check run's status or conclusion as the detail.
+
+    Check runs first; a context no check run reports falls back to the commit's legacy statuses, and one neither
+    reports is pending. A skipped required check passes, as it does for GitHub's own mergeability. A check run left
+    out by the page size is an error, not a pending check (fail closed).
+    """
+    runs = gh(["api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"])
+    if runs["total_count"] > len(runs["check_runs"]):
+        raise Unreadable(f"{runs['total_count']} check runs on {sha[:7]} but gh returned {len(runs['check_runs'])}")
+    by_name = {c["name"]: c for c in runs["check_runs"]}
+    statuses = None
+    verdicts = {}
+    for name in contexts:
+        c = by_name.get(name)
+        if c:
+            if c["conclusion"] in ("success", "skipped"):
+                verdicts[name] = ("pass", c["conclusion"])
+            elif c["status"] != "completed":
+                verdicts[name] = ("pending", c["status"])
+            else:
+                verdicts[name] = ("fail", c["conclusion"])
+            continue
+        if statuses is None:
+            statuses = gh(["api", f"repos/{repo}/commits/{sha}/status"]).get("statuses") or []
+        s = next((s for s in statuses if s["context"] == name), None)
+        verdicts[name] = ({"success": "pass", "failure": "fail", "error": "fail"}.get(s["state"], "pending"),
+                          s["state"]) if s else ("pending", "not reported")
+    return verdicts
+
+
+def check_any(repo, pr=None):
+    """One GitHub repo not in the table: the required checks on its default branch's tip, or on PR `pr`'s head with --pr.
+
+    The required checks come from branch protection, else the repo's active rulesets. When none can be read (none
+    required, or no permission), the state is unreadable: exit 1, never a pass.
+    """
+    branch = gh(["api", f"repos/{repo}"])["default_branch"]
+    contexts = required_contexts(repo, branch)
+    if not contexts:
+        raise Unreadable(f"no required checks readable on {branch} (branch protection or an active ruleset must "
+                         f"require status checks, and the account must be allowed to read them); failing closed")
+    if pr:
+        sha = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid"])["headRefOid"]
+        where = f"PR #{pr} head {sha[:7]}"
+    else:
+        sha = gh(["api", f"repos/{repo}/branches/{branch}"])["commit"]["sha"]
+        where = f"{branch} tip {sha[:7]}"
+    verdicts = check_verdicts(repo, sha, contexts)
+    failed = sorted(n for n, (v, _) in verdicts.items() if v == "fail")
+    if failed:
+        return 1, [f"{repo}: RED  required check(s) failed on {where}: {', '.join(failed)}"]
+    pending = sorted(f"{n} ({d})" for n, (v, d) in verdicts.items() if v == "pending")
+    if pending:
+        return 2, [f"{repo}: UNTESTED  required check(s) pending on {where}: {', '.join(pending)}"]
+    return 0, [f"{repo}: GREEN  all {len(contexts)} required checks passed on {where}: {', '.join(sorted(contexts))}"]
+
+
+def describe_any(repo, pr=None):
+    """Run one GitHub repo that is not in the table. A state it cannot read is one ERROR line and exit 1."""
+    try:
+        return check_any(repo, pr)
+    except Unreadable as e:
+        return 1, [f"{repo}: ERROR  cannot read state: {e}"]
+    except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
+        traceback.print_exc(file=sys.stderr)
+        return 1, [f"{repo}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
 
 
 def unrun_jobs(repo, run_id, attempt):
@@ -599,7 +700,7 @@ def main(argv):
         value = argv[k + 1] if k + 1 < len(argv) else ""
         pr = int(value) if value.isdigit() and int(value) > 0 else 0
         del argv[k:k + 2]
-        if not pr or not merge_gate or tip_only or len(argv) != 1 or argv[0] not in REPOS:
+        if not pr or not merge_gate or tip_only or len(argv) != 1 or (argv[0] not in REPOS and "/" not in argv[0]):
             argv = []   # --pr needs a PR number, --merge-gate and one repo (not --all): usage error
     if tip_only and merge_gate:
         argv = []   # the two flags disagree about UNTESTED: usage error
@@ -607,13 +708,18 @@ def main(argv):
         names = ORDER
     elif len(argv) == 1 and argv[0] in REPOS:
         names = argv
+    elif len(argv) == 1 and "/" in argv[0] and not tip_only:
+        names = argv   # OWNER/REPO: a GitHub repo not in the table; --tip is not for these repos
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N]", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
     for name in names:
-        code, lines = describe(name, tip_only, pr)
+        if name in REPOS:
+            code, lines = describe(name, tip_only, pr)
+        else:
+            code, lines = describe_any(name, pr)
         print("\n".join(lines))
         if rank[code] > rank[worst]:
             worst = code
