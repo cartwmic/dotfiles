@@ -86,6 +86,20 @@ class Installer(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertFalse((self.home / ".config" / "leak-guard" / "pi-judge").exists())
 
+    def test_approval_check_data_writes_the_checker_and_no_data_writes_nothing(self):
+        done = self.render(DATA)
+        self.assertEqual(self.run_script(done.stdout).returncode, 0)
+        self.assertFalse((self.home / ".config" / "leak-guard" / "approval-check").exists())
+        done = self.render(DATA + '    approvalCheck: "/usr/local/bin/ask-approval-check"')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        ran = self.run_script(done.stdout)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual((self.home / ".config" / "leak-guard" / "approval-check").read_text(), "/usr/local/bin/ask-approval-check\n")
+        self.assertEqual(stat.S_IMODE((self.home / ".config" / "leak-guard" / "approval-check").stat().st_mode), 0o600)
+        ran = self.run_script(self.render(DATA).stdout)      # the key removed again: a stale checker must not keep approving skips
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertFalse((self.home / ".config" / "leak-guard" / "approval-check").exists())
+
     def test_a_hook_that_is_not_ours_is_left_alone_with_a_warning(self):
         done = self.render(DATA)
         self.hooks().mkdir(parents=True, exist_ok=True)

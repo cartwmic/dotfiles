@@ -4,6 +4,7 @@
       terms: [<regex>, ...]
       context: "<what counts as a work detail, a few lines>"
       piJudge: "<the pi fallback's command line, one line; optional — without it pi runs on its own default model>"
+      approvalCheck: "<the skip approval checker's command line, one line; optional — without it every LEAK_GUARD_SKIP is refused>"
   Renders nothing (chezmoi runs no script) on any other profile, or without the leakGuard data. docs/leak-guard.md.
 */ -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "leakGuard") -}}
@@ -55,5 +56,14 @@ printf '\n' >> "$dest/pi-judge.tmp"
 mv "$dest/pi-judge.tmp" "$dest/pi-judge"
 {{-   else }}
 rm -f "$dest/pi-judge"      # a pin that is no longer in the data must not keep judging
+{{-   end }}
+{{-   $approval := dig "approvalCheck" "" $lg -}}
+{{-   if and $approval (not (kindIs "string" $approval)) }}{{ fail "leakGuard.approvalCheck must be a string (one command line)" }}{{ end -}}
+{{-   if $approval }}
+printf '%s' {{ $approval | b64enc | quote }} | base64 -d > "$dest/approval-check.tmp"
+printf '\n' >> "$dest/approval-check.tmp"
+mv "$dest/approval-check.tmp" "$dest/approval-check"
+{{-   else }}
+rm -f "$dest/approval-check"      # a checker that is no longer in the data must not keep approving skips
 {{-   end }}
 {{ end -}}

@@ -15,7 +15,9 @@ write command it does not recognise, and on any flag that makes gh compose the t
 Everything else, and every command for another repository, runs the real gh with the same arguments and stdin.
 
 It writes one log line (mode "gh") to ~/.local/state/leak-guard/log.jsonl for each guarded command it checks or blocks: {utc, mode, command, verdict,
-layer, duration_s, findings}. Never the text, a term, a path or a repository name. LEAK_GUARD_SKIP="<reason>" skips the check for one command; it is logged.
+layer, duration_s, findings}. Never the text, a term, a path or a repository name. LEAK_GUARD_SKIP="ask N: reason" skips the check for one command; the
+override must name an approval the agent cannot create alone (N is the ask that approved the skip, which the approval checker on this machine confirms),
+it is single use, and the skip is logged with its ask id; the reason text is never logged.
 
 Environment: LEAK_GUARD_CONFIG_DIR, XDG_STATE_HOME as for leak-guard; LEAK_GUARD_BIN is the leak-guard to run (default ~/.local/bin/leak-guard).
 """
@@ -133,11 +135,13 @@ def config_dir():
     return os.environ.get("LEAK_GUARD_CONFIG_DIR") or home(".config", "leak-guard")
 
 
-def log(command, verdict, layer, findings, t0):
+def log(command, verdict, layer, findings, t0, ask=None, reason=None):
     entry = {"utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "gh", "command": command, "verdict": verdict,
              "layer": layer, "duration_s": round(time.time() - t0, 3), "findings": findings}
     if verdict == "skip":
-        entry["reason"] = os.environ.get("LEAK_GUARD_SKIP", "").strip()
+        entry["ask"] = ask              # the ask that approved the skip; the reason text is never logged
+    elif reason:
+        entry["reason"] = reason        # a short fixed code, for an override refusal
     state = os.path.join(os.environ.get("XDG_STATE_HOME") or home(".local", "state"), "leak-guard")
     try:
         os.makedirs(state, mode=0o700, exist_ok=True)
@@ -148,6 +152,70 @@ def log(command, verdict, layer, findings, t0):
             f.write(json.dumps(entry) + "\n")
     except OSError as e:
         print("leak-guard gh: could not write its log: %s" % e.strerror, file=sys.stderr)
+
+
+def skip_ask(skip):
+    """The ask id of a well-formed override ("ask N: reason", N a number, the reason non-empty), else None."""
+    m = re.match(r"^ask (\d+): \S", skip)
+    return int(m.group(1)) if m else None
+
+
+def approve_skip(skip, command, t0):
+    """The override must name an approval the agent cannot create alone: "ask N: reason". The checker command in ~/.config/leak-guard/approval-check
+    (one line, written from local chezmoi data) decides whether ask N approves this skip: run as "<checker> <N>", exit 0 approves, anything else blocks
+    with the checker's first stderr line. Fails closed: a malformed override, a missing checker, a refusal, or an ask already used blocks. Single use per
+    mode ("gh" here): an approved ask is recorded in the state dir, so a second skip with the same ask is refused. Returns the ask id, or None after
+    refusing: the refusal is logged and printed, and the command was not run. The reason text is never logged, so it is not passed on."""
+    ask = skip_ask(skip)
+    if ask is None:
+        log(command, "block", "override", 0, t0, reason="override is not an ask")
+        print('leak-guard gh: BLOCKED, override: LEAK_GUARD_SKIP must name the ask that approved this skip: LEAK_GUARD_SKIP="ask N: reason" (for example '
+              'LEAK_GUARD_SKIP="ask 12: reviewed by hand"). `gh %s` was not run.' % command, file=sys.stderr)
+        return None
+    path = os.path.join(config_dir(), "approval-check")
+    try:
+        with open(path) as f:
+            cmd = shlex.split(f.readline().strip())
+    except OSError:
+        cmd = []
+    if not cmd:
+        log(command, "block", "override", 0, t0, reason="no approval checker")
+        print("leak-guard gh: BLOCKED, override: no approval checker on this machine (%s is missing or empty), so every skip is refused." % path, file=sys.stderr)
+        return None
+    try:
+        done = subprocess.run(cmd + [str(ask)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as e:
+        log(command, "block", "override", 0, t0, reason="approval checker cannot run")
+        print("leak-guard gh: BLOCKED, override: cannot run the approval checker: %s" % e, file=sys.stderr)
+        return None
+    if done.returncode != 0:
+        err = done.stderr.decode(errors="replace").strip()
+        why = err.splitlines()[0][:200] if err else "no message"
+        log(command, "block", "override", 0, t0, reason="approval checker refused ask %d" % ask)
+        print("leak-guard gh: BLOCKED, override: ask %d does not approve this skip (the approval checker exited %d): %s" % (ask, done.returncode, why), file=sys.stderr)
+        return None
+    state = os.path.join(os.environ.get("XDG_STATE_HOME") or home(".local", "state"), "leak-guard")
+    used = os.path.join(state, "used-asks")
+    try:
+        with open(used) as f:
+            if any(line.split()[:2] == [str(ask), "gh"] for line in f):
+                log(command, "block", "override", 0, t0, reason="ask %d already used" % ask)
+                print("leak-guard gh: BLOCKED, override: ask %d was already used: a skip is single use, so get a new ask." % ask, file=sys.stderr)
+                return None
+    except OSError:
+        pass
+    try:
+        os.makedirs(state, mode=0o700, exist_ok=True)
+        os.chmod(state, 0o700)
+        fd = os.open(used, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write("%d gh\n" % ask)
+    except OSError as e:
+        log(command, "block", "override", 0, t0, reason="cannot record the used ask")
+        print("leak-guard gh: BLOCKED, override: cannot record the used ask: %s" % e, file=sys.stderr)
+        return None
+    return ask
 
 
 # ---- the real gh -------------------------------------------------------------------------------------------------------------------------------------
@@ -820,8 +888,11 @@ def checked_run(real, args, t0, wait):
             return run_real(real, args, texts.stdin if texts else None, wait=wait)
         command = name
         if skip:
-            log(command, "skip", "override", 0, t0)
-            print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
+            ask = approve_skip(skip, command, t0)
+            if ask is None:
+                return 1
+            log(command, "skip", "override", 0, t0, ask=ask)
+            print("leak-guard gh: check skipped (ask %d); logged." % ask, file=sys.stderr)
             return run_real(real, args, texts.stdin, wait=wait)
         if not texts.items:
             log(command, "pass", "none", 0, t0)
@@ -839,12 +910,15 @@ def checked_run(real, args, t0, wait):
         return 0 if h.argv is None else run_real(real, h.argv, b"", True)          # stdin closed, and none of the user's arguments
     except Refuse as r:
         if skip:
-            log(command, "skip", "override", 0, t0)
-            print("leak-guard gh: check skipped (%s); logged." % skip, file=sys.stderr)
+            ask = approve_skip(skip, command, t0)
+            if ask is None:
+                return 1
+            log(command, "skip", "override", 0, t0, ask=ask)
+            print("leak-guard gh: check skipped (ask %d); logged." % ask, file=sys.stderr)
             return run_real(real, args, texts.stdin, wait=wait)
         log(command, "block", "wrapper", 0, t0)
         shown = "command" if args and args[0].startswith("-") else args[0] if args and re.match(r"^[a-z][a-z-]*$", args[0]) and command == "unrecognised" else command      # the message names what was typed; the log only a safe name
-        print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"<reason>\" gh ..." % (r, shown), file=sys.stderr)
+        print("leak-guard gh: BLOCKED, %s. `gh %s` was not run. Override once: LEAK_GUARD_SKIP=\"ask N: reason\" gh ..." % (r, shown), file=sys.stderr)
         return 1
 
 
