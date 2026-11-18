@@ -22,8 +22,8 @@ ZSHENV = REPO / "dot_zshenv"
 ZSH = shutil.which("zsh")
 LINUX = Path("/proc").is_dir()   # session.sh decides liveness from /proc/<pid>
 TOOLS = ("hyprctl", "wlrctl", "wtype", "grim")
-# Real tools the script and the fakes run. python3 is needed only by `windows`.
-REAL = ("cat", "date", "mkdir", "python3")
+# Real tools the script and the fakes run. python3 is needed by `windows`, `save` and `restore`.
+REAL = ("cat", "date", "mkdir", "python3", "rm")
 
 FAKE = """#!/bin/sh
 name=${0##*/}
@@ -36,8 +36,10 @@ case $name in
     case $1 in
       cursorpos) cat "$FAKE_FIXTURES/cursorpos" ;;
       clients) cat "$FAKE_FIXTURES/clients.json" ;;
+      activewindow) cat "$FAKE_FIXTURES/activewindow.json" ;;
       dispatch)
         if [ -n "${FAKE_DISPATCH_EXIT:-}" ]; then echo "error: lua syntax" >&2; exit "$FAKE_DISPATCH_EXIT"; fi
+        case $2 in *hl.dsp.focus*) if [ -n "${FAKE_FOCUS_OUT:-}" ]; then printf '%s\\n' "$FAKE_FOCUS_OUT"; exit 0; fi ;; esac
         printf '%s\\n' "${FAKE_DISPATCH_OUT:-ok}" ;;
       *) echo "fake hyprctl: unexpected $*" >&2; exit 99 ;;
     esac ;;
@@ -57,6 +59,9 @@ WINDOWS_OUT = (
     "com.onepassword.OnePassword\t1Password Vault\t967,38\t941x1030\t42\tfalse\n"
     "Steam\tSteam\t-20,0\t1280x720\tspecial:scratchpad\ttrue\n"
 )
+WIN_A = "0xaaaa1111"   # the window Michael is using
+WIN_CHROME = "0xbbbb2222"   # the agent Chrome
+MOVE_CURSORPOS = "hyprctl [dispatch] [hl.dsp.cursor.move({x=961,y=553})]"
 MOVE_737 = "hyprctl [dispatch] [hl.dsp.cursor.move({x=737,y=277})]"
 
 
@@ -108,6 +113,7 @@ class DesktopTest(unittest.TestCase):
             d.mkdir()
         (self.fixtures / "cursorpos").write_text("961, 553\n")
         (self.fixtures / "clients.json").write_text(json.dumps(CLIENTS))
+        self.set_active(WIN_A)
         self.calls_file = self.tmp / "calls"
         self.env_file = self.tmp / "env"
         self.bin = make_bin(self.tmp / "bin", TOOLS)
@@ -135,6 +141,14 @@ class DesktopTest(unittest.TestCase):
     def run_script(self, *args, unset=(), **extra):
         return subprocess.run(["/bin/sh", str(SCRIPT), *args], env=self.env(unset, **extra),
                               capture_output=True, text=True, timeout=30)
+
+    def set_active(self, address):
+        """What `hyprctl activewindow -j` prints: a window object, `{}` (None) or nothing at all ("")."""
+        body = "" if address == "" else "{}" if address is None else json.dumps({"address": address, "class": "x"})
+        (self.fixtures / "activewindow.json").write_text(body)
+
+    def saved_file(self):
+        return self.home / ".state" / "agent-desktop" / "saved-focus"
 
     def calls(self):
         return self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
@@ -282,7 +296,7 @@ class DesktopTest(unittest.TestCase):
 
     # usage
     def test_usage_errors_exit_two(self):
-        for args in ((), ("nope",), ("move", "1"), ("windows", "extra"), ("cursor", "x")):
+        for args in ((), ("nope",), ("move", "1"), ("windows", "extra"), ("cursor", "x"), ("save", "x"), ("restore", "x")):
             with self.subTest(args=args):
                 r = self.run_script(*args)
                 self.assertEqual(r.returncode, 2, r.stderr)
@@ -301,6 +315,10 @@ class DesktopTest(unittest.TestCase):
             (["type", "x"], "wtype", "Arch package wtype"),
             (["key", "a"], "wtype", "Arch package wtype"),
             (["cursor"], "hyprctl", "Arch package hyprland"),
+            (["save"], "hyprctl", "Arch package hyprland"),
+            (["save"], "python3", "Arch package python"),
+            (["restore"], "hyprctl", "Arch package hyprland"),
+            (["restore"], "python3", "Arch package python"),
         ]
         for i, (args, missing, hint) in enumerate(cases):
             with self.subTest(args=args, missing=missing):
@@ -423,6 +441,84 @@ class DesktopTest(unittest.TestCase):
             "hyprctl dispatch hl.dsp.cursor.move({x=737,y=277}) ok",
             "click 737 277 left",
         ])
+
+    # save and restore: give back the focus and the pointer an agent run used (Linux only; see docs/agent-desktop.md)
+    def test_save_restore_round_trip(self):
+        r = self.run_script("save")
+        self.assertEqual((r.returncode, r.stdout), (0, f"saved window {WIN_A} pointer 961,553\n"), r.stderr)
+        self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]", "hyprctl [cursorpos]"])
+        self.calls_file.unlink()
+        self.set_active(WIN_CHROME)   # the agent's work moved focus
+        r = self.run_script("restore")
+        self.assertEqual((r.returncode, r.stdout), (0, f"restored window {WIN_A}, pointer 961,553\n"), r.stderr)
+        self.assertEqual(self.calls(), [
+            MOVE_CURSORPOS,                               # pointer first, so follow_mouse cannot refocus what is under it
+            "hyprctl [activewindow] [-j]",
+            f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]',   # then the window, by address
+        ])
+        self.assertFalse(self.saved_file().exists(), "the record is deleted after a restore")
+
+    def test_restore_with_nothing_saved_exits_1(self):
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("nothing saved: run agent-desktop save first", r.stderr)
+        self.assertEqual(self.calls(), [], "restore with nothing saved made a Hyprland call")
+
+    def test_restore_when_the_window_is_gone_exits_1(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        self.set_active(WIN_CHROME)
+        r = self.run_script("restore", FAKE_FOCUS_OUT="warning: =[C]:-1: hl.focus: window not found")   # hyprctl exits 0
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(WIN_A, r.stderr)
+        self.assertIn(MOVE_CURSORPOS, self.calls(), "the pointer still moves")
+        self.assertFalse(self.saved_file().exists(), "the record is deleted even when the window is gone")
+
+    def test_save_with_no_active_window_restores_the_pointer_only(self):
+        for none in (None, ""):   # `{}` and no output at all
+            with self.subTest(active=none):
+                self.calls_file.unlink(missing_ok=True)
+                self.set_active(none)
+                r = self.run_script("save")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.calls_file.unlink()
+                self.set_active(WIN_CHROME)
+                r = self.run_script("restore")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("no window to refocus", r.stdout)
+                self.assertEqual(self.calls(), [MOVE_CURSORPOS], "only the pointer moves")
+                self.assertFalse(self.saved_file().exists())
+
+    def test_second_save_keeps_the_first(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.set_active(WIN_CHROME)
+        r = self.run_script("save")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"^already saved \d+s ago; first record kept\n$")
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]', self.calls())
+
+    def test_restore_when_the_saved_window_is_already_active_makes_no_focus_dispatch(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        r = self.run_script("restore")   # focus never moved
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), [MOVE_CURSORPOS, "hyprctl [activewindow] [-j]"])
+        self.assertFalse(self.saved_file().exists())
+
+    def test_save_and_restore_log_one_line_each(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.set_active(WIN_CHROME)
+        self.assertEqual(self.run_script("restore").returncode, 0)
+        lines = self.log_lines()
+        saves = [x for x in lines if x.split(" ", 3)[3].startswith("save ")]
+        restores = [x for x in lines if x.split(" ", 3)[3].startswith("restore ")]
+        self.assertEqual(len(saves), 1, lines)
+        self.assertEqual(len(restores), 1, lines)
+        self.assertRegex(saves[0], rf"^\S+ run=\d{{8}}T\d{{6}}Z-\d+ elapsed=\d+s save window={WIN_A} pointer=961,553$")
+        self.assertRegex(restores[0], rf"^\S+ run=\d{{8}}T\d{{6}}Z-\d+ elapsed=\d+s restore window={WIN_A} pointer=961,553 refocused$")
 
 
 @unittest.skipUnless(ZSH and LINUX, "needs zsh and /proc")
