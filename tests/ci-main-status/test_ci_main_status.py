@@ -108,6 +108,12 @@ GH_FAKE = textwrap.dedent('''\
             print(json.dumps(notes))
         elif path == "repos/" + repo:
             print(json.dumps({"default_branch": "main"}))
+        elif "/pulls/" in path:
+            n = path.split("/pulls/")[1].split("?")[0].split("/")[0]
+            pull = fixture.get("prs", {}).get(n)
+            if pull is None:
+                fail("HTTP 404: no PR fixture " + n)
+            print(json.dumps({"base": {"ref": pull.get("baseRefName")}}))
         elif path.endswith("/protection/required_status_checks"):
             prot = (fixture.get("protection") or {}).get(repo)
             if prot is None:
@@ -1563,7 +1569,7 @@ class AnyRepo(Fixture):
                                            "checks": [{"context": "tests", "app_id": 1}, {"context": "lint", "app_id": 1}]}}
         self.branch_rules = {self.any_repo: []}   # rules/branches/main: no active ruleset applies
         self.branch_protection = {self.any_repo: {"protected": True,
-                                                  "protection": {"required_status_checks": {
+                                                  "protection": {"enabled": True, "required_status_checks": {
                                                       "checks": [{"context": "tests", "app_id": 1},
                                                                  {"context": "lint", "app_id": 1}],
                                                       "contexts": ["tests", "lint"]}}}}
@@ -1609,7 +1615,7 @@ class AnyRepo(Fixture):
         # a script that reads protection alone prints GREEN here.
         self.protection = {self.any_repo: {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
         self.branch_protection = {self.any_repo: {"protected": True,
-                                                  "protection": {"required_status_checks": {
+                                                  "protection": {"enabled": True, "required_status_checks": {
                                                       "checks": [{"context": "tests", "app_id": 1}],
                                                       "contexts": ["tests"]}}}}
         self.branch_rules = {self.any_repo: [{"type": "required_status_checks",
@@ -1624,7 +1630,7 @@ class AnyRepo(Fixture):
         # its required check, which failed. The old /protection read printed an error or a wrong GREEN here.
         self.protection = None
         self.branch_protection = {self.any_repo: {"protected": True,
-                                                  "protection": {"required_status_checks": {
+                                                  "protection": {"enabled": True, "required_status_checks": {
                                                       "checks": [{"context": "tests", "app_id": 1}],
                                                       "contexts": ["tests"]}}}}
         self.set_tip_checks(self.check_row("tests", "failure"))
@@ -1635,7 +1641,7 @@ class AnyRepo(Fixture):
     def test_protection_only_works_for_a_non_admin(self):
         self.protection = None
         self.branch_protection = {self.any_repo: {"protected": True,
-                                                  "protection": {"required_status_checks": {
+                                                  "protection": {"enabled": True, "required_status_checks": {
                                                       "checks": [{"context": "tests", "app_id": 1},
                                                                  {"context": "lint", "app_id": 1}],
                                                       "contexts": ["tests", "lint"]}}}}
@@ -1644,12 +1650,14 @@ class AnyRepo(Fixture):
         self.assertEqual(rc, 0, out)
         self.assertIn(f"GREEN  all 2 required checks passed on main tip {self.c3[:7]}", out)
 
-    def test_protected_with_hidden_checks_fails_closed(self):
+    def test_protected_with_a_malformed_protection_fails_closed(self):
+        # protection present but enabled missing: a missing field is malformed, never a default -- ERROR, never
+        # C = {} and never the checks read anyway.
         self.protection = None
         self.branch_protection = {self.any_repo: {"protected": True, "protection": {}}}
         rc, out = self.status(self.any_repo)
         self.assertEqual(rc, 1, out)
-        self.assertIn("protected but its required status checks are not visible", out)
+        self.assertIn("protection.enabled is missing or not a bool", out)
         self.assertIn("failing closed", out)
 
     def test_an_older_success_and_a_newer_queued_run_is_not_green(self):
@@ -1751,12 +1759,14 @@ class AnyRepo(Fixture):
         self.assertIn("failing closed", out)
 
     def test_protection_with_no_required_checks_fails_closed(self):
+        # Enabled, but neither source requires anything: nothing could be proved, so ERROR (row 9), never GREEN.
         self.branch_protection = {self.any_repo: {"protected": True,
-                                                  "protection": {"required_status_checks": {"contexts": [], "checks": []}}}}
+                                                  "protection": {"enabled": True,
+                                                                 "required_status_checks": {"contexts": [], "checks": []}}}}
         rc, out = self.status(self.any_repo)
         self.assertEqual(rc, 1, out)
-        self.assertIn("not visible", out)
-        self.assertIn("failing closed", out)
+        self.assertIn("protected, but no required checks in protection or rulesets", out)
+        self.assertIn("nothing for this gate to verify", out)
 
     def test_pr_checks_the_pr_head_commit(self):
         self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
@@ -1774,12 +1784,26 @@ class AnyRepo(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn(f"RED  required check(s) failed on PR #7 head {self.c2[:7]}: tests", out)
 
-    def test_a_pr_required_set_that_does_not_match_the_base_fails_closed(self):
+    def test_a_pr_required_check_missing_from_the_rollup_is_still_verified(self):
+        # The gate verifies the computed base set on the PR head, never the rollup: lint is required on main but
+        # never started on the PR, so gh pr checks --required does not list it -- and the gate is not GREEN.
         self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
         self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}]}}
+        self.check_runs = {self.any_repo: {self.c2: [self.check_row("tests")]}}
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("GREEN", out)
+        self.assertIn("lint (not reported)", out)
+
+    def test_a_pr_rollup_name_the_base_set_lacks_fails_closed(self):
+        # gh pr checks --required lists "extra", which the base branch's computed set does not: an under-report.
+        self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
+        self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}, {"name": "extra"}]}}
+        self.check_runs = {self.any_repo: {self.c2: [self.check_row("tests"), self.check_row("extra", rid=2)]}}
         rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7")
         self.assertEqual(rc, 1, out)
-        self.assertIn("do not match", out)
+        self.assertIn("ERROR", out)
+        self.assertIn("extra", out)
         self.assertIn("failing closed", out)
 
     def test_pr_without_merge_gate_is_a_usage_error(self):
@@ -1836,7 +1860,7 @@ class AnyRepo(Fixture):
         self.extra_repos = {"cartwmic/dotfiles": str(self.src)}
         self.protection = {"cartwmic/dotfiles": {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
         self.branch_protection = {"cartwmic/dotfiles": {"protected": True,
-                                                        "protection": {"required_status_checks": {
+                                                        "protection": {"enabled": True, "required_status_checks": {
                                                             "checks": [{"context": "tests", "app_id": 1}],
                                                             "contexts": ["tests"]}}}}
         self.branch_rules = {"cartwmic/dotfiles": []}

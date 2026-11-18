@@ -30,22 +30,30 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
 
-Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the checks
-GitHub itself requires on the default branch — the union of classic branch protection's required status checks,
-read from the branch itself (GET repos/.../branches/{b}, read access is enough; the /protection endpoints are
-admin-only and their 404 for a non-admin is not "not protected" — a protected branch whose required checks are not
-visible fails closed), and the active rulesets that apply to the branch (rules/branches answers only those, org
-rulesets included), lists paged at 100. All of them passed on the tip: GREEN, 0. One failed: RED, 1. One is
+Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the exact set
+of checks GitHub requires to merge into the default branch, from two sources both always read. Classic branch
+protection comes from the branch itself (GET repos/.../branches/{b}, read access is enough; it carries
+protection.enabled and its required_status_checks to a non-admin, and the classic /protection endpoints —
+admin-only, 404 to a non-admin even when protection exists — are never called). The active rulesets that apply to
+the branch come from rules/branches (org rulesets included, paged at 100, the branch name URL-encoded). A ruleset
+rule type this gate does not know to be check-free (workflows, code_scanning, code_quality, required_deployments,
+or any type GitHub adds later) fails closed: ERROR, never GREEN. So do a protected branch with no required checks
+in either source, a malformed response, or a read that fails: the full set must be known, never a smaller one and
+never "none" unless proven. All of them passed on the tip: GREEN, 0. One failed: RED, 1. One is
 queued, running or has not reported: UNTESTED, 2 — and UNTESTED never passes the merge gate for these repos:
 --merge-gate exits non-zero on a pending, missing or never-reported required check, where the table repos'
 2-becomes-0 does not apply. Only a check run's success passes a required check: skipped and neutral fail closed.
 Per name the newest run decides, the highest check-run id (a newer queued or running run is still newest); a
 commit status with the same name is combined in, the worse verdict winning. --pr N (only with --merge-gate)
 checks the PR's head commit against the required checks instead of the tip — for a table repo --pr means the fix
-for a red main (above); here main is not read. The required set for a PR is what GitHub computes for it (gh pr
-checks --required), cross-checked against the base branch's union; a mismatch fails closed. When the required
-checks cannot be read at all (none required, no permission, a rate limit), it says so and exits 1: no silent
-pass. --tip is not for these repos (a deploy pulls a sha of a repo on this machine).
+for a red main (above); here main is not read. The set the gate verifies on the PR head is the required set
+computed for the PR's base branch, never gh pr checks --required's list: that rollup holds only checks present in
+the PR, so a required check that never started is missing from it, and a name with no run on the head fails the
+gate. gh pr checks --required is a cross-check only: a name it marks required that the computed set lacks is an
+ERROR (an under-report); its pending (exit 8) and none-reported (exit 1) states do not end the check, and any
+other exit fails closed. When the required checks cannot be read at all (none required, no permission, a rate
+limit), it says so and exits 1: no silent pass. --tip is not for these repos (a deploy pulls a sha of a repo on
+this machine).
 
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
 `ci-main-status ... && pr-body-check ... && gh pr merge`.
@@ -106,6 +114,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
+from urllib.parse import quote
 
 REPOS = {
     "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml"},
@@ -179,29 +188,147 @@ def main_tip(repo):
     return gh(["api", f"repos/{repo}/branches/main"])["commit"]["sha"]
 
 
-def required_contexts(repo, branch, branch_data=None):
-    """The check names `branch` requires: the union of classic branch protection's required status checks and the
-    active rulesets that apply to the branch (rules/branches answers only those, org rulesets included).
+CHECK_FREE_RULE_TYPES = frozenset({
+    # The branch-rule types a merge can carry that cannot gate it on status checks, verified live as a non-admin
+    # on public repos: branch-management rules, review rules, and the organization-level repository rules (they
+    # govern repositories, not merges). required_status_checks is handled separately; every other type -- the
+    # known CI gates (workflows, code_scanning, code_quality, required_deployments, code_coverage,
+    # license_compliance_scanning) and anything GitHub adds later -- fails closed, so a new type can never
+    # produce a wrong GREEN.
+    "creation", "update", "deletion", "required_linear_history", "required_signatures", "non_fast_forward",
+    "pull_request", "merge_queue", "copilot_code_review", "commit_message_pattern", "commit_author_email_pattern",
+    "committer_email_pattern", "branch_name_pattern", "tag_name_pattern", "file_path_restriction",
+    "max_file_path_length", "file_extension_restriction", "max_file_size", "repository_create", "repository_delete",
+    "repository_name", "repository_transfer", "repository_visibility",
+})
 
-    Protection is read from the branch itself (GET repos/{repo}/branches/{branch}, read access is enough; the
-    /protection endpoints are admin-only and 404 for a non-admin, which is not "not protected"). A branch that is
-    not protected requires nothing there; a protected branch whose required status checks are not visible is
-    unreadable, never "none". Any branch-rules error is unreadable too: the caller fails closed. None only when
-    both sources say there are no required checks. branch_data is the branch response when the caller has it.
+
+def required_checks(repo, branch, pr=None):
+    """The exact set of status checks GitHub requires to merge into `branch` of `repo` -- or, with `pr`, into
+    that PR's base (base.ref read from the pulls API). Unreadable whenever the full set cannot be known: never a
+    smaller set, and never "none" unless proven. The decision table's rows:
+
+    Both sources are always read; nothing returns before the rules are read. B = GET repos/{repo}/branches/{b}
+    (row 1: any non-200, a 403 rate limit or a 404 included, is unreadable; read access is enough, and it carries
+    protection.enabled and protection.required_status_checks to a non-admin -- the classic /protection endpoints
+    answer 404 to a non-admin even when protection exists, so they are never called). R = GET
+    repos/{repo}/rules/branches/{b}?per_page=100 --paginate (row 2: a non-200, or any page failing, is
+    unreadable), the active rules already merged across org and repo rulesets; the branch name is URL-encoded (a
+    name with / must work). Row 3: a malformed response is unreadable -- an unexpected JSON value type at ANY
+    depth the gate reads (an unknown rule TYPE is not malformed; row 5a handles it). Row 4: C is the classic set
+    when protection.enabled, else empty; both checks[].context and contexts are read and de-duplicated, and an
+    enabled protection whose required_status_checks is missing, or carries neither checks nor contexts, is
+    unreadable -- no silent default. Row 5: S is the union of the rulesets' required_status_checks contexts.
+    Row 5a: any rule type not known to be check-free is unreadable, never GREEN. Row 6: required = C | S.
+    Rows 7-9: non-empty returns the set; empty and not protected returns the empty set (proven); empty and
+    protected is unreadable -- nothing is required, so nothing could be proved.
     """
-    if branch_data is None:
-        branch_data = gh(["api", f"repos/{repo}/branches/{branch}"])
-    names = []
-    if branch_data.get("protected"):
-        checks = (branch_data.get("protection") or {}).get("required_status_checks") or {}
-        contexts = [c["context"] for c in checks.get("checks") or []] or list(checks.get("contexts") or [])
-        if not contexts:
-            raise Unreadable(f"{branch} is protected but its required status checks are not visible; failing closed")
-        names += contexts
-    for rule in gh(["api", f"repos/{repo}/rules/branches/{branch}?per_page=100", "--paginate"]):
-        if rule.get("type") == "required_status_checks":
-            names += [c["context"] for c in (rule.get("parameters") or {}).get("required_status_checks") or []]
-    return sorted(set(names)) or None
+    if pr is not None:
+        pull = gh(["api", f"repos/{repo}/pulls/{pr}"])   # non-200 -> unreadable
+        if not isinstance(pull, dict) or not isinstance(pull.get("base"), dict) \
+                or not isinstance(pull["base"].get("ref"), str):
+            raise Unreadable(f"PR #{pr}: the pulls response has no base.ref; failing closed")
+        branch = pull["base"]["ref"]
+
+    def bad(what):
+        return Unreadable(f"{branch}: {what}; failing closed")
+
+    # Row 1: B non-200 raises. Rows 3-4: B's shape, then C.
+    b = gh(["api", f"repos/{repo}/branches/{quote(branch, safe='')}"])
+    if not isinstance(b, dict):
+        raise bad("the branch response is not an object")
+    protected = b.get("protected")
+    if not isinstance(protected, bool):
+        raise bad("the branch response's protected is not a bool")
+    classic = set()
+    if protected:
+        protection = b.get("protection")
+        if not isinstance(protection, dict):
+            raise bad("the branch is protected but its protection is not an object")
+        enabled = protection.get("enabled")
+        if not isinstance(enabled, bool):
+            raise bad("the branch is protected but protection.enabled is missing or not a bool")
+        if enabled:
+            rsc = protection.get("required_status_checks")
+            if not isinstance(rsc, dict):
+                raise bad("protection.enabled but required_status_checks is missing or not an object")
+            checks, contexts = rsc.get("checks"), rsc.get("contexts")
+            if checks is None and contexts is None:
+                raise bad("protection.enabled with neither checks nor contexts in required_status_checks")
+            if checks is not None:
+                if not isinstance(checks, list):
+                    raise bad("required_status_checks.checks is not a list")
+                for c in checks:
+                    if not isinstance(c, dict) or not isinstance(c.get("context"), str):
+                        raise bad("a required_status_checks.checks item has no context string")
+                    classic.add(c["context"])
+            if contexts is not None:
+                if not isinstance(contexts, list):
+                    raise bad("required_status_checks.contexts is not a list")
+                for c in contexts:
+                    if not isinstance(c, str):
+                        raise bad("a required_status_checks.contexts item is not a string")
+                    classic.add(c)
+
+    # Row 2: R non-200, or any page failing, raises. Row 3: R's shape. Rows 5 and 5a: S, and unknown types.
+    rules = gh(["api", f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", "--paginate"])
+    if not isinstance(rules, list):
+        raise bad("the branch rules response is not an array")
+    rulesets, unknown = set(), set()
+    for r in rules:
+        if not isinstance(r, dict):
+            raise bad("a branch rules item is not an object")
+        rtype = r.get("type")
+        if not isinstance(rtype, str):
+            raise bad("a branch rule's type is not a string")
+        if rtype != "required_status_checks":
+            if rtype not in CHECK_FREE_RULE_TYPES:
+                unknown.add(rtype)   # row 5a, reported once every rule has been read
+            continue
+        params = r.get("parameters")
+        if not isinstance(params, dict):
+            raise bad("a required_status_checks rule has missing or invalid parameters")
+        wanted = params.get("required_status_checks")
+        if not isinstance(wanted, list):
+            raise bad("a required_status_checks rule's parameters.required_status_checks is missing or not a list")
+        for c in wanted:
+            if not isinstance(c, dict) or not isinstance(c.get("context"), str):
+                raise bad("a ruleset required_status_checks item has no context string")
+            rulesets.add(c["context"])
+    if unknown:   # row 5a: a type this gate cannot rule out is never GREEN
+        raise Unreadable(f"{branch} also requires checks through rulesets of type {', '.join(sorted(unknown))}, "
+                         f"which this gate cannot verify; check the PR's merge box by hand")
+
+    # Rows 6-9.
+    required = classic | rulesets
+    if required:
+        return required
+    if not protected:
+        return set()   # row 8: proven -- nothing is required
+    raise Unreadable(f"{branch} is protected, but no required checks in protection or rulesets: "
+                     f"nothing for this gate to verify")
+
+
+def pr_rollup(repo, pr):
+    """`gh pr checks --required` rows for PR `pr`, a cross-check on the computed required set only -- never the
+    set the gate verifies (the rollup holds only checks present in the PR, so a required check that never started
+    is missing from it). Exit 0 is the rollup; exit 1 (none reported) and exit 8 (some pending) leave the check
+    to the computed set; any other exit is unreadable: fail closed."""
+    env = {**os.environ, "GH_CALLER": CALLER}
+    if URGENT:
+        env["GH_URGENT"] = "1"
+    args = ["pr", "checks", str(pr), "-R", repo, "--required", "--json", "name,state,bucket,link"]
+    try:
+        r = subprocess.run(["gh", *args], capture_output=True, text=True, env=env)
+    except OSError as e:
+        raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
+    if r.returncode not in (0, 1, 8):
+        raise Unreadable(f"gh pr checks --required failed (exit {r.returncode}): "
+                         f"{r.stderr.strip() or r.stdout.strip()}")
+    try:
+        return json.loads(r.stdout) if r.stdout.strip() else []
+    except json.JSONDecodeError as e:
+        raise Unreadable(f"gh pr checks --required returned non-JSON: {e}")
 
 
 def paged(repo, sha, what, field):
@@ -269,28 +396,28 @@ def check_verdicts(repo, sha, contexts):
 def check_any(repo, pr=None):
     """One GitHub repo not in the table: the required checks on its default branch's tip, or on PR `pr`'s head with --pr.
 
-    The required checks are GitHub's own: branch protection union the branch's active rulesets. With --pr they are
-    what GitHub computes for the PR (gh pr checks --required), cross-checked against the PR's base branch's union;
-    a mismatch is unreadable. When the required checks cannot be read (none required, no permission, a rate limit),
-    the state is unreadable: exit 1, never a pass.
+    The required set is the one required_checks computes for the branch (or, with --pr, for the PR's base), and
+    that computed set is what the gate verifies on the tip or PR head -- never gh pr checks --required's list,
+    which holds only checks present in the PR's rollup, so a required check that never started is missing from
+    it and a name with no run on the head fails the gate. The rollup is a cross-check only: a name it marks
+    required that the computed set lacks is an under-report, unreadable. When the required set cannot be computed
+    (a read failing, a malformed response, an unknown rule type, nothing required), the state is unreadable:
+    exit 1, never a pass.
     """
     if pr:
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,baseRefName"])
         sha, base = pull["headRefOid"], pull["baseRefName"]
         where = f"PR #{pr} head {sha[:7]}"
-        pr_required = sorted({c["name"] for c in gh(["pr", "checks", str(pr), "-R", repo, "--required",
-                                                     "--json", "name,state,bucket,link"])})
-        base_required = required_contexts(repo, base) or []
-        if pr_required != sorted(set(base_required)):
-            raise Unreadable(f"GitHub's required checks for PR #{pr} ({', '.join(pr_required) or 'none'}) do not match "
-                             f"{base}'s ({', '.join(sorted(set(base_required))) or 'none'}); failing closed")
-        contexts = pr_required
+        contexts = sorted(required_checks(repo, None, pr))
+        extra = sorted({c["name"] for c in pr_rollup(repo, pr)} - set(contexts))
+        if extra:
+            raise Unreadable(f"GitHub's required checks for PR #{pr} include {', '.join(extra)}, which {base}'s "
+                             f"computed required set does not; failing closed")
     else:
         branch = gh(["api", f"repos/{repo}"])["default_branch"]
-        branch_data = gh(["api", f"repos/{repo}/branches/{branch}"])
-        sha = branch_data["commit"]["sha"]
+        sha = gh(["api", f"repos/{repo}/branches/{quote(branch, safe='')}"])["commit"]["sha"]
         where = f"{branch} tip {sha[:7]}"
-        contexts = required_contexts(repo, branch, branch_data) or []
+        contexts = sorted(required_checks(repo, branch))
     if not contexts:
         raise Unreadable(f"no required checks readable on {base if pr else branch} (branch protection or an active "
                          f"ruleset must require status checks, and the account must be allowed to read them); failing closed")
