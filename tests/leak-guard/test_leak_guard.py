@@ -9,8 +9,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_leak-guard"
@@ -79,6 +81,20 @@ elif mode == "sleep":
     time.sleep(30)
 '''
 
+FAKE_CHECKER = r'''#!/usr/bin/env python3
+import json, os, sys, time
+# The fake approval checker: approves every ask unless FAKE_CHECKER says "refuse"; "slow" lingers before answering, to hold two
+# concurrent skips in flight at once. Records the ask ids it was given.
+fake = os.environ["FAKE"]
+json.dump(sys.argv[1:], open(os.path.join(fake, "checker-args.json"), "w"))
+if os.environ.get("FAKE_CHECKER") == "slow":
+    time.sleep(0.5)
+if os.environ.get("FAKE_CHECKER") == "refuse":
+    sys.stderr.write("the checker says no\n")
+    sys.exit(1)
+sys.exit(0)
+'''
+
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -94,6 +110,9 @@ class Base(unittest.TestCase):
             d.mkdir()
         (self.bin / "claude").write_text(FAKE_CLAUDE)
         (self.bin / "claude").chmod(0o755)
+        (self.bin / "fake-checker").write_text(FAKE_CHECKER)
+        (self.bin / "fake-checker").chmod(0o755)
+        (self.home / ".config" / "leak-guard" / "approval-check").write_text("%s\n" % (self.bin / "fake-checker"))
         self.repo = self.tmp / "repo"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -115,6 +134,11 @@ class Base(unittest.TestCase):
     def stage(self, name, text):
         (self.repo / name).write_text(text)
         self.git("add", name)
+
+    def message_file(self, text):
+        path = self.tmp / "COMMIT_EDITMSG"
+        path.write_text(text)
+        return str(path)
 
     def log(self):
         path = self.home / ".local" / "state" / "leak-guard" / "log.jsonl"
@@ -303,13 +327,15 @@ class PreCommit(Base):
         self.assertIn("commit smaller changes, or override", done.stderr)
         self.assertEqual(self.calls(), 0)
 
-    def test_the_override_passes_without_claude_and_logs_a_skip_with_the_reason(self):
+    def test_the_override_passes_without_claude_and_logs_a_skip_with_its_ask(self):
         self.stage("notes.txt", "this names fooco\n")
-        done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "fixture for a test"})
+        done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: fixture for a test"})
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.calls(), 0)
         rec = self.log()[-1]
-        self.assertEqual((rec["verdict"], rec["layer"], rec["reason"], rec["mode"]), ("skip", "override", "fixture for a test", "pre-commit"))
+        self.assertEqual((rec["verdict"], rec["layer"], rec["ask"], rec["mode"]), ("skip", "override", 7, "pre-commit"))
+        self.assertNotIn("reason", rec)
+        self.assertNotIn("fixture for a test", (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text())
 
     def test_a_missing_terms_or_context_file_blocks(self):
         self.stage("notes.txt", "a quiet sentence\n")
@@ -377,7 +403,7 @@ class PreCommit(Base):
         self.assertIn("binary", done.stderr)
         self.assertIn("image.bin", done.stderr)
         self.assertEqual(self.calls(), 0)
-        override = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "reviewed the binary"})
+        override = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 3: reviewed the binary"})
         self.assertEqual(override.returncode, 0, override.stderr)
 
     def test_an_added_line_that_starts_with_two_pluses_is_a_line_not_a_file_header(self):
@@ -468,11 +494,6 @@ class PreCommit(Base):
 
     # --- commit-msg: the message of a commit with no diff (an empty commit) is not visible to pre-commit
 
-    def message_file(self, text):
-        path = self.tmp / "COMMIT_EDITMSG"
-        path.write_text(text)
-        return str(path)
-
     def test_commit_msg_blocks_a_term_in_the_message_scans_hash_lines_and_stops_at_the_scissors(self):
         done = self.guard("commit-msg", self.message_file("subject\n\nbody names fooco\n"))
         self.assertEqual(done.returncode, 1, done.stderr)
@@ -486,7 +507,7 @@ class PreCommit(Base):
         self.assertEqual(self.log()[-1]["mode"], "commit-msg")
 
     def test_commit_msg_honours_the_override_and_fails_closed_without_the_file_or_terms(self):
-        self.assertEqual(self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "by hand"}).returncode, 0)
+        self.assertEqual(self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "ask 2: by hand"}).returncode, 0)
         self.assertEqual(self.guard("commit-msg", str(self.tmp / "missing")).returncode, 1)
         self.assertEqual(self.guard("commit-msg").returncode, 64)
         (self.home / ".config" / "leak-guard" / "terms").unlink()
@@ -1074,7 +1095,7 @@ class PrePush(Base):
     def test_the_override_works_for_a_push_too(self):
         self.git("checkout", "-q", "-b", "feature")
         tip = self.commit("one.txt", "mentions fooco\n")
-        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"LEAK_GUARD_SKIP": "reviewed by hand"})
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env={"LEAK_GUARD_SKIP": "ask 4: reviewed by hand"})
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual((self.log()[-1]["verdict"], self.log()[-1]["mode"]), ("skip", "pre-push"))
 
@@ -1234,6 +1255,169 @@ class NamesTheRepoAlreadyHolds(Base):
         self.git("commit", "-q", "-m", "mention", "--no-verify")
         self.env = self.judge("Quillon")
         self.assertEqual(self.push(self.git("rev-parse", "HEAD").stdout.strip()).returncode, 1)
+
+
+class OverrideApproval(Base):
+    """The override must name an approval the agent cannot create alone: LEAK_GUARD_SKIP="ask N: reason", confirmed by the machine's approval checker."""
+
+    def test_an_unformatted_skip_is_refused(self):
+        self.stage("notes.txt", "this names fooco\n")
+        for value in ("just a reason", "ask 7", "ask 7:", "ask 7:   ", "ask seven: reason", "Ask 7: reason"):
+            with self.subTest(value):
+                (self.home / ".local" / "state" / "leak-guard" / "used-asks").unlink(missing_ok=True)
+                done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": value})
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertIn("ask N: reason", done.stderr)
+                self.assertEqual(self.calls(), 0)
+                rec = self.log()[-1]
+                self.assertEqual((rec["verdict"], rec["layer"]), ("block", "override"))
+
+    def test_with_no_checker_every_skip_is_refused(self):
+        self.stage("notes.txt", "this names fooco\n")
+        (self.home / ".config" / "leak-guard" / "approval-check").unlink()
+        done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: reason"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("no approval checker on this machine", done.stderr)
+        self.assertEqual(self.calls(), 0)
+        self.assertEqual(self.log()[-1]["verdict"], "block")
+
+    def test_a_checker_that_says_no_is_refused_with_its_stderr_shown(self):
+        self.stage("notes.txt", "this names fooco\n")
+        done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: reason", "FAKE_CHECKER": "refuse"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("the checker says no", done.stderr)
+        self.assertIn("ask 7", done.stderr)
+        rec = self.log()[-1]
+        self.assertEqual((rec["verdict"], rec["layer"]), ("block", "override"))
+
+    def test_an_approval_lets_the_skip_through_once_and_is_logged_with_its_ask(self):
+        self.stage("notes.txt", "this names fooco\n")
+        done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: a reason for the record"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.calls(), 0)
+        rec = self.log()[-1]
+        self.assertEqual((rec["verdict"], rec["layer"], rec["ask"]), ("skip", "override", 7))
+        self.assertNotIn("reason", rec)
+        raw = (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text()
+        self.assertNotIn("a reason for the record", raw)
+        self.assertEqual(json.loads((self.fake / "checker-args.json").read_text()), ["7"])      # the checker got the ask id, and nothing else
+        used = self.home / ".local" / "state" / "leak-guard" / "used-asks"
+        self.assertEqual(stat.S_IMODE(used.stat().st_mode), 0o600)
+
+    def test_an_unrunnable_or_empty_or_unreadable_checker_refuses(self):
+        self.stage("notes.txt", "this names fooco\n")
+        ac = self.home / ".config" / "leak-guard" / "approval-check"
+        for content, text in (("/no/such/checker-anywhere\n", "cannot run the approval checker"), ("\n", "holds no command"),
+                              ('say "unbalanced\n', "not a readable command line")):
+            with self.subTest(content.strip() or "empty"):
+                ac.write_text(content)
+                done = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: reason"})
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertIn(text, done.stderr)
+                self.assertNotIn("Traceback", done.stderr)
+                self.assertEqual(self.log()[-1]["verdict"], "block")
+
+    def test_the_same_ask_a_second_time_is_refused_and_a_new_ask_works(self):
+        self.stage("notes.txt", "this names fooco\n")
+        self.assertEqual(self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: first"}).returncode, 0)
+        self.stage("more.txt", "also names fooco\n")
+        again = self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: second"})
+        self.assertEqual(again.returncode, 1, again.stderr)
+        self.assertIn("already used", again.stderr)
+        self.assertEqual(self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 8: fresh"}).returncode, 0)
+
+    def bare_remote(self):
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main", "--no-verify")
+        return remote
+
+    def test_one_ask_cannot_pass_pre_commit_and_then_pre_push(self):
+        remote = self.bare_remote()
+        self.stage("notes.txt", "this names fooco\n")
+        self.assertEqual(self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: by hand"}).returncode, 0)
+        done = self.guard("pre-push", "origin", str(remote), stdin="", env={"LEAK_GUARD_SKIP": "ask 7: by hand"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("already used", done.stderr)
+        self.assertIn("pre-commit", done.stderr)      # the refusal names what the ask was spent on
+
+    def test_an_ask_is_single_use_in_text_and_in_pre_push(self):
+        body = self.tmp / "body.txt"
+        body.write_text("fooco\n")
+        self.assertEqual(self.guard("text", str(body), env={"LEAK_GUARD_SKIP": "ask 7: r"}).returncode, 0)
+        remote = self.bare_remote()
+        spent = self.guard("pre-push", "origin", str(remote), stdin="", env={"LEAK_GUARD_SKIP": "ask 7: r"})
+        self.assertEqual(spent.returncode, 1, spent.stderr)
+        self.assertIn("already used", spent.stderr)
+        self.assertEqual(self.guard("pre-push", "origin", str(remote), stdin="", env={"LEAK_GUARD_SKIP": "ask 8: r"}).returncode, 0)
+        again = self.guard("pre-push", "origin", str(remote), stdin="", env={"LEAK_GUARD_SKIP": "ask 8: r"})
+        self.assertEqual(again.returncode, 1, again.stderr)
+        self.assertIn("already used", again.stderr)
+
+    def test_pre_commit_then_commit_msg_on_the_same_tree_passes_and_spends_the_ask(self):
+        self.stage("notes.txt", "this names fooco\n")
+        self.assertEqual(self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 9: by hand"}).returncode, 0)
+        self.assertEqual(self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "ask 9: by hand"}).returncode, 0)
+        records = (self.home / ".local" / "state" / "leak-guard" / "used-asks").read_text().splitlines()
+        self.assertEqual(len(records), 2)
+        for record, mode in zip(records, ("pre-commit", "commit-msg")):
+            self.assertRegex(record, r"^9 %s [0-9a-f]{40}$" % mode)      # each use records the mode and the index tree
+        spent = self.guard("text", str(self.spent_file()), env={"LEAK_GUARD_SKIP": "ask 9: by hand"})
+        self.assertEqual(spent.returncode, 1, spent.stderr)
+        self.assertIn("already used", spent.stderr)
+
+    def spent_file(self):
+        path = self.tmp / "spent.txt"
+        path.write_text("fooco\n")
+        return str(path)
+
+    def test_commit_msg_alone_with_an_unused_ask_passes_once(self):
+        self.assertEqual(self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "ask 7: by hand"}).returncode, 0)
+        again = self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "ask 7: by hand"})
+        self.assertEqual(again.returncode, 1, again.stderr)
+        self.assertIn("already used", again.stderr)
+        spent = self.guard("text", str(self.spent_file()), env={"LEAK_GUARD_SKIP": "ask 7: by hand"})
+        self.assertEqual(spent.returncode, 1, spent.stderr)
+        self.assertIn("already used", spent.stderr)
+
+    def test_commit_msg_after_pre_commit_on_a_different_tree_is_refused(self):
+        self.stage("notes.txt", "this names fooco\n")
+        self.assertEqual(self.guard("pre-commit", env={"LEAK_GUARD_SKIP": "ask 7: by hand"}).returncode, 0)
+        self.stage("more.txt", "also names fooco\n")      # the index tree changes between the two hooks
+        done = self.guard("commit-msg", self.message_file("fooco\n"), env={"LEAK_GUARD_SKIP": "ask 7: by hand"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("already used", done.stderr)
+
+    def test_two_concurrent_uses_only_one_passes(self):
+        """Both uses are approved and arrive at the used-asks step together (a barrier holds them there): the read-check-append must be atomic."""
+        mod = load_guard()
+        saved = {k: os.environ[k] for k in ("LEAK_GUARD_CONFIG_DIR", "XDG_STATE_HOME") if k in os.environ}
+        os.environ.update(LEAK_GUARD_CONFIG_DIR=str(self.home / ".config" / "leak-guard"), XDG_STATE_HOME=str(self.home / ".local" / "state"))
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in ("LEAK_GUARD_CONFIG_DIR", "XDG_STATE_HOME")])
+        self.addCleanup(os.environ.update, saved)
+        barrier = threading.Barrier(2, timeout=30)
+        def synced_run(cmd, **kw):      # the checker approves, then both uses wait for each other before the used-asks step
+            barrier.wait()
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+        patcher = mock.patch.object(mod.subprocess, "run", synced_run)      # one patch for both threads, stopped once
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        results = []
+        def use():
+            try:
+                results.append(mod.approve_skip("ask 7: by hand", "text"))
+            except mod.Block as b:
+                results.append(b)
+        threads = [threading.Thread(target=use) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        passed = [r for r in results if not isinstance(r, mod.Block)]
+        self.assertEqual(len(passed), 1, results)
+        records = (self.home / ".local" / "state" / "leak-guard" / "used-asks").read_text().splitlines()
+        self.assertEqual(records, ["7 text"])
 
 
 if __name__ == "__main__":

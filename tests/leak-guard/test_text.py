@@ -152,19 +152,21 @@ class TextLog(TextBase):
         for secret in ("gardens", "fooco", "bad.txt", "body.txt"):
             self.assertNotIn(secret, raw)
 
-    def test_the_skip_override_skips_both_layers_exits_0_and_is_logged_with_its_reason(self):
-        done = self.guard("text", self.txt("bad.txt", "fooco is here\n"), env={"LEAK_GUARD_SKIP": "test reason"})
+    def test_the_skip_override_skips_both_layers_exits_0_and_is_logged_with_its_ask(self):
+        done = self.guard("text", self.txt("bad.txt", "fooco is here\n"), env={"LEAK_GUARD_SKIP": "ask 5: test reason"})
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.calls(), 0)
         rec = self.log()[-1]
-        self.assertEqual((rec["mode"], rec["verdict"], rec["layer"], rec["reason"]), ("text", "skip", "override", "test reason"))
+        self.assertEqual((rec["mode"], rec["verdict"], rec["layer"], rec["ask"]), ("text", "skip", "override", 5))
+        self.assertNotIn("reason", rec)
+        self.assertNotIn("test reason", (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text())
 
     def test_result_file_carries_verdict_layer_and_findings(self):
         done, res = self.result(self.txt("body.txt", "quiet words\n"))
         self.assertEqual((done.returncode, res), (0, {"verdict": "pass", "layer": 2, "findings": 0}))
         done, res = self.result(self.txt("bad.txt", "fooco\nbar then baz\n"))
         self.assertEqual((done.returncode, res), (1, {"verdict": "block", "layer": 1, "findings": 2}))
-        done, res = self.result(self.txt("body.txt", "quiet words\n"), env={"LEAK_GUARD_SKIP": "r"})
+        done, res = self.result(self.txt("body.txt", "quiet words\n"), env={"LEAK_GUARD_SKIP": "ask 6: r"})
         self.assertEqual(res["verdict"], "skip")
 
 

@@ -33,12 +33,17 @@ a pi failure blocks too, naming both. The log records which judge answered (one 
 
 The terms and context files are in ~/.config/leak-guard (LEAK_GUARD_CONFIG_DIR overrides the directory).
 
-Override one command: LEAK_GUARD_SKIP="<reason>" git commit ... (or git push ...). The skip is logged. Every run logs one line to
+Override one command: LEAK_GUARD_SKIP="ask N: reason" git commit ... (or git push ...). The override must name an approval the agent cannot create
+alone: N is the number of the ask that approved the skip, and the approval checker on this machine (~/.config/leak-guard/approval-check, run as
+"<checker> <N>") must confirm it; with no checker every skip is refused. An approval is single use per ask: the one shared use is a single commit
+(commit-msg may reuse the ask right after a pre-commit used it for the same index tree); a push, a text run or a gh command each spend the ask. The skip
+is logged with its ask id; the reason text is never logged. Every run logs one line to
 ~/.local/state/leak-guard/log.jsonl: {utc, mode, verdict, layer, duration_s, findings, head, ...}. The diff is never logged.
 
 Exit: 0 pass, 1 block, 64 usage.
 """
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -55,8 +60,8 @@ CLAUDE_TIMEOUT_S = int(os.environ.get("LEAK_GUARD_TIMEOUT_S", "120"))   # the en
 MODEL = os.environ.get("LEAK_GUARD_MODEL", "claude-haiku-5-5")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 ZERO = "0" * 40
-OVERRIDE = 'LEAK_GUARD_SKIP="<reason>" git commit ...   (or git push ...), or --no-verify'
-OVERRIDE_TEXT = 'LEAK_GUARD_SKIP="<reason>" on the same command (for example LEAK_GUARD_SKIP="<reason>" gh pr create ...)'
+OVERRIDE = 'LEAK_GUARD_SKIP="ask N: reason" git commit ...   (or git push ...), where N is the ask that approved the skip; or --no-verify'
+OVERRIDE_TEXT = 'LEAK_GUARD_SKIP="ask N: reason" on the same command (for example LEAK_GUARD_SKIP="ask 12: reviewed by hand" gh pr create ...)'
 RESULT_PATH = None           # --result FILE: where the verdict is also written
 
 SYSTEM = ("You review a diff for a public git repository. You answer with exactly one JSON object and nothing else: "
@@ -110,6 +115,67 @@ def log(entry):
             f.write(json.dumps(entry) + "\n")
     except OSError as e:
         print("leak-guard: could not write its log: %s" % e, file=sys.stderr)
+
+
+def skip_ask(skip):
+    """The ask id of a well-formed override ("ask N: reason", N a number, the reason non-empty), else None."""
+    m = re.match(r"^ask ([0-9]+): \S", skip)
+    return int(m.group(1)) if m else None
+
+
+def approve_skip(skip, mode):
+    """The override must name an approval the agent cannot create alone: "ask N: reason". The checker command in ~/.config/leak-guard/approval-check
+    (one line, written from local chezmoi data) decides whether ask N approves this skip: run as "<checker> <N>", exit 0 approves, anything else blocks
+    with the checker's first stderr line. Fails closed: a malformed override, a missing checker, a refusal, or an ask already used blocks. An approval is
+    single use per ask, decided under an flock on the used-asks file so two uses of one ask cannot both pass: the one shared use is a single commit —
+    commit-msg may reuse the ask right after a pre-commit used it for the same index tree, and only once; a pre-push, a text run or a gh command each
+    spend the ask. Returns the ask id. The reason text is never logged, so it is not passed on."""
+    ask = skip_ask(skip)
+    if ask is None:
+        raise Block("override", 'LEAK_GUARD_SKIP must name the ask that approved this skip: LEAK_GUARD_SKIP="ask N: reason" (for example '
+                    'LEAK_GUARD_SKIP="ask 12: reviewed by hand")', "override", "override is not an ask")
+    path = os.path.join(config_dir(), "approval-check")
+    try:
+        with open(path) as f:
+            cmd = shlex.split(f.readline().strip())
+    except OSError:
+        raise Block("override", "no approval checker on this machine (%s is missing), so every skip is refused" % path, "override", "no approval checker")
+    except ValueError as e:
+        raise Block("override", "the approval checker (%s) is not a readable command line: %s" % (path, e), "override", "approval checker unreadable")
+    if not cmd:
+        raise Block("override", "the approval checker (%s) holds no command, so every skip is refused" % path, "override", "no approval checker")
+    try:
+        done = subprocess.run(cmd + [str(ask)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as e:
+        raise Block("override", "cannot run the approval checker: %s" % e, "override", "approval checker cannot run")
+    if done.returncode != 0:
+        err = done.stderr.decode(errors="replace").strip()
+        why = err.splitlines()[0][:200] if err else "no message"
+        raise Block("override", "ask %d does not approve this skip (the approval checker exited %d): %s" % (ask, done.returncode, why), "override",
+                    "approval checker refused ask %d" % ask)
+    tree = git("write-tree").strip() if mode in ("pre-commit", "commit-msg") else None      # commit-msg may share a pre-commit use of the same commit
+    used = os.path.join(state_dir(), "used-asks")
+    try:
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        os.chmod(state_dir(), 0o700)
+        with os.fdopen(os.open(used, os.O_RDWR | os.O_CREAT, 0o600), "r+") as f:
+            os.fchmod(f.fileno(), 0o600)     # an existing file may have been made wider
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            last = None                       # the ask's latest record: "<ask> <mode> [<tree>]"
+            for line in f.read().splitlines():
+                parts = line.split()
+                if parts and parts[0] == str(ask):
+                    last = parts
+            shared = (mode == "commit-msg" and last is not None and len(last) > 2 and last[1] == "pre-commit" and last[2] == tree)
+            if last is not None and not shared:
+                raise Block("override", "ask %d was already used (%s): an approval is single use, so get a new ask" % (ask, last[1]),
+                            "override", "ask %d already used" % ask)
+            f.write("%s %s%s\n" % (ask, mode, " " + tree if tree else ""))
+            f.flush()
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except OSError as e:
+        raise Block("override", "cannot record the used ask: %s" % e, "override", "cannot record the used ask")
+    return ask
 
 
 # Every git call goes through run_git, in a neutral environment: what the hook reads must be what `git push` sends, whatever local git configuration says.
@@ -669,12 +735,13 @@ def run(mode, stdin_lines, remote, url="", target=None):
     entry = {"utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": mode, "head": head}
     override = OVERRIDE_TEXT if mode == "text" else OVERRIDE
     skip = os.environ.get("LEAK_GUARD_SKIP", "").strip()
-    if skip:
-        log({**entry, "verdict": "skip", "layer": "override", "reason": skip, "duration_s": round(time.time() - t0, 3), "findings": 0})
-        print("leak-guard: skipped (%s); logged." % skip, file=sys.stderr)
-        return 0
     layer = 0
     try:
+        if skip:
+            ask = approve_skip(skip, mode)       # raises Block: a malformed override, a missing checker, a refusal or a used ask never lets a change through
+            log({**entry, "verdict": "skip", "layer": "override", "ask": ask, "duration_s": round(time.time() - t0, 3), "findings": 0})
+            print("leak-guard: skipped (ask %d); logged." % ask, file=sys.stderr)
+            return 0
         if mode in ("pre-commit", "pre-push"):
             refuse_replaced_history()
         lines, binary, notes, trees = collect(mode, stdin_lines, remote, url, target)

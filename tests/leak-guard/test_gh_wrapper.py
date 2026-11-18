@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_leak_guard import FAKE_CLAUDE
+from test_leak_guard import FAKE_CHECKER, FAKE_CLAUDE
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / "scripts/gh-wrapper"
@@ -117,6 +117,9 @@ class WrapperBase(unittest.TestCase):
         (self.realbin / "gh").chmod(0o755)
         (self.cbin / "claude").write_text(FAKE_CLAUDE)
         (self.cbin / "claude").chmod(0o755)
+        (self.cbin / "fake-checker").write_text(FAKE_CHECKER)
+        (self.cbin / "fake-checker").chmod(0o755)
+        (cfg / "approval-check").write_text("%s\n" % (self.cbin / "fake-checker"))
         self.files = self.tmp / "files"
         self.files.mkdir()
 
@@ -715,7 +718,7 @@ class WrapperGraphql(Decisions):
             self.assertEqual(name, "api graphql", ep)
 
     def test_the_skip_override_keeps_the_stdin_the_wrapper_read(self):
-        done = self.gh("api", "graphql", "--input", "-", stdin="not json", env={"LEAK_GUARD_SKIP": "t"})
+        done = self.gh("api", "graphql", "--input", "-", stdin="not json", env={"LEAK_GUARD_SKIP": "ask 1: t"})
         self.assertRan(done, "api", "graphql", "--input", "-", stdin="not json")
 
     def test_the_word_mutation_in_a_comment_is_not_a_mutation(self):
@@ -1019,7 +1022,7 @@ class WrapperComposed(Decisions):
         self.gh("pr", "merge", "5", "--squash")                # a guarded write with no text still has prompts off
         self.assertEqual(self.real_calls()[0]["prompt_disabled"], "1")
         self.reset()
-        self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "r"})        # an override is plain gh
+        self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 2: r"})        # an override is plain gh
         self.assertIsNone(self.real_calls()[0]["prompt_disabled"])
 
     def test_the_same_flags_pass_for_an_unguarded_repository(self):
@@ -1110,15 +1113,62 @@ class WrapperFailClosed(WrapperBase):
             self.assertRan(self.gh("pr", "comment", "5", "--body", PLANTED), "pr", "comment", "5", "--body", PLANTED)
         self.assertEqual(self.claude_calls(), 0)
 
-    def test_the_skip_override_runs_the_real_gh_and_is_logged_with_its_reason(self):
-        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "test reason"})
+    def test_the_skip_override_runs_the_real_gh_and_is_logged_with_its_ask(self):
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 3: test reason"})
         self.assertRan(done, "pr", "comment", "5", "--body", PLANTED)
         self.assertEqual(self.claude_calls(), 0)
         rec = self.gh_log()[-1]
-        self.assertEqual((rec["verdict"], rec["layer"], rec["reason"]), ("skip", "override", "test reason"))
+        self.assertEqual((rec["verdict"], rec["layer"], rec["ask"]), ("skip", "override", 3))
+        self.assertNotIn("reason", rec)
+        self.assertNotIn("test reason", (self.home / ".local" / "state" / "leak-guard" / "log.jsonl").read_text())
         self.reset()
-        done = self.gh("repo", "edit", "--description", "x", env={"LEAK_GUARD_SKIP": "another"})
+        done = self.gh("repo", "edit", "--description", "x", env={"LEAK_GUARD_SKIP": "ask 4: another"})
         self.assertRan(done, "repo", "edit", "--description", "x")
+
+    def test_an_unformatted_skip_or_no_checker_refuses_and_the_real_gh_does_not_run(self):
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "just a reason"})
+        self.assertBlocked(done, "ask N: reason")
+        rec = self.gh_log()[-1]
+        self.assertEqual((rec["verdict"], rec["layer"]), ("block", "override"))
+        (self.home / ".config" / "leak-guard" / "approval-check").unlink()
+        self.reset()
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason"})
+        self.assertBlocked(done, "no approval checker on this machine")
+
+    def test_one_ask_cannot_pass_text_and_then_gh(self):
+        # leak-guard and the wrapper share one used-asks record: a text run spends the ask, so gh cannot reuse it
+        body = self.file("body.md", PLANTED)
+        text_run = subprocess.run([sys.executable, str(GUARD), "text", body], capture_output=True, text=True,
+                                  env={**self.env(), "LEAK_GUARD_SKIP": "ask 9: by hand"})
+        self.assertEqual(text_run.returncode, 0, text_run.stderr)
+        self.assertIn("skipped (ask 9)", text_run.stderr)
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 9: by hand"})
+        self.assertBlocked(done, "already used")
+        self.assertEqual(self.claude_calls(), 0)
+
+    def test_an_unrunnable_or_empty_or_unreadable_checker_refuses_cleanly(self):
+        ac = self.home / ".config" / "leak-guard" / "approval-check"
+        for content, text in (("/no/such/checker-anywhere\n", "cannot run the approval checker"), ("\n", "missing or empty"),
+                              ('say "unbalanced\n', "not a readable command line")):
+            with self.subTest(content.strip() or "empty"):
+                ac.write_text(content)
+                self.reset()
+                done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason"})
+                self.assertBlocked(done, text)
+                self.assertNotIn("Traceback", done.stderr)
+                self.assertEqual(self.gh_log()[-1]["verdict"], "block")
+
+    def test_a_checker_that_says_no_refuses_with_its_stderr_and_a_yes_lets_the_skip_through_once(self):
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason", "FAKE_CHECKER": "refuse"})
+        self.assertBlocked(done, "the checker says no")
+        self.assertBlocked(done, "ask 5")
+        self.reset()
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason"})
+        self.assertRan(done, "pr", "comment", "5", "--body", PLANTED)
+        self.assertEqual(json.loads((self.fake / "checker-args.json").read_text()), ["5"])
+        self.reset()
+        again = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason"})
+        self.assertBlocked(again, "already used")
 
 
 class WrapperLog(WrapperBase):
