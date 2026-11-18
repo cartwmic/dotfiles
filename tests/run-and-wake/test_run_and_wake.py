@@ -339,17 +339,50 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([records[-1]["reason"], records[-1]["detail"]], ["session-changed", "/sessions/after-new.jsonl"])
         self.assertEqual(self.prompts(), [], "nothing is sent")
 
-    def test_no_pane_says_so_at_launch_and_calls_no_herdr(self):
-        result = self.launch("--", "true", env={"HERDR_PANE_ID": ""})
-        self.assertIn("WARN: no HERDR_PANE_ID: nothing will wake you", result.stdout)
-        records = self.replay(self.job_id(result))
-        self.assertEqual(records[-1]["reason"], "no-pane")
+    def test_no_pane_waits_for_the_job_and_prints_its_result(self):
+        """A caller nothing can wake (a Pi child T3 runs: no pane, no thread) gets the result in the same call, not a lost wake."""
+        result = self.launch("--", "sh", "-c", "exit 3", env={"HERDR_PANE_ID": ""})
+        self.assertIn("WARN: no HERDR_PANE_ID and no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
+        self.assertEqual(result.returncode, 3, "the launcher exits with the job's status")
+        job = next(line for line in result.stdout.splitlines() if " job " in line).split(" job ")[1].split()[0]
+        self.assertIn("[run-and-wake k:%s]" % job, result.stdout, "the line the wake would carry is printed")
+        events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
+        self.assertEqual(events[:2], ["start", "end"], "the job had ended when the launcher returned")
+        self.assertEqual(sorted(events[2:]), ["read", "skip"], "the watcher's skip and the launcher's read, in either order")
         self.assertEqual(self.calls(), [])
 
-    def test_no_pi_session_says_so_at_launch(self):
+    def test_a_waiting_launcher_killed_with_its_process_group_leaves_the_job_running(self):
+        """A caller's tool timeout kills the waiting launcher (and its process group): the job must finish anyway, and --wait must still get it."""
+        done = self.root / "done"
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), "--", "sh", "-c", f"sleep 2; touch {done}"],
+                                env={**self.env, "HERDR_PANE_ID": ""}, cwd=self.root, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        lines = []
+        while not any("--wait" in line for line in lines):      # the job id and the --wait command come before the wait starts
+            line = proc.stdout.readline()
+            self.assertTrue(line, "the launcher printed its job id and the --wait command before waiting")
+            lines.append(line)
+        job = next(line for line in lines if " job " in line).split(" job ")[1].split()[0]
+        self.assertIn("run-and-wake --wait %s" % job, "".join(lines))
+        os.killpg(proc.pid, signal.SIGKILL)                     # the whole group the launcher started in
+        proc.wait(timeout=10)
+        deadline = time.monotonic() + 15
+        while not done.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertTrue(done.exists(), "the job ran to the end after its launcher's process group was killed")
+        waited = subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, "HERDR_PANE_ID": ""}, cwd=self.root,
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(waited.returncode, 0, waited.stderr)
+        self.assertIn("[run-and-wake k:%s] job finished: exit 0" % job, waited.stdout)
+
+    def test_no_pi_session_waits_for_the_job_too(self):
         result = self.launch("--", "true", env={"PI_SESSION_FILE": ""})
-        self.assertIn("WARN: no PI_SESSION_FILE: nothing will wake you", result.stdout)
-        self.assertEqual(self.replay(self.job_id(result))[-1]["reason"], "no-session")
+        self.assertIn("WARN: no PI_SESSION_FILE and no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
+        self.assertEqual(result.returncode, 0)
+        job = self.job_id(result)
+        events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
+        self.assertEqual(events[:2], ["start", "end"])
+        self.assertEqual(sorted(events[2:]), ["read", "skip"])
         self.assertEqual(self.calls(), [])
 
     def test_blocked_pane_is_waited_out_then_sent_once(self):

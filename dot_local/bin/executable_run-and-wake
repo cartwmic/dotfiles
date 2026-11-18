@@ -7,7 +7,7 @@ Usage: run-and-wake [--] CMD [ARGS...]
        run-and-wake --wait JOB     (block until JOB ends, print its result line, exit with its status; when run by the session that started JOB, the wake for JOB is then dropped)
 
 Contract (docs/run-and-wake.md):
-- Returns at once. Prints the job id, the job's pid and its output file.
+- Returns at once (unless nothing could wake the caller: see the no-wake-target bullet below). Prints the job id, the job's pid and its output file.
 - CMD runs in its own session, so it outlives the tool call or shell that started it.
   Its stdout and stderr go to the output file.
 - On Linux with a working `systemd-run --user`, the launcher first re-runs itself in its own transient scope
@@ -22,6 +22,9 @@ Contract (docs/run-and-wake.md):
   `herdr agent prompt` to the pane in $HERDR_PANE_ID, sent only if, at check time, that
   pane shows the Pi session in $PI_SESSION_FILE captured at launch. Otherwise the wake is
   skipped with a reason: no-pane, no-session, pane-gone, session-changed, herdr-error.
+- With no wake target at all (no T3CODE_THREAD_ID, and no Herdr pane with a Pi session: a Pi child that T3 runs as a
+  delegated task is one) the launcher does not return at once: it waits for the job as `--wait` does, prints the line
+  the wake would have carried, and exits with the job's status, so the result reaches the caller in the same call.
 - Started from a T3 Code thread instead (T3CODE_THREAD_ID set, and no Herdr pane plus Pi session to wake): the
   wake is one `t3 thread send <thread> -` with the same text on stdin, using $T3CODE_CLI_PATH, else ~/.t3/bin/t3.
   While the T3 server cannot be reached (it is restarting), the send is retried every 5 s for up to 10 minutes: one wake is delivered, not one per try.
@@ -769,10 +772,17 @@ def main(argv):
         say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]. Builders: wait with `{wait_command(job)}` in Bash (run_in_background), then t3_background_wait; it prints the result and the message is then not sent. The Stop hook refuses to stop while the job runs. Other seats can end the turn.")
     elif thread:
         say("INFO", f"when it ends, T3 thread {thread} gets one message tagged [{NAME} k:{job}]; you can end your turn")
-    elif not pane:
-        say("WARN", "no HERDR_PANE_ID: nothing will wake you when it ends")
-    elif not session:
-        say("WARN", "no PI_SESSION_FILE: nothing will wake you when it ends")
+    elif not pane or not session:
+        # Nothing can wake this caller (no T3 thread, and no Herdr pane with a Pi session): a Pi child that T3 runs is
+        # exactly this. Detaching would end its turn with a result nobody delivers, so wait here instead, as --wait does.
+        missing = "HERDR_PANE_ID" if not pane else "PI_SESSION_FILE"
+        if started.startswith("pid "):
+            say("WARN", f"no {missing} and no T3CODE_THREAD_ID: nothing could wake you when it ends, so this waits for the job and prints its result. "
+                        f"The job runs in its own session: if this call is cut off, it keeps running; get its result with `{wait_command(job)}`")
+            if scope:
+                say("INFO", f"scope {scope} in {slice_ or 'no slice'}: the job outlives the scope of the session that started it")
+            sys.stdout.flush()
+            return wait_for(job)
     else:
         say("INFO", f"when it ends, pane {pane} gets one prompt tagged [{NAME} k:{job}]; you can end your turn")
     if scope:
