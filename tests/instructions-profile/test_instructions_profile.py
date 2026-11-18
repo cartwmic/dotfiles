@@ -33,14 +33,22 @@ SEAT_ROWS = {
         "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
     ),
     "axon-work-computer": (
-        "| Coordinator | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
-        "| Lead | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
+        "| Coordinator | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
+        "| Lead | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Reviewer | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
+        "| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Browser work | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+        "| Browser use | Sonnet 5.5 high, Anthropic (anthropic/claude-sonnet-5-5) |",
     ),
 }
+BROWSER_ROW_LABEL = {"personal": "| Browser work |", "axon-work-computer": "| Browser use |"}
+WORK_SEAT_BULLETS = (
+    "- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
+    "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Browser use runs on Pi with "
+    "`--provider anthropic --model claude-sonnet-5-5` at high thinking.",
+    "- Browser use drives the agent Chrome on 127.0.0.1:9333 only through the browser-harness MCP server, plus "
+    "agent-desktop for things outside the page; never start another browser or browser tool.",
+)
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
     "when you will use subagents and which models they will use; if that is not clear, ask again, and do not guess. "
@@ -139,8 +147,12 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(text.count(SEAT_HEADING), 1)
                     for row in SEAT_ROWS[profile]:
                         self.assertEqual(text.count(row), 1)
-                    self.assertEqual(text.count("| Browser work |"), 1)
+                    self.assertEqual(text.count("| Browser work |") + text.count("| Browser use |"), 1)
+                    self.assertEqual(text.count(BROWSER_ROW_LABEL[profile]), 1)
                     self.assertEqual(("Terra" in text), profile == "personal")
+                    self.assertNotIn("Cursor", text)
+                    for bullet in WORK_SEAT_BULLETS:
+                        self.assertEqual(text.count(bullet), int(profile == "axon-work-computer"))
 
     def test_scheduling_rule_is_personal_only(self):
         for name, template in TEMPLATES.items():
