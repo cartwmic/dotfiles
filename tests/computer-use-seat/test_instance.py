@@ -1,4 +1,4 @@
-"""The Computer use seat's T3 instance (`seat-computer`), its seat file and its MCP file. Design: coordinator workstream computer-use-seat, D3.
+"""The Computer use seat's T3 instance (`seat-computer`), its seat file and its MCP file. It runs only on the personal profile, where T3 seat instances exist.
 
 The real chezmoi renders the real source into a throwaway HOME. A missing chezmoi fails the test (it does not skip).
 
