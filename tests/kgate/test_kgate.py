@@ -2681,20 +2681,63 @@ class PodSh(unittest.TestCase):
         os.utime(path / "blob", (t, t))
         return path
 
-    def test_an_over_cap_cache_is_trimmed_least_recently_used_first_and_the_job_still_passes(self):
+    def cache_file(self, parent, name, age, kib=2048):
+        "One plain cache file of about kib KiB last used age seconds ago (the real caches are trimmed at file level)."
+        path = parent / name
+        parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * kib * 1024)
+        t = time.time() - age
+        os.utime(path, (t, t))
+        return path
+
+    def test_an_over_cap_cache_is_trimmed_oldest_file_first_and_the_job_still_passes(self):
         cache = self.tmp / "cache"
         old = self.cache_entry(cache / "go-build", "old", 3000)
         mid = self.cache_entry(cache / "go-build", "mid", 2000)
         new = self.cache_entry(cache / "go-build", "new", 10)
         done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertIn("over the 3072KiB cap: trimming least recently used entries", done.stdout)
+        self.assertIn("over the 3072KiB cap: trimming oldest files first", done.stdout)
         self.assertIn("trimmed to", done.stdout)
-        self.assertFalse(old.exists())
-        self.assertFalse(mid.exists())
-        self.assertTrue(new.exists(), "the newest entry is the last to go")
+        self.assertFalse((old / "blob").exists())
+        self.assertFalse((mid / "blob").exists())
+        self.assertTrue((new / "blob").exists(), "the newest file is the last to go")
         self.assertTrue((cache / "go-build").is_dir(), "the cache directory itself is never removed")
         self.assertEqual(self.markers(done.stdout)["hash"], "ok " + K.tree_hash(str(self.tree), self.files))
+
+    def test_a_pnpm_store_is_trimmed_file_by_file_not_wiped_whole(self):
+        "A real pnpm store holds only version directories (v3, v10, v11) over content: a trim of whole children would wipe it in one step."
+        cache = self.tmp / "cache"
+        blobs = cache / "pnpm-store" / "v10" / "files" / "ab"
+        old = self.cache_file(blobs, "old", 3000)
+        new = self.cache_file(blobs, "new", 10)
+        now = time.time()
+        for d in (cache / "pnpm-store", cache / "pnpm-store" / "v10", blobs):
+            os.utime(d, (now, now))     # the version directories' own mtimes are the newest of all
+        done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(old.exists(), "the oldest file goes")
+        self.assertTrue(new.exists(), "the newest file survives")
+        for kept in (cache / "pnpm-store", cache / "pnpm-store" / "v10", blobs):
+            self.assertTrue(kept.is_dir(), "no version or content directory is removed")
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), ["pnpm-store"], "nothing is written onto the claim")
+
+    def test_go_build_buckets_are_trimmed_by_file_age_not_bucket_mtime(self):
+        "go-build is 256 bucket directories (00..ff) whose mtimes do not move when Go rewrites the files inside: the file ages decide."
+        cache = self.tmp / "cache"
+        ff_old = self.cache_file(cache / "go-build" / "ff", "old", 3000)
+        ab_mid = self.cache_file(cache / "go-build" / "ab", "mid", 2000)
+        new = self.cache_file(cache / "go-build" / "00", "new", 10)
+        now = time.time()
+        for b in ("00", "ab", "ff"):
+            os.utime(cache / "go-build" / b, (now, now))    # every bucket directory's mtime is the newest of all
+        done, _ = self.run_sh(cache_cap=5 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(ff_old.exists(), "the oldest file goes, whatever bucket it is in")
+        self.assertTrue(ab_mid.exists())
+        self.assertTrue(new.exists(), "the newest file survives")
+        for b in ("00", "ab", "ff"):
+            self.assertTrue((cache / "go-build" / b).is_dir(), "no bucket directory is removed")
 
     def test_an_under_cap_cache_is_left_alone(self):
         cache = self.tmp / "cache"
@@ -2712,20 +2755,20 @@ class PodSh(unittest.TestCase):
         self.assertTrue(keep.exists())
         self.assertNotIn("trimming", done.stdout)
 
-    def test_an_entry_that_cannot_be_removed_is_skipped_and_the_job_still_passes(self):
+    def test_a_file_that_cannot_be_removed_is_skipped_and_the_job_still_passes(self):
         cache = self.tmp / "cache"
         stuck = self.cache_entry(cache / "go-build", "stuck", 3000)
         (stuck / "sub").mkdir()
         (stuck / "sub" / "blob").write_bytes(b"x" * 64 * 1024)
-        (stuck / "sub").chmod(0)            # rm -rf cannot empty this, so the entry cannot go whole
+        (stuck / "sub").chmod(0)            # rm cannot reach into this, so this file cannot go
         free = self.cache_entry(cache / "go-build", "free", 2000)
         try:
             done, _ = self.run_sh(cache_cap=1 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
         finally:
             (stuck / "sub").chmod(0o755)    # let the test's own cleanup remove what the trim could not
         self.assertEqual(done.returncode, 0, done.stdout)
-        self.assertTrue(stuck.exists(), "the undeletable entry is skipped, not a failed job")
-        self.assertFalse(free.exists(), "the trim goes on with the entries it can remove")
+        self.assertTrue((stuck / "sub" / "blob").exists(), "the undeletable file is skipped, not a failed job")
+        self.assertFalse((free / "blob").exists(), "the trim goes on with the files it can remove")
 
     def test_no_cache_cap_line_and_no_trim_without_one(self):
         cache = self.tmp / "cache"
@@ -3935,6 +3978,25 @@ class KubectlBlack(unittest.TestCase):
 
     def test_an_invalid_cache_cap_is_refused_with_the_key_named(self):
         for line in ('cache_cap = "huge"\n', 'cache_cap = "8 Gi"\n', "cache_cap = -1\n", "cache_cap = true\n", "cache_cap = 1.5\n"):
+            self.set_cache_cap(line)
+            done = self.run_kgate("--", "true")
+            self.assertEqual(done.returncode, 69, done.stdout)
+            self.assertIn("cache_cap", self.records()[-1]["reason"])
+
+    def test_a_cache_cap_above_the_maximum_is_refused_and_one_pib_is_accepted(self):
+        for line in ('cache_cap = "16Ei"\n', 'cache_cap = "2Pi"\n', "cache_cap = %d\n" % ((1 << 50) + 1)):
+            self.set_cache_cap(line)
+            done = self.run_kgate("--", "true")
+            self.assertEqual(done.returncode, 69, done.stdout)
+            self.assertIn("cache_cap", self.records()[-1]["reason"])
+        self.set_cache_cap('cache_cap = "1Pi"\n')   # exactly the maximum is accepted
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP=1125899906842624", job_sh)
+
+    def test_a_cache_cap_that_truncates_below_one_byte_is_refused(self):
+        for line in ('cache_cap = "100m"\n', 'cache_cap = "0.5"\n'):
             self.set_cache_cap(line)
             done = self.run_kgate("--", "true")
             self.assertEqual(done.returncode, 69, done.stdout)
