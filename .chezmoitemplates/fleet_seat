@@ -85,4 +85,9 @@
 {{-   $command := printf `g=%q; [ -r "$g" ] || { echo "homelab-chat tool list: the hook script is missing; every tool call is denied" >&2; exit 2; }; python3 -I "$g"; [ $? -eq 0 ] || exit 2` $script -}}
 {{-   $_ := set $seatFile "hooks" (dict "PreToolUse" (list (dict "matcher" "*" "hooks" (list (dict "type" "command" "command" $command))))) -}}
 {{- end -}}
+{{- /* Computer use seat only: a SessionStart hook that prints the using-computer skill (its tool rule) into the session, so the seat follows it without having to choose to load it. Live proof phase 1 (2026-11-18) showed a fresh seat agent load using-browse alone and take focus. A missing file prints nothing and the session still starts. */ -}}
+{{- if eq .seat "computer" -}}
+{{-   $skill := joinPath .ctx.chezmoi.homeDir ".local/share/agent-harness/canonical/skills/using-computer/SKILL.md" -}}
+{{-   $_ := set $seatFile "hooks" (dict "SessionStart" (list (dict "hooks" (list (dict "type" "command" "command" (printf `f=%q; [ -r "$f" ] && cat "$f"; exit 0` $skill)))))) -}}
+{{- end -}}
 {{- $seatFile | toPrettyJson }}
