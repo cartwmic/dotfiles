@@ -500,7 +500,7 @@ class DesktopTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]', self.calls())
 
-    def test_restore_when_the_saved_window_is_already_active_makes_no_focus_dispatch(self):
+    def test_restore_when_already_focused_makes_no_focus_dispatch(self):
         self.assertEqual(self.run_script("save").returncode, 0)
         self.calls_file.unlink()
         r = self.run_script("restore")   # focus never moved
