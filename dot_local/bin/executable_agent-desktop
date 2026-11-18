@@ -17,7 +17,7 @@
 # save and restore exist only here (Hyprland); the Mac and G14 scripts have no such verbs. They let an agent give back the
 # focus it used: `save` first, any work that may move focus (Chrome, focus, click), `restore` last. The record is one file per
 # caller, ${XDG_STATE_HOME:-~/.local/state}/agent-desktop/saved-focus.KEY (address, pointer, epoch time). KEY is $T3CODE_THREAD_ID,
-# else $CLAUDE_CODE_SESSION_ID (the same pair kill-mine uses), with every character outside A-Za-z0-9._- turned into _; every
+# else $CLAUDE_CODE_SESSION_ID, with every character outside A-Za-z0-9._- turned into _; every
 # call of one agent carries the same value and two agents carry different ones, so each `restore` reads only its own record.
 # With neither variable set (a plain terminal) the file is saved-focus with no key, shared by whoever calls without one.
 # While the record exists, `focus CLASS`
