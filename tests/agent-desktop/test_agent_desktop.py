@@ -40,6 +40,9 @@ case $name in
       dispatch)
         if [ -n "${FAKE_DISPATCH_EXIT:-}" ]; then echo "error: lua syntax" >&2; exit "$FAKE_DISPATCH_EXIT"; fi
         case $2 in *hl.dsp.focus*) if [ -n "${FAKE_FOCUS_OUT:-}" ]; then printf '%s\\n' "$FAKE_FOCUS_OUT"; exit 0; fi ;; esac
+        # Like Hyprland: a focus by address makes that window active; FAKE_MOVE_FOCUS is a window follow_mouse hands focus to
+        case $2 in *hl.dsp.focus*address:*) a=${2#*address:}; a=${a%%\\"*}; printf '{"address": "%s", "class": "x"}' "$a" > "$FAKE_FIXTURES/activewindow.json" ;; esac
+        case $2 in *hl.dsp.cursor.move*) if [ -n "${FAKE_MOVE_FOCUS:-}" ]; then printf '{"address": "%s", "class": "x"}' "$FAKE_MOVE_FOCUS" > "$FAKE_FIXTURES/activewindow.json"; fi ;; esac
         printf '%s\\n' "${FAKE_DISPATCH_OUT:-ok}" ;;
       *) echo "fake hyprctl: unexpected $*" >&2; exit 99 ;;
     esac ;;
@@ -452,11 +455,21 @@ class DesktopTest(unittest.TestCase):
         r = self.run_script("restore")
         self.assertEqual((r.returncode, r.stdout), (0, f"restored window {WIN_A}, pointer 961,553\n"), r.stderr)
         self.assertEqual(self.calls(), [
-            MOVE_CURSORPOS,                               # pointer first, so follow_mouse cannot refocus what is under it
             "hyprctl [activewindow] [-j]",
-            f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]',   # then the window, by address
+            f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]',   # the window first, by address
+            MOVE_CURSORPOS,                               # then the pointer, so a workspace-change warp cannot undo it
+            "hyprctl [activewindow] [-j]",                # focus is checked again after the pointer move
         ])
         self.assertFalse(self.saved_file().exists(), "the record is deleted after a restore")
+
+    def test_restore_refocuses_when_the_pointer_move_hands_focus_away(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        self.set_active(WIN_CHROME)
+        r = self.run_script("restore", FAKE_MOVE_FOCUS=WIN_CHROME)   # follow_mouse: the window under the pointer takes focus
+        self.assertEqual(r.returncode, 0, r.stderr)
+        focus = f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]'
+        self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]", focus, MOVE_CURSORPOS, "hyprctl [activewindow] [-j]", focus])
 
     def test_restore_with_nothing_saved_exits_1(self):
         r = self.run_script("restore")
@@ -505,7 +518,7 @@ class DesktopTest(unittest.TestCase):
         self.calls_file.unlink()
         r = self.run_script("restore")   # focus never moved
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.calls(), [MOVE_CURSORPOS, "hyprctl [activewindow] [-j]"])
+        self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]", MOVE_CURSORPOS])
         self.assertFalse(self.saved_file().exists())
 
     def test_save_and_restore_log_one_line_each(self):

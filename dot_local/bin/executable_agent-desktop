@@ -308,8 +308,12 @@ cmd_restore() {
     record "FAIL restore unreadable record"
     fail 1 "the saved record in $file is unreadable; delete it and run $SCRIPT_NAME save again"
   fi
-  cmd_move "$saved_x" "$saved_y"
+  # Focus first, then the pointer: with cursor:warp_on_change_workspace on, focusing a window on another workspace
+  # warps the pointer (live proof phase 2, 2026-11-18), so a pointer move made before the focus would be undone.
+  # The pointer move can in turn hand focus (follow_mouse) to the window under it, so focus is checked once more after
+  # it; that second focus is on the same workspace and does not warp.
   if [ -z "$saved_addr" ]; then
+    cmd_move "$saved_x" "$saved_y"
     rm -f "$file"
     record "restore window=none pointer=$saved_x,$saved_y"
     echo "no window to refocus; pointer back at $saved_x,$saved_y"
@@ -318,13 +322,22 @@ cmd_restore() {
   active_address restore
   rm -f "$file"
   if [ "$ADDR" = "$saved_addr" ]; then
+    cmd_move "$saved_x" "$saved_y"
     record "restore window=$saved_addr pointer=$saved_x,$saved_y already active"
     echo "restored: $saved_addr was already active; pointer back at $saved_x,$saved_y"
     return 0
   fi
-  if ! try_dispatch "hl.dsp.focus({window=\"address:$saved_addr\"})"; then
+  focus_ok=1
+  try_dispatch "hl.dsp.focus({window=\"address:$saved_addr\"})" || focus_ok=0
+  focus_rc=$rc focus_out=$out
+  cmd_move "$saved_x" "$saved_y"
+  if [ "$focus_ok" -eq 0 ]; then
     record "FAIL restore window=$saved_addr pointer=$saved_x,$saved_y"
-    fail 1 "could not focus the saved window $saved_addr (exit $rc): $out"
+    fail 1 "could not focus the saved window $saved_addr (exit $focus_rc): $focus_out"
+  fi
+  active_address restore
+  if [ "$ADDR" != "$saved_addr" ]; then
+    dispatch "hl.dsp.focus({window=\"address:$saved_addr\"})"
   fi
   record "restore window=$saved_addr pointer=$saved_x,$saved_y refocused"
   echo "restored window $saved_addr, pointer $saved_x,$saved_y"
