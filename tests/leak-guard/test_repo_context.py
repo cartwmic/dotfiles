@@ -5,9 +5,10 @@ Halcyon and Zephyrine are invented; "fooco" is the pretend layer-1 term. The fak
 import os
 import subprocess
 import sys
+import time
 import unittest
 
-from test_leak_guard import Base, SCRIPT
+from test_leak_guard import ZERO, Base, SCRIPT, load_guard
 
 
 TARGET = "fooco-dev/guarded"       # the repository the text is posted to, as the gh wrapper names it
@@ -152,6 +153,94 @@ class CommitAndPushShareTheContext(RepoContextBase):
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
 
+
+class PublishedBase(RepoContextBase):
+    """What counts as already published: the remote's default branch plus, at pre-push, each pushed branch the remote already has -- never the remote's
+    every branch (hundreds of tracking refs made every pre-push grep for minutes)."""
+
+    def side_branches(self, count):
+        """Branches on the remote that main does not have, with tracking refs here: what a long-lived fork or a busy remote looks like."""
+        main = self.git("rev-parse", "HEAD").stdout.strip()
+        plan = "".join("update refs/heads/side%d %s\n" % (i, main) for i in range(count))
+        subprocess.run(["git", "-C", str(self.remote), "update-ref", "--stdin"], input=plan, check=True, text=True, capture_output=True)
+        self.git("fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+
+    def side_branch_with(self, name):
+        """A branch on the remote, and only there, whose files hold the name."""
+        self.git("checkout", "-q", "-b", "side")
+        (self.repo / "side.txt").write_text("The %s tools live here\n" % name)
+        self.git("add", "side.txt")
+        self.git("commit", "-q", "-m", "side", "--no-verify")
+        self.git("push", "-q", "origin", "side", "--no-verify")
+        self.git("checkout", "-q", "main")
+        self.git("branch", "-q", "-D", "side")
+        self.git("fetch", "-q", "origin")
+
+    def feature_commit(self, name, text):
+        self.git("checkout", "-q", "-B", "feature")
+        (self.repo / name).write_text(text)
+        self.git("add", name)
+        self.git("commit", "-q", "-m", "mention", "--no-verify")
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def push_line(self, tip, remote_sha=ZERO):
+        return "refs/heads/feature %s refs/heads/feature %s\n" % (tip, remote_sha)
+
+    def test_pre_push_with_many_tracking_refs_greps_only_the_default_and_pushed_trees(self):
+        self.side_branches(300)
+        self.assertEqual(len(self.git("for-each-ref", "refs/remotes/origin/").stdout.splitlines()), 301)
+        self.git("remote", "set-head", "origin", "--auto")     # the default branch named by refs/remotes/origin/HEAD, as a clone has
+        tip = self.feature_commit("notes.txt", "see the Halcyon docs\n")
+        mod = load_guard()
+        calls, real = [], mod.run_git
+        mod.run_git = lambda args, stdin=None: (calls.append(args), real(args, stdin))[1]
+        cwd = os.getcwd()
+        os.chdir(self.repo)      # in-process, the guard's git calls run here, as the hook's would
+        try:
+            t0 = time.monotonic()
+            lines, binary, notes, trees = mod.prepush([self.push_line(tip).strip()], "origin", str(self.remote))
+            known = mod.repo_context(lines, trees)
+            elapsed = time.monotonic() - t0
+        finally:
+            mod.run_git = real
+            os.chdir(cwd)
+        main_sha = self.git("rev-parse", "refs/remotes/origin/main").stdout.strip()
+        self.assertEqual(trees, [main_sha], "only the default branch is the published base; the 300 side branches are not greped")
+        self.assertEqual(known, ["Halcyon"])
+        greps = [args for args in calls if args and args[0] == "grep"]
+        self.assertTrue(greps, "the repo context greps the published trees")
+        for args in greps:
+            self.assertEqual(args[-1], "--")
+            self.assertEqual(args[8:-1], [main_sha], "every grep runs over the default branch's tree only")
+        self.assertLess(elapsed, 10.0, "pre-push and its repo context stay fast with 301 tracking refs")
+
+    def test_a_name_only_a_side_branch_holds_is_not_published_at_pre_push(self):
+        self.side_branch_with("Sidewinder")
+        tip = self.feature_commit("notes.txt", "see the Sidewinder docs\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip), env=self.judge("Sidewinder"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
+        self.assertNotIn("skipped", done.stderr)
+
+    def test_a_name_only_a_side_branch_holds_is_not_published_in_text_mode(self):
+        self.side_branch_with("Sidewinder")
+        done = self.guard("text", "--repo", TARGET, self.body("see the Sidewinder docs\n"), env=self.judge("Sidewinder"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
+        self.assertNotIn("skipped", done.stderr)
+
+    def test_a_pushed_branch_the_remote_already_has_joins_the_base(self):
+        self.git("checkout", "-q", "-b", "feature")
+        (self.repo / "one.txt").write_text("The Sidewinder tools live here\n")
+        self.git("add", "one.txt")
+        self.git("commit", "-q", "-m", "add", "--no-verify")
+        tip1 = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("push", "-q", "origin", "feature", "--no-verify")   # the remote now has feature
+        self.git("fetch", "-q", "origin")       # and the tracking ref says so
+        tip2 = self.feature_commit("two.txt", "see the Sidewinder docs\n")
+        done = self.guard("pre-push", "origin", str(self.remote), stdin=self.push_line(tip2, tip1), env=self.judge("Sidewinder"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("skipped, its name is already in the repository", done.stderr)
 
 if __name__ == "__main__":
     unittest.main()
