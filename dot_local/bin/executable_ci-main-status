@@ -42,7 +42,8 @@ in either source, a malformed response, or a read that fails: the full set must 
 never "none" unless proven. All of them passed on the tip: GREEN, 0. One failed: RED, 1. One is
 queued, running or has not reported: UNTESTED, 2 — and UNTESTED never passes the merge gate for these repos:
 --merge-gate exits non-zero on a pending, missing or never-reported required check, where the table repos'
-2-becomes-0 does not apply. Only a check run's success passes a required check: skipped and neutral fail closed.
+2-becomes-0 does not apply. A required check passes as GitHub's merge box passes it: a completed check run whose
+conclusion is success, skipped or neutral (GitHub: required checks need "a successful, skipped, or neutral status").
 Per name the newest run decides, the highest check-run id (a newer queued or running run is still newest); a
 commit status with the same name is combined in, the worse verdict winning. --pr N (only with --merge-gate)
 checks the PR's head commit against the required checks instead of the tip — for a table repo --pr means the fix
@@ -352,6 +353,10 @@ def paged(repo, sha, what, field):
 WORSE = ("pass", "pending", "fail")   # worst of two verdicts for one required check wins
 
 
+# The completed check-run conclusions GitHub's merge box accepts for a required status check.
+PASSING_CONCLUSIONS = frozenset({"success", "skipped", "neutral"})
+
+
 def check_verdicts(repo, sha, contexts):
     """{context: (verdict, detail)} for the required checks on `sha`: verdict "pass", "fail" or "pending", and the
     check run's conclusion or status (or the commit status's state) as the detail.
@@ -359,8 +364,9 @@ def check_verdicts(repo, sha, contexts):
     Check runs (filter=latest, every page read): per name the newest run decides, the highest check-run id, which
     follows creation order — never a timestamp, which lets an older success hide a newer run still going, and never
     the last row the list happened to show. That run's status decides: queued or in_progress is pending (never a
-    pass), and only its success passes; skipped and neutral fail closed, like any other conclusion that is not a
-    pass. A context no check run reports falls back to the commit's combined statuses (already the latest per
+    pass); a completed run passes when its conclusion is success, skipped or neutral, exactly the conclusions
+    GitHub's merge box accepts for a required check (a job skipped by its `if:` reports skipped and does not block
+    the merge); any other conclusion fails. A context no check run reports falls back to the commit's combined statuses (already the latest per
     context); when both report a name, the worse verdict wins, so a passing check run cannot hide a failing status.
     A name neither reports is pending (never a pass).
     """
@@ -373,8 +379,8 @@ def check_verdicts(repo, sha, contexts):
         c = newest.get(name)
         if c is None:
             verdicts[name] = None   # no check run: the commit status alone decides
-        elif c["conclusion"] == "success":
-            verdicts[name] = ("pass", "success")
+        elif c["status"] == "completed" and c["conclusion"] in PASSING_CONCLUSIONS:
+            verdicts[name] = ("pass", c["conclusion"])
         elif c["status"] != "completed":
             verdicts[name] = ("pending", c["status"])
         else:
