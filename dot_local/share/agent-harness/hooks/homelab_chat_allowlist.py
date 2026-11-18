@@ -16,7 +16,7 @@ Allowed:
             [COORDINATOR_EVENT_ID=<token>] coordinator lead post HomelabChat [--key K] [--text T]   (--key=K / --text=T also)
           <homelab_bot.py> is the absolute path or the literal ~/git/... form.
           The command is read as zsh reads it (zsh runs the Bash tool): outside single quotes `$`, a backtick, a backslash and a newline are refused; outside
-          any quotes only plain word characters are accepted, so `; | & < > ( ) { } * ? [ ] ! # ^` and command substitution cannot occur; inside single quotes
+          any quotes only letters, digits and `_ . / : + % , = - @` are accepted (and a leading `~`), so `; | & < > ( ) { } * ? [ ] ! # ^` and command substitution cannot occur; inside single quotes
           every character but the closing quote is literal and passes (a multi-line chat text with `$` in it); inside double quotes `; | & < >` pass, `$`, backtick, backslash and newline do not.
   WebSearch, WebFetch, ToolSearch
   mcp__hindsight__recall, mcp__hindsight__reflect, mcp__hindsight__retain
@@ -39,7 +39,7 @@ BOT_PATHS = ("~/" + BOT_SCRIPT, "/home/cartwmic/" + BOT_SCRIPT)
 BOT_VERBS = {
     "sonarr": ("lookup", "add", "monitor", "episodes", "episode-search"),
     "radarr": ("lookup", "add", "monitor"),
-    "readarr": ("lookup", "add"),
+    "readarr": ("lookup", "add", "kindle"),
     "queue": None,
     "download": ("status",),
     "jellyfin": ("search",),

@@ -1,6 +1,6 @@
 """The CLIProxy hub as the default of Claude Code, Codex and the T3 `codex` instance, behind one switch (hub.enabled).
 
-    dot_claude/modify_settings.json.tmpl         env.ANTHROPIC_BASE_URL + apiKeyHelper
+    dot_claude/modify_settings.json.tmpl         env.ANTHROPIC_BASE_URL + apiKeyHelper (and env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE on the work profile)
     dot_codex/modify_private_config.toml.tmpl    top-level model_provider = "cliproxy"
     dot_t3/private_userdata/modify_settings.json.tmpl   providerInstances.codex -> setupMode existing
 
@@ -29,7 +29,8 @@ CLAUDE, CODEX, T3 = ("dot_claude/modify_settings.json.tmpl", "dot_codex/modify_p
                      "dot_t3/private_userdata/modify_settings.json.tmpl")
 HOME = "/Users/hubtest"
 URL = "https://cliproxy.internal.cartwmic.com"
-HELPER = HOME + "/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'"
+CODE_MODE = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"  # set to "1" on the work profile only (dot_claude/modify_settings.json.tmpl)
+HELPER =HOME + "/.local/user_scripts/op_read_cached.sh 'op://developer/tb36gtnaocyezjk3dslomp64he/laptop-claude-code'"
 CODEX_VERSION = "9.9.9"
 BINARY = "%s/.t3/tools/codex/%s/bin/codex" % (HOME, CODEX_VERSION)
 ORIGINAL_CODEX = {"driver": "codex", "enabled": True, "config": {"setupMode": "managed"}}
@@ -187,27 +188,47 @@ class ClaudeTest(unittest.TestCase):
             s = self.modify("on", text)
             self.assertEqual((s["env"], s["apiKeyHelper"]), ({"ANTHROPIC_BASE_URL": URL}, self.helper))
 
+    def expected_env(self, case, env):
+        """The env a case leaves after the hub is off: the work profile also carries the Code Mode key (test_work_sets_code_mode...)."""
+        return {**env, CODE_MODE: "1"} if case == "work" else env
+
     def test_off_removes_ours_and_keeps_a_users_env_keys(self):
         for case in ("off", "work", "off_linux"):
             s = self.modify(case, self.modify("on", self.USER))
-            self.assertEqual(s["env"], {"FOO": "bar"}, case)
+            self.assertEqual(s["env"], self.expected_env(case, {"FOO": "bar"}), case)
             self.assertNotIn("apiKeyHelper", s, case)
             self.assertEqual(s["hooks"]["Stop"], self.USER["hooks"]["Stop"], case)  # work adds its own SessionStart hook
             self.assertEqual(self.modify(case, s), s, case)
 
     def test_off_prunes_env_when_we_emptied_it_and_never_adds_it(self):
-        for case in ("off", "work", "off_linux"):
+        for case in ("off", "off_linux"):  # work keeps an env again for its Code Mode key: test_work_sets_code_mode...
             s = self.modify(case, self.modify("on", "{}"))
             self.assertNotIn("env", s, case)
             self.assertNotIn("apiKeyHelper", s, case)
             self.assertNotIn("env", self.modify(case, "{}"), case)
+        self.assertEqual(self.modify("work", self.modify("on", "{}"))["env"], {CODE_MODE: "1"})
 
     def test_off_keeps_a_different_url_a_different_helper_and_an_env_the_user_left_empty(self):
         mine = {"env": {"ANTHROPIC_BASE_URL": "https://proxy.example/v1"}, "apiKeyHelper": "/bin/my-helper"}
         for case in ("off", "work", "off_linux"):
-            self.assertEqual(self.modify(case, mine)["env"], mine["env"], case)
+            self.assertEqual(self.modify(case, mine)["env"], self.expected_env(case, mine["env"]), case)
             self.assertEqual(self.modify(case, mine)["apiKeyHelper"], "/bin/my-helper", case)
-            self.assertEqual(self.modify(case, {"env": {}})["env"], {}, case)
+            self.assertEqual(self.modify(case, {"env": {}})["env"], self.expected_env(case, {}), case)
+
+    def test_work_sets_code_mode_to_one_and_keeps_every_other_key(self):
+        self.assertEqual(self.modify("work", "{}")["env"], {CODE_MODE: "1"})
+        s = self.modify("work", {"theme": "dark", "env": {"FOO": "bar", CODE_MODE: "0"}})
+        self.assertEqual((s["env"], s["theme"]), ({"FOO": "bar", CODE_MODE: "1"}, "dark"))
+        self.assertEqual(self.modify("work", s), s)  # idempotent
+
+    def test_personal_never_has_code_mode_and_drops_one_left_in_env(self):
+        for case in ("on", "linux", "off", "off_linux"):
+            s = self.modify(case, {"env": {CODE_MODE: "1", "FOO": "bar"}})
+            self.assertNotIn(CODE_MODE, s["env"], case)
+            self.assertEqual(s["env"]["FOO"], "bar", case)
+            self.assertNotIn(CODE_MODE, self.modify(case, "{}").get("env", {}), case)
+        for case in ("off", "off_linux"):  # with the hub off, the key was the only thing in env: env goes too
+            self.assertNotIn("env", self.modify(case, {"env": {CODE_MODE: "1"}}), case)
 
     def test_the_helper_prints_only_the_key(self):
         # op_read_cached.sh must write nothing but the value to stdout (messages go to stderr): fake op, then read twice (miss, hit).
@@ -467,7 +488,7 @@ class ApplyPathTest(unittest.TestCase):
         fake = self.home / ".local/user_scripts/op_read_cached.sh"
         fake.write_text("#!/bin/sh\nprintf %s " + KEY + "\n")
         fake.chmod(0o755)
-        (self.home / ".claude/settings.json").write_text('{"theme": "dark", "env": {"FOO": "bar"}}')
+        (self.home / ".claude/settings.json").write_text(json.dumps({"theme": "dark", "env": {"FOO": "bar", CODE_MODE: "1"}}))  # Code Mode left on: personal removes it
         (self.home / ".codex/config.toml").write_text(self.CODEX_BASE)
         (self.home / ".t3/userdata/settings.json").write_text(FIXTURE)
         self.cfg = Path(self.tmp.name) / "chezmoi.yaml"
@@ -534,6 +555,14 @@ class ApplyPathTest(unittest.TestCase):
         self.apply(*self.targets())
         self.assertEqual(self.read(), baseline)
         self.assertEqual(stat.S_IMODE((self.home / ".t3/userdata").stat().st_mode), 0o700)
+
+    def test_work_profile_real_apply_sets_code_mode_and_keeps_the_other_env_keys(self):
+        self.cfg.write_text("data:\n  profile: axon-work-computer\n")
+        (self.home / ".claude/settings.json").write_text(json.dumps({"theme": "dark", "env": {"FOO": "bar"}}))
+        self.apply(self.targets()[0])
+        claude = json.loads((self.home / ".claude/settings.json").read_text())
+        self.assertEqual((claude["env"], claude["theme"]), ({"FOO": "bar", CODE_MODE: "1"}, "dark"))
+        self.assertNotIn("apiKeyHelper", claude)
 
     def test_full_apply_of_t3_keeps_userdata_private(self):
         self.apply(str(self.home / ".t3"))
