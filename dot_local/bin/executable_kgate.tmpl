@@ -162,7 +162,14 @@ def registry_admits(regs, ref):
     return any(ref.startswith(r + "/") or ("/" in r and repo == r) for r in regs)
 
 
-CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default"}
+CLUSTER_KEYS = {"kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s", "pod_labels", "pod_annotations", "cache_claim_default", "cache_cap"}
+# The kubectl pod's shared cache claim keeps the Go build cache and the pnpm store between jobs, and nothing trimmed them:
+# left alone they grow without bound, a shared claim can fill, and the next job dies with exit 69, "no space left on
+# device". The pod side now trims /cache/go-build and /cache/pnpm-store to
+# this cap each, oldest files first (a file-level trim: see trim_cache in POD_SH). gomod is not trimmed: a trimmed
+# module is downloaded again in full, so a cap there buys little and costs the proxy round trips.
+CACHE_CAP_KUBECTL_DEFAULT = 8 << 30   # bytes per cache, when the cluster file sets no cache_cap; 0 disables the trim
+CACHE_CAP_KUBECTL_MAX = 1 << 50       # 1PiB: the largest cache_cap accepted. The pod side gets cap // 1024 as CACHE_CAP_KIB (at most 2^40), far inside its 64-bit shell arithmetic; the bound only keeps out an absurd cap, since the trim walks every file under the cache
 CLUSTER_REQUIRED = ("kind", "kubeconfig", "context", "namespace", "registries", "tree_roots", "user", "deadline_s")
 MAX_RUN_S = 4 * 3600  # the homelab pod ends itself at this age: the hard bound on any job. The longest legitimate jobs on record ran 3 h (a 30-run journey repeat); it was 8 h, which two of the three 2026-11-16 orphans never reached
 UNAVAILABLE = 69
@@ -610,9 +617,22 @@ def load_cluster(name):
     claim = raw.get("cache_claim_default")
     if claim is not None and (not isinstance(claim, str) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", claim)):
         raise Unavailable("cluster file %s: cache_claim_default must be a claim name, got %r" % (path, claim))
+    cap = raw.get("cache_cap", CACHE_CAP_KUBECTL_DEFAULT)   # per cache (/cache/go-build, /cache/pnpm-store); 0 disables the trim
+    given, qty = cap, None
+    if isinstance(cap, str):
+        qty = parse_qty(cap)
+        if qty is None:
+            raise Unavailable("cluster file %s: cache_cap must be a quantity of bytes like 8Gi (or a whole number of bytes), got %r" % (path, cap))
+        cap = int(qty)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+        raise Unavailable("cluster file %s: cache_cap must be a quantity of bytes like 8Gi (or a whole number of bytes), got %r" % (path, cap))
+    if 0 < cap < 1024 or (qty is not None and 0 < qty < 1024):   # a cap under 1KiB ("100m", "0.5", 500) would reach the pod side as cap // 1024 == 0 KiB and silently disable the trim
+        raise Unavailable("cluster file %s: cache_cap %r is under 1KiB; give at least 1024 bytes (0 disables the trim)" % (path, given))
+    if cap > CACHE_CAP_KUBECTL_MAX:
+        raise Unavailable("cluster file %s: cache_cap %r is above the %d-byte maximum (1PiB); the trim walks every file under the cache, and a cap that size is not sane" % (path, given, CACHE_CAP_KUBECTL_MAX))
     return {"name": name, "path": path, "kubeconfig": os.path.expanduser(raw["kubeconfig"]), "context": raw["context"], "namespace": raw["namespace"],
             "registries": raw["registries"], "tree_roots": raw["tree_roots"], "user": raw["user"], "deadline_s": raw["deadline_s"],
-            "pod_labels": raw.get("pod_labels", {}), "pod_annotations": raw.get("pod_annotations", {}), "cache_claim_default": claim}
+            "pod_labels": raw.get("pod_labels", {}), "pod_annotations": raw.get("pod_annotations", {}), "cache_claim_default": claim, "cache_cap": cap}
 
 
 def tree_roots_for(cfg, *paths):
@@ -714,7 +734,10 @@ def job_sh(job):
     """The job as a POSIX sh file for pod_sh: variables, the tool checks as kg_tools, the command as the positional parameters."""
     q = shlex.quote
     lines = ["ID=" + q(job["id"]), "ROOT=" + q(job["root"]), "CWD=" + q(job["cwd"]), "TREE=" + q(job["tree"]),
-             "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD", "kg_tools() {"]
+             "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD"]
+    if job.get("cache_cap") is not None:   # the pod side trims its Go build cache and pnpm store to this, oldest files first; KiB, so the cap cannot overflow the pod side's shell arithmetic
+        lines.append("CACHE_CAP_KIB=%d" % (job["cache_cap"] // 1024))
+    lines.append("kg_tools() {")
     lines += ["  kg_check %s %s %s || return" % (q(name), q(version), q(cmd or name + " --version")) for name, (version, cmd) in job["tools"].items()]
     lines += ["  :", "}", "set -- " + " ".join(q(a) for a in job["argv"])]
     return "\n".join(lines) + "\n"
@@ -730,6 +753,85 @@ trap 'rm -rf "$dir"' EXIT
 find "$(dirname "$dir")" -maxdepth 1 -name 'kgate-*' -mmin +1440 -exec rm -rf {} + 2>/dev/null
 say() { printf 'kgate[%s]: %s\n' "$ID" "$*"; }
 say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)"
+# The shared cache claim (cache_pvc) keeps the Go build cache and the pnpm store between jobs, and nothing trimmed them:
+# left alone they can fill it until a job dies with no space left on device. Before the job runs, trim each to
+# CACHE_CAP_KIB (from job.sh; the cluster file's cache_cap // 1024, 8Mi KiB by default), oldest file first. The trim
+# is at file level, because the real layouts defeat a trim of whole children: go-build is 256 bucket directories
+# (00..ff) whose directory mtimes do not move when Go rewrites the files inside, and a pnpm store holds only version
+# directories (v3, v10, v11), so trimming children by their own mtime would evict go-build in a random order and wipe
+# a whole store at once. Only files are removed, never a directory, so the cache, its version and bucket directories
+# all survive; an empty directory left behind costs almost nothing. The listing is piped, never written onto the
+# claim. This is safe only because the claim is ReadWriteOncePod: one job at a time, so nothing else writes the cache
+# while we trim. A file that vanished since the listing is skipped by rm -f itself; one that will not delete is left
+# where it is and is not counted as removed; and any failure here is logged and the job goes on. KGATE_CACHE_ROOT
+# exists for the tests and a live proof only; a pod never sets it.
+# Which stat flavor: GNU and busybox stat take -c; macOS BSD stat (the test suite) takes -f.
+if stat -c '%Y %s %n' / >/dev/null 2>&1; then
+  cache_files() {  # DIR KIND: one "mtime size path" line per file, one stat pass in batches; mtime first, so sort -n orders oldest first
+    if [ "$2" = pnpm ]; then
+      for v in "$1"/v*/; do   # walk the version directories here: a -path pattern's * crosses /, so it would also match a /files/ or /index/ part under v*/links/ or v*/projects/
+        [ -d "${v}files" ] && find "${v}files" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
+        [ -d "${v}index" ] && find "${v}index" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
+      done
+    else
+      find "$1" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
+    fi
+  }
+else
+  cache_files() {
+    if [ "$2" = pnpm ]; then
+      for v in "$1"/v*/; do
+        [ -d "${v}files" ] && find "${v}files" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
+        [ -d "${v}index" ] && find "${v}index" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
+      done
+    else
+      find "$1" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
+    fi
+  }
+fi
+# The pnpm listing walks the version directories in the shell and reaches only each one's content and old index
+# trees: v*/files/ holds the content-addressed blobs, and before pnpm 11 moved the index into one SQLite database,
+# v*/index/ held the per-package JSON files; both are safe to delete file by file, because pnpm re-fetches what is
+# missing. Never listed, at any version directory: index.db and the -wal and -shm side files SQLite writes beside it
+# (pnpm 11 keeps the store's one SQLite index at v11/index.db, and pnpm does not touch store files on use, so an old,
+# stable store has an old index.db that the trim would otherwise delete whole as one old file), v*/links/ (pnpm 11
+# keeps whole package directories there, the global virtual store: deleting single files could leave a package
+# half-deleted that pnpm still treats as installed) and v*/projects/ (per-project state) -- including a path under
+# links/ or projects/ that merely contains a files/ or index/ part, which is why the walk is in the shell and not a
+# find -path pattern. For go-build every file is listed.
+trim_cache() {  # DIR KIND CAP_KIB: delete the oldest files under DIR until it fits CAP_KIB
+  d=$1 kind=$2 cap=$3
+  [ -d "$d" ] || return 0
+  [ "${cap:-0}" -gt 0 ] || return 0
+  used=$(du -sk "$d" 2>/dev/null | cut -f1)
+  [ "${used:-0}" -gt "$cap" ] || return 0
+  say "cache $d at ${used}KiB over the ${cap}KiB cap: trimming oldest files first"
+  t0=$(date +%s)
+  over=$(( (used - cap) * 1024 ))   # bytes still to free; the sizes in the listing are bytes
+  before=$(find "$d" -type f 2>/dev/null | wc -l)
+  # awk walks the listing oldest first, prints each path while the cache is still over the cap and then stops; xargs
+  # batches the rm calls (one rm per batch, not one fork per file). Paths are cache hashes with no newlines, and the
+  # tr makes the handover NUL-separated anyway, so a space in a path cannot split it.
+  cache_files "$d" "$kind" | sort -n | awk -v over="$over" \
+    'over > 0 { sz = $2; sub(/^[0-9]+ [0-9]+ /, ""); print; over -= sz }' |
+    tr "\n" "\0" | xargs -0 rm -f 2>/dev/null
+  left=$(find "$d" -type f 2>/dev/null | wc -l)
+  after=$(du -sk "$d" 2>/dev/null | cut -f1)
+  took=$(( $(date +%s) - t0 ))
+  if [ "$((before - left))" -gt 0 ]; then
+    say "cache $d removed $((before - left)) files in ${took}s, now at ${after:-?}KiB (cap ${cap}KiB)"
+  else
+    say "cache $d removed nothing in ${took}s, still at ${after:-?}KiB (cap ${cap}KiB)"
+  fi
+  if [ "${after:-0}" -gt "$cap" ]; then   # index.db, links/ and projects/ can exceed the cap on their own: nothing trimmable left
+    say "cache $d still over cap: $((after - cap))KiB not trimmable"
+  fi
+}
+cache_root=${KGATE_CACHE_ROOT:-/cache}
+if [ -n "${CACHE_CAP_KIB:-}" ]; then
+  trim_cache "$cache_root/go-build" go "$CACHE_CAP_KIB"
+  trim_cache "$cache_root/pnpm-store" pnpm "$CACHE_CAP_KIB"
+fi
 mkdir -p "$HOME" 2>/dev/null
 # A fresh one-commit repo at the tree root (no history is shipped), so tools find a HEAD. Its index holds exactly the shipped files, hashed as
 # bytes (no line-ending, filter or encoding conversion), and `git write-tree` of it is the tree hash. The commit is made only when it matches.
@@ -2120,7 +2222,7 @@ class Job:
                "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()},
                "cache": {"root": CACHE_ROOT, "cap": CACHE_CAP}}
         if self.cluster.kind == "kubectl":
-            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"]}).encode(),
+            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"], "cache_cap": self.kcfg["cache_cap"]}).encode(),
                        "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:

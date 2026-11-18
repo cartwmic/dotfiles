@@ -2449,9 +2449,9 @@ class PodSh(unittest.TestCase):
         self.cg = self.tmp / "cg"
         self.cg.mkdir()
 
-    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False):
+    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False, cache_cap=None):
         job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files, "head": head,
-               "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}}
+               "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}, "cache_cap": cache_cap}
         self.job.mkdir(exist_ok=True)   # the script removes it at the end
         (self.job / "job.sh").write_text(K.job_sh(job))
         (self.job / "files.nul").write_bytes(b"".join(os.fsencode(f) + b"\0" for f in self.files))
@@ -2668,6 +2668,189 @@ class PodSh(unittest.TestCase):
     def test_no_head_on_the_mac_gives_an_empty_kgate_head(self):
         done, _ = self.run_sh(argv=("sh", "-c", 'echo "[$KGATE_HEAD]"'), head=None)
         self.assertIn("[]", done.stdout)
+
+    # --- the cache trim (KGATE_CACHE_ROOT points the pod side's /cache at a temp dir; a pod never sets it)
+
+    def cache_entry(self, cache, name, age, kib=2048):
+        "One cache entry of about kib KiB whose files were last used age seconds ago."
+        path = cache / name
+        path.mkdir(parents=True)
+        (path / "blob").write_bytes(b"x" * kib * 1024)
+        t = time.time() - age
+        os.utime(path, (t, t))
+        os.utime(path / "blob", (t, t))
+        return path
+
+    def cache_file(self, parent, name, age, kib=2048):
+        "One plain cache file of about kib KiB last used age seconds ago (the real caches are trimmed at file level)."
+        path = parent / name
+        parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * kib * 1024)
+        t = time.time() - age
+        os.utime(path, (t, t))
+        return path
+
+    def test_an_over_cap_cache_is_trimmed_oldest_file_first_and_the_job_still_passes(self):
+        cache = self.tmp / "cache"
+        old = self.cache_entry(cache / "go-build", "old", 3000)
+        mid = self.cache_entry(cache / "go-build", "mid", 2000)
+        new = self.cache_entry(cache / "go-build", "new", 10)
+        done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("over the 3072KiB cap: trimming oldest files first", done.stdout)
+        self.assertRegex(done.stdout, r"removed [1-9] files in [0-9]+s, now at [0-9]+KiB \(cap 3072KiB\)")
+        self.assertFalse((old / "blob").exists())
+        self.assertFalse((mid / "blob").exists())
+        self.assertTrue((new / "blob").exists(), "the newest file is the last to go")
+        self.assertTrue((cache / "go-build").is_dir(), "the cache directory itself is never removed")
+        self.assertEqual(self.markers(done.stdout)["hash"], "ok " + K.tree_hash(str(self.tree), self.files))
+
+    def test_a_pnpm_store_is_trimmed_file_by_file_not_wiped_whole(self):
+        "A real pnpm store holds only version directories (v3, v10, v11) over content: a trim of whole children would wipe it in one step."
+        cache = self.tmp / "cache"
+        blobs = cache / "pnpm-store" / "v10" / "files" / "ab"
+        old = self.cache_file(blobs, "old", 3000)
+        new = self.cache_file(blobs, "new", 10)
+        now = time.time()
+        for d in (cache / "pnpm-store", cache / "pnpm-store" / "v10", blobs):
+            os.utime(d, (now, now))     # the version directories' own mtimes are the newest of all
+        done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(old.exists(), "the oldest file goes")
+        self.assertTrue(new.exists(), "the newest file survives")
+        for kept in (cache / "pnpm-store", cache / "pnpm-store" / "v10", blobs):
+            self.assertTrue(kept.is_dir(), "no version or content directory is removed")
+        self.assertEqual(sorted(p.name for p in cache.iterdir()), ["pnpm-store"], "nothing is written onto the claim")
+
+    def test_the_pnpm_index_and_links_survive_the_trim_and_files_go_oldest_first(self):
+        "pnpm 11 keeps its SQLite index at v11/index.db and whole packages in v11/links/: the trim touches only the version directories' files/ and index/ trees."
+        cache = self.tmp / "cache"
+        store = cache / "pnpm-store" / "v11"
+        old = self.cache_file(store / "files" / "ab", "old", 3000)
+        new = self.cache_file(store / "files" / "ab", "new", 10)
+        index = self.cache_file(store, "index.db", 4000, kib=64)   # an old, stable store: the index is the oldest thing in it
+        wal = self.cache_file(store, "index.db-wal", 4000, kib=64)
+        link = self.cache_file(store / "links" / "x" / "node_modules" / "y", "pkg", 3000, kib=64)
+        project = self.cache_file(store / "projects" / "p", "state", 3000, kib=64)
+        # A links/ or projects/ path that merely contains a /files/ or /index/ part is still links/ or projects/ content:
+        # a -path pattern's * crosses /, so it would match these and half-delete a package pnpm treats as installed.
+        link_index = self.cache_file(store / "links" / "@x" / "y" / "1.0.0" / "h" / "node_modules" / "y" / "lib" / "index", "b.js", 5000, kib=64)
+        project_files = self.cache_file(store / "projects" / "p" / "files", "s", 4000, kib=64)
+        done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(old.exists(), "the oldest files/ blob goes first")
+        self.assertTrue(new.exists(), "the newest files/ blob survives")
+        self.assertTrue(index.exists(), "index.db is never deleted, whatever version directory holds it")
+        self.assertTrue(wal.exists(), "the -wal side file survives with it")
+        self.assertTrue(link.exists(), "links/ (the global virtual store) is never touched")
+        self.assertTrue(project.exists(), "projects/ is never touched")
+        self.assertTrue(link_index.exists(), "a links/ path with an /index/ part is never listed")
+        self.assertTrue(project_files.exists(), "a projects/ path with a /files/ part is never listed")
+        self.assertTrue((store / "files" / "ab").is_dir(), "the content directory survives")
+
+    def test_go_build_buckets_are_trimmed_by_file_age_not_bucket_mtime(self):
+        "go-build is 256 bucket directories (00..ff) whose mtimes do not move when Go rewrites the files inside: the file ages decide."
+        cache = self.tmp / "cache"
+        ff_old = self.cache_file(cache / "go-build" / "ff", "old", 3000)
+        ab_mid = self.cache_file(cache / "go-build" / "ab", "mid", 2000)
+        new = self.cache_file(cache / "go-build" / "00", "new", 10)
+        now = time.time()
+        for b in ("00", "ab", "ff"):
+            os.utime(cache / "go-build" / b, (now, now))    # every bucket directory's mtime is the newest of all
+        done, _ = self.run_sh(cache_cap=5 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(ff_old.exists(), "the oldest file goes, whatever bucket it is in")
+        self.assertTrue(ab_mid.exists())
+        self.assertTrue(new.exists(), "the newest file survives")
+        for b in ("00", "ab", "ff"):
+            self.assertTrue((cache / "go-build" / b).is_dir(), "no bucket directory is removed")
+
+    def test_an_under_cap_cache_is_left_alone(self):
+        cache = self.tmp / "cache"
+        keep = self.cache_entry(cache / "go-build", "keep", 3000, kib=64)
+        done, _ = self.run_sh(cache_cap=8 << 30, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(keep.exists())
+        self.assertNotIn("trimming", done.stdout)
+
+    def test_a_cap_of_zero_disables_the_trim(self):
+        cache = self.tmp / "cache"
+        keep = self.cache_entry(cache / "go-build", "keep", 3000, kib=64)
+        done, _ = self.run_sh(cache_cap=0, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(keep.exists())
+        self.assertNotIn("trimming", done.stdout)
+
+    def test_a_file_that_cannot_be_removed_is_skipped_and_the_job_still_passes(self):
+        cache = self.tmp / "cache"
+        stuck = self.cache_entry(cache / "go-build", "stuck", 3000)
+        (stuck / "sub").mkdir()
+        (stuck / "sub" / "blob").write_bytes(b"x" * 64 * 1024)
+        (stuck / "sub").chmod(0)            # rm cannot reach into this, so this file cannot go
+        free = self.cache_entry(cache / "go-build", "free", 2000)
+        try:
+            done, _ = self.run_sh(cache_cap=1 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        finally:
+            (stuck / "sub").chmod(0o755)    # let the test's own cleanup remove what the trim could not
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue((stuck / "sub" / "blob").exists(), "the undeletable file is skipped, not a failed job")
+        self.assertFalse((free / "blob").exists(), "the trim goes on with the files it can remove")
+
+    def test_a_vanished_file_is_skipped_and_the_trim_goes_on(self):
+        "A file that vanished since the listing is skipped (rm -f ignores it) and the trim goes on with the rest."
+        fn = re.search(r"^trim_cache\(\) \{.*?^\}", K.POD_SH, re.S | re.M).group(0)
+        cache = self.tmp / "cache"
+        keep = self.cache_file(cache / "go-build", "keep", 10, kib=8)
+        d = str(cache / "go-build")
+        script = fn + "\n" + (   # fn ends at the closing brace with no newline; keep say() on its own line
+            'say() { printf "%s\\n" "$*" ; }\n'
+            + 'cache_files() { printf "100 2048 /no/such/vanished\\n200 65536 %s/keep\\n" "%s" ; }\n' % (d, d)
+            + "trim_cache '%s' go 4\n" % d
+        )
+        done = subprocess.run(["sh", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(keep.exists(), "the file that is still there goes")
+        self.assertIn("over the 4KiB cap: trimming oldest files first", done.stdout)
+        self.assertIn("removed 1 files", done.stdout, "the vanished file is not counted as removed")
+
+    def test_a_cache_still_over_cap_after_the_trim_is_logged(self):
+        "index.db, links/ and projects/ can exceed the cap on their own: the trim logs what is left instead of failing."
+        fn = re.search(r"^trim_cache\(\) \{.*?^\}", K.POD_SH, re.S | re.M).group(0)
+        cache = self.tmp / "cache"
+        keep = self.cache_file(cache / "go-build", "keep", 10, kib=8)
+        d = str(cache / "go-build")
+        script = fn + "\n" + (   # fn ends at the closing brace with no newline; keep say() on its own line
+            'say() { printf "%s\\n" "$*" ; }\n'
+            + "cache_files() { : ; }\n"   # nothing is trimmable: the listing is empty
+            + "trim_cache '%s' go 4\n" % d
+        )
+        done = subprocess.run(["sh", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(keep.exists())
+        self.assertRegex(done.stdout, r"still over cap: [0-9]+KiB not trimmable")
+
+    def test_a_failed_trim_never_fails_the_job(self):
+        "rm cannot delete from a directory this user cannot write: the trim removes nothing, says so, and the job passes."
+        cache = self.tmp / "cache"
+        stuck_dir = cache / "go-build" / "ff"
+        stuck = self.cache_file(stuck_dir, "stuck", 3000)
+        stuck_dir.chmod(0o555)
+        try:
+            done, _ = self.run_sh(cache_cap=1 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        finally:
+            stuck_dir.chmod(0o755)      # let the test's own cleanup remove what the trim could not
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(stuck.exists(), "the undeletable file is still there")
+        self.assertRegex(done.stdout, r"removed nothing in [0-9]+s, still at [0-9]+KiB \(cap 1024KiB\)")
+        self.assertEqual(self.markers(done.stdout)["hash"], "ok " + K.tree_hash(str(self.tree), self.files))
+
+    def test_no_cache_cap_line_and_no_trim_without_one(self):
+        cache = self.tmp / "cache"
+        keep = self.cache_entry(cache / "go-build", "keep", 3000, kib=64)
+        done, _ = self.run_sh(env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(keep.exists())
+        self.assertNotIn("trimming", done.stdout)
 
 
 SUB_SHA = "1" * 40
@@ -3841,6 +4024,64 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(self.run_kgate("--", "true").returncode, 0)
         pod = [c["manifest"] for c in self.kcalls() if "manifest" in c][-1]["items"][0]
         self.assertIn({"name": "cache", "persistentVolumeClaim": {"claimName": "own-cache"}}, pod["spec"]["volumes"])
+
+    def set_cache_cap(self, line):
+        """A top-level cache_cap key: prepended, because write_cluster's extra lands inside the last table."""
+        path = self.write_cluster()
+        path.write_text(line + path.read_text())
+        return path
+
+    def test_the_cache_cap_reaches_the_pod_side_in_job_sh(self):
+        self.set_cache_cap('cache_cap = "4Gi"\n')
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP_KIB=4194304", job_sh)
+        self.set_cache_cap("")
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP_KIB=8388608", job_sh, "the 8Gi default is applied when the cluster file sets no cache_cap")
+
+    def test_a_cache_cap_of_zero_reaches_the_pod_side_as_zero(self):
+        self.set_cache_cap("cache_cap = 0\n")
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP_KIB=0", job_sh)
+
+    def test_an_invalid_cache_cap_is_refused_with_the_key_named(self):
+        for line in ('cache_cap = "huge"\n', 'cache_cap = "8 Gi"\n', "cache_cap = -1\n", "cache_cap = true\n", "cache_cap = 1.5\n"):
+            self.set_cache_cap(line)
+            done = self.run_kgate("--", "true")
+            self.assertEqual(done.returncode, 69, done.stdout)
+            self.assertIn("cache_cap", self.records()[-1]["reason"])
+
+    def test_a_cache_cap_above_the_maximum_is_refused_and_one_pib_is_accepted(self):
+        for line in ('cache_cap = "16Ei"\n', 'cache_cap = "2Pi"\n', "cache_cap = %d\n" % ((1 << 50) + 1)):
+            self.set_cache_cap(line)
+            done = self.run_kgate("--", "true")
+            self.assertEqual(done.returncode, 69, done.stdout)
+            self.assertIn("cache_cap", self.records()[-1]["reason"])
+        self.set_cache_cap('cache_cap = "1Pi"\n')   # exactly the maximum is accepted
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP_KIB=1099511627776", job_sh)
+
+    def test_a_cache_cap_under_one_kib_is_refused_and_one_kib_is_accepted(self):
+        "A cap under 1KiB would reach the pod side as cap // 1024 == 0 KiB and silently disable the trim."
+        for line in ('cache_cap = "100m"\n', 'cache_cap = "0.5"\n', 'cache_cap = "1"\n', 'cache_cap = "1023"\n', "cache_cap = 500\n"):
+            self.set_cache_cap(line)
+            done = self.run_kgate("--", "true")
+            self.assertEqual(done.returncode, 69, done.stdout)
+            self.assertIn("cache_cap", self.records()[-1]["reason"])
+            self.assertIn("under 1KiB", self.records()[-1]["reason"])
+        self.set_cache_cap('cache_cap = "1Ki"\n')   # exactly 1KiB is accepted
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP_KIB=1", job_sh)
 
     def test_two_clusters_can_coexist_each_with_its_own_file_and_record(self):
         self.write_cluster(name="second")
