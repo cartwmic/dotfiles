@@ -86,7 +86,7 @@
 #               without the hindsight guide, plus the skill that carries the guide (docs/profiles.md "Agent seat instances"). The lead, coordinator and default instances are unchanged.
 #               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
 #               is deployed for it to point at.
-# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and the four seats; an `environment` entry, merged by name so other entries stay):
+# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and every seat-* instance (lead, builder, planner, reviewer, computer, and homelab-chat on Linux outside container mode); an `environment` entry, merged by name so other entries stay):
 #               T3 delivers a message to a running session as an interrupt (priority "now"). When it lands while Claude Code is still running a
 #               PreToolUse hook, that call is skipped, and Claude Code 2.1.322/323 reports it as "The user doesn't want to take this action right now. STOP
 #               what you are doing and wait for the user to tell you how to proceed." (three false declines in the coordinator session, 2026-11-12/13). With this

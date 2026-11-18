@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The Omarchy script is what it was at the base commit.
+"""The Omarchy script rendered by chezmoi has the sha256 it is given.
 
 usage: check_omarchy_unchanged.py SHA256
 Renders ~/.local/bin/agent-desktop the way chezmoi would on personal Linux, in a scratch destination, and compares its
-sha256 with SHA256 (the sha256 of the script at the base commit). Prints one fixed line and exits 0 when they match;
+sha256 with SHA256 (the hash the caller expects, for example the script at a known commit). Prints one fixed line and exits 0 when they match;
 prints what differs to stderr and exits 1 otherwise. The fixed line is what lets the criterion say `old: same`.
 """
 import hashlib
