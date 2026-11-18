@@ -33,15 +33,22 @@ SEAT_ROWS = {
         "| Computer use | Sonnet 5.5 high |",
     ),
     "axon-work-computer": (
-        "| Coordinator | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
-        "| Lead | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
+        "| Coordinator | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
+        "| Lead | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Reviewer | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
+        "| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
         "| Computer use | Sonnet 5.5 high, Pi (anthropic/claude-sonnet-5-5) |",
     ),
 }
 CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
+WORK_SEAT_BULLETS = (
+    "- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
+    "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Computer use runs on Pi with "
+    "`--provider anthropic --model claude-sonnet-5-5` at high thinking.",
+    "- Computer use drives the agent Chrome on 127.0.0.1:9333 only through the browser-harness MCP server, plus "
+    "agent-desktop for things outside the page; never start another browser or browser tool.",
+)
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
     "when you will use subagents and which models they will use; if that is not clear, ask again, and do not guess. "
@@ -148,7 +155,11 @@ class InstructionProfileTests(unittest.TestCase):
                 for row in SEAT_ROWS["axon-work-computer"]:
                     self.assertEqual(text.count(row), 1)
                 self.assertNotIn("| Browser work |", text)
+                self.assertNotIn("| Browser use |", text)
+                self.assertNotIn("Cursor", text)
                 self.assertNotIn(CLI_PROXY_LINE, text)
+                for bullet in WORK_SEAT_BULLETS:
+                    self.assertEqual(text.count(bullet), 1)
 
     def test_termux_has_no_seat_table(self):
         for name, template in TEMPLATES.items():
