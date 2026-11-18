@@ -1,0 +1,33 @@
+---
+name: using-computer
+description: Use when you are the Computer use seat, or any task needs a browser or the screen as Michael: open or read a site, sign in, fill a form, click, download a file, or drive something outside the page. It sets the order of work, which tool to use for what, and how to keep Michael's focus where it was.
+---
+{{- $personalLinux := and (eq .profile "personal") (eq .chezmoi.os "linux") }}
+{{- $work := eq .profile "axon-work-computer" }}
+
+# Using the computer
+
+You are the Computer use seat: the one seat for any task in a browser or on the screen. The seat table names your model. The first line of your brief names the seat. Do not take Michael's focus: he keeps working while you do.
+
+## Order
+{{ if $personalLinux -}}
+1. First, before anything that touches Chrome: `agent-desktop save`. It records the active window and the pointer.
+2. Do the work.
+3. Last: `agent-desktop restore`. It puts the pointer and focus back where `save` found them. Run it even when the work failed.
+
+Nothing that touches Chrome (the browser tool, `agent-chrome`, `agent-download`) runs before `save`.
+{{- else -}}
+On a Mac, `agent-desktop` has no `save` or `restore`. Keep Chrome in the background, and call `agent-desktop focus` only when input outside the page is needed.
+{{- end }}
+
+## Which tool
+- Browser tool: {{ if $work }}the `browser-harness` MCP server (agent-harness README, "browser-harness"){{ else }}Browse, the `browse` MCP server; load the `using-browse` skill{{ end }}.
+- Downloads: `agent-download`.
+- Outside the page (a dialog, a prompt, a screenshot): `agent-desktop` (docs/agent-desktop.md). Use screen input only when the page needs it. `agent-desktop shot` needs no focus, so prefer it to anything that moves focus.
+{{ if $work }}
+## Sign-in (work)
+Okta and Google sign-in needs FastPass or a push on Michael's phone. Do not retry it. Stop and ask your lead; the lead takes it up the chain.
+{{- else }}
+## Sign-in and codes (personal)
+Use the 1Password personal account first. Read login codes from Beeper and Gmail. Ask Michael only after you have tried those and screen control. The one-host rule for logins you add is in `using-browse`.
+{{- end }}
