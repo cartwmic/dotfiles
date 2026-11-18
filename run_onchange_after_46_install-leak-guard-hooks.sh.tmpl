@@ -53,5 +53,7 @@ mv "$dest/context.tmp" "$dest/context"
 printf '%s' {{ $pi | b64enc | quote }} | base64 -d > "$dest/pi-judge.tmp"
 printf '\n' >> "$dest/pi-judge.tmp"
 mv "$dest/pi-judge.tmp" "$dest/pi-judge"
+{{-   else }}
+rm -f "$dest/pi-judge"      # a pin that is no longer in the data must not keep judging
 {{-   end }}
 {{ end -}}

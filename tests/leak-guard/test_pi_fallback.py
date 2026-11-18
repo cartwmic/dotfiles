@@ -81,7 +81,7 @@ class SpendLimitFallsBack(PiBase):
         self.assertEqual(args[:1], ["-p"])
         self.assertNotIn("--provider", args)
         self.assertNotIn("--model", args)
-        for flag in ("--no-tools", "--no-extensions", "--no-mcp", "--no-session"):
+        for flag in ("--no-tools", "--no-extensions", "--no-mcp", "--no-session", "--no-context-files", "--no-skills"):
             self.assertIn(flag, args)
         sysprompt = args[args.index("--system-prompt") + 1]
         self.assertIn('"leak"', sysprompt)
@@ -95,7 +95,7 @@ class SpendLimitFallsBack(PiBase):
         args = json.loads((self.fake / "pi-args.json").read_text())
         self.assertEqual(args[args.index("--provider") + 1], "pinprovider")
         self.assertEqual(args[args.index("--model") + 1], "pinmodel")
-        for flag in ("--no-tools", "--no-extensions", "--no-mcp", "--no-session"):
+        for flag in ("--no-tools", "--no-extensions", "--no-mcp", "--no-session", "--no-context-files", "--no-skills"):
             self.assertIn(flag, args)
 
     def test_a_not_signed_in_failure_with_a_429_elsewhere_in_the_output_never_falls_back(self):

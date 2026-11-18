@@ -82,6 +82,9 @@ class Installer(unittest.TestCase):
         self.assertEqual((self.home / ".config" / "leak-guard" / "pi-judge").read_text(), "pi -p --provider pinprovider --model pinmodel\n")
         import stat as st
         self.assertEqual(st.S_IMODE((self.home / ".config" / "leak-guard" / "pi-judge").stat().st_mode), 0o600)
+        ran = self.run_script(self.render(DATA).stdout)      # the key removed again: a stale pin must not keep judging
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertFalse((self.home / ".config" / "leak-guard" / "pi-judge").exists())
 
     def test_a_hook_that_is_not_ours_is_left_alone_with_a_warning(self):
         done = self.render(DATA)

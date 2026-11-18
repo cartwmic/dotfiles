@@ -126,6 +126,21 @@ class CommitAndPushShareTheContext(RepoContextBase):
         self.assertIn("do not report them: Halcyon", (self.fake / "stdin.txt").read_text())
         self.assertIn("skipped, its name is already in the repository", done.stderr)
 
+    def test_a_name_added_by_an_earlier_commit_of_the_same_push_is_not_named_as_published(self):
+        self.git("checkout", "-q", "-b", "feature")
+        for name, text in (("one.txt", "The Zephyrine tools live here\n"), ("two.txt", "see the Zephyrine docs\n")):
+            (self.repo / name).write_text(text)
+            self.git("add", name)
+            self.git("commit", "-q", "-m", "mention", "--no-verify")
+        tip = self.git("rev-parse", "HEAD").stdout.strip()
+        done = self.guard("pre-push", "origin", str(self.remote),
+                          stdin="refs/heads/feature %s refs/heads/feature %s\n" % (tip, "0" * 40), env=self.judge("Zephyrine"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        sent = (self.fake / "stdin.txt").read_text()
+        self.assertNotIn("report them: Zephyrine", sent, "a name this same push adds is new, whatever an earlier commit of the push holds")
+        self.assertNotIn(", Zephyrine", sent)
+        self.assertNotIn("skipped", done.stderr)
+
     def test_a_name_the_branch_lacks_is_not_named_in_the_pre_push_prompt(self):
         self.git("checkout", "-q", "-b", "feature")
         (self.repo / "notes.txt").write_text("see the Zephyrine docs\n")

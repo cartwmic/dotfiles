@@ -26,9 +26,9 @@ It fails closed: a missing claude CLI, no sign-in, no network, a timeout (120 s)
 200 KB, or a push line over a 180 KB chunk blocks with a one-line reason naming the step. A larger push is split into chunks of about 180 KB, each its own
 Claude call, and every chunk must pass. The one retried failure is claude's spend-limit / usage-limit 429 — decided only from claude's own structured
 verdict, the result event's api_error_status being 429, never from a 429 or the words anywhere in the output: the same prompt then goes to pi once (pi's
-own default model, or the judge pinned in ~/.config/leak-guard/pi-judge; no tools, no extensions, no MCP, no session, claude's system prompt passed as
-pi's), by the same JSON contract and the same fail-closed rules; any other claude failure blocks with no fallback, and a pi failure blocks too, naming
-both. The log records which judge answered.
+own default model, or the judge pinned in ~/.config/leak-guard/pi-judge; no tools, no extensions, no context files, no skills, no MCP, no session,
+claude's system prompt passed as pi's), by the same JSON contract and the same fail-closed rules; any other claude failure blocks with no fallback, and
+a pi failure blocks too, naming both. The log records which judge answered (one judge, or the list when the chunks differ).
 
 The terms and context files are in ~/.config/leak-guard (LEAK_GUARD_CONFIG_DIR overrides the directory).
 
@@ -338,7 +338,8 @@ def pi_cmd():
                 pinned = f.readline().strip()
         except OSError:
             pass
-    return (shlex.split(pinned) if pinned else ["pi", "-p"]) + ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"]
+    return (shlex.split(pinned) if pinned else ["pi", "-p"]) + ["--no-tools", "--no-extensions", "--no-mcp", "--no-session",
+                                                                "--no-context-files", "--no-skills"]
 
 
 def pi_layer2(prompt, limited):
@@ -677,12 +678,13 @@ def run(mode, stdin_lines, remote, url="", target=None):
         prompts = chunk_prompts(context, corpus(lines, numbered=(mode != "pre-push")), CHUNK_BYTES if mode == "pre-push" else None,
                                 INTRO_TEXT if mode == "text" else INTRO)
         extra = {"chunks": len(prompts), "claude_s": 0.0, "cost_usd": 0.0}
+        judges = []
         skipped = 0
         for i, (prompt, data) in enumerate(prompts, 1):
             leak, findings, one = layer2(prompt)
             extra["claude_s"] = round(extra["claude_s"] + one["claude_s"], 2)
             extra["cost_usd"] += one["cost_usd"] or 0.0
-            extra["judge"] = one["judge"]
+            judges.append(one["judge"])
             if "pi_s" in one:
                 extra["pi_s"] = round(extra.get("pi_s", 0.0) + one["pi_s"], 2)
             known = []
@@ -695,13 +697,15 @@ def run(mode, stdin_lines, remote, url="", target=None):
                     extra["known_skipped"] = skipped
             if leak and (findings or not known):
                 print("leak-guard: BLOCKED by %s (layer 2%s): %d finding(s). Fix them, or override: %s"
-                      % ("Claude" if extra["judge"] == "claude" else "the pi fallback",
+                      % ("Claude" if one["judge"] == "claude" else "the pi fallback",
                          ", part %d of %d" % (i, len(prompts)) if len(prompts) > 1 else "", len(findings), override), file=sys.stderr)
                 for f in findings:
                     if isinstance(f, dict):
                         print("  %s:%s: %s (%s)" % (f.get("file"), f.get("line"), str(f.get("text"))[:120], str(f.get("why"))[:160]), file=sys.stderr)
-                log({**entry, "verdict": "block", "layer": 2, "duration_s": round(time.time() - t0, 3), "findings": len(findings), **extra})
+                log({**entry, "verdict": "block", "layer": 2, "duration_s": round(time.time() - t0, 3), "findings": len(findings),
+                        **{**extra, "judge": judges[0] if len(set(judges)) == 1 else list(dict.fromkeys(judges))}})
                 return 1
+        extra["judge"] = judges[0] if len(set(judges)) == 1 else list(dict.fromkeys(judges))
         log({**entry, "verdict": "pass", "layer": 2, "duration_s": round(time.time() - t0, 3), "findings": 0, **extra})
         return 0
     except Block as b:
