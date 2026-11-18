@@ -254,6 +254,21 @@ def lines_of(report, kind):
 
 
 class ClaimTest(unittest.TestCase):
+    def test_a_bad_citation_in_a_heading_still_fails(self):
+        code, out = check("## Parsing `src/a.rs:99`\n\n- It counts. `src/a.rs:1`\n", REPO)
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/a.rs:99: line out of range", out)
+        self.assertNotIn(": flag ", check("## Every part\n\n- It counts. `src/a.rs:1`\n", REPO)[1])  # a heading is not a claim
+
+    def test_a_straight_quote_inside_backticks_is_code_not_a_quoted_string(self):
+        files = {"src/parse.py": "if c == '\"':\n    start()\nif c == '\"':\n    end()\n"}
+        code, out = check("- A string opens on `\"` and closes on the next `\"`. `src/parse.py:1-4`\n", files)
+        self.assertEqual(code, 0, out)
+
+    def test_a_parenthetical_that_names_no_source_is_judged_as_uncited_words(self):
+        out = check("- It runs. `a.ts:1` (only on Mondays)\n", {"a.ts": "x\n"})[1]
+        self.assertIn("flag uncited: only", out)
+
     def test_citations_joined_by_and_back_one_claim_together(self):
         files = {"src/a.ts": "const a = 1;\n", "src/b.ts": "const LIMIT = 42;\n"}
         code, out = check("- The limit is 42. `src/a.ts:1` and `src/b.ts:1`\n", files)

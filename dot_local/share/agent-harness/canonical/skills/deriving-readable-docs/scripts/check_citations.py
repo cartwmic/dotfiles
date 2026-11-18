@@ -76,7 +76,8 @@ def line_items(line, repo):
 
 
 def doc_lines(text):
-    """Yield (doc_line_no, line, in_header) for each prose line; fenced code blocks and headings are skipped.
+    """Yield (doc_line_no, line, in_header, is_heading) for each line outside fenced code blocks. A heading's
+    citations are checked, but its words are not judged as a claim.
     The header is everything before the first `## ` heading (a doc with none has no header)."""
     fenced, header = False, any(l.startswith("## ") for l in text.splitlines())
     for n, line in enumerate(text.splitlines(), 1):
@@ -87,9 +88,9 @@ def doc_lines(text):
             continue
         if line.startswith("## "):
             header = False
-        if line.startswith("#") or not line.strip():
+        if not line.strip():
             continue
-        yield n, line, header
+        yield n, line, header, line.startswith("#")
 
 
 LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
@@ -100,8 +101,13 @@ LABEL = re.compile(r"^\s*\(([^)]*)\)")
 def claims(text, repo):
     """Yield one dict per claim: line, text (the words before the citation group), cites, label (a parenthetical
     right after the group, such as "code comment"), and uncited (words after the last group, or a whole line with none)."""
-    for n, line, header in doc_lines(text):
+    for n, line, header, heading in doc_lines(text):
         items = line_items(line, repo)
+        if heading:
+            for _, _, cites, _ in items:
+                if cites:
+                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True}
+            continue
         groups = []  # [first_start, last_end, cites]
         for start, end, cites, _ in items:
             if not cites:
@@ -141,14 +147,10 @@ COMMENT_START = {
 }
 
 
-def norm_number(tok):
-    return tok.replace(",", "").replace("_", "")
-
-
 def numbers_in(text):
     """The set of numbers in cited text: digits (2,000 = 2000 = 2_000) and the number words one..twenty."""
     text = re.sub(r"(?<=\d)[,_](?=\d{3}\b)", "", text)
-    found = {norm_number(m.group(0)) for m in NUMBER.finditer(text)}
+    found = {m.group(0) for m in NUMBER.finditer(text)}
     for w in re.findall(r"[a-z]+", text.lower()):
         if w in WORDS:
             found.add(str(WORDS.index(w)))
@@ -160,8 +162,8 @@ def squash(text):
 
 
 def strings_in(claim_text, repo):
-    """Backticked and double-quoted strings in a claim (not citations). A backticked repo path that exists is skipped."""
-    out = [m.group(1) for m in SPAN.finditer(claim_text)] + [a or b for a, b in QUOTED.findall(claim_text)]
+    """Backticked and double-quoted strings in a claim (not citations; quotes inside backticks are code). A repo path that exists is skipped."""
+    out = [m.group(1) for m in SPAN.finditer(claim_text)] + [a or b for a, b in QUOTED.findall(strip_code(claim_text))]
     return [t for t in out if len(squash(t)) > 1 and not repo_file(repo, t.strip())]
 
 
@@ -208,7 +210,7 @@ def read_lines(cache, repo, path):
     return cache[path]
 
 
-def check_claim(c, repo, window, cache):
+def check_claim(c, repo, cache):
     """Return (failures, flags) for one claim; each is a list of (doc_line, kind, detail)."""
     fails, flags = [], []
     n = c["line"]
@@ -216,7 +218,7 @@ def check_claim(c, repo, window, cache):
     ranges = []
     for path, lo, hi in c["cites"]:
         lines = read_lines(cache, repo, path)
-        ranges.append((path, lo, hi, lines[max(0, lo - 1 - window):hi + window]))
+        ranges.append((path, lo, hi, lines[max(0, lo - 1 - WINDOW):hi + WINDOW]))
     if ranges:
         have_text = "\n".join(["\n".join(r[3]) for r in ranges] + [r[0] for r in ranges])  # a journey's number is in its path
         have_nums, have_sq = numbers_in(have_text), squash(have_text)
@@ -251,7 +253,7 @@ def line_count(full):
     return len(data.decode("utf-8", errors="replace").splitlines())
 
 
-def check(doc_text, repo, window=WINDOW):
+def check(doc_text, repo):
     """Return (checked, bad, fails, flags). bad is [(doc_line, citation, reason)]; fails and flags are
     [(doc_line, kind, detail)]. Claims are only judged when all their citations are good."""
     repo = os.path.realpath(repo)
@@ -272,8 +274,8 @@ def check(doc_text, repo, window=WINDOW):
                 total = line_count(full)
                 if end > total:
                     bad.append((c["line"], cite, "line out of range (file has %d lines)" % total))
-        if len(bad) == before:  # judge the words only when every citation under them is real
-            f, g = check_claim(c, repo, window, cache)
+        if len(bad) == before and not c.get("heading"):  # judge the words only when every citation under them is real
+            f, g = check_claim(c, repo, cache)
             fails += f
             flags += g
     return checked, bad, sorted(set(fails)), flags
