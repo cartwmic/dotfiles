@@ -328,6 +328,11 @@ class ClaimTest(unittest.TestCase):
         for plain in ("It runs on a timer.", "It no longer reads the file.", "It is a card, not a list."):
             self.assertNotIn("flag overreach", check("- %s `a.ts:1`\n" % plain, {"a.ts": "x\n"})[1], plain)
 
+    def test_next_is_listed_because_a_journey_that_skips_wakes_proves_a_later_one(self):
+        out = check("- With 5.2 GB free the next wake carries the reading. `a.ts:1`\n", {"a.ts": "5.2\n"})[1]
+        self.assertIn("flag overreach: next | ", out)
+        self.assertNotIn("flag overreach", check("- A later wake carries the reading. `a.ts:1`\n", {"a.ts": "x\n"})[1])
+
     def test_design_65_a_count_of_things_is_listed(self):
         doc = "How an ask travels is split across four parts that meet in one file. `a.ts:1`\n"
         out = check(doc, {"a.ts": "x\n"})[1]

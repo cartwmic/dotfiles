@@ -19,7 +19,7 @@ joined by commas or "and". Two checks FAIL a claim, because a miss is a fact the
           appear there. A one-word string must appear as written; a longer one needs each of its words.
 Four checks only LIST a sentence, because a script cannot judge them. The check pass (references/check-brief.md)
 takes the list:
-  overreach  every, all, always, never, only, none, any, no <noun> (and every/any + thing, one, where, body)
+  overreach  every, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words"
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
   uncited    the first two, in a sentence after the doc header that has no citation of its own
@@ -127,7 +127,7 @@ def claims(text, repo):
 NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")
 WORDS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
 QUOTED = re.compile(r'"([^"\n]+)"|\u201c([^\u201d\n]+)\u201d')
-OVERREACH = re.compile(r"\b(every(?:thing|one|where|body)?|all|always|never|only|none|any(?:thing|one|where|body)?|no(?=\s+(?!longer\b)[a-z]))\b", re.I)
+OVERREACH = re.compile(r"\b(every(?:thing|one|where|body)?|all|always|never|only|next|none|any(?:thing|one|where|body)?|no(?=\s+(?!longer\b)[a-z]))\b", re.I)
 # A count of things: "three parts", "6 words". Not a time ("45 minutes") or a bare status code ("409 and").
 COUNT = re.compile(r"(?<![\w.])(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|\d+)\s+(?:[a-z-]+\s+)?(?!(?:seconds?|minutes?|hours?|days?|weeks?|bytes?|times?|chars?|characters?)\b)[a-z-]+s\b", re.I)
 TIME_SCALE = {"second": (1000,), "minute": (60, 60000), "hour": (60, 3600, 3600000), "day": (24, 86400, 86400000)}
