@@ -69,6 +69,29 @@ log() {
 	printf '[%s] %s\n' "$SCRIPT_NAME" "$*" >&2
 }
 
+# One line per refusal, stale serve, failed read, slow hit or kill by the caller, in $XDG_STATE_HOME/agent-harness/op-read-cached.jsonl: a time, the event and the
+# reference, and for a failed read why (timeout or error) and how long `op` ran. Never a value. Best effort: a write that fails
+# does not change the outcome. $3, when given, is extra JSON fields (no leading comma).
+record_event() {
+	state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
+	(umask 077 && mkdir -p "$state_dir") 2>/dev/null || return 0
+	escaped_ref=$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')
+	printf '{"ts":"%s","event":"%s","ref":"%s",%s"script":"op_read_cached.sh"}\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$escaped_ref" "${3:+$3,}" >> "$state_dir/op-read-cached.jsonl" 2>/dev/null || true
+}
+
+# Pi runs this through execSync with a hard 10 s timeout and throws away stderr, so a kill must leave its own record.
+# Every phase records a SIGTERM/INT/HUP from the caller with the phase it reached and how long the script ran
+# ($SECONDS: bash's counter, no subprocess on the hot path; dash has none, so the field is null there). A script the
+# system never schedules (seen 2026-11-18: 35-74 s whole-Mac stalls under memory pressure) cannot record anything; the
+# coordinator's load.log lag column shows those.
+phase=start
+on_kill() {
+	record_event caller-killed "${ref:-}" "$(printf '"phase":"%s","seconds":%s' "$phase" "${SECONDS:-null}")"
+	exit 143
+}
+trap on_kill TERM INT HUP
+
 usage() {
 	cat >&2 <<EOF
 Usage: $SCRIPT_NAME [--refresh] op://vault/item/field
@@ -147,10 +170,16 @@ emit_cache() {
 }
 
 # The hot path: a fresh hit, before anything else.
+phase=hit
 if [ "$refresh" = false ] && cache_is_fresh; then
 	emit_cache
+	# A hit normally takes milliseconds; one that took seconds is the machine stalling, and pi's 10 s limit is near.
+	if [ -n "${SECONDS:-}" ] && [ "$SECONDS" -ge 3 ]; then
+		record_event slow-hit "$ref" "$(printf '"seconds":%s' "$SECONDS")"
+	fi
 	exit 0
 fi
+phase=miss
 
 if ! command -v op >/dev/null 2>&1; then
 	log "ERROR: 1Password CLI (op) not found on PATH"
@@ -200,16 +229,6 @@ if [ ! -e "$cache_file" ]; then
 	fi
 fi
 
-# One line per refusal, stale serve or failed read, in $XDG_STATE_HOME/agent-harness/op-read-cached.jsonl: a time, the event and the
-# reference, and for a failed read why (timeout or error) and how long `op` ran. Never a value. Best effort: a write that fails
-# does not change the outcome. $3, when given, is extra JSON fields (no leading comma).
-record_event() {
-	state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
-	(umask 077 && mkdir -p "$state_dir") 2>/dev/null || return 0
-	escaped_ref=$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')
-	printf '{"ts":"%s","event":"%s","ref":"%s",%s"script":"op_read_cached.sh"}\n' \
-		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$escaped_ref" "${3:+$3,}" >> "$state_dir/op-read-cached.jsonl" 2>/dev/null || true
-}
 
 # Without a service-account token `op` would fall back to the desktop app, so never run it (playbook 78819cbd). A fresh
 # cache hit above needs no `op`. A stale entry is still served, as on any other op failure, so a caller is not broken.
@@ -271,8 +290,8 @@ op_rc=0
 # 20 s no-cache bound. Record that read as failed, stop `op` and the watchdog, and exit, so the log still shows it.
 op_out="$cache_file.out.$$"
 on_caller_kill() {
-	[ -n "$cmd_pid" ] && kill -9 "$cmd_pid" 2>/dev/null
-	[ -n "$watchdog_pid" ] && kill "$watchdog_pid" 2>/dev/null
+	[ -n "$cmd_pid" ] && kill -9 "$cmd_pid" 2>/dev/null || true
+	[ -n "$watchdog_pid" ] && kill "$watchdog_pid" 2>/dev/null || true
 	rm -f "$op_out"
 	record_event op-failed "$ref" "$(printf '"reason":"caller-killed","op_exit":null,"op_seconds":%s' "$(($(date +%s) - op_started))")"
 	exit 143
@@ -281,7 +300,8 @@ trap on_caller_kill TERM INT HUP
 trap 'rm -f "$op_out"' EXIT
 (umask 077 && : >"$op_out")
 run_bounded op_sa read "$ref" --no-newline >"$op_out" 2>/dev/null || op_rc=$?
-trap - TERM INT HUP
+phase=after-op
+trap on_kill TERM INT HUP
 value="$(cat "$op_out")"
 rm -f "$op_out"
 trap - EXIT
