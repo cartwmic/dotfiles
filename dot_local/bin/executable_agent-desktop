@@ -15,8 +15,12 @@
 #   agent-desktop restore                           move the pointer back and focus the remembered window, then forget it
 #
 # save and restore exist only here (Hyprland); the Mac and G14 scripts have no such verbs. They let an agent give back the
-# focus it used: `save` first, any work that may move focus (Chrome, focus, click), `restore` last. The record is one file,
-# ${XDG_STATE_HOME:-~/.local/state}/agent-desktop/saved-focus (address, pointer, epoch time). While it exists, `focus CLASS`
+# focus it used: `save` first, any work that may move focus (Chrome, focus, click), `restore` last. The record is one file per
+# caller, ${XDG_STATE_HOME:-~/.local/state}/agent-desktop/saved-focus.KEY (address, pointer, epoch time). KEY is $T3CODE_THREAD_ID,
+# else $CLAUDE_CODE_SESSION_ID (the same pair kill-mine uses), with every character outside A-Za-z0-9._- turned into _; every
+# call of one agent carries the same value and two agents carry different ones, so each `restore` reads only its own record.
+# With neither variable set (a plain terminal) the file is saved-focus with no key, shared by whoever calls without one.
+# While the record exists, `focus CLASS`
 # adds an agent_window=ADDRESS line (the window that became active) and `move` and `click` write agent_pointer=X,Y (the last
 # one counts); with no record they write nothing. `restore` puts back only what the agent moved: it refocuses the saved window
 # when the active window is the agent's (an agent_window address, or a process of the agent Chrome profile), and moves the
@@ -288,8 +292,12 @@ active_address() {  # active_address STEP: set ADDR to the active window's addre
   fi
 }
 
-saved_file() {
-  echo "${XDG_STATE_HOME:-$HOME/.local/state}/agent-desktop/saved-focus"
+saved_file() {  # the caller's record: saved-focus.KEY, where KEY is the T3 thread (else the Claude Code session) with every
+  # character outside A-Za-z0-9._- turned into _; with neither set, the shared saved-focus
+  file="${XDG_STATE_HOME:-$HOME/.local/state}/agent-desktop/saved-focus"
+  key=$(printf '%s' "${T3CODE_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}" | tr -c 'A-Za-z0-9._-' '_')
+  if [ -n "$key" ]; then file="$file.$key"; fi
+  echo "$file"
 }
 
 cmd_save() {
@@ -352,7 +360,8 @@ pointer_back() {  # pointer_back REFOCUSED: move the pointer to the saved point 
 }
 
 keep_focus() {  # keep_focus ADDRESS: after a pointer move, follow_mouse may have handed focus to the window under the pointer; put ADDRESS back
-  # (the second focus is on the same workspace and does not warp the pointer)
+  # (ADDRESS was the active window before the move, so on one monitor this focus stays on the same workspace and does not warp
+  # the pointer; not checked across monitors, where focusing may warp it)
   active_address restore
   if [ "$ADDR" != "$1" ]; then
     dispatch "hl.dsp.focus({window=\"address:$1\"})"
