@@ -139,7 +139,7 @@ class TickTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.env.lines()[-1]["action"], "alert")
         self.assertIn("display notification", self.env.joined_calls())
-        self.assertEqual(self.env.state_json()["episode"], {"alerted": True})
+        self.assertTrue(self.env.state_json()["episode"]["alerted"])
         # A third stale tick stays quiet: one alert per stale episode.
         self.env.new_calls()
         self.env.run(FAKE_CURL_CODE="7")
@@ -331,6 +331,30 @@ class ReconnectTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_a_reconnect_that_works_resets_the_wait(self):
+        sd = self.env.state / "vpn-keepalive"
+        sd.mkdir(parents=True)
+        (sd / "state.json").write_text(json.dumps({"failStreak": 2, "episode": {"alerted": True},
+                                                   "lastReconnect": 0, "reconnectFailures": 3}))
+        self.env.run(FAKE_CURL_FAIL_FIRST="2")   # the stale probe and the first re-probe fail, then it answers
+        self.assertEqual(self.env.lines()[-1]["action"], "reconnected")
+        self.assertEqual(self.env.state_json()["reconnectFailures"], 0)
+
+    def test_the_wait_is_capped_at_one_hour(self):
+        # Ten failed reconnects in a row would be 15 min x 1024 without a cap; the cap is 1 hour.
+        sd = self.env.state / "vpn-keepalive"
+        sd.mkdir(parents=True)
+        now = int(time.time())
+        (sd / "state.json").write_text(json.dumps({"failStreak": 2, "episode": {"alerted": True},
+                                                   "lastReconnect": now - 3500, "reconnectFailures": 10}))
+        self.env.run(FAKE_CURL_CODE="7")
+        self.assertNotIn('to disconnect "%s"' % CONN, self.env.joined_calls())   # 3500 s < 3600 s
+        state = self.env.state_json()
+        state["lastReconnect"] = now - 3700
+        (sd / "state.json").write_text(json.dumps(state))
+        self.env.run(FAKE_CURL_CODE="7")
+        self.assertReconnected(self.env.joined_calls())                           # 3700 s >= 3600 s
+
 
 class AlertTest(unittest.TestCase):
     def setUp(self):
@@ -347,6 +371,23 @@ class AlertTest(unittest.TestCase):
         self.assertEqual(self.env.lines()[-1]["action"], "alert")
         self.env.run(FAKE_CURL_CODE="7")
         self.assertEqual(self.env.lines()[-1]["action"], "none")   # once per episode after a real alert
+
+    def test_only_the_part_of_an_alert_that_failed_is_retried(self):
+        # The notification works, the alert command fails: the next tick reruns the command only, so a
+        # pager-style command does not page twice for one shown notification, nor the reverse.
+        env = Env()
+        try:
+            env.env["VPN_KEEPALIVE_ALERT_COMMAND"] = str(env.bin / "alert-cmd")
+            env.run(FAKE_CURL_CODE="7")
+            env.run(FAKE_CURL_CODE="7", FAKE_ALERT_CODE="1")
+            self.assertEqual(env.lines()[-1]["action"], "alert-failed")
+            self.assertEqual(env.joined_calls().count("display notification"), 1)
+            env.run(FAKE_CURL_CODE="7")
+            self.assertEqual(env.lines()[-1]["action"], "alert")
+            self.assertEqual(env.joined_calls().count("display notification"), 1)   # not shown again
+            self.assertEqual(len((env.fake / "alert-calls").read_text().splitlines()), 2)
+        finally:
+            env.close()
 
     def test_a_state_file_of_the_wrong_type_is_a_fresh_start(self):
         sd = self.env.state / "vpn-keepalive"

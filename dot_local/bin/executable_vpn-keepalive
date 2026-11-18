@@ -15,7 +15,7 @@ HTTPS (curl --max-time 8; any HTTP status counts as reachable). The tunnel is st
 in a row fail (state.json keeps the streak). Stale in mode alert: alert at once, touch nothing.
 Stale in mode reconnect: at most once per 15 minutes, disconnect and connect via AppleScript, then
 re-probe for up to 2 minutes; still unreachable, alert. A reconnect that did not bring the host back
-doubles the wait before the next one (15, 30, 60 minutes ... at most 4 hours) until a probe answers,
+doubles the wait before the next one (15, 30, 60 minutes, at most 1 hour) until a probe answers,
 because each reconnect can open the owner's browser sign-in. An alert fires once per stale episode
 (a notification that could not be shown is retried next tick); a probe that answers again ends the
 episode and is logged as a recovery. Any unexpected error still writes a log line ("error").
@@ -43,7 +43,7 @@ REPROBE_SECS = int(os.environ.get("VPN_KEEPALIVE_REPROBE_SECS") or 120)
 REPROBE_STEP = int(os.environ.get("VPN_KEEPALIVE_REPROBE_STEP") or 10)
 DISCONNECT_WAIT = float(os.environ.get("VPN_KEEPALIVE_DISCONNECT_WAIT") or 3)
 ALERT_TIMEOUT = float(os.environ.get("VPN_KEEPALIVE_ALERT_TIMEOUT") or 30)
-BACKOFF_MAX_SECS = 4 * 3600
+BACKOFF_MAX_SECS = 3600   # lead decision #1225: double after an unhelpful reconnect, at most 1 hour
 
 
 def state_dir():
@@ -135,15 +135,17 @@ def reprobe(host):
         time.sleep(min(REPROBE_STEP, max(0.0, deadline - time.monotonic())))
 
 
-def alert(connection, alert_command):
-    """Show the notification and run the optional alert command. True only when every part worked:
-    a failed or timed-out part is reported, never raised, so the tick still saves its state."""
-    ok = osascript('display notification "VPN tunnel is not passing traffic" with title "VPN keepalive" subtitle "%s"'
-                   % connection).returncode == 0
-    if alert_command:
+def alert(episode, connection, alert_command):
+    """Show the notification and run the optional alert command, each at most once per episode: a part
+    that worked is recorded in the episode and not repeated, a part that failed or timed out is tried
+    again next tick (reported, never raised, so the tick still saves its state). True when both are done."""
+    if not episode.get("notified"):
+        episode["notified"] = osascript('display notification "VPN tunnel is not passing traffic" with title '
+                                        '"VPN keepalive" subtitle "%s"' % connection).returncode == 0
+    if alert_command and not episode.get("commanded"):
         os.environ["VPN_KEEPALIVE_REASON"] = "vpn tunnel is not passing traffic"
-        ok = run(["/bin/sh", "-c", alert_command], ALERT_TIMEOUT).returncode == 0 and ok
-    return ok
+        episode["commanded"] = run(["/bin/sh", "-c", alert_command], ALERT_TIMEOUT).returncode == 0
+    return bool(episode["notified"] and (episode.get("commanded") or not alert_command))
 
 
 def reconnect(connection):
@@ -160,15 +162,15 @@ def alert_once(episode, connection, alert_command):
     """Alert once per stale episode; a later stale tick in the same episode stays quiet."""
     if episode.get("alerted"):
         return "none"
-    if alert(connection, alert_command):
+    if alert(episode, connection, alert_command):
         episode["alerted"] = True
         return "alert"
-    return "alert-failed"   # not marked alerted: the next stale tick tries again
+    return "alert-failed"   # not marked alerted: the next stale tick retries only the part that failed
 
 
 def reconnect_wait(failures):
     """The wait before the next reconnect: 15 minutes, doubled for each reconnect in a row that did
-    not bring the host back, at most 4 hours."""
+    not bring the host back, at most 1 hour."""
     return min(RECONNECT_MIN_SECS * (2 ** min(failures, 16)), BACKOFF_MAX_SECS) if RECONNECT_MIN_SECS else 0
 
 

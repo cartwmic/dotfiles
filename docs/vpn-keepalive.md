@@ -26,14 +26,14 @@ Every `intervalSeconds` launchd runs `~/.local/bin/vpn-keepalive` once:
 
 ## Stale tunnel
 
-- `reconnect` (default): at most once per 15 minutes, tell Viscosity to `disconnect` and then `connect` the connection by name (its AppleScript dictionary takes the name as the direct parameter). reconnect can open the connection's browser sign-in, which holds the owner's credentials — that is why the mode is the owner's choice and why the rate limit exists. After reconnecting, re-probe for up to 2 minutes; if the host is still unreachable, alert.
+- `reconnect` (default): at most once per 15 minutes, tell Viscosity to `disconnect` and then `connect` the connection by name (its AppleScript dictionary takes the name as the direct parameter). reconnect can open the connection's browser sign-in, which holds the owner's credentials — that is why the mode is the owner's choice and why the rate limit exists. After reconnecting, re-probe for up to 2 minutes; if the host is still unreachable, alert. A reconnect that did not bring the host back doubles the wait before the next one (15, 30, 60 minutes, at most 1 hour); a probe that answers resets it to 15 minutes. The reconnect time is saved before reconnecting, so a crash cannot undo the wait.
 - `alert`: alert at once and touch nothing.
 
-An alert is a macOS notification plus the optional `alertCommand`, once per stale episode. A probe that answers again ends the episode and is logged as a recovery, so a tunnel that goes stale again later alerts again.
+An alert is a macOS notification plus the optional `alertCommand` (run with a 30-second timeout), each at most once per stale episode. A part that failed is logged as `alert-failed` and only that part is tried again on the next stale tick. A probe that answers again ends the episode and is logged as a recovery, so a tunnel that goes stale again later alerts again.
 
 ## State and logs
 
-Everything lands in `~/.local/state/vpn-keepalive/`: `log.jsonl` (one JSON line per tick: time, connection state, probe result, action), `state.json` (failure streak, current episode, last reconnect attempt) and `launchd.log` (stray output only).
+Everything lands in `~/.local/state/vpn-keepalive/`: `log.jsonl` (one JSON line per tick: time, connection state, probe result, action: `none`, `idle`, `alert`, `alert-failed`, `reconnected`, `recovered` or `error`; a tick that reconnected also carries the exit codes of its disconnect and connect calls), `state.json` (failure streak, current episode, last reconnect attempt, reconnects in a row that did not help; a file that is not valid is a fresh start) and `launchd.log` (stray output only).
 
 ## Tests
 
