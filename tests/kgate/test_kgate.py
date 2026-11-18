@@ -2722,6 +2722,26 @@ class PodSh(unittest.TestCase):
             self.assertTrue(kept.is_dir(), "no version or content directory is removed")
         self.assertEqual(sorted(p.name for p in cache.iterdir()), ["pnpm-store"], "nothing is written onto the claim")
 
+    def test_the_pnpm_index_and_links_survive_the_trim_and_files_go_oldest_first(self):
+        "pnpm 11 keeps its SQLite index at v11/index.db and whole packages in v11/links/: the trim touches only v*/files/ (and the old v*/index/ JSON)."
+        cache = self.tmp / "cache"
+        store = cache / "pnpm-store" / "v11"
+        old = self.cache_file(store / "files" / "ab", "old", 3000)
+        new = self.cache_file(store / "files" / "ab", "new", 10)
+        index = self.cache_file(store, "index.db", 4000, kib=64)   # an old, stable store: the index is the oldest thing in it
+        wal = self.cache_file(store, "index.db-wal", 4000, kib=64)
+        link = self.cache_file(store / "links" / "x" / "node_modules" / "y", "pkg", 3000, kib=64)
+        project = self.cache_file(store / "projects" / "p", "state", 3000, kib=64)
+        done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(old.exists(), "the oldest files/ blob goes first")
+        self.assertTrue(new.exists(), "the newest files/ blob survives")
+        self.assertTrue(index.exists(), "index.db is never deleted, whatever version directory holds it")
+        self.assertTrue(wal.exists(), "the -wal side file survives with it")
+        self.assertTrue(link.exists(), "links/ (the global virtual store) is never touched")
+        self.assertTrue(project.exists(), "projects/ is never touched")
+        self.assertTrue((store / "files" / "ab").is_dir(), "the content directory survives")
+
     def test_go_build_buckets_are_trimmed_by_file_age_not_bucket_mtime(self):
         "go-build is 256 bucket directories (00..ff) whose mtimes do not move when Go rewrites the files inside: the file ages decide."
         cache = self.tmp / "cache"
@@ -2779,7 +2799,7 @@ class PodSh(unittest.TestCase):
         script = fn + "\n" + (   # fn ends at the closing brace with no newline; keep say() on its own line
             'say() { printf "%s\\n" "$*" ; }\n'
             + 'cache_files() { printf "100 2048 /no/such/vanished\\n200 65536 %s/keep\\n" "%s" ; }\n' % (d, d)
-            + "trim_cache '%s' 4\n" % d
+            + "trim_cache '%s' go 4\n" % d
         )
         done = subprocess.run(["sh", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stdout)

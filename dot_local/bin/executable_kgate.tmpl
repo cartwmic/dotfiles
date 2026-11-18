@@ -767,20 +767,32 @@ say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)
 # exists for the tests and a live proof only; a pod never sets it.
 # Which stat flavor: GNU and busybox stat take -c; macOS BSD stat (the test suite) takes -f.
 if stat -c '%Y %s %n' / >/dev/null 2>&1; then
-  cache_files() {  # DIR: one "mtime size path" line per file, one stat pass in batches; mtime first, so sort -n orders oldest first
-    find "$1" -type f ! -path "$1/index.db" ! -path "$1/index.db-wal" ! -path "$1/index.db-shm" -exec stat -c '%Y %s %n' {} + 2>/dev/null
+  cache_files() {  # DIR KIND: one "mtime size path" line per file, one stat pass in batches; mtime first, so sort -n orders oldest first
+    if [ "$2" = pnpm ]; then
+      find "$1" -type f \( -path "$1/v*/files/*" -o -path "$1/v*/index/*" \) -exec stat -c '%Y %s %n' {} + 2>/dev/null
+    else
+      find "$1" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
+    fi
   }
 else
   cache_files() {
-    find "$1" -type f ! -path "$1/index.db" ! -path "$1/index.db-wal" ! -path "$1/index.db-shm" -exec stat -f '%m %z %N' {} + 2>/dev/null
+    if [ "$2" = pnpm ]; then
+      find "$1" -type f \( -path "$1/v*/files/*" -o -path "$1/v*/index/*" \) -exec stat -f '%m %z %N' {} + 2>/dev/null
+    else
+      find "$1" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
+    fi
   }
 fi
-# index.db is never listed: the pnpm store (v10, v11) keeps one SQLite database of the whole store at its root, and
-# pnpm does not touch store files on use, so its mtime only moves when packages are added or removed. An old, stable
-# store would therefore have an old index.db, and the trim would delete it whole as one old file. The -wal and -shm
-# side files SQLite writes beside it are excluded with it. For go-build the pattern matches nothing.
-trim_cache() {  # DIR CAP_KIB: delete the oldest files under DIR until it fits CAP_KIB
-  d=$1 cap=$2
+# The pnpm trim reaches only the version directories' content and old index trees: v*/files/ holds the
+# content-addressed blobs, and before pnpm 11 moved the index into one SQLite database, v*/index/ held the
+# per-package JSON files; both are safe to delete file by file, because pnpm re-fetches what is missing. Never
+# listed, at any version directory: index.db and the -wal and -shm side files SQLite writes beside it (pnpm 11 keeps
+# the store's one SQLite index at v11/index.db, and pnpm does not touch store files on use, so an old, stable store
+# has an old index.db that the trim would otherwise delete whole as one old file), v*/links/ (pnpm 11 keeps whole
+# package directories there, the global virtual store: deleting single files could leave a package half-deleted
+# that pnpm still treats as installed) and v*/projects/ (per-project state). For go-build every file is listed.
+trim_cache() {  # DIR KIND CAP_KIB: delete the oldest files under DIR until it fits CAP_KIB
+  d=$1 kind=$2 cap=$3
   [ -d "$d" ] || return 0
   [ "${cap:-0}" -gt 0 ] || return 0
   used=$(du -sk "$d" 2>/dev/null | cut -f1)
@@ -792,7 +804,7 @@ trim_cache() {  # DIR CAP_KIB: delete the oldest files under DIR until it fits C
   # awk walks the listing oldest first, prints each path while the cache is still over the cap and then stops; xargs
   # batches the rm calls (one rm per batch, not one fork per file). Paths are cache hashes with no newlines, and the
   # tr makes the handover NUL-separated anyway, so a space in a path cannot split it.
-  cache_files "$d" | sort -n | awk -v over="$over" \
+  cache_files "$d" "$kind" | sort -n | awk -v over="$over" \
     'over > 0 { sz = $2; sub(/^[0-9]+ [0-9]+ /, ""); print; over -= sz }' |
     tr "\n" "\0" | xargs -0 rm -f 2>/dev/null
   left=$(find "$d" -type f 2>/dev/null | wc -l)
@@ -806,8 +818,8 @@ trim_cache() {  # DIR CAP_KIB: delete the oldest files under DIR until it fits C
 }
 cache_root=${KGATE_CACHE_ROOT:-/cache}
 if [ -n "${CACHE_CAP_KIB:-}" ]; then
-  trim_cache "$cache_root/go-build" "$CACHE_CAP_KIB"
-  trim_cache "$cache_root/pnpm-store" "$CACHE_CAP_KIB"
+  trim_cache "$cache_root/go-build" go "$CACHE_CAP_KIB"
+  trim_cache "$cache_root/pnpm-store" pnpm "$CACHE_CAP_KIB"
 fi
 mkdir -p "$HOME" 2>/dev/null
 # A fresh one-commit repo at the tree root (no history is shipped), so tools find a HEAD. Its index holds exactly the shipped files, hashed as
