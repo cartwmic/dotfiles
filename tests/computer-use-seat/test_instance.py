@@ -1,4 +1,4 @@
-"""The Computer use seat's T3 instance (`seat-computer`), its seat file and its MCP file. It runs only on the personal profile, where T3 seat instances exist.
+"""The Computer use seat's T3 instance (`seat-computer`), its seat file and its MCP file. The instance exists only on the personal profile, outside container mode; the seat and MCP files render on both profiles.
 
 The real chezmoi renders the real source into a throwaway HOME. A missing chezmoi fails the test (it does not skip).
 
