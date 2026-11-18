@@ -232,11 +232,16 @@ class OpReadCached(unittest.TestCase):
         (self.bin / "find").write_text('#!/bin/sh\n: > "$FAKE_CALLS.find"\nsleep %s\nexec /usr/bin/find "$@"\n' % seconds)
         (self.bin / "find").chmod(0o755)
 
+    @unittest.skipUnless(subprocess.run(["sh", "-c", 'echo "${SECONDS:-none}"'], capture_output=True, text=True).stdout.strip() != "none",
+                         "this sh has no $SECONDS (dash): slow hits are not timed there, by design")
     def test_a_hit_that_takes_seconds_is_recorded_as_slow(self):
         self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)  # a miss: caches the value
         self.stalled_find(3.2)
         done = self.run_script(REF, token_env="")
         self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
+        deadline = time.monotonic() + 5      # the record is written in the background, after the value is returned
+        while not [l for l in self.records() if '"event":"slow-hit"' in l] and time.monotonic() < deadline:
+            time.sleep(0.05)
         record = json.loads([l for l in self.records() if '"event":"slow-hit"' in l][0])
         self.assertGreaterEqual(record["seconds"], 3, record)
 

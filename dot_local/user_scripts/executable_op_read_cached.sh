@@ -169,14 +169,21 @@ emit_cache() {
 	cat "$cache_file"
 }
 
+# A hit normally takes milliseconds; one that took seconds is the machine stalling, and pi's 10 s limit is near. Timed
+# with $SECONDS, which bash has (macOS /bin/sh, where these stalls were seen) and dash does not; under dash there is no
+# subprocess-free clock, so no slow-hit is recorded there (kills are, in every shell). The record is written in the
+# background, its output detached from the caller's pipe, so recording a stall never adds to the time the caller waits.
+note_slow_hit() {
+	if [ -n "${SECONDS:-}" ] && [ "$SECONDS" -ge 3 ]; then
+		record_event slow-hit "$ref" "$(printf '"seconds":%s' "$SECONDS")" </dev/null >/dev/null 2>&1 &
+	fi
+}
+
 # The hot path: a fresh hit, before anything else.
 phase=hit
 if [ "$refresh" = false ] && cache_is_fresh; then
 	emit_cache
-	# A hit normally takes milliseconds; one that took seconds is the machine stalling, and pi's 10 s limit is near.
-	if [ -n "${SECONDS:-}" ] && [ "$SECONDS" -ge 3 ]; then
-		record_event slow-hit "$ref" "$(printf '"seconds":%s' "$SECONDS")"
-	fi
+	note_slow_hit
 	exit 0
 fi
 phase=miss
@@ -223,7 +230,9 @@ if [ ! -e "$cache_file" ]; then
 			cache_file="$legacy_file"
 		fi
 		if [ "$refresh" = false ] && cache_is_fresh; then
+			phase=hit
 			emit_cache
+			note_slow_hit
 			exit 0
 		fi
 	fi
