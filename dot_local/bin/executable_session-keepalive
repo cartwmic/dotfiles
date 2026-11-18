@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""session-keepalive (docs/session-keepalive.md): one launchd tick of local.session-keepalive.
+
+A general keepalive for VPNs and other sessions (a Viscosity VPN, AWS, Azure, Grafana, Splunk): a
+list of checks, each with a probe, an optional refresh action and a mode. The committed code is
+generic; every work-specific value lives in local chezmoi data
+(.chezmoitemplates/session_keepalive_config), rendered into the SESSION_KEEPALIVE_CHECKS
+environment variable. A check list that is missing, unreadable, not JSON or invalid is an error
+log line and exit 1; without the variable at all the tick logs and exits, so the script is inert
+when run by hand on a machine without the agent.
+
+One tick runs the checks serially, viscosity checks first, then command checks in data order, so a
+slow cloud probe can never delay a VPN check within a tick. A viscosity check is gated on Viscosity
+running and the connection Connected - the tick never starts Viscosity and never touches a
+connection that is not Connected. A command check runs its probe through /bin/sh -c with a timeout;
+exit 0 is healthy, a missing or wedged command is a failed probe (exit 124), never a crash.
+
+A check without intervalSeconds runs on every tick. A check with one runs when
+tickStart - lastRunStart >= intervalSeconds - 10 (a fixed 10 s of slack, so it never runs more
+often than its interval: 300 s on a 120 s tick runs every 360 s), or when the clock moved back
+(tickStart < lastRunStart), which makes it due at once.
+
+Two failed probes in a row make a check stale (one failure waits). Stale in mode alert: alert at
+once, touch nothing. Stale in mode refresh: at most once per 15 minutes, run the refresh action
+(viscosity: disconnect and connect via AppleScript; command: its refresh command), then re-probe
+for up to 2 minutes; still failing, alert. A refresh that did not bring the probe back doubles the
+wait before the next one (15, 30, 60 minutes, at most 1 hour - decision #1225) until a probe
+answers. A refresh can open a browser sign-in holding the owner's credentials, so refresh is
+always explicit in the local data; MFA- or Okta-gated sessions are configured alert-only, and the
+tool never types, stores or pipes a password. An alert fires once per stale episode (a part that
+could not be shown is retried next tick); a probe that answers again ends the episode and is
+logged as a recovery.
+
+Every child (probe, refresh, alert command, osascript, curl) runs in its own process group: on
+timeout the whole group gets SIGTERM, then SIGKILL after 2 s, so a wedged helper or an orphaned
+child cannot outlive the tick. Each child's environment is this process's environment minus
+SESSION_KEEPALIVE_CHECKS (config for the tick alone, not for children), plus that call's own
+variables - os.environ is never mutated.
+
+The tick appends one JSON line per check to ~/.local/state/session-keepalive/log.jsonl and keeps
+each check's state in ~/.local/state/session-keepalive/state/<label>.json. Lines carry the label,
+kind, exit codes and timing - never a command string or command output.
+"""
+import json
+import os
+import re
+import signal
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+APP = "Viscosity"
+GET_CONNECTIONS = 'tell application "%s" to get {name, state} of connections' % APP
+# The same charsets .chezmoitemplates/session_keepalive_config enforces: the connection name goes
+# into AppleScript source, and Viscosity's name/state list is comma-joined, so a comma or quote in
+# a name would break both; the label goes into a notification subtitle and a state filename.
+# Re-checked here (with fullmatch, never match) because the environment can also be set by hand.
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}")
+HOST_RE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?")
+PROBE_MAX_TIME = "8"
+REFRESH_MIN_SECS = int(os.environ.get("SESSION_KEEPALIVE_REFRESH_MIN_SECS") or 900)
+REPROBE_SECS = int(os.environ.get("SESSION_KEEPALIVE_REPROBE_SECS") or 120)
+REPROBE_STEP = int(os.environ.get("SESSION_KEEPALIVE_REPROBE_STEP") or 10)
+DISCONNECT_WAIT = float(os.environ.get("SESSION_KEEPALIVE_DISCONNECT_WAIT") or 3)
+ALERT_TIMEOUT = float(os.environ.get("SESSION_KEEPALIVE_ALERT_TIMEOUT") or 30)
+INTERVAL_SLACK_SECS = 10   # a fixed slack, not half a tick: an interval check never runs early
+BACKOFF_MAX_SECS = 3600    # lead decision #1225: double after an unhelpful refresh, at most 1 hour
+TIMEOUT_DEFAULTS = {"probeTimeoutSeconds": 20, "refreshTimeoutSeconds": 120}
+CHECK_KEYS = {"label", "kind", "mode", "intervalSeconds", "alertCommand"}
+KIND_KEYS = {"viscosity": {"connection", "host"},
+             "command": {"probe", "refresh", "probeTimeoutSeconds", "refreshTimeoutSeconds"}}
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+def state_dir():
+    root = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return Path(root) / "session-keepalive"
+
+def read_json(path):
+    """The state file as a dict; anything else (missing, unreadable, not JSON, not an object) is a
+    fresh start, never a crash."""
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+def as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value))
+    tmp.replace(path)
+
+def log(dir_, line):
+    dir_.mkdir(parents=True, exist_ok=True)
+    with open(dir_ / "log.jsonl", "a") as f:
+        f.write(json.dumps(line) + "\n")
+
+def child_env(**extra):
+    """Every child's environment: this process's environment minus SESSION_KEEPALIVE_CHECKS (the
+    check list is config for the tick alone, not for children), plus this call's own variables. A
+    fresh dict per call; os.environ is never mutated."""
+    env = {k: v for k, v in os.environ.items() if k != "SESSION_KEEPALIVE_CHECKS"}
+    env.update(extra)
+    return env
+
+def kill_group(p):
+    """SIGTERM the child's whole process group, then SIGKILL after 2 s, so a helper that wedged or
+    left an orphaned child behind cannot outlive the tick."""
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        p.wait(timeout=2)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+def run(cmd, timeout, env=None):
+    """One child from an argv list, in its own process group. A missing or wedged helper is a
+    failed command (exit 124), never a crash. The timeout bounds the whole call including output
+    collection, so a probe that exits but leaves a child holding the stdout pipe is a timeout too.
+    The error text never carries the command line."""
+    if env is None:
+        env = child_env()
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             start_new_session=True, env=env)
+    except OSError as exc:
+        return subprocess.CompletedProcess(cmd, 124, "", str(exc))
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_group(p)
+        out, err = p.communicate()
+        return subprocess.CompletedProcess(cmd, 124, out or "", "timed out after %gs" % timeout)
+    return subprocess.CompletedProcess(cmd, p.returncode, out or "", err or "")
+
+def osascript(script):
+    return run(["osascript", "-e", script], 30)
+
+def viscosity_running():
+    return run(["pgrep", "-x", APP], 10).returncode == 0
+
+def connection_states():
+    """{name: state} from Viscosity, or None when osascript failed or the answer is not the
+    comma-joined {names..., states...} list the AppleScript asks for."""
+    r = osascript(GET_CONNECTIONS)
+    if r.returncode != 0:
+        return None
+    parts = [p.strip() for p in r.stdout.strip().split(",")]
+    if parts == [""]:
+        return {}
+    if len(parts) % 2:
+        return None
+    n = len(parts) // 2
+    return dict(zip(parts[:n], parts[n:]))
+
+def probe(host):
+    """One HTTPS probe: any HTTP status counts as reachable; a timeout, TLS or connection failure
+    does not. Latency is the wall time, so a failed probe carries one too."""
+    start = time.monotonic()
+    r = run(["curl", "-sS", "-o", os.devnull, "--max-time", PROBE_MAX_TIME, "-w", "%{http_code}",
+             "https://" + host], 20)
+    latency = round((time.monotonic() - start) * 1000)
+    status = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    return {"ok": r.returncode == 0, "httpStatus": status, "latencyMs": latency}
+
+def command_probe(check):
+    """One probe command through sh -c with its timeout: exit 0 is healthy."""
+    start = time.monotonic()
+    r = run(["/bin/sh", "-c", check["probe"]], check["probeTimeoutSeconds"])
+    return {"ok": r.returncode == 0, "exitCode": r.returncode,
+            "latencyMs": round((time.monotonic() - start) * 1000)}
+
+def command_refresh(check):
+    r = run(["/bin/sh", "-c", check["refresh"]], check["refreshTimeoutSeconds"])
+    return {"exitCode": r.returncode}
+
+def reprobe(probe_fn):
+    """Probe until the check answers or the re-probe window (2 minutes in production) is over: once
+    immediately, then with a REPROBE_STEP sleep between probes."""
+    deadline = time.monotonic() + REPROBE_SECS
+    while True:
+        p = probe_fn()
+        if p["ok"] or time.monotonic() >= deadline:
+            return p
+        time.sleep(min(REPROBE_STEP, max(0.0, deadline - time.monotonic())))
+
+def reconnect(connection):
+    """Disconnect, then connect again by name (Viscosity's AppleScript dictionary: connect and
+    disconnect each take the connection's name as their direct parameter). Returns both exit codes
+    for the log."""
+    d = osascript('tell application "%s" to disconnect "%s"' % (APP, connection)).returncode
+    time.sleep(DISCONNECT_WAIT)
+    c = osascript('tell application "%s" to connect "%s"' % (APP, connection)).returncode
+    return {"disconnect": d, "connect": c}
+
+def alert(episode, check, message, line):
+    """Show the notification and run the optional per-check alert command, each at most once per
+    episode: a part that worked is recorded in the episode and not repeated, a part that failed or
+    timed out is tried again next tick (reported, never raised, so the tick still saves its state).
+    True when every configured part is done."""
+    label = check["label"]
+    if not episode.get("notified"):
+        script = ('display notification "%s" with title "Session keepalive" subtitle "%s"'
+                  % (message, label))
+        episode["notified"] = osascript(script).returncode == 0
+    if check.get("alertCommand") and not episode.get("commanded"):
+        env = child_env(SESSION_KEEPALIVE_REASON=message.lower(), SESSION_KEEPALIVE_CHECK=label)
+        r = run(["/bin/sh", "-c", check["alertCommand"]], ALERT_TIMEOUT, env=env)
+        line["alertCommandExit"] = r.returncode
+        episode["commanded"] = r.returncode == 0
+    return bool(episode["notified"] and (episode.get("commanded") or not check.get("alertCommand")))
+
+def alert_once(episode, check, message, line):
+    """Alert once per stale episode; a later stale tick in the same episode stays quiet."""
+    if episode.get("alerted"):
+        return "none"
+    if alert(episode, check, message, line):
+        episode["alerted"] = True
+        return "alert"
+    return "alert-failed"   # not marked alerted: the next stale tick retries only the part that failed
+
+def refresh_wait(failures):
+    """The wait before the next refresh: 15 minutes, doubled for each refresh in a row that did not
+    bring the probe back, at most 1 hour."""
+    return min(REFRESH_MIN_SECS * (2 ** min(failures, 16)), BACKOFF_MAX_SECS) if REFRESH_MIN_SECS else 0
+
+def parse_checks(raw):
+    """The check list from the environment, validated and filled with defaults. A ValueError names
+    the check's index or label and the problem - never a value, so the error log line stays free of
+    commands and hosts."""
+    try:
+        checks = json.loads(raw)
+    except ValueError:
+        raise ValueError("SESSION_KEEPALIVE_CHECKS is not JSON")
+    if not isinstance(checks, list) or not checks:
+        raise ValueError("SESSION_KEEPALIVE_CHECKS must be a non-empty JSON list of checks")
+    seen = set()
+    return [parse_check(i, check, seen) for i, check in enumerate(checks)]
+
+def parse_check(index, check, seen):
+    if not isinstance(check, dict):
+        raise ValueError("check %d is not an object" % index)
+    label = check.get("label")
+    if not isinstance(label, str) or not NAME_RE.fullmatch(label):
+        raise ValueError("check %d: label is required (a letter or digit, then up to 63 of letters, "
+                         "digits, space, dot, underscore, hyphen)" % index)
+    if label.lower() in seen:
+        raise ValueError("check %s: label is duplicated (labels are unique case-insensitively)" % label)
+    seen.add(label.lower())
+    kind = check.get("kind")
+    if kind not in KIND_KEYS:
+        raise ValueError("check %s: kind must be viscosity or command" % label)
+    for key in check:
+        if key not in CHECK_KEYS | KIND_KEYS[kind]:
+            raise ValueError("check %s: %s is not a setting of a %s check" % (label, key, kind))
+    mode = check.get("mode") or "alert"
+    if mode not in ("alert", "refresh"):
+        raise ValueError("check %s: mode must be alert or refresh" % label)
+    interval = check.get("intervalSeconds")
+    if interval is not None:
+        interval = as_int(interval)
+        if not 30 <= interval <= 3600:
+            raise ValueError("check %s: intervalSeconds must be between 30 and 3600" % label)
+    alert_command = check.get("alertCommand")
+    if alert_command is not None and (not isinstance(alert_command, str) or not alert_command.strip()):
+        raise ValueError("check %s: alertCommand must be a command string" % label)
+    out = {"label": label, "kind": kind, "mode": mode, "intervalSeconds": interval,
+           "alertCommand": alert_command or ""}
+    if kind == "viscosity":
+        connection = check.get("connection")
+        if not isinstance(connection, str) or not NAME_RE.fullmatch(connection):
+            raise ValueError("check %s: connection must be the Viscosity connection name (no comma "
+                             "or quote)" % label)
+        host = check.get("host")
+        if not isinstance(host, str) or not HOST_RE.fullmatch(host):
+            raise ValueError("check %s: host must be a hostname" % label)
+        out.update(connection=connection, host=host)
+    else:
+        if not isinstance(check.get("probe"), str) or not check["probe"].strip():
+            raise ValueError("check %s: probe is required" % label)
+        refresh = check.get("refresh")
+        if refresh is not None and (not isinstance(refresh, str) or not refresh.strip()):
+            raise ValueError("check %s: refresh must be a command string" % label)
+        if mode == "refresh" and not refresh:
+            raise ValueError("check %s: mode refresh needs a refresh command" % label)
+        out["probe"] = check["probe"]
+        out["refresh"] = refresh or ""
+        # The template enforces the ranges (5-120, 10-600); the tick only re-checks that a value is
+        # a positive whole number of seconds, so a hand-set environment cannot wedge the tick.
+        for field, default in TIMEOUT_DEFAULTS.items():
+            value = check.get(field)
+            if value is None:
+                out[field] = default
+                continue
+            value = as_int(value)
+            if value < 1:
+                raise ValueError("check %s: %s must be a positive whole number of seconds" % (label, field))
+            out[field] = value
+    return out
+
+def tick():
+    sd = state_dir()
+    tick_start = time.time()   # taken once: every gate this tick compares against the same start
+    raw = os.environ.get("SESSION_KEEPALIVE_CHECKS")
+    if not (raw or "").strip():
+        log(sd, {"time": now_iso(), "state": "unconfigured", "action": "idle"})
+        return 0
+    try:
+        checks = parse_checks(raw)
+    except ValueError as exc:
+        log(sd, {"time": now_iso(), "state": "unconfigured", "action": "error", "error": str(exc)})
+        return 1
+    # Viscosity checks first, then command checks in data order: a slow cloud probe can never delay
+    # a VPN check within a tick.
+    ordered = [c for c in checks if c["kind"] == "viscosity"] + [c for c in checks if c["kind"] == "command"]
+    failed = False
+    for check in ordered:
+        try:
+            run_check(check, sd, tick_start)
+        except Exception as exc:   # one broken check must not stop the others
+            log(sd, {"time": now_iso(), "check": check["label"], "kind": check["kind"], "state": None,
+                     "probe": None, "action": "error", "error": "%s: %s" % (type(exc).__name__, exc)})
+            failed = True
+    return 1 if failed else 0
+
+def run_check(check, sd, tick_start):
+    label, kind, mode = check["label"], check["kind"], check["mode"]
+    path = sd / "state" / (label + ".json")
+    state = read_json(path)
+    streak = as_int(state.get("failStreak"))
+    episode = state.get("episode") if isinstance(state.get("episode"), dict) else None
+    last_refresh = as_int(state.get("lastRefresh"))
+    failures = as_int(state.get("refreshFailures"))
+    last_run = as_int(state.get("lastRunStart"))
+    line = {"time": now_iso(), "check": label, "kind": kind, "state": None, "probe": None, "action": None}
+
+    interval = check.get("intervalSeconds")
+    if interval is not None and last_run > 0:
+        elapsed = tick_start - last_run
+        # A fixed 10 s of slack: the check never runs more often than its interval (300 s on a
+        # 120 s tick runs every 360 s). A clock moved back (elapsed < 0) makes it due at once.
+        if 0 <= elapsed < interval - INTERVAL_SLACK_SECS:
+            line["action"] = "skipped"
+            log(sd, line)
+            return
+
+    def save():
+        write_json(path, {"lastRunStart": int(tick_start), "failStreak": streak, "episode": episode,
+                          "lastRefresh": last_refresh, "refreshFailures": failures})
+
+    # The run start is saved before acting: a crash mid-check cannot make the next tick run it
+    # ahead of its interval.
+    save()
+
+    if kind == "viscosity":
+        message = "VPN tunnel is not passing traffic"
+        probe_fn = lambda: probe(check["host"])
+        refresh_fn = lambda: reconnect(check["connection"])
+        if not viscosity_running():
+            # The owner quit Viscosity, or the machine just woke: not our place to start it.
+            line["state"], line["action"] = "down", "idle"
+            streak, episode = 0, None
+            gate = False
+        else:
+            states = connection_states()
+            if states is None:
+                # osascript failed or answered something unexpected: change nothing, try again next tick.
+                line["state"], line["action"] = "unknown", "idle"
+                gate = False
+            else:
+                state_text = states.get(check["connection"])
+                line["state"] = state_text if state_text else "absent"
+                if state_text != "Connected":
+                    # Disconnected (or connecting): the owner may have done that on purpose. An
+                    # episode ends here too, so a tunnel that comes back stale starts a fresh one.
+                    line["action"] = "idle"
+                    streak, episode = 0, None
+                    gate = False
+                else:
+                    gate = True
+    else:
+        message = "session check failing"
+        probe_fn = lambda: command_probe(check)
+        refresh_fn = lambda: command_refresh(check)
+        gate = True
+
+    if gate:
+        p = probe_fn()
+        line["probe"] = p
+        if p["ok"]:
+            line["action"] = "recovered" if episode else "none"
+            streak, episode, failures = 0, None, 0
+        else:
+            streak += 1
+            if streak < 2:
+                line["action"] = "none"
+            else:
+                if episode is None:
+                    episode = {"alerted": False}
+                if mode == "refresh" and tick_start - last_refresh >= refresh_wait(failures):
+                    # Saved before acting: whatever happens next, the attempt counts toward the wait.
+                    last_refresh = int(time.time())
+                    save()
+                    line["refresh"] = refresh_fn()
+                    p = reprobe(probe_fn)
+                    line["probe"] = p
+                    if p["ok"]:
+                        line["action"] = "refreshed"
+                        streak, episode, failures = 0, None, 0
+                    else:
+                        failures += 1
+                        line["action"] = alert_once(episode, check, message, line)
+                else:
+                    # alert mode touches nothing; refresh mode waits out its 15 minutes.
+                    line["action"] = alert_once(episode, check, message, line)
+
+    save()
+    log(sd, line)
+
+def main():
+    try:
+        return tick()
+    except Exception as exc:   # never a silent tick: the log says what went wrong
+        log(state_dir(), {"time": now_iso(), "state": None, "probe": None, "action": "error",
+                          "error": "%s: %s" % (type(exc).__name__, exc)})
+        return 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
