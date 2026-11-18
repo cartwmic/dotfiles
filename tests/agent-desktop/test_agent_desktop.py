@@ -179,8 +179,11 @@ class DesktopTest(unittest.TestCase):
     def calls(self):
         return self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
 
+    def log_file(self):
+        return self.home / ".state" / "agent-desktop" / "agent-desktop.log"
+
     def log_lines(self):
-        log = self.home / ".state" / "agent-desktop" / "agent-desktop.log"
+        log = self.log_file()
         return log.read_text().splitlines() if log.exists() else []
 
     # shot
@@ -525,7 +528,8 @@ class DesktopTest(unittest.TestCase):
                 r = self.run_script("restore")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn("no window to refocus", r.stdout)
-                self.assertEqual(self.calls(), ["hyprctl [cursorpos]", MOVE_CURSORPOS], "only the pointer moves")
+                self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]", "hyprctl [cursorpos]", MOVE_CURSORPOS,
+                                                "hyprctl [activewindow] [-j]"], "only the pointer moves, then focus is checked")
                 self.assertFalse(self.saved_file().exists())
 
     def test_second_save_keeps_the_first(self):
@@ -616,6 +620,79 @@ class DesktopTest(unittest.TestCase):
         r = self.run_script("restore")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.dispatches("hl.dsp."), [])
+
+    # the pointer-only paths check focus after the pointer move, like the refocus path (follow_mouse may hand focus away)
+    def agent_moved_pointer(self):
+        """save, then the agent moves the pointer to 10,20, where it stays."""
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.assertEqual(self.run_script("move", "10", "20").returncode, 0)
+        self.set_cursor(10, 20)
+
+    def active_address(self):
+        return json.loads((self.fixtures / "activewindow.json").read_text())["address"]
+
+    def test_restore_gives_michael_his_window_back_when_the_pointer_move_hands_focus_away(self):
+        self.agent_moved_pointer()
+        self.set_active(WIN_B)   # Michael switched to WIN_B; the pointer is still the agent's, so it goes back
+        self.calls_file.unlink()
+        r = self.run_script("restore", FAKE_MOVE_FOCUS=WIN_CHROME)   # follow_mouse hands focus to the window under the pointer
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp.focus"), [f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_B}"}})]'])
+        self.assertEqual(self.active_address(), WIN_B, "Michael's window has focus again")
+        self.assertIn(f"kept focus on {WIN_B}", r.stdout)
+
+    def test_restore_keeps_the_saved_window_focused_when_the_pointer_move_hands_focus_away(self):
+        self.agent_moved_pointer()   # the saved window never lost focus
+        self.calls_file.unlink()
+        r = self.run_script("restore", FAKE_MOVE_FOCUS=WIN_CHROME)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp.focus"), [f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]'])
+        self.assertEqual(self.active_address(), WIN_A)
+
+    def test_restore_gives_back_the_window_in_use_when_no_window_was_saved_and_the_pointer_move_hands_focus_away(self):
+        self.set_active(None)
+        self.agent_moved_pointer()
+        self.set_active(WIN_B)
+        self.calls_file.unlink()
+        r = self.run_script("restore", FAKE_MOVE_FOCUS=WIN_CHROME)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.active_address(), WIN_B)
+
+    def test_restore_makes_no_focus_dispatch_when_the_pointer_move_hands_focus_nowhere(self):
+        self.agent_moved_pointer()
+        self.set_active(WIN_B)
+        self.calls_file.unlink()
+        r = self.run_script("restore")   # focus stays on WIN_B after the pointer move
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp."), [MOVE_CURSORPOS])
+
+    # no active window when restore runs
+    def test_restore_with_no_active_window_says_so_and_does_not_refocus(self):
+        for none in (None, ""):   # `{}` and no output at all
+            with self.subTest(active=none):
+                self.saved_file().unlink(missing_ok=True)
+                self.log_file().unlink(missing_ok=True)
+                self.set_active(WIN_A)
+                self.assertEqual(self.run_script("save").returncode, 0)
+                self.set_active(none)   # for example an empty workspace
+                self.calls_file.unlink(missing_ok=True)
+                r = self.run_script("restore")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.dispatches("hl.dsp."), [], "restore refocused the saved window with nothing active")
+                self.assertIn("no active window", r.stdout)
+                self.assertNotIn("kept focus", r.stdout)
+                self.assertFalse(self.saved_file().exists())
+                restores = [x.split(" ", 3)[3] for x in self.log_lines() if x.split(" ", 3)[3].startswith("restore ")]
+                self.assertEqual(restores, [f"restore window={WIN_A} no active window pointer=left"])
+
+    def test_restore_with_no_active_window_still_puts_back_the_pointer_the_agent_moved(self):
+        self.agent_moved_pointer()
+        self.set_active(None)
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp."), [MOVE_CURSORPOS])
+        self.assertIn("no active window", r.stdout)
 
     def test_focus_move_and_click_write_no_record_when_nothing_is_saved(self):
         for args in (("focus", "Steam"), ("move", "10", "20"), ("click", "10", "20")):

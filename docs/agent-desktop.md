@@ -80,14 +80,16 @@ agent-desktop restore   put back what the agent moved: focus the remembered wind
 
 Call `agent-desktop save` first, before anything that touches Chrome or the screen, and `agent-desktop restore` last. The record is one file, `~/.local/state/agent-desktop/saved-focus` (under `$XDG_STATE_HOME` when it is set), holding the address, the pointer and the time. 
 
-`restore` puts back only what the agent moved, and leaves the rest. While a record exists, `focus` notes the window it focused (`agent_window=`) and `move` and `click` note the point (`agent_pointer=`, the last one counts); with no record they write nothing. `restore` refocuses the saved window only when the active window is the agent's: one it focused, or one of the agent Chrome profile's processes. If Michael switched to another window, that window keeps focus and `restore` says so. It moves the pointer back only when it refocused or the pointer is still where the agent's last `move` or `click` put it. It focuses first and moves the pointer second, because changing workspace warps the pointer; it then checks focus once more, because `follow_mouse` may refocus whatever is under the pointer.
+`restore` puts back only what the agent moved, and leaves the rest. While a record exists, `focus` notes the window it focused (`agent_window=`) and `move` and `click` note the point (`agent_pointer=`, the last one counts); with no record they write nothing. `restore` refocuses the saved window only when the active window is the agent's: one it focused, or one of the agent Chrome profile's processes. If Michael switched to another window, that window keeps focus and `restore` says so. It moves the pointer back only when it refocused or the pointer is still where the agent's last `move` or `click` put it. It focuses first and moves the pointer second, because changing workspace warps the pointer; it then checks focus once more after every pointer move, because `follow_mouse` may hand focus to whatever is under the pointer: the window that had focus before the move gets it back (the saved window when `restore` refocused it or it was already active, otherwise the window that kept focus).
 
 Cases:
 
 | Case | Result |
 |---|---|
 | `restore` with nothing saved | exit 1, says to run `agent-desktop save` first, makes no Hyprland call |
-| the saved window no longer exists | exit 1 and names the address, even though `hyprctl` itself exits 0 with a warning; the pointer still moves and the record is deleted |
+| the saved window no longer exists, and the active window is the agent's | exit 1 and names the address, even though `hyprctl` itself exits 0 with a warning; the pointer still moves and the record is deleted |
+| the saved window no longer exists, and Michael's own window is active | `restore` keeps that window and exits 0; it never asks for the saved window, so it cannot find it gone |
+| no window is active when `restore` runs (for example an empty workspace) | `restore` says there is no active window, does not refocus the saved window (an empty workspace Michael chose looks the same), moves the pointer back only if the agent moved it, exit 0 |
 | no window was active at `save` | `save` succeeds; `restore` moves the pointer only (when the agent moved it), says there is no window to refocus, exit 0 |
 | `save` twice | the second keeps the first record, prints `already saved <N>s ago; first record kept`, exit 0 |
 | the saved window is already active | `restore` makes no focus dispatch; the pointer goes back only if the agent moved it |

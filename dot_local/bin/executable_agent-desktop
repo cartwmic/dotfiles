@@ -21,10 +21,14 @@
 # one counts); with no record they write nothing. `restore` puts back only what the agent moved: it refocuses the saved window
 # when the active window is the agent's (an agent_window address, or a process of the agent Chrome profile), and moves the
 # pointer back when it refocused or the pointer is still at agent_pointer. A window or pointer Michael moved is left alone.
-# Cases: nothing saved is exit 1 and no Hyprland call; a saved window that is gone is exit 1 naming its address (the pointer
-# still moves and the record is deleted); no active window at save restores the pointer only (when the agent moved it) and
-# exits 0; a second save keeps the first record and says how old it is; a saved window that is already active gets no focus
-# dispatch.
+# After every pointer move, focus is checked once more (follow_mouse may hand it to the window under the pointer) and the
+# window that had focus before the move gets it back.
+# Cases: nothing saved is exit 1 and no Hyprland call; a saved window that is gone is exit 1 naming its address, but only
+# when the active window is the agent's (the pointer still moves and the record is deleted); when Michael's own window is
+# active restore keeps it and exits 0 without asking for the saved window; with no active window at restore it says so, does
+# not refocus the saved window, and exits 0; no active window at save restores the pointer only (when the agent moved it)
+# and exits 0; a second save keeps the first record and says how old it is; a saved window that is already active gets no
+# focus dispatch.
 #
 # Lua dispatch (verified live on Hyprland 0.56.2): the config is Lua. The old dispatcher syntax fails with a Lua
 # syntax error: `hyprctl dispatch movecursor 737 277` and `hyprctl dispatch focuswindow class:X` do not work. Use
@@ -347,6 +351,19 @@ pointer_back() {  # pointer_back REFOCUSED: move the pointer to the saved point 
   fi
 }
 
+keep_focus() {  # keep_focus ADDRESS: after a pointer move, follow_mouse may have handed focus to the window under the pointer; put ADDRESS back
+  # (the second focus is on the same workspace and does not warp the pointer)
+  active_address restore
+  if [ "$ADDR" != "$1" ]; then
+    dispatch "hl.dsp.focus({window=\"address:$1\"})"
+  fi
+}
+
+pointer_only() {  # pointer_only ADDRESS: pointer_back without a refocus, then keep_focus ADDRESS when the pointer moved ("" = no window to keep)
+  pointer_back 0
+  if [ "$moved" -eq 1 ] && [ -n "$1" ]; then keep_focus "$1"; fi
+}
+
 cmd_restore() {
   file=$(saved_file)
   if [ ! -f "$file" ]; then
@@ -368,30 +385,36 @@ cmd_restore() {
     fail 1 "the saved record in $file is unreadable; delete it and run $SCRIPT_NAME save again"
   fi
   # Restore puts back only what the agent moved. Focus: the saved window is refocused only when the active window is the
-  # agent's; if Michael switched to another window, that window keeps focus. Pointer: moved back only when restore refocused
-  # or it is still at the agent's last move or click.
+  # agent's; if Michael switched to another window, that window keeps focus, and with no active window nothing is refocused.
+  # Pointer: moved back only when restore refocused or it is still at the agent's last move or click.
   # Focus first, then the pointer: with cursor:warp_on_change_workspace on, focusing a window on another workspace
   # warps the pointer (live proof phase 2, 2026-11-18), so a pointer move made before the focus would be undone.
   # The pointer move can in turn hand focus (follow_mouse) to the window under it, so focus is checked once more after
-  # it; that second focus is on the same workspace and does not warp.
+  # every pointer move: the window that had focus before it gets it back (keep_focus).
+  active_address restore
   if [ -z "$saved_addr" ]; then
-    pointer_back 0
+    pointer_only "$ADDR"
     rm -f "$file"
     record "restore window=none pointer=$POINTER"
     echo "no window to refocus; pointer $POINTER"
     return 0
   fi
-  active_address restore
   rm -f "$file"
   if [ "$ADDR" = "$saved_addr" ]; then
-    pointer_back 0
+    pointer_only "$saved_addr"
     record "restore window=$saved_addr already active pointer=$POINTER"
     echo "restored: $saved_addr was already active; pointer $POINTER"
     return 0
   fi
+  if [ -z "$ADDR" ]; then
+    pointer_only ""
+    record "restore window=$saved_addr no active window pointer=$POINTER"
+    echo "no active window; saved window $saved_addr left alone; pointer $POINTER"
+    return 0
+  fi
   if ! is_agent_window; then
-    active=${ADDR:-none}
-    pointer_back 0
+    active=$ADDR
+    pointer_only "$active"
     record "restore window=$saved_addr kept focus on $active pointer=$POINTER"
     echo "kept focus on $active (not the agent's); pointer $POINTER"
     return 0
@@ -404,10 +427,7 @@ cmd_restore() {
     record "FAIL restore window=$saved_addr pointer=$saved_x,$saved_y"
     fail 1 "could not focus the saved window $saved_addr (exit $focus_rc): $focus_out"
   fi
-  active_address restore
-  if [ "$ADDR" != "$saved_addr" ]; then
-    dispatch "hl.dsp.focus({window=\"address:$saved_addr\"})"
-  fi
+  keep_focus "$saved_addr"
   record "restore window=$saved_addr pointer=$saved_x,$saved_y refocused"
   echo "restored window $saved_addr, pointer $saved_x,$saved_y"
 }
