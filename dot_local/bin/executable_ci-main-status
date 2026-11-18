@@ -30,13 +30,19 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
 
-Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the required
-status checks on its default branch, read from branch protection, else from the repo's active rulesets. All of them
-passed on the tip: GREEN, 0. One failed: RED, 1. One is queued, running or has not reported: UNTESTED, 2 (0 under
---merge-gate, like the table repos). --pr N (only with --merge-gate) checks the PR's head commit instead of the
-tip. A skipped required check counts as passing, as it does for GitHub's own mergeability. When the required
-checks cannot be read at all (none required, or no permission to read them), it says so and exits 1: no silent
-pass. --tip is not for these repos (a deploy pulls a sha of a repo on this machine).
+Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the checks
+GitHub itself requires on the default branch — the union of classic branch protection's required status checks and
+the active rulesets that apply to the branch (rules/branches answers only those, org rulesets included), lists
+paged at 100. All of them passed on the tip: GREEN, 0. One failed: RED, 1. One is queued, running or has not
+reported: UNTESTED, 2 — and UNTESTED never passes the merge gate for these repos: --merge-gate exits non-zero on a
+pending, missing or never-reported required check, where the table repos' 2-becomes-0 does not apply. Only a check
+run's success passes a required check: skipped and neutral fail closed. Per name the newest run decides
+(completed_at, else started_at); a commit status with the same name is combined in, the worse verdict winning.
+--pr N (only with --merge-gate) checks the PR's head commit against the required checks instead of the tip — for a
+table repo --pr means the fix for a red main (above); here main is not read. The required set for a PR is what
+GitHub computes for it (gh pr checks --required), cross-checked against the base branch's union; a mismatch fails
+closed. When the required checks cannot be read at all (none required, no permission, a rate limit), it says so
+and exits 1: no silent pass. --tip is not for these repos (a deploy pulls a sha of a repo on this machine).
 
 This is not the flake ruling (that is the coordinator's journal) and it is not a bypass of the merge hook, which still needs
 `ci-main-status ... && pr-body-check ... && gh pr merge`.
@@ -145,9 +151,10 @@ class Record:
         return Record(sha, "pass", f"{self.label} (tip {self.tip[:7]}, same tree)", tree=self.tree, line=self.line)
 
 
-def gh(args, soft=False):
-    """One gh call's JSON. soft: GitHub answering there is nothing to read (404) or no permission (403) gives None,
-    for the caller to decide; any other failure still raises."""
+def gh(args, not_found_ok=False):
+    """One gh call's JSON. not_found_ok: a 404 (GitHub answering there is nothing to read, such as an unprotected
+    branch) gives None, for the caller to decide. Every other failure, a 403 included (no permission, a rate
+    limit), still raises: fail closed."""
     env = {**os.environ, "GH_CALLER": CALLER}
     if URGENT:
         env["GH_URGENT"] = "1"
@@ -156,7 +163,7 @@ def gh(args, soft=False):
     except OSError as e:
         raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
     if r.returncode:
-        if soft and ("HTTP 404" in r.stderr or "HTTP 403" in r.stderr):
+        if not_found_ok and "HTTP 404" in r.stderr:
             return None
         raise Unreadable(f"gh {' '.join(args[:2])} failed: {r.stderr.strip() or r.stdout.strip()}")
     try:
@@ -170,79 +177,118 @@ def main_tip(repo):
 
 
 def required_contexts(repo, branch):
-    """The check names `branch` requires: branch protection's required status checks, else the repo's active
-    rulesets'. None when GitHub answers that it can read none (no protection, or no permission): the caller fails closed."""
-    prot = gh(["api", f"repos/{repo}/branches/{branch}/protection/required_status_checks"], soft=True)
-    if prot is not None:
-        names = [c["context"] for c in prot.get("checks") or []] or list(prot.get("contexts") or [])
-        return names or None
+    """The check names `branch` requires: the union of classic branch protection's required status checks and the
+    active rulesets that apply to the branch (rules/branches answers only those, org rulesets included).
+
+    Protection answering 404 means the branch is not protected or required status checks are not enabled: none from
+    that source. Any other protection error (no permission, a rate limit), and any branch-rules error, is
+    unreadable: the caller fails closed. None only when both sources say there are no required checks.
+    """
+    prot = gh(["api", f"repos/{repo}/branches/{branch}/protection/required_status_checks"], not_found_ok=True)
     names = []
-    for ruleset in gh(["api", f"repos/{repo}/rulesets"], soft=True) or []:
-        if ruleset.get("enforcement") != "active":
-            continue
-        full = gh(["api", f"repos/{repo}/rulesets/{ruleset['id']}"], soft=True) or {}
-        for rule in full.get("rules") or []:
-            if rule.get("type") == "required_status_checks":
-                names += [c["context"] for c in (rule.get("parameters") or {}).get("required_status_checks") or []]
-    return names or None
+    if prot is not None:
+        names += [c["context"] for c in prot.get("checks") or []] or list(prot.get("contexts") or [])
+    for rule in gh(["api", f"repos/{repo}/rules/branches/{branch}?per_page=100", "--paginate"]):
+        if rule.get("type") == "required_status_checks":
+            names += [c["context"] for c in (rule.get("parameters") or {}).get("required_status_checks") or []]
+    return sorted(set(names)) or None
+
+
+def paged(repo, sha, what, field):
+    """Every entry of a paged commit endpoint (check runs or statuses), read page by page at 100 a page.
+
+    A page that comes back empty while the total count is not reached is an error, not a silent truncation (fail
+    closed): gh --paginate cannot merge these endpoints' object pages, so the pages are asked for by number.
+    """
+    rows, page = [], 1
+    sep = "&" if "?" in what else "?"
+    while True:
+        data = gh(["api", f"repos/{repo}/commits/{sha}/{what}{sep}per_page=100&page={page}"])
+        rows += data[field]
+        if len(rows) >= data["total_count"]:
+            return rows
+        if not data[field]:
+            raise Unreadable(f"{what} page {page} on {sha[:7]} is empty but {data['total_count']} are counted")
+        page += 1
+
+
+WORSE = ("pass", "pending", "fail")   # worst of two verdicts for one required check wins
 
 
 def check_verdicts(repo, sha, contexts):
     """{context: (verdict, detail)} for the required checks on `sha`: verdict "pass", "fail" or "pending", and the
-    check run's status or conclusion as the detail.
+    check run's conclusion or status (or the commit status's state) as the detail.
 
-    Check runs first; a context no check run reports falls back to the commit's legacy statuses, and one neither
-    reports is pending. A skipped required check passes, as it does for GitHub's own mergeability. A check run left
-    out by the page size is an error, not a pending check (fail closed).
+    Check runs (filter=latest, every page read): per name the newest run decides, by completed_at else started_at,
+    never the last one the list happened to show. Only a run's success passes a required check: skipped and neutral
+    fail closed, like any other conclusion that is not a pass. A context no check run reports falls back to the
+    commit's combined statuses (already the latest per context); when both report a name, the worse verdict wins, so
+    a passing check run cannot hide a failing status. A name neither reports is pending (never a pass).
     """
-    runs = gh(["api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"])
-    if runs["total_count"] > len(runs["check_runs"]):
-        raise Unreadable(f"{runs['total_count']} check runs on {sha[:7]} but gh returned {len(runs['check_runs'])}")
-    by_name = {c["name"]: c for c in runs["check_runs"]}
-    statuses = None
-    verdicts = {}
+    newest = {}
+    for c in paged(repo, sha, "check-runs?filter=latest", "check_runs"):
+        key = (c.get("completed_at") or c.get("started_at") or "", c["id"])
+        if c["name"] not in newest or key > newest[c["name"]][0]:
+            newest[c["name"]] = (key, c)
+    verdicts, statuses = {}, None
     for name in contexts:
-        c = by_name.get(name)
-        if c:
-            if c["conclusion"] in ("success", "skipped"):
-                verdicts[name] = ("pass", c["conclusion"])
-            elif c["status"] != "completed":
-                verdicts[name] = ("pending", c["status"])
-            else:
-                verdicts[name] = ("fail", c["conclusion"])
-            continue
-        if statuses is None:
-            statuses = gh(["api", f"repos/{repo}/commits/{sha}/status"]).get("statuses") or []
+        c = newest.get(name, (None, None))[1]
+        if c is None:
+            verdicts[name] = None   # no check run: the commit status alone decides
+        elif c["conclusion"] == "success":
+            verdicts[name] = ("pass", "success")
+        elif c["status"] != "completed":
+            verdicts[name] = ("pending", c["status"])
+        else:
+            verdicts[name] = ("fail", c["conclusion"])
+        if (verdicts[name] is None or verdicts[name][0] != "fail") and statuses is None:
+            statuses = paged(repo, sha, "status", "statuses")   # a passing check run must not hide a failing status
+    if statuses is None:   # every required check has a failed check run; nothing can make it worse
+        return verdicts
+    for name in contexts:
         s = next((s for s in statuses if s["context"] == name), None)
-        verdicts[name] = ({"success": "pass", "failure": "fail", "error": "fail"}.get(s["state"], "pending"),
-                          s["state"]) if s else ("pending", "not reported")
+        sv = ({"success": "pass", "failure": "fail", "error": "fail"}.get(s["state"], "pending"), s["state"]) if s else None
+        if verdicts[name] is None:
+            verdicts[name] = sv or ("pending", "not reported")
+        elif sv and WORSE.index(sv[0]) > WORSE.index(verdicts[name][0]):
+            verdicts[name] = sv
     return verdicts
 
 
 def check_any(repo, pr=None):
     """One GitHub repo not in the table: the required checks on its default branch's tip, or on PR `pr`'s head with --pr.
 
-    The required checks come from branch protection, else the repo's active rulesets. When none can be read (none
-    required, or no permission), the state is unreadable: exit 1, never a pass.
+    The required checks are GitHub's own: branch protection union the branch's active rulesets. With --pr they are
+    what GitHub computes for the PR (gh pr checks --required), cross-checked against the PR's base branch's union;
+    a mismatch is unreadable. When the required checks cannot be read (none required, no permission, a rate limit),
+    the state is unreadable: exit 1, never a pass.
     """
     branch = gh(["api", f"repos/{repo}"])["default_branch"]
-    contexts = required_contexts(repo, branch)
-    if not contexts:
-        raise Unreadable(f"no required checks readable on {branch} (branch protection or an active ruleset must "
-                         f"require status checks, and the account must be allowed to read them); failing closed")
     if pr:
-        sha = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid"])["headRefOid"]
+        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,baseRefName"])
+        sha, base = pull["headRefOid"], pull["baseRefName"]
         where = f"PR #{pr} head {sha[:7]}"
+        pr_required = sorted(c["name"] for c in gh(["pr", "checks", str(pr), "-R", repo, "--required",
+                                                    "--json", "name,state,bucket,link"]))
+        base_required = required_contexts(repo, base) or []
+        if pr_required != sorted(base_required):
+            raise Unreadable(f"GitHub's required checks for PR #{pr} ({', '.join(pr_required) or 'none'}) do not match "
+                             f"{base}'s ({', '.join(sorted(base_required)) or 'none'}); failing closed")
+        contexts = pr_required
     else:
         sha = gh(["api", f"repos/{repo}/branches/{branch}"])["commit"]["sha"]
         where = f"{branch} tip {sha[:7]}"
+        contexts = required_contexts(repo, branch) or []
+    if not contexts:
+        raise Unreadable(f"no required checks readable on {base if pr else branch} (branch protection or an active "
+                         f"ruleset must require status checks, and the account must be allowed to read them); failing closed")
     verdicts = check_verdicts(repo, sha, contexts)
     failed = sorted(n for n, (v, _) in verdicts.items() if v == "fail")
     if failed:
         return 1, [f"{repo}: RED  required check(s) failed on {where}: {', '.join(failed)}"]
     pending = sorted(f"{n} ({d})" for n, (v, d) in verdicts.items() if v == "pending")
     if pending:
-        return 2, [f"{repo}: UNTESTED  required check(s) pending on {where}: {', '.join(pending)}"]
+        return 2, [f"{repo}: UNTESTED  required check(s) pending on {where}: {', '.join(pending)}. Not a pass."]
     return 0, [f"{repo}: GREEN  all {len(contexts)} required checks passed on {where}: {', '.join(sorted(contexts))}"]
 
 
@@ -723,7 +769,9 @@ def main(argv):
         print("\n".join(lines))
         if rank[code] > rank[worst]:
             worst = code
-    return 0 if merge_gate and worst == 2 else worst
+    # UNTESTED passes the merge gate only for the table repos (main is not red). For OWNER/REPO a pending, missing
+    # or never-reported required check never passes it (lead decision, 2026-11-18): non-zero either way.
+    return 0 if merge_gate and worst == 2 and names[0] in REPOS else worst
 
 
 if __name__ == "__main__":
