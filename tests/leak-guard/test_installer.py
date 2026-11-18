@@ -71,6 +71,18 @@ class Installer(unittest.TestCase):
         for f in ("terms", "context"):
             self.assertEqual(stat.S_IMODE((base / f).stat().st_mode), 0o600)
 
+    def test_pi_judge_data_writes_the_pin_and_no_data_writes_nothing(self):
+        done = self.render(DATA)
+        self.assertEqual(self.run_script(done.stdout).returncode, 0)
+        self.assertFalse((self.home / ".config" / "leak-guard" / "pi-judge").exists())
+        done = self.render(DATA + '    piJudge: "pi -p --provider pinprovider --model pinmodel"')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        ran = self.run_script(done.stdout)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual((self.home / ".config" / "leak-guard" / "pi-judge").read_text(), "pi -p --provider pinprovider --model pinmodel\n")
+        import stat as st
+        self.assertEqual(st.S_IMODE((self.home / ".config" / "leak-guard" / "pi-judge").stat().st_mode), 0o600)
+
     def test_a_hook_that_is_not_ours_is_left_alone_with_a_warning(self):
         done = self.render(DATA)
         self.hooks().mkdir(parents=True, exist_ok=True)

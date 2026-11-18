@@ -3,6 +3,7 @@
     leakGuard:
       terms: [<regex>, ...]
       context: "<what counts as a work detail, a few lines>"
+      piJudge: "<the pi fallback's command line, one line; optional — without it pi runs on its own default model>"
   Renders nothing (chezmoi runs no script) on any other profile, or without the leakGuard data. docs/leak-guard.md.
 */ -}}
 {{- if and (eq .profile "axon-work-computer") (hasKey . "leakGuard") -}}
@@ -47,4 +48,10 @@ mv "$dest/terms.tmp" "$dest/terms"
 printf '%s' {{ $context | b64enc | quote }} | base64 -d > "$dest/context.tmp"
 printf '\n' >> "$dest/context.tmp"
 mv "$dest/context.tmp" "$dest/context"
+{{-   $pi := dig "piJudge" "" $lg -}}
+{{-   if $pi }}
+printf '%s' {{ $pi | b64enc | quote }} | base64 -d > "$dest/pi-judge.tmp"
+printf '\n' >> "$dest/pi-judge.tmp"
+mv "$dest/pi-judge.tmp" "$dest/pi-judge"
+{{-   end }}
 {{ end -}}

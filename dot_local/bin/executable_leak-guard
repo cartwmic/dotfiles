@@ -22,7 +22,10 @@ skip them, as git always allows). Two layers, cheapest first, on the ADDED lines
 
 It fails closed: a missing claude CLI, no sign-in, no network, a timeout (120 s), a non-zero exit, a missing terms or context file, a pre-commit diff over
 200 KB, or a push line over a 180 KB chunk blocks with a one-line reason naming the step. A larger push is split into chunks of about 180 KB, each its own
-Claude call, and every chunk must pass.
+Claude call, and every chunk must pass. The one retried failure is claude's spend-limit / usage-limit 429: the same prompt then goes to pi once (pi's
+own default model, or the judge pinned in ~/.config/leak-guard/pi-judge; no tools, no extensions, no MCP, no session, claude's system prompt passed as
+pi's), by the same JSON contract and the same fail-closed rules; any other claude failure blocks with no fallback, and a pi failure blocks too, naming
+both. The log records which judge answered.
 
 The terms and context files are in ~/.config/leak-guard (LEAK_GUARD_CONFIG_DIR overrides the directory).
 
@@ -35,6 +38,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -45,6 +49,7 @@ MAX_BYTES = 200_000          # what one layer-2 call is sent; pre-commit refuses
 CHUNK_BYTES = 180_000        # the most of the change one layer-2 call carries at pre-push
 CLAUDE_TIMEOUT_S = int(os.environ.get("LEAK_GUARD_TIMEOUT_S", "120"))   # the env var is for the tests
 MODEL = os.environ.get("LEAK_GUARD_MODEL", "claude-haiku-5-5")
+SPEND_RE = re.compile(r"\b429\b|spend limit|usage limit", re.I)   # claude's spend-limit / usage-limit 429: the one failure the pi fallback retries
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 ZERO = "0" * 40
 OVERRIDE = 'LEAK_GUARD_SKIP="<reason>" git commit ...   (or git push ...), or --no-verify'
@@ -64,6 +69,14 @@ class Block(Exception):
         super().__init__("%s: %s" % (step, reason))
         self.step, self.reason, self.layer = step, reason, layer
         self.log_reason = log_reason or reason     # what the log gets: never a term
+
+
+class SpendLimit(Exception):
+    """claude failed with a spend-limit / usage-limit 429: the one claude failure the pi fallback may retry."""
+
+    def __init__(self, why, claude_s):
+        super().__init__(why)
+        self.why, self.claude_s = why, claude_s
 
 
 def home(*parts):
@@ -283,6 +296,8 @@ def claude_layer2(prompt):
     out, err = done.stdout.decode(errors="replace"), done.stderr.decode(errors="replace")
     if done.returncode != 0:
         why = (err.strip() or out.strip() or "no output").splitlines()[-1][:200]
+        if SPEND_RE.search(out) or SPEND_RE.search(err):
+            raise SpendLimit(why, took)
         raise Block("layer 2", "claude exited %d (not signed in, offline, or failing): %s" % (done.returncode, why), 2, "claude exited %d" % done.returncode)
     try:
         events = json.loads(out)
@@ -291,18 +306,68 @@ def claude_layer2(prompt):
     except (ValueError, StopIteration):
         raise Block("layer 2", "claude's output was not the expected JSON", 2)
     if result.get("is_error"):
-        raise Block("layer 2", "claude reported an error: %s" % str(result.get("result"))[:200], 2, "claude reported an error")
+        why = str(result.get("result"))[:200]
+        if SPEND_RE.search(why):
+            raise SpendLimit(why, took)
+        raise Block("layer 2", "claude reported an error: %s" % why, 2, "claude reported an error")
     text = result.get("result")
     if not isinstance(text, str):
         raise Block("layer 2", "claude's result was not text", 2)
     leak, findings = judged(text, "claude")
-    return leak, findings, {"claude_s": took, "cost_usd": result.get("total_cost_usd")}
+    return leak, findings, {"claude_s": took, "cost_usd": result.get("total_cost_usd"), "judge": "claude"}
+
+
+def pi_cmd():
+    """The pi fallback's command line: LEAK_GUARD_PI (the tests' override), else the judge pinned in ~/.config/leak-guard/pi-judge (one line, a full
+    command line, written from local chezmoi data on the work machine — which model judges is a per-machine choice, never committed), else plain
+    `pi -p` on pi's own default model. The no-tools, no-extensions, no-MCP, no-session flags are always appended, pin or not."""
+    pinned = os.environ.get("LEAK_GUARD_PI")
+    if not pinned:
+        try:
+            with open(os.path.join(config_dir(), "pi-judge")) as f:
+                pinned = f.readline().strip()
+        except OSError:
+            pass
+    return (shlex.split(pinned) if pinned else ["pi", "-p"]) + ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"]
+
+
+def pi_layer2(prompt, limited):
+    """The fallback judge: after claude's spend-limit 429, the same prompt to pi once, in an empty directory, by the same contract and the same
+    fail-closed rules. Every pi failure blocks, naming both failures. Pi gets the same system prompt claude does: without it the JSON contract lives
+    nowhere in what pi is sent, and it answers in prose, which fails closed."""
+    base = pi_cmd()
+    exe = shutil.which(base[0])
+    if not exe:
+        raise Block("layer 2", "claude hit its spend limit (%s); the pi fallback (%s) is not on PATH" % (limited.why, base[0]), 2,
+                    "claude spend limit; pi fallback missing")
+    cmd = base + ["--system-prompt", SYSTEM]
+    t0 = time.time()
+    try:
+        with tempfile.TemporaryDirectory() as cwd:   # no project files, no AGENTS.md of this repo
+            done = subprocess.run(cmd, input=prompt.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=CLAUDE_TIMEOUT_S, cwd=cwd)
+    except subprocess.TimeoutExpired:
+        raise Block("layer 2", "claude hit its spend limit (%s); the pi fallback gave no answer in %d s (timed out)" % (limited.why, CLAUDE_TIMEOUT_S), 2,
+                    "claude spend limit; pi fallback timed out")
+    except OSError as e:
+        raise Block("layer 2", "claude hit its spend limit (%s); cannot run the pi fallback: %s" % (limited.why, e), 2,
+                    "claude spend limit; pi fallback cannot run")
+    took = round(time.time() - t0, 2)
+    out, err = done.stdout.decode(errors="replace"), done.stderr.decode(errors="replace")
+    if done.returncode != 0:
+        why = (err.strip() or out.strip() or "no output").splitlines()[-1][:200]
+        raise Block("layer 2", "claude hit its spend limit (%s); the pi fallback exited %d: %s" % (limited.why, done.returncode, why), 2,
+                    "claude spend limit; pi fallback exited %d" % done.returncode)
+    leak, findings = judged(out.strip(), "the pi fallback")
+    return leak, findings, {"claude_s": limited.claude_s, "pi_s": took, "cost_usd": 0.0, "judge": "pi"}
 
 
 def layer2(prompt):
     if len(prompt.encode()) > MAX_BYTES:
         raise Block("layer 2", "the change is %d KB, over the %d KB the check will send; commit smaller changes, or override" % (len(prompt) // 1000, MAX_BYTES // 1000), 2)
-    return claude_layer2(prompt)
+    try:
+        return claude_layer2(prompt)
+    except SpendLimit as limited:
+        return pi_layer2(prompt, limited)     # the one retried failure; every other claude failure still fails closed above
 
 
 def text_trees():
@@ -585,6 +650,9 @@ def run(mode, stdin_lines, remote, url=""):
             leak, findings, one = layer2(prompt)
             extra["claude_s"] = round(extra["claude_s"] + one["claude_s"], 2)
             extra["cost_usd"] += one["cost_usd"] or 0.0
+            extra["judge"] = one["judge"]
+            if "pi_s" in one:
+                extra["pi_s"] = round(extra.get("pi_s", 0.0) + one["pi_s"], 2)
             known = []
             if leak:
                 findings, known = split_findings(findings, data, trees)
@@ -594,8 +662,9 @@ def run(mode, stdin_lines, remote, url=""):
                 if skipped:
                     extra["known_skipped"] = skipped
             if leak and (findings or not known):
-                print("leak-guard: BLOCKED by Claude (layer 2%s): %d finding(s). Fix them, or override: %s"
-                      % (", part %d of %d" % (i, len(prompts)) if len(prompts) > 1 else "", len(findings), override), file=sys.stderr)
+                print("leak-guard: BLOCKED by %s (layer 2%s): %d finding(s). Fix them, or override: %s"
+                      % ("Claude" if extra["judge"] == "claude" else "the pi fallback",
+                         ", part %d of %d" % (i, len(prompts)) if len(prompts) > 1 else "", len(findings), override), file=sys.stderr)
                 for f in findings:
                     if isinstance(f, dict):
                         print("  %s:%s: %s (%s)" % (f.get("file"), f.get("line"), str(f.get("text"))[:120], str(f.get("why"))[:160]), file=sys.stderr)

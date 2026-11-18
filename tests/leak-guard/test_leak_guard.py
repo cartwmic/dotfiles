@@ -59,6 +59,10 @@ elif mode == "error":
     result("Not logged in", is_error=True)
 elif mode == "exit1":
     sys.stderr.write("Error: not signed in. Run claude login.\n"); sys.exit(1)
+elif mode == "spend429":
+    sys.stderr.write('API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your monthly spend limit of 40 USD. To increase your spend limit, visit https://claude.ai/settings/spend-limits"}}\n'); sys.exit(1)
+elif mode == "spend_result":
+    result("This request would exceed your monthly usage limit (HTTP 429).", is_error=True)
 elif mode == "sleep":
     time.sleep(30)
 '''
