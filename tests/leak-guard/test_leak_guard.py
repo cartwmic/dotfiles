@@ -1165,10 +1165,18 @@ class NamesTheRepoAlreadyHolds(Base):
         self.assertIn("BLOCKED by the terms list (layer 1)", done.stderr)
         self.assertEqual(self.calls(), 0)
 
-    def test_text_mode_has_no_base_so_a_flagged_name_blocks(self):
+    def test_text_mode_uses_the_checkouts_remote_tracking_refs_as_its_base(self):
         (self.tmp / "body.md").write_text("see the Halcyon docs\n")
         done = self.guard("text", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("skipped, its name is already in the repository", done.stderr)
+        self.assertIn("Halcyon", done.stderr)
+        self.assertIn("do not report them: Halcyon", (self.fake / "stdin.txt").read_text(),
+                      "the prompt names what the target branch already publishes")
+        (self.tmp / "other.md").write_text("see the Zephyrine docs\n")
+        done = self.guard("text", str(self.tmp / "other.md"), env=self.judge("Zephyrine"))
         self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
 
     def test_a_push_skips_a_name_the_remote_already_holds(self):
         self.git("checkout", "-q", "-b", "feature")
