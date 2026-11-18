@@ -17,11 +17,12 @@ Everything else, and every command for another repository, runs the real gh with
 It writes one log line (mode "gh") to ~/.local/state/leak-guard/log.jsonl for each guarded command it checks or blocks: {utc, mode, command, verdict,
 layer, duration_s, findings}. Never the text, a term, a path or a repository name. LEAK_GUARD_SKIP="ask N: reason" skips the check for one command; the
 override must name an approval the agent cannot create alone (N is the ask that approved the skip, which the approval checker on this machine confirms),
-it is single use, and the skip is logged with its ask id; the reason text is never logged.
+an approval is single use per ask (a gh command always spends it), and the skip is logged with its ask id; the reason text is never logged.
 
 Environment: LEAK_GUARD_CONFIG_DIR, XDG_STATE_HOME as for leak-guard; LEAK_GUARD_BIN is the leak-guard to run (default ~/.local/bin/leak-guard).
 """
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -163,9 +164,10 @@ def skip_ask(skip):
 def approve_skip(skip, command, t0):
     """The override must name an approval the agent cannot create alone: "ask N: reason". The checker command in ~/.config/leak-guard/approval-check
     (one line, written from local chezmoi data) decides whether ask N approves this skip: run as "<checker> <N>", exit 0 approves, anything else blocks
-    with the checker's first stderr line. Fails closed: a malformed override, a missing checker, a refusal, or an ask already used blocks. Single use per
-    mode ("gh" here): an approved ask is recorded in the state dir, so a second skip with the same ask is refused. Returns the ask id, or None after
-    refusing: the refusal is logged and printed, and the command was not run. The reason text is never logged, so it is not passed on."""
+    with the checker's first stderr line. Fails closed: a malformed override, a missing checker, a refusal, or an ask already used blocks. An approval is
+    single use per ask, decided under an flock on the used-asks file: a gh command always spends the ask (only a commit's commit-msg may share a pre-commit
+    use, and that sharing lives in leak-guard). Returns the ask id, or None after refusing: the refusal is logged and printed, and the command was not run.
+    The reason text is never logged, so it is not passed on."""
     ask = skip_ask(skip)
     if ask is None:
         log(command, "block", "override", 0, t0, reason="override is not an ask")
@@ -178,6 +180,10 @@ def approve_skip(skip, command, t0):
             cmd = shlex.split(f.readline().strip())
     except OSError:
         cmd = []
+    except ValueError as e:
+        log(command, "block", "override", 0, t0, reason="approval checker unreadable")
+        print("leak-guard gh: BLOCKED, override: the approval checker (%s) is not a readable command line: %s" % (path, e), file=sys.stderr)
+        return None
     if not cmd:
         log(command, "block", "override", 0, t0, reason="no approval checker")
         print("leak-guard gh: BLOCKED, override: no approval checker on this machine (%s is missing or empty), so every skip is refused." % path, file=sys.stderr)
@@ -197,20 +203,18 @@ def approve_skip(skip, command, t0):
     state = os.path.join(os.environ.get("XDG_STATE_HOME") or home(".local", "state"), "leak-guard")
     used = os.path.join(state, "used-asks")
     try:
-        with open(used) as f:
-            if any(line.split()[:2] == [str(ask), "gh"] for line in f):
-                log(command, "block", "override", 0, t0, reason="ask %d already used" % ask)
-                print("leak-guard gh: BLOCKED, override: ask %d was already used: a skip is single use, so get a new ask." % ask, file=sys.stderr)
-                return None
-    except OSError:
-        pass
-    try:
         os.makedirs(state, mode=0o700, exist_ok=True)
         os.chmod(state, 0o700)
-        fd = os.open(used, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "a") as f:
+        with os.fdopen(os.open(used, os.O_RDWR | os.O_CREAT, 0o600), "r+") as f:
+            os.fchmod(f.fileno(), 0o600)     # an existing file may have been made wider
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            if any(line.split()[:1] == [str(ask)] for line in f.read().splitlines()):
+                log(command, "block", "override", 0, t0, reason="ask %d already used" % ask)
+                print("leak-guard gh: BLOCKED, override: ask %d was already used: an approval is single use, so get a new ask." % ask, file=sys.stderr)
+                return None
             f.write("%d gh\n" % ask)
+            f.flush()
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except OSError as e:
         log(command, "block", "override", 0, t0, reason="cannot record the used ask")
         print("leak-guard gh: BLOCKED, override: cannot record the used ask: %s" % e, file=sys.stderr)

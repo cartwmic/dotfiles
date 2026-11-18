@@ -74,7 +74,7 @@ Every git call the hook makes goes through one helper in a neutral environment, 
 
 ## Override and bypass
 
-- `LEAK_GUARD_SKIP="ask N: reason" git commit ...` (or `git push ...`) skips both layers for that one command, so it has to be set on each command that needs it (a commit runs three hooks, and a push one; the variable reaches each of them). **Every skip is logged**, with its ask id, in the log below; the reason text is never logged.
+- `LEAK_GUARD_SKIP="ask N: reason" git commit ...` (or `git push ...`) skips both layers for that one command, so it has to be set on each command that needs it (a commit runs two hooks, pre-commit and commit-msg, and a push one; the variable reaches each of them). **Every skip is logged**, with its ask id, in the log below; the reason text is never logged.
 - `git commit --no-verify` and `git push --no-verify` skip the hooks, as git always allows. That leaves no log line.
 
 The override must name an approval the agent cannot create alone. `LEAK_GUARD_SKIP` has to be `ask N: reason` — N is the number of the ask that approved the skip, and the reason is free text for the person who reads the command, never logged. Anything else is refused, with the format named. The machine's **approval checker** decides whether ask N approves this skip; it is a per-machine choice and is never committed: the work machine's install step writes its command line to `~/.config/leak-guard/approval-check` (one line, from the `leakGuard.approvalCheck` local data key, and removed again when that key is). leak-guard runs `<checker> <N>`:
@@ -82,9 +82,9 @@ The override must name an approval the agent cannot create alone. `LEAK_GUARD_SK
 - **Exit 0** approves the skip. Any other exit blocks it, with the checker's first stderr line shown.
 - **The checker owns the 24-hour window**: it reads the ask's answered time and refuses an ask older than 24 hours. leak-guard passes it the ask id and nothing else.
 - **Fail closed**: with no checker file on the machine, every skip is refused ("no approval checker on this machine"), as is a checker that cannot be run.
-- **Single use per mode**: an approved ask id is recorded in `~/.local/state/leak-guard/used-asks` (mode 600), and a second skip with the same ask and mode is refused. One `git commit` runs pre-commit and commit-msg, and each consumes the ask once, so one override still covers a whole commit; a second commit (or push, or `gh` command) with the same ask needs a new one.
+- **Single use per ask**: an approved ask id is recorded in `~/.local/state/leak-guard/used-asks` (mode 600), and any further skip with the same ask is refused. The one shared use is a single commit: commit-msg may reuse the ask right after a pre-commit used it for the same index tree, and only once. A pre-push, a `leak-guard text` run or a `gh` command each spend the ask, so a commit and its push need separate asks. The record is decided under an `flock` on the file, so two concurrent uses of one ask cannot both pass.
 
-The real checker for the work machine is not part of this repository; only its contract above is.
+The real checker for the work machine is not part of this repository; only its contract above is. This gate stops accidents and unilateral skips, not a deliberate forger: someone who can set `LEAK_GUARD_CONFIG_DIR` or `XDG_STATE_HOME` can point leak-guard at their own checker or used-asks.
 
 ## Log
 

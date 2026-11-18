@@ -1135,6 +1135,29 @@ class WrapperFailClosed(WrapperBase):
         done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason"})
         self.assertBlocked(done, "no approval checker on this machine")
 
+    def test_one_ask_cannot_pass_text_and_then_gh(self):
+        # leak-guard and the wrapper share one used-asks record: a text run spends the ask, so gh cannot reuse it
+        body = self.file("body.md", PLANTED)
+        text_run = subprocess.run([sys.executable, str(GUARD), "text", body], capture_output=True, text=True,
+                                  env={**self.env(), "LEAK_GUARD_SKIP": "ask 9: by hand"})
+        self.assertEqual(text_run.returncode, 0, text_run.stderr)
+        self.assertIn("skipped (ask 9)", text_run.stderr)
+        done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 9: by hand"})
+        self.assertBlocked(done, "already used")
+        self.assertEqual(self.claude_calls(), 0)
+
+    def test_an_unrunnable_or_empty_or_unreadable_checker_refuses_cleanly(self):
+        ac = self.home / ".config" / "leak-guard" / "approval-check"
+        for content, text in (("/no/such/checker-anywhere\n", "cannot run the approval checker"), ("\n", "missing or empty"),
+                              ('say "unbalanced\n', "not a readable command line")):
+            with self.subTest(content.strip() or "empty"):
+                ac.write_text(content)
+                self.reset()
+                done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason"})
+                self.assertBlocked(done, text)
+                self.assertNotIn("Traceback", done.stderr)
+                self.assertEqual(self.gh_log()[-1]["verdict"], "block")
+
     def test_a_checker_that_says_no_refuses_with_its_stderr_and_a_yes_lets_the_skip_through_once(self):
         done = self.gh("pr", "comment", "5", "--body", PLANTED, env={"LEAK_GUARD_SKIP": "ask 5: reason", "FAKE_CHECKER": "refuse"})
         self.assertBlocked(done, "the checker says no")
