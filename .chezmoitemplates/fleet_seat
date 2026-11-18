@@ -15,7 +15,7 @@
   plus the Loop Engine and lean-change skills for builders and leads, reviewing-prs and review-plans for reviewers, using-shartifacts
   for leads and the coordinator, and correcting-repeated-mistakes for builders, leads and the coordinator (playbook
   rule 3222c71d has the lead run it on a repeat or follow-on finding; builders and the coordinator may need to call it too), and hill-climb for
-  builders and leads (seats could use it before the 2026-11-13 re-apply (#389) turned it off). deriving-readable-docs (PRD, design and spec docs from a repo's tests; dotfiles #411, decision #1597) is kept for builders, leads and the coordinator, with no-ai-slop, which its slop pass loads (decision #1598). tests/t3-hub SkillRequiresTest reads every "Load the `X` skill" line in the canonical SKILL.md files and fails when a seat keeps the skill without X; that is why reviewers keep using-loop-engine, which using-lean-change-provider loads. The coordinator seat had no attributed skill calls, so it takes the lead's list, without hill-climb.
+  builders and leads (seats could use it before the 2026-11-13 re-apply (#389) turned it off). The computer seat (the Computer use seat, instance seat-computer) keeps using-computer, its tool rule, and using-browse, which that skill loads on personal; it is a worker seat like the builder, planner and reviewer (worker instructions, no Workflow tool). deriving-readable-docs (PRD, design and spec docs from a repo's tests; dotfiles #411, decision #1597) is kept for builders, leads and the coordinator, with no-ai-slop, which its slop pass loads (decision #1598). tests/t3-hub SkillRequiresTest reads every "Load the `X` skill" line in the canonical SKILL.md files and fails when a seat keeps the skill without X; that is why reviewers keep using-loop-engine, which using-lean-change-provider loads. The coordinator seat had no attributed skill calls, so it takes the lead's list, without hill-climb.
   Advisor, MCP servers and the compaction window are not set here: they belong to the T3 instance (modify_settings.json.tmpl) or to the
   launch arguments.
 */ -}}
@@ -25,6 +25,7 @@
       "builder" (list "correcting-repeated-mistakes" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "designing-the-smallest-version" "no-ai-slop")
       "reviewer" (list "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine")
+      "computer" (list "using-computer" "using-browse")
       "homelab-chat" (list) -}}
 {{- /* The seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs (SkillRequiresTest). */ -}}
 {{- range $seat := list "lead" "builder" -}}{{- $_ := set $keeps $seat (concat (get $keeps $seat) (list "reviewing-prs" "triaging-automated-review")) -}}{{- end -}}
@@ -61,17 +62,17 @@
   its name is added here: tests/t3-hub test_every_bundled_skill_is_off_or_workflow_authoring runs the binary and fails naming it. */ -}}
 {{- $bundledOff := list "artifact-design" "artifact-diagramming" "claude-api" "code-review" "dataviz" "fewer-permission-prompts" "init" "keybindings-help" "loop" "plugin-authoring" "run" "security-review" "simplify" "update-config" -}}
 {{- /* Builder, planner and reviewer deny the Workflow tool (below), so they have no use for workflow-authoring: it goes in their off list. The lead and the coordinator keep the tool, so they keep the skill listed. */ -}}
-{{- if has .seat (list "builder" "planner" "reviewer") -}}{{- $bundledOff = append $bundledOff "workflow-authoring" -}}{{- end -}}
+{{- if has .seat (list "builder" "planner" "reviewer" "computer") -}}{{- $bundledOff = append $bundledOff "workflow-authoring" -}}{{- end -}}
 {{- range $name := $bundledOff -}}{{- if has $name $keep -}}{{ fail (printf "fleet_seat: seat %s keeps %q, which is also a Claude Code bundled skill turned off above; rename the kept skill or drop the name from $bundledOff" $.seat $name) }}{{- end -}}{{- $_ := set $off $name "off" -}}{{- end -}}
 {{- /* Builder, planner and reviewer: four tools they do not use are denied, which takes them out of the tools array (4,898 tokens, measured in every request). ReportFindings (typed review findings for a host UI),
   ScheduleWakeup (/loop pacing; sleeping and polling are against the rules), ListAgents, and Workflow (needs an explicit opt-in; 1,993 tokens even with workflow-authoring on). Counts 2026-11-14..16, main sessions:
   none of the four called in the planner and reviewer seats; the builder called ScheduleWakeup 8 times and ListAgents 3 times (polling and a listing it can do without), Workflow once. The lead and the coordinator
   keep all four: leads drive workflows and loops. Probe and numbers: coordinator-workspace token-efficiency/build-1116/L5/PROBE.md. */ -}}
 {{- $deny := list "Artifact" -}}
-{{- if has .seat (list "builder" "planner" "reviewer") -}}{{- $deny = concat $deny (list "ListAgents" "ReportFindings" "ScheduleWakeup" "Workflow") -}}{{- end -}}
+{{- if has .seat (list "builder" "planner" "reviewer" "computer") -}}{{- $deny = concat $deny (list "ListAgents" "ReportFindings" "ScheduleWakeup" "Workflow") -}}{{- end -}}
 {{- $seatFile := dict "permissions" (dict "deny" $deny) "syncClaudeAiSkills" false "disableBundledSkills" false "skillOverrides" $off -}}
 {{- /* Builder, planner and reviewer only: ~/.claude/CLAUDE.md (with the hindsight memory guide) is not loaded; the same text without the guide comes from the worker folder (claudeMdExcludes only skips this one file). The T3 instance adds --add-dir and CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 (modify_settings.json.tmpl) and tests/t3-hub keeps the three halves together: an exclude without them would leave the seat with no user instructions at all. */ -}}
-{{- if has .seat (list "builder" "planner" "reviewer") -}}
+{{- if has .seat (list "builder" "planner" "reviewer" "computer") -}}
 {{-   $_ := set $seatFile "claudeMdExcludes" (list (joinPath .ctx.chezmoi.homeDir ".claude" "CLAUDE.md")) -}}
 {{- end -}}
 {{- /* Builder only: a Stop hook that refuses to stop while a run-and-wake or kgate job this thread started still runs (hooks/stop_running_jobs.py; Retro proposal 12, playbook rule 19e13f7b). It fails open: a missing script or python3 allows the stop. */ -}}

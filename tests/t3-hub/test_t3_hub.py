@@ -31,7 +31,7 @@ WINDOWS = {"claudeAgent": "300000", "coordinator": "200000"}  # T3's "Auto-compa
 WINDOW_IDS = tuple(WINDOWS)
 IDLE = "beforeCacheExpires"  # T3's "Compact idle threads: Before the cache expires (beta)" (top-level idleCompaction)
 # One claudeAgent instance per agent seat: id, window, and whether the advisor tool is switched off. Restated here on purpose, not read from the template.
-SEAT_TABLE = (("seat-lead", "200000", False), ("seat-builder", "300000", True), ("seat-planner", "300000", True), ("seat-reviewer", "300000", False))
+SEAT_TABLE = (("seat-lead", "200000", False), ("seat-builder", "300000", True), ("seat-planner", "300000", True), ("seat-reviewer", "300000", False), ("seat-computer", "200000", False))
 SEATS = tuple(i for i, _, _ in SEAT_TABLE)
 # T3 interrupts a running session to deliver a message; Claude Code then reports a call it skipped as a user decline unless this variable is set (see the template header). Restated here on purpose.
 FIZZY = {"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}
@@ -42,18 +42,18 @@ HOMELAB_CHAT = "seat-homelab-chat"
 FIZZY_IDS = ("claudeAgent", "coordinator", "claude-hub") + SEATS  # every Claude instance the template owns or finds
 # The builder, planner and reviewer seats load their user instructions from ~/.claude/fleet/worker (the same text without the hindsight guide, plus the skill that holds it)
 # instead of ~/.claude/CLAUDE.md. The instance adds the folder and the variable that makes Claude Code read CLAUDE.md from an added folder; the seat file excludes CLAUDE.md.
-WORKER_SEATS = ("builder", "planner", "reviewer")
+WORKER_SEATS = ("builder", "planner", "reviewer", "computer")
 WORKER_ENV = {"name": "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", "sensitive": False, "value": "1"}
 
 
 def seat_instances(home):
-    """The four seat instances as the script writes them (key order is the template's: config, displayName, driver, enabled, environment; inside config the keys are alphabetical, because chezmoi's toJson sorts a dict)."""
+    """The five seat instances as the script writes them (key order is the template's: config, displayName, driver, enabled, environment; inside config the keys are alphabetical, because chezmoi's toJson sorts a dict)."""
     out = {}
     for sid, window, advisor in SEAT_TABLE:
         fleet = "%s/.claude/fleet" % home
         worker = sid.split("-", 1)[1] in WORKER_SEATS
         inst = {"config": {"autoCompactWindow": window,
-                           "launchArgs": "--settings %s/%s.json %s--strict-mcp-config --mcp-config %s/mcp.json" % (fleet, sid, "--add-dir %s/worker " % fleet if worker else "", fleet)},
+                           "launchArgs": "--settings %s/%s.json %s--strict-mcp-config --mcp-config %s/%s.json" % (fleet, sid, "--add-dir %s/worker " % fleet if worker else "", fleet, "mcp-computer" if sid == "seat-computer" else "mcp")},
                 "displayName": "Claude (%s)" % sid.split("-", 1)[1], "driver": "claudeAgent", "enabled": True}
         inst["environment"] = ([] if advisor else [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}]) + [FIZZY]
         if sid == "seat-reviewer":
@@ -82,7 +82,7 @@ SETTLED = json.dumps(with_window(json.loads(FIXTURE)), indent=2, ensure_ascii=Fa
 
 
 def seated(home):
-    """SETTLED plus the four seat instances: what the settings file holds once the hub is off (the seats are not part of the hub switch)."""
+    """SETTLED plus the five seat instances: what the settings file holds once the hub is off (the seats are not part of the hub switch)."""
     data = json.loads(SETTLED)
     data["providerInstances"].update(seat_instances(str(home)))
     return json.dumps(data, indent=2, ensure_ascii=False)
@@ -162,7 +162,7 @@ class SettingsScriptTest(unittest.TestCase):
     def apply(self, stdin, **kw):
         return run_script(self.script, stdin, **kw)
 
-    def test_adds_exactly_the_two_hub_instances_and_the_four_seats(self):
+    def test_adds_exactly_the_two_hub_instances_and_the_five_seats(self):
         out = json.loads(self.apply(FIXTURE))
         before = json.loads(FIXTURE)
         self.assertEqual(list(out["providerInstances"]), list(before["providerInstances"]) + list(OURS) + list(SEATS))
@@ -203,7 +203,7 @@ class SettingsScriptTest(unittest.TestCase):
         self.assertEqual(self.apply(once), once)
 
     def test_only_additions_in_the_text(self):
-        """Line by line, the diff is six new objects (two hub, four seat) and the comma on the object before them. Nothing else, to the last line."""
+        """Line by line, the diff is seven new objects (two hub, five seat) and the comma on the object before them. Nothing else, to the last line."""
         once = self.apply(SETTLED)
         ops = difflib.SequenceMatcher(None, SETTLED.splitlines(), once.splitlines(), autojunk=False).get_opcodes()
         changes = [(tag, SETTLED.splitlines()[a1:a2], once.splitlines()[b1:b2]) for tag, a1, a2, b1, b2 in ops if tag != "equal"]
@@ -679,12 +679,13 @@ KEEP = {
     "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"designing-the-smallest-version", "no-ai-slop"},
     "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
+    "computer": {"using-computer", "using-browse"},
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
 # The tools the builder, planner and reviewer seat files deny (restated from .chezmoitemplates/fleet_seat); the lead and coordinator keep them.
 UNUSED_TOOLS = {"ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"}
-UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer"}
+UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer", "computer"}
 # Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on for the lead and the coordinator, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
@@ -736,7 +737,7 @@ class SkillRequiresTest(unittest.TestCase):
 
 
 class SeatInstanceTest(unittest.TestCase):
-    """The four seat instances in the settings script, on personal Linux and on the Mac."""
+    """The five seat instances in the settings script, on personal Linux and on the Mac."""
 
     def script(self, chezmoi_os, enabled=True):
         return LinuxSettingsTest().render(chezmoi_os, enabled)
@@ -759,9 +760,9 @@ class SeatInstanceTest(unittest.TestCase):
         script, _ = self.script("linux")
         inst = json.loads(run_script(script, FIXTURE))["providerInstances"]
         self.assertEqual({i: inst[i]["config"]["autoCompactWindow"] for i in SEATS},
-                         {"seat-lead": "200000", "seat-builder": "300000", "seat-planner": "300000", "seat-reviewer": "300000"})
+                         {"seat-lead": "200000", "seat-builder": "300000", "seat-planner": "300000", "seat-reviewer": "300000", "seat-computer": "200000"})
         off = {i for i in SEATS if any(e["name"] == "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" and e["value"] == "1" for e in inst[i].get("environment", []))}
-        self.assertEqual(off, {"seat-lead", "seat-reviewer"})
+        self.assertEqual(off, {"seat-lead", "seat-reviewer", "seat-computer"})
         for i in SEATS:
             self.assertEqual(inst[i]["driver"], "claudeAgent")
             self.assertIn("--strict-mcp-config --mcp-config ", inst[i]["config"]["launchArgs"])
