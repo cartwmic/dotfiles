@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""VPN keepalive (docs/vpn-keepalive.md): one launchd tick of local.vpn-keepalive.
+
+The work Mac's VPN (a Viscosity OpenVPN connection) sometimes sits Connected while the tunnel no
+longer carries traffic; a manual reconnect fixed it every time. This tick notices that and, in
+reconnect mode, asks Viscosity to disconnect and connect the connection again. reconnect can open
+the connection's browser sign-in, so the mode is the owner's choice (chezmoi data vpnKeepalive).
+
+Config arrives as launchd environment variables, rendered from local chezmoi data
+(.chezmoitemplates/vpn_keepalive_config). Without them the tick logs and exits, so the script is
+inert when run by hand on a machine without the agent, or when the owner disconnected on purpose.
+
+One tick: Viscosity running and the connection Connected, else do nothing. Probe the host over
+HTTPS (curl --max-time 8; any HTTP status counts as reachable). The tunnel is stale when two probes
+in a row fail (state.json keeps the streak). Stale in mode alert: alert at once, touch nothing.
+Stale in mode reconnect: at most once per 15 minutes, disconnect and connect via AppleScript, then
+re-probe for up to 2 minutes; still unreachable, alert. An alert fires once per stale episode; a
+probe that answers again ends the episode and is logged as a recovery.
+
+The tick appends one JSON line to ~/.local/state/vpn-keepalive/log.jsonl and keeps its streak, the
+episode and the last reconnect attempt in ~/.local/state/vpn-keepalive/state.json.
+"""
+import json
+import os
+import re
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+APP = "Viscosity"
+GET_CONNECTIONS = 'tell application "%s" to get {name, state} of connections' % APP
+# The same charset .chezmoitemplates/vpn_keepalive_config enforces: the name goes into AppleScript
+# source, and Viscosity's name/state list is comma-joined, so a comma or quote in a name would
+# break both. Re-checked here because the environment can also be set by hand.
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
+PROBE_MAX_TIME = "8"
+RECONNECT_MIN_SECS = int(os.environ.get("VPN_KEEPALIVE_RECONNECT_MIN_SECS") or 900)
+REPROBE_SECS = int(os.environ.get("VPN_KEEPALIVE_REPROBE_SECS") or 120)
+REPROBE_STEP = int(os.environ.get("VPN_KEEPALIVE_REPROBE_STEP") or 10)
+DISCONNECT_WAIT = float(os.environ.get("VPN_KEEPALIVE_DISCONNECT_WAIT") or 3)
+
+
+def state_dir():
+    root = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return Path(root) / "vpn-keepalive"
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value))
+    tmp.replace(path)
+
+
+def log(dir_, line):
+    dir_.mkdir(parents=True, exist_ok=True)
+    with open(dir_ / "log.jsonl", "a") as f:
+        f.write(json.dumps(line) + "\n")
+
+
+def run(cmd, timeout):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # A missing or wedged helper is a failed probe or a failed command, not a crash: the next
+        # tick tries again.
+        out = getattr(exc, "stdout", "") or ""
+        return subprocess.CompletedProcess(cmd, 124, out if isinstance(out, str) else "", str(exc))
+
+
+def osascript(script):
+    return run(["osascript", "-e", script], 30)
+
+
+def viscosity_running():
+    return run(["pgrep", "-x", APP], 10).returncode == 0
+
+
+def connection_states():
+    """{name: state} from Viscosity, or None when osascript failed or the answer is not the
+    comma-joined {names..., states...} list the AppleScript asks for."""
+    r = osascript(GET_CONNECTIONS)
+    if r.returncode != 0:
+        return None
+    parts = [p.strip() for p in r.stdout.strip().split(",")]
+    if parts == [""]:
+        return {}
+    if len(parts) % 2:
+        return None
+    n = len(parts) // 2
+    return dict(zip(parts[:n], parts[n:]))
+
+
+def probe(host):
+    """One HTTPS probe: any HTTP status counts as reachable; a timeout, TLS or connection failure
+    does not. Latency is the wall time, so a failed probe carries one too."""
+    start = time.monotonic()
+    r = run(["curl", "-sS", "-o", os.devnull, "--max-time", PROBE_MAX_TIME, "-w", "%{http_code}",
+             "https://" + host], 20)
+    latency = round((time.monotonic() - start) * 1000)
+    status = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    return {"ok": r.returncode == 0, "httpStatus": status, "latencyMs": latency}
+
+
+def reprobe(host):
+    """Probe until the tunnel answers or the re-probe window (2 minutes in production) is over."""
+    deadline = time.monotonic() + REPROBE_SECS
+    while True:
+        p = probe(host)
+        if p["ok"] or time.monotonic() >= deadline:
+            return p
+        time.sleep(min(REPROBE_STEP, max(0.0, deadline - time.monotonic())))
+
+
+def alert(connection, alert_command):
+    osascript('display notification "VPN tunnel is not passing traffic" with title "VPN keepalive" subtitle "%s"'
+              % connection)
+    if alert_command:
+        env = dict(os.environ, VPN_KEEPALIVE_REASON="vpn tunnel is not passing traffic")
+        run_alert = subprocess.run(["/bin/sh", "-c", alert_command], capture_output=True, text=True,
+                                   timeout=30, env=env)
+        if run_alert.returncode != 0:
+            return False
+    return True
+
+
+def reconnect(connection):
+    """Disconnect, then connect again by name (Viscosity's AppleScript dictionary: connect and
+    disconnect each take the connection's name as their direct parameter)."""
+    osascript('tell application "%s" to disconnect "%s"' % (APP, connection))
+    time.sleep(DISCONNECT_WAIT)
+    osascript('tell application "%s" to connect "%s"' % (APP, connection))
+
+
+def alert_once(episode, connection, alert_command):
+    """Alert once per stale episode; a later stale tick in the same episode stays quiet."""
+    if episode.get("alerted"):
+        return "none"
+    episode["alerted"] = True
+    return "alert" if alert(connection, alert_command) else "alert-failed"
+
+
+def tick():
+    sd = state_dir()
+    connection = os.environ.get("VPN_KEEPALIVE_CONNECTION") or ""
+    host = os.environ.get("VPN_KEEPALIVE_HOST") or ""
+    # reconnect is the default (the owner's decision): a tick run by hand without the variable reconnects too.
+    mode = os.environ.get("VPN_KEEPALIVE_MODE") or "reconnect"
+    alert_command = os.environ.get("VPN_KEEPALIVE_ALERT_COMMAND") or ""
+    now = time.time()
+    line = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "state": None,
+            "probe": None, "action": None}
+    if not (connection and host and mode):
+        line.update(state="unconfigured", action="idle")
+        log(sd, line)
+        return 0
+    if not NAME_RE.match(connection):
+        line.update(state="unconfigured", action="error")
+        log(sd, line)
+        return 1
+
+    state = read_json(sd / "state.json")
+    streak = int(state.get("failStreak") or 0)
+    episode = state.get("episode")
+    last_reconnect = int(state.get("lastReconnect") or 0)
+
+    if not viscosity_running():
+        # The owner quit Viscosity, or the machine just woke: not our place to start it.
+        line.update(state="down", action="idle")
+        streak, episode = 0, None
+    else:
+        states = connection_states()
+        if states is None:
+            # osascript failed or answered something unexpected: change nothing, try again next tick.
+            line.update(state="unknown", action="idle")
+        else:
+            state_text = states.get(connection)
+            line["state"] = state_text if state_text else "absent"
+            if state_text != "Connected":
+                # Disconnected (or connecting): the owner may have done that on purpose. An episode
+                # ends here too, so a tunnel that comes back stale starts a fresh one.
+                line["action"] = "idle"
+                streak, episode = 0, None
+            else:
+                p = probe(host)
+                line["probe"] = p
+                if p["ok"]:
+                    line["action"] = "recovered" if episode else "none"
+                    streak, episode = 0, None
+                else:
+                    streak += 1
+                    if streak < 2:
+                        line["action"] = "none"
+                    else:
+                        if episode is None:
+                            episode = {"alerted": False}
+                        if mode == "reconnect" and now - last_reconnect >= RECONNECT_MIN_SECS:
+                            last_reconnect = now
+                            reconnect(connection)
+                            p = reprobe(host)
+                            line["probe"] = p
+                            if p["ok"]:
+                                line["action"] = "reconnected"
+                                streak, episode = 0, None
+                            else:
+                                line["action"] = alert_once(episode, connection, alert_command)
+                        else:
+                            # alert mode touches nothing; reconnect mode waits out its 15 minutes.
+                            line["action"] = alert_once(episode, connection, alert_command)
+
+    write_json(sd / "state.json", {"failStreak": streak, "episode": episode, "lastReconnect": last_reconnect})
+    log(sd, line)
+    return 0 if line["action"] != "error" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(tick())

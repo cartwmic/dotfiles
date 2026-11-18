@@ -29,6 +29,17 @@ data:
   # qmd:
   #   refresh: {enabled: true, intervalMinutes: 60}   # 15 to 1440; enabled: false removes the agent
   #   (add cleanup: false to stop the daily `qmd cleanup` that qmd-refresh runs at most once per 24 h; docs/qmd.md "Daily cleanup")
+  # VPN keepalive (macOS, axon-work-computer only; docs/vpn-keepalive.md). The block's presence turns the feature on;
+  # leave it out (or remove it) and the agent is not deployed, or unloaded and removed on the next apply. The values
+  # are machine-specific and stay in this local file, never in the repo.
+  # vpnKeepalive:
+  #   connection: "Example VPN"     # the Viscosity connection name, exactly as Viscosity lists it
+  #   host: "git.example.com"       # probed over HTTPS through the tunnel; any HTTP status counts as reachable
+  #   mode: reconnect                # reconnect (the default) | alert; reconnect tells Viscosity to disconnect and
+  #                                  # connect again, which can open the connection's browser sign-in (the owner's
+  #                                  # credentials); alert only reports a stale tunnel and touches nothing
+  #   intervalSeconds: 120           # launchd StartInterval, 30 to 3600
+  #   alertCommand: /Users/you/bin/notify-vpn   # optional extra command run on alert (VPN_KEEPALIVE_REASON is set)
   # Always-on agent-events metrics (macOS; dot_local/share/agent-events/README.md). On by default on personal only.
   # enabled: false unloads and removes the LaunchAgent on the next apply. A bad value fails the apply.
   # agentEvents:
