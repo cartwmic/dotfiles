@@ -354,5 +354,25 @@ class ClaimTest(unittest.TestCase):
         self.assertNotIn("FAIL", out)
 
 
+SKILL_DIR = SCRIPTS.parent
+
+
+class SkillTextTests(unittest.TestCase):
+    """The check pass is the skill's quality gate: keep its required checks in the text a checker is handed."""
+
+    def test_check_brief_carries_the_independent_checks(self):
+        brief = (SKILL_DIR / "references/check-brief.md").read_text()
+        for needle in ("a helper's HOLDS does not count", "search the test and journey files yourself", "expect and assert lines",
+                       "the code must agree", "open its definition", "about 100 claims", "including header counts"):
+            self.assertIn(needle, brief)
+
+    def test_skill_rules_and_step_8_match_the_brief(self):
+        skill = (SKILL_DIR / "SKILL.md").read_text()
+        for needle in ("Search before writing an entry", "assert and expect lines", "drop the claim",
+                       "writer builds each slice", "Helpers may only find code", "Stop when a re-check"):
+            self.assertIn(needle, skill)
+        self.assertLess(len(skill), 11800)
+
+
 if __name__ == "__main__":
     unittest.main()
