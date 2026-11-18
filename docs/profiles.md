@@ -34,6 +34,7 @@ How to read a row:
 | `.pi/agent/extensions/openrouter-gate` | personal | The work profile keeps its own OpenRouter posture, not the personal setup. |
 | `.pi/agent/extensions/claude-compat-guard` | personal | It rides on the personal Claude login; work uses its own provider. |
 | `.config/kgate/host` | personal | The address of the personal homelab Kubernetes cluster, which the work Mac has no business reaching. The `kgate` binary itself (`.local/bin/kgate`) lands on both profiles; the second-cluster files come from local chezmoi data on any profile that has it (`kgate.clusters`, `kgate.profiles`; see Optional keys), so they need no row. |
+| `.local/bin/pi` | axon-work-computer | The launcher wrapper that reads the work-glm key once into the environment ("pi key from the environment" below). Only the work profile has the work-glm provider and its per-request key failures; elsewhere `~/.local/bin/pi` stays pi's own installer symlink. |
 | `.local/bin/leak-guard` | axon-work-computer | It was asked for as a work-machine-only git hook, so there is no personal counterpart (`docs/leak-guard.md`). The hooks and the terms and context files are written only on that profile, and only when the `leakGuard` data key is present. `leak-guard text` (the file mode the gh wrapper calls) is part of the same script. |
 | `80_spotlight_off_workshop.sh` | personal | `/Volumes/Workshop` exists only on the personal Mac; the work Mac has no such volume. A personal Mac without the SSD sets `workshop.enabled: false` (Optional keys below). |
 | `.config/agent-scratch`, `81_agent_scratch_workshop.sh`, `.local/user_scripts/agent_tmp_move.py`, `.local/share/agent-scratch` | personal (macOS) | `/Volumes/Workshop` exists only on the personal Mac; the work Mac and the Linux and WSL hosts have no such volume. The one line in `dot_zshenv` that sources the env file does nothing without it. |
@@ -189,6 +190,16 @@ Known gaps:
 - `takes_no_path` lists six subcommands (`read`, `whoami`, `item get`, `item list`, `vault list`, `account list`) and treats five option names as path options. A flag the list does not know about that takes a relative path would resolve against the op home, not the caller's directory. The list was not checked against the full flag set of each `op` release.
 
 The human-run flows keep their own fallbacks: fresh-machine provisioning (`run_after_05_provision_ssh_keys.sh.tmpl`), the token refresh (`refresh_op_service_account_token.sh`, biometric on purpose), and the zshrc warning block.
+
+### pi key from the environment (work profile)
+
+pi resolves a `!command` apiKey on every model request, through `execSync` with a hard 10 s timeout. When the machine stalls under memory pressure the key command is killed before it starts, and the turn fails with "Failed to resolve API key". So on the work profile the work-glm key is read once, at pi's launch:
+
+- `~/.local/bin/pi` (`dot_local/bin/private_executable_pi.tmpl`, mode 0700, work only; elsewhere it stays pi's installer symlink) reads the key with `op_read_cached.sh` and the `workGlmKeyRef` data key, with no 10 s limit, exports `WORK_GLM_API_KEY`, and execs pi's own launcher, `~/.pi/agent/bin/pi`.
+- models.json names the work-glm key as `"$WORK_GLM_API_KEY"`. pi reads it from its own environment on each request: no subprocess.
+- If the read fails, pi still starts (its other providers need no work key), with a `[pi] WARN:` line naming `WORK_GLM_API_KEY`. A work-glm request then fails at once with pi's own `No API key found for work-glm`, which does not name the variable, so the launch warning is the clue. A key already in the environment is kept.
+- A rotated key needs pi sessions restarted.
+- The trade-off (the owner's choice): every tool command a pi session runs inherits the variable, so an agent that dumps its environment prints the key. The leak guard's terms hold the key's prefix (machine-local data), so it is blocked from commits and from posts to guarded repositories. Transcripts and session logs are not covered.
 
 ### Environment for the Mac-side phone helpers
 

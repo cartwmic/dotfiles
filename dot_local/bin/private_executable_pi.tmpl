@@ -1,0 +1,26 @@
+#!/bin/sh
+# pi: the work machine's launcher wrapper (docs/profiles.md, "pi key from the environment").
+#
+# pi resolves a provider's `!command` apiKey on EVERY model request, through execSync with a hard 10 s timeout. When the
+# machine stalls under memory pressure the key command is killed before it starts and the turn fails ("Failed to resolve
+# API key"). So the work-glm key is read ONCE here, with no 10 s limit, and handed to pi as WORK_GLM_API_KEY, which
+# models.json names as "$WORK_GLM_API_KEY" (pi reads it from its own environment: no subprocess per request).
+#
+# The trade-off, approved by the owner: every tool command a pi session runs inherits the variable. The leak guard's
+# terms block the key from commits and from posts to guarded repositories; transcripts and session logs are not covered.
+#
+# If the read fails, pi still starts (its other providers need no work key), and this prints a [pi] WARN line naming
+# WORK_GLM_API_KEY. A work-glm request then fails at once with pi's own "No API key found for work-glm" error; that error
+# does not name the variable, so the WARN line at launch is the clue. A rotated key needs pi restarted.
+{{- if hasKey . "workGlmKeyRef" }}
+if [ -z "${WORK_GLM_API_KEY:-}" ]; then
+	if key=$("$HOME/.local/user_scripts/op_read_cached.sh" '{{ .workGlmKeyRef }}') && [ -n "$key" ]; then
+		WORK_GLM_API_KEY=$key
+		export WORK_GLM_API_KEY
+	else
+		echo "[pi] WARN: could not read the work-glm key, so WORK_GLM_API_KEY is unset; work-glm requests will fail (\"No API key found for work-glm\") until pi is restarted" >&2
+	fi
+	unset key
+fi
+{{- end }}
+exec "$HOME/.pi/agent/bin/pi" "$@"

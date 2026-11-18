@@ -418,6 +418,9 @@ Library/Preferences/pnpm/**
 .config/heavy-gate/volumes
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
+# The pi launcher wrapper reads the work-glm key once into the environment (docs/profiles.md); work only. Elsewhere
+# ~/.local/bin/pi stays pi's own installer symlink.
+.local/bin/pi
 # Anthropic stalls are only seen on the work profile.
 .pi/agent/extensions/anthropic-stall-retry
 .pi/agent/extensions/anthropic-stall-retry/**

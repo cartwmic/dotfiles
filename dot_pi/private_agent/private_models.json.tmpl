@@ -21,7 +21,7 @@
 {{- if and (eq .profile "axon-work-computer") (hasKey . "workGlmBaseUrl") (hasKey . "workGlmKeyRef") (hasKey . "workGlmModelId") -}}
 {{-   $workGlmCost := dict "input" 0 "output" 0 "cacheRead" 0 "cacheWrite" 0 -}}
 {{-   $workGlmModel := dict "id" .workGlmModelId "name" "Work GLM 5.3 Flash" "contextWindow" 1048576 "maxTokens" 131072 "input" (list "text") "reasoning" true "cost" $workGlmCost -}}
-{{-   $workGlm = dict "baseUrl" .workGlmBaseUrl "api" "anthropic-messages" "authHeader" true "compat" (dict "allowEmptySignature" true) "apiKey" (printf "!$HOME/.local/user_scripts/op_read_cached.sh '%s'" .workGlmKeyRef) "models" (list $workGlmModel) -}}
+{{-   $workGlm = dict "baseUrl" .workGlmBaseUrl "api" "anthropic-messages" "authHeader" true "compat" (dict "allowEmptySignature" true) "apiKey" "$WORK_GLM_API_KEY" "models" (list $workGlmModel) -}}
 {{- end -}}
 {
   "providers": {
