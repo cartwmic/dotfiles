@@ -769,7 +769,10 @@ say "start $(date +%s) node=${KGATE_NODE:-?} cpus=$(nproc 2>/dev/null || echo 0)
 if stat -c '%Y %s %n' / >/dev/null 2>&1; then
   cache_files() {  # DIR KIND: one "mtime size path" line per file, one stat pass in batches; mtime first, so sort -n orders oldest first
     if [ "$2" = pnpm ]; then
-      find "$1" -type f \( -path "$1/v*/files/*" -o -path "$1/v*/index/*" \) -exec stat -c '%Y %s %n' {} + 2>/dev/null
+      for v in "$1"/v*/; do   # walk the version directories here: a -path pattern's * crosses /, so it would also match a /files/ or /index/ part under v*/links/ or v*/projects/
+        [ -d "${v}files" ] && find "${v}files" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
+        [ -d "${v}index" ] && find "${v}index" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
+      done
     else
       find "$1" -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null
     fi
@@ -777,20 +780,25 @@ if stat -c '%Y %s %n' / >/dev/null 2>&1; then
 else
   cache_files() {
     if [ "$2" = pnpm ]; then
-      find "$1" -type f \( -path "$1/v*/files/*" -o -path "$1/v*/index/*" \) -exec stat -f '%m %z %N' {} + 2>/dev/null
+      for v in "$1"/v*/; do
+        [ -d "${v}files" ] && find "${v}files" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
+        [ -d "${v}index" ] && find "${v}index" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
+      done
     else
       find "$1" -type f -exec stat -f '%m %z %N' {} + 2>/dev/null
     fi
   }
 fi
-# The pnpm trim reaches only the version directories' content and old index trees: v*/files/ holds the
-# content-addressed blobs, and before pnpm 11 moved the index into one SQLite database, v*/index/ held the
-# per-package JSON files; both are safe to delete file by file, because pnpm re-fetches what is missing. Never
-# listed, at any version directory: index.db and the -wal and -shm side files SQLite writes beside it (pnpm 11 keeps
-# the store's one SQLite index at v11/index.db, and pnpm does not touch store files on use, so an old, stable store
-# has an old index.db that the trim would otherwise delete whole as one old file), v*/links/ (pnpm 11 keeps whole
-# package directories there, the global virtual store: deleting single files could leave a package half-deleted
-# that pnpm still treats as installed) and v*/projects/ (per-project state). For go-build every file is listed.
+# The pnpm listing walks the version directories in the shell and reaches only each one's content and old index
+# trees: v*/files/ holds the content-addressed blobs, and before pnpm 11 moved the index into one SQLite database,
+# v*/index/ held the per-package JSON files; both are safe to delete file by file, because pnpm re-fetches what is
+# missing. Never listed, at any version directory: index.db and the -wal and -shm side files SQLite writes beside it
+# (pnpm 11 keeps the store's one SQLite index at v11/index.db, and pnpm does not touch store files on use, so an old,
+# stable store has an old index.db that the trim would otherwise delete whole as one old file), v*/links/ (pnpm 11
+# keeps whole package directories there, the global virtual store: deleting single files could leave a package
+# half-deleted that pnpm still treats as installed) and v*/projects/ (per-project state) -- including a path under
+# links/ or projects/ that merely contains a files/ or index/ part, which is why the walk is in the shell and not a
+# find -path pattern. For go-build every file is listed.
 trim_cache() {  # DIR KIND CAP_KIB: delete the oldest files under DIR until it fits CAP_KIB
   d=$1 kind=$2 cap=$3
   [ -d "$d" ] || return 0
@@ -814,6 +822,9 @@ trim_cache() {  # DIR KIND CAP_KIB: delete the oldest files under DIR until it f
     say "cache $d removed $((before - left)) files in ${took}s, now at ${after:-?}KiB (cap ${cap}KiB)"
   else
     say "cache $d removed nothing in ${took}s, still at ${after:-?}KiB (cap ${cap}KiB)"
+  fi
+  if [ "${after:-0}" -gt "$cap" ]; then   # index.db, links/ and projects/ can exceed the cap on their own: nothing trimmable left
+    say "cache $d still over cap: $((after - cap))KiB not trimmable"
   fi
 }
 cache_root=${KGATE_CACHE_ROOT:-/cache}

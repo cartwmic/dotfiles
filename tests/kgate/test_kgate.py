@@ -2723,7 +2723,7 @@ class PodSh(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in cache.iterdir()), ["pnpm-store"], "nothing is written onto the claim")
 
     def test_the_pnpm_index_and_links_survive_the_trim_and_files_go_oldest_first(self):
-        "pnpm 11 keeps its SQLite index at v11/index.db and whole packages in v11/links/: the trim touches only v*/files/ (and the old v*/index/ JSON)."
+        "pnpm 11 keeps its SQLite index at v11/index.db and whole packages in v11/links/: the trim touches only the version directories' files/ and index/ trees."
         cache = self.tmp / "cache"
         store = cache / "pnpm-store" / "v11"
         old = self.cache_file(store / "files" / "ab", "old", 3000)
@@ -2732,6 +2732,10 @@ class PodSh(unittest.TestCase):
         wal = self.cache_file(store, "index.db-wal", 4000, kib=64)
         link = self.cache_file(store / "links" / "x" / "node_modules" / "y", "pkg", 3000, kib=64)
         project = self.cache_file(store / "projects" / "p", "state", 3000, kib=64)
+        # A links/ or projects/ path that merely contains a /files/ or /index/ part is still links/ or projects/ content:
+        # a -path pattern's * crosses /, so it would match these and half-delete a package pnpm treats as installed.
+        link_index = self.cache_file(store / "links" / "@x" / "y" / "1.0.0" / "h" / "node_modules" / "y" / "lib" / "index", "b.js", 5000, kib=64)
+        project_files = self.cache_file(store / "projects" / "p" / "files", "s", 4000, kib=64)
         done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertFalse(old.exists(), "the oldest files/ blob goes first")
@@ -2740,6 +2744,8 @@ class PodSh(unittest.TestCase):
         self.assertTrue(wal.exists(), "the -wal side file survives with it")
         self.assertTrue(link.exists(), "links/ (the global virtual store) is never touched")
         self.assertTrue(project.exists(), "projects/ is never touched")
+        self.assertTrue(link_index.exists(), "a links/ path with an /index/ part is never listed")
+        self.assertTrue(project_files.exists(), "a projects/ path with a /files/ part is never listed")
         self.assertTrue((store / "files" / "ab").is_dir(), "the content directory survives")
 
     def test_go_build_buckets_are_trimmed_by_file_age_not_bucket_mtime(self):
@@ -2806,6 +2812,22 @@ class PodSh(unittest.TestCase):
         self.assertFalse(keep.exists(), "the file that is still there goes")
         self.assertIn("over the 4KiB cap: trimming oldest files first", done.stdout)
         self.assertIn("removed 1 files", done.stdout, "the vanished file is not counted as removed")
+
+    def test_a_cache_still_over_cap_after_the_trim_is_logged(self):
+        "index.db, links/ and projects/ can exceed the cap on their own: the trim logs what is left instead of failing."
+        fn = re.search(r"^trim_cache\(\) \{.*?^\}", K.POD_SH, re.S | re.M).group(0)
+        cache = self.tmp / "cache"
+        keep = self.cache_file(cache / "go-build", "keep", 10, kib=8)
+        d = str(cache / "go-build")
+        script = fn + "\n" + (   # fn ends at the closing brace with no newline; keep say() on its own line
+            'say() { printf "%s\\n" "$*" ; }\n'
+            + "cache_files() { : ; }\n"   # nothing is trimmable: the listing is empty
+            + "trim_cache '%s' go 4\n" % d
+        )
+        done = subprocess.run(["sh", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(keep.exists())
+        self.assertRegex(done.stdout, r"still over cap: [0-9]+KiB not trimmable")
 
     def test_a_failed_trim_never_fails_the_job(self):
         "rm cannot delete from a directory this user cannot write: the trim removes nothing, says so, and the job passes."
