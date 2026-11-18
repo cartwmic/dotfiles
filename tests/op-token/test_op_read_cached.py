@@ -227,6 +227,42 @@ class OpReadCached(unittest.TestCase):
             os.kill(op_pid, 0)
         self.assertEqual([p for p in (self.tmp / "cache").rglob("*") if p.is_file()], [], "no temp output left behind")
 
+    def stalled_find(self, seconds):
+        """`find` first on PATH that stalls (as a paged-out process does), then runs the real find; it marks when it started."""
+        (self.bin / "find").write_text('#!/bin/sh\n: > "$FAKE_CALLS.find"\nsleep %s\nexec /usr/bin/find "$@"\n' % seconds)
+        (self.bin / "find").chmod(0o755)
+
+    @unittest.skipUnless(subprocess.run(["sh", "-c", 'echo "${SECONDS:-none}"'], capture_output=True, text=True).stdout.strip() != "none",
+                         "this sh has no $SECONDS (dash): slow hits are not timed there, by design")
+    def test_a_hit_that_takes_seconds_is_recorded_as_slow(self):
+        self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)  # a miss: caches the value
+        self.stalled_find(3.2)
+        done = self.run_script(REF, token_env="")
+        self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
+        deadline = time.monotonic() + 5      # the record is written in the background, after the value is returned
+        while not [l for l in self.records() if '"event":"slow-hit"' in l] and time.monotonic() < deadline:
+            time.sleep(0.05)
+        record = json.loads([l for l in self.records() if '"event":"slow-hit"' in l][0])
+        self.assertGreaterEqual(record["seconds"], 3, record)
+
+    def test_a_caller_kill_during_a_hit_is_recorded_with_its_phase(self):
+        """pi's execSync sends SIGTERM at 10 s: a hit stalled by the machine must still leave a record naming where it was."""
+        self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)
+        self.stalled_find(2)
+        env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "OP_READ_CACHE_DIR": str(self.tmp / "cache"),
+               "XDG_STATE_HOME": str(self.tmp / "state"), "FAKE_CALLS": str(self.calls)}
+        proc = subprocess.Popen(["sh", str(SCRIPT), REF], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        marker = Path(str(self.calls) + ".find")
+        deadline = time.monotonic() + 10
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        proc.terminate()
+        out, _ = proc.communicate(timeout=15)
+        self.assertEqual((proc.returncode, out), (143, b""))
+        record = json.loads([l for l in self.records() if '"event":"caller-killed"' in l][0])
+        self.assertEqual(record["phase"], "hit", record)
+        self.assertEqual(record["ref"], REF, record)
+
 
 if __name__ == "__main__":
     unittest.main()
