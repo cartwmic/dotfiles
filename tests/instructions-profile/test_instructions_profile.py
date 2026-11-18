@@ -46,8 +46,6 @@ WORK_SEAT_BULLETS = (
     "- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
     "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Computer use runs on Pi with "
     "`--provider anthropic --model claude-sonnet-5-5` at high thinking.",
-    "- Computer use drives the agent Chrome on 127.0.0.1:9333 only through the browser-harness MCP server, plus "
-    "agent-desktop for things outside the page; never start another browser or browser tool.",
 )
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
@@ -158,6 +156,7 @@ class InstructionProfileTests(unittest.TestCase):
                 self.assertNotIn("| Browser use |", text)
                 self.assertNotIn("Cursor", text)
                 self.assertNotIn(CLI_PROXY_LINE, text)
+                self.assertNotIn("127.0.0.1:9333", text)   # the tool rule lives in the using-computer skill
                 for bullet in WORK_SEAT_BULLETS:
                     self.assertEqual(text.count(bullet), 1)
 
