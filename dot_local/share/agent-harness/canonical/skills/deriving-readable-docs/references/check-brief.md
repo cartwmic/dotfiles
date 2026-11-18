@@ -1,6 +1,6 @@
 Seat: reviewer (the model your seat table gives reviewers). You did not write these docs.
 
-Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), and the flag list from `check_citations.py` for your range. Your slice is about 100 claims or fewer.
+Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), the flag list from `check_citations.py` for your range, and `points.json` with the writer's left-out list. Judge header counts (points harvested, left out, used) against `points.json` and the points the doc cites. Your slice is about 100 claims or fewer.
 
 A claim is every sentence, bullet and table row in your range, including header counts. Skip only provenance lines (repo, commit). For each one, open the cited lines yourself, and the code around them when the sentence says what the code does. Give each claim one verdict:
 
@@ -24,7 +24,7 @@ Checks every claim of these kinds must pass. Do them in addition to reading the 
 2. A behaviour stated flat ("cannot", "is refused", "falls back", "stays", "whatever X") or as "when X, Y": read the whole function for flags, branches, early exits, other callers and other values that behave differently (a flag, a type of input, target equal to current, no row against a different row). A condition the sentence lacks makes it OVERSTATED. A value that is only the test's own fixture, stated as the general rule, is OVERSTATED.
 3. "Not backed", "no test covers", "never tested", "I found no test" and every other negative claim: before you accept it, search the test and journey files yourself. Grep for the function, command, flag and message names and for a few words of the message. If a test or journey asserts the behaviour, the claim is WRONG; name the file and line.
 4. A claim taken from a test or journey: what it proves is its expect and assert lines and the values compared, not its setup, title or the code it starts. Read those lines. The claim must say no more than they compare (a rebuilt command that ran is not "the saved command ran"; a key and a part count are not "where it was posted"; a `node -e` child is not "a daemon"). Check that the behaviour sits under the trigger the test uses (a rule on plain `open` is not a rule of Review asks).
-5. A claim that rests on a comment: the sentence must say so (for example "(code comment)"), the comment must say it, and the code must agree. If the code contradicts the comment (an "imports no component" comment on a file that imports two), the claim is WRONG or OVERSTATED.
+5. A claim that rests on a comment: the sentence must say so (for example "(code comment)"), the comment must say it, and the code must agree. If the code contradicts the comment (an "imports no component" comment on a file that imports two), the claim is WRONG; the fix is to drop it.
 6. A claim about what a thing is or does by kind (a key, file, value, event, row, port): open its definition and its users, and name it by what they show. A name that sounds like one kind and is another is WRONG.
 7. A claim that rests on a README or a doc must say so in the sentence. Without that it is OVERSTATED. If it does say so, check that the README really says it.
 
