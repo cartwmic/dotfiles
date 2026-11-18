@@ -51,6 +51,12 @@ GH_FAKE = textwrap.dedent('''\
         if jobs is None:   # a run with no jobs fixture failed in a real job
             jobs = [{"databaseId": 1, "name": "tests", "conclusion": "failure", "steps": []}]
         print(json.dumps({"jobs": jobs}))
+    elif args[:2] == ["pr", "checks"]:
+        repo = args[args.index("-R") + 1]
+        checks = (fixture.get("pr_checks") or {}).get(repo, {}).get(args[2])
+        if checks is None:
+            fail("fake gh: no pr checks fixture " + repo + " " + args[2])
+        print(json.dumps(checks))
     elif args[:2] == ["pr", "view"]:
         if args[args.index("-R") + 1] in fixture.get("fail_pr", []):
             fail("HTTP 502 from fake api")
@@ -65,7 +71,12 @@ GH_FAKE = textwrap.dedent('''\
             fail("HTTP 502 from fake api")
         src = fixture["repos"][repo]
         if path.endswith("/branches/main"):
-            print(json.dumps({"commit": {"sha": git(src, "rev-parse", "main").strip()}}))
+            bp = (fixture.get("branch_protection") or {}).get(repo)
+            if isinstance(bp, str):   # a named failure, such as a rate limit on the branch read
+                fail(bp)
+            out = {"commit": {"sha": git(src, "rev-parse", "main").strip()}}
+            out.update(bp or {})   # protected + protection, as the real branch response carries them
+            print(json.dumps(out))
         elif "/compare/" in path:
             base, head = path.split("/compare/")[1].split("...")
             lines = git(src, "rev-list", "--parents", f"{base}..{head}").split("\\n")
@@ -75,6 +86,16 @@ GH_FAKE = textwrap.dedent('''\
                 subject = git(src, "log", "-1", "--format=%s", sha).strip()
                 commits.append({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject}})
             print(json.dumps({"status": "ahead", "total_commits": len(commits), "commits": commits}))
+        elif "/commits/" in path and "/check-runs" in path.split("/commits/")[1]:
+            sha = path.split("/commits/")[1].split("/")[0]
+            page = int(path.split("&page=")[1]) if "&page=" in path else 1
+            rows = (fixture.get("check_runs") or {}).get(repo, {}).get(sha) or []
+            print(json.dumps({"total_count": len(rows), "check_runs": rows[(page - 1) * 100:page * 100]}))
+        elif "/commits/" in path and path.split("/commits/")[1].split("?")[0].endswith("/status"):
+            sha = path.split("/commits/")[1].split("/status")[0]
+            page = int(path.split("&page=")[1]) if "&page=" in path else 1
+            st = (fixture.get("statuses") or {}).get(repo, {}).get(sha) or []
+            print(json.dumps({"state": "pending", "total_count": len(st), "statuses": st[(page - 1) * 100:page * 100]}))
         elif "/commits/" in path:
             sha = path.split("/commits/")[1]
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
@@ -85,6 +106,45 @@ GH_FAKE = textwrap.dedent('''\
             if notes is None:
                 fail("HTTP 404: no annotations fixture for " + path)
             print(json.dumps(notes))
+        elif path == "repos/" + repo:
+            print(json.dumps({"default_branch": "main"}))
+        elif "/pulls/" in path:
+            n = path.split("/pulls/")[1].split("?")[0].split("/")[0]
+            pull = fixture.get("prs", {}).get(n)
+            if pull is None:
+                fail("HTTP 404: no PR fixture " + n)
+            print(json.dumps({"base": {"ref": pull.get("baseRefName")}}))
+        elif path.endswith("/protection/required_status_checks"):
+            prot = (fixture.get("protection") or {}).get(repo)
+            if prot is None:
+                fail("HTTP 404: no protection fixture for " + repo)
+            if prot is False:
+                fail("HTTP 403: forbidden")
+            if isinstance(prot, str):   # a named failure, such as a rate limit
+                fail(prot)
+            print(json.dumps(prot))
+        elif "/rules/branches/" in path:
+            rules = (fixture.get("branch_rules") or {}).get(repo)
+            if rules is None:
+                fail("HTTP 404: no branch-rules fixture for " + repo)
+            if rules is False:
+                fail("HTTP 403: forbidden")
+            if isinstance(rules, str):
+                fail(rules)
+            print(json.dumps(rules))
+        elif path.endswith("/rulesets"):
+            sets = (fixture.get("rulesets") or {}).get(repo)
+            if sets is None:
+                fail("HTTP 404: no rulesets fixture for " + repo)
+            if sets is False:
+                fail("HTTP 403: forbidden")
+            print(json.dumps(sets))
+        elif "/rulesets/" in path:
+            rid = path.split("/rulesets/")[1]
+            full = next((s for s in (fixture.get("rulesets") or {}).get(repo) or [] if str(s.get("id")) == rid), None)
+            if full is None:
+                fail("HTTP 404: no ruleset " + rid)
+            print(json.dumps(full))
         elif "/actions/runs/" in path:
             run_id, n = path.split("/actions/runs/")[1].split("/attempts/")
             attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
@@ -162,9 +222,14 @@ class Fixture(unittest.TestCase):
     def write_fixture(self):
         repos = {r: str(self.src) for r in ("cartwmic/dotfiles", "cartwmic/loop-engine", "cartwmic/agent-kit", "cartwmic/coordinator",
                                             "cartwmic/alert-steward")}
+        repos.update(getattr(self, "extra_repos", {}))
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
             {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts,
-             "jobs": self.jobs, "annotations": self.annotations, "prs": self.prs, "fail_pr": self.failing_pr}))
+             "jobs": self.jobs, "annotations": self.annotations, "prs": self.prs, "fail_pr": self.failing_pr,
+             "protection": getattr(self, "protection", {}), "rulesets": getattr(self, "rulesets", {}),
+             "branch_rules": getattr(self, "branch_rules", {}), "pr_checks": getattr(self, "pr_checks", {}),
+             "branch_protection": getattr(self, "branch_protection", {}),
+             "check_runs": getattr(self, "check_runs", {}), "statuses": getattr(self, "statuses", {})}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -1489,6 +1554,326 @@ class JournalTreeAndFlake(Fixture):
 
     def git_move_main_to(self, sha):
         git(self.src, "reset", "-q", "--hard", sha)
+
+
+class AnyRepo(Fixture):
+    """A GitHub repo not in the table, named OWNER/REPO: the checks GitHub requires on the default branch — branch
+    protection union the branch's active rulesets — and, with --pr, what GitHub computes for the PR, cross-checked
+    against the base branch. The tip (or PR head) must pass them; anything unreadable fails closed."""
+
+    def setUp(self):
+        super().setUp()
+        self.any_repo = "example-org/example-repo"
+        self.extra_repos = {self.any_repo: str(self.src)}
+        self.protection = {self.any_repo: {"contexts": ["tests", "lint"],
+                                           "checks": [{"context": "tests", "app_id": 1}, {"context": "lint", "app_id": 1}]}}
+        self.branch_rules = {self.any_repo: []}   # rules/branches/main: no active ruleset applies
+        self.branch_protection = {self.any_repo: {"protected": True,
+                                                  "protection": {"enabled": True, "required_status_checks": {
+                                                      "checks": [{"context": "tests", "app_id": 1},
+                                                                 {"context": "lint", "app_id": 1}],
+                                                      "contexts": ["tests", "lint"]}}}}
+        self.rulesets = {}     # the old rulesets-list endpoints, which the pre-union script read instead
+        self.check_runs = {}   # {sha: [check run rows, newest first as GitHub lists them]}
+        self.statuses = {}     # {sha: [commit status rows]}
+        self.pr_checks = {}    # {repo: {pr: [gh pr checks --required rows]}}
+
+    def check_row(self, name, conclusion="success", status="completed", rid=1,
+                  completed="2026-11-18T10:01:00Z", started="2026-11-18T10:00:00Z"):
+        return {"id": rid, "name": name, "status": status,
+                "conclusion": conclusion if status == "completed" else None,
+                "started_at": started, "completed_at": completed if status == "completed" else None}
+
+    def set_tip_checks(self, *rows):
+        self.check_runs = {self.any_repo: {self.c3: list(rows) or [self.check_row("tests"), self.check_row("lint", rid=2)]}}
+
+    def test_green_exits_0(self):
+        self.set_tip_checks()
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"{self.any_repo}: GREEN  all 2 required checks passed on main tip {self.c3[:7]}", out)
+        self.assertIn("lint, tests", out)
+
+    def test_red_exits_1_and_names_the_check(self):
+        self.set_tip_checks(self.check_row("tests"), self.check_row("lint", "failure", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"{self.any_repo}: RED  required check(s) failed on main tip {self.c3[:7]}: lint", out)
+
+    def test_a_pending_required_check_fails_the_merge_gate(self):
+        self.set_tip_checks(self.check_row("tests"), self.check_row("lint", status="in_progress", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f"{self.any_repo}: UNTESTED  required check(s) pending on main tip {self.c3[:7]}: lint (in_progress)", out)
+        self.assertIn("Not a pass.", out)
+        rc, out = self.status("--merge-gate", self.any_repo)
+        self.assertEqual(rc, 2, out + " (a pending required check never passes the gate)")
+        self.assertIn("Not a pass.", out)
+
+    def test_protection_plus_a_ruleset_is_the_union(self):
+        # Protection requires only "tests" (passing); an active ruleset adds "lint", which failed. The union is red;
+        # a script that reads protection alone prints GREEN here.
+        self.protection = {self.any_repo: {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
+        self.branch_protection = {self.any_repo: {"protected": True,
+                                                  "protection": {"enabled": True, "required_status_checks": {
+                                                      "checks": [{"context": "tests", "app_id": 1}],
+                                                      "contexts": ["tests"]}}}}
+        self.branch_rules = {self.any_repo: [{"type": "required_status_checks",
+                                              "parameters": {"required_status_checks": [{"context": "lint"}]}}]}
+        self.set_tip_checks(self.check_row("tests"), self.check_row("lint", "failure", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": lint", out)
+
+    def test_a_non_admin_sees_protection_through_the_branch(self):
+        # A non-admin gets 404 from the /protection endpoints; the branch response still shows the protection and
+        # its required check, which failed. The old /protection read printed an error or a wrong GREEN here.
+        self.protection = None
+        self.branch_protection = {self.any_repo: {"protected": True,
+                                                  "protection": {"enabled": True, "required_status_checks": {
+                                                      "checks": [{"context": "tests", "app_id": 1}],
+                                                      "contexts": ["tests"]}}}}
+        self.set_tip_checks(self.check_row("tests", "failure"))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": tests", out)
+
+    def test_protection_only_works_for_a_non_admin(self):
+        self.protection = None
+        self.branch_protection = {self.any_repo: {"protected": True,
+                                                  "protection": {"enabled": True, "required_status_checks": {
+                                                      "checks": [{"context": "tests", "app_id": 1},
+                                                                 {"context": "lint", "app_id": 1}],
+                                                      "contexts": ["tests", "lint"]}}}}
+        self.set_tip_checks()
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"GREEN  all 2 required checks passed on main tip {self.c3[:7]}", out)
+
+    def test_protected_with_a_malformed_protection_fails_closed(self):
+        # protection present but enabled missing: a missing field is malformed, never a default -- ERROR, never
+        # C = {} and never the checks read anyway.
+        self.protection = None
+        self.branch_protection = {self.any_repo: {"protected": True, "protection": {}}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("protection.enabled is missing or not a bool", out)
+        self.assertIn("failing closed", out)
+
+    def test_an_older_success_and_a_newer_queued_run_is_not_green(self):
+        self.set_tip_checks(self.check_row("tests", rid=100, completed="2026-11-18T10:05:00Z"),
+                            self.check_row("tests", status="queued", rid=200, started=None),
+                            self.check_row("lint", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 2, out + " (a newer queued run must not read green)")
+        self.assertIn("tests (queued)", out)
+
+    def test_an_older_success_and_a_newer_in_progress_run_is_not_green(self):
+        self.set_tip_checks(self.check_row("tests", rid=100, completed="2026-11-18T10:05:00Z"),
+                            self.check_row("tests", status="in_progress", rid=200, started="2026-11-18T10:01:00Z"),
+                            self.check_row("lint", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 2, out + " (a newer in-progress run must not read green)")
+        self.assertIn("tests (in_progress)", out)
+
+    def test_a_newer_success_over_an_older_failure_is_green(self):
+        # The newer run was created later but finished sooner; the id, not the timestamp, says it is newest.
+        self.set_tip_checks(self.check_row("tests", rid=20, completed="2026-11-18T10:04:00Z",
+                                           started="2026-11-18T10:03:00Z"),
+                            self.check_row("tests", "failure", rid=10, completed="2026-11-18T10:05:00Z",
+                                           started="2026-11-18T10:00:00Z"),
+                            self.check_row("lint", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 0, out + " (the newest run, by id, passed)")
+        self.assertIn(f"GREEN  all 2 required checks passed on main tip {self.c3[:7]}", out)
+
+    def test_a_ruleset_for_another_branch_is_not_required(self):
+        # The old rulesets-list read would require "extra" here; rules/branches/main answers [] because the
+        # ruleset applies to another branch, so nothing is required and the read fails closed.
+        self.protection = None
+        self.branch_protection = {self.any_repo: {"protected": False}}
+        self.rulesets = {self.any_repo: [{"id": 11, "enforcement": "active",
+                                          "rules": [{"type": "required_status_checks",
+                                                     "parameters": {"required_status_checks": [{"context": "extra"}]}}]}]}
+        self.set_tip_checks(self.check_row("tests"), self.check_row("extra", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no required checks readable on main", out)
+        self.assertIn("failing closed", out)
+        self.assertNotIn("extra", out)
+
+    def test_a_ruleset_error_fails_closed(self):
+        self.branch_rules = {self.any_repo: False}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("HTTP 403", out)
+
+    def test_two_runs_with_one_name_the_newest_decides(self):
+        # GitHub lists the newest run first; the older success below it must not win.
+        self.set_tip_checks(self.check_row("tests", "failure", rid=200, completed="2026-11-18T10:05:00Z"),
+                            self.check_row("tests", "success", rid=100, completed="2026-11-18T10:01:00Z"),
+                            self.check_row("lint", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": tests", out)
+
+    def test_pagination_reads_past_page_one(self):
+        rows = [self.check_row(f"job{i}", rid=1000 + i) for i in range(100)]
+        rows += [self.check_row("tests", rid=2000), self.check_row("lint", rid=2001)]
+        self.check_runs = {self.any_repo: {self.c3: rows}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"GREEN  all 2 required checks passed on main tip {self.c3[:7]}", out)
+
+    def test_the_calls_page_and_filter(self):
+        self.set_tip_checks()
+        self.status(self.any_repo)
+        calls = self.log.read_text().splitlines()
+        rules = [c for c in calls if "rules/branches/main?per_page=100" in c]
+        self.assertEqual(len(rules), 1, calls)
+        self.assertIn("--paginate", rules[0])
+        runs = [c for c in calls if "/check-runs" in c]
+        self.assertEqual(len(runs), 1, calls)
+        self.assertIn("filter=latest", runs[0])
+        self.assertIn("per_page=100", runs[0])
+
+    def test_a_403_rate_limit_fails_closed_loudly(self):
+        self.branch_protection = {self.any_repo: "HTTP 403: API rate limit exceeded"}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("rate limit", out)
+        self.assertNotIn("no required checks readable", out)
+
+    def test_no_permission_fails_closed(self):
+        self.branch_protection = {self.any_repo: "HTTP 403: Resource not accessible by integration"}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("HTTP 403", out)
+
+    def test_no_protection_fails_closed(self):
+        self.protection = None
+        self.branch_protection = {self.any_repo: {"protected": False}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"{self.any_repo}: ERROR  cannot read state: no required checks readable on main", out)
+        self.assertIn("failing closed", out)
+
+    def test_protection_with_no_required_checks_fails_closed(self):
+        # Enabled, but neither source requires anything: nothing could be proved, so ERROR (row 9), never GREEN.
+        self.branch_protection = {self.any_repo: {"protected": True,
+                                                  "protection": {"enabled": True,
+                                                                 "required_status_checks": {"contexts": [], "checks": []}}}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("protected, but no required checks in protection or rulesets", out)
+        self.assertIn("nothing for this gate to verify", out)
+
+    def test_pr_checks_the_pr_head_commit(self):
+        self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
+        self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}, {"name": "lint"}]}}
+        self.check_runs = {self.any_repo: {self.c2: [self.check_row("tests"), self.check_row("lint", rid=2)]}}
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"{self.any_repo}: GREEN  all 2 required checks passed on PR #7 head {self.c2[:7]}", out)
+
+    def test_pr_red_exits_1(self):
+        self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
+        self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}, {"name": "lint"}]}}
+        self.check_runs = {self.any_repo: {self.c2: [self.check_row("tests", "failure"), self.check_row("lint", rid=2)]}}
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"RED  required check(s) failed on PR #7 head {self.c2[:7]}: tests", out)
+
+    def test_a_pr_required_check_missing_from_the_rollup_is_still_verified(self):
+        # The gate verifies the computed base set on the PR head, never the rollup: lint is required on main but
+        # never started on the PR, so gh pr checks --required does not list it -- and the gate is not GREEN.
+        self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
+        self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}]}}
+        self.check_runs = {self.any_repo: {self.c2: [self.check_row("tests")]}}
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7")
+        self.assertEqual(rc, 2, out)
+        self.assertNotIn("GREEN", out)
+        self.assertIn("lint (not reported)", out)
+
+    def test_a_pr_rollup_name_the_base_set_lacks_fails_closed(self):
+        # gh pr checks --required lists "extra", which the base branch's computed set does not: an under-report.
+        self.prs = {"7": {"headRefOid": self.c2, "headRefName": "fix", "baseRefName": "main"}}
+        self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}, {"name": "extra"}]}}
+        self.check_runs = {self.any_repo: {self.c2: [self.check_row("tests"), self.check_row("extra", rid=2)]}}
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR", out)
+        self.assertIn("extra", out)
+        self.assertIn("failing closed", out)
+
+    def test_pr_without_merge_gate_is_a_usage_error(self):
+        self.set_tip_checks()
+        rc, out = self.status(self.any_repo, "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage:", out)
+
+    def test_a_required_check_nothing_reports_is_pending(self):
+        self.set_tip_checks(self.check_row("tests"))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("lint (not reported)", out)
+
+    def test_a_missing_check_falls_back_to_the_commit_status(self):
+        self.set_tip_checks(self.check_row("tests"))
+        self.statuses = {self.any_repo: {self.c3: [{"context": "lint", "state": "success"}]}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN", out)
+
+    def test_a_failing_status_is_red(self):
+        self.set_tip_checks(self.check_row("tests"))
+        self.statuses = {self.any_repo: {self.c3: [{"context": "lint", "state": "failure"}]}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+
+    def test_a_failing_status_behind_a_passing_check_run_is_red(self):
+        self.set_tip_checks(self.check_row("tests"), self.check_row("lint", rid=2))
+        self.statuses = {self.any_repo: {self.c3: [{"context": "lint", "state": "failure"}]}}
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": lint", out)
+
+    def test_a_skipped_required_check_fails_closed(self):
+        self.set_tip_checks(self.check_row("tests"), self.check_row("lint", "skipped", rid=2))
+        rc, out = self.status(self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED  required check(s) failed on main tip " + self.c3[:7] + ": lint", out)
+
+    def test_tip_flag_is_a_usage_error(self):
+        self.set_tip_checks()
+        rc, out = self.status("--tip", self.any_repo)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage:", out)
+
+    def test_a_short_name_not_in_the_table_is_still_a_usage_error(self):
+        rc, out = self.status("no-such-repo")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage:", out)
+
+    def test_a_table_repo_by_full_name_uses_this_path(self):
+        self.extra_repos = {"cartwmic/dotfiles": str(self.src)}
+        self.protection = {"cartwmic/dotfiles": {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
+        self.branch_protection = {"cartwmic/dotfiles": {"protected": True,
+                                                        "protection": {"enabled": True, "required_status_checks": {
+                                                            "checks": [{"context": "tests", "app_id": 1}],
+                                                            "contexts": ["tests"]}}}}
+        self.branch_rules = {"cartwmic/dotfiles": []}
+        self.check_runs = {"cartwmic/dotfiles": {self.c3: [self.check_row("tests")]}}
+        rc, out = self.status("cartwmic/dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"cartwmic/dotfiles: GREEN  all 1 required checks passed on main tip {self.c3[:7]}: tests", out)
+
+    def test_gh_caller_is_set_on_every_call(self):
+        self.set_tip_checks()
+        self.status(self.any_repo)
+        for line in self.env_log.read_text().splitlines():
+            self.assertEqual(json.loads(line)["caller"], "ci-main-status", line)
 
 
 if __name__ == "__main__":
