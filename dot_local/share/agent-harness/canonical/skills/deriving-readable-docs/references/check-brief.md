@@ -1,6 +1,6 @@
 Seat: reviewer (the model your seat table gives reviewers). You did not write these docs.
 
-Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), the flag list from `check_citations.py` for your range, and `points.json` with the writer's left-out list. Judge header counts (points harvested, left out, used) against `points.json` and the points the doc cites. Your slice is about 100 claims or fewer.
+Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), the flag list from `check_citations.py` for your range, and `points.json` with the writer's left-out list. Judge header counts (points harvested, left out, used) against `points.json`, the hand-added points the header lists, and the points the doc cites. Your slice is about 100 claims or fewer.
 
 A claim is every sentence, bullet and table row in your range, including header counts. Skip only provenance lines (repo, commit). For each one, open the cited lines yourself, and the code around them when the sentence says what the code does. Give each claim one verdict:
 
@@ -14,7 +14,7 @@ The rule above everything else: you read the code yourself. A verdict, HOLDS inc
 General rules:
 
 - The cited lines must show what the sentence says. A line existing is not enough.
-- The usual misses: overreach words (every, all, always, never, only, none, any, no X); counts ("three parts"); names and numbers; the order of steps; who does what; and negative claims. These hold only if the code you read defines the whole set or limit.
+- The usual misses: overreach words (every, all, always, never, only, next, none, any, no X); counts ("three parts"); names and numbers; the order of steps; who does what; and negative claims. These hold only if the code you read defines the whole set or limit.
 - Check every claim in your range, not a sample. Check the flagged ones first.
 - Do not edit the doc.
 

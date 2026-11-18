@@ -250,10 +250,24 @@ HEADER = "# Doc\n\nWritten from a commit. Every citation is shown.\n\n## Part\n\
 
 
 def lines_of(report, kind):
-    return [l for l in report.splitlines() if (": %s " % kind) in l]
+    return [l for l in report.splitlines() if (": %s:" % kind) in l]
 
 
 class ClaimTest(unittest.TestCase):
+    def test_citations_joined_by_and_back_one_claim_together(self):
+        files = {"src/a.ts": "const a = 1;\n", "src/b.ts": "const LIMIT = 42;\n"}
+        code, out = check("- The limit is 42. `src/a.ts:1` and `src/b.ts:1`\n", files)
+        self.assertEqual(code, 0, out)
+
+    def test_a_backticked_path_outside_the_repo_is_not_exempt(self):
+        with make_repo({"repo/src/a.ts": "const a = 1;\n", "outside.txt": "x\n"}) as root, tempfile.TemporaryDirectory() as d:
+            docp = Path(d) / "DOC.md"
+            docp.write_text("- It reads `../outside.txt`. `src/a.ts:1`\n")
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), str(docp), str(Path(root) / "repo")],
+                               capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("FAIL string: '../outside.txt'", r.stdout)
+
     def test_spec_144_a_limit_that_lives_in_a_constant_fails_until_the_constant_is_cited(self):
         files = {"src/send-gate.test.ts": LAYOUT_TEST, "src/send-gate.ts": LIMITS_TS}
         code, out = check("- " + SPEC_144 + "`src/send-gate.test.ts:1-5`\n", files)
