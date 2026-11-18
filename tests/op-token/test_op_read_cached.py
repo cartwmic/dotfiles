@@ -5,6 +5,7 @@ token in its environment is the expected one. Checked from outside: exit status,
 Run: python3 -m unittest discover -s tests/op-token -v
 """
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -175,12 +176,17 @@ class OpReadCached(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
         self.assertLess(took, 9.5, "the default op bound must leave pi time to get the stale value")
         self.assertEqual(len([l for l in self.records() if "op-failed-stale-served" in l]), 1, self.records())
+        record = json.loads([l for l in self.records() if "op-failed-stale-served" in l][0])
+        self.assertEqual((record["reason"], record["op_exit"]), ("timeout", 137), record)
+        self.assertLessEqual(record["op_seconds"], 7, record)
 
     def test_a_failed_read_with_no_cache_is_recorded(self):
         (self.bin / "op").write_text("#!/bin/sh\nexit 1\n")
         done = self.run_script(REF, token_env=TOKEN)
         self.assertEqual(done.returncode, 1)
         self.assertEqual(len([l for l in self.records() if '"event":"op-failed"' in l]), 1, self.records())
+        record = json.loads([l for l in self.records() if '"event":"op-failed"' in l][0])
+        self.assertEqual((record["reason"], record["op_exit"]), ("error", 1), record)
 
     def test_a_field_and_a_section_of_the_same_name_do_not_collide(self):
         (self.bin / "op").write_text('#!/bin/sh\necho "$*" >> "$FAKE_CALLS"\nprintf "value-of-%s" "$2"\n')
@@ -189,6 +195,12 @@ class OpReadCached(unittest.TestCase):
             done = self.run_script(ref, token_env=TOKEN)
             self.assertEqual((done.returncode, done.stdout), (0, "value-of-" + ref), done.stderr)
         self.assertEqual(len(self.op_calls()), 2, "the second pass was two hits")
+
+    def test_with_nothing_cached_a_slow_read_gets_the_long_bound(self):
+        (self.bin / "op").write_text('#!/bin/sh\nsleep 7\nprintf slow-value\n')  # past 5 s, inside 20 s
+        done = self.run_script(REF, token_env=TOKEN)
+        self.assertEqual((done.returncode, done.stdout), (0, "slow-value"), done.stderr)
+        self.assertEqual(self.cache_entry().read_text(), "slow-value")
 
 
 if __name__ == "__main__":

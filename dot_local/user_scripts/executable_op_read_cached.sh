@@ -33,8 +33,10 @@
 # Environment:
 #   OP_READ_CACHE_TTL_MINUTES  cache lifetime in minutes (default 720 = 12h)
 #   OP_READ_CACHE_DIR          cache location (default ~/.cache/agent-harness/secrets)
-#   OP_READ_TIMEOUT_SECONDS    how long `op read` may run on a miss (default 5, half of pi's 10s, so a stale value
-#                              still reaches pi in time under load; the same budget as claude-compat-guard)
+#   OP_READ_TIMEOUT_SECONDS    how long `op read` may run on a miss. Default: 5 when a stale value can be served
+#                              (half of pi's 10s, so the stale value still reaches pi in time under load; the same
+#                              budget as claude-compat-guard), 20 when nothing is cached (waiting is the only way
+#                              to get a value, and callers other than pi have no 10s limit)
 #
 # A fresh cache hit is the hot path (pi runs this on every model request), so it
 # runs first and does as little as it can: no `op` lookup, no token read, no
@@ -43,7 +45,7 @@
 # expansion only, and the hit costs one `find` (the age check) and one `cat`. The
 # `.v` suffix keeps a field and a section of the same name apart; the one clash
 # left is a section literally named "<field>.v" next to a field "<field>".
-# References with an empty, absolute, `.` or `..` segment are refused. Entries
+# References with an empty, absolute or `.` segment, or any `..`, are refused. Entries
 # from the older layout ($cache_dir/<sha256 of the reference>) are copied to the
 # new path, with their age, on first use; the old file is kept, so rolling this
 # script back still finds its cache.
@@ -194,13 +196,14 @@ if [ ! -e "$cache_file" ]; then
 fi
 
 # One line per refusal, stale serve or failed read, in $XDG_STATE_HOME/agent-harness/op-read-cached.jsonl: a time, the event and the
-# reference. Never a value. Best effort: a write that fails does not change the outcome.
+# reference, and for a failed read why (timeout or error) and how long `op` ran. Never a value. Best effort: a write that fails
+# does not change the outcome. $3, when given, is extra JSON fields (no leading comma).
 record_event() {
 	state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
 	(umask 077 && mkdir -p "$state_dir") 2>/dev/null || return 0
 	escaped_ref=$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')
-	printf '{"ts":"%s","event":"%s","ref":"%s","script":"op_read_cached.sh"}\n' \
-		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$escaped_ref" >> "$state_dir/op-read-cached.jsonl" 2>/dev/null || true
+	printf '{"ts":"%s","event":"%s","ref":"%s",%s"script":"op_read_cached.sh"}\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$escaped_ref" "${3:+$3,}" >> "$state_dir/op-read-cached.jsonl" 2>/dev/null || true
 }
 
 # Without a service-account token `op` would fall back to the desktop app, so never run it (playbook 78819cbd). A fresh
@@ -238,7 +241,11 @@ op_sa() {
 
 # Never let a wedged `op` hang the caller: kill it after a bound and fall
 # through to the stale-cache path below.
-op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-5}"
+if [ -s "$cache_file" ]; then
+	op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-5}"
+else
+	op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-20}"
+fi
 run_bounded() {
 	"$@" &
 	cmd_pid=$!
@@ -250,7 +257,10 @@ run_bounded() {
 	return "$cmd_rc"
 }
 
-if value="$(run_bounded op_sa read "$ref" --no-newline 2>/dev/null)" && [ -n "$value" ]; then
+op_started=$(date +%s)
+op_rc=0
+value="$(run_bounded op_sa read "$ref" --no-newline 2>/dev/null)" || op_rc=$?
+if [ "$op_rc" -eq 0 ] && [ -n "$value" ]; then
 	tmp_file="$cache_file.$$"
 	trap 'rm -f "$tmp_file"' EXIT
 	(umask 077 && printf '%s' "$value" >"$tmp_file")
@@ -260,13 +270,20 @@ if value="$(run_bounded op_sa read "$ref" --no-newline 2>/dev/null)" && [ -n "$v
 	exit 0
 fi
 
+# 137 is the watchdog's kill -9. A zero exit with no output counts as an error.
+case "$op_rc" in
+137) op_failure=timeout ;;
+*) op_failure=error ;;
+esac
+op_detail=$(printf '"reason":"%s","op_exit":%s,"op_seconds":%s' "$op_failure" "$op_rc" "$(($(date +%s) - op_started))")
+
 if [ -s "$cache_file" ]; then
-	log "WARN: op read failed for $ref; serving stale cached value"
-	record_event op-failed-stale-served "$ref"
+	log "WARN: op read failed ($op_failure) for $ref; serving stale cached value"
+	record_event op-failed-stale-served "$ref" "$op_detail"
 	emit_cache
 	exit 0
 fi
 
-log "ERROR: op read failed for $ref and no cached value is available"
-record_event op-failed "$ref"
+log "ERROR: op read failed ($op_failure) for $ref and no cached value is available"
+record_event op-failed "$ref" "$op_detail"
 exit 1
