@@ -347,8 +347,8 @@ class RunAndWake(unittest.TestCase):
         job = next(line for line in result.stdout.splitlines() if " job " in line).split(" job ")[1].split()[0]
         self.assertIn("[run-and-wake k:%s]" % job, result.stdout, "the line the wake would carry is printed")
         events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
-        self.assertEqual(events[:3], ["start", "end", "skip"], "the job had ended when the launcher returned")
-        self.assertEqual(events[-1], "read", "the launcher printed the result")
+        self.assertEqual(events[:2], ["start", "end"], "the job had ended when the launcher returned")
+        self.assertEqual(sorted(events[2:]), ["read", "skip"], "the watcher's skip and the launcher's read, in either order")
         self.assertEqual(self.calls(), [])
 
     def test_a_waiting_launcher_killed_with_its_process_group_leaves_the_job_running(self):
@@ -381,7 +381,8 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         job = self.job_id(result)
         events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
-        self.assertEqual(events, ["start", "end", "skip", "read"])
+        self.assertEqual(events[:2], ["start", "end"])
+        self.assertEqual(sorted(events[2:]), ["read", "skip"])
         self.assertEqual(self.calls(), [])
 
     def test_blocked_pane_is_waited_out_then_sent_once(self):
