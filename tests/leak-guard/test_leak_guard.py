@@ -60,9 +60,21 @@ elif mode == "error":
 elif mode == "exit1":
     sys.stderr.write("Error: not signed in. Run claude login.\n"); sys.exit(1)
 elif mode == "spend429":
-    sys.stderr.write('API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your monthly spend limit of 40 USD. To increase your spend limit, visit https://claude.ai/settings/spend-limits"}}\n'); sys.exit(1)
+    print(json.dumps([{"type": "system", "subtype": "init"}, {"type": "result", "is_error": True, "api_error_status": 429,
+                      "result": "This request would exceed your monthly spend limit of 40 USD. To increase your spend limit, visit https://claude.ai/settings/spend-limits"}]))
+    sys.exit(1)
 elif mode == "spend_result":
-    result("This request would exceed your monthly usage limit (HTTP 429).", is_error=True)
+    result("This request would exceed your monthly usage limit (HTTP 429).", is_error=True, api_error_status=429)
+elif mode == "notsignedin":
+    # Not signed in, with a 429 that is only a duration: nothing in the output may fall back, only the structured api_error_status decides.
+    print(json.dumps([{"type": "system", "subtype": "init"}, {"type": "result", "is_error": True, "api_error_status": 401, "duration_ms": 429,
+                      "result": "Invalid API key · Please run /login"}]))
+    sys.exit(1)
+elif mode == "servererror":
+    # Another failure whose text happens to hold the words and the number: still no fallback.
+    print(json.dumps([{"type": "system", "subtype": "init"}, {"type": "result", "is_error": True, "api_error_status": 500,
+                      "result": "upstream error after 429 ms: the usage limit service was unreachable"}]))
+    sys.exit(1)
 elif mode == "sleep":
     time.sleep(30)
 '''

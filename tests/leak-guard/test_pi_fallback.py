@@ -98,6 +98,25 @@ class SpendLimitFallsBack(PiBase):
         for flag in ("--no-tools", "--no-extensions", "--no-mcp", "--no-session"):
             self.assertIn(flag, args)
 
+    def test_a_not_signed_in_failure_with_a_429_elsewhere_in_the_output_never_falls_back(self):
+        done = self.guard("text", self.body(), env={"FAKE_CLAUDE": "notsignedin", "FAKE_PI": "clean"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("claude exited 1", done.stderr)
+        self.assertEqual(self.pi_calls(), 0, "a duration_ms of 429 is not claude saying it hit its limit")
+
+    def test_another_failure_whose_text_holds_the_words_and_the_number_never_falls_back(self):
+        done = self.guard("text", self.body(), env={"FAKE_CLAUDE": "servererror", "FAKE_PI": "clean"})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("claude exited 1", done.stderr)
+        self.assertEqual(self.pi_calls(), 0)
+
+    def test_a_429_or_the_words_in_the_judged_text_itself_never_fall_back(self):
+        done = self.guard("text", self.body("the usage limit is 429 requests a minute\n"), env={"FAKE_CLAUDE": "clean"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.calls(), 1)
+        self.assertEqual(self.pi_calls(), 0)
+        self.assertEqual(self.log()[-1]["judge"], "claude")
+
     def test_the_env_var_override_beats_the_pin(self):
         (self.home / ".config" / "leak-guard" / "pi-judge").write_text("pi -p --provider pinprovider --model pinmodel\n")
         done = self.guard("text", self.body(), env={"FAKE_CLAUDE": "spend429", "FAKE_PI": "clean",

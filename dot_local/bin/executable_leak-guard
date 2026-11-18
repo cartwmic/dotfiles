@@ -24,7 +24,8 @@ skip them, as git always allows). Two layers, cheapest first, on the ADDED lines
 
 It fails closed: a missing claude CLI, no sign-in, no network, a timeout (120 s), a non-zero exit, a missing terms or context file, a pre-commit diff over
 200 KB, or a push line over a 180 KB chunk blocks with a one-line reason naming the step. A larger push is split into chunks of about 180 KB, each its own
-Claude call, and every chunk must pass. The one retried failure is claude's spend-limit / usage-limit 429: the same prompt then goes to pi once (pi's
+Claude call, and every chunk must pass. The one retried failure is claude's spend-limit / usage-limit 429 — decided only from claude's own structured
+verdict, the result event's api_error_status being 429, never from a 429 or the words anywhere in the output: the same prompt then goes to pi once (pi's
 own default model, or the judge pinned in ~/.config/leak-guard/pi-judge; no tools, no extensions, no MCP, no session, claude's system prompt passed as
 pi's), by the same JSON contract and the same fail-closed rules; any other claude failure blocks with no fallback, and a pi failure blocks too, naming
 both. The log records which judge answered.
@@ -51,7 +52,6 @@ MAX_BYTES = 200_000          # what one layer-2 call is sent; pre-commit refuses
 CHUNK_BYTES = 180_000        # the most of the change one layer-2 call carries at pre-push
 CLAUDE_TIMEOUT_S = int(os.environ.get("LEAK_GUARD_TIMEOUT_S", "120"))   # the env var is for the tests
 MODEL = os.environ.get("LEAK_GUARD_MODEL", "claude-haiku-5-5")
-SPEND_RE = re.compile(r"\b429\b|spend limit|usage limit", re.I)   # claude's spend-limit / usage-limit 429: the one failure the pi fallback retries
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 ZERO = "0" * 40
 OVERRIDE = 'LEAK_GUARD_SKIP="<reason>" git commit ...   (or git push ...), or --no-verify'
@@ -280,6 +280,17 @@ def judged(text, who):
     return answer["leak"], findings
 
 
+def result_event(out):
+    """The result event of claude's --output-format json output, or None. Its api_error_status is the only thing the spend-limit fallback may decide from:
+    a 429 anywhere else in the output (a duration, a token count, the judged text) is not claude saying it hit its limit."""
+    try:
+        events = json.loads(out)
+        events = events if isinstance(events, list) else [events]
+        return next((e for e in events if isinstance(e, dict) and e.get("type") == "result"), None)
+    except ValueError:
+        return None
+
+
 def claude_layer2(prompt):
     exe = shutil.which("claude")
     if not exe:
@@ -296,20 +307,17 @@ def claude_layer2(prompt):
         raise Block("layer 2", "cannot run claude: %s" % e, 2)
     took = round(time.time() - t0, 2)
     out, err = done.stdout.decode(errors="replace"), done.stderr.decode(errors="replace")
+    result = result_event(out)
     if done.returncode != 0:
         why = (err.strip() or out.strip() or "no output").splitlines()[-1][:200]
-        if SPEND_RE.search(out) or SPEND_RE.search(err):
-            raise SpendLimit(why, took)
+        if result and result.get("api_error_status") == 429:      # claude's own structured verdict on the failure; nothing else in the output counts
+            raise SpendLimit(str(result.get("result"))[:200] or why, took)
         raise Block("layer 2", "claude exited %d (not signed in, offline, or failing): %s" % (done.returncode, why), 2, "claude exited %d" % done.returncode)
-    try:
-        events = json.loads(out)
-        events = events if isinstance(events, list) else [events]
-        result = next(e for e in events if isinstance(e, dict) and e.get("type") == "result")
-    except (ValueError, StopIteration):
+    if result is None:
         raise Block("layer 2", "claude's output was not the expected JSON", 2)
     if result.get("is_error"):
         why = str(result.get("result"))[:200]
-        if SPEND_RE.search(why):
+        if result.get("api_error_status") == 429:
             raise SpendLimit(why, took)
         raise Block("layer 2", "claude reported an error: %s" % why, 2, "claude reported an error")
     text = result.get("result")
