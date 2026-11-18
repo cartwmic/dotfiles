@@ -202,6 +202,31 @@ class OpReadCached(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout), (0, "slow-value"), done.stderr)
         self.assertEqual(self.cache_entry().read_text(), "slow-value")
 
+    def test_a_caller_kill_during_a_no_cache_read_is_recorded_and_stops_op(self):
+        """pi's execSync sends SIGTERM at 10 s, inside the 20 s no-cache bound: the read must still be logged."""
+        (self.bin / "op").write_text('#!/bin/sh\necho "$$" > "$FAKE_CALLS.pid"\nexec sleep 30\n')
+        (self.bin / "op").chmod(0o755)
+        env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "OP_READ_CACHE_DIR": str(self.tmp / "cache"),
+               "XDG_STATE_HOME": str(self.tmp / "state"), "FAKE_CALLS": str(self.calls), "OP_SERVICE_ACCOUNT_TOKEN": TOKEN}
+        proc = subprocess.Popen(["sh", str(SCRIPT), REF], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pid_file = Path(str(self.calls) + ".pid")
+        deadline = time.monotonic() + 10
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(pid_file.exists(), "op started")
+        proc.terminate()  # SIGTERM, as execSync's timeout sends
+        start = time.monotonic()
+        out, _ = proc.communicate(timeout=10)
+        self.assertLess(time.monotonic() - start, 3, "the script exits promptly on the caller's SIGTERM")
+        self.assertEqual((proc.returncode, out), (143, b""))
+        record = json.loads([l for l in self.records() if '"event":"op-failed"' in l][0])
+        self.assertEqual(record["reason"], "caller-killed", record)
+        op_pid = int(pid_file.read_text())
+        time.sleep(0.2)
+        with self.assertRaises(ProcessLookupError, msg="op was stopped too"):
+            os.kill(op_pid, 0)
+        self.assertEqual([p for p in (self.tmp / "cache").rglob("*") if p.is_file()], [], "no temp output left behind")
+
 
 if __name__ == "__main__":
     unittest.main()

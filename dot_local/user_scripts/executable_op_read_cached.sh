@@ -187,7 +187,12 @@ if [ ! -e "$cache_file" ]; then
 	legacy_file="$cache_dir/$(hash_ref "$ref")"
 	if [ -s "$legacy_file" ]; then
 		# Copy to a temporary name, then rename: a concurrent caller never sees a half-written file.
-		(umask 077 && cp -p "$legacy_file" "$cache_file.$$" && mv -f "$cache_file.$$" "$cache_file")
+		if ! (umask 077 && cp -p "$legacy_file" "$cache_file.$$" && mv -f "$cache_file.$$" "$cache_file"); then
+			# The copy failed (a full disk, say): read the old file where it is rather than fail.
+			rm -f "$cache_file.$$"
+			log "WARN: could not copy the cached value for $ref to the new layout; using the old file"
+			cache_file="$legacy_file"
+		fi
 		if [ "$refresh" = false ] && cache_is_fresh; then
 			emit_cache
 			exit 0
@@ -246,6 +251,8 @@ if [ -s "$cache_file" ]; then
 else
 	op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-20}"
 fi
+cmd_pid=""
+watchdog_pid=""
 run_bounded() {
 	"$@" &
 	cmd_pid=$!
@@ -259,7 +266,25 @@ run_bounded() {
 
 op_started=$(date +%s)
 op_rc=0
-value="$(run_bounded op_sa read "$ref" --no-newline 2>/dev/null)" || op_rc=$?
+# The read runs in this shell (not in a $(...)), its output in a private file, so a signal from the caller interrupts
+# `wait` at once. The caller may kill this script before the bound: pi's execSync sends SIGTERM at 10 s, inside the
+# 20 s no-cache bound. Record that read as failed, stop `op` and the watchdog, and exit, so the log still shows it.
+op_out="$cache_file.out.$$"
+on_caller_kill() {
+	[ -n "$cmd_pid" ] && kill -9 "$cmd_pid" 2>/dev/null
+	[ -n "$watchdog_pid" ] && kill "$watchdog_pid" 2>/dev/null
+	rm -f "$op_out"
+	record_event op-failed "$ref" "$(printf '"reason":"caller-killed","op_exit":null,"op_seconds":%s' "$(($(date +%s) - op_started))")"
+	exit 143
+}
+trap on_caller_kill TERM INT HUP
+trap 'rm -f "$op_out"' EXIT
+(umask 077 && : >"$op_out")
+run_bounded op_sa read "$ref" --no-newline >"$op_out" 2>/dev/null || op_rc=$?
+trap - TERM INT HUP
+value="$(cat "$op_out")"
+rm -f "$op_out"
+trap - EXIT
 if [ "$op_rc" -eq 0 ] && [ -n "$value" ]; then
 	tmp_file="$cache_file.$$"
 	trap 'rm -f "$tmp_file"' EXIT
