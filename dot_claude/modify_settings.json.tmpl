@@ -10,6 +10,11 @@
 # advisor. The id is the same form as model above (Anthropic ids, which CLIProxy also serves as claude-fable-5-2). Fable 5.2 is the only advisor
 # a Fable 5.2 main model accepts, and ranks above the Opus 5.5 default, so it is accepted for any main model here. Set on every apply.
 # The advisor needs the Anthropic API or Claude Platform on AWS: it is not available on Bedrock, Vertex or Foundry, where it is silently not attached.
+# Code Mode (axon-work-computer only): env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = "1" turns on Claude Code's experimental Code Mode. Set on every apply.
+# Personal is left out because Code Mode refuses gateways and API key helpers, and personal routes Claude through the CLIProxy hub (Michael, ask #1301).
+# The value must be "1" in this settings.json env block: Claude Code refuses it from ~/.claude.json or managed settings. It only takes effect in
+# interactive terminal sessions on Opus or Sonnet 5.5 and later, and the user accepts a one-time prompt. Every other profile removes that one key,
+# and prunes env if that empties it. Every other env key and setting is left alone.
 # cleanupPeriodDays: Claude deletes transcripts after this many days (default 30). qmd-export prunes a session's copy once its
 # source is gone, so a year here is what lets the claude-sessions QMD collection match the Pi window (docs/qmd.md).
 # SessionStart playbook hook (axon-work-computer only): runs the private playbook's bin/playbook-context so the session starts
@@ -54,6 +59,7 @@ WANT=true
 {{- else -}}
 WANT=false
 {{- end }}
+CODE_MODE_WANT={{ eq .profile "axon-work-computer" }}
 # Single quotes on purpose: $HOME expands when the hook runs, not here.
 HOOK_COMMAND='p="$HOME/.local/share/agent-harness/external-skills/axon-agents-playbook/bin/playbook-context"; [ -x "$p" ] && "$p" || true'
 HOOK_MARKER='axon-agents-playbook/bin/playbook-context'
@@ -116,7 +122,7 @@ if [ "$T3_WANT" = true ]; then
   fi
 fi
 
-exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
+exec jq -s --argjson want "$WANT" --argjson codemode "$CODE_MODE_WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_MARKER" \
   --arg t3mode "$T3_MODE" --argjson t3printed "$T3_JSON" \
   --arg t3repo "$T3_REPO" --arg t3state "$T3_STATE" --arg t3marker "$T3_MARKER" \
   --argjson hubwant "$HUB_WANT" --arg huburl "$HUB_URL" --arg hubhelper "$HUB_HELPER" \
@@ -200,6 +206,15 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
        else . end)
       | if .apiKeyHelper == $hubhelper then del(.apiKeyHelper) else . end
     end;
+  def ensure_code_mode:
+    # The key is ours whatever its value: set on the work profile, removed everywhere else (unlike the hub, which matches the URL and helper).
+    if $codemode then
+      .env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE = "1"
+    else
+      (if (.env | type) == "object" and (.env | has("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE"))
+       then del(.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE) | if .env == {} then del(.env) else . end
+       else . end)
+    end;
   if length == 0 then
     {}
   elif length == 1 and (.[0] | type) == "object" then
@@ -213,6 +228,7 @@ exec jq -s --argjson want "$WANT" --arg cmd "$HOOK_COMMAND" --arg marker "$HOOK_
   | .advisorModel = "claude-fable-5-2"
   | .modelSettings["claude-opus-5-5"].effortLevel //= "medium"
   | ensure_hub  # before the hook defs: they delete and re-append .hooks, so anything added after it would reorder on the next apply
+  | ensure_code_mode
   | ensure_hook
   | ensure_t3
   | ensure_guard
