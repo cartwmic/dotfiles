@@ -118,7 +118,7 @@ class OpReadCached(unittest.TestCase):
         old = os.stat(cache).st_mtime - 3 * 24 * 3600
         os.utime(cache, (old, old))
         self.assertEqual(self.run_script(REF, token_env="").returncode, 0)
-        self.assertEqual([l for l in self.records() if "stale-served" in l].__len__(), 1, self.records())
+        self.assertEqual(len([l for l in self.records() if "stale-served" in l]), 1, self.records())
         self.assertNotIn("secret-value", "\n".join(self.records()))
 
     def test_a_fresh_cache_hit_needs_no_op_and_no_token(self):
@@ -141,11 +141,12 @@ class OpReadCached(unittest.TestCase):
 
     def test_the_cache_path_is_built_from_the_reference(self):
         self.assertEqual(self.run_script(REF, token_env=TOKEN).returncode, 0)
-        self.assertEqual(self.cache_entry(), self.tmp / "cache/ref/developer/item/password")
+        self.assertEqual(self.cache_entry(), self.tmp / "cache/ref/developer/item/password.v")
         self.assertEqual(oct(os.stat(self.tmp / "cache/ref").st_mode & 0o777), "0o700")
 
     def test_unsafe_reference_paths_are_refused(self):
-        for bad in ("op://", "op://vault/../../etc/passwd", "op://vault//field", "op://vault/item/"):
+        for bad in ("op://", "op:///abs/item/field", "op://vault/../../etc/passwd", "op://vault//field", "op://vault/item/",
+                    "op://vault/./item/field", "op://vault/item/.", "op://vault/item\nfield"):
             done = self.run_script(bad, token_env=TOKEN)
             self.assertEqual(done.returncode, 2, (bad, done.stderr))
             self.assertEqual(self.op_calls(), [], bad)
@@ -159,7 +160,7 @@ class OpReadCached(unittest.TestCase):
         done = self.run_script(REF, token_env=TOKEN)
         self.assertEqual((done.returncode, done.stdout), (0, "legacy-value"), done.stderr)
         self.assertEqual(self.op_calls(), [], "a fresh legacy entry needs no op")
-        moved = cache / "ref/developer/item/password"
+        moved = cache / "ref/developer/item/password.v"
         self.assertEqual(moved.read_text(), "legacy-value")
         self.assertAlmostEqual(os.stat(moved).st_mtime, os.stat(legacy).st_mtime, delta=2)
 
@@ -173,13 +174,21 @@ class OpReadCached(unittest.TestCase):
         took = time.monotonic() - start
         self.assertEqual((done.returncode, done.stdout), (0, "secret-value"), done.stderr)
         self.assertLess(took, 9.5, "the default op bound must leave pi time to get the stale value")
-        self.assertEqual([l for l in self.records() if "op-failed-stale-served" in l].__len__(), 1, self.records())
+        self.assertEqual(len([l for l in self.records() if "op-failed-stale-served" in l]), 1, self.records())
 
     def test_a_failed_read_with_no_cache_is_recorded(self):
         (self.bin / "op").write_text("#!/bin/sh\nexit 1\n")
         done = self.run_script(REF, token_env=TOKEN)
         self.assertEqual(done.returncode, 1)
-        self.assertEqual([l for l in self.records() if '"event":"op-failed"' in l].__len__(), 1, self.records())
+        self.assertEqual(len([l for l in self.records() if '"event":"op-failed"' in l]), 1, self.records())
+
+    def test_a_field_and_a_section_of_the_same_name_do_not_collide(self):
+        (self.bin / "op").write_text('#!/bin/sh\necho "$*" >> "$FAKE_CALLS"\nprintf "value-of-%s" "$2"\n')
+        three, four = "op://vault/item/s", "op://vault/item/s/f"
+        for ref in (three, four, three, four):  # misses, then hits, in both orders
+            done = self.run_script(ref, token_env=TOKEN)
+            self.assertEqual((done.returncode, done.stdout), (0, "value-of-" + ref), done.stderr)
+        self.assertEqual(len(self.op_calls()), 2, "the second pass was two hits")
 
 
 if __name__ == "__main__":

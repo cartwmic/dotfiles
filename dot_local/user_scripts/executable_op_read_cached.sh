@@ -33,15 +33,20 @@
 # Environment:
 #   OP_READ_CACHE_TTL_MINUTES  cache lifetime in minutes (default 720 = 12h)
 #   OP_READ_CACHE_DIR          cache location (default ~/.cache/agent-harness/secrets)
-#   OP_READ_TIMEOUT_SECONDS    how long `op read` may run on a miss (default 8, under pi's 10s, so a stale value
-#                              still reaches pi in time)
+#   OP_READ_TIMEOUT_SECONDS    how long `op read` may run on a miss (default 5, half of pi's 10s, so a stale value
+#                              still reaches pi in time under load; the same budget as claude-compat-guard)
 #
 # A fresh cache hit is the hot path (pi runs this on every model request), so it
 # runs first and does as little as it can: no `op` lookup, no token read, no
-# hashing. The entry lives at $cache_dir/ref/<vault>/<item>/<field>, a path built
-# from the reference with shell expansion only, and the hit costs one `find` (the
-# age check) and one `cat`. Entries from the older layout ($cache_dir/<sha256 of
-# the reference>) are copied to the new path, with their age, on first use.
+# hashing. The entry lives at $cache_dir/ref/<vault>/<item>/<field>.v (or
+# .../<item>/<section>/<field>.v), a path built from the reference with shell
+# expansion only, and the hit costs one `find` (the age check) and one `cat`. The
+# `.v` suffix keeps a field and a section of the same name apart; the one clash
+# left is a section literally named "<field>.v" next to a field "<field>".
+# References with an empty, absolute, `.` or `..` segment are refused. Entries
+# from the older layout ($cache_dir/<sha256 of the reference>) are copied to the
+# new path, with their age, on first use; the old file is kept, so rolling this
+# script back still finds its cache.
 #
 # Exit 69 when a read would need `op` and there is no service-account token (OP_SERVICE_ACCOUNT_TOKEN, else the token
 # file): `op` is not run, because without the token it would fall back to the desktop app.
@@ -118,7 +123,7 @@ esac
 
 ref_path="${ref#op://}"
 case "$ref_path" in
-"" | /* | */ | *//* | *..* | *"
+"" | /* | */ | *//* | *..* | . | ./* | */./* | */. | *"
 "*)
 	log "ERROR: secret reference has an empty or unsafe path: $ref"
 	exit 2
@@ -127,7 +132,7 @@ esac
 
 cache_dir="${OP_READ_CACHE_DIR:-$HOME/.cache/agent-harness/secrets}"
 ttl_minutes="${OP_READ_CACHE_TTL_MINUTES:-720}"
-cache_file="$cache_dir/ref/$ref_path"
+cache_file="$cache_dir/ref/$ref_path.v"
 
 # `find -mmin` is portable across BSD and GNU find; `stat` format flags are not.
 cache_is_fresh() {
@@ -179,7 +184,8 @@ hash_ref() {
 if [ ! -e "$cache_file" ]; then
 	legacy_file="$cache_dir/$(hash_ref "$ref")"
 	if [ -s "$legacy_file" ]; then
-		(umask 077 && cp -p "$legacy_file" "$cache_file")
+		# Copy to a temporary name, then rename: a concurrent caller never sees a half-written file.
+		(umask 077 && cp -p "$legacy_file" "$cache_file.$$" && mv -f "$cache_file.$$" "$cache_file")
 		if [ "$refresh" = false ] && cache_is_fresh; then
 			emit_cache
 			exit 0
@@ -232,7 +238,7 @@ op_sa() {
 
 # Never let a wedged `op` hang the caller: kill it after a bound and fall
 # through to the stale-cache path below.
-op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-8}"
+op_timeout_seconds="${OP_READ_TIMEOUT_SECONDS:-5}"
 run_bounded() {
 	"$@" &
 	cmd_pid=$!
