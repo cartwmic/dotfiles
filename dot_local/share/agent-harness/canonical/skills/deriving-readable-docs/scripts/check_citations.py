@@ -22,7 +22,7 @@ takes the list:
   overreach  every, all, always, never, only, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words"
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
-  uncited    the first two, in a sentence after the doc header that carries no citation
+  uncited    the first two, in a sentence after the doc header that has no citation of its own
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
 sentences never change the exit code. Stdlib only.
 """
@@ -162,7 +162,12 @@ def squash(text):
 def strings_in(claim_text, repo):
     """Backticked and double-quoted strings in a claim (not citations). A backticked repo path that exists is skipped."""
     out = [m.group(1) for m in SPAN.finditer(claim_text)] + [a or b for a, b in QUOTED.findall(claim_text)]
-    return [t for t in out if len(squash(t)) > 1 and not os.path.exists(os.path.join(repo, t.strip()))]
+    return [t for t in out if len(squash(t)) > 1 and not repo_file(repo, t.strip())]
+
+
+def repo_file(repo, rel):
+    full = os.path.realpath(os.path.join(repo, rel))
+    return (full == repo or full.startswith(repo + os.sep)) and os.path.exists(full)
 
 
 def string_in(tok, have):
@@ -230,14 +235,13 @@ def check_claim(c, repo, window, cache):
         says = SAYS_SOURCE.search(c["text"] + " " + c["label"])
         if not says and all(comment_only(read_lines(cache, repo, p)[lo - 1:hi], p) for p, lo, hi, _ in ranges):
             flags.append((n, "comment", "%s are only comment lines and the sentence does not say so" % ", ".join("%s:%d-%d" % r[:3] for r in ranges)))
-    for kind_text in () if c["header"] else (prose, strip_code(c["uncited"])):  # the header describes the doc
+    for kind, kind_text in () if c["header"] else (("overreach", prose), ("uncited", strip_code(c["uncited"]))):  # the header describes the doc
         for sent in sentences(kind_text):
             hits = sorted({m.group(1).lower() for m in OVERREACH.finditer(sent)})
-            if hits:
-                flags.append((n, "overreach", "%s | %s" % (", ".join(hits), sent.strip())))
             count = COUNT.search(sent)
-            if count:
-                flags.append((n, "count", "%s | %s" % (count.group(0).strip(), sent.strip())))
+            if hits or count:
+                what = ", ".join(hits + ([count.group(0).strip()] if count else []))
+                flags.append((n, kind if kind == "uncited" else ("count" if count and not hits else "overreach"), "%s | %s" % (what, sent.strip())))
     return fails, flags
 
 

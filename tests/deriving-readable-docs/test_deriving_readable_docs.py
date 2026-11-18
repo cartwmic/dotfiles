@@ -227,8 +227,10 @@ class CitationTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
-# Real mistakes from the coordinator docs written at f455f086 (docs-v2), each with a shortened copy of the lines it cited.
-# CORRECTIONS.md in docs-v3 lists what was wrong. The check must fail or flag the sentence as it was written.
+# Sentences from the coordinator docs written at f455f086 (docs-v2), with shortened copies of the lines they cited.
+# CORRECTIONS.md in docs-v3 lists what was wrong in them. Named spec_144, design_65, prd_57 and spec_860 are real
+# mistakes that the check must fail or flag as written. The "constructed" tests are modelled on a v2 sentence but do
+# not reproduce its wrong fact (the string and comment checks have no real v2 mistake behind them).
 LAYOUT_TEST = (
     "describe('layout', () => {\n"
     "  it(`a paragraph of ${LIMITS.paragraphWords} words is fine; one more is named by its first words`, () => {\n"
@@ -283,7 +285,7 @@ class ClaimTest(unittest.TestCase):
     def test_a_list_numeral_and_a_citation_number_are_not_claims(self):
         self.assertEqual(check("4. It runs. `a.ts:1`\n", {"a.ts": "run();\n"})[0], 0)
 
-    def test_design_177_a_named_file_the_cited_lines_never_mention_fails(self):
+    def test_constructed_a_named_file_the_cited_lines_never_mention_fails(self):
         files = {"board-cli.ts": "// runs the board command as a child process\n// no module is imported\n", "a.rs": "x\n"}
         doc = "The board is a git repository holding `BOARD.md` and a config file. `board-cli.ts:1`\n"
         code, out = check(doc, files)
@@ -301,7 +303,7 @@ class ClaimTest(unittest.TestCase):
         self.assertIn("FAIL string: 'Queued as event'", out)
         self.assertIn("FAIL string: 'reach drop'", out)
 
-    def test_prd_57_a_sentence_resting_on_comment_lines_is_flagged_unless_it_says_so(self):
+    def test_constructed_a_sentence_resting_on_comment_lines_is_flagged_unless_it_says_so(self):
         files = {"src/board-sync.ts": BOARD_SYNC}
         doc = "- The board sync writes to the project and nothing else. `src/board-sync.ts:1-3`%s\n"
         code, out = check(doc % "", files)
@@ -337,7 +339,7 @@ class ClaimTest(unittest.TestCase):
         doc = HEADER + "- The Limits section is refreshed. `a.ts:1`\n- It sits in src/status-limits.ts (only push-test names cover it).\n"
         code, out = check(doc, {"a.ts": "x\n"})
         self.assertEqual(code, 0)
-        self.assertIn("flag overreach: only", out)
+        self.assertIn("flag uncited: only", out)
         self.assertNotIn("flag overreach", check("# Doc\n\nEvery citation is shown. `a.ts:1`\n\n## Part\n\n- It runs. `a.ts:1`\n", {"a.ts": "x\n"})[1])
 
     def test_claims_are_not_judged_when_a_citation_under_them_is_bad(self):
