@@ -339,17 +339,25 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([records[-1]["reason"], records[-1]["detail"]], ["session-changed", "/sessions/after-new.jsonl"])
         self.assertEqual(self.prompts(), [], "nothing is sent")
 
-    def test_no_pane_says_so_at_launch_and_calls_no_herdr(self):
-        result = self.launch("--", "true", env={"HERDR_PANE_ID": ""})
-        self.assertIn("WARN: no HERDR_PANE_ID: nothing will wake you", result.stdout)
-        records = self.replay(self.job_id(result))
-        self.assertEqual(records[-1]["reason"], "no-pane")
+    def test_no_pane_waits_for_the_job_and_prints_its_result(self):
+        """A caller nothing can wake (a Pi child T3 runs: no pane, no thread) gets the result in the same call, not a lost wake."""
+        result = self.launch("--", "sh", "-c", "exit 3", env={"HERDR_PANE_ID": ""})
+        self.assertIn("WARN: no HERDR_PANE_ID and no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
+        self.assertEqual(result.returncode, 3, "the launcher exits with the job's status")
+        job = next(line for line in result.stdout.splitlines() if " job " in line).split(" job ")[1].split()[0]
+        self.assertIn("[run-and-wake k:%s]" % job, result.stdout, "the line the wake would carry is printed")
+        events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
+        self.assertEqual(events[:3], ["start", "end", "skip"], "the job had ended when the launcher returned")
+        self.assertEqual(events[-1], "read", "the launcher printed the result")
         self.assertEqual(self.calls(), [])
 
-    def test_no_pi_session_says_so_at_launch(self):
+    def test_no_pi_session_waits_for_the_job_too(self):
         result = self.launch("--", "true", env={"PI_SESSION_FILE": ""})
-        self.assertIn("WARN: no PI_SESSION_FILE: nothing will wake you", result.stdout)
-        self.assertEqual(self.replay(self.job_id(result))[-1]["reason"], "no-session")
+        self.assertIn("WARN: no PI_SESSION_FILE and no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
+        self.assertEqual(result.returncode, 0)
+        job = self.job_id(result)
+        events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
+        self.assertEqual(events, ["start", "end", "skip", "read"])
         self.assertEqual(self.calls(), [])
 
     def test_blocked_pane_is_waited_out_then_sent_once(self):
