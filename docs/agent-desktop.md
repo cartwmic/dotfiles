@@ -41,6 +41,7 @@ A coordinate is a whole number; anything else exits 2. On Omarchy and Windows, c
 | `focus NAME` matches | the window class | the app name, which is the first column of `windows` | the app name (with or without `.exe`, any case), else the exact title, else a title that contains NAME. No match exits 1. If Windows refuses to bring the window forward after trying each way it has (share input with the window in front, hold Alt, the shell's switch call, minimise and restore), exit 1; the log line `worker focus detail` says what was in front and which way worked |
 | An unknown key or modifier name | exit 1 (`wtype` refuses it) | exit 2, before anything is sent | exit 2, before anything is sent |
 | `ui` with no arguments | not offered | passed to Vercel's program as is | exit 2 |
+| `agent-desktop save` and `agent-desktop restore` | Linux only (below) | not offered | not offered |
 | Coordinates | pixels | points | pixels |
 
 Key names are the Linux ones in every case (`comma`, `Return`, `BackSpace`, `Escape`, `F5`, letters, digits). Modifiers are `ctrl`, `shift`, `alt` and `super`. The Mac script also takes `option` for `alt` and `cmd` or `command` for `super`; the Windows script also takes `win`, `logo` and `meta` for `super`.
@@ -62,11 +63,34 @@ Vercel's agent-desktop is the only third-party program. It is pinned at v1.3.1 a
 
 ## Omarchy (personal Linux)
 
-The Omarchy script is `dot_local/bin/executable_agent-desktop` and is unchanged: dotfiles installs it at `~/.local/bin/agent-desktop` byte for byte, on the personal profile only (the work profile has no Linux desktop). A test (`tests/agent-desktop/check_omarchy_unchanged.py`) renders it and compares its hash with the base script.
+The Omarchy script is `dot_local/bin/executable_agent-desktop`. The eight actions are unchanged, and it has two more verbs, `save` and `restore` (below). Dotfiles installs it at `~/.local/bin/agent-desktop` byte for byte, on the personal profile only (the work profile has no Linux desktop). A test (`tests/agent-desktop/check_omarchy_unchanged.py`) renders it and compares its hash with the base script.
 
 It drives Hyprland 0.56.2, which uses a Lua config. The old `hyprctl dispatch movecursor 737 277` and `focuswindow class:X` fail with a Lua syntax error, so the script uses `hyprctl dispatch 'hl.dsp.cursor.move({x=737,y=277})'` and `hyprctl dispatch 'hl.dsp.focus({window="class:X"})'`. Hyprland has no click dispatcher, so a click is a move followed by `wlrctl pointer click left`. `wlrctl` is an AUR package (`yay -S --needed wlrctl`); a missing tool exits 69 and names its package.
 
 What it cannot do: the bar on Omarchy is the eight actions plus screenshots the agent reads, which is about 9 of the 14 checks (J0 to J8). It cannot list buttons by name; N1 to N4 are recorded as not offered, because Omarchy's apps do not show their buttons by name, and there is no `ui` action. Reading labels there is out of scope.
+
+### `agent-desktop save` and `agent-desktop restore` (Linux only)
+
+These two verbs are not part of the contract above and exist only in the Omarchy script, because Hyprland is where an agent's browser or screen work moves the focus Michael is using (`follow_mouse` focuses the window under the pointer, and `agent-desktop focus` and `click` change focus on purpose). The Mac and G14 scripts have no such verbs.
+
+```
+agent-desktop save      remember the active window (by address) and the pointer position
+agent-desktop restore   move the pointer back, focus the remembered window by address, then forget the record
+```
+
+Call `agent-desktop save` first, before anything that touches Chrome or the screen, and `agent-desktop restore` last. The record is one file, `~/.local/state/agent-desktop/saved-focus` (under `$XDG_STATE_HOME` when it is set), holding the address, the pointer and the time. `restore` moves the pointer first and then focuses the window, because `follow_mouse` may refocus whatever is under the pointer.
+
+Cases:
+
+| Case | Result |
+|---|---|
+| `restore` with nothing saved | exit 1, says to run `agent-desktop save` first, makes no Hyprland call |
+| the saved window no longer exists | exit 1 and names the address, even though `hyprctl` itself exits 0 with a warning; the pointer still moves and the record is deleted |
+| no window was active at `save` | `save` succeeds; `restore` moves the pointer only, says there is no window to refocus, exit 0 |
+| `save` twice | the second keeps the first record, prints `already saved <N>s ago; first record kept`, exit 0 |
+| the saved window is already active | `restore` moves the pointer and makes no focus dispatch |
+
+Each of the two writes one line to `agent-desktop.log` with the run id and the outcome. Tests: `tests/agent-desktop/test_agent_desktop.py` (`test_save_*`, `test_restore_*`).
 
 Reproduce: `chezmoi apply ~/.local/bin/agent-desktop` (after the preflight in `AGENTS.md`), then `agent-desktop cursor`. Tests: `python3 -m unittest discover -s tests/agent-desktop -v`.
 
