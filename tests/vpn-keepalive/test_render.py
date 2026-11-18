@@ -95,6 +95,13 @@ class DeployTest(unittest.TestCase):
         p = plistlib.loads(r.stdout.encode())
         self.assertEqual(p["EnvironmentVariables"]["VPN_KEEPALIVE_ALERT_COMMAND"], "/Users/you/bin/notify-vpn")
 
+    def test_an_alert_command_with_shell_metacharacters_still_renders_a_valid_plist(self):
+        # & < > and quotes must be escaped, or launchd refuses the plist and the agent never runs.
+        cmd = '/Users/you/bin/notify "vpn" && echo \'done\' > /dev/null 2>&1 < /dev/null'
+        r = render(PLIST, block=dict(BLOCK, alertCommand=cmd))
+        p = plistlib.loads(r.stdout.encode())
+        self.assertEqual(p["EnvironmentVariables"]["VPN_KEEPALIVE_ALERT_COMMAND"], cmd)
+
 
 class LoaderRenderTest(unittest.TestCase):
     def test_work_with_the_block_loads_the_agent(self):

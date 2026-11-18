@@ -21,12 +21,13 @@
   <key>Nice</key><integer>10</integer>
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- chezmoi data vpnKeepalive (.chezmoitemplates/vpn_keepalive_config). No real names here: they are local data. -->
-    <key>VPN_KEEPALIVE_CONNECTION</key><string>{{ $cfg.connection }}</string>
-    <key>VPN_KEEPALIVE_HOST</key><string>{{ $cfg.host }}</string>
-    <key>VPN_KEEPALIVE_MODE</key><string>{{ $cfg.mode }}</string>
+    <!-- chezmoi data vpnKeepalive (.chezmoitemplates/vpn_keepalive_config). No real names here: they are local data.
+         Every value is escaped (html) so a command with & < > or quotes still renders a valid plist. -->
+    <key>VPN_KEEPALIVE_CONNECTION</key><string>{{ $cfg.connection | html }}</string>
+    <key>VPN_KEEPALIVE_HOST</key><string>{{ $cfg.host | html }}</string>
+    <key>VPN_KEEPALIVE_MODE</key><string>{{ $cfg.mode | html }}</string>
 {{- if hasKey $cfg "alertCommand" }}
-    <key>VPN_KEEPALIVE_ALERT_COMMAND</key><string>{{ $cfg.alertCommand }}</string>
+    <key>VPN_KEEPALIVE_ALERT_COMMAND</key><string>{{ $cfg.alertCommand | html }}</string>
 {{- end }}
     <key>PATH</key><string>{{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>

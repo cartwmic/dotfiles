@@ -14,8 +14,11 @@ One tick: Viscosity running and the connection Connected, else do nothing. Probe
 HTTPS (curl --max-time 8; any HTTP status counts as reachable). The tunnel is stale when two probes
 in a row fail (state.json keeps the streak). Stale in mode alert: alert at once, touch nothing.
 Stale in mode reconnect: at most once per 15 minutes, disconnect and connect via AppleScript, then
-re-probe for up to 2 minutes; still unreachable, alert. An alert fires once per stale episode; a
-probe that answers again ends the episode and is logged as a recovery.
+re-probe for up to 2 minutes; still unreachable, alert. A reconnect that did not bring the host back
+doubles the wait before the next one (15, 30, 60 minutes ... at most 4 hours) until a probe answers,
+because each reconnect can open the owner's browser sign-in. An alert fires once per stale episode
+(a notification that could not be shown is retried next tick); a probe that answers again ends the
+episode and is logged as a recovery. Any unexpected error still writes a log line ("error").
 
 The tick appends one JSON line to ~/.local/state/vpn-keepalive/log.jsonl and keeps its streak, the
 episode and the last reconnect attempt in ~/.local/state/vpn-keepalive/state.json.
@@ -39,6 +42,8 @@ RECONNECT_MIN_SECS = int(os.environ.get("VPN_KEEPALIVE_RECONNECT_MIN_SECS") or 9
 REPROBE_SECS = int(os.environ.get("VPN_KEEPALIVE_REPROBE_SECS") or 120)
 REPROBE_STEP = int(os.environ.get("VPN_KEEPALIVE_REPROBE_STEP") or 10)
 DISCONNECT_WAIT = float(os.environ.get("VPN_KEEPALIVE_DISCONNECT_WAIT") or 3)
+ALERT_TIMEOUT = float(os.environ.get("VPN_KEEPALIVE_ALERT_TIMEOUT") or 30)
+BACKOFF_MAX_SECS = 4 * 3600
 
 
 def state_dir():
@@ -47,10 +52,20 @@ def state_dir():
 
 
 def read_json(path):
+    """The state file as a dict; anything else (missing, unreadable, not JSON, not an object) is a
+    fresh start, never a crash."""
     try:
-        return json.loads(path.read_text())
+        value = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
+    return value if isinstance(value, dict) else {}
+
+
+def as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def write_json(path, value):
@@ -121,31 +136,40 @@ def reprobe(host):
 
 
 def alert(connection, alert_command):
-    osascript('display notification "VPN tunnel is not passing traffic" with title "VPN keepalive" subtitle "%s"'
-              % connection)
+    """Show the notification and run the optional alert command. True only when every part worked:
+    a failed or timed-out part is reported, never raised, so the tick still saves its state."""
+    ok = osascript('display notification "VPN tunnel is not passing traffic" with title "VPN keepalive" subtitle "%s"'
+                   % connection).returncode == 0
     if alert_command:
-        env = dict(os.environ, VPN_KEEPALIVE_REASON="vpn tunnel is not passing traffic")
-        run_alert = subprocess.run(["/bin/sh", "-c", alert_command], capture_output=True, text=True,
-                                   timeout=30, env=env)
-        if run_alert.returncode != 0:
-            return False
-    return True
+        os.environ["VPN_KEEPALIVE_REASON"] = "vpn tunnel is not passing traffic"
+        ok = run(["/bin/sh", "-c", alert_command], ALERT_TIMEOUT).returncode == 0 and ok
+    return ok
 
 
 def reconnect(connection):
     """Disconnect, then connect again by name (Viscosity's AppleScript dictionary: connect and
-    disconnect each take the connection's name as their direct parameter)."""
-    osascript('tell application "%s" to disconnect "%s"' % (APP, connection))
+    disconnect each take the connection's name as their direct parameter). Returns both exit codes
+    for the log."""
+    d = osascript('tell application "%s" to disconnect "%s"' % (APP, connection)).returncode
     time.sleep(DISCONNECT_WAIT)
-    osascript('tell application "%s" to connect "%s"' % (APP, connection))
+    c = osascript('tell application "%s" to connect "%s"' % (APP, connection)).returncode
+    return {"disconnect": d, "connect": c}
 
 
 def alert_once(episode, connection, alert_command):
     """Alert once per stale episode; a later stale tick in the same episode stays quiet."""
     if episode.get("alerted"):
         return "none"
-    episode["alerted"] = True
-    return "alert" if alert(connection, alert_command) else "alert-failed"
+    if alert(connection, alert_command):
+        episode["alerted"] = True
+        return "alert"
+    return "alert-failed"   # not marked alerted: the next stale tick tries again
+
+
+def reconnect_wait(failures):
+    """The wait before the next reconnect: 15 minutes, doubled for each reconnect in a row that did
+    not bring the host back, at most 4 hours."""
+    return min(RECONNECT_MIN_SECS * (2 ** min(failures, 16)), BACKOFF_MAX_SECS) if RECONNECT_MIN_SECS else 0
 
 
 def tick():
@@ -168,9 +192,14 @@ def tick():
         return 1
 
     state = read_json(sd / "state.json")
-    streak = int(state.get("failStreak") or 0)
-    episode = state.get("episode")
-    last_reconnect = int(state.get("lastReconnect") or 0)
+    streak = as_int(state.get("failStreak"))
+    episode = state.get("episode") if isinstance(state.get("episode"), dict) else None
+    last_reconnect = as_int(state.get("lastReconnect"))
+    failures = as_int(state.get("reconnectFailures"))
+
+    def save():
+        write_json(sd / "state.json", {"failStreak": streak, "episode": episode, "lastReconnect": last_reconnect,
+                                       "reconnectFailures": failures})
 
     if not viscosity_running():
         # The owner quit Viscosity, or the machine just woke: not our place to start it.
@@ -194,7 +223,7 @@ def tick():
                 line["probe"] = p
                 if p["ok"]:
                     line["action"] = "recovered" if episode else "none"
-                    streak, episode = 0, None
+                    streak, episode, failures = 0, None, 0
                 else:
                     streak += 1
                     if streak < 2:
@@ -202,24 +231,36 @@ def tick():
                     else:
                         if episode is None:
                             episode = {"alerted": False}
-                        if mode == "reconnect" and now - last_reconnect >= RECONNECT_MIN_SECS:
-                            last_reconnect = now
-                            reconnect(connection)
+                        if mode == "reconnect" and now - last_reconnect >= reconnect_wait(failures):
+                            # Saved before acting: whatever happens next, the attempt counts toward the wait.
+                            last_reconnect = int(now)
+                            save()
+                            line["reconnect"] = reconnect(connection)
                             p = reprobe(host)
                             line["probe"] = p
                             if p["ok"]:
                                 line["action"] = "reconnected"
-                                streak, episode = 0, None
+                                streak, episode, failures = 0, None, 0
                             else:
+                                failures += 1
                                 line["action"] = alert_once(episode, connection, alert_command)
                         else:
                             # alert mode touches nothing; reconnect mode waits out its 15 minutes.
                             line["action"] = alert_once(episode, connection, alert_command)
 
-    write_json(sd / "state.json", {"failStreak": streak, "episode": episode, "lastReconnect": last_reconnect})
+    save()
     log(sd, line)
     return 0 if line["action"] != "error" else 1
 
 
+def main():
+    try:
+        return tick()
+    except Exception as exc:   # never a silent tick: the log says what went wrong
+        log(state_dir(), {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "state": None,
+                          "probe": None, "action": "error", "error": "%s: %s" % (type(exc).__name__, exc)})
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(tick())
+    raise SystemExit(main())

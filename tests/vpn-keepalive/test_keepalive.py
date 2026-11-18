@@ -23,6 +23,7 @@ FAKE_OSASCRIPT = r"""#!/bin/sh
 echo "osascript $*" >> "$FAKE/calls"
 case "$*" in
   *"get {name, state} of connections"*) printf '%s\n' "$FAKE_CONN_STATE";;
+  *"display notification"*) exit "${FAKE_NOTIFY_CODE:-0}";;
   *) :;;
 esac
 exit "${FAKE_OSASCRIPT_CODE:-0}"
@@ -43,6 +44,7 @@ exit "${FAKE_PGREP_CODE:-0}"
 
 FAKE_ALERT_COMMAND = r"""#!/bin/sh
 echo "alert $VPN_KEEPALIVE_REASON" >> "$FAKE/alert-calls"
+if [ -n "${FAKE_ALERT_SLEEP:-}" ]; then sleep "$FAKE_ALERT_SLEEP"; fi
 exit "${FAKE_ALERT_CODE:-0}"
 """
 
@@ -116,7 +118,7 @@ class TickTest(unittest.TestCase):
         self.assertEqual(line["probe"]["httpStatus"], "200")
         self.assertLess(line["probe"]["latencyMs"], 20000)
         self.assertEqual(line["action"], "none")
-        self.assertEqual(self.env.state_json(), {"failStreak": 0, "episode": None, "lastReconnect": 0})
+        self.assertEqual(self.env.state_json(), {"failStreak": 0, "episode": None, "lastReconnect": 0, "reconnectFailures": 0})
         joined = self.env.joined_calls()
         self.assertNotIn("disconnect", joined)
         self.assertNotIn("connect ", joined)
@@ -158,7 +160,7 @@ class TickTest(unittest.TestCase):
         self.assertEqual(self.env.lines()[-1]["action"], "alert")
         self.env.run()
         self.assertEqual(self.env.lines()[-1]["action"], "recovered")
-        self.assertEqual(self.env.state_json(), {"failStreak": 0, "episode": None, "lastReconnect": 0})
+        self.assertEqual(self.env.state_json(), {"failStreak": 0, "episode": None, "lastReconnect": 0, "reconnectFailures": 0})
         # A fresh stale episode alerts again.
         self.env.new_calls()
         self.env.run(FAKE_CURL_CODE="7")
@@ -176,7 +178,7 @@ class TickTest(unittest.TestCase):
         joined = self.env.joined_calls()
         self.assertNotIn("get {name, state}", joined)
         self.assertNotIn("curl", joined)
-        self.assertEqual(self.env.state_json(), {"failStreak": 0, "episode": None, "lastReconnect": 0})
+        self.assertEqual(self.env.state_json(), {"failStreak": 0, "episode": None, "lastReconnect": 0, "reconnectFailures": 0})
 
     def test_not_connected_does_nothing(self):
         r = self.env.run(FAKE_CONN_STATE="%s, Disconnected" % CONN)
@@ -209,10 +211,14 @@ class ReconnectTest(unittest.TestCase):
         self.env.close()
 
     def assertReconnected(self, joined):
-        d, c = 'disconnect "%s"' % CONN, 'connect "%s"' % CONN
-        self.assertIn(d, joined)
-        self.assertIn(c, joined)
-        self.assertLess(joined.index(d), joined.index(c))
+        # Two separate osascript calls, matched as whole commands: 'connect "X"' is a substring of
+        # 'disconnect "X"', so a substring check would pass with the connect call missing.
+        calls = joined.splitlines()
+        d = 'osascript -e tell application "Viscosity" to disconnect "%s"' % CONN
+        c = 'osascript -e tell application "Viscosity" to connect "%s"' % CONN
+        self.assertIn(d, calls)
+        self.assertIn(c, calls)
+        self.assertLess(calls.index(d), calls.index(c))
 
     def test_stale_reconnects_then_alerts_when_still_down(self):
         # Two failing probes make the tunnel stale; the reconnect's re-probe still fails, so it alerts.
@@ -262,8 +268,7 @@ class ReconnectTest(unittest.TestCase):
             env.run(FAKE_CURL_CODE="7")
             r = env.run(FAKE_CURL_CODE="7")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn('disconnect "%s"' % CONN, env.joined_calls())
-            self.assertIn('connect "%s"' % CONN, env.joined_calls())
+            self.assertReconnected(env.joined_calls())
         finally:
             env.close()
 
@@ -279,6 +284,79 @@ class ReconnectTest(unittest.TestCase):
         self.assertEqual(self.env.lines()[-1]["action"], "alert")
         self.assertIn("display notification", self.env.joined_calls())
         self.assertNotIn('disconnect "%s"' % CONN, self.env.joined_calls())
+
+    def test_each_reconnect_that_fails_doubles_the_wait(self):
+        # Each reconnect can open the owner's sign-in: after one that did not bring the host back, the
+        # next waits 30 minutes, not 15.
+        sd = self.env.state / "vpn-keepalive"
+        sd.mkdir(parents=True)
+        now = int(time.time())
+        (sd / "state.json").write_text(json.dumps({"failStreak": 2, "episode": {"alerted": True},
+                                                   "lastReconnect": now - 1000, "reconnectFailures": 1}))
+        self.env.run(FAKE_CURL_CODE="7")
+        self.assertNotIn('to disconnect "%s"' % CONN, self.env.joined_calls())   # 1000 s < 1800 s
+        state = json.loads((sd / "state.json").read_text())
+        state["lastReconnect"] = now - 2000
+        (sd / "state.json").write_text(json.dumps(state))
+        self.env.run(FAKE_CURL_CODE="7")
+        self.assertReconnected(self.env.joined_calls())                           # 2000 s >= 1800 s
+        self.assertEqual(self.env.state_json()["reconnectFailures"], 2)
+        line = self.env.lines()[-1]
+        self.assertEqual(line["reconnect"], {"disconnect": 0, "connect": 0})
+
+    def test_a_recovery_resets_the_wait(self):
+        self.env.run(FAKE_CURL_CODE="7", VPN_KEEPALIVE_RECONNECT_MIN_SECS="0")
+        self.env.run(FAKE_CURL_CODE="7", VPN_KEEPALIVE_RECONNECT_MIN_SECS="0")
+        self.assertEqual(self.env.state_json()["reconnectFailures"], 1)
+        self.env.run()
+        self.assertEqual(self.env.state_json()["reconnectFailures"], 0)
+
+    def test_a_slow_alert_command_does_not_lose_the_reconnect_time(self):
+        # An alert command past its timeout is a failed alert, not a crash: the reconnect time is kept,
+        # so the next tick does not reconnect again, and the tick still logs a line.
+        env = Env(mode="reconnect", VPN_KEEPALIVE_ALERT_COMMAND=str(self.env.bin / "alert-cmd"),
+                  VPN_KEEPALIVE_ALERT_TIMEOUT="1")
+        try:
+            (env.bin / "alert-cmd").write_text(FAKE_ALERT_COMMAND)
+            (env.bin / "alert-cmd").chmod(0o755)
+            env.env["VPN_KEEPALIVE_ALERT_COMMAND"] = str(env.bin / "alert-cmd")
+            env.run(FAKE_CURL_CODE="7")
+            r = env.run(FAKE_CURL_CODE="7", FAKE_ALERT_SLEEP="5")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(env.lines()[-1]["action"], "alert-failed")
+            self.assertGreater(env.state_json()["lastReconnect"], 0)
+            env.new_calls()
+            env.run(FAKE_CURL_CODE="7")
+            self.assertNotIn('to disconnect "%s"' % CONN, env.joined_calls())
+        finally:
+            env.close()
+
+
+class AlertTest(unittest.TestCase):
+    def setUp(self):
+        self.env = Env()
+
+    def tearDown(self):
+        self.env.close()
+
+    def test_a_notification_that_fails_is_recorded_and_retried(self):
+        self.env.run(FAKE_CURL_CODE="7")
+        self.env.run(FAKE_CURL_CODE="7", FAKE_NOTIFY_CODE="1")
+        self.assertEqual(self.env.lines()[-1]["action"], "alert-failed")
+        self.env.run(FAKE_CURL_CODE="7")
+        self.assertEqual(self.env.lines()[-1]["action"], "alert")
+        self.env.run(FAKE_CURL_CODE="7")
+        self.assertEqual(self.env.lines()[-1]["action"], "none")   # once per episode after a real alert
+
+    def test_a_state_file_of_the_wrong_type_is_a_fresh_start(self):
+        sd = self.env.state / "vpn-keepalive"
+        sd.mkdir(parents=True)
+        for bad in ("[]", '"x"', '{"failStreak": "lots", "episode": 3, "lastReconnect": null}'):
+            with self.subTest(bad):
+                (sd / "state.json").write_text(bad)
+                r = self.env.run()
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(self.env.lines()[-1]["action"], "none")
 
 
 if __name__ == "__main__":
