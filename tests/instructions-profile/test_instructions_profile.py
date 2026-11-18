@@ -30,7 +30,7 @@ SEAT_ROWS = {
         "| Planner | Sonnet 5.5 high |",
         "| Reviewer | Opus 5.5 medium |",
         "| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |",
-        "| Browser work | Terra 6.1 (cliproxy/gpt-6.1-terra) if available, else Sonnet 5.5 high |",
+        "| Computer use | Sonnet 5.5 high |",
     ),
     "axon-work-computer": (
         "| Coordinator | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
@@ -38,9 +38,10 @@ SEAT_ROWS = {
         "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
         "| Reviewer | Opus 5.5 medium, Cursor (claude-opus-5-5) |",
         "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Browser work | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+        "| Computer use | Sonnet 5.5 high, Pi (anthropic/claude-sonnet-5-5) |",
     ),
 }
+CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
     "when you will use subagents and which models they will use; if that is not clear, ask again, and do not guess. "
@@ -128,19 +129,31 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(profile == "personal", "## Personal computer" in text)
 
 
-    def test_seat_table_once_per_harness_with_the_right_browser_row(self):
+    def test_personal_seat_table_has_the_computer_use_row(self):
         for name, template in TEMPLATES.items():
-            for profile in ("personal", "axon-work-computer", "termux"):
-                with self.subTest(harness=name, profile=profile):
-                    text = render(template, profile)
-                    if profile == "termux":
-                        self.assertNotIn(SEAT_HEADING, text)
-                        continue
-                    self.assertEqual(text.count(SEAT_HEADING), 1)
-                    for row in SEAT_ROWS[profile]:
-                        self.assertEqual(text.count(row), 1)
-                    self.assertEqual(text.count("| Browser work |"), 1)
-                    self.assertEqual(("Terra" in text), profile == "personal")
+            with self.subTest(harness=name):
+                text = render(template, "personal")
+                self.assertEqual(text.count(SEAT_HEADING), 1)
+                for row in SEAT_ROWS["personal"]:
+                    self.assertEqual(text.count(row), 1)
+                self.assertNotIn("| Browser work |", text)
+                self.assertNotIn("Terra", text)
+                self.assertEqual(text.count(CLI_PROXY_LINE), 1)
+
+    def test_work_seat_table_has_the_computer_use_row(self):
+        for name, template in TEMPLATES.items():
+            with self.subTest(harness=name):
+                text = render(template, "axon-work-computer")
+                self.assertEqual(text.count(SEAT_HEADING), 1)
+                for row in SEAT_ROWS["axon-work-computer"]:
+                    self.assertEqual(text.count(row), 1)
+                self.assertNotIn("| Browser work |", text)
+                self.assertNotIn(CLI_PROXY_LINE, text)
+
+    def test_termux_has_no_seat_table(self):
+        for name, template in TEMPLATES.items():
+            with self.subTest(harness=name):
+                self.assertNotIn(SEAT_HEADING, render(template, "termux"))
 
     def test_scheduling_rule_is_personal_only(self):
         for name, template in TEMPLATES.items():
