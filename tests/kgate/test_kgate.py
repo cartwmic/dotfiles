@@ -2698,7 +2698,7 @@ class PodSh(unittest.TestCase):
         done, _ = self.run_sh(cache_cap=3 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("over the 3072KiB cap: trimming oldest files first", done.stdout)
-        self.assertIn("trimmed to", done.stdout)
+        self.assertRegex(done.stdout, r"removed [1-9] files in [0-9]+s, now at [0-9]+KiB \(cap 3072KiB\)")
         self.assertFalse((old / "blob").exists())
         self.assertFalse((mid / "blob").exists())
         self.assertTrue((new / "blob").exists(), "the newest file is the last to go")
@@ -2769,6 +2769,38 @@ class PodSh(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertTrue((stuck / "sub" / "blob").exists(), "the undeletable file is skipped, not a failed job")
         self.assertFalse((free / "blob").exists(), "the trim goes on with the files it can remove")
+
+    def test_a_vanished_file_is_skipped_and_the_trim_goes_on(self):
+        "A file that vanished since the listing is skipped (rm -f ignores it) and the trim goes on with the rest."
+        fn = re.search(r"^trim_cache\(\) \{.*?^\}", K.POD_SH, re.S | re.M).group(0)
+        cache = self.tmp / "cache"
+        keep = self.cache_file(cache / "go-build", "keep", 10, kib=8)
+        d = str(cache / "go-build")
+        script = fn + "\n" + (   # fn ends at the closing brace with no newline; keep say() on its own line
+            'say() { printf "%s\\n" "$*" ; }\n'
+            + 'cache_files() { printf "100 2048 /no/such/vanished\\n200 65536 %s/keep\\n" "%s" ; }\n' % (d, d)
+            + "trim_cache '%s' 4\n" % d
+        )
+        done = subprocess.run(["sh", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertFalse(keep.exists(), "the file that is still there goes")
+        self.assertIn("over the 4KiB cap: trimming oldest files first", done.stdout)
+        self.assertIn("removed 1 files", done.stdout, "the vanished file is not counted as removed")
+
+    def test_a_failed_trim_never_fails_the_job(self):
+        "rm cannot delete from a directory this user cannot write: the trim removes nothing, says so, and the job passes."
+        cache = self.tmp / "cache"
+        stuck_dir = cache / "go-build" / "ff"
+        stuck = self.cache_file(stuck_dir, "stuck", 3000)
+        stuck_dir.chmod(0o555)
+        try:
+            done, _ = self.run_sh(cache_cap=1 << 20, env={"KGATE_CACHE_ROOT": str(cache)})
+        finally:
+            stuck_dir.chmod(0o755)      # let the test's own cleanup remove what the trim could not
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertTrue(stuck.exists(), "the undeletable file is still there")
+        self.assertRegex(done.stdout, r"removed nothing in [0-9]+s, still at [0-9]+KiB \(cap 1024KiB\)")
+        self.assertEqual(self.markers(done.stdout)["hash"], "ok " + K.tree_hash(str(self.tree), self.files))
 
     def test_no_cache_cap_line_and_no_trim_without_one(self):
         cache = self.tmp / "cache"
@@ -3962,19 +3994,19 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(self.run_kgate("--", "true").returncode, 0)
         with tarfile.open(self.fake / "shipped.tar") as tar:
             job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
-        self.assertIn("CACHE_CAP=4294967296", job_sh)
+        self.assertIn("CACHE_CAP_KIB=4194304", job_sh)
         self.set_cache_cap("")
         self.assertEqual(self.run_kgate("--", "true").returncode, 0)
         with tarfile.open(self.fake / "shipped.tar") as tar:
             job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
-        self.assertIn("CACHE_CAP=8589934592", job_sh, "the 8Gi default is applied when the cluster file sets no cache_cap")
+        self.assertIn("CACHE_CAP_KIB=8388608", job_sh, "the 8Gi default is applied when the cluster file sets no cache_cap")
 
     def test_a_cache_cap_of_zero_reaches_the_pod_side_as_zero(self):
         self.set_cache_cap("cache_cap = 0\n")
         self.assertEqual(self.run_kgate("--", "true").returncode, 0)
         with tarfile.open(self.fake / "shipped.tar") as tar:
             job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
-        self.assertIn("CACHE_CAP=0", job_sh)
+        self.assertIn("CACHE_CAP_KIB=0", job_sh)
 
     def test_an_invalid_cache_cap_is_refused_with_the_key_named(self):
         for line in ('cache_cap = "huge"\n', 'cache_cap = "8 Gi"\n', "cache_cap = -1\n", "cache_cap = true\n", "cache_cap = 1.5\n"):
@@ -3993,14 +4025,21 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(self.run_kgate("--", "true").returncode, 0)
         with tarfile.open(self.fake / "shipped.tar") as tar:
             job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
-        self.assertIn("CACHE_CAP=1125899906842624", job_sh)
+        self.assertIn("CACHE_CAP_KIB=1099511627776", job_sh)
 
-    def test_a_cache_cap_that_truncates_below_one_byte_is_refused(self):
-        for line in ('cache_cap = "100m"\n', 'cache_cap = "0.5"\n'):
+    def test_a_cache_cap_under_one_kib_is_refused_and_one_kib_is_accepted(self):
+        "A cap under 1KiB would reach the pod side as cap // 1024 == 0 KiB and silently disable the trim."
+        for line in ('cache_cap = "100m"\n', 'cache_cap = "0.5"\n', 'cache_cap = "1"\n', 'cache_cap = "1023"\n', "cache_cap = 500\n"):
             self.set_cache_cap(line)
             done = self.run_kgate("--", "true")
             self.assertEqual(done.returncode, 69, done.stdout)
             self.assertIn("cache_cap", self.records()[-1]["reason"])
+            self.assertIn("under 1KiB", self.records()[-1]["reason"])
+        self.set_cache_cap('cache_cap = "1Ki"\n')   # exactly 1KiB is accepted
+        self.assertEqual(self.run_kgate("--", "true").returncode, 0)
+        with tarfile.open(self.fake / "shipped.tar") as tar:
+            job_sh = next(tar.extractfile(m).read().decode() for m in tar.getmembers() if m.name.endswith("/job.sh"))
+        self.assertIn("CACHE_CAP_KIB=1", job_sh)
 
     def test_two_clusters_can_coexist_each_with_its_own_file_and_record(self):
         self.write_cluster(name="second")
