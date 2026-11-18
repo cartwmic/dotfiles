@@ -1108,7 +1108,8 @@ class NamesTheRepoAlreadyHolds(Base):
         super().setUp()
         self.remote = self.tmp / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)], check=True)
-        self.git("remote", "add", "origin", str(self.remote))
+        self.git("remote", "add", "origin", "https://github.com/fooco-dev/guarded.git")
+        self.git("config", "url.file://%s.insteadOf" % self.remote, "https://github.com/fooco-dev/guarded.git")
         self.holds("docs.txt", "The Halcyon tools live here\nand fooco is a pretend term\n")
 
     def holds(self, name, text):
@@ -1169,16 +1170,22 @@ class NamesTheRepoAlreadyHolds(Base):
         self.assertIn("BLOCKED by the terms list (layer 1)", done.stderr)
         self.assertEqual(self.calls(), 0)
 
-    def test_text_mode_uses_the_checkouts_remote_tracking_refs_as_its_base(self):
+    def test_text_mode_uses_the_target_repositorys_remote_tracking_refs_as_its_base(self):
         (self.tmp / "body.md").write_text("see the Halcyon docs\n")
-        done = self.guard("text", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
+        done = self.guard("text", "--repo", "fooco-dev/guarded", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("skipped, its name is already in the repository", done.stderr)
         self.assertIn("Halcyon", done.stderr)
         self.assertIn("do not report them: Halcyon", (self.fake / "stdin.txt").read_text(),
                       "the prompt names what the target branch already publishes")
         (self.tmp / "other.md").write_text("see the Zephyrine docs\n")
-        done = self.guard("text", str(self.tmp / "other.md"), env=self.judge("Zephyrine"))
+        done = self.guard("text", "--repo", "fooco-dev/guarded", str(self.tmp / "other.md"), env=self.judge("Zephyrine"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
+
+    def test_text_mode_without_the_target_repository_has_no_base(self):
+        (self.tmp / "body.md").write_text("see the Halcyon docs\n")
+        done = self.guard("text", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
 

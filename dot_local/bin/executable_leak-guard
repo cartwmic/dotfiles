@@ -5,8 +5,9 @@
     leak-guard commit-msg MESSAGE-FILE   layer 1 on the message (a commit with no diff, such as --allow-empty, has nothing for pre-commit to read)
     leak-guard pre-push REMOTE URL   reads git's pre-push lines on stdin and checks everything the remote's tracking refs lack: every such commit's
                                      raw header, message, paths and added lines (one rev-list into one diff-tree), the remote ref names, tag objects
-    leak-guard text [--result FILE] TEXTFILE...   both layers on the text of each file (a PR body, a comment, release notes); the gh wrapper calls it.
-                                     --result FILE gets {"verdict", "layer", "findings"}, the same values the log line carries
+    leak-guard text [--result FILE] [--repo HOST/]OWNER/REPO TEXTFILE...   both layers on the text of each file (a PR body, a comment, release notes);
+                                     the gh wrapper calls it, with --repo naming the repository the text is being posted to. --result FILE gets
+                                     {"verdict", "layer", "findings"}, the same values the log line carries
 
 Git runs it as the repo's pre-commit, commit-msg and pre-push hooks (a chezmoi script installs those; `git commit --no-verify` and `git push --no-verify`
 skip them, as git always allows). Two layers, cheapest first, on the ADDED lines only (and added file paths, and commit messages):
@@ -17,8 +18,9 @@ skip them, as git always allows). Two layers, cheapest first, on the ADDED lines
      lines, and the names the target branch already publishes that the change also holds (so they are not reported), and must answer one JSON object
      {"leak": true|false, "findings": [{"file", "line", "text", "why", "name"}]}, where name is the exact word or phrase of the change that is the work
      detail. leak true blocks, unless every finding's name is already in the files the repository publishes (pre-push: the remote's tracking refs;
-     pre-commit: HEAD; text: the checkout's remote tracking refs; commit-msg: no base, so nothing is skipped); those are printed as skipped and counted
-     in the log. A finding with no usable name counts as new. So does an answer that is not that JSON.
+     pre-commit: HEAD; text: the target repository's, and only when a remote of the checkout the command runs in fetches from that target — the gh
+     wrapper names it with --repo; commit-msg: no base, so nothing is skipped); those are printed as skipped and counted in the log. A finding with no
+     usable name counts as new. So does an answer that is not that JSON.
 
 It fails closed: a missing claude CLI, no sign-in, no network, a timeout (120 s), a non-zero exit, a missing terms or context file, a pre-commit diff over
 200 KB, or a push line over a 180 KB chunk blocks with a one-line reason naming the step. A larger push is split into chunks of about 180 KB, each its own
@@ -370,10 +372,31 @@ def layer2(prompt):
         return pi_layer2(prompt, limited)     # the one retried failure; every other claude failure still fails closed above
 
 
-def text_trees():
-    """The commits of every remote tracking ref of the checkout the text is written from: what its repositories already publish, the text mode's
-    'already published' base. Outside a repository, or with no remote, there is nothing, and the text is judged with no repo context."""
-    return list(dict.fromkeys(git("for-each-ref", "--format=%(objectname)", "refs/remotes/", check=False).split()))
+def remote_repo(url):
+    """(host, owner/name) that a remote URL fetches from, lower-cased, or None when the URL names no repository."""
+    m = re.match(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?([^/:\s]+)(?::\d*)?[/:]([^/\s]+)/([^/\s#?]+?)(?:\.git)?/?$", url, re.I)
+    if not m:
+        return None
+    host = "github.com" if m.group(1).lower() == "api.github.com" else m.group(1).lower()
+    return host, (m.group(2) + "/" + m.group(3)).lower()
+
+
+def text_trees(target):
+    """The commits of every remote tracking ref of the remotes here that fetch from the target repository: what the target already publishes, the text
+    mode's 'already published' base. Without a target, or when no remote here fetches from the target — a checkout of some other repository, or no
+    repository at all — there is nothing, and the text is judged with no repo context: another checkout's names are never named as published."""
+    if not target:
+        return []
+    names = []
+    for row in git("config", "--get-regexp", r"^remote\..+\.url$", check=False).splitlines():
+        key, _, url = row.partition(" ")
+        name = key[len("remote."):-len(".url")]
+        if remote_repo(url.strip()) == target and name not in names:
+            names.append(name)
+    out = []
+    for name in names:
+        out += git("for-each-ref", "--format=%(objectname)", "refs/remotes/%s/" % name, check=False).split()
+    return list(dict.fromkeys(out))
 
 
 NAME_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9._+-]{2,}")
@@ -579,10 +602,11 @@ def text_lines(paths):
     return out
 
 
-def collect(mode, stdin_lines, remote, url):
-    """([(file, line, text, commit)], binary file names, notes, base trees). Pre-commit: the staged diff, against HEAD. Text and commit-msg have no base."""
-    if mode == "text":     # `remote` is the list of text files; the checkout's remote tracking refs are the 'already published' base
-        return text_lines(remote), [], [], text_trees()
+def collect(mode, stdin_lines, remote, url, target=None):
+    """([(file, line, text, commit)], binary file names, notes, base trees). Pre-commit: the staged diff, against HEAD. Text has a base only when it is
+    the target repository (below); commit-msg has no base."""
+    if mode == "text":     # `remote` is the list of text files; only a checkout of the target repository names what the target already publishes
+        return text_lines(remote), [], [], text_trees(target)
     if mode == "pre-commit":
         lines, binary = diff_parts("--cached")
         head = git("rev-parse", "--verify", "-q", "HEAD", check=False).strip()
@@ -597,7 +621,7 @@ def collect(mode, stdin_lines, remote, url):
     return prepush(stdin_lines, remote, url)
 
 
-def run(mode, stdin_lines, remote, url=""):
+def run(mode, stdin_lines, remote, url="", target=None):
     t0 = time.time()
     try:
         head = git("rev-parse", "HEAD", check=False).strip() or None
@@ -614,7 +638,7 @@ def run(mode, stdin_lines, remote, url=""):
     try:
         if mode in ("pre-commit", "pre-push"):
             refuse_replaced_history()
-        lines, binary, notes, trees = collect(mode, stdin_lines, remote, url)
+        lines, binary, notes, trees = collect(mode, stdin_lines, remote, url, target)
         for code, text in notes:
             print("leak-guard: note: " + text, file=sys.stderr)
         if notes:
@@ -688,7 +712,7 @@ def main(argv):
         return 0 if argv else 64
     global RESULT_PATH
     mode = argv[0]
-    usage = "usage: leak-guard pre-commit | commit-msg MESSAGE-FILE | pre-push REMOTE URL | text [--result FILE] TEXTFILE..."
+    usage = "usage: leak-guard pre-commit | commit-msg MESSAGE-FILE | pre-push REMOTE URL | text [--result FILE] [--repo HOST/]OWNER/REPO TEXTFILE..."
     if mode == "text":
         rest = argv[1:]
         if rest[:1] == ["--result"]:
@@ -696,10 +720,17 @@ def main(argv):
                 print(usage, file=sys.stderr)
                 return 64
             RESULT_PATH, rest = rest[1], rest[2:]
+        target = None
+        if rest[:1] == ["--repo"]:       # the repository the text is being posted to, named by the gh wrapper; only a checkout of it gives a base
+            if len(rest) < 2:
+                print(usage, file=sys.stderr)
+                return 64
+            target = remote_repo(rest[1] if rest[1].count("/") > 1 else "github.com/" + rest[1])
+            rest = rest[2:]
         if not rest:
             print(usage, file=sys.stderr)
             return 64
-        return run(mode, [], rest)
+        return run(mode, [], rest, target=target)
     if mode not in ("pre-commit", "commit-msg", "pre-push") or (mode == "commit-msg" and len(argv) < 2):
         print(usage, file=sys.stderr)
         return 64

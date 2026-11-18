@@ -10,12 +10,18 @@ import unittest
 from test_leak_guard import Base, SCRIPT
 
 
+TARGET = "fooco-dev/guarded"       # the repository the text is posted to, as the gh wrapper names it
+OTHER = "fooco-dev/other"          # a different repository, whose checkout must never name its own names as published
+
+
 class RepoContextBase(Base):
     def setUp(self):
         super().setUp()
         self.remote = self.tmp / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)], check=True)
-        self.git("remote", "add", "origin", str(self.remote))
+        # The remote is named as its public URL; git rewrites it to the local bare repo for transport, as insteadOf does on a real machine.
+        self.git("remote", "add", "origin", "https://github.com/%s.git" % TARGET)
+        self.git("config", "url.file://%s.insteadOf" % self.remote, "https://github.com/%s.git" % TARGET)
         (self.repo / "docs.txt").write_text("The Halcyon tools live here\n")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "docs", "--no-verify")
@@ -31,8 +37,11 @@ class RepoContextBase(Base):
 
 
 class TextModeRepoContext(RepoContextBase):
+    def guard_text(self, body, env, target=TARGET):
+        return self.guard("text", "--repo", target, self.body(body), env=env)
+
     def test_a_name_the_target_branch_publishes_is_named_in_the_prompt_and_an_unknown_one_is_not(self):
-        done = self.guard("text", self.body("see the Halcyon docs and the Zephyrine docs\n"), env=self.judge("Zephyrine"))
+        done = self.guard_text("see the Halcyon docs and the Zephyrine docs\n", self.judge("Zephyrine"))
         self.assertEqual(done.returncode, 1, done.stderr)
         sent = (self.fake / "stdin.txt").read_text()
         self.assertIn("do not report them: Halcyon", sent)
@@ -41,12 +50,12 @@ class TextModeRepoContext(RepoContextBase):
         self.assertNotIn("The Halcyon tools live here", sent, "the repo context names the name, never whole files")
 
     def test_ordinary_lowercase_words_are_never_named_even_when_the_branch_holds_them(self):
-        done = self.guard("text", self.body("the tools live here too\n"), env={"FAKE_CLAUDE": "clean"})
+        done = self.guard_text("the tools live here too\n", {"FAKE_CLAUDE": "clean"})
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
 
     def test_a_repo_known_name_reported_anyway_is_skipped_not_blocked(self):
-        done = self.guard("text", self.body("see the Halcyon docs\n"), env=self.judge("Halcyon"))
+        done = self.guard_text("see the Halcyon docs\n", self.judge("Halcyon"))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("skipped, its name is already in the repository", done.stderr)
         self.assertIn("Halcyon", done.stderr)
@@ -57,11 +66,35 @@ class TextModeRepoContext(RepoContextBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "docs", "--no-verify")
         self.git("push", "-q", "origin", "main", "--no-verify")
-        done = self.guard("text", self.body("fooco is mentioned in the docs\n"))
+        done = self.guard("text", "--repo", TARGET, self.body("fooco is mentioned in the docs\n"))
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertIn("BLOCKED by the terms list (layer 1)", done.stderr)
         self.assertIn("body.txt:1: term 1", done.stderr)
         self.assertEqual(self.calls(), 0, "layer 1 blocks before any judge is called")
+
+    def test_a_checkout_of_another_repository_never_names_its_names_as_published(self):
+        # The gh wrapper runs leak-guard in the caller's directory: a checkout of repo Y, posting to repo X, must not get Y's names as a base.
+        other_remote = self.tmp / "other.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(other_remote)], check=True)
+        other = self.tmp / "other-clone"
+        other.mkdir()
+        env = {**os.environ, "HOME": str(self.home), "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", "-q", "-b", "main", str(other)], check=True, env=env)
+        subprocess.run(["git", "-C", str(other), "remote", "add", "origin", "https://github.com/%s.git" % OTHER], check=True, env=env)
+        subprocess.run(["git", "-C", str(other), "config", "url.file://%s.insteadOf" % other_remote, "https://github.com/%s.git" % OTHER], check=True, env=env)
+        (other / "docs.txt").write_text("The Halcyon tools live here\n")
+        subprocess.run(["git", "-C", str(other), "add", "-A"], check=True, env=env)
+        subprocess.run(["git", "-C", str(other), "commit", "-q", "-m", "docs"], check=True, env=env)
+        subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "main"], check=True, env=env)
+        for target, blocks in ((TARGET, True), (OTHER, False)):
+            with self.subTest(target):
+                body = self.body("see the Halcyon docs\n")
+                run_env = {**os.environ, "HOME": str(self.home), "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), **self.judge("Halcyon")}
+                done = subprocess.run([sys.executable, str(SCRIPT), "text", "--repo", target, body], cwd=other, capture_output=True, text=True, env=run_env, timeout=60)
+                sent = (self.fake / "stdin.txt").read_text()
+                self.assertEqual(done.returncode, 1 if blocks else 0, done.stderr)
+                self.assertEqual("do not report them" in sent, not blocks, sent[-400:])
+                self.assertEqual("skipped, its name is already in the repository" in done.stderr, not blocks)
 
     def test_no_remote_or_no_repository_gives_no_repo_context(self):
         lonely = self.tmp / "lonely"
