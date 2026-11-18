@@ -1,1 +1,4 @@
-{{ includeTemplate "fleet_seat" (dict "seat" "coordinator" "ctx" .) }}
+{{- /* The coordinator seat's Claude settings file (the coordinator daemon copies its keys, except env and hooks, into the settings file its session starts with). Built by .chezmoitemplates/fleet_seat, plus this seat's auto-compact window: without it Claude Code compacts a 1M-window model at about 967K tokens; 200000 is Michael's choice (2026-11-13, the same value the personal profile's T3 settings set for the coordinator instance). Claude Code reads the key from a --settings file (2.1.327; documented range 100000-1000000). Reaches new sessions only. */ -}}
+{{- $seat := includeTemplate "fleet_seat" (dict "seat" "coordinator" "ctx" .) | fromJson -}}
+{{- $_ := set $seat "autoCompactWindow" 200000 -}}
+{{- $seat | toPrettyJson }}

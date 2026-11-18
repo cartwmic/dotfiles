@@ -51,12 +51,8 @@
       }
     }{{ end }}{{ if eq .profile "axon-work-computer" }},
     "jira": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "${JIRA_MCP_URL}"
-      ]
+      "type": "http",
+      "url": "${JIRA_MCP_URL}"
     },
     "slack": {
       "type": "http",

@@ -33,10 +33,10 @@ was Pi; it holds for Claude Code and Codex unless a line says otherwise.
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on both profiles; `browser-harness` and `jira` on
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on both profiles; `browser-harness` on
 `axon-work-computer` only; the source is `servers.list.tmpl`, which renders those lines only on that profile). One server per line,
-optionally followed by that server's idle seconds and the word `pi-only`. `jira` is `pi-only`: Claude Code and Codex keep it as
-rendered, and only Pi runs it lazily (#1890). `browser-harness` is `604800` (a week, so never stopped): stopping it would
+optionally followed by that server's idle seconds and the word `pi-only` (a `pi-only` server is wrapped for Pi and left as rendered
+for Claude Code and Codex; no current server uses it). `browser-harness` is `604800` (a week, so never stopped): stopping it would
 close the agent's own Chrome tab. A listed name that the profile does not render is skipped: `browser-harness` is not rendered on
 Linux with the work profile, which has no Linux machine. The remote HTTP servers (`hindsight`, `context7`, `ticktick`, and the
 work servers) are not touched. On the personal profile the browser server is `browse` (OpenCode Browse). It has no line in
@@ -44,18 +44,9 @@ work servers) are not touched. On the personal profile the browser server is `br
 
 ### jira (work profile)
 
-`jira` is `npx -y mcp-remote <URL>`, a local stdio proxy to a remote server. It has **no shipped seed**: its tool list can
-only be captured on the work computer, where the URL (a 1Password secret) and the sign-in exist. The **first apply on the work
-computer populates it**: the apply refreshes `jira` and saves its handshake and tool list to
-`~/.local/state/pi-mcp-lazy/jira.json`. Every later apply refreshes it again.
-
-If that refresh fails (not signed in, offline, `mcp-remote` cannot start) and no saved list exists, the apply **leaves the `jira`
-entry as rendered**. Pi then starts it at session start exactly as before this change, so `jira` never shows up with zero tools.
-The apply logs `jira has no saved tool list; left as rendered`; fix the cause and apply again. A refresh that fails while an
-older saved list exists keeps the entry wrapped and serves that list.
-
-The saved copy's `key` field is the command line, which for `jira` includes the resolved URL. The state directory is mode 0700
-and the same URL is already in `~/.pi/agent/mcp.json`. The apply log hides URLs and env values from a failed refresh's output.
+`jira` left the list: it is a remote HTTP server in the canonical `mcp/servers.json` now (`{"type": "http", "url":
+"${JIRA_MCP_URL}"}`), so no harness starts a local process for it and there is nothing to wrap. It needs a one-time OAuth
+sign-in per harness (`/mcp` in Claude Code); the URL itself is unchanged and still comes from 1Password at apply time.
 
 ## Where the saved tool list comes from
 
