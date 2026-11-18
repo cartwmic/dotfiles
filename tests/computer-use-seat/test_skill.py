@@ -31,6 +31,13 @@ def render(profile, chezmoi_os):
     return result.stdout
 
 
+def tool_section(text):
+    """The '## Which tool' section. Other sections name tools too, so tool checks read only this slice."""
+    start = text.index("## Which tool")
+    end = text.find("\n## ", start + 1)
+    return text[start:] if end == -1 else text[start:end]
+
+
 class UsingComputerSkillTests(unittest.TestCase):
     def test_chezmoi_is_installed(self):
         self.assertIsNotNone(shutil.which("chezmoi"), "chezmoi is required: this test must not skip")
@@ -66,6 +73,21 @@ class UsingComputerSkillTests(unittest.TestCase):
         self.assertNotIn("agent-desktop restore", text)
         self.assertNotIn("1Password", text)
 
+    def test_personal_tool_list_names_every_tool_it_has(self):
+        for chezmoi_os in ("linux", "darwin"):
+            with self.subTest(os=chezmoi_os):
+                section = tool_section(render("personal", chezmoi_os))
+                for name in ("agent-chrome", "agent-download", "agent-login", "agent-desktop"):
+                    self.assertIn(name, section)
+
+    def test_work_tool_list_names_only_tools_the_work_profile_installs(self):
+        section = tool_section(render("axon-work-computer", "darwin"))
+        self.assertIn("browser-harness", section)
+        self.assertIn("agent-chrome", section)
+        self.assertIn("agent-desktop", section)
+        self.assertNotIn("agent-download", section)  # .chezmoiignore leaves it out on work
+        self.assertNotIn("agent-login", section)     # .chezmoiignore leaves it out on work
+
     def test_only_one_template_line_names_browser_harness(self):
         lines = [l for l in SKILL.read_text(encoding="utf-8").splitlines() if "browser-harness" in l]
         self.assertEqual(len(lines), 1, lines)
@@ -75,7 +97,7 @@ class UsingComputerSkillTests(unittest.TestCase):
         for profile, chezmoi_os in (("personal", "linux"), ("personal", "darwin"), ("axon-work-computer", "darwin")):
             with self.subTest(profile=profile, os=chezmoi_os):
                 text = render(profile, chezmoi_os)
-                for heading in ("## Order", "## Which tool", "agent-download", "agent-desktop shot",
+                for heading in ("## Order", "## Which tool", "agent-desktop shot",
                                 "Never start another browser or browser tool."):
                     self.assertIn(heading, text)
                 self.assertIsNone(re.search(r"\{\{|\}\}", text))
