@@ -764,7 +764,7 @@ class DesktopTest(unittest.TestCase):
         self.assertEqual(self.run_script("restore", CLAUDE_CODE_SESSION_ID="sess-1").returncode, 0)
         r = self.run_script("save", T3CODE_THREAD_ID="thread-one", CLAUDE_CODE_SESSION_ID="sess-1")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(self.saved_file("thread-one").exists(), "the T3 thread comes first, as in kill-mine")
+        self.assertTrue(self.saved_file("thread-one").exists(), "the T3 thread comes first")
         self.assertFalse(self.saved_file("sess-1").exists())
 
     def test_a_key_with_slashes_and_colons_stays_one_file_in_the_state_folder(self):
