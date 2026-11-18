@@ -276,6 +276,12 @@ def all_targets(repo_flags=(), words=()):
     return [r for r in (parse_repo(v) for v in repo_flags) if r] + repo_words(words) + context_targets()
 
 
+def guarded_once(targets, repos):
+    """The guarded repositories among targets, each once, in order. One repository is often named twice (by --repo and by the checkout's remote), and the
+    text check takes a published-names base only when the command is aimed at exactly one repository."""
+    return list(dict.fromkeys(t for t in targets if t in repos))
+
+
 def raw_repo_flags(args):
     """Every value of -R/--repo among unparsed arguments (a flag value may be one too: this over-approximates)."""
     out = []
@@ -707,7 +713,7 @@ def decide(args, repos, texts=None, real=None, depth=0):
                          "Use the repos/<owner>/<repo>/... form of the endpoint")
         if write and any(t in repos for t in api_targets(endpoint, hostname) + context_targets()):
             gather_api(fields, inputs, texts, False)
-            return "api", texts, [t for t in api_targets(endpoint, hostname) if t in repos]
+            return "api", texts, guarded_once(api_targets(endpoint, hostname), repos)
         return "", None, []
     if group in NOT_REPO:
         return "", None, []
@@ -733,7 +739,7 @@ def decide(args, repos, texts=None, real=None, depth=0):
         if refusal:
             raise Refuse(refusal)
         gather_text(found, texts)
-        return name, texts, [t for t in named if t in repos]
+        return name, texts, guarded_once(named, repos)
     if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
         return "", None, []
     if any(t in repos for t in raw_targets(args)):

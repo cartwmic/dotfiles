@@ -357,6 +357,14 @@ class WrapperTextTarget(WrapperBase):
         self.assertEqual(args[args.index("--repo") + 1], "github.com/%s" % GUARDED)
         self.assertIn("--result", args)
 
+    def test_a_repo_named_by_both_repo_and_the_checkout_is_one_target_and_is_passed_as_repo(self):
+        for spelling in (GUARDED, GUARDED.upper(), "https://github.com/%s.git" % GUARDED):
+            done = self.gh("pr", "comment", "5", "--body", CLEAN, "--repo", spelling, env={"LEAK_GUARD_BIN": str(self.recording_guard())})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            args = self.guard_args()
+            self.assertIn("--repo", args, spelling)
+            self.assertEqual(args[args.index("--repo") + 1], "github.com/%s" % GUARDED, spelling)
+
     def test_a_command_aimed_at_two_guarded_repos_passes_no_repo(self):
         (self.home / ".config" / "leak-guard" / "repos").write_text("%s\nfooco-dev/second\n" % GUARDED)
         done = self.gh("pr", "comment", "5", "--body", CLEAN, "--repo", "fooco-dev/second", env={"LEAK_GUARD_BIN": str(self.recording_guard())})
