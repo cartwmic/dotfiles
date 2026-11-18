@@ -22,8 +22,8 @@ ZSHENV = REPO / "dot_zshenv"
 ZSH = shutil.which("zsh")
 LINUX = Path("/proc").is_dir()   # session.sh decides liveness from /proc/<pid>
 TOOLS = ("hyprctl", "wlrctl", "wtype", "grim")
-# Real tools the script and the fakes run. python3 is needed only by `windows`.
-REAL = ("cat", "date", "mkdir", "python3")
+# Real tools the script and the fakes run. python3 is needed by `windows`, `save` and `restore`.
+REAL = ("cat", "date", "mkdir", "python3", "rm")
 
 FAKE = """#!/bin/sh
 name=${0##*/}
@@ -36,13 +36,27 @@ case $name in
     case $1 in
       cursorpos) cat "$FAKE_FIXTURES/cursorpos" ;;
       clients) cat "$FAKE_FIXTURES/clients.json" ;;
+      activewindow) cat "$FAKE_FIXTURES/activewindow.json" ;;
       dispatch)
         if [ -n "${FAKE_DISPATCH_EXIT:-}" ]; then echo "error: lua syntax" >&2; exit "$FAKE_DISPATCH_EXIT"; fi
+        case $2 in *hl.dsp.focus*) if [ -n "${FAKE_FOCUS_OUT:-}" ]; then printf '%s\\n' "$FAKE_FOCUS_OUT"; exit 0; fi ;; esac
+        # Like Hyprland: a focus by address makes that window active; FAKE_MOVE_FOCUS is a window follow_mouse hands focus to
+        case $2 in *hl.dsp.focus*address:*) a=${2#*address:}; a=${a%%\\"*}; printf '{"address": "%s", "class": "x"}' "$a" > "$FAKE_FIXTURES/activewindow.json" ;; esac
+        case $2 in *hl.dsp.cursor.move*) if [ -n "${FAKE_MOVE_FOCUS:-}" ]; then printf '{"address": "%s", "class": "x"}' "$FAKE_MOVE_FOCUS" > "$FAKE_FIXTURES/activewindow.json"; fi ;; esac
         printf '%s\\n' "${FAKE_DISPATCH_OUT:-ok}" ;;
       *) echo "fake hyprctl: unexpected $*" >&2; exit 99 ;;
     esac ;;
   wlrctl) exit "${FAKE_WLRCTL_EXIT:-0}" ;;
   wtype|grim) exit 0 ;;
+esac
+"""
+
+# pgrep prints FAKE_CHROME_PIDS, one per line, only when asked for the agent Chrome profile's command-line pattern
+# (what agent-chrome matches on), so a restore that asks the wrong question sees no agent Chrome.
+FAKE_PGREP = """#!/bin/sh
+case "$*" in
+  *"--user-data-dir=$HOME/.local/share/agent-chrome-profile"*) printf '%s\\n' ${FAKE_CHROME_PIDS:-} ;;
+  *) exit 1 ;;
 esac
 """
 
@@ -57,6 +71,11 @@ WINDOWS_OUT = (
     "com.onepassword.OnePassword\t1Password Vault\t967,38\t941x1030\t42\tfalse\n"
     "Steam\tSteam\t-20,0\t1280x720\tspecial:scratchpad\ttrue\n"
 )
+WIN_A = "0xaaaa1111"   # the window Michael is using
+WIN_CHROME = "0xbbbb2222"   # the agent Chrome
+WIN_B = "0xcccc3333"   # another window Michael switches to
+CHROME_PID = 4242   # the agent Chrome's process; every other window is pid 1000
+MOVE_CURSORPOS = "hyprctl [dispatch] [hl.dsp.cursor.move({x=961,y=553})]"
 MOVE_737 = "hyprctl [dispatch] [hl.dsp.cursor.move({x=737,y=277})]"
 
 
@@ -108,9 +127,13 @@ class DesktopTest(unittest.TestCase):
             d.mkdir()
         (self.fixtures / "cursorpos").write_text("961, 553\n")
         (self.fixtures / "clients.json").write_text(json.dumps(CLIENTS))
+        self.set_active(WIN_A)
         self.calls_file = self.tmp / "calls"
         self.env_file = self.tmp / "env"
         self.bin = make_bin(self.tmp / "bin", TOOLS)
+        pgrep = self.bin / "pgrep"
+        pgrep.write_text(FAKE_PGREP)
+        pgrep.chmod(0o755)
         lib = self.home / ".local/share/agent-desktop"
         lib.mkdir(parents=True)
         shutil.copy(SESSION_LIB, lib / "session.sh")
@@ -126,6 +149,7 @@ class DesktopTest(unittest.TestCase):
             "FAKE_CALLS": str(self.calls_file),
             "FAKE_ENV": str(self.env_file),
             "FAKE_FIXTURES": str(self.fixtures),
+            "FAKE_CHROME_PIDS": str(CHROME_PID),
         }
         for k in unset:
             e.pop(k, None)
@@ -135,6 +159,22 @@ class DesktopTest(unittest.TestCase):
     def run_script(self, *args, unset=(), **extra):
         return subprocess.run(["/bin/sh", str(SCRIPT), *args], env=self.env(unset, **extra),
                               capture_output=True, text=True, timeout=30)
+
+    def set_active(self, address):
+        """What `hyprctl activewindow -j` prints: a window object, `{}` (None) or nothing at all ("")."""
+        pid = CHROME_PID if address == WIN_CHROME else 1000
+        body = "" if address == "" else "{}" if address is None else json.dumps({"address": address, "class": "x", "pid": pid})
+        (self.fixtures / "activewindow.json").write_text(body)
+
+    def saved_file(self):
+        return self.home / ".state" / "agent-desktop" / "saved-focus"
+
+    def set_cursor(self, x, y):
+        (self.fixtures / "cursorpos").write_text(f"{x}, {y}\n")
+
+    def dispatches(self, what):
+        """The recorded hyprctl dispatch calls that contain `what`."""
+        return [c for c in self.calls() if c.startswith("hyprctl [dispatch]") and what in c]
 
     def calls(self):
         return self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
@@ -282,7 +322,7 @@ class DesktopTest(unittest.TestCase):
 
     # usage
     def test_usage_errors_exit_two(self):
-        for args in ((), ("nope",), ("move", "1"), ("windows", "extra"), ("cursor", "x")):
+        for args in ((), ("nope",), ("move", "1"), ("windows", "extra"), ("cursor", "x"), ("save", "x"), ("restore", "x")):
             with self.subTest(args=args):
                 r = self.run_script(*args)
                 self.assertEqual(r.returncode, 2, r.stderr)
@@ -301,6 +341,10 @@ class DesktopTest(unittest.TestCase):
             (["type", "x"], "wtype", "Arch package wtype"),
             (["key", "a"], "wtype", "Arch package wtype"),
             (["cursor"], "hyprctl", "Arch package hyprland"),
+            (["save"], "hyprctl", "Arch package hyprland"),
+            (["save"], "python3", "Arch package python"),
+            (["restore"], "hyprctl", "Arch package hyprland"),
+            (["restore"], "python3", "Arch package python"),
         ]
         for i, (args, missing, hint) in enumerate(cases):
             with self.subTest(args=args, missing=missing):
@@ -423,6 +467,163 @@ class DesktopTest(unittest.TestCase):
             "hyprctl dispatch hl.dsp.cursor.move({x=737,y=277}) ok",
             "click 737 277 left",
         ])
+
+    # save and restore: give back the focus and the pointer an agent run used (Linux only; see docs/agent-desktop.md)
+    def test_save_restore_round_trip(self):
+        r = self.run_script("save")
+        self.assertEqual((r.returncode, r.stdout), (0, f"saved window {WIN_A} pointer 961,553\n"), r.stderr)
+        self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]", "hyprctl [cursorpos]"])
+        self.calls_file.unlink()
+        self.set_active(WIN_CHROME)   # the agent's work moved focus
+        r = self.run_script("restore")
+        self.assertEqual((r.returncode, r.stdout), (0, f"restored window {WIN_A}, pointer 961,553\n"), r.stderr)
+        self.assertEqual(self.calls(), [
+            "hyprctl [activewindow] [-j]",
+            f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]',   # the window first, by address
+            MOVE_CURSORPOS,                               # then the pointer, so a workspace-change warp cannot undo it
+            "hyprctl [activewindow] [-j]",                # focus is checked again after the pointer move
+        ])
+        self.assertFalse(self.saved_file().exists(), "the record is deleted after a restore")
+
+    def test_restore_refocuses_when_the_pointer_move_hands_focus_away(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        self.set_active(WIN_CHROME)
+        r = self.run_script("restore", FAKE_MOVE_FOCUS=WIN_CHROME)   # follow_mouse: the window under the pointer takes focus
+        self.assertEqual(r.returncode, 0, r.stderr)
+        focus = f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]'
+        self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]", focus, MOVE_CURSORPOS, "hyprctl [activewindow] [-j]", focus])
+
+    def test_restore_with_nothing_saved_exits_1(self):
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("nothing saved: run agent-desktop save first", r.stderr)
+        self.assertEqual(self.calls(), [], "restore with nothing saved made a Hyprland call")
+
+    def test_restore_when_the_window_is_gone_exits_1(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        self.set_active(WIN_CHROME)
+        r = self.run_script("restore", FAKE_FOCUS_OUT="warning: =[C]:-1: hl.focus: window not found")   # hyprctl exits 0
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(WIN_A, r.stderr)
+        self.assertIn(MOVE_CURSORPOS, self.calls(), "the pointer still moves")
+        self.assertFalse(self.saved_file().exists(), "the record is deleted even when the window is gone")
+
+    def test_save_with_no_active_window_restores_the_pointer_only(self):
+        for none in (None, ""):   # `{}` and no output at all
+            with self.subTest(active=none):
+                self.calls_file.unlink(missing_ok=True)
+                self.set_active(none)
+                self.set_cursor(961, 553)
+                r = self.run_script("save")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.run_script("move", "10", "20").returncode, 0)   # the agent moved the pointer
+                self.set_cursor(10, 20)
+                self.calls_file.unlink()
+                self.set_active(WIN_CHROME)
+                r = self.run_script("restore")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("no window to refocus", r.stdout)
+                self.assertEqual(self.calls(), ["hyprctl [cursorpos]", MOVE_CURSORPOS], "only the pointer moves")
+                self.assertFalse(self.saved_file().exists())
+
+    def test_second_save_keeps_the_first(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.set_active(WIN_CHROME)
+        r = self.run_script("save")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"^already saved \d+s ago; first record kept\n$")
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]', self.calls())
+
+    def test_restore_when_already_focused_makes_no_focus_dispatch(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        r = self.run_script("restore")   # focus never moved, and the agent did not move the pointer
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(), ["hyprctl [activewindow] [-j]"])
+        self.assertIn(f"restored: {WIN_A} was already active; pointer left", r.stdout)
+        self.assertFalse(self.saved_file().exists())
+
+    def test_save_and_restore_log_one_line_each(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.set_active(WIN_CHROME)
+        self.assertEqual(self.run_script("restore").returncode, 0)
+        lines = self.log_lines()
+        saves = [x for x in lines if x.split(" ", 3)[3].startswith("save ")]
+        restores = [x for x in lines if x.split(" ", 3)[3].startswith("restore ")]
+        self.assertEqual(len(saves), 1, lines)
+        self.assertEqual(len(restores), 1, lines)
+        self.assertRegex(saves[0], rf"^\S+ run=\d{{8}}T\d{{6}}Z-\d+ elapsed=\d+s save window={WIN_A} pointer=961,553$")
+        self.assertRegex(restores[0], rf"^\S+ run=\d{{8}}T\d{{6}}Z-\d+ elapsed=\d+s restore window={WIN_A} pointer=961,553 refocused$")
+
+    # restore puts back only what the agent moved
+    def test_restore_keeps_a_window_michael_switched_to(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.calls_file.unlink()
+        self.set_active(WIN_B)   # not the agent's: not agent Chrome, not focused by the agent
+        self.set_cursor(300, 400)   # and the pointer is not where the agent left it
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp."), [], "restore dispatched focus or a pointer move over Michael's window")
+        self.assertIn(f"kept focus on {WIN_B}", r.stdout)
+        self.assertFalse(self.saved_file().exists())
+        restores = [x.split(" ", 3)[3] for x in self.log_lines() if x.split(" ", 3)[3].startswith("restore ")]
+        self.assertEqual(restores, [f"restore window={WIN_A} kept focus on {WIN_B} pointer=left"])
+
+    def test_restore_refocuses_a_window_the_agent_focused(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.set_active(WIN_B)   # not agent Chrome; only the focus verb says it is the agent's
+        self.assertEqual(self.run_script("focus", "Steam").returncode, 0)
+        self.assertIn(f"agent_window={WIN_B}", self.saved_file().read_text().splitlines())
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp.focus"), [f'hyprctl [dispatch] [hl.dsp.focus({{window="address:{WIN_A}"}})]'])
+        self.assertIn(MOVE_CURSORPOS, self.calls())
+
+    def test_restore_keeps_a_window_michael_took_after_an_agent_focus(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.set_active(WIN_B)
+        self.assertEqual(self.run_script("focus", "Steam").returncode, 0)
+        self.set_active("0xdddd4444")   # Michael switched again
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp."), [])
+
+    def test_restore_moves_the_pointer_back_when_it_is_where_the_agent_put_it(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.assertEqual(self.run_script("move", "10", "20").returncode, 0)
+        self.assertIn("agent_pointer=10,20", self.saved_file().read_text().splitlines())
+        self.set_cursor(10, 20)
+        self.set_active(WIN_B)   # Michael's window has focus: it stays, the untouched pointer goes back
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp."), [MOVE_CURSORPOS])
+
+    def test_restore_leaves_a_pointer_michael_moved(self):
+        self.assertEqual(self.run_script("save").returncode, 0)
+        self.assertEqual(self.run_script("click", "10", "20").returncode, 0)
+        self.assertIn("agent_pointer=10,20", self.saved_file().read_text().splitlines())   # the last move or click counts
+        self.set_cursor(300, 400)   # Michael moved it elsewhere
+        self.set_active(WIN_B)
+        self.calls_file.unlink()
+        r = self.run_script("restore")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.dispatches("hl.dsp."), [])
+
+    def test_focus_move_and_click_write_no_record_when_nothing_is_saved(self):
+        for args in (("focus", "Steam"), ("move", "10", "20"), ("click", "10", "20")):
+            with self.subTest(verb=args[0]):
+                r = self.run_script(*args)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertFalse(self.saved_file().exists())
+        self.assertNotIn("hyprctl [activewindow] [-j]", self.calls(), "focus asked for the active window with no record")
 
 
 @unittest.skipUnless(ZSH and LINUX, "needs zsh and /proc")

@@ -11,6 +11,20 @@
 #   agent-desktop type TEXT                         type TEXT (wtype -- TEXT)
 #   agent-desktop key KEY [MOD...]                  press KEY with modifiers held: key comma ctrl -> wtype -M ctrl -k comma -m ctrl
 #   agent-desktop cursor                            print the pointer position as "X Y"
+#   agent-desktop save                              remember the active window and the pointer position (first record wins)
+#   agent-desktop restore                           move the pointer back and focus the remembered window, then forget it
+#
+# save and restore exist only here (Hyprland); the Mac and G14 scripts have no such verbs. They let an agent give back the
+# focus it used: `save` first, any work that may move focus (Chrome, focus, click), `restore` last. The record is one file,
+# ${XDG_STATE_HOME:-~/.local/state}/agent-desktop/saved-focus (address, pointer, epoch time). While it exists, `focus CLASS`
+# adds an agent_window=ADDRESS line (the window that became active) and `move` and `click` write agent_pointer=X,Y (the last
+# one counts); with no record they write nothing. `restore` puts back only what the agent moved: it refocuses the saved window
+# when the active window is the agent's (an agent_window address, or a process of the agent Chrome profile), and moves the
+# pointer back when it refocused or the pointer is still at agent_pointer. A window or pointer Michael moved is left alone.
+# Cases: nothing saved is exit 1 and no Hyprland call; a saved window that is gone is exit 1 naming its address (the pointer
+# still moves and the record is deleted); no active window at save restores the pointer only (when the agent moved it) and
+# exits 0; a second save keeps the first record and says how old it is; a saved window that is already active gets no focus
+# dispatch.
 #
 # Lua dispatch (verified live on Hyprland 0.56.2): the config is Lua. The old dispatcher syntax fails with a Lua
 # syntax error: `hyprctl dispatch movecursor 737 277` and `hyprctl dispatch focuswindow class:X` do not work. Use
@@ -42,7 +56,7 @@ SCRIPT_NAME="agent-desktop"
 
 usage() {
   echo "usage: $SCRIPT_NAME shot FILE [REGION] | windows | focus CLASS | move X Y |" >&2
-  echo "       $SCRIPT_NAME click X Y [left|right|middle] | type TEXT | key KEY [MOD...] | cursor" >&2
+  echo "       $SCRIPT_NAME click X Y [left|right|middle] | type TEXT | key KEY [MOD...] | cursor | save | restore" >&2
   exit 2
 }
 
@@ -113,14 +127,18 @@ valid_word() {  # valid_word VALUE: a key or modifier name such as comma or ctrl
   esac
 }
 
-dispatch() {  # dispatch LUA: one hyprctl dispatch. Only the exact output "ok" is success.
+try_dispatch() {  # try_dispatch LUA: one hyprctl dispatch; sets rc and out. Only the exact output "ok" is success (returns 1 otherwise).
   rc=0
   out=$(hyprctl dispatch "$1" 2>&1) || rc=$?
   if [ "$rc" -ne 0 ] || [ "$out" != ok ]; then
     record "FAIL hyprctl dispatch $1 exit=$rc output=$out"
-    fail 1 "hyprctl dispatch failed (exit $rc): $out"
+    return 1
   fi
   record "hyprctl dispatch $1 ok"
+}
+
+dispatch() {  # dispatch LUA: try_dispatch, and exit 1 on failure
+  try_dispatch "$1" || fail 1 "hyprctl dispatch failed (exit $rc): $out"
 }
 
 WINDOWS_PY='
@@ -166,8 +184,19 @@ cmd_windows() {
   fi
 }
 
+note_agent() {  # note_agent LINE: when save left a record, add LINE to it (what restore later treats as the agent's own doing)
+  file=$(saved_file)
+  if [ -f "$file" ]; then
+    echo "$1" >>"$file"
+  fi
+}
+
 cmd_focus() {  # CLASS
   dispatch "hl.dsp.focus({window=\"class:$1\"})"
+  if [ -f "$(saved_file)" ]; then
+    active_address focus
+    if [ -n "$ADDR" ]; then note_agent "agent_window=$ADDR"; fi
+  fi
 }
 
 cmd_move() {  # X Y
@@ -177,6 +206,7 @@ cmd_move() {  # X Y
 cmd_click() {  # X Y [BUTTON]
   button=${3:-left}
   cmd_move "$1" "$2"
+  note_agent "agent_pointer=$1,$2"
   if wlrctl pointer click "$button"; then
     record "click $1 $2 $button"
   else
@@ -210,24 +240,176 @@ cmd_key() {  # KEY [MOD...]
   fi
 }
 
-cmd_cursor() {
+read_cursor() {  # read_cursor STEP: set X and Y to the pointer position; exit 1 (logged under STEP) when hyprctl gives anything else
   if ! pos=$(hyprctl cursorpos 2>&1); then
-    record "FAIL cursor"
+    record "FAIL $1"
     fail 1 "hyprctl cursorpos failed: $pos"
   fi
   case $pos in
     *", "*) ;;
-    *) record "FAIL cursor output=$pos"; fail 1 "unexpected cursorpos output: $pos" ;;
+    *) record "FAIL $1 output=$pos"; fail 1 "unexpected cursorpos output: $pos" ;;
   esac
-  x=${pos%%,*}
-  y=${pos#*, }
-  if is_int "$x" && is_int "$y"; then
-    record "cursor $x $y"
-    echo "$x $y"
-  else
-    record "FAIL cursor output=$pos"
+  X=${pos%%,*}
+  Y=${pos#*, }
+  if ! is_int "$X" || ! is_int "$Y"; then
+    record "FAIL $1 output=$pos"
     fail 1 "unexpected cursorpos output: $pos"
   fi
+}
+
+cmd_cursor() {
+  read_cursor cursor
+  record "cursor $X $Y"
+  echo "$X $Y"
+}
+
+ACTIVE_PY='
+import json, re, sys
+try:
+    w = json.load(sys.stdin)
+except ValueError:
+    w = {}
+a = w.get("address", "") if isinstance(w, dict) else ""
+print(a if isinstance(a, str) and re.fullmatch(r"0x[0-9a-fA-F]+", a) else "")
+'
+
+active_address() {  # active_address STEP: set ADDR to the active window's address, or "" when no window is active
+  if ! json=$(hyprctl activewindow -j 2>&1); then
+    record "FAIL $1 (activewindow)"
+    fail 1 "hyprctl activewindow failed: $json"
+  fi
+  if ! ADDR=$(printf '%s' "$json" | python3 -c "$ACTIVE_PY"); then
+    record "FAIL $1 (parse)"
+    fail 1 "could not read hyprctl activewindow output"
+  fi
+}
+
+saved_file() {
+  echo "${XDG_STATE_HOME:-$HOME/.local/state}/agent-desktop/saved-focus"
+}
+
+cmd_save() {
+  file=$(saved_file)
+  if [ -f "$file" ]; then
+    then_at=0
+    while IFS== read -r k v; do
+      case $k in time) then_at=$v ;; esac
+    done <"$file"
+    age=$(($(date +%s) - then_at))
+    record "save already saved ${age}s ago; first record kept"
+    echo "already saved ${age}s ago; first record kept"
+    return 0
+  fi
+  active_address save
+  read_cursor save
+  printf 'address=%s\nx=%s\ny=%s\ntime=%s\n' "$ADDR" "$X" "$Y" "$(date +%s)" >"$file"
+  record "save window=${ADDR:-none} pointer=$X,$Y"
+  echo "saved window ${ADDR:-none} pointer $X,$Y"
+}
+
+PID_PY='
+import json, sys
+try:
+    w = json.load(sys.stdin)
+except ValueError:
+    w = {}
+p = w.get("pid", "") if isinstance(w, dict) else ""
+print(p if isinstance(p, int) else "")
+'
+
+is_agent_window() {  # is_agent_window: true when the active window (ADDR, and its json from active_address) is the agent's: its address
+  # is one of the agent_window lines read from the record, or its process belongs to the agent Chrome profile
+  [ -n "$ADDR" ] || return 1
+  case " $agent_windows " in *" $ADDR "*) return 0 ;; esac
+  pid=$(printf '%s' "$json" | python3 -c "$PID_PY") || return 1
+  [ -n "$pid" ] || return 1
+  # the same pattern agent-chrome uses to find its own processes
+  for p in $(pgrep -f -- "--user-data-dir=$HOME/.local/share/agent-chrome-profile" 2>/dev/null || true); do
+    [ "$p" = "$pid" ] && return 0
+  done
+  return 1
+}
+
+pointer_back() {  # pointer_back REFOCUSED: move the pointer to the saved point when restore refocused (1), or when it is still
+  # where the agent's last move or click put it; sets POINTER to what was done
+  moved=0
+  if [ "$1" -eq 1 ]; then
+    moved=1
+  elif [ -n "$agent_pointer" ]; then
+    read_cursor restore
+    if [ "$X,$Y" = "$agent_pointer" ]; then moved=1; fi
+  fi
+  if [ "$moved" -eq 1 ]; then
+    cmd_move "$saved_x" "$saved_y"
+    POINTER="$saved_x,$saved_y"
+  else
+    POINTER=left
+  fi
+}
+
+cmd_restore() {
+  file=$(saved_file)
+  if [ ! -f "$file" ]; then
+    record "FAIL restore nothing saved"
+    fail 1 "nothing saved: run $SCRIPT_NAME save first"
+  fi
+  saved_addr="" saved_x="" saved_y="" agent_windows="" agent_pointer=""
+  while IFS== read -r k v; do
+    case $k in
+      address) saved_addr=$v ;;
+      x) saved_x=$v ;;
+      y) saved_y=$v ;;
+      agent_window) agent_windows="$agent_windows $v" ;;
+      agent_pointer) agent_pointer=$v ;;
+    esac
+  done <"$file"
+  if ! is_int "$saved_x" || ! is_int "$saved_y"; then
+    record "FAIL restore unreadable record"
+    fail 1 "the saved record in $file is unreadable; delete it and run $SCRIPT_NAME save again"
+  fi
+  # Restore puts back only what the agent moved. Focus: the saved window is refocused only when the active window is the
+  # agent's; if Michael switched to another window, that window keeps focus. Pointer: moved back only when restore refocused
+  # or it is still at the agent's last move or click.
+  # Focus first, then the pointer: with cursor:warp_on_change_workspace on, focusing a window on another workspace
+  # warps the pointer (live proof phase 2, 2026-11-18), so a pointer move made before the focus would be undone.
+  # The pointer move can in turn hand focus (follow_mouse) to the window under it, so focus is checked once more after
+  # it; that second focus is on the same workspace and does not warp.
+  if [ -z "$saved_addr" ]; then
+    pointer_back 0
+    rm -f "$file"
+    record "restore window=none pointer=$POINTER"
+    echo "no window to refocus; pointer $POINTER"
+    return 0
+  fi
+  active_address restore
+  rm -f "$file"
+  if [ "$ADDR" = "$saved_addr" ]; then
+    pointer_back 0
+    record "restore window=$saved_addr already active pointer=$POINTER"
+    echo "restored: $saved_addr was already active; pointer $POINTER"
+    return 0
+  fi
+  if ! is_agent_window; then
+    active=${ADDR:-none}
+    pointer_back 0
+    record "restore window=$saved_addr kept focus on $active pointer=$POINTER"
+    echo "kept focus on $active (not the agent's); pointer $POINTER"
+    return 0
+  fi
+  focus_ok=1
+  try_dispatch "hl.dsp.focus({window=\"address:$saved_addr\"})" || focus_ok=0
+  focus_rc=$rc focus_out=$out
+  pointer_back 1
+  if [ "$focus_ok" -eq 0 ]; then
+    record "FAIL restore window=$saved_addr pointer=$saved_x,$saved_y"
+    fail 1 "could not focus the saved window $saved_addr (exit $focus_rc): $focus_out"
+  fi
+  active_address restore
+  if [ "$ADDR" != "$saved_addr" ]; then
+    dispatch "hl.dsp.focus({window=\"address:$saved_addr\"})"
+  fi
+  record "restore window=$saved_addr pointer=$saved_x,$saved_y refocused"
+  echo "restored window $saved_addr, pointer $saved_x,$saved_y"
 }
 
 [ $# -ge 1 ] || usage
@@ -254,7 +436,8 @@ case $cmd in
     [ $# -eq 2 ] || usage
     if ! is_int "$1" || ! is_int "$2"; then fail 2 "move: X and Y must be integers"; fi
     prepare hyprctl
-    cmd_move "$1" "$2" ;;
+    cmd_move "$1" "$2"
+    note_agent "agent_pointer=$1,$2" ;;
   click)
     [ $# -eq 2 ] || [ $# -eq 3 ] || usage
     if ! is_int "$1" || ! is_int "$2"; then fail 2 "click: X and Y must be integers"; fi
@@ -279,6 +462,14 @@ case $cmd in
     [ $# -eq 0 ] || usage
     prepare hyprctl
     cmd_cursor ;;
+  save)
+    [ $# -eq 0 ] || usage
+    prepare hyprctl python3
+    cmd_save ;;
+  restore)
+    [ $# -eq 0 ] || usage
+    prepare hyprctl python3
+    cmd_restore ;;
   *)
     usage ;;
 esac

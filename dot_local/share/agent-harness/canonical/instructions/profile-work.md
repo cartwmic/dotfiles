@@ -14,11 +14,10 @@ Each agent seat has a model. This is a rule, not a mechanism: there is no launch
 | Planner | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
 | Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |
 | Builder | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
-| Browser use | Sonnet 5.5 high, Anthropic (anthropic/claude-sonnet-5-5) |
+| Computer use | Sonnet 5.5 high, Pi (anthropic/claude-sonnet-5-5) |
 
 - Every brief's first line names the seat and the model.
-- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); T3 provider claudeAgent. Planners and builders use Pi (`work-glm/{{ .workGlmModelId }}`). Browser use runs on Pi with `--provider anthropic --model claude-sonnet-5-5` at high thinking.
-- Browser use drives the agent Chrome on 127.0.0.1:9333 only through the browser-harness MCP server, plus agent-desktop for things outside the page; never start another browser or browser tool.
+- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); T3 provider claudeAgent. Planners and builders use Pi (`work-glm/{{ .workGlmModelId }}`). Computer use runs on Pi with `--provider anthropic --model claude-sonnet-5-5` at high thinking.
 - Sessions I open myself are not covered by this table. Their default is set separately.
 - No OpenAI models for now.
 - If you are unsure of a model ID for a harness, use the human names above.
