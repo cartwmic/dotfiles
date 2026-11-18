@@ -193,7 +193,7 @@ class Decisions(WrapperBase):
         with mock.patch.dict(os.environ, env):
             if not repo:
                 os.environ.pop("GH_REPO", None)
-            name, texts = self.W.decide(list(args), self.REPOS, None, str(self.realbin / "gh"))
+            name, texts, _targets = self.W.decide(list(args), self.REPOS, None, str(self.realbin / "gh"))
         return name, ({l: d.decode() for l, d in texts.items} if texts else None)
 
     def refused(self, *args, repo=GUARDED):
@@ -331,6 +331,45 @@ class WrapperRepo(WrapperBase):
         self.assertBlocked(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=cwd), "term 1")
         github = self.repo("gh", "https://github.com/team/proj.git")
         self.assertRan(self.gh("pr", "comment", "5", "--body", PLANTED, cwd=github), "pr", "comment", "5", "--body", PLANTED)
+
+
+class WrapperTextTarget(WrapperBase):
+    """The guard is told which repository the text is being posted to, so only that repository's published names can become the base (round 1, f1)."""
+
+    def recording_guard(self):
+        rec = self.tmp / "rec-guard"
+        nl = chr(10)
+        rec.write_text("#!/usr/bin/env python3" + nl
+                       + "import json, sys" + nl
+                       + "open(%s, 'w').write(json.dumps(sys.argv[1:]))" % json.dumps(str(self.fake / "guard-args")) + nl
+                       + "exit(0)" + nl)
+        rec.chmod(0o755)
+        return rec
+
+    def guard_args(self):
+        return json.loads((self.fake / "guard-args").read_text())
+
+    def test_a_text_command_aimed_at_one_guarded_repo_passes_it_as_repo(self):
+        done = self.gh("pr", "comment", "5", "--body", CLEAN, env={"LEAK_GUARD_BIN": str(self.recording_guard())})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        args = self.guard_args()
+        self.assertIn("--repo", args)
+        self.assertEqual(args[args.index("--repo") + 1], "github.com/%s" % GUARDED)
+        self.assertIn("--result", args)
+
+    def test_a_repo_named_by_both_repo_and_the_checkout_is_one_target_and_is_passed_as_repo(self):
+        for spelling in (GUARDED, GUARDED.upper(), "https://github.com/%s.git" % GUARDED):
+            done = self.gh("pr", "comment", "5", "--body", CLEAN, "--repo", spelling, env={"LEAK_GUARD_BIN": str(self.recording_guard())})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            args = self.guard_args()
+            self.assertIn("--repo", args, spelling)
+            self.assertEqual(args[args.index("--repo") + 1], "github.com/%s" % GUARDED, spelling)
+
+    def test_a_command_aimed_at_two_guarded_repos_passes_no_repo(self):
+        (self.home / ".config" / "leak-guard" / "repos").write_text("%s\nfooco-dev/second\n" % GUARDED)
+        done = self.gh("pr", "comment", "5", "--body", CLEAN, "--repo", "fooco-dev/second", env={"LEAK_GUARD_BIN": str(self.recording_guard())})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("--repo", self.guard_args(), "which of two guarded repos gh would pick cannot be told, so there is no base")
 
 
 class WrapperText(Decisions):
@@ -615,7 +654,7 @@ class WrapperApi(Decisions):
         self.assertEqual(self.decide("api", "--hostname=ghe.example.test", ep, "-f", "body=x", repo="someone/other"), ("", None))
         self.assertEqual(self.decide("api", "--hostname", "github.com", ep, "-f", "body=x")[0], "api")
         with mock.patch.dict(os.environ, {"GH_HOST": "github.com"}):
-            name, texts = self.W.decide(["api", "--hostname", "ghe.example.test", "repos/team/proj/issues", "-f", "body=x"], {("ghe.example.test", "team/proj")})
+            name, texts, _targets = self.W.decide(["api", "--hostname", "ghe.example.test", "repos/team/proj/issues", "-f", "body=x"], {("ghe.example.test", "team/proj")})
         self.assertEqual(name, "api")
 
     def test_field_keys_are_checked_as_text_and_a_hit_names_the_field_by_position_not_by_its_key(self):

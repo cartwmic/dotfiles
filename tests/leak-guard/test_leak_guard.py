@@ -59,6 +59,22 @@ elif mode == "error":
     result("Not logged in", is_error=True)
 elif mode == "exit1":
     sys.stderr.write("Error: not signed in. Run claude login.\n"); sys.exit(1)
+elif mode == "spend429":
+    print(json.dumps([{"type": "system", "subtype": "init"}, {"type": "result", "is_error": True, "api_error_status": 429,
+                      "result": "This request would exceed your monthly spend limit of 40 USD. To increase your spend limit, visit https://claude.ai/settings/spend-limits"}]))
+    sys.exit(1)
+elif mode == "spend_result":
+    result("This request would exceed your monthly usage limit (HTTP 429).", is_error=True, api_error_status=429)
+elif mode == "notsignedin":
+    # Not signed in, with a 429 that is only a duration: nothing in the output may fall back, only the structured api_error_status decides.
+    print(json.dumps([{"type": "system", "subtype": "init"}, {"type": "result", "is_error": True, "api_error_status": 401, "duration_ms": 429,
+                      "result": "Invalid API key · Please run /login"}]))
+    sys.exit(1)
+elif mode == "servererror":
+    # Another failure whose text happens to hold the words and the number: still no fallback.
+    print(json.dumps([{"type": "system", "subtype": "init"}, {"type": "result", "is_error": True, "api_error_status": 500,
+                      "result": "upstream error after 429 ms: the usage limit service was unreachable"}]))
+    sys.exit(1)
 elif mode == "sleep":
     time.sleep(30)
 '''
@@ -1104,7 +1120,8 @@ class NamesTheRepoAlreadyHolds(Base):
         super().setUp()
         self.remote = self.tmp / "remote.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.remote)], check=True)
-        self.git("remote", "add", "origin", str(self.remote))
+        self.git("remote", "add", "origin", "https://github.com/fooco-dev/guarded.git")
+        self.git("config", "url.file://%s.insteadOf" % self.remote, "https://github.com/fooco-dev/guarded.git")
         self.holds("docs.txt", "The Halcyon tools live here\nand fooco is a pretend term\n")
 
     def holds(self, name, text):
@@ -1165,10 +1182,24 @@ class NamesTheRepoAlreadyHolds(Base):
         self.assertIn("BLOCKED by the terms list (layer 1)", done.stderr)
         self.assertEqual(self.calls(), 0)
 
-    def test_text_mode_has_no_base_so_a_flagged_name_blocks(self):
+    def test_text_mode_uses_the_target_repositorys_remote_tracking_refs_as_its_base(self):
+        (self.tmp / "body.md").write_text("see the Halcyon docs\n")
+        done = self.guard("text", "--repo", "fooco-dev/guarded", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("skipped, its name is already in the repository", done.stderr)
+        self.assertIn("Halcyon", done.stderr)
+        self.assertIn("do not report them: Halcyon", (self.fake / "stdin.txt").read_text(),
+                      "the prompt names what the target branch already publishes")
+        (self.tmp / "other.md").write_text("see the Zephyrine docs\n")
+        done = self.guard("text", "--repo", "fooco-dev/guarded", str(self.tmp / "other.md"), env=self.judge("Zephyrine"))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
+
+    def test_text_mode_without_the_target_repository_has_no_base(self):
         (self.tmp / "body.md").write_text("see the Halcyon docs\n")
         done = self.guard("text", str(self.tmp / "body.md"), env=self.judge("Halcyon"))
         self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("do not report them", (self.fake / "stdin.txt").read_text())
 
     def test_a_push_skips_a_name_the_remote_already_holds(self):
         self.git("checkout", "-q", "-b", "feature")

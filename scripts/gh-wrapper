@@ -276,6 +276,12 @@ def all_targets(repo_flags=(), words=()):
     return [r for r in (parse_repo(v) for v in repo_flags) if r] + repo_words(words) + context_targets()
 
 
+def guarded_once(targets, repos):
+    """The guarded repositories among targets, each once, in order. One repository is often named twice (by --repo and by the checkout's remote), and the
+    text check takes a published-names base only when the command is aimed at exactly one repository."""
+    return list(dict.fromkeys(t for t in targets if t in repos))
+
+
 def raw_repo_flags(args):
     """Every value of -R/--repo among unparsed arguments (a flag value may be one too: this over-approximates)."""
     out = []
@@ -644,12 +650,12 @@ def unknown_command(args, repos, texts, real, depth):
     except Refuse:
         if aimed():
             raise
-        return "", None          # aliases cannot be listed, and nothing says this is aimed at a guarded repository
+        return "", None, []      # aliases cannot be listed, and nothing says this is aimed at a guarded repository
     if expansion is None:
         if aimed():
             raise Refuse("`gh %s` is not a built-in gh command and not an alias, so it is an extension (or a typo), and it is aimed at a guarded repository. "
                          "It may send text this wrapper cannot see%s. Use a built-in command" % (name, ", and `--help` would run the extension's own code" if help_token(args[1:]) else ""))
-        return "", None
+        return "", None, []
     if help_token(args[1:]):
         try:
             expanded = expand_alias(expansion, args)
@@ -667,23 +673,25 @@ def unknown_command(args, repos, texts, real, depth):
     if expansion.startswith("!"):
         if aimed():
             raise Refuse("`gh %s` is a shell alias, and it is aimed at a guarded repository. What it runs cannot be checked. Run the command it stands for" % name)
-        return "", None
+        return "", None, []
     return decide(expand_alias(expansion, args), repos, texts, real, depth + 1)
 
 
 def decide(args, repos, texts=None, real=None, depth=0):
-    """(command name, Texts). Texts None: run gh as is. A Texts with an empty name: run gh as is, with the standard input that was read. Raises Refuse.
-    `texts` is where gathered text (and standard input, if read) goes, so the caller still has the input when this raises. `real` is the real gh, used to
-    expand aliases; with none, an unknown name is treated as an extension."""
+    """(command name, Texts, targets). Texts None: run gh as is. A Texts with an empty name: run gh as is, with the standard input that was read. Raises
+    Refuse. `targets` are the guarded repositories the command's text is aimed at (empty when gh runs as is); the text check uses one as the published
+    names' base, and only when the command names exactly one, since which of several gh would pick cannot be told. `texts` is where gathered text (and
+    standard input, if read) goes, so the caller still has the input when this raises. `real` is the real gh, used to expand aliases; with none, an
+    unknown name is treated as an extension."""
     texts = texts if texts is not None else Texts()
     if not args or args in (["-h"], ["--help"], ["--version"]):
-        return "", None
+        return "", None, []
     if args[0].startswith("-"):
         # gh accepts flags before the command group (`gh -R <repo> pr comment ...`), and the subcommand then parses the whole command line. Which command
         # that is cannot be told from here, so the any-target rule decides: refused when any target is guarded, run untouched when none is.
         if any(t in repos for t in raw_targets(args) + [r for a in args for r in api_targets(a)]):
             raise Refuse("a flag comes before the command group, so what gh runs cannot be told. Put the command group first, e.g. `gh pr comment ... -R ...`")
-        return "", None
+        return "", None, []
     group = args[0]
     if group == "api":
         method, endpoint, fields, inputs, hostname, helped, unknown, missing = parse_api(args[1:])
@@ -693,29 +701,29 @@ def decide(args, repos, texts=None, real=None, depth=0):
                     raise Help(help_args("api"))
                 raise Refuse("argument %d of this `gh api` call is a flag this wrapper does not know, or a flag with no value, so the call cannot be read "
                              "and its text cannot be checked. Use the flags `gh api --help` lists" % ((unknown if unknown is not None else missing) + 2))
-            return "", None
+            return "", None, []
         write = (method or ("POST" if fields or inputs else "GET")).upper() not in ("GET", "HEAD")
         if helped and (endpoint_path(endpoint) in ("graphql", "api/graphql") or (write and any(t in repos for t in api_targets(endpoint, hostname) + context_targets()))):
             raise Help(help_args("api"))
         if endpoint_path(endpoint) in ("graphql", "api/graphql"):      # a mutation names objects by node id, never a repository: check every one
             query = gather_api(fields, inputs, texts, True)
-            return ("api graphql", texts) if query is not None and is_mutation(query) else ("", texts)
+            return ("api graphql", texts, []) if query is not None and is_mutation(query) else ("", texts, [])
         if write and re.match(r"^repositories/\d+", endpoint_path(endpoint)):
             raise Refuse("this `gh api` write names a repository by its numeric id, which this wrapper cannot map to a guarded repository. "
                          "Use the repos/<owner>/<repo>/... form of the endpoint")
         if write and any(t in repos for t in api_targets(endpoint, hostname) + context_targets()):
             gather_api(fields, inputs, texts, False)
-            return "api", texts
-        return "", None
+            return "api", texts, guarded_once(api_targets(endpoint, hostname), repos)
+        return "", None, []
     if group in NOT_REPO:
-        return "", None
+        return "", None, []
     if group not in BUILTIN:
         return unknown_command(args, repos, texts, real, depth)
     args = normalize_group_flags(args) or args      # the group's own flags move behind the subcommand, as gh reads them
     group, verb, ambiguous = split_command(args)
     name = command_name(args)
     if not verb:      # a bare built-in group (`gh pr`) is help
-        return "", None
+        return "", None, []
     if ambiguous and any(t in repos for t in raw_targets(args)):
         if help_token(args):
             raise Help(help_args(group, verb))
@@ -725,25 +733,26 @@ def decide(args, repos, texts=None, real=None, depth=0):
         found, repo, positionals, refusal, unparsed, helped = parse_text(args[1:], group, verb)
         named = all_targets(repo + (raw_repo_flags(args) if unparsed else []), positionals + (args if unparsed else []))
         if not any(t in repos for t in named):
-            return "", None
+            return "", None, []
         if helped or (unparsed and help_token(args)):      # a clean parse whose last help flag is true; else any help token of an unclean one: only help is shown
             raise Help(help_args(group, verb))
         if refusal:
             raise Refuse(refusal)
         gather_text(found, texts)
-        return name, texts
+        return name, texts, guarded_once(named, repos)
     if known_verb(group, verb) and (verb in READ.get(group, ()) or verb in NOTEXT.get(group, ())):
-        return "", None
+        return "", None, []
     if any(t in repos for t in raw_targets(args)):
         if help_token(args):
             raise Help(help_args(group, verb))
         raise Refuse("`gh %s %s` is not a command this wrapper knows to be safe for a guarded repository (it may send text it cannot check). "
                      "Use a recognised command" % (group, verb))
-    return "", None
+    return "", None, []
 
 
-def run_guard(texts, t0, name):
-    """Run `leak-guard text` on the texts. Returns (ok, layer, findings, verdict)."""
+def run_guard(texts, t0, name, target):
+    """Run `leak-guard text` on the texts. Returns (ok, layer, findings, verdict). The target repository, when the command names exactly one guarded
+    one, is passed as --repo: only a checkout of that repository may name what it already publishes, never whatever checkout the caller happens to be in."""
     guard = os.environ.get("LEAK_GUARD_BIN") or home(".local", "bin", "leak-guard")
     with tempfile.TemporaryDirectory(prefix="lg-gh-") as d:
         paths = []
@@ -756,7 +765,8 @@ def run_guard(texts, t0, name):
             paths.append(path)
         result = os.path.join(d, "result.json")
         try:
-            done = subprocess.run([guard, "text", "--result", result] + paths, stdin=subprocess.DEVNULL)
+            repo_arg = ["--repo", "%s/%s" % target] if target else []
+            done = subprocess.run([guard, "text", "--result", result] + repo_arg + paths, stdin=subprocess.DEVNULL)
         except OSError as e:
             raise Refuse("leak-guard cannot be run (%s), so the text cannot be checked" % e.strerror)
         try:
@@ -805,7 +815,7 @@ def checked_run(real, args, t0, wait):
     skip = os.environ.get("LEAK_GUARD_SKIP", "").strip()
     texts = Texts()
     try:
-        name, texts = decide(args, repos, texts, real)
+        name, texts, targets = decide(args, repos, texts, real)
         if not name:
             return run_real(real, args, texts.stdin if texts else None, wait=wait)
         command = name
@@ -816,7 +826,7 @@ def checked_run(real, args, t0, wait):
         if not texts.items:
             log(command, "pass", "none", 0, t0)
             return run_real(real, args, texts.stdin, True, wait)
-        ok, layer, findings, verdict = run_guard(texts, t0, command)
+        ok, layer, findings, verdict = run_guard(texts, t0, command, targets[0] if len(targets) == 1 else None)
         if not ok:
             log(command, "block", layer, findings, t0)
             print("leak-guard gh: BLOCKED. `gh %s` was not run." % command, file=sys.stderr)
