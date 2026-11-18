@@ -7,17 +7,18 @@
 # models.json names as "$WORK_GLM_API_KEY" (pi reads it from its own environment: no subprocess per request).
 #
 # The trade-off, approved by the owner: every tool command a pi session runs inherits the variable. The leak guard's
-# terms block the key from commits and from posts to guarded repositories.
+# terms block the key from commits and from posts to guarded repositories; transcripts and session logs are not covered.
 #
-# If the read fails, pi still starts (its other providers need no work key); a work-glm request then fails at once
-# with pi's own "missing environment variable" error, which names the cause. A rotated key needs pi restarted.
+# If the read fails, pi still starts (its other providers need no work key), and this prints a [pi] WARN line naming
+# WORK_GLM_API_KEY. A work-glm request then fails at once with pi's own "No API key found for work-glm" error; that error
+# does not name the variable, so the WARN line at launch is the clue. A rotated key needs pi restarted.
 {{- if hasKey . "workGlmKeyRef" }}
 if [ -z "${WORK_GLM_API_KEY:-}" ]; then
 	if key=$("$HOME/.local/user_scripts/op_read_cached.sh" '{{ .workGlmKeyRef }}') && [ -n "$key" ]; then
 		WORK_GLM_API_KEY=$key
 		export WORK_GLM_API_KEY
 	else
-		echo "pi (wrapper): could not read the work-glm key; work-glm requests will fail until pi is restarted" >&2
+		echo "[pi] WARN: could not read the work-glm key, so WORK_GLM_API_KEY is unset; work-glm requests will fail (\"No API key found for work-glm\") until pi is restarted" >&2
 	fi
 	unset key
 fi

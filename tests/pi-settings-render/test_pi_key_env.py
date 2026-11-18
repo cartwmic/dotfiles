@@ -1,7 +1,7 @@
 """The work-glm key reaches pi from its environment, read once at launch (docs/profiles.md, "pi key from the environment").
 
 pi runs a `!command` apiKey on every request with a hard 10 s execSync timeout, so a machine stall killed the key read
-mid-turn. On the work profile models.json names the key as "$WORK_GLM_API_KEY" and dot_local/bin/executable_pi.tmpl
+mid-turn. On the work profile models.json names the key as "$WORK_GLM_API_KEY" and dot_local/bin/private_executable_pi.tmpl
 reads it once and execs pi's own launcher. Rendered with the real chezmoi; the rendered wrapper runs as a process with a
 stand-in key script and a stand-in pi launcher. No real key, op or pi is used.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = ROOT / "dot_pi" / "private_agent" / "private_models.json.tmpl"
-WRAPPER = ROOT / "dot_local" / "bin" / "executable_pi.tmpl"
+WRAPPER = ROOT / "dot_local" / "bin" / "private_executable_pi.tmpl"
 KEY_REF = "op://test/gateway"
 WORK = {"profile": "axon-work-computer", "workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test",
         "workGlmKeyRef": KEY_REF, "workGlmModelId": "test-model", "workAwsProfile": "test-aws",
@@ -90,13 +90,22 @@ class PiKeyFromEnv(unittest.TestCase):
         done = self.run_wrapper(wrapper, "--version")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.strip(), "key=unset args=--version")
-        self.assertIn("could not read the work-glm key", done.stderr)
+        self.assertIn("[pi] WARN: could not read the work-glm key, so WORK_GLM_API_KEY is unset", done.stderr)
 
     def test_an_empty_read_counts_as_failed(self):
         wrapper = self.install("#!/bin/sh\nexit 0\n")
         done = self.run_wrapper(wrapper)
         self.assertEqual(done.stdout.strip(), "key=unset args=")
-        self.assertIn("could not read the work-glm key", done.stderr)
+        self.assertIn("[pi] WARN: could not read the work-glm key, so WORK_GLM_API_KEY is unset", done.stderr)
+
+    def test_without_the_key_ref_the_wrapper_reads_nothing_and_still_starts_pi(self):
+        calls = self.tmp / "calls"
+        data = {k: v for k, v in WORK.items() if k != "workGlmKeyRef"}
+        wrapper = self.install('#!/bin/sh\necho "$*" >> "%s"\nprintf k\n' % calls, data=data)
+        done = self.run_wrapper(wrapper, "--version")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "key=unset args=--version")
+        self.assertFalse(calls.exists(), "no key ref, no read")
 
     def test_the_wrapper_is_work_only(self):
         ignored = self.render(ROOT / ".chezmoiignore", {**WORK, "profile": "personal"})
