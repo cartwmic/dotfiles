@@ -15,7 +15,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from support import chrome_app
+MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+LINUX_CHROME = "/usr/bin/google-chrome-stable"
+
+
+def chrome_app():
+    return os.environ.get("AGENT_CHROME_APP") or (MAC_CHROME if sys.platform == "darwin" else LINUX_CHROME)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_agent-login"

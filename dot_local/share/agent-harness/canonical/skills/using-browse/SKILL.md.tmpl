@@ -31,6 +31,13 @@ Browse has no download tool. Use `agent-download`{{ if $mac }} (on a Mac the fol
 1. `mark=$(agent-download mark)` before the click.
 2. Click the download in the page with Browse. The click can take up to about 15 seconds to return; that is normal.
 3. `path=$(agent-download wait --mark "$mark")` prints the file's path (exit 1 if nothing arrives in 60 s: `--timeout N` changes it). Use that path; do not guess a file name, and `rm` the file when you are done with it.
+{{- if not $work }}
+
+## Sign in: `agent-login`
+Sign in without the 1Password extension. For each field: click it with Browse (so it has focus), then run `agent-login username <part of the page URL>`, and the same with `password` and `otp`. Then submit with Browse.
+It types the value from the `developer` vault login whose URL has exactly that page's host, and prints only what it typed. If it refuses, it says why (no login for that host, several logins: it lists each title with its id; pick one with `--item <id>`, no field has focus: click the field again).
+Use the 1Password popup (next section) only for passkeys, or when `agent-login` says there is no login for that host.
+{{- end }}
 
 ## Outside the page: `agent-desktop`
 Browse cannot see {{ if $work }}browser dialogs{{ else }}the 1Password popup, passkey prompts or browser dialogs{{ end }}. Use the screen tool (docs/agent-desktop.md):
