@@ -37,18 +37,26 @@ try:
     tool = argv[i + 1]
 except ValueError:
     pass
+import re as _re
+m = _re.search(r'ticket ([A-Z][A-Z0-9]+-[0-9]+)', ' '.join(argv))
+key = os.environ.get('FAKE_INPUTKEY', m.group(1) if m else '')
 msgs = []
 if os.environ.get('FAKE_TOOLUSE', '1') == '1':
     name = os.environ.get('FAKE_TOOLNAME', tool)
     msgs.append({'type': 'assistant', 'message': {'content': [
-        {'type': 'tool_use', 'id': 'tu_1', 'name': name, 'input': {}}]}})
+        {'type': 'tool_use', 'id': 'tu_1', 'name': name, 'input': {'issuekey': key}}]}})
     tr = {'type': 'tool_result', 'tool_use_id': 'tu_1', 'content': 'ok'}
     if os.environ.get('FAKE_TOOLERR') == '1':
         tr['is_error'] = True
     msgs.append({'type': 'user', 'message': {'content': [tr]}})
 msgs.append({'type': 'result', 'subtype': 'success', 'is_error': False, 'num_turns': 2,
              'result': os.environ.get('FAKE_REPLY', '')})
-print(json.dumps(msgs))
+# The real CLI prints the full message list only when verbose is on; the helper must pass
+# --verbose explicitly, so the fake mimics that shape rule.
+if '--verbose' in argv:
+    print(json.dumps(msgs))
+else:
+    print(json.dumps(msgs[-1]))
 """
 
 
@@ -112,17 +120,36 @@ class McpTicketLookup(unittest.TestCase):
     def test_a_found_reply_with_no_tool_call_exits_2(self):
         out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLUSE="0"))
         self.assertEqual(out.returncode, 2, out.stderr)
-        self.assertIn("did not run successfully", out.stderr)
+        self.assertIn("did not succeed", out.stderr)
 
     def test_a_found_reply_with_a_failed_tool_result_exits_2(self):
         out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLERR="1"))
         self.assertEqual(out.returncode, 2, out.stderr)
-        self.assertIn("did not run successfully", out.stderr)
+        self.assertIn("did not succeed", out.stderr)
 
     def test_a_found_reply_from_a_different_tool_exits_2(self):
         out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLNAME="mcp__example__other_tool"))
         self.assertEqual(out.returncode, 2, out.stderr)
-        self.assertIn("did not run successfully", out.stderr)
+        self.assertIn("did not succeed", out.stderr)
+
+    def test_an_errored_result_plus_missing_exits_1(self):
+        out = run("PROJ-1", env=self.env(reply="MISSING", FAKE_TOOLERR="1"))
+        self.assertEqual(out.returncode, 1, out.stderr)
+
+    def test_a_found_reply_with_an_errored_result_exits_2(self):
+        out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLERR="1"))
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("did not succeed", out.stderr)
+
+    def test_missing_with_no_tool_call_exits_2(self):
+        out = run("PROJ-1", env=self.env(reply="MISSING", FAKE_TOOLUSE="0"))
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("did not run", out.stderr)
+
+    def test_a_tool_use_for_a_different_key_plus_found_exits_2(self):
+        out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_INPUTKEY="OTHER-9"))
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("did not succeed", out.stderr)
 
     def test_a_timeout_exits_2_and_kills_claude_and_its_child(self):
         pid_file = str(Path(self.tmp) / "pids.json")
@@ -166,6 +193,7 @@ class McpTicketLookup(unittest.TestCase):
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "manual")
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "user")
         self.assertEqual(argv[argv.index("--output-format") + 1], "json")
+        self.assertIn("--verbose", argv)
         self.assertNotIn("--dangerously-skip-permissions", argv)
         self.assertNotIn("--allow-dangerously-skip-permissions", argv)
         prompt = [a for a in argv if "PROJ-1" in a and a.startswith("Use the")][0]
