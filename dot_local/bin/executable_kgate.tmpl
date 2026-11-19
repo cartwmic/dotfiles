@@ -9,6 +9,7 @@ heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few o
     kgate cancel [--wait SECONDS] JOB_ID      stop that one job (kgate's id or the run-and-wake id; exact match only)
     kgate cancel --list                       the jobs that are running now
     kgate cluster-setup NAME --from-context CTX   write a one-context kubeconfig and a cluster-file skeleton (once, for a profile with cluster = "NAME")
+    kgate report [--days N] [--repo NAME] [--all] [--json]   read-only: per repo and command, the job log's runs, times, cores, memory and jobs that did not run
 
 `cancel` is the only supported way to stop a job: it signals that job's one client and nothing else. Never pkill.
 
@@ -69,6 +70,7 @@ import shutil
 import shlex
 import signal
 import stat
+import statistics
 import subprocess
 import sys
 import tarfile
@@ -140,7 +142,7 @@ CACHE_ROOT = "/cache"
 CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 8 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. The env var is for a live proof of the trim only
 CACHE_LOCK = ".kgate-use"    # a shared flock held by every running job, taken exclusively to trim; names that start ".kgate" are not cache entries
 CACHE_TRASH = ".kgate-trash"
-CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
+CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?|/nm)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
 END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
@@ -277,7 +279,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci", "scratch_tmpfs", "workers_per_cpu"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci", "install", "scratch_tmpfs", "workers_per_cpu"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -357,11 +359,24 @@ def parse_profile(text):
     per_cpu = raw.get("workers_per_cpu", 1)
     if not isinstance(per_cpu, int) or isinstance(per_cpu, bool) or per_cpu < 1:
         raise Unavailable("profile workers_per_cpu must be a whole number of at least 1, got %r" % (per_cpu,))
-    return {"scratch_tmpfs": scratch, "workers_per_cpu": per_cpu, **{"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
+    install = parse_install(raw.get("install"))
+    return {"install": install, "scratch_tmpfs": scratch, "workers_per_cpu": per_cpu, "image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
             "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "priority_class": priority_class, "cache_pvc": cache_pvc,
-            "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}}
+            "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
+
+
+def parse_install(table):
+    """[install] npm = true: `npm ci` in the job is served from the node cache (INSTALL_SH). -> {"npm": bool}."""
+    if table is None:
+        return {"npm": False}
+    if not isinstance(table, dict) or set(table) - {"npm"}:
+        raise Unavailable("profile [install] takes npm = true only, got %r" % (table,))
+    npm = table.get("npm", False)
+    if not isinstance(npm, bool):
+        raise Unavailable("profile [install] npm must be true or false, got %r" % (npm,))
+    return {"npm": npm}
 
 
 def parse_github_ci(table):
@@ -781,11 +796,96 @@ def job_sh(job):
              "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD"]
     if job.get("cache_cap") is not None:   # the pod side trims its Go build cache and pnpm store to this, oldest files first; KiB, so the cap cannot overflow the pod side's shell arithmetic
         lines.append("CACHE_CAP_KIB=%d" % (job["cache_cap"] // 1024))
+    if job.get("install_dir"):   # [install] npm = true and a cache that outlives the pod: the pod side puts INSTALL_SH first on PATH as `npm`
+        lines.append("INSTALL_DIR=" + q(job["install_dir"]))
     lines.append("kg_tools() {")
     lines += ["  kg_check %s %s %s || return" % (q(name), q(version), q(cmd or name + " --version")) for name, (version, cmd) in job["tools"].items()]
     lines += ["  :", "}", "set -- " + " ".join(q(a) for a in job["argv"])]
     return "\n".join(lines) + "\n"
 
+
+# The cached `npm ci` (profile [install] npm = true). The pod puts a directory with this script, named `npm`, first on the job's PATH, so a command that types
+# `npm ci` gets the cached install and every other npm command passes through. One script for both pod sides (pod_main writes it out, POD_SH's job ships it).
+# The script takes its own directory out of PATH first, so the real npm it calls (and everything the real npm starts: lifecycle scripts, tests that run `npm ci` in a
+# fixture folder) never meets it again. The cache is used only when the folder it runs in is inside the shipped tree and holds package.json and package-lock.json.
+# Cache: KGATE_INSTALL_DIR/<key>.tar, one folder per repo, the 2 newest keys kept. key = first 16 hex of sha256 of package.json, package-lock.json, .npmrc, the node and npm
+# versions and the arguments after `ci`. A tar is made of node_modules plus a marker added last, so a cut file is a miss and a real install, never a broken hit.
+# Result: one line `hit|miss SECONDS` appended to KGATE_INSTALL_RESULT, which the pod side turns into the job's `install` and `install_s`.
+INSTALL_SH = r"""#!/bin/sh
+self=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
+newpath=
+oldifs=$IFS
+IFS=:
+for p in $PATH; do
+  case $p in "$self"|"${KGATE_INSTALL_BIN:-$self}") ;; *) newpath=${newpath:+$newpath:}$p ;; esac
+done
+IFS=$oldifs
+PATH=$newpath
+export PATH
+cmd=${1:-}
+case $cmd in ci|clean-install|install-clean|ic) ;; *) exec npm "$@" ;; esac
+shift
+root=${KGATE_INSTALL_ROOT:-}
+dir=${KGATE_INSTALL_DIR:-}
+inside=
+[ -z "$root" ] || case $PWD/ in "$root"/*) inside=1 ;; esac
+if [ -z "$dir" ] || [ -z "$inside" ] || [ ! -f package.json ] || [ ! -f package-lock.json ]; then exec npm "$cmd" "$@"; fi
+mkdir -p "$dir" 2>/dev/null
+[ -w "$dir" ] || exec npm "$cmd" "$@"
+now() { t=$(date +%s.%N 2>/dev/null); case $t in *N*|"") date +%s ;; *) printf '%s\n' "$t" ;; esac; }
+since() { awk -v a="$1" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }'; }
+sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
+record() { [ -z "${KGATE_INSTALL_RESULT:-}" ] || printf '%s %s\n' "$1" "$2" >>"$KGATE_INSTALL_RESULT" 2>/dev/null || :; }
+marker=node_modules/.kgate-install-done
+log=${TMPDIR:-/tmp}/kgate-npm-ci.$$.log
+start=$(now)
+key=$({ cat package.json package-lock.json; [ ! -f .npmrc ] || cat .npmrc; node -v; npm -v; printf 'ci %s\n' "$*"; } 2>/dev/null | sum | cut -c1-16)
+tarball=$dir/$key.tar
+if [ -e "$tarball" ]; then
+  rm -rf node_modules
+  # tar exits 0 on a file cut at a block boundary: a whole file is one whose last member, the marker, came out.
+  if tar -xf "$tarball" 2>/dev/null && [ -e "$marker" ]; then
+    rm -f "$marker"
+    touch "$tarball" 2>/dev/null || :
+    secs=$(since "$start")
+    record hit "$secs"
+    echo "kgate-install: hit $key, unpacked in ${secs}s"
+    exit 0
+  fi
+  echo "kgate-install: $key.tar did not unpack, removing it" >&2
+  rm -rf node_modules
+  rm -f "$tarball"
+fi
+npm ci --prefer-offline --no-audit --no-fund "$@" >"$log" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  tail -30 "$log"
+  echo "kgate-install: npm ci failed (full output in $log)" >&2
+  exit "$rc"
+fi
+rm -f "$log"
+installed=$(since "$start")
+# Publish unless another pod did while this one installed. Not compressed (packing and unpacking are most of what a hit costs), written under its own temp name and renamed.
+if [ -e "$tarball" ]; then
+  note="not published (another pod did)"
+else
+  tmp=$(mktemp "$dir/.$key.tmp.XXXXXX") || tmp=
+  if [ -n "$tmp" ] && tar -cf "$tmp" node_modules && : >"$marker" && tar -rf "$tmp" "$marker" && rm -f "$marker" && chmod 0644 "$tmp" && mv -f "$tmp" "$tarball"; then
+    note="published $key.tar"
+  else
+    [ -z "$tmp" ] || rm -f "$tmp"
+    rm -f "$marker"
+    note="publishing failed (continuing without the cache)"
+  fi
+fi
+secs=$(since "$start")
+record miss "$secs"
+echo "kgate-install: miss $key, npm ci ${installed}s, $note"
+# keep the 2 newest keys of this repo, and drop a temp file nobody is writing any more
+ls -t "$dir"/*.tar 2>/dev/null | tail -n +3 | while read -r old; do rm -f "$old"; done
+find "$dir" -maxdepth 1 -name '.*.tmp.*' -mmin +60 -exec rm -f {} + 2>/dev/null || :
+exit 0
+"""
 
 # The pod side on a kubectl cluster, where the image may have no python3. It prints the markers `kgate.py --pod` prints, so the Mac side reads both the same way.
 # Usage: sh kgate.sh DIR. DIR holds job.sh (job_sh) and files.nul (the shipped file list, NUL-separated).
@@ -910,6 +1010,17 @@ kg_check() {
 }
 kg_tools || exit 71
 say "preflight ok $n tools"
+# [install] npm = true: a directory with INSTALL_SH as `npm` goes first on PATH (after the tool checks, which meet the real npm). The wrapper writes one line per cached
+# install to install.result, which the job user must be able to write.
+iresult=
+if [ -n "${INSTALL_DIR:-}" ] && command -v npm >/dev/null 2>&1; then
+  if mkdir -p "$dir/bin" && cp "$dir/install.sh" "$dir/bin/npm" && chmod 755 "$dir/bin" "$dir/bin/npm" && : > "$dir/install.result" && chmod 666 "$dir/install.result"; then
+    iresult=$dir/install.result
+    KGATE_INSTALL_BIN=$(cd "$dir/bin" && pwd -P); KGATE_INSTALL_ROOT=$ROOT; KGATE_INSTALL_DIR=$INSTALL_DIR; KGATE_INSTALL_RESULT=$iresult
+    PATH=$KGATE_INSTALL_BIN:$PATH
+    export PATH KGATE_INSTALL_BIN KGATE_INSTALL_ROOT KGATE_INSTALL_DIR KGATE_INSTALL_RESULT
+  fi
+fi
 cg=${KGATE_CGROUP:-/sys/fs/cgroup}
 up0=; { read up0 _ < /proc/uptime; } 2>/dev/null
 say "running $*"
@@ -923,12 +1034,15 @@ peak=unknown
 printf '\n'; say "peak $peak"
 say "cpu $cpu"
 [ -n "$up0" ] && [ -n "$up1" ] && say "clock $up0 $up1"
+ires=
+[ -z "$iresult" ] || ires=$(awk '{ s += $2; if ($1 == "miss") m = 1 } END { if (NR) printf "%s %.1f", (m ? "miss" : "hit"), s }' "$iresult" 2>/dev/null)
+say "install ${ires:-none 0.0}"
 say "end $(date +%s) exit $code"
 exit "$code"
 """
 
 
-MARKER = r"kgate\[%s\]: (start|running|peak|cpu|clock|end|hash|commit|image|preflight)\b(.*)"
+MARKER = r"kgate\[%s\]: (start|running|peak|cpu|clock|end|hash|commit|image|preflight|install)\b(.*)"
 
 
 class Markers:
@@ -1109,6 +1223,35 @@ def prepare_user(job, euid=None, chown=os.lchown, root=""):
     return {"user": uid, "group": gid, "extra_groups": []}, {"HOME": home, "npm_config_cache": cache + "/npm", "CARGO_HOME": cache + "/cargo"}
 
 
+def install_setup(base, root, cache_dir, path):
+    """[install] npm = true, pod side: a folder with INSTALL_SH as `npm` and a file the job user can write, in `base` (the job's own folder). Returns (env additions, result file);
+    nothing when the image has no npm."""
+    if shutil.which("npm", path=path) is None:
+        return {}, None
+    bin_dir, result = os.path.join(base, "bin"), os.path.join(base, "install.result")
+    os.makedirs(bin_dir, exist_ok=True)
+    for d in (base, bin_dir):
+        os.chmod(d, 0o755)
+    with open(os.path.join(bin_dir, "npm"), "w") as f:
+        f.write(INSTALL_SH)
+    os.chmod(os.path.join(bin_dir, "npm"), 0o755)
+    open(result, "w").close()
+    os.chmod(result, 0o666)
+    return {"PATH": bin_dir + ":" + path, "KGATE_INSTALL_BIN": bin_dir, "KGATE_INSTALL_ROOT": root, "KGATE_INSTALL_DIR": cache_dir, "KGATE_INSTALL_RESULT": result}, result
+
+
+def install_result(result):
+    """What the cached npm ci did, from the lines INSTALL_SH wrote: `hit|miss SECONDS` (miss when any install missed, the seconds added up), or `none 0.0` when it never ran."""
+    try:
+        with open(result) as f:
+            rows = [line.split() for line in f if len(line.split()) == 2]
+    except (OSError, TypeError):
+        rows = []
+    if not rows:
+        return "none 0.0"
+    return "%s %.1f" % ("miss" if any(r[0] == "miss" for r in rows) else "hit", sum(float(r[1]) for r in rows))
+
+
 def pod_main(jobfile):
     """Inside the pod: verify the tree hash, check the tool versions, run CMD, report peak memory and its exit code."""
     with open(jobfile) as f:
@@ -1135,6 +1278,10 @@ def pod_main(jobfile):
                 % (name, version, json.dumps(line[:120]), cmd, run.returncode))
             return 71
     out("kgate: preflight ok %d tools\n" % len(job["tools"]))
+    result = None
+    if job.get("install"):
+        extra, result = install_setup(os.path.dirname(os.path.abspath(jobfile)), job["root"], "%s/u%d/nm/%s" % (os.environ.get("KGATE_CACHE_ROOT") or CACHE_ROOT, job["uid"], job["install"]["repo"]), env.get("PATH", ""))   # KGATE_CACHE_ROOT: the tests only, as in POD_SH
+        env.update(extra)
     meter = PeakMeter()
     meter.start()
     t0 = time.monotonic()
@@ -1150,6 +1297,7 @@ def pod_main(jobfile):
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
     out("kgate: cpu %s\n" % (cpu if cpu is not None else "unknown"))
     out("kgate: clock %.3f %.3f\n" % (t0, t1))
+    out("kgate: install %s\n" % install_result(result))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
     return code if code >= 0 else 128 - code
 
@@ -1739,7 +1887,7 @@ class Job:
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
-                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "cpu_usec": None, "run_s": None, "ran": False,
+                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "cpu_usec": None, "run_s": None, "install": None, "install_s": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log", "priority_class": None}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
@@ -1814,7 +1962,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": [], "scratch_tmpfs": None, "workers_per_cpu": 1}
+                "services": [], "cluster": "homelab", "github_ci": None, "install": {"npm": False}, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": [], "scratch_tmpfs": None, "workers_per_cpu": 1}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -2266,9 +2414,18 @@ class Job:
                "own": [wt] + ([common] if not common.startswith(wt + "/") else []),
                "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()},
                "cache": {"root": CACHE_ROOT, "cap": CACHE_CAP}}
+        install_repo = re.sub(r"[^A-Za-z0-9._-]", "_", self.rec["repo"] or "repo").lstrip(".") or "repo"   # one cache folder per repo, the same for every clone of it
+        if prof["install"]["npm"] and self.cluster.kind != "kubectl":
+            job["install"] = {"repo": install_repo}
         if self.cluster.kind == "kubectl":
-            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"], "cache_cap": self.kcfg["cache_cap"]}).encode(),
+            kube = {**job, "tools": prof["tools"], "cache_cap": self.kcfg["cache_cap"]}
+            if prof["install"]["npm"] and prof["cache_pvc"]:   # without a claim /cache is gone with the pod: nothing to keep
+                kube["install_dir"] = "/cache/nm/" + install_repo
+            elif prof["install"]["npm"]:
+                self.note("[install] npm = true: this profile has no cache claim, so npm ci runs as typed")
+            shipped = {"cache/%s/job.sh" % self.id: job_sh(kube).encode(),
                        "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
+                       "cache/%s/install.sh" % self.id: INSTALL_SH.encode(),
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:
             shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
@@ -2350,6 +2507,9 @@ class Job:
                 self.rec["run_s"] = round(max(float(clock[1]) - float(clock[0]), 0.0), 2)
             except ValueError:
                 pass
+        got = re.fullmatch(r"(hit|miss|none) ([0-9.]+)", seen.get("install", ""))
+        if got:   # what the cached npm ci did in the pod (INSTALL_SH): none when the command never ran it
+            self.rec["install"], self.rec["install_s"] = got.group(1), float(got.group(2))
         if "hash" in seen and seen["hash"].startswith("MISMATCH"):
             raise Unavailable("tree hash differs: " + seen["hash"].replace("MISMATCH", "").strip() + " (CMD not run)")
         if seen.get("image", "").startswith("FAILED"):
@@ -2543,6 +2703,7 @@ USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SI
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate cluster-setup NAME --from-context CTX [--namespace NS]   write a one-context kubeconfig and a cluster-file skeleton (profiles with cluster = NAME)\n" \
+             "       kgate report [--days N] [--repo NAME] [--all] [--json]   read-only summary of the job log, per repo and command (docs/kgate.md)\n" \
              "cpu (--cpu or the profile) is rounded up to whole 4-cpu slots on the homelab (1-3 -> 4, 6 -> 8); the client prints a line when it does.\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 1800 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
@@ -2781,6 +2942,174 @@ def cancel_main(argv):
     return cancel_orphan(state, e, rec)
 
 
+# kgate report: a read-only summary of the job log, per repo and command (docs/kgate.md, "Report"). The report_* functions
+# take the records and the clock as arguments and do no I/O. read_job_log and report_main are the only I/O.
+REPORT_SLOW_WALL_S = 300  # a row whose median wall is over this is listed first
+REPORT_TOP_ROWS = 30  # the text table shows this many rows unless --all
+REPORT_NOT_RAN_EXITS = (69, 75, 137, 143)  # could not start or finish, not scheduled in time (75), or killed: SIGKILL, SIGTERM
+G14_NODE = "cartwmic-g14-wsl"
+
+
+def report_command(cmd):
+    """The command as the gate runs it: leading `env` and NAME=value words dropped. They carry ids and payloads that differ per run."""
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return cmd
+    while words and (words[0] == "env" or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0])):
+        words = words[1:]
+    return shlex.join(words) if words else cmd
+
+
+def report_node_class(node):
+    if node is None:
+        return "unplaced"  # the job never got a node
+    return "g14" if node == G14_NODE else "other"
+
+
+def report_when(rec):
+    try:
+        return datetime.datetime.strptime(rec["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def report_p90(xs):
+    """Nearest rank over sorted xs: nine runs in ten finish within it, so it is where the slowest tenth starts."""
+    return xs[-(-len(xs) * 9 // 10) - 1] if xs else None
+
+
+def report_row(key, recs):
+    repo, cmd, node = key
+    ran = [r for r in recs if r.get("exit") not in REPORT_NOT_RAN_EXITS]
+    timed = [r for r in ran if r.get("duration_s") is not None and r.get("pod_start_s") is not None]
+    walls = sorted(r["duration_s"] - r["pod_start_s"] for r in timed)  # execution time, not the queue or the pod start
+    counted = [r for r in timed if r.get("cpu_usec") is not None and r.get("run_s")]  # cpu_usec is in newer records only
+    cpu_s = [r["cpu_usec"] / 1e6 for r in counted]
+    run_total = sum(r["run_s"] for r in counted)
+    asked = [r["cpu"] for r in timed if r.get("cpu") is not None]
+    peaks = [(r["peak_bytes"], parse_qty(r.get("mem_limit") or "")) for r in timed if r.get("peak_bytes") is not None]
+    shares = [100.0 * peak / limit for peak, limit in peaks if limit]
+    wall_median = statistics.median(walls) if walls else None
+    return {
+        "repo": repo, "cmd": cmd, "node": node,
+        "runs": len(recs), "not_run": len(recs) - len(ran), "timed_runs": len(timed),
+        "wall_median_s": None if wall_median is None else round(wall_median, 1),
+        "wall_p90_s": None if not walls else round(report_p90(walls), 1),
+        "total_wall_s": None if not walls else round(sum(walls), 1),  # what the gate cost in all
+        "cpu_median_s": round(statistics.median(cpu_s), 1) if cpu_s else None,
+        "cores_used": round(sum(cpu_s) / run_total, 2) if counted else None,  # average busy cores while CMD ran
+        "cores_asked_median": statistics.median(asked) if asked else None,
+        "peak_max_bytes": max(peak for peak, _ in peaks) if peaks else None,
+        "limit_max_bytes": max(limit for _, limit in peaks if limit) if shares else None,
+        "peak_pct_of_limit_max": round(max(shares), 1) if shares else None,  # the worst job's peak as a share of its limit
+        "slow": wall_median is not None and wall_median > REPORT_SLOW_WALL_S,
+    }
+
+
+def report_rows(records, now, days, repo=None):
+    """One row per (repo, command, node class) for jobs started in the last `days` days. Rows over REPORT_SLOW_WALL_S come
+    first, then the rest; within each, the most total wall time first, so a gate that runs often outranks a one-off."""
+    since = now - datetime.timedelta(days=days)
+    groups = {}
+    for rec in records:
+        when = report_when(rec)
+        if when is None or when < since or (repo is not None and rec.get("repo") != repo):
+            continue
+        key = (rec.get("repo") or "(no repo)", report_command(rec.get("cmd") or ""), report_node_class(rec.get("node")))
+        groups.setdefault(key, []).append(rec)
+    rows = [report_row(key, recs) for key, recs in groups.items()]
+    rows.sort(key=lambda r: (not r["slow"], -(r["total_wall_s"] or 0), r["repo"], r["cmd"], r["node"]))
+    return rows
+
+
+def report_fmt(value, digits, suffix=""):
+    return "-" if value is None else "%.*f%s" % (digits, value, suffix)
+
+
+def report_short(cmd, width=48):
+    return cmd if len(cmd) <= width else cmd[:width - 3] + "..."
+
+
+def report_gib(nbytes):
+    return None if nbytes is None else nbytes / 2**30
+
+
+def report_hours(seconds):
+    return None if seconds is None else seconds / 3600
+
+
+def report_text(rows, since, days, repo, jobs, bad, path, top=None):
+    shown = rows if top is None else rows[:top]
+    head = ["", "repo", "command", "node", "runs", "not run", "wall med s", "wall p90 s", "wall total h", "cpu-s med",
+            "cores used", "cores asked", "peak max GiB", "limit GiB", "peak % limit"]
+    body = [["SLOW" if r["slow"] else "", r["repo"], report_short(r["cmd"]), r["node"], str(r["runs"]), str(r["not_run"]),
+             report_fmt(r["wall_median_s"], 0), report_fmt(r["wall_p90_s"], 0), report_fmt(report_hours(r["total_wall_s"]), 1),
+             report_fmt(r["cpu_median_s"], 1), report_fmt(r["cores_used"], 2), report_fmt(r["cores_asked_median"], 1),
+             report_fmt(report_gib(r["peak_max_bytes"]), 2), report_fmt(report_gib(r["limit_max_bytes"]), 2),
+             report_fmt(r["peak_pct_of_limit_max"], 0, "%")] for r in shown]
+    widths = [max(len(cell) for cell in col) for col in zip(head, *body)]
+    table = ["  ".join(cell.ljust(w) for cell, w in zip(line, widths)).rstrip() for line in [head] + body]
+    out = ["kgate report: %d jobs started since %s UTC (last %d days)%s; log %s"
+           % (jobs, since.strftime("%Y-%m-%d %H:%M"), days, " for repo " + repo if repo else "", path)]
+    if bad:
+        out.append("%d unreadable line(s) in the log skipped" % bad)
+    out += table if rows else ["no jobs in this window"]
+    if len(shown) < len(rows):
+        out.append("%d more rows not shown; --all lists every row" % (len(rows) - len(shown)))
+    out += ["",
+            "node: g14 = cartwmic-g14-wsl; other = any other node; unplaced = the job never got a node.",
+            "not run: exit 69 or 75, or killed (137, 143). Timings, CPU and memory use only the jobs that ran.",
+            "wall = duration_s - pod_start_s; med = median; p90 = nearest rank (nine runs in ten finish within it); total h = all wall time.",
+            "cpu-s and cores use only records that have cpu_usec. cores used = CPU-s / run_s over those jobs; cores asked = median cpu request.",
+            "peak max GiB and limit GiB are each the row's highest value, so they can come from different jobs. "
+            "peak %% limit = the worst job's peak memory as a share of that job's own limit. SLOW = median wall over %d s, listed first."
+            % REPORT_SLOW_WALL_S]
+    return out
+
+
+def read_job_log(path):
+    """The records of the job log and how many lines could not be read. A missing log is an empty one."""
+    records, bad = [], 0
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    records.append(json.loads(line))
+                except ValueError:
+                    bad += 1
+    except FileNotFoundError:
+        pass
+    return records, bad
+
+
+def report_main(argv):
+    p = _Quiet(prog="kgate report", add_help=False, allow_abbrev=False)
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--repo")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true")
+    try:
+        o = p.parse_args(argv)
+        if o.days < 1:
+            raise SystemExit(USAGE_TEXT)
+    except SystemExit as err:
+        print(err.code if isinstance(err.code, str) else USAGE_TEXT, file=sys.stderr)
+        return USAGE
+    path = os.path.join(state_dir(), "log.jsonl")
+    records, bad = read_job_log(path)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    since = now - datetime.timedelta(days=o.days)
+    rows = report_rows(records, now, o.days, o.repo)
+    jobs = sum(r["runs"] for r in rows)
+    if o.json:
+        print(json.dumps({"repo": o.repo, "window_days": o.days, "since": since.isoformat(), "jobs": jobs, "unreadable_lines": bad,
+                          "slow_wall_s": REPORT_SLOW_WALL_S, "rows": rows}, indent=2))
+    else:
+        print("\n".join(report_text(rows, since, o.days, o.repo, jobs, bad, path, None if o.all else REPORT_TOP_ROWS)))
+    return 0
+
+
 def main(argv):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
@@ -2791,6 +3120,8 @@ def main(argv):
         return cancel_main(argv[1:])
     if argv[:1] == ["cluster-setup"]:
         return cluster_setup(argv[1:])
+    if argv[:1] == ["report"]:
+        return report_main(argv[1:])
     try:
         opts = parse_args(argv)
     except SystemExit as e:

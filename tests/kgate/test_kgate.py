@@ -33,6 +33,22 @@ FAKE_TOKEN = "ops_fake-token-for-tests-only"  # a stand-in service-account token
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 
 
+FAKE_NPM = """#!/bin/sh
+echo "npm $*" >> "$FAKE_LOG"
+case "$1" in
+  -v|--version) echo 11.0.0 ;;
+  ci)
+    [ -z "$FAKE_NPM_FAIL" ] || { echo "npm error broke" >&2; exit 1; }
+    mkdir -p node_modules/pkg && echo "built by npm ci" > node_modules/pkg/index.js
+    ;;
+  *) echo "ran npm $*" ;;
+esac
+"""
+FAKE_NODE = """#!/bin/sh
+echo v24.0.0
+"""
+
+
 def render_script(profile):
     """kgate as chezmoi deploys it for a profile: the template through real chezmoi, with a throwaway config (the user's own
     config and its hooks are never read). Only the 1Password help lines depend on the profile."""
@@ -409,6 +425,11 @@ class NodeCache(unittest.TestCase):
         (self.root / K.CACHE_LOCK).write_text("")
         self.assertEqual(sorted(os.path.relpath(p, self.root) for p in K.cache_entries(str(self.root))),
                          ["cargo-registry", "npm", "u1000/cargo", "u1000/home/.cache/go-build", "u1000/home/.cache/ms-playwright", "u1000/home/go", "u1000/home/n26", "u1000/npm"])
+
+    def test_each_repo_folder_of_the_npm_install_cache_is_its_own_entry(self):
+        for rel in ("u1000/nm/alert-steward", "u1000/nm/budget-steward"):
+            self.entry(rel, 1)
+        self.assertEqual(sorted(os.path.relpath(p, self.root) for p in K.cache_entries(str(self.root))), ["u1000/nm/alert-steward", "u1000/nm/budget-steward"])
 
     def test_over_the_cap_the_least_recently_used_entries_go_first_until_it_fits(self):
         old, mid, new = self.entry("u1000/home/old", 3000), self.entry("u1000/npm", 2000), self.entry("u1000/home/.cache/new", 10)
@@ -824,6 +845,45 @@ class Black(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         rec = self.records()[-1]
         self.assertIn("kgate[%s]: hash ok %s" % (rec["id"], rec["tree"]), done.stdout)
+
+    def test_a_profile_with_install_npm_serves_npm_ci_from_the_node_cache_and_records_it(self):
+        for name, text in (("npm", FAKE_NPM), ("node", FAKE_NODE)):
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+        (self.repo / "package.json").write_text("{}\n")
+        (self.repo / "package-lock.json").write_text("lock\n")
+        self.profile(extra="[install]\nnpm = true\n")
+        env = {"KGATE_CACHE_ROOT": str(self.tmp / "nodecache"), "FAKE_LOG": str(self.tmp / "npm.log")}
+        for _ in range(2):
+            done = self.kgate("--", "sh", "-c", "npm ci && test -f node_modules/pkg/index.js", env=env)
+            self.assertEqual(done.returncode, 0, done.stdout)
+        first, second = self.records()[-2:]
+        self.assertEqual(first["install"], "miss")
+        self.assertEqual(second["install"], "hit")
+        self.assertTrue(all(isinstance(r["install_s"], float) and r["install_s"] >= 0 for r in (first, second)), (first["install_s"], second["install_s"]))
+        self.assertEqual(len(list((self.tmp / "nodecache" / "u1000" / "nm" / "repo").glob("*.tar"))), 1, "one folder per repo, named for the repo")
+        done = self.kgate("--", "true", env=env)   # a command that never runs npm ci
+        self.assertEqual((done.returncode, self.records()[-1]["install"], self.records()[-1]["install_s"]), (0, "none", 0.0))
+
+    def test_without_install_in_the_profile_npm_ci_is_not_touched(self):
+        for name, text in (("npm", FAKE_NPM), ("node", FAKE_NODE)):
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+        (self.repo / "package.json").write_text("{}\n")
+        (self.repo / "package-lock.json").write_text("lock\n")
+        env = {"KGATE_CACHE_ROOT": str(self.tmp / "nodecache"), "FAKE_LOG": str(self.tmp / "npm.log")}
+        done = self.kgate("--", "npm", "ci", env=env)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        rec = self.records()[-1]
+        self.assertEqual((rec["install"], rec["install_s"]), ("none", 0.0))
+        self.assertFalse((self.tmp / "nodecache").exists())
+        self.assertEqual((self.tmp / "npm.log").read_text(), "npm ci\n")
+
+    def test_a_job_that_never_ran_has_no_install_in_its_record(self):
+        done = self.kgate("--profile", str(self.tmp / "missing.toml"), "--", "true")
+        self.assertEqual(done.returncode, 69)
+        rec = self.records()[-1]
+        self.assertEqual((rec["install"], rec["install_s"]), (None, None))
 
     def test_cmd_failure_is_cmds_exit_code_not_69(self):
         done = self.kgate("--", "sh", "-c", "echo boom; exit 3")
@@ -2514,10 +2574,13 @@ class PodSh(unittest.TestCase):
         self.cg = self.tmp / "cg"
         self.cg.mkdir()
 
-    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False, cache_cap=None):
+    def run_sh(self, argv=("sh", "-c", "echo hi"), tools=None, tree=None, env=None, head="1234567890abcdef1234567890abcdef12345678", lock_main=False, cache_cap=None, install_dir=None):
         job = {"id": "kgate-1-2", "root": str(self.tree), "cwd": str(self.tree), "files": self.files, "head": head,
                "tree": tree or K.tree_hash(str(self.tree), self.files), "argv": list(argv), "tools": tools or {}, "cache_cap": cache_cap}
         self.job.mkdir(exist_ok=True)   # the script removes it at the end
+        if install_dir:
+            job["install_dir"] = install_dir
+        (self.job / "install.sh").write_text(K.INSTALL_SH)
         (self.job / "job.sh").write_text(K.job_sh(job))
         (self.job / "files.nul").write_bytes(b"".join(os.fsencode(f) + b"\0" for f in self.files))
         (self.job / "kgate.sh").write_text(K.POD_SH)
@@ -2537,6 +2600,31 @@ class PodSh(unittest.TestCase):
                 (self.tree / ".git").rename(self.podgit)
             aside.rename(self.tree / ".git")
         return done, K.Markers("kgate-1-2")
+
+    def test_the_install_marker_reports_a_cached_npm_ci_and_none_without_one(self):
+        fake = self.tmp / "fakebin"
+        fake.mkdir()
+        for name, text in (("npm", FAKE_NPM), ("node", FAKE_NODE)):
+            (fake / name).write_text(text)
+            (fake / name).chmod(0o755)
+        (self.tree / "package.json").write_text("{}\n")
+        (self.tree / "package-lock.json").write_text("lock\n")
+        self.files = sorted(os.fsdecode(f) for f in subprocess.run(["git", "-C", str(self.tree), "ls-files", "-co", "-z"], check=True, stdout=subprocess.PIPE).stdout.split(b"\0") if f)
+        env = {"PATH": "%s:%s" % (fake, os.environ["PATH"]), "FAKE_LOG": str(self.tmp / "npm.log")}
+        cache = str(self.tmp / "nodecache" / "nm" / "repo")
+        seen = []
+        for argv in (("sh", "-c", "npm ci && node -e 1"), ("sh", "-c", "npm ci"), ("sh", "-c", "npm run x")):
+            done, _ = self.run_sh(argv=argv, env=env, install_dir=cache)
+            self.assertEqual(done.returncode, 0, done.stdout)
+            seen.append(self.markers(done.stdout)["install"])
+            shutil.rmtree(self.tree / "node_modules", True)
+        self.assertRegex(seen[0], r"^miss [0-9.]+$")
+        self.assertRegex(seen[1], r"^hit [0-9.]+$")
+        self.assertEqual(seen[2], "none 0.0")
+        done, _ = self.run_sh(argv=("sh", "-c", "npm ci"), env=env)   # a profile without [install]: the real npm, no wrapper
+        self.assertEqual(self.markers(done.stdout)["install"], "none 0.0")
+        ran = [l for l in (self.tmp / "npm.log").read_text().splitlines() if l.startswith("npm ci")]
+        self.assertEqual(len(ran), 2, "the real npm ci ran for the miss and for the profile without the step; the hit never reached it")
 
     def podgit_run(self, *args):
         return subprocess.run(["git", "--git-dir", str(self.podgit), "--work-tree", str(self.tree), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -2635,7 +2723,7 @@ class PodSh(unittest.TestCase):
     def test_markers_are_the_ones_the_mac_side_reads_even_after_output_without_a_newline(self):
         done, _ = self.run_sh(argv=("printf", "no newline"))
         seen = self.markers(done.stdout)
-        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "cpu", "clock", "end"})
+        self.assertEqual(set(seen), {"start", "hash", "preflight", "running", "peak", "cpu", "clock", "install", "end"})
         self.assertRegex(seen["start"], r"^\d+ node=n1 cpus=\d+$")
         self.assertRegex(seen["end"], r"^\d+ exit 0$")
 
