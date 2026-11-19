@@ -520,7 +520,7 @@ class OverreachWordFormTest(unittest.TestCase):
         for tail in (", the test puts a reply id on the first part", ", the test sets a bad token", ", the test makes one call"):
             code, out = check(base % tail, PEERS_FILES)
             self.assertEqual(code, 0, tail + out)
-        for tail in (", as the test files name", ", as the test file names", ", and the test is short", ", the test was added"):
+        for tail in (", as the test files name", ", as the test fixtures say", ", as the test file names", ", and the test is short", ", the test was added"):
             self.assertEqual(check(base % tail, PEERS_FILES)[0], 1, tail)
 
     def test_an_and_after_a_comma_joins_clauses_so_each_before_a_noun_still_fails(self):

@@ -169,7 +169,7 @@ NUMBERISH = set(WORDS) | {"once", "twice", "thrice", "dozen"}
 NOT_SUBJECT = {"on", "in", "of", "for", "to", "at", "by", "with", "from", "per", "into", "than", "and", "or", "but", "if", "when", "that", "the", "a", "an", "is", "are"}
 # A sentence worded to the cases a test runs, or labelled as inferred or from the caller's list, is not an overreach.
 # "the test" then a verb: the explicit list, or any word ending in -s that is not a noun or "is/was/has" ("the test puts").
-TEST_VERB = r"(?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?|(?!(?:is|was|has|as|its|this|files|cases|suites|names|results|titles|paths|lines|ids)\b)(?![a-z]*ss\b)[a-z]+s)"
+TEST_VERB = r"(?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?|(?!(?:is|was|has|as|its|this|files|cases|suites|names|results|titles|paths|lines|ids|fixtures|helpers|scripts|inputs|outputs|steps|sources|tests|journeys)\b)(?![a-z]*ss\b)[a-z]+s)"
 SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\bthe (?:tests?|journeys?) " + TEST_VERB + r"\b|\bthe (?:test|journey)'s\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
 # In a "Not backed" section, a sentence that reports the search or what the tests do ("I grepped the tests for X and found
 # no match", "no test asserts it", "the only hits are in pr.ts", "the tests only check the main file") says what was
