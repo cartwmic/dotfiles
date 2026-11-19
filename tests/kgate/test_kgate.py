@@ -311,13 +311,13 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["cpu"], "3")
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
-        # the pins moved once, when every pod gained the compile caches and the worker counts (tuning_env); a profile without scratch_tmpfs still renders no scratch volume
+        # the pins moved once, when every pod gained the compile caches and the worker counts (tuning_env), and again when the compile caches moved from /tmp to /var/tmp (the only change: NODE_COMPILE_CACHE and PYTHONPYCACHEPREFIX); a profile without scratch_tmpfs or tmp_tmpfs still renders no memory volume
         # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "e78f5001bc715b3c809ec6ebb4c476dc7dd73c5d0b676bf74c936c906cdba416"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "5f9dd1b59bac033c124d0185acd027ac2d04d90da42d593dc6c1da515bbd76c9"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "b1f861cc17edb27e01c2548612ca3f28ce6a25630d4e0d2909bbaf449d47bd11"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "3deaa4cdca22803664527ce2d72ef1dd9b9458737c86d54cef848054d06dace2"),
+             "13bfbb79b9177ba2fd2f08fa6694d64dea3479e03ecdc0d005337747caf98e38"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "a0a97fdf70c7380507ff778b3970f1bc55f3a507fbd1866fd5c0170ca870e96c"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -2483,7 +2483,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "e78f5001bc715b3c809ec6ebb4c476dc7dd73c5d0b676bf74c936c906cdba416"  # the same pin as test_default_render_is_byte_identical
+        want = "5f9dd1b59bac033c124d0185acd027ac2d04d90da42d593dc6c1da515bbd76c9"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
@@ -2503,7 +2503,7 @@ class PodTuning(unittest.TestCase):
     def test_every_pod_gets_the_compile_caches_and_the_counts_from_its_cpu(self):
         for pod, cpus in ((self.homelab(), "4"), (self.kubectl(), "5")):
             env = self.env(pod)
-            self.assertEqual((env["NODE_COMPILE_CACHE"], env["PYTHONPYCACHEPREFIX"]), ("/tmp/kgate-node-cache", "/tmp/kgate-pycache"))
+            self.assertEqual((env["NODE_COMPILE_CACHE"], env["PYTHONPYCACHEPREFIX"]), ("/var/tmp/kgate-node-cache", "/var/tmp/kgate-pycache"), "on disk, and not in /tmp, which tmp_tmpfs puts in memory")
             self.assertEqual((env["KGATE_CPUS"], env["VITEST_MAX_WORKERS"], env["CI_PAR_JOBS"]), (cpus, cpus, cpus))
             self.assertEqual(env["KGATE_CPUS"], env["CARGO_BUILD_JOBS"], "one number for every tool")
             self.assertNotIn("TMPDIR", env, "no scratch_tmpfs, no change")
@@ -2524,7 +2524,7 @@ class PodTuning(unittest.TestCase):
     def test_a_caller_assignment_in_cmd_wins_in_a_real_shell(self):
         env = {e["name"]: e["value"] for e in K.tuning_env(4, 2, "64Mi")}
         out = subprocess.run(["sh", "-c", 'VITEST_MAX_WORKERS=1 printenv NODE_COMPILE_CACHE VITEST_MAX_WORKERS TMPDIR'], env=env, capture_output=True, text=True).stdout.split()
-        self.assertEqual(out, ["/tmp/kgate-node-cache", "1", "/kgate-scratch"])
+        self.assertEqual(out, ["/var/tmp/kgate-node-cache", "1", "/kgate-scratch"])
 
     def test_scratch_tmpfs_is_a_sized_memory_emptydir_mounted_where_tmpdir_points(self):
         for pod in (self.homelab(scratch="256Mi"), self.kubectl(scratch="256Mi")):
@@ -2533,22 +2533,42 @@ class PodTuning(unittest.TestCase):
             self.assertIn({"name": "scratch", "mountPath": "/kgate-scratch"}, c["volumeMounts"])
             self.assertEqual(self.env(pod)["TMPDIR"], "/kgate-scratch")
 
+    def test_tmp_tmpfs_is_a_sized_memory_emptydir_mounted_at_tmp_and_the_caches_stay_on_disk(self):
+        for pod in (self.homelab(tmp="2Gi"), self.kubectl(tmp="2Gi")):
+            self.assertIn({"name": "tmp", "emptyDir": {"medium": "Memory", "sizeLimit": "2Gi"}}, pod["spec"]["volumes"])
+            c = pod["spec"]["containers"][0]
+            self.assertIn({"name": "tmp", "mountPath": "/tmp"}, c["volumeMounts"])
+            env = self.env(pod)
+            self.assertNotIn("TMPDIR", env, "a program that names /tmp in code and one that reads TMPDIR both land in the mount")
+            for path in (env["NODE_COMPILE_CACHE"], env["PYTHONPYCACHEPREFIX"]):
+                self.assertFalse(path.startswith("/tmp/"), "a cache under the memory mount would take the pod's memory: " + path)
+            self.assertEqual([m["mountPath"] for m in c["volumeMounts"]].count("/tmp"), 1)
+
+    def test_both_memory_folders_can_be_set_and_each_gets_its_own_mount(self):
+        for pod in (self.homelab(scratch="256Mi", tmp="2Gi"), self.kubectl(scratch="256Mi", tmp="2Gi")):
+            mounts = {m["name"]: m["mountPath"] for m in pod["spec"]["containers"][0]["volumeMounts"]}
+            self.assertEqual((mounts["scratch"], mounts["tmp"]), ("/kgate-scratch", "/tmp"))
+            self.assertEqual(self.env(pod)["TMPDIR"], "/kgate-scratch")
+
     def test_the_profile_keys_parse_and_default(self):
-        prof = K.parse_profile('image = "x"\nscratch_tmpfs = "256Mi"\nworkers_per_cpu = 2\n')
-        self.assertEqual((prof["scratch_tmpfs"], prof["workers_per_cpu"]), ("256Mi", 2))
+        prof = K.parse_profile('image = "x"\nscratch_tmpfs = "256Mi"\ntmp_tmpfs = "2Gi"\nworkers_per_cpu = 2\n')
+        self.assertEqual((prof["scratch_tmpfs"], prof["tmp_tmpfs"], prof["workers_per_cpu"]), ("256Mi", "2Gi", 2))
         prof = K.parse_profile('image = "x"\n')
-        self.assertEqual((prof["scratch_tmpfs"], prof["workers_per_cpu"]), (None, 1))
+        self.assertEqual((prof["scratch_tmpfs"], prof["tmp_tmpfs"], prof["workers_per_cpu"]), (None, None, 1))
 
     def test_bad_profile_values_are_refused(self):
-        for text in ('scratch_tmpfs = 256', 'scratch_tmpfs = "lots"', 'workers_per_cpu = 0', 'workers_per_cpu = 1.5', 'workers_per_cpu = true'):
+        for text in ('scratch_tmpfs = 256', 'scratch_tmpfs = "lots"', 'tmp_tmpfs = 2', 'tmp_tmpfs = "lots"', 'tmp_tmpfs = "0Gi"', 'workers_per_cpu = 0', 'workers_per_cpu = 1.5', 'workers_per_cpu = true'):
             with self.assertRaises(K.Unavailable, msg=text):
                 K.parse_profile(text)
 
-    def test_scratch_must_fit_inside_the_memory_limit(self):
-        K.check_scratch(None, "1Gi")
-        K.check_scratch("256Mi", "1Gi")
-        with self.assertRaises(K.Unavailable):
-            K.check_scratch("1Gi", "1Gi")
+    def test_the_memory_folders_must_fit_inside_the_memory_limit_together(self):
+        K.check_tmpfs("1Gi")
+        K.check_tmpfs("1Gi", scratch_tmpfs=None, tmp_tmpfs=None)
+        K.check_tmpfs("1Gi", scratch_tmpfs="256Mi")
+        K.check_tmpfs("1Gi", tmp_tmpfs="512Mi", scratch_tmpfs="256Mi")
+        for sizes in ({"scratch_tmpfs": "1Gi"}, {"tmp_tmpfs": "1Gi"}, {"scratch_tmpfs": "512Mi", "tmp_tmpfs": "512Mi"}):
+            with self.assertRaises(K.Unavailable, msg=str(sizes)):
+                K.check_tmpfs("1Gi", **sizes)
 
 
 class PodSh(unittest.TestCase):

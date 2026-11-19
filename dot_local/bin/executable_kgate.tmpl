@@ -22,6 +22,7 @@ Contract
 - Profile (kgate.toml at the worktree root, or --profile FILE): image (pinned by digest), cpu (homelab: rounded up to whole 4-CPU slots, 1-3 -> 4, 6 -> 8; the client says so when it does), memory (the request),
   memory_limit (optional: the limit, default equal to memory), ephemeral_storage (the disk request, default 4Gi; ephemeral_storage_limit optional, default 12Gi or the request if larger), cpu_limit (optional, at least cpu; the pod's CPU limit, default none),
   workers_per_cpu (default 1: VITEST_MAX_WORKERS and CI_PAR_JOBS are the pod's CPUs times this), scratch_tmpfs (optional size, e.g. 256Mi: a memory-backed folder, TMPDIR points at it; counts toward the memory limit),
+  tmp_tmpfs (optional size, e.g. 2Gi: /tmp itself is memory-backed, for a suite that names /tmp in code; counts toward the memory limit),
   priority_class (homelab, optional: kgate, kgate-first or kgate-main; env KGATE_PRIORITY_CLASS overrides it), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
@@ -279,7 +280,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci", "install", "scratch_tmpfs", "workers_per_cpu"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci", "install", "scratch_tmpfs", "tmp_tmpfs", "workers_per_cpu"}
     if set(raw) - known - {"split"}:   # [split] is kgate-split's table in the same file (docs/kgate-split.md); kgate ignores it
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known - {"split"})))
     tools = {}
@@ -353,18 +354,25 @@ def parse_profile(text):
     if user is not None and (not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user)):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     github_ci = parse_github_ci(raw.get("github_ci"))
-    scratch = raw.get("scratch_tmpfs")
-    if scratch is not None and (not isinstance(scratch, str) or not re.fullmatch(MEM_SIZE, scratch)):
-        raise Unavailable("profile scratch_tmpfs must look like 256Mi, got %r" % (scratch,))
+    scratch = tmpfs_size(raw, "scratch_tmpfs")
+    tmp = tmpfs_size(raw, "tmp_tmpfs")
     per_cpu = raw.get("workers_per_cpu", 1)
     if not isinstance(per_cpu, int) or isinstance(per_cpu, bool) or per_cpu < 1:
         raise Unavailable("profile workers_per_cpu must be a whole number of at least 1, got %r" % (per_cpu,))
     install = parse_install(raw.get("install"))
-    return {"install": install, "scratch_tmpfs": scratch, "workers_per_cpu": per_cpu, "image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
+    return {"install": install, "scratch_tmpfs": scratch, "tmp_tmpfs": tmp, "workers_per_cpu": per_cpu, "image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
             "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "priority_class": priority_class, "cache_pvc": cache_pvc,
             "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
+
+
+def tmpfs_size(raw, key):
+    """The size of a memory-backed folder key (scratch_tmpfs, tmp_tmpfs): None when the profile does not set it."""
+    size = raw.get(key)
+    if size is not None and (not isinstance(size, str) or not re.fullmatch(MEM_SIZE, size)):
+        raise Unavailable("profile %s must look like 256Mi, got %r" % (key, size))
+    return size
 
 
 def parse_install(table):
@@ -529,10 +537,12 @@ def version_found(text, expected):
     return re.search(r"(?<![0-9])(?<![0-9]\.)" + re.escape(expected) + r"(?![0-9])(?!\.[0-9])", text) is not None
 
 
-def check_scratch(scratch, memory_limit):
-    """scratch_tmpfs lives in memory and counts toward the pod's memory limit, so it must be smaller than that limit (the job's own memory comes on top)."""
-    if scratch is not None and mem_bytes(scratch) >= mem_bytes(memory_limit):
-        raise Unavailable("profile scratch_tmpfs %s must be smaller than the memory limit %s: the scratch folder is memory and counts toward that limit" % (scratch, memory_limit))
+def check_tmpfs(memory_limit, **sizes):
+    """scratch_tmpfs and tmp_tmpfs live in memory and count toward the pod's memory limit, so together they must be smaller than that limit (the job's own memory comes on top)."""
+    sizes = {k: v for k, v in sizes.items() if v is not None}
+    if sizes and sum(mem_bytes(v) for v in sizes.values()) >= mem_bytes(memory_limit):
+        raise Unavailable("profile %s must be smaller than the memory limit %s: a memory-backed folder counts toward that limit"
+                          % (" and ".join("%s %s" % kv for kv in sizes.items()), memory_limit))
 
 
 def check_cpu_limit(prof, cpu):
@@ -550,8 +560,9 @@ def slot_cpu(cpu, service_cpu=0):
 
 
 SCRATCH_PATH = "/kgate-scratch"   # where a profile's scratch_tmpfs is mounted; TMPDIR points here
-PYCACHE_DIR = "/tmp/kgate-pycache"
-NODE_CACHE_DIR = "/tmp/kgate-node-cache"
+TMP_PATH = "/tmp"                 # where a profile's tmp_tmpfs is mounted; TMPDIR stays unset
+PYCACHE_DIR = "/var/tmp/kgate-pycache"       # the compile caches are on the pod's disk on purpose (large), and /var/tmp is not /tmp, which tmp_tmpfs can put in memory
+NODE_CACHE_DIR = "/var/tmp/kgate-node-cache"
 
 
 def tuning_env(cpu, per_cpu=1, scratch=None, taken=()):
@@ -567,12 +578,13 @@ def tuning_env(cpu, per_cpu=1, scratch=None, taken=()):
     return [{"name": k, "value": v} for k, v in entries if k not in taken]
 
 
-def scratch_volume(scratch):
-    """The memory-backed folder for a profile's scratch_tmpfs: (volume, mount). Its size counts toward the container's memory cgroup, so toward the pod's memory limit."""
-    return ({"name": "scratch", "emptyDir": {"medium": "Memory", "sizeLimit": scratch}}, {"name": "scratch", "mountPath": SCRATCH_PATH})
+def tmpfs_volumes(scratch=None, tmp=None):
+    """The memory-backed folders for a profile's scratch_tmpfs (at SCRATCH_PATH) and tmp_tmpfs (at /tmp): [(volume, mount), ...]. Each size counts toward the container's memory cgroup, so toward the pod's memory limit."""
+    return [({"name": name, "emptyDir": {"medium": "Memory", "sizeLimit": size}}, {"name": name, "mountPath": path})
+            for name, size, path in (("scratch", scratch, SCRATCH_PATH), ("tmp", tmp, TMP_PATH)) if size]
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None, scratch=None, per_cpu=1):
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None, scratch=None, per_cpu=1, tmp=None):
     """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request;
     `ephemeral_limit` is the limit (the kubelet evicts a pod that writes past it); unset, it is EPHEMERAL_LIMIT_DEFAULT, or the request when that is larger.
     `priority_class` is the pod's PriorityClass; `cpu_limit` is the CPU limit, unset by default (no CPU limit)."""
@@ -619,8 +631,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
            "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}},
                        {"name": "out", "emptyDir": {}}],
            "containers": [container]}
-    if scratch:
-        volume, mount = scratch_volume(scratch)
+    for volume, mount in tmpfs_volumes(scratch, tmp):
         pod["volumes"].append(volume)
         container["volumeMounts"].append(mount)
     if pull:
@@ -743,7 +754,7 @@ def mssql_container(svc, password):
 
 
 def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral, uid, gid, roots, cpu_limit=None, cache_pvc=None,
-                          mssql=None, image_volumes=(), local_hostnames=(), password=None, name=None, active_deadline=None, scratch=None, per_cpu=1):
+                          mssql=None, image_volumes=(), local_hostnames=(), password=None, name=None, active_deadline=None, scratch=None, per_cpu=1, tmp=None):
     """The one Pod for a job on a kubectl cluster, as a List. `name` is the pod's name when it is not the job id (the rerun after an eviction); `active_deadline` is what is left of the job's deadline then. The labels and annotations the cluster's policy needs come from its cluster file. cpu is the request; cpu_limit (default: cpu) is what it may burst to, and sizes the build parallelism. /cache is an emptyDir, or the profile's claim (cache_pvc: persists between jobs, ReadWriteOncePod, so one job at a time). No Secrets, no pull Secret, no hostPath, no affinity: the cluster's own policy decides."""
     cpu_limit = cpu_limit or cpu
     labels = {"app": "kgate", "kgate-job": job, **cfg["pod_labels"]}
@@ -772,8 +783,7 @@ def pod_manifests_kubectl(cfg, job, image, cpu, memory, memory_limit, ephemeral,
            "securityContext": {"runAsNonRoot": True, "runAsUser": uid, "runAsGroup": gid, "seccompProfile": {"type": "RuntimeDefault"}},
            "volumes": [{"name": n, "persistentVolumeClaim": {"claimName": cache_pvc}} if n == "cache" and cache_pvc else {"name": n, "emptyDir": {}} for n, _ in mounts],
            "containers": [container]}
-    if scratch:
-        volume, mount = scratch_volume(scratch)
+    for volume, mount in tmpfs_volumes(scratch, tmp):
         pod["volumes"].append(volume)
         container["volumeMounts"].append(mount)
     pod["volumes"] += [{"name": "imgvol%d" % i, "image": {"reference": v["image"], "pullPolicy": "IfNotPresent"}} for i, v in enumerate(image_volumes)]
@@ -1962,7 +1972,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "github_ci": None, "install": {"npm": False}, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": [], "scratch_tmpfs": None, "workers_per_cpu": 1}
+                "services": [], "cluster": "homelab", "github_ci": None, "install": {"npm": False}, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": [], "scratch_tmpfs": None, "tmp_tmpfs": None, "workers_per_cpu": 1}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -1983,7 +1993,7 @@ class Job:
         mem = o.mem or prof["memory"] or "4Gi"
         mem_limit = o.mem_limit or prof["memory_limit"] or mem
         check_settings(image, cpu, mem, mem_limit)
-        check_scratch(prof["scratch_tmpfs"], mem_limit)
+        check_tmpfs(mem_limit, scratch_tmpfs=prof["scratch_tmpfs"], tmp_tmpfs=prof["tmp_tmpfs"])
         env_class = os.environ.get("KGATE_PRIORITY_CLASS")   # wins over the profile key, like the flag over KGATE_SCHED_WAIT
         if env_class:
             check_priority_class(env_class, prof["cluster"], "KGATE_PRIORITY_CLASS")
@@ -2449,7 +2459,7 @@ class Job:
         if self.cluster.kind == "kubectl":
             args = (self.kcfg, self.id, image, cpu, mem, mem_limit, prof["ephemeral_storage"] or "10Gi", job["uid"], job["gid"], tree_roots_for(self.kcfg, wt), prof["cpu_limit"])
             extra = {"mssql": prof["mssql"], "image_volumes": prof["image_volumes"], "local_hostnames": prof["local_hostnames"],
-                     "scratch": prof["scratch_tmpfs"], "per_cpu": prof["workers_per_cpu"]}
+                     "scratch": prof["scratch_tmpfs"], "tmp": prof["tmp_tmpfs"], "per_cpu": prof["workers_per_cpu"]}
             if prof["mssql"]:
                 self.mssql = prof["mssql"]
                 self.secret = new_password()        # throwaway, for this job's pods only: set in the pod spec of both containers, never logged or recorded
@@ -2466,7 +2476,7 @@ class Job:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"],
                                       ephemeral=prof["ephemeral_storage"] or EPHEMERAL_DEFAULT, ephemeral_limit=prof["ephemeral_storage_limit"],
                                       priority_class=prof["priority_class"] or PRIORITY_CLASS, cpu_limit=prof["cpu_limit"],
-                                      scratch=prof["scratch_tmpfs"], per_cpu=prof["workers_per_cpu"])
+                                      scratch=prof["scratch_tmpfs"], tmp=prof["tmp_tmpfs"], per_cpu=prof["workers_per_cpu"])
         del secret_env, pull
         while True:
             try:
