@@ -7,10 +7,11 @@ A sentence about what a function does is true on the path the writer followed an
 earlier `return`, `throw`, `continue` or `break` skips the cited line. For a line inside a function this lists,
 from the function's first line down to (not including) that line, each statement that leaves the function or the
 loop around the line: return, throw / raise, continue and break (only when the loop also holds the line),
-process.exit / sys.exit. With `upto` the list stops before `upto` instead, still in the function that holds `line`,
-and a continue or break counts only when its loop holds `upto`. check_citations.py asks a cited range this way (`line`
-its first line, `upto` its last), so a range that starts in one function and runs into another also gets the first
-function's exits inside it, marked there. A `return` inside a nested callback or inner function is not an exit of the
+process.exit / sys.exit. With `upto` the list stops before `upto` instead, still in the function that holds `line`.
+A continue or break counts when its loop opens before `upto` and closes at or after `first` (default `line`): a loop
+that ends before the first cited line does not change the path to it, one that overlaps the cited lines does.
+check_citations.py asks a cited range this way (`first` its first line, `upto` its last), so a range that starts in
+one function and runs into another also gets the first function's exits inside it, marked there. A `return` inside a nested callback or inner function is not an exit of the
 function and is left out. Each exit prints with its line, its source and, when the exit line does not show it, the `if`,
 `else` or `catch` line it sits under (a Python exit in an `else:` says "in the else of" that `if`).
 
@@ -22,9 +23,9 @@ nothing. Known gaps: text in JSX that reads `return` or `throw` is listed as an 
 condition that skips code without leaving (an `if/else if` chain, a ternary, a flag test) is not listed.
 
 Exit 0 always (it is a reading aid). 2: usage error. Stdlib only. As a library:
-`early_exits(text, ext, line, upto=None)` (upto defaults to line) returns None when the file type is not read or the
+`early_exits(text, ext, line, upto=None, first=None)` (upto and first default to line) returns None when the file type is not read or the
 line is in no function, else a dict
-`{"unreadable": True}` or `{"fn_line": N, "exits": [{"line", "kind", "guard"}]}`.
+`{"unreadable": True}` or `{"fn_line": N, "fn_end": N, "exits": [{"line", "kind", "guard"}]}`.
 """
 import ast
 import os
@@ -232,7 +233,7 @@ def js_blocks_and_events(src):
     return blocks, events, not stack and not stray
 
 
-def js_exits(src, line, upto):
+def js_exits(src, line, upto, first):
     blocks, events, balanced = js_blocks_and_events(src)
     if not balanced:
         return {"unreadable": True}
@@ -247,15 +248,15 @@ def js_exits(src, line, upto):
             continue
         if e["kind"] in ("continue", "break"):
             b = e["brk"]
-            if not (b and b["kind"] == "loop" and b["open"] < upto <= b["close"]):
-                continue  # a loop (or a switch) that closed before upto does not change the path to it
+            if not (b and b["kind"] == "loop" and b["open"] < upto and b["close"] >= first):
+                continue  # a loop (or a switch) that closed before the first cited line does not change the path to it
         guard = None
         if e["stmt"] != e["line"]:
             guard = e["stmt"]  # `if (x)` on one line, the exit on the next (only read after `)` or `else`)
         elif e["cond"] is not None and e["cond"]["open"] >= fn["open"] and e["cond"]["head"] != e["line"]:
             guard = e["cond"]["head"]
         out.append({"line": e["line"], "kind": e["kind"], "guard": guard})
-    return {"fn_line": fn["head"], "exits": out}
+    return {"fn_line": fn["head"], "fn_end": fn["close"], "exits": out}
 
 
 # --- Python ---------------------------------------------------------------------------------------------------
@@ -272,7 +273,7 @@ def exit_call(node):
     return isinstance(f, ast.Name) and (None, f.id) in EXIT_CALLS
 
 
-def py_exits(src, line, upto):
+def py_exits(src, line, upto, first):
     try:
         tree = ast.parse(src)
     except (SyntaxError, ValueError, RecursionError):
@@ -291,8 +292,8 @@ def py_exits(src, line, upto):
                 kind = {ast.Return: "return", ast.Raise: "raise", ast.Continue: "continue", ast.Break: "break"}.get(type(child))
                 if kind in ("continue", "break"):
                     loop = next((a for a in reversed(chain) if isinstance(a, (ast.For, ast.AsyncFor, ast.While))), None)
-                    if not (loop and loop.lineno < upto <= loop.end_lineno):
-                        kind = None  # a loop that closed before upto does not change the path to it
+                    if not (loop and loop.lineno < upto and loop.end_lineno >= first):
+                        kind = None  # a loop that closed before the first cited line does not change the path to it
                 elif kind is None and exit_call(child):
                     kind = "exit"
                 if kind:
@@ -304,17 +305,19 @@ def py_exits(src, line, upto):
             visit(child, chain + [child])
 
     visit(fn, [fn])
-    return {"fn_line": fn.lineno, "exits": sorted(out, key=lambda e: e["line"])}
+    return {"fn_line": fn.lineno, "fn_end": fn.end_lineno, "exits": sorted(out, key=lambda e: e["line"])}
 
 
-def early_exits(text, ext, line, upto=None):
-    """The exits of the function that holds `line`, above `upto` (default: `line`). See the module docstring."""
+def early_exits(text, ext, line, upto=None, first=None):
+    """The exits of the function that holds `line`, above `upto` (default: `line`); a continue or break counts when its
+    loop opens before `upto` and closes at or after `first` (default: `line`). See the module docstring."""
     ext = ext.lower()
     upto = line if upto is None else upto
+    first = line if first is None else first
     if ext in PY_EXT:
-        return py_exits(text, line, upto)
+        return py_exits(text, line, upto, first)
     if ext in JS_EXT:
-        return js_exits(text, line, upto)
+        return js_exits(text, line, upto, first)
     return None
 
 
