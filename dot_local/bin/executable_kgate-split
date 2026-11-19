@@ -14,11 +14,14 @@ Settings, in the repo's kgate.toml (or --profile FILE), table [split]:
     lanes          tests at once inside one pod (default 1)
     durations      optional JSON file, test id -> seconds; an id missing from it counts as the median
     claim_seconds  optional: a pod stops claiming tests this many seconds after its first claim; ids left over go to one more, uncapped pod
+    files          optional table, name -> a file on this host (`~` is this home; a relative path is relative to the profile's folder): each pod
+                   downloads them from the queue server before `setup`, into a folder named by $KGATE_SPLIT_FILES, as <folder>/<name>
 
 Exit: 0 every test passed and the run is complete; 1 a test failed or the run is INCOMPLETE; 64 bad usage or settings; 69 a pod did not
 run and nothing failed (or the list could not be made). On TERM, INT or HUP every pod's kgate client is stopped and nothing is merged.
 """
 import argparse
+import hashlib
 import hmac
 import http.server
 import json
@@ -43,7 +46,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-SETTINGS = {"list", "run", "setup", "pods", "lanes", "durations", "claim_seconds"}
+SETTINGS = {"list", "run", "setup", "pods", "lanes", "durations", "claim_seconds", "files"}
+FILE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
 PORT_RANGE = "47390-47399"   # the range the host firewall opens to the cluster's LAN (homelab#524); KGATE_SPLIT_PORTS overrides it
 STAGGER_S = 2                # pods start this far apart: creating many at once failed some (etcdserver: request timed out)
 STUCK_FACTOR, STUCK_FLOOR_S = 10, 120   # a test is killed at max(10 x its recorded median, 120 s)
@@ -128,8 +132,16 @@ def parse_settings(text, pods=None, lanes=None):
     for key in ("setup", "durations"):
         if key in raw and not isinstance(raw[key], str):
             raise ValueError(f"[split] {key} must be a string")
+    files = raw.get("files", {})
+    if not isinstance(files, dict):
+        raise ValueError("[split] files must be a table of name = \"path on this host\"")
+    for name, path in files.items():
+        if not FILE_NAME.fullmatch(name):
+            raise ValueError(f"[split] files: the name {name!r} must be letters, digits, dot, dash or underscore, and not start with a dot or dash")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"[split] files.{name} must be the path of a file on this host")
     out = {"list": raw["list"], "run": raw["run"], "setup": raw.get("setup") or "", "durations": raw.get("durations") or "",
-           "pods": raw.get("pods", 1), "lanes": raw.get("lanes", 1), "claim_seconds": raw.get("claim_seconds", 0)}
+           "pods": raw.get("pods", 1), "lanes": raw.get("lanes", 1), "claim_seconds": raw.get("claim_seconds", 0), "files": dict(files)}
     if pods is not None:
         out["pods"] = pods
     if lanes is not None:
@@ -175,8 +187,8 @@ class Queue:
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, addr, queue, token, config, worker_source):
-        self.queue, self.token, self.config, self.worker_source = queue, token, config, worker_source
+    def __init__(self, addr, queue, token, config, worker_source, files):
+        self.queue, self.token, self.config, self.worker_source, self.files = queue, token, config, worker_source, files
         super().__init__(addr, Handler)
 
     def server_bind(self):
@@ -208,6 +220,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send(200, self.server.worker_source.encode(), "text/x-python")
         if self.command == "GET" and self.path == "/config":
             return self._send(200, self.server.config)
+        if self.command == "GET" and self.path.startswith("/file/") and self.path[6:] in self.server.files:
+            return self._send(200, self.server.files[self.path[6:]], "application/octet-stream")
         if self.command == "POST" and self.path == "/claim":
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"null")
@@ -225,7 +239,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = _handle
 
 
-def start_server(queue, config, worker_source):
+def start_server(queue, config, worker_source, files=None):
     """A server on the first free port of PORT_RANGE, serving in a thread: (server, port, token). OSError when no port is free."""
     ports = os.environ.get("KGATE_SPLIT_PORTS", PORT_RANGE)
     low, _, high = ports.partition("-")
@@ -233,7 +247,7 @@ def start_server(queue, config, worker_source):
     last = None
     for port in range(int(low), int(high or low) + 1):
         try:
-            server = Server(("0.0.0.0", port), queue, token, config, worker_source)
+            server = Server(("0.0.0.0", port), queue, token, config, worker_source, files or {})
         except OSError as e:
             last = e
             continue
@@ -338,6 +352,17 @@ def pod_main():
     except (OSError, ValueError) as e:
         print(f"kgate-split: pod {pod} did not run: cannot reach the queue: {e}", flush=True)
         sys.exit(69)
+    if config.get("files"):
+        folder = tempfile.mkdtemp(prefix="kgate-split-files-")
+        for name in config["files"]:
+            try:
+                req = urllib.request.Request(os.environ["KGATE_SPLIT_URL"] + "/file/" + name, headers={"Authorization": "Bearer " + os.environ["KGATE_SPLIT_TOKEN"]})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    (Path(folder) / name).write_bytes(r.read())
+            except (OSError, ValueError) as e:
+                print(f"kgate-split: pod {pod} did not run: cannot fetch the file {name}: {e}", flush=True)
+                sys.exit(69)
+        os.environ["KGATE_SPLIT_FILES"] = folder
     if config["setup"]:
         done = subprocess.run(["sh", "-c", config["setup"]])
         if done.returncode:
@@ -620,6 +645,15 @@ def cmd_run(args):
     if not ids or again:
         print("kgate-split: the list command " + ("printed no test ids" if not ids else "printed an id twice: " + ", ".join(again[:5])), file=sys.stderr)
         return 64
+    served = {}
+    for name, path in settings["files"].items():
+        where = Path(path).expanduser()
+        where = where if where.is_absolute() else profile.parent / where
+        try:
+            served[name] = where.read_bytes()
+        except OSError as e:
+            print(f"kgate-split: NOT RUN: [split] files.{name}: cannot read {where}: {e.strerror or e}. No kgate job was started.", file=sys.stderr)
+            return 69
     seed = args.seed if args.seed is not None else secrets.randbelow(2**32)
     order, est, median = deal(ids, durations, seed)
     limits = {i: (stuck_limit(durations.get(i), median)[0], durations.get(i)) for i in ids}
@@ -639,9 +673,9 @@ def cmd_run(args):
         return 69
     n = settings["pods"]
     queue = Queue(order, limits, n, settings["claim_seconds"], log)
-    config = {"setup": settings["setup"], "run": settings["run"], "lanes": settings["lanes"], "median": median}
+    config = {"setup": settings["setup"], "run": settings["run"], "lanes": settings["lanes"], "median": median, "files": sorted(served)}
     try:
-        server, port, token = start_server(queue, config, Path(__file__).read_text())
+        server, port, token = start_server(queue, config, Path(__file__).read_text(), served)
     except OSError as e:
         print(f"kgate-split: NOT RUN: {e}", file=sys.stderr)
         return 69
@@ -650,7 +684,7 @@ def cmd_run(args):
         + (["--lanes", str(args.lanes)] if args.lanes else []) + (["--", *args.kgate_args] if args.kgate_args else [])
     plan = {"run": rundir.name, "repo": repo_name(root), "head": git_out(root, "rev-parse", "HEAD"), "seed": seed, "ids": sorted(ids), "order": order,
             "est": est, "median": median, "recorded": sum(1 for i in ids if i in durations), "pods": n, "lanes": settings["lanes"],
-            "claim_seconds": settings["claim_seconds"], "queue": url, "profile": str(profile), "durations": settings["durations"], "rerun": rerun, "started": started}
+            "claim_seconds": settings["claim_seconds"], "files": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(served.items())}, "queue": url, "profile": str(profile), "durations": settings["durations"], "rerun": rerun, "started": started}
     (rundir / "plan.json").write_text(json.dumps(plan, indent=1))
     print(f"kgate-split: seed {seed}; {len(ids)} tests, {n} pods x {settings['lanes']} lanes; queue {url}; run dir {rundir}", flush=True)
 

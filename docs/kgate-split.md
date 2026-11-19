@@ -17,11 +17,15 @@ pods          = 6      # default 1
 lanes         = 4      # tests at once inside one pod; default 1
 durations     = "test-durations.json"   # optional; {"test id": seconds}; an id missing from it counts as the median
 claim_seconds = 225    # optional; a pod stops claiming this many seconds after its first claim; 0 or absent is no cap
+
+[split.files]          # optional; name = a file on this host that every pod gets
+core = "~/.local/share/agent-alert/core/agent-alert"
 ```
 
 - `{items}` is the path of a file that holds the id(s) for this one invocation, one per line (today one id, so a `run` that takes one test reads `$(cat {items})`). The path is shell-quoted. The pod also sets `KGATE_SPLIT_ID` (the id), `KGATE_SPLIT_POD` (the pod's number) and `KGATE_SPLIT_LANE` (0 to lanes-1), so a test can keep a port or a folder of its own per lane.
 - An id is a line: it cannot hold a newline. `list` must print each id once; an empty list or a repeated id is refused (exit 64) before any pod starts.
 - The `run` command's exit code is the test's: 0 passes.
+- `files` puts host files into every pod without putting them in the tree or on the pod command. Each value is a path on the host that runs `kgate-split run` (`~` is that home; a relative path is relative to the profile's folder). The queue server reads each file once at the start and serves it, with the run's token, at `/file/<name>`; a pod downloads every file into a folder of its own before `setup` and sets `KGATE_SPLIT_FILES` to that folder, so `setup` and the tests see `$KGATE_SPLIT_FILES/<name>` (bytes only: `setup` sets the mode). A name is letters, digits, dot, dash and underscore and does not start with a dot or dash. A host file that cannot be read stops the run with exit 69 before any pod starts; a pod that cannot fetch one "did not run" (69). `plan.json` records each file's sha256. Use it for what only this host has (a core binary, a config), not for secrets that belong in the profile's `[secrets]`.
 - `durations` is resolved next to the profile. A missing file means no records yet (every id counts as the median of 1 s, so the first run deals in the seed's order). Write it with `kgate-split durations`.
 
 ## Commands
@@ -92,7 +96,7 @@ rerun with: kgate-split run --seed 101
 
 - `list` must run on the host, with what the host has (it runs where you type `kgate-split run`, in the current directory). If listing needs an install (a vitest list), `list` has to run on a tree with it.
 - A test that is split into parts (journeys with rows) needs one id per part.
-- A pod gets only what the `run` command line, the tree and `setup` give it: environment a pod needs (a core binary, a token) goes into `setup` or the profile's `[secrets]`, not through `kgate-split`.
+- A pod gets only what the `run` command line, the tree, `setup` and `[split.files]` give it: a host file a pod needs (a core binary) goes in `[split.files]`, a secret in the profile's `[secrets]`, never through `kgate-split` itself.
 - Tests run side by side in one pod (`lanes`) share its home and ports. `KGATE_SPLIT_LANE` is there for that.
 - The shared queue and the pods' results do not know about a tool-specific verdict file. A repo that needs a merged artifact (a summary, kept scratch) reads `pods/K/` in the run directory.
 
