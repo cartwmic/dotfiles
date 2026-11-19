@@ -1,0 +1,780 @@
+#!/usr/bin/env python3
+"""kgate-split: run a slow suite of independent tests across several kgate pods, longest test first, and prove every test ran exactly once.
+Full doc: docs/kgate-split.md.
+
+    kgate-split run [--profile FILE] [--seed N] [--pods N] [--lanes N] [-- KGATE_ARGS...]
+    kgate-split check RUN_DIR
+    kgate-split durations [--profile FILE] [--runs N]
+
+Settings, in the repo's kgate.toml (or --profile FILE), table [split]:
+    list           command that prints one test id per line, run here in the current directory
+    run            command that runs one test; `{items}` is replaced by the path of a file holding the id(s) it must run
+    setup          optional command run first in each pod; if it fails the pod "did not run"
+    pods           how many pods (default 1)
+    lanes          tests at once inside one pod (default 1)
+    durations      optional JSON file, test id -> seconds; an id missing from it counts as the median
+    claim_seconds  optional: a pod stops claiming tests this many seconds after its first claim; ids left over go to one more, uncapped pod
+
+Exit: 0 every test passed and the run is complete; 1 a test failed or the run is INCOMPLETE; 64 bad usage or settings; 69 a pod did not
+run and nothing failed (or the list could not be made). On TERM, INT or HUP every pod's kgate client is stopped and nothing is merged.
+"""
+import argparse
+import hmac
+import http.server
+import json
+import math
+import os
+import random
+import re
+import secrets
+import shlex
+import shutil
+import signal
+import socket
+import socketserver
+import statistics
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tomllib
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+SETTINGS = {"list", "run", "setup", "pods", "lanes", "durations", "claim_seconds"}
+PORT_RANGE = "47390-47399"   # the range the host firewall opens to the cluster's LAN (homelab#524); KGATE_SPLIT_PORTS overrides it
+STAGGER_S = 2                # pods start this far apart: creating many at once failed some (etcdserver: request timed out)
+STUCK_FACTOR, STUCK_FLOOR_S = 10, 120   # a test is killed at max(10 x its recorded median, 120 s)
+JITTER_SIGMA = 0.5           # spread of the seeded jitter on the long half's order (decision #4356, revised after review round 1)
+SLOW_FACTOR = 3              # the receipt lists tests that ran over 3 x their record
+KILL_GRACE_S = 5
+CLAIM_TRIES = 3
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def fmt_s(x):
+    return f"{x:.1f}".rstrip("0").rstrip(".") if x != int(x) else str(int(x))
+
+
+# ---- plan: the deal and the limits (pure) ----
+
+def median_of(durations, ids):
+    known = [durations[i] for i in ids if i in durations]
+    return statistics.median(known) if known else 1.0
+
+
+def deal(ids, durations, seed):
+    """The hand-out order, a pure function of the ids (as a set), their recorded seconds and the seed.
+    An id longer than the median is handed out roughly longest first, so the queue's speed win stays: its recorded time is multiplied by a
+    seeded jitter (exp of 0.5 x a normal draw, so a test twice as long as its neighbour still goes first about 5 times in 6) before the
+    sort. The others (at or below the median, or with no record, which counts as the median) are handed out in the seed's random order.
+    Both halves change with the seed: that is what moves tests next to each other and lets an order-dependent test fail on a normal run."""
+    median = median_of(durations, ids)
+    est = {i: durations.get(i, median) for i in ids}
+    rng = random.Random(seed)
+    key = {i: rng.random() for i in sorted(ids)}
+    jitter = {i: math.exp(JITTER_SIGMA * rng.gauss(0, 1)) for i in sorted(ids)}
+    long = sorted((i for i in ids if est[i] > median), key=lambda i: (-est[i] * jitter[i], key[i]))
+    short = sorted((i for i in ids if est[i] <= median), key=lambda i: key[i])
+    return long + short, est, median
+
+
+def stuck_limit(recorded, median):
+    """(seconds after which a test is killed, the time it is judged against): ten times its record (the median when it has none), at least 120 s."""
+    basis = recorded if recorded is not None else median
+    return max(STUCK_FACTOR * basis, STUCK_FLOOR_S), basis
+
+
+def killed_message(seconds, recorded, median):
+    if recorded is None:
+        return f"killed after {seconds:.0f} s; it has no recorded time (the median is {fmt_s(median)} s)"
+    return f"killed after {seconds:.0f} s; its recorded time is {fmt_s(recorded)} s"
+
+
+def load_durations(path):
+    if not path:
+        return {}
+    try:
+        raw = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ValueError(f"durations file {path}: {e}")
+    if not isinstance(raw, dict) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 for v in raw.values()):
+        raise ValueError(f"durations file {path} must be a JSON object of test id -> seconds (a number of 0 or more)")
+    return raw
+
+
+def parse_settings(text, pods=None, lanes=None):
+    """The [split] table of a profile as a dict with defaults, or ValueError."""
+    try:
+        raw = tomllib.loads(text).get("split")
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"profile is not valid TOML: {e}")
+    if not isinstance(raw, dict):
+        raise ValueError("the profile has no [split] table")
+    if set(raw) - SETTINGS:
+        raise ValueError("[split] has unknown keys: " + ", ".join(sorted(set(raw) - SETTINGS)))
+    for key in ("list", "run"):
+        if not isinstance(raw.get(key), str) or not raw[key].strip():
+            raise ValueError(f"[split] {key} must be a non-empty command")
+    if "{items}" not in raw["run"]:
+        raise ValueError("[split] run must contain {items}, the path of the file that holds the id(s) to run")
+    for key in ("setup", "durations"):
+        if key in raw and not isinstance(raw[key], str):
+            raise ValueError(f"[split] {key} must be a string")
+    out = {"list": raw["list"], "run": raw["run"], "setup": raw.get("setup") or "", "durations": raw.get("durations") or "",
+           "pods": raw.get("pods", 1), "lanes": raw.get("lanes", 1), "claim_seconds": raw.get("claim_seconds", 0)}
+    if pods is not None:
+        out["pods"] = pods
+    if lanes is not None:
+        out["lanes"] = lanes
+    for key in ("pods", "lanes"):
+        if isinstance(out[key], bool) or not isinstance(out[key], int) or out[key] < 1:
+            raise ValueError(f"[split] {key} must be a whole number of 1 or more")
+    if isinstance(out["claim_seconds"], bool) or not isinstance(out["claim_seconds"], (int, float)) or out["claim_seconds"] < 0:
+        raise ValueError("[split] claim_seconds must be a number of seconds (0 or absent is no cap)")
+    return out
+
+
+# ---- the queue the pods claim from (host side) ----
+
+class Queue:
+    """The order, a cursor, each pod's claim clock and the hand-out log, behind one lock. A handed-out id is never handed out again."""
+
+    def __init__(self, order, limits, pods, claim_seconds, log):
+        self.order, self.limits, self.pods, self.cap, self.log = order, limits, pods, claim_seconds, log
+        self.next, self.first, self.lock = 0, {}, threading.Lock()
+
+    def claim(self, pod):
+        """The answer to one claim: {"item", "limit_s", "recorded_s"} or {"item": None}. Pods 1..N are capped; a later pod (the leftover one) is not."""
+        with self.lock:
+            now = time.monotonic()
+            self.first.setdefault(pod, now)
+            if self.cap and pod <= self.pods and now - self.first[pod] > self.cap:
+                return {"item": None, "reason": "claim cap"}
+            if self.next >= len(self.order):
+                return {"item": None}
+            item = self.order[self.next]
+            self.log.write(json.dumps({"item": item, "pod": pod, "at": utc_now()}) + "\n")
+            self.log.flush()   # only after the line is written does the id leave the queue
+            self.next += 1
+            limit, recorded = self.limits[item]
+            return {"item": item, "limit_s": limit, "recorded_s": recorded}
+
+    def drained(self):
+        with self.lock:
+            return self.next >= len(self.order)
+
+
+class Server(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, queue, token, config, worker_source):
+        self.queue, self.token, self.config, self.worker_source = queue, token, config, worker_source
+        super().__init__(addr, Handler)
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)   # http.server's bind does a reverse lookup that took 5 s on this host (coordinator journey-queue)
+        self.server_name, self.server_port = "", self.server_address[1]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    timeout = 10
+
+    def log_message(self, *_):
+        pass
+
+    def _send(self, status, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle(self):
+        header = self.headers.get("Authorization", "")
+        given = header[7:] if header.startswith("Bearer ") else ""
+        if not hmac.compare_digest(given.encode(), self.server.token.encode()):
+            return self._send(403, {"error": "forbidden"})
+        if self.command == "GET" and self.path == "/worker":
+            return self._send(200, self.server.worker_source.encode(), "text/x-python")
+        if self.command == "GET" and self.path == "/config":
+            return self._send(200, self.server.config)
+        if self.command == "POST" and self.path == "/claim":
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"null")
+                pod = body["pod"]
+                if isinstance(pod, bool) or not isinstance(pod, int):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, {"error": 'body must be {"pod": <number>}'})
+            try:
+                return self._send(200, self.server.queue.claim(pod))
+            except OSError as e:
+                return self._send(500, {"error": f"hand-out log not written: {e.strerror or e}"})
+        self._send(404, {"error": "not found"})
+
+    do_GET = do_POST = _handle
+
+
+def start_server(queue, config, worker_source):
+    """A server on the first free port of PORT_RANGE, serving in a thread: (server, port, token). OSError when no port is free."""
+    ports = os.environ.get("KGATE_SPLIT_PORTS", PORT_RANGE)
+    low, _, high = ports.partition("-")
+    token = secrets.token_hex(16)
+    last = None
+    for port in range(int(low), int(high or low) + 1):
+        try:
+            server = Server(("0.0.0.0", port), queue, token, config, worker_source)
+        except OSError as e:
+            last = e
+            continue
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server, server.server_address[1], token
+    raise OSError(f"no free port in {ports}: {last}")
+
+
+def host_address():
+    """The address the pods use to reach this host: KGATE_SPLIT_HOST, else the address this host uses to reach the kgate control plane."""
+    if os.environ.get("KGATE_SPLIT_HOST"):
+        return os.environ["KGATE_SPLIT_HOST"]
+    spec = os.environ.get("KGATE_SSH")
+    if not spec:
+        try:
+            spec = (Path.home() / ".config/kgate/host").read_text()
+        except OSError:
+            spec = ""
+    lines = [l.strip() for l in spec.replace(",", "\n").splitlines() if l.strip() and not l.strip().startswith("#")]
+    if lines:
+        target = lines[0].rpartition("@")[2]
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect((target, 9))
+                if not s.getsockname()[0].startswith("127."):
+                    return s.getsockname()[0]
+        except OSError:
+            pass
+    raise ValueError("cannot tell which address the pods reach this host on: set KGATE_SPLIT_HOST")
+
+
+# ---- the pod worker (runs in the pod; fetched from the queue server, never a file in the tree) ----
+
+def http_json(method, path, body=None):
+    url, token = os.environ["KGATE_SPLIT_URL"], os.environ["KGATE_SPLIT_TOKEN"]
+    req = urllib.request.Request(url + path, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+
+def claim_next(pod):
+    for attempt in range(CLAIM_TRIES):
+        try:
+            return http_json("POST", "/claim", {"pod": pod})
+        except (OSError, ValueError) as e:
+            error = e
+            time.sleep(1)
+    print(f"kgate-split: lost the queue: {error}", flush=True)
+    return None
+
+
+def run_one(claimed, pod, lane, number, out, scratch, run_cmd, median):
+    """Run one claimed id; the result record. The test is killed at its limit (its process group: TERM, then KILL)."""
+    item, limit = claimed["item"], claimed["limit_s"]
+    items_file = Path(scratch) / f"{lane}-{number}.items"
+    items_file.write_text(item + "\n")
+    log = Path("logs") / f"{pod}-{lane}-{number}.log"
+    env = dict(os.environ, KGATE_SPLIT_ID=item, KGATE_SPLIT_POD=str(pod), KGATE_SPLIT_LANE=str(lane))
+    for name in ("KGATE_SPLIT_URL", "KGATE_SPLIT_TOKEN"):
+        env.pop(name, None)
+    started, t0, killed = time.time(), time.monotonic(), False
+    with open(out / log, "wb") as f:
+        proc = subprocess.Popen(["sh", "-c", run_cmd.replace("{items}", shlex.quote(str(items_file)))], stdin=subprocess.DEVNULL, stdout=f,
+                                stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        try:
+            code = proc.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            killed = True
+            for sig, wait in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, None)):
+                try:
+                    os.killpg(proc.pid, sig)
+                    proc.wait(timeout=wait)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+                except ProcessLookupError:
+                    break
+            proc.wait()
+            code = 124
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)   # whatever the test left running in its group
+        except ProcessLookupError:
+            pass
+    seconds = time.monotonic() - t0
+    result = {"id": item, "pod": pod, "lane": lane, "exit": code, "seconds": round(seconds, 3), "start": round(started, 3), "log": str(log),
+              "recorded_s": claimed.get("recorded_s"), "limit_s": limit}
+    if killed:
+        result["killed"] = True
+        result["message"] = killed_message(seconds, claimed.get("recorded_s"), median)
+    return result
+
+
+def pod_main():
+    """One pod: setup, then `lanes` threads that each claim an id, run it and record the result, until the queue has no more for this pod.
+    Exit 0 every test passed, 1 a test failed, 69 the pod did not run (no queue, or setup failed) or lost the queue."""
+    pod = int(os.environ["KGATE_SPLIT_POD"])
+    out = Path(os.environ.get("KGATE_OUT", "/out"))
+    (out / "logs").mkdir(parents=True, exist_ok=True)
+    try:
+        config = http_json("GET", "/config")
+    except (OSError, ValueError) as e:
+        print(f"kgate-split: pod {pod} did not run: cannot reach the queue: {e}", flush=True)
+        sys.exit(69)
+    if config["setup"]:
+        done = subprocess.run(["sh", "-c", config["setup"]])
+        if done.returncode:
+            print(f"kgate-split: pod {pod} did not run: setup failed (exit {done.returncode})", flush=True)
+            sys.exit(69)
+    scratch = tempfile.mkdtemp(prefix="kgate-split-")
+    lock, state = threading.Lock(), {"failed": 0, "lost": False}
+    results = open(out / "results.jsonl", "a", buffering=1)
+
+    def lane_loop(lane):
+        number = 0
+        while True:
+            claimed = claim_next(pod)
+            if claimed is None:
+                state["lost"] = True
+                return
+            if claimed["item"] is None:
+                return
+            number += 1
+            result = run_one(claimed, pod, lane, number, out, scratch, config["run"], config["median"])
+            ok = result["exit"] == 0
+            with lock:
+                results.write(json.dumps(result) + "\n")
+                state["failed"] += not ok
+                print(f"{'PASS' if ok else 'FAIL'} {result['id']} {result['seconds']:.1f} s" + ("" if ok else f": {result.get('message') or 'exit ' + str(result['exit'])}"), flush=True)
+                if not ok:
+                    tail = (out / result["log"]).read_text(errors="replace").splitlines()[-20:]
+                    print("".join(f"    | {line}\n" for line in tail), end="", flush=True)
+
+    threads = [threading.Thread(target=lane_loop, args=(lane,)) for lane in range(config["lanes"])]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    results.close()
+    shutil.rmtree(scratch, True)
+    if state["lost"]:
+        sys.exit(69)
+    sys.exit(1 if state["failed"] else 0)
+
+
+# What every pod runs first: fetch this file from the queue server and call pod_main. A failed fetch is "did not run" (69).
+BOOTSTRAP = """import os, sys, urllib.request as u
+try:
+    r = u.Request(os.environ['KGATE_SPLIT_URL'] + '/worker', headers={'Authorization': 'Bearer ' + os.environ['KGATE_SPLIT_TOKEN']})
+    g = {'__name__': 'kgate_split_pod'}
+    exec(compile(u.urlopen(r, timeout=30).read(), 'kgate-split', 'exec'), g)
+except Exception as e:
+    print('kgate-split: this pod did not run: cannot fetch the worker:', e, flush=True)
+    sys.exit(69)
+g['pod_main']()
+"""
+
+
+# ---- the verdict, a pure function of a run directory ----
+
+def read_jsonl(path):
+    try:
+        return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+    except OSError:
+        return []
+
+
+def check(rundir):
+    """Read a run directory and judge it. Returns a dict: exit, verdict, lines (findings), results, pods, plan.
+    Every id of the plan must be reported exactly once. An id with no report is `lost` or `missing`; when a pod that did not run to its end
+    explains it, the run is NOT RUN (69), and when every pod ended normally nothing explains it, so it is INCOMPLETE (1). 1 wins over 69."""
+    rundir = Path(rundir)
+    plan = json.loads((rundir / "plan.json").read_text())
+    meta = json.loads((rundir / "pods.json").read_text())
+    handed = {}
+    for h in read_jsonl(rundir / "queue.jsonl"):
+        handed.setdefault(h["item"], []).append(h["pod"])
+    results, pods = [], {}
+    for p in meta["pods"]:
+        pods[p["pod"]] = p
+        results += read_jsonl(rundir / "pods" / str(p["pod"]) / "results.jsonl")
+    expected = set(plan["ids"])
+    reported = {}
+    for r in results:
+        reported.setdefault(r["id"], []).append(r)
+    ended = {k for k, p in pods.items() if p["exit"] in (0, 1)}   # a pod that ran to its end
+    bad, notrun, lines = [], [], []
+    claimed_by = {k for pods_ in handed.values() for k in pods_}
+    drained = all(i in handed for i in plan["ids"])
+    dropped = {k for k in pods if k not in ended and k not in claimed_by and drained}   # never ran, took nothing, the others ran every id
+    for k in sorted(pods):
+        if k not in ended and k not in dropped:
+            notrun.append(f"pod {k} did not run to its end (exit {pods[k]['exit']}, {pods[k].get('id') or 'no kgate job'})")
+    for k in sorted(dropped):
+        lines.append(f"note: pod {k} did not run and took nothing; the other pods ran every test ({pods[k].get('id') or 'no kgate job'}, exit {pods[k]['exit']})")
+    for i, rs in sorted(reported.items()):
+        if i not in expected:
+            bad.append(f"extra: {i} reported by pod {rs[0]['pod']}, not in the list")
+        elif len(rs) > 1:
+            bad.append(f"dup: {i} reported {len(rs)} times (pods {', '.join(str(r['pod']) for r in rs)})")
+    for i in plan["order"]:
+        if len(handed.get(i, [])) > 1:
+            bad.append(f"dup: {i} handed out {len(handed[i])} times (pods {', '.join(map(str, handed[i]))})")
+    for i in plan["order"]:
+        if i in reported:
+            continue
+        if i not in handed:
+            (notrun if set(pods) - ended else bad).append(f"missing: {i} was never handed out")
+        else:
+            who = handed[i][0]
+            (notrun if who not in ended else bad).append(f"lost: {i} handed out to pod {who}, no result")
+    failed = [r for rs in reported.values() for r in rs if r["exit"] != 0 and r["id"] in expected]
+    for r in sorted(failed, key=lambda r: r["id"]):
+        lines.append(f"FAIL {r['id']}: {r.get('message') or 'exit ' + str(r['exit'])} (pod {r['pod']})")
+    lines += [f"INCOMPLETE: {b}" for b in bad] + [f"NOT RUN: {n}" for n in notrun]
+    if failed or bad:
+        code, verdict = 1, ("FAILED" if failed else "INCOMPLETE")
+    elif notrun:
+        code, verdict = 69, "NOT RUN"
+    else:
+        code, verdict = 0, "PASS"
+    return {"exit": code, "verdict": verdict, "lines": lines, "results": results, "pods": pods, "plan": plan, "meta": meta, "handed": handed, "failed": failed}
+
+
+def pod_table(run):
+    """One line per pod: what the plan handed it (est s, from the records) against what it took."""
+    plan, lines = run["plan"], []
+    est = plan["est"]
+    for k in sorted(run["pods"]):
+        mine = [i for i, ks in run["handed"].items() if k in ks]
+        rs = [r for r in run["results"] if r["pod"] == k]
+        took = (max(r["start"] + r["seconds"] for r in rs) - min(r["start"] for r in rs)) if rs else None
+        p = run["pods"][k]
+        lines.append(f"pod {k}/{plan['pods']}: {p.get('id') or 'no kgate job'} exit {p['exit']} node {p.get('node') or '?'}: {len(mine)} tests, "
+                     f"{sum(est.get(i, plan['median']) for i in mine):.0f} est s, took {'?' if took is None else f'{took:.0f}'} s")
+    return lines
+
+
+def slow_tests(run):
+    out = []
+    for r in run["results"]:
+        if r.get("recorded_s") and r["seconds"] > SLOW_FACTOR * r["recorded_s"] and not r.get("killed"):
+            out.append((r["seconds"] - r["recorded_s"], f"slow: {r['id']} {r['seconds']:.1f} s, its record is {fmt_s(r['recorded_s'])} s ({r['seconds'] / r['recorded_s']:.1f}x)"))
+    return [line for _, line in sorted(out, reverse=True)]
+
+
+def rerun_line(plan):
+    return "rerun with: " + " ".join(shlex.quote(a) for a in plan["rerun"])
+
+
+def receipt(rundir):
+    run = check(rundir)
+    plan, meta = run["plan"], run["meta"]
+    passed = sum(1 for r in run["results"] if r["exit"] == 0)
+    out = [f"kgate-split run {Path(rundir).name}: {plan['repo']} {plan['head'][:12]}",
+           f"seed: {plan['seed']}",
+           f"plan: {len(plan['ids'])} tests, {plan['pods']} pods x {plan['lanes']} lanes, median {fmt_s(plan['median'])} s, {plan['recorded']} with a recorded time, queue at {plan['queue']}"]
+    out += pod_table(run) + slow_tests(run) + run["lines"]
+    summary = f"{passed} PASS, {len(run['failed'])} FAIL of {len(plan['ids'])}"
+    out.append(f"VERDICT: {run['verdict']}: {summary}" + (f" ({meta['elapsed_s']:.0f} s)" if meta.get("elapsed_s") is not None else ""))
+    out += [f"run dir: {rundir}", rerun_line(plan)]
+    return run["exit"], "\n".join(out)
+
+
+# ---- the kgate clients (host side) ----
+
+class Pods:
+    """The kgate clients this run started, each its own process group, and the one way to stop them."""
+
+    def __init__(self):
+        self.procs, self.lock, self.stopping = [], threading.Lock(), False
+
+    def start(self, argv, **kw):
+        with self.lock:
+            if self.stopping:
+                return None
+            proc = subprocess.Popen(argv, start_new_session=True, stdin=subprocess.DEVNULL, **kw)
+            self.procs.append(proc)
+            return proc
+
+    def stop(self):
+        """TERM every client's process group (a kgate client deletes its pod on TERM, whatever signal the run got), then wait until none is left."""
+        with self.lock:
+            self.stopping = True
+            procs = list(self.procs)
+        sent = 0
+        for p in procs:
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+                sent += 1
+            except ProcessLookupError:
+                pass
+        for p in procs:
+            p.wait()
+        while any(group_alive(p.pid) for p in procs):
+            time.sleep(0.1)
+        return sent
+
+
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def kgate_state_dir():
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "kgate"
+
+
+def kgate_record(state, kid):
+    """kgate's job record for an id, read from the tail of its log, or {}."""
+    try:
+        with open(state / "log.jsonl", "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4_000_000))
+            for line in reversed(f.read().decode(errors="replace").splitlines()):
+                if f'"{kid}"' in line:
+                    rec = json.loads(line)
+                    if rec.get("id") == kid:
+                        return rec
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def run_pod(k, n, pods, kgate_argv, env_words, bootstrap, prefix_log, state, stop):
+    """One pod: a kgate job, started once more when it never started (kgate 75, or 69 with `"ran": false`). Returns its record dict."""
+    attempts, rec = [], {}
+    for attempt in (1, 2):
+        label = f"[pod {k}/{n}] " if k <= n else f"[leftover pod {k}] "
+        proc = pods.start(["kgate", *kgate_argv, "--", "env", *env_words, "python3", "-c", bootstrap], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        if proc is None:
+            return {"pod": k, "exit": 143, "attempts": attempts}
+        kid = None
+        for line in proc.stdout:
+            kid = kid or (re.search(r"kgate-\d+-\d+", line) or [None])[0]
+            prefix_log.write(line)
+            print(label + line, end="", flush=True)
+        code = proc.wait()
+        rec = kgate_record(state, kid) if kid else {}
+        attempts.append({"id": kid, "exit": code})
+        never_started = code == 75 or (code == 69 and rec.get("ran") is False)
+        if attempt == 1 and never_started and not stop.is_set():
+            print(f"{label}never started (kgate exit {code}, {kid}); starting it once more", flush=True)
+            continue
+        return {"pod": k, "id": kid, "exit": code, "node": rec.get("node"), "attempts": attempts}
+    return {"pod": k, "exit": 69, "attempts": attempts}
+
+
+def repo_name(root):
+    done = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True)
+    url = done.stdout.strip()
+    return re.sub(r"\.git$", "", url.rstrip("/").rpartition("/")[2].rpartition(":")[2]) if url else Path(root).name
+
+
+def git_out(root, *args):
+    done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def cmd_run(args):
+    root = git_out(".", "rev-parse", "--show-toplevel")
+    if not root:
+        print("kgate-split: not in a git worktree", file=sys.stderr)
+        return 64
+    profile = Path(args.profile or Path(root) / "kgate.toml")
+    try:
+        settings = parse_settings(profile.read_text(), args.pods, args.lanes)
+        durations = load_durations(profile.parent / settings["durations"] if settings["durations"] else None)
+    except OSError as e:
+        print(f"kgate-split: cannot read the profile {profile}: {e.strerror or e}", file=sys.stderr)
+        return 64
+    except ValueError as e:
+        print(f"kgate-split: {e}", file=sys.stderr)
+        return 64
+    listed = subprocess.run(["sh", "-c", settings["list"]], capture_output=True, text=True)
+    if listed.returncode:
+        print(f"kgate-split: NOT RUN: the list command failed (exit {listed.returncode}): {listed.stderr.strip()[-300:]}", file=sys.stderr)
+        return 69
+    ids = [l.strip() for l in listed.stdout.splitlines() if l.strip()]
+    again = sorted({i for i in ids if ids.count(i) > 1})
+    if not ids or again:
+        print("kgate-split: the list command " + ("printed no test ids" if not ids else "printed an id twice: " + ", ".join(again[:5])), file=sys.stderr)
+        return 64
+    seed = args.seed if args.seed is not None else secrets.randbelow(2**32)
+    order, est, median = deal(ids, durations, seed)
+    limits = {i: (stuck_limit(durations.get(i), median)[0], durations.get(i)) for i in ids}
+    try:
+        host = host_address()
+    except ValueError as e:
+        print(f"kgate-split: NOT RUN: {e}", file=sys.stderr)
+        return 69
+    state = kgate_state_dir()
+    started = time.time()
+    rundir = state / f"split-{int(started)}-{os.getpid()}"
+    try:
+        (rundir / "pods").mkdir(parents=True)
+        log = open(rundir / "queue.jsonl", "w")
+    except OSError as e:
+        print(f"kgate-split: NOT RUN: cannot create {rundir}: {e.strerror or e}", file=sys.stderr)
+        return 69
+    n = settings["pods"]
+    queue = Queue(order, limits, n, settings["claim_seconds"], log)
+    config = {"setup": settings["setup"], "run": settings["run"], "lanes": settings["lanes"], "median": median}
+    try:
+        server, port, token = start_server(queue, config, Path(__file__).read_text())
+    except OSError as e:
+        print(f"kgate-split: NOT RUN: {e}", file=sys.stderr)
+        return 69
+    url = f"http://{host}:{port}"
+    rerun = ["kgate-split", "run", "--seed", str(seed)] + (["--profile", args.profile] if args.profile else []) + (["--pods", str(args.pods)] if args.pods else []) \
+        + (["--lanes", str(args.lanes)] if args.lanes else []) + (["--", *args.kgate_args] if args.kgate_args else [])
+    plan = {"run": rundir.name, "repo": repo_name(root), "head": git_out(root, "rev-parse", "HEAD"), "seed": seed, "ids": sorted(ids), "order": order,
+            "est": est, "median": median, "recorded": sum(1 for i in ids if i in durations), "pods": n, "lanes": settings["lanes"],
+            "claim_seconds": settings["claim_seconds"], "queue": url, "profile": str(profile), "durations": settings["durations"], "rerun": rerun, "started": started}
+    (rundir / "plan.json").write_text(json.dumps(plan, indent=1))
+    print(f"kgate-split: seed {seed}; {len(ids)} tests, {n} pods x {settings['lanes']} lanes; queue {url}; run dir {rundir}", flush=True)
+
+    pods, stop, done = Pods(), threading.Event(), {}
+    kgate_argv = (["--profile", str(profile)] if args.profile else []) + list(args.kgate_args)
+
+    def on_signal(signum, _frame):
+        name = signal.Signals(signum).name
+        stop.set()
+        sent = pods.stop()
+        print(f"kgate-split: stopped by {name}; signalled {sent} pod(s); nothing was merged", file=sys.stderr, flush=True)
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_signal)
+
+    def pod_thread(k):
+        env_words = [f"KGATE_SPLIT_URL={url}", f"KGATE_SPLIT_TOKEN={token}", f"KGATE_SPLIT_POD={k}"]
+        (rundir / "pods" / str(k)).mkdir(exist_ok=True)
+        with open(rundir / "pods" / f"{k}.console.log", "w") as plog:
+            done[k] = run_pod(k, n, pods, kgate_argv, env_words, BOOTSTRAP, plog, state, stop)
+
+    def run_pods(numbers):
+        threads = []
+        for k in numbers:
+            t = threading.Thread(target=pod_thread, args=(k,), daemon=True)
+            t.start()
+            threads.append(t)
+            if k != numbers[-1]:
+                stop.wait(STAGGER_S)
+        for t in threads:
+            while t.is_alive():
+                t.join(0.5)
+
+    run_pods(list(range(1, n + 1)))
+    if not queue.drained():
+        print(f"kgate-split: leftover pod {n + 1}: tests are still unclaimed", flush=True)
+        run_pods([n + 1])
+    server.shutdown()
+    log.close()
+    for k, p in done.items():
+        src = state / f"{p['id']}.out" if p.get("id") else None
+        if src and src.is_dir():
+            shutil.copytree(src, rundir / "pods" / str(k), dirs_exist_ok=True)
+    (rundir / "pods.json").write_text(json.dumps({"elapsed_s": time.time() - started, "pods": [done[k] for k in sorted(done)]}, indent=1))
+    code, text = receipt(rundir)
+    (rundir / "receipt.txt").write_text(text + "\n")
+    print(text)
+    return code
+
+
+def cmd_check(args):
+    try:
+        code, text = receipt(args.rundir)
+    except (OSError, ValueError, KeyError) as e:
+        print(f"kgate-split: cannot read the run directory {args.rundir}: {e}", file=sys.stderr)
+        return 64
+    print(text)
+    return code
+
+
+def cmd_durations(args):
+    root = git_out(".", "rev-parse", "--show-toplevel")
+    if not root:
+        print("kgate-split: not in a git worktree", file=sys.stderr)
+        return 64
+    profile = Path(args.profile or Path(root) / "kgate.toml")
+    try:
+        settings = parse_settings(profile.read_text())
+    except (OSError, ValueError) as e:
+        print(f"kgate-split: {e}", file=sys.stderr)
+        return 64
+    if not settings["durations"]:
+        print("kgate-split: [split] has no durations file to write", file=sys.stderr)
+        return 64
+    repo, green = repo_name(root), []
+    for d in sorted((d for d in kgate_state_dir().glob("split-*-*") if re.fullmatch(r"split-\d+-\d+", d.name)), key=lambda d: int(d.name.split("-")[1]), reverse=True):
+        try:
+            plan = json.loads((d / "plan.json").read_text())
+            if plan["repo"] == repo and check(d)["exit"] == 0:
+                green.append(d)
+        except (OSError, ValueError, KeyError):
+            continue
+        if len(green) == args.runs:
+            break
+    if not green:
+        print(f"kgate-split: no green run of {repo} in {kgate_state_dir()}", file=sys.stderr)
+        return 1
+    latest = check(green[0])
+    seconds = {}
+    for d in green:
+        for r in check(d)["results"]:
+            seconds.setdefault(r["id"], []).append(r["seconds"])
+    fitted = {i: round(statistics.median(seconds[i]), 1) for i in latest["plan"]["ids"] if i in seconds}
+    out = profile.parent / settings["durations"]
+    before = load_durations(out) if out.exists() else {}
+    body = ",\n".join(f" {json.dumps(i)}: {s}" for i, s in sorted(fitted.items(), key=lambda kv: (-kv[1], kv[0])))
+    out.write_text("{\n" + body + "\n}\n")
+    print(f"kgate-split: wrote {len(fitted)} ids to {out} (was {len(before)}), the median over the last {len(green)} green run(s): {', '.join(d.name for d in green)}")
+    print(f"plan against actual, {green[0].name}:")
+    print("\n".join(pod_table(latest)))
+    wall = latest["meta"].get("elapsed_s")
+    slots = latest["plan"]["pods"] * latest["plan"]["lanes"]
+    print(f"est total {sum(latest['plan']['est'].values()):.0f} s over {slots} lanes = {sum(latest['plan']['est'].values()) / slots:.0f} s if perfectly even; the run took {'?' if wall is None else f'{wall:.0f}'} s")
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="kgate-split", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run", help="run the suite across pods and check every test ran once")
+    r.add_argument("--profile", help="the profile with the [split] table (default kgate.toml at the worktree root)")
+    r.add_argument("--seed", type=int, help="the run's seed (default random); the same seed hands the tests out in the same order")
+    r.add_argument("--pods", type=int, help="override [split] pods")
+    r.add_argument("--lanes", type=int, help="override [split] lanes")
+    r.add_argument("kgate_args", nargs="*", help="after --: extra arguments for every kgate job (for example --node N)")
+    c = sub.add_parser("check", help="judge a saved run directory again")
+    c.add_argument("rundir")
+    d = sub.add_parser("durations", help="refit the durations file from the last green runs")
+    d.add_argument("--profile")
+    d.add_argument("--runs", type=int, default=5, help="how many green runs to take the median over (default 5)")
+    args = ap.parse_args(argv)
+    return {"run": cmd_run, "check": cmd_check, "durations": cmd_durations}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
