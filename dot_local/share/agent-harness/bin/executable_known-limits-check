@@ -523,7 +523,7 @@ def gh_unconfirmed(url):
     if not found.get("state"):
         return "gh issue view printed no state"
     returned = found.get("url") or ""
-    if "/issues/" not in returned:
+    if not re.search(r"/issues/[0-9]+$", returned):
         return "the returned reference is a pull request, not an issue"
     return None
 

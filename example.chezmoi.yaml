@@ -118,6 +118,10 @@ data:
   #   context: |
   #     Fooco is the employer. A work detail is anything that names it, its hosts, its repositories, its clusters or its registries.
   #   repos: ["fooco-dev/some-public-repo"]   # the repositories the gh wrapper guards (host/owner/name off github.com); empty or omitted: no wrapper
+  # axon-work-computer only: the MCP tool that the mcp-ticket-lookup helper runs for known-limits-check's
+  # ticket-key lookup (docs/profiles.md, Optional keys). A work detail: set it here, never in the repo.
+  # workEnv:
+  #   mcpTool: "mcp__example_tracker__get_issue"
 
 hooks:
   read-source-state:

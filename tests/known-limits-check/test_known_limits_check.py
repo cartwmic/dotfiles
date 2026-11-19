@@ -381,6 +381,14 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("pull request, not an issue", out.stderr)
 
+    def test_a_pull_request_in_a_repo_named_issues_does_not_confirm(self):
+        gh = self.tracker("gh", ['echo "{\\"state\\": \\"OPEN\\", \\"url\\": \\"https://example.com/o/issues/pull/44\\"}"'])
+        env = dict(os.environ, PATH=str(Path(self.tmp)) + os.pathsep + os.environ["PATH"])
+        text = "## Known limits\n- A. Tracked in https://example.com/o/issues/44.\n"
+        out = run("--body-file", self.body(text), env=env)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("pull request, not an issue", out.stderr)
+
     def test_a_closed_issue_counts_as_filed(self):
         gh = self.tracker("gh", ['echo "{\\\"state\\\": \\\"CLOSED\\\", \\\"url\\\": \\\"https://example.com/issues/44\\\"}"'])
         env = dict(os.environ, PATH=str(Path(self.tmp)) + os.pathsep + os.environ["PATH"])

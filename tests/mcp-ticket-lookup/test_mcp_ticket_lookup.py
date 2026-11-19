@@ -2,8 +2,10 @@
 
 The helper confirms one ticket key through a single read-only MCP tool in a non-interactive
 claude turn. A fake claude on PATH stands in for the real one, so nothing here calls claude;
-the fake records the argv it was given, so the tests also pin the lockdown flags: no built-in
-tools, exactly one allowed tool, and automatic denial of everything else.
+the fake records the argv it was given and answers with a JSON transcript built from
+environment knobs, so the tests pin the lockdown flags (no built-in tools, exactly one
+allowed tool, manual permission mode, no project or local settings, automatic denial of
+everything else) and the requirement that the allowed tool actually ran and succeeded.
 
     python3 -m unittest discover -s tests/mcp-ticket-lookup -v
 """
@@ -20,6 +22,35 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/share/agent-harness/bin/executable_mcp-ticket-lookup"
 TOOL = "mcp__example__get_issue"
 
+FAKE = """#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+argv = sys.argv
+if os.environ.get('ARGV_FILE'):
+    json.dump(argv, open(os.environ['ARGV_FILE'], 'w'))
+if os.environ.get('FAKE_PID_FILE'):
+    child = subprocess.Popen(['sleep', '30'])
+    json.dump({'self': os.getpid(), 'child': child.pid}, open(os.environ['FAKE_PID_FILE'], 'w'))
+time.sleep(float(os.environ.get('FAKE_SLEEP', '0')))
+tool = 'mcp__example__get_issue'
+try:
+    i = argv.index('--allowedTools')
+    tool = argv[i + 1]
+except ValueError:
+    pass
+msgs = []
+if os.environ.get('FAKE_TOOLUSE', '1') == '1':
+    name = os.environ.get('FAKE_TOOLNAME', tool)
+    msgs.append({'type': 'assistant', 'message': {'content': [
+        {'type': 'tool_use', 'id': 'tu_1', 'name': name, 'input': {}}]}})
+    tr = {'type': 'tool_result', 'tool_use_id': 'tu_1', 'content': 'ok'}
+    if os.environ.get('FAKE_TOOLERR') == '1':
+        tr['is_error'] = True
+    msgs.append({'type': 'user', 'message': {'content': [tr]}})
+msgs.append({'type': 'result', 'subtype': 'success', 'is_error': False, 'num_turns': 2,
+             'result': os.environ.get('FAKE_REPLY', '')})
+print(json.dumps(msgs))
+"""
+
 
 def run(*args, env=None):
     assert env is not None and "ARGV_FILE" in env, "every run must go through self.env()"
@@ -32,27 +63,17 @@ class McpTicketLookup(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
 
-    def setUp(self):
-        # Put the fake claude on PATH before anything runs: a missing fake would silently
-        # fall through to the real claude, which these tests must never call.
-        self.fake_claude()
-
     @classmethod
     def tearDownClass(cls):
         import shutil
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def fake_claude(self):
+    def setUp(self):
+        # Put the fake claude on PATH before anything runs: a missing fake would silently
+        # fall through to the real claude, which these tests must never call.
         p = Path(self.tmp) / "claude"
-        p.write_text(
-            "#!/usr/bin/env python3\n"
-            "import json, os, sys, time\n"
-            "json.dump(sys.argv, open(os.environ['ARGV_FILE'], 'w'))\n"
-            "time.sleep(float(os.environ.get('FAKE_SLEEP', '0')))\n"
-            "print(os.environ.get('FAKE_REPLY', ''))\n"
-        )
+        p.write_text(FAKE)
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
-        return str(p)
 
     def env(self, reply=None, sleep="0", tool=TOOL, **over):
         e = dict(os.environ)
@@ -88,12 +109,32 @@ class McpTicketLookup(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stderr)
         self.assertIn("neither FOUND", out.stderr)
 
-    def test_a_timeout_exits_2(self):
-        e = self.env(reply="FOUND PROJ-1", sleep="30")
+    def test_a_found_reply_with_no_tool_call_exits_2(self):
+        out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLUSE="0"))
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("did not run successfully", out.stderr)
+
+    def test_a_found_reply_with_a_failed_tool_result_exits_2(self):
+        out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLERR="1"))
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("did not run successfully", out.stderr)
+
+    def test_a_found_reply_from_a_different_tool_exits_2(self):
+        out = run("PROJ-1", env=self.env(reply="FOUND PROJ-1", FAKE_TOOLNAME="mcp__example__other_tool"))
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("did not run successfully", out.stderr)
+
+    def test_a_timeout_exits_2_and_kills_claude_and_its_child(self):
+        pid_file = str(Path(self.tmp) / "pids.json")
+        e = self.env(reply="FOUND PROJ-1", sleep="30", FAKE_PID_FILE=pid_file)
         e["MCP_TICKET_LOOKUP_TIMEOUT"] = "2"
         out = run("PROJ-1", env=e)
         self.assertEqual(out.returncode, 2, out.stderr)
-        self.assertIn("failed or timed out", out.stderr)
+        self.assertIn("timed out", out.stderr)
+        pids = json.loads(Path(pid_file).read_text())
+        for name, pid in pids.items():
+            with self.assertRaises(ProcessLookupError, msg="%s (%d) still alive" % (name, pid)):
+                os.kill(pid, 0)
 
     def test_usage_errors_exit_2(self):
         self.assertEqual(run(env=self.env(reply="FOUND PROJ-1")).returncode, 2)
@@ -107,16 +148,24 @@ class McpTicketLookup(unittest.TestCase):
         self.assertEqual(out.returncode, 2, out.stderr)
         self.assertIn("KNOWN_LIMITS_MCP_TOOL", out.stderr)
 
+    def test_claude_not_installed_exits_2_with_its_own_message(self):
+        empty = tempfile.mkdtemp()
+        e = self.env(reply="FOUND PROJ-1")
+        e["PATH"] = empty  # a PATH with no claude on it
+        out = run("PROJ-1", env=e)
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("claude is not installed", out.stderr)
+
     def test_the_claude_turn_is_locked_to_one_tool(self):
         run("PROJ-1", env=self.env(reply="MISSING"))
         argv = self.argv_of_last_call()
         self.assertIn("-p", argv)
-        i = argv.index("--tools")
-        self.assertEqual(argv[i + 1], "")
-        j = argv.index("--allowedTools")
-        self.assertEqual(argv[j + 1], TOOL)
-        k = argv.index("--permission-prompts")
-        self.assertEqual(argv[k + 1], "none")
+        self.assertEqual(argv[argv.index("--tools") + 1], "")
+        self.assertEqual(argv[argv.index("--allowedTools") + 1], TOOL)
+        self.assertEqual(argv[argv.index("--permission-prompts") + 1], "none")
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "manual")
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "user")
+        self.assertEqual(argv[argv.index("--output-format") + 1], "json")
         self.assertNotIn("--dangerously-skip-permissions", argv)
         self.assertNotIn("--allow-dangerously-skip-permissions", argv)
         prompt = [a for a in argv if "PROJ-1" in a and a.startswith("Use the")][0]

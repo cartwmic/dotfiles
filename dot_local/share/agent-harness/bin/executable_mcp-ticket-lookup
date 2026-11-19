@@ -6,21 +6,32 @@ usage: mcp-ticket-lookup KEY
 Runs one non-interactive claude turn whose only permitted tool is the MCP tool named by
 KNOWN_LIMITS_MCP_TOOL (each profile supplies it in its own environment; this repo ships no
 tool name). The turn is locked down: every built-in tool is removed (--tools ""), only that
-one tool is allowed (--allowedTools), and any other tool call is denied automatically
-(--permission-prompts none, no bypass mode). The turn is asked for a fixed reply, FOUND <KEY>
-when the ticket exists or MISSING when it does not, and the echoed key must equal the
-requested key exactly. The lookup is read-only: the tool this check names is a get-issue
-read, and nothing here can write.
+one tool is allowed (--allowedTools), the permission mode is manual so anything not allowed
+needs a person (--permission-mode manual), no prompt can be answered (--permission-prompts
+none), and project and local settings are not loaded, so their allow rules cannot widen the
+turn (--setting-sources user; the claude.ai connector itself loads from user settings, so
+user settings cannot be dropped — a user-settings allow rule for another tool would widen
+the turn, and this machine's user settings hold none). The turn must actually run that tool
+and get a successful result back (--output-format json; a reply of FOUND with no successful
+tool call exits 2), and is asked for a fixed reply, FOUND <KEY> when the ticket exists or
+MISSING when it does not; the echoed key must equal the requested key exactly. The lookup is
+read-only by intent: the tool this check names is a get-issue read, and the turn is given no
+tool that can write.
 
-Exit 0 the reply is exactly "FOUND KEY" with the echoed key equal to the requested one; 1 the
-reply is MISSING; 2 anything else: bad usage, the tool name unset, claude failed or timed out,
-or the reply was neither form. The key is read as one argument validated against the
-ticket-key pattern and handed to claude as an argv element, never through a shell. Claude's
-own output is never printed, so nothing from it (a token included) reaches a log or a file.
-The timeout is MCP_TICKET_LOOKUP_TIMEOUT seconds (default 180; the test suite sets it short).
+Exit 0 the reply is exactly "FOUND KEY" with the echoed key equal to the requested one and
+the allowed tool ran successfully; 1 the reply is MISSING (same tool requirement); 2 anything
+else: bad usage, the tool name unset, claude missing, the turn failed or timed out, no
+successful call of the allowed tool, or the reply was neither form. The key is read as one
+argument validated against the ticket-key pattern and handed to claude as an argv element,
+never through a shell. Claude's own output is never printed, so nothing from it (a token
+included) reaches a log or a file. The timeout is MCP_TICKET_LOOKUP_TIMEOUT seconds
+(default 45, under the check's 60 s tracker limit; the test suite sets it short) and a
+timeout kills the whole claude process group.
 """
+import json
 import os
 import re
+import signal
 import subprocess
 import sys
 
@@ -29,9 +40,27 @@ KEY = re.compile(r"^[A-Z][A-Z0-9]+-[0-9]+$")
 
 def timeout():
     try:
-        return int(os.environ.get("MCP_TICKET_LOOKUP_TIMEOUT", "180"))
+        return int(os.environ.get("MCP_TICKET_LOOKUP_TIMEOUT", "45"))
     except ValueError:
-        return 180
+        return 45
+
+
+def tool_ran(messages, tool):
+    """True when the allowed tool was called and its result came back without an error."""
+    calls = {}
+    for m in messages:
+        content = (m.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            if m.get("type") == "assistant" and c.get("type") == "tool_use":
+                calls[c.get("id")] = c.get("name")
+            if m.get("type") == "user" and c.get("type") == "tool_result" and calls.get(c.get("tool_use_id")) == tool \
+                    and c.get("is_error") is not True:
+                return True
+    return False
 
 
 def main(argv):
@@ -46,20 +75,49 @@ def main(argv):
     prompt = ("Use the %s tool once to look up ticket %s. Then reply with exactly one line and "
               "nothing else: FOUND %s when the ticket exists, or MISSING when it does not."
               % (tool, key, key))
+    cmd = ["claude", "-p", prompt,
+           "--tools", "",
+           "--allowedTools", tool,
+           "--permission-prompts", "none",
+           "--permission-mode", "manual",
+           "--setting-sources", "user",
+           "--output-format", "json"]
     try:
-        done = subprocess.run(
-            ["claude", "-p", prompt,
-             "--tools", "",
-             "--allowedTools", tool,
-             "--permission-prompts", "none"],
-            capture_output=True, text=True, timeout=timeout())
-    except (OSError, subprocess.TimeoutExpired):
-        print("mcp-ticket-lookup: the claude lookup failed or timed out", file=sys.stderr)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+    except FileNotFoundError:
+        print("mcp-ticket-lookup: claude is not installed or not on PATH", file=sys.stderr)
         return 2
-    if done.returncode != 0:
-        print("mcp-ticket-lookup: the claude lookup exited %d" % done.returncode, file=sys.stderr)
+    except OSError as e:
+        print("mcp-ticket-lookup: the claude lookup could not be started: %s" % e, file=sys.stderr)
         return 2
-    reply = done.stdout.strip()
+    try:
+        out, err = proc.communicate(timeout=timeout())
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, AttributeError):
+            proc.kill()
+        proc.wait()
+        print("mcp-ticket-lookup: the claude lookup timed out", file=sys.stderr)
+        return 2
+    if proc.returncode != 0:
+        print("mcp-ticket-lookup: the claude lookup exited %d" % proc.returncode, file=sys.stderr)
+        return 2
+    try:
+        parsed = json.loads(out)
+    except ValueError:
+        print("mcp-ticket-lookup: the claude lookup printed no JSON result", file=sys.stderr)
+        return 2
+    messages = parsed if isinstance(parsed, list) else [parsed]
+    result = next((m for m in messages if isinstance(m, dict) and m.get("type") == "result"), None)
+    if result is None or result.get("subtype") != "success" or result.get("is_error") is True:
+        print("mcp-ticket-lookup: the claude turn did not succeed", file=sys.stderr)
+        return 2
+    if not tool_ran(messages, tool):
+        print("mcp-ticket-lookup: the allowed tool did not run successfully", file=sys.stderr)
+        return 2
+    reply = str(result.get("result") or "").strip()
     if reply == "MISSING":
         return 1
     if reply == "FOUND " + key:
