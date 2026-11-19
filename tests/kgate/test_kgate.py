@@ -311,12 +311,13 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(pod["spec"]["containers"][0]["resources"]["requests"]["cpu"], "3")
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
+        # the pins moved once, when every pod gained the compile caches and the worker counts (tuning_env); a profile without scratch_tmpfs still renders no scratch volume
         # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "96deff24cd96afadc077b8d55ab7501a29627f45206397da8e148f9230450406"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "e78f5001bc715b3c809ec6ebb4c476dc7dd73c5d0b676bf74c936c906cdba416"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "82325df3b64380ec1b1f67a731a07a8d656b4a938c53a6a2183cd6d3bc568634"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "418ee9be5326a850ccf6b38b51c9f2328a054a41afbd60b8d6d8a0c416bc8e26"),
+             "b1f861cc17edb27e01c2548612ca3f28ce6a25630d4e0d2909bbaf449d47bd11"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "3deaa4cdca22803664527ce2d72ef1dd9b9458737c86d54cef848054d06dace2"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -2482,8 +2483,72 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "96deff24cd96afadc077b8d55ab7501a29627f45206397da8e148f9230450406"  # the same pin as test_default_render_is_byte_identical
+        want = "e78f5001bc715b3c809ec6ebb4c476dc7dd73c5d0b676bf74c936c906cdba416"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
+
+
+class PodTuning(unittest.TestCase):
+    """The compile caches, the worker counts and the scratch memory disk, on both kinds of cluster (candidates 3, 5 and 8 of the stack audit)."""
+
+    def homelab(self, **kw):
+        items = K.pod_manifests("kgate-1-2", DIGEST, kw.pop("cpu", 4), kw.pop("memory", "6Gi"), None, kw.pop("secret_env", {}), None, **kw)["items"]
+        return items[-1]
+
+    def kubectl(self, **kw):
+        return K.pod_manifests_kubectl(KCFG, "kgate-1-2", KCL_IMAGE, 2, "6Gi", "10Gi", "8Gi", 65532, 65532, ["/Users"], kw.pop("cpu_limit", 5), **kw)["items"][0]
+
+    def env(self, pod):
+        return {e["name"]: e.get("value") for e in pod["spec"]["containers"][0]["env"]}
+
+    def test_every_pod_gets_the_compile_caches_and_the_counts_from_its_cpu(self):
+        for pod, cpus in ((self.homelab(), "4"), (self.kubectl(), "5")):
+            env = self.env(pod)
+            self.assertEqual((env["NODE_COMPILE_CACHE"], env["PYTHONPYCACHEPREFIX"]), ("/tmp/kgate-node-cache", "/tmp/kgate-pycache"))
+            self.assertEqual((env["KGATE_CPUS"], env["VITEST_MAX_WORKERS"], env["CI_PAR_JOBS"]), (cpus, cpus, cpus))
+            self.assertEqual(env["KGATE_CPUS"], env["CARGO_BUILD_JOBS"], "one number for every tool")
+            self.assertNotIn("TMPDIR", env, "no scratch_tmpfs, no change")
+            self.assertNotIn("scratch", json.dumps(pod))
+
+    def test_workers_per_cpu_multiplies_the_worker_counts_and_not_kgate_cpus(self):
+        for pod, cpus, workers in ((self.homelab(per_cpu=2), "4", "8"), (self.kubectl(per_cpu=3), "5", "15")):
+            env = self.env(pod)
+            self.assertEqual((env["KGATE_CPUS"], env["VITEST_MAX_WORKERS"], env["CI_PAR_JOBS"]), (cpus, workers, workers))
+
+    def test_a_name_the_profile_already_sets_is_left_to_the_profile(self):
+        pod = self.homelab(secret_env={"NODE_COMPILE_CACHE": b"/mine", "CI_PAR_JOBS": b"9"})
+        names = [e["name"] for e in pod["spec"]["containers"][0]["env"]]
+        self.assertNotIn("NODE_COMPILE_CACHE", names)
+        self.assertNotIn("CI_PAR_JOBS", names)
+        self.assertIn("PYTHONPYCACHEPREFIX", names)
+
+    def test_a_caller_assignment_in_cmd_wins_in_a_real_shell(self):
+        env = {e["name"]: e["value"] for e in K.tuning_env(4, 2, "64Mi")}
+        out = subprocess.run(["sh", "-c", 'VITEST_MAX_WORKERS=1 printenv NODE_COMPILE_CACHE VITEST_MAX_WORKERS TMPDIR'], env=env, capture_output=True, text=True).stdout.split()
+        self.assertEqual(out, ["/tmp/kgate-node-cache", "1", "/kgate-scratch"])
+
+    def test_scratch_tmpfs_is_a_sized_memory_emptydir_mounted_where_tmpdir_points(self):
+        for pod in (self.homelab(scratch="256Mi"), self.kubectl(scratch="256Mi")):
+            self.assertIn({"name": "scratch", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}, pod["spec"]["volumes"])
+            c = pod["spec"]["containers"][0]
+            self.assertIn({"name": "scratch", "mountPath": "/kgate-scratch"}, c["volumeMounts"])
+            self.assertEqual(self.env(pod)["TMPDIR"], "/kgate-scratch")
+
+    def test_the_profile_keys_parse_and_default(self):
+        prof = K.parse_profile('image = "x"\nscratch_tmpfs = "256Mi"\nworkers_per_cpu = 2\n')
+        self.assertEqual((prof["scratch_tmpfs"], prof["workers_per_cpu"]), ("256Mi", 2))
+        prof = K.parse_profile('image = "x"\n')
+        self.assertEqual((prof["scratch_tmpfs"], prof["workers_per_cpu"]), (None, 1))
+
+    def test_bad_profile_values_are_refused(self):
+        for text in ('scratch_tmpfs = 256', 'scratch_tmpfs = "lots"', 'workers_per_cpu = 0', 'workers_per_cpu = 1.5', 'workers_per_cpu = true'):
+            with self.assertRaises(K.Unavailable, msg=text):
+                K.parse_profile(text)
+
+    def test_scratch_must_fit_inside_the_memory_limit(self):
+        K.check_scratch(None, "1Gi")
+        K.check_scratch("256Mi", "1Gi")
+        with self.assertRaises(K.Unavailable):
+            K.check_scratch("1Gi", "1Gi")
 
 
 class PodSh(unittest.TestCase):
@@ -5238,7 +5303,8 @@ class SshMux:
         self.assert_one_master_closed_last()
 
     def test_a_waiting_job_polls_over_the_one_connection(self):
-        done = self.job("--wait", "5", "--sched-wait", "5", "--", "true", env={"FAKE_POD": "pending"})
+        # --wait must outlast --sched-wait: the wait deadline starts at the job's start, the scheduling deadline at the pod's creation, so with both at 5 s a slow runner lets a poll land between them and exit 69 instead of 75
+        done = self.job("--wait", "60", "--sched-wait", "5", "--", "true", env={"FAKE_POD": "pending"})
         self.assertEqual(done.returncode, 75, done.stdout)
         working, _ = self.assert_one_master_closed_last()
         polls = [c for c in working if "get pod" in c[-1] and "-o json" in c[-1]]

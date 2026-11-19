@@ -12,7 +12,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-${TMPDIR:-/tmp}/ci-pycache}"   # bytecode goes here, not into the checkout (kgate sets it already)
 
 # systemd-analyze --user needs XDG_RUNTIME_DIR, or it exits 1 ("Failed to initialize manager") before it reads the unit, and the
 # unit tests that only look at its stderr pass without checking anything. A login session sets it (GitHub's runner has one); a kgate

@@ -76,10 +76,10 @@ How it works:
 When GitHub's runners fail twice the same infrastructure way, the same check runs on kgate at the same commit; if that run is green, the PR merges with `--admin` (ask #849=A). The check is `scripts/ci-linux.sh`, the command the CI `tests` job runs. The kgate image carries what it needs (chezmoi, zsh, rsync, sqlite3, jq, lsof; `images/kgate` in the homelab repo), and `kgate.toml` pins it. From the PR's worktree:
 
 ```sh
-run-and-wake -- kgate --cpu 4 --mem 4Gi --mem-limit 6Gi --wait 1800 -- env CI_PAR_JOBS=4 scripts/ci-linux.sh
+run-and-wake -- kgate --cpu 4 --mem 4Gi --mem-limit 6Gi --wait 1800 -- scripts/ci-linux.sh
 ```
 
-`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and, unless the profile sets `cpu_limit`, no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; set it to the `--cpu` value. `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ. When you merge on kgate's green run, say so in the PR: the two failed GitHub runs, the kgate job id and log path, the head it ran, and the counts comparison; then merge with `--admin`.
+`CI_PAR_JOBS` is the width of `scripts/ci-par.py`'s suite pool. A homelab pod has a CPU request and, unless the profile sets `cpu_limit`, no CPU limit, so the pool cannot read its size from the cgroup and would use the node's CPU count; kgate sets it to the pod's CPUs (the `--cpu` value, rounded up to a slot; see "Pod environment"). `ci-par` prints `suite counts (ran, skipped)` at the end. Compare it with the same block in the GitHub `tests` log at the same commit: a pass that skips tests GitHub runs is not the same check. Only the exception below may differ. When you merge on kgate's green run, say so in the PR: the two failed GitHub runs, the kgate job id and log path, the head it ran, and the counts comparison; then merge with `--admin`.
 
 **The one exception (CI-plan lead's decision under #849=A).** kgate runs the same `tests` check except `RestartJourneyTest` in `tests/agent-browser/test_login_unit.py`. It starts the real `agent-chrome.service` unit under the user systemd manager and restarts it ten times, and a pod has no user manager (and no `ss`). It skips there: one extra skipped test in `tests/agent-browser`.
 
@@ -386,6 +386,8 @@ ephemeral_storage_limit = "20Gi"                 # homelab only, optional: the l
 cpu_limit = 8                                    # optional, whole number, at least cpu. A kubectl cluster: the CPU limit and build parallelism, default cpu. The homelab: sets the pod's CPU limit (default none, and not below the rounded-up cpu); build parallelism still follows cpu
 priority_class = "kgate-first"                   # homelab only, optional: "kgate" (default), "kgate-first" (ahead of waiting kgate pods) or "kgate-main"; env KGATE_PRIORITY_CLASS wins (see Priority)
 local_hostnames = ["db"]                         # kubectl clusters only: names that resolve to 127.0.0.1 in the pod
+workers_per_cpu = 2                              # optional, whole number, default 1: VITEST_MAX_WORKERS and CI_PAR_JOBS are the pod's CPUs times this (see "Pod environment")
+scratch_tmpfs = "256Mi"                          # optional: a memory-backed folder of this size, TMPDIR points at it (see "Pod environment"); counts toward the memory limit
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
 
 [tools]                                          # exact versions; checked in the pod before CMD
@@ -416,6 +418,22 @@ npm = true                                       # `npm ci` in the job is served
 ## GitHub CI is the receipt
 
 Playbook 83fbe006: do not run a suite on kgate when GitHub CI already ran it green on the same commit. A profile with a `[github_ci]` table (`workflow`, a workflow file name such as `ci.yml`; `suites`, a list of strings) makes kgate check first. It refuses with exit 69 (`GitHub CI already ran this suite green on <sha12> (<run url>): GitHub's run is the receipt`) when all of these hold: one of `suites` appears in the shell-quoted CMD; the worktree is clean (`git status --porcelain` is empty, untracked files that are not ignored count); and `gh run list --workflow <workflow> --commit <HEAD>`, run in the worktree, shows a completed, successful run on exactly `HEAD` whose event is `push` or `workflow_dispatch` (a `pull_request` run tests the merge commit, not `HEAD`, so it never counts). The check runs after the profile is read and before any cluster call. If `gh` is missing, not signed in, takes over 15 s or fails, kgate prints one `kgate:` note with the first line of its error and runs the job as before. A profile with no `[github_ci]` table, or a table of the wrong shape (a profile error, exit 69), is unchanged or refused like any other bad key. To run the suite anyway, change something in the tree or use a CMD the suites do not name. The dotfiles `kgate.toml` lists `tests/heavy-gate`, `tests/workstream-rank` and `scripts/ci-linux.sh`.
+
+## Pod environment
+
+Every pod starts CMD with these variables set, so no repo has to remember them (stack audit candidates 3, 5 and 8, workstream coordinator-test-speed):
+
+| Variable | Value | Why |
+|---|---|---|
+| `NODE_COMPILE_CACHE` | `/tmp/kgate-node-cache` | Every Node process in the job shares one compile cache; only the first start pays. The cache is keyed on file content, so it cannot go stale. |
+| `PYTHONPYCACHEPREFIX` | `/tmp/kgate-pycache` | The same for Python bytecode, written outside the checkout (so a test run leaves the tree clean). |
+| `KGATE_CPUS` | the pod's CPUs | The number `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` already use: the CPU request on the homelab, the CPU limit on a kubectl cluster. A pod sees the node's CPUs, not its own, so a tool that reads the machine oversizes its pool. |
+| `VITEST_MAX_WORKERS`, `CI_PAR_JOBS` | `KGATE_CPUS` times the profile's `workers_per_cpu` (default 1) | Worker pools sized from the pod. Raise `workers_per_cpu` only where a measured run shows it pays. |
+| `TMPDIR` | `/kgate-scratch` | Only with `scratch_tmpfs` (below). |
+
+A profile secret with one of these names wins (kgate leaves that variable out). A CMD that sets one itself wins too, since CMD starts after the pod's environment is in place: `kgate -- sh -c 'VITEST_MAX_WORKERS=2 npm test'`. The compile caches live in `/tmp` on the pod's disk on purpose: they are large and should not take memory.
+
+**`scratch_tmpfs = "256Mi"`.** kgate mounts a memory-backed folder (`emptyDir` with `medium: Memory` and that `sizeLimit`) at `/kgate-scratch` and sets `TMPDIR` to it. A suite that makes and removes many small files and folders runs faster there than on the pod's overlay disk. No key, no mount and no `TMPDIR`. **The size counts toward the pod's memory limit:** the files sit in memory the container's cgroup is charged for, so a full folder uses `memory_limit` that the job's own processes then do not have. Size the profile's `memory` and `memory_limit` to include it (job peak plus the scratch you expect to use; kgate refuses a `scratch_tmpfs` that is not smaller than `memory_limit`). Too much scratch fails the job as out of memory, not silently. A write past the folder's size fails with "no space left on device"; size the key from one measured run, the way memory is sized. Tests about real disk behaviour (sync, renames across file systems) should name a disk path themselves.
 
 ## Cached npm install
 
