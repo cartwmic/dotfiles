@@ -23,7 +23,6 @@ HOOKS_TMPL = ROOT / "dot_cursor/modify_hooks.json.tmpl"
 ADAPTER = ROOT / "dot_cursor/hooks/executable_shell_guard.py"
 HARNESS = ROOT / "dot_local/share/agent-harness/hooks"
 PROFILES = ("personal", "axon-work-computer")
-ALLOW = {"permission": "allow"}
 
 
 def shell(command, cwd="/tmp", tool="Shell"):
@@ -54,11 +53,19 @@ class CursorShellGuard(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.home, ignore_errors=True)
 
+    def run_guard(self, profile, payload, home=None):
+        return subprocess.run(["sh", "-c", self.commands[profile]], input=payload, capture_output=True, text=True, timeout=30,
+                              env=dict(os.environ, HOME=str(home or self.home)))
+
     def answer(self, profile, payload):
-        r = subprocess.run(["sh", "-c", self.commands[profile]], input=payload, capture_output=True, text=True, timeout=30,
-                           env=dict(os.environ, HOME=str(self.home)))
+        r = self.run_guard(profile, payload)
         self.assertEqual((r.returncode, r.stderr), (0, ""))
         return json.loads(r.stdout)
+
+    def assertPasses(self, profile, payload, home=None):
+        # Exit 1 with no output: Cursor reads that as "hook failed, action proceeds". Any other answer fails here.
+        r = self.run_guard(profile, payload, home)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (1, "", ""))
 
     def assertDenied(self, profile, payload, text):
         out = self.answer(profile, payload)
@@ -76,12 +83,12 @@ class CursorShellGuard(unittest.TestCase):
             with self.subTest(profile=profile):
                 self.assertDenied(profile, shell("until test -f /tmp/done; do sleep 2; done"), "sleep-poll loop is refused in agent sessions")
 
-    def test_a_harmless_command_another_tool_and_garbage_are_allowed(self):
+    def test_a_harmless_command_another_tool_and_garbage_are_let_through(self):
         for profile in PROFILES:
             for name, payload in (("ls", shell("ls")), ("other tool", shell("pkill -f x", tool="Read")), ("garbage", "not json {"),
                                   ("empty", ""), ("array", "[1]")):
                 with self.subTest(profile=profile, case=name):
-                    self.assertEqual(self.answer(profile, payload), ALLOW)
+                    self.assertPasses(profile, payload)
 
     def test_the_command_runs_in_the_directory_cursor_names(self):
         # The git rule looks at the session's directory; Cursor sends it inside tool_input, so the adapter has to hand it on.
@@ -90,16 +97,14 @@ class CursorShellGuard(unittest.TestCase):
         for profile in PROFILES:
             with self.subTest(profile=profile):
                 self.assertDenied(profile, shell("git commit -m x", cwd=str(live)), "refused in agent sessions")
-                self.assertEqual(self.answer(profile, shell("git commit -m x", cwd="/tmp")), ALLOW)
+                self.assertPasses(profile, shell("git commit -m x", cwd="/tmp"))
 
-    def test_a_missing_classifier_allows(self):
+    def test_a_missing_classifier_lets_the_command_through(self):
         home = Path(tempfile.mkdtemp())
         try:
             (home / ".cursor/hooks").mkdir(parents=True)
             shutil.copy(ADAPTER, home / ".cursor/hooks/shell_guard.py")
-            r = subprocess.run(["sh", "-c", self.commands["personal"]], input=shell("pkill -f x"), capture_output=True, text=True, timeout=30,
-                               env=dict(os.environ, HOME=str(home)))
-            self.assertEqual((r.returncode, json.loads(r.stdout)), (0, ALLOW))
+            self.assertPasses("personal", shell("pkill -f x"), home=home)
         finally:
             shutil.rmtree(home, ignore_errors=True)
 

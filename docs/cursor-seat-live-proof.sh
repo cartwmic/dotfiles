@@ -4,7 +4,8 @@
 # Four steps, each PASS or FAIL:
 #   1. ~/.cursor/mcp.json has the hindsight and shartifacts servers (the key list is printed).
 #   2. `cursor-agent mcp list` shows both.
-#   3. The guard command installed in ~/.cursor/hooks.json, fed a recorded pkill payload and an ls payload, denies the first and allows the second.
+#   3. The guard command installed in ~/.cursor/hooks.json, fed a recorded pkill payload and an ls payload, denies the first and lets the second through:
+#      the ls run passes only when the command exits 1 with no output; any output, or exit 0 or 2, is a FAIL.
 #   4. A real headless cursor-agent is asked to run `pkill -f nosuchproc-seat-proof` and then `echo ok`; its transcript is printed, and the step passes
 #      when the transcript carries the guard's refusal ("pkill is refused in agent sessions"). The pattern matches no process, so nothing is killed even if the guard failed.
 # It reads ~/.cursor and runs cursor-agent; it changes nothing. Exits 1 if any step FAILs. A person reads the transcript and the note at the end.
@@ -41,11 +42,12 @@ if [ -z "$cmd" ]; then
 else
   echo "command: $cmd"
   deny=$(printf '%s' '{"tool_name":"Shell","tool_input":{"command":"pkill -f x","cwd":"/tmp","timeout":30}}' | sh -c "$cmd" || true)
-  allow=$(printf '%s' '{"tool_name":"Shell","tool_input":{"command":"ls","cwd":"/tmp","timeout":30}}' | sh -c "$cmd" || true)
+  printf '%s' '{"tool_name":"Shell","tool_input":{"command":"ls","cwd":"/tmp","timeout":30}}' | sh -c "$cmd" >"$tmp/ls.out" && ls_rc=0 || ls_rc=$?
+  ls_bytes=$(wc -c <"$tmp/ls.out" | tr -d ' ')
   echo "pkill -f x -> $deny"
-  echo "ls         -> $allow"
+  echo "ls         -> exit $ls_rc, $ls_bytes bytes of output"
   if echo "$deny" | jq -e '.permission == "deny" and (.user_message | contains("pkill is refused in agent sessions"))' >/dev/null 2>&1; then pass "pkill is denied with the guard's message"; else fail "pkill was not denied"; fi
-  if echo "$allow" | jq -e '.permission == "allow"' >/dev/null 2>&1; then pass "ls is allowed"; else fail "ls was not allowed"; fi
+  if [ "$ls_rc" = 1 ] && [ "$ls_bytes" = 0 ]; then pass "ls passes: the guard exits 1 with no output"; else fail "ls was not passed through (want exit 1 with no output; got exit $ls_rc with $ls_bytes bytes)"; fi
 fi
 
 echo "== 4. a real headless cursor-agent session"
@@ -59,10 +61,13 @@ if grep -qw ok "$tmp/transcript"; then echo "note: the transcript mentions ok (t
 cat <<'NOTE'
 
 == For a person to look at (not automated)
-The hook answers {"permission":"allow"} for a harmless command. Check whether Cursor still asks for approval on a command you have set to "ask":
-in Cursor's settings put a command (for example `git push`) under the commands that need approval, run `cursor-agent` interactively without --force,
-ask it to run that command, and see whether the approval prompt still appears. If the allow skips the prompt, the guard should print {} instead of
-{"permission":"allow"} (dot_cursor/hooks/executable_shell_guard.py, the ALLOW value): tell the dotfiles owner.
+On the work Mac, record three things. For a passing command the guard prints nothing and exits 1, which Cursor reads as "hook failed, action proceeds".
+(a) The passing command runs: run `cursor-agent` interactively and ask it to run `ls`. It should run.
+(b) The ask prompt still shows, where you have one: in Cursor's settings, put a command (for example `git push`) under the commands that need
+    approval. Run `cursor-agent` interactively without --force, ask it to run that command, and check that the approval prompt still appears.
+    If you have no such command, write "no ask command set".
+(c) Whether Cursor shows or logs a hook error for the passing command: look in Cursor's own hook output or logs for the `ls` run.
+If (b) shows no prompt, tell the dotfiles owner. A noisy (c) is a follow-up, not a blocker.
 NOTE
 
 if [ "$fails" = 0 ]; then echo "PASS: all four steps"; else echo "FAIL: $fails step(s) failed"; fi
