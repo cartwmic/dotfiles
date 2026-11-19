@@ -31,6 +31,7 @@ Every claim in the report carries the source id, the **verbatim extract** (copie
 - Copy numbers, names and versions from the raw page. Never from memory or a summary.
 - If you cannot quote it, it is not a finding. Move it to "could not find or check", or label it a guess.
 - Never cite a source you did not open.
+- Save the raw text you took each extract from (the fetched page, file or PDF text) in a folder next to the report, named by source id, so the extracts can be checked again later.
 
 ## 4. Coverage and stopping
 
