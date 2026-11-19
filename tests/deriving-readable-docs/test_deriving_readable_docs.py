@@ -462,10 +462,13 @@ class OverreachFailTest(unittest.TestCase):
         self.assertEqual(check("- Every peer is listed. `src/inbox/http.ts:1`\n", PEERS_FILES)[0], 0)  # source code can define the set
 
     def test_a_test_path_is_found_by_name_or_by_the_harvest(self):
-        files = {"checks/odd_name.py": "def test_one():\n    assert 1\n", "src/x.py": "x = 1\n"}
-        doc = "- It always passes. `checks/odd_name.py:2`\n"
+        files = {"Pay.Tests/PayTests.cs": "public class PayTests {\n  [Fact]\n  public void Charges() {}\n}\n", "src/x.cs": "class X {}\n"}
+        doc = "- It always charges. `Pay.Tests/PayTests.cs:3`\n"
         self.assertEqual(check(doc, files)[0], 0)  # not a test by its name
-        self.assertEqual(check_counted("# D\n\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n## P\n\n" + doc, files)[0], 1)  # the harvest knows it is one
+        counts = "# D\n\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n## P\n\n"
+        code, out = check_counted(counts + doc, files)  # the harvest knows it is one
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL overreach: always", out)
 
 
 def counted_doc(counts, body):
