@@ -139,7 +139,7 @@ CACHE_ROOT = "/cache"
 CACHE_CAP = int(os.environ.get("KGATE_CACHE_CAP") or 8 << 30)   # bytes of disk the node cache may use when a job starts on an idle node. The env var is for a live proof of the trim only
 CACHE_LOCK = ".kgate-use"    # a shared flock held by every running job, taken exclusively to trim; names that start ".kgate" are not cache entries
 CACHE_TRASH = ".kgate-trash"
-CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
+CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?|/nm)?")   # directories that hold entries; every other child of these is one entry, trimmed whole
 END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
@@ -276,7 +276,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci", "install"}
     if set(raw) - known:
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known)))
     tools = {}
@@ -350,11 +350,24 @@ def parse_profile(text):
     if user is not None and (not isinstance(user, str) or not re.fullmatch(r"[0-9]+:[0-9]+", user)):
         raise Unavailable("profile user must look like 1000:1000, got %r" % (user,))
     github_ci = parse_github_ci(raw.get("github_ci"))
-    return {"image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
+    install = parse_install(raw.get("install"))
+    return {"install": install, "image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
             "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "priority_class": priority_class, "cache_pvc": cache_pvc,
             "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
 
+
+
+def parse_install(table):
+    """[install] npm = true: `npm ci` in the job is served from the node cache (INSTALL_SH). -> {"npm": bool}."""
+    if table is None:
+        return {"npm": False}
+    if not isinstance(table, dict) or set(table) - {"npm"}:
+        raise Unavailable("profile [install] takes npm = true only, got %r" % (table,))
+    npm = table.get("npm", False)
+    if not isinstance(npm, bool):
+        raise Unavailable("profile [install] npm must be true or false, got %r" % (npm,))
+    return {"npm": npm}
 
 
 def parse_github_ci(table):
@@ -737,11 +750,96 @@ def job_sh(job):
              "KGATE_HEAD=" + q(job.get("head") or ""), "export KGATE_HEAD"]
     if job.get("cache_cap") is not None:   # the pod side trims its Go build cache and pnpm store to this, oldest files first; KiB, so the cap cannot overflow the pod side's shell arithmetic
         lines.append("CACHE_CAP_KIB=%d" % (job["cache_cap"] // 1024))
+    if job.get("install_dir"):   # [install] npm = true and a cache that outlives the pod: the pod side puts INSTALL_SH first on PATH as `npm`
+        lines.append("INSTALL_DIR=" + q(job["install_dir"]))
     lines.append("kg_tools() {")
     lines += ["  kg_check %s %s %s || return" % (q(name), q(version), q(cmd or name + " --version")) for name, (version, cmd) in job["tools"].items()]
     lines += ["  :", "}", "set -- " + " ".join(q(a) for a in job["argv"])]
     return "\n".join(lines) + "\n"
 
+
+# The cached `npm ci` (profile [install] npm = true). The pod puts a directory with this script, named `npm`, first on the job's PATH, so a command that types
+# `npm ci` gets the cached install and every other npm command passes through. One script for both pod sides (pod_main writes it out, POD_SH's job ships it).
+# The script takes its own directory out of PATH first, so the real npm it calls (and everything the real npm starts: lifecycle scripts, tests that run `npm ci` in a
+# fixture folder) never meets it again. The cache is used only when the folder it runs in is inside the shipped tree and holds package.json and package-lock.json.
+# Cache: KGATE_INSTALL_DIR/<key>.tar, one folder per repo, the 2 newest keys kept. key = first 16 hex of sha256 of package.json, package-lock.json, .npmrc, the node and npm
+# versions and the arguments after `ci`. A tar is made of node_modules plus a marker added last, so a cut file is a miss and a real install, never a broken hit.
+# Result: one line `hit|miss SECONDS` appended to KGATE_INSTALL_RESULT, which the pod side turns into the job's `install` and `install_s`.
+INSTALL_SH = r"""#!/bin/sh
+self=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
+newpath=
+oldifs=$IFS
+IFS=:
+for p in $PATH; do
+  case $p in "$self"|"${KGATE_INSTALL_BIN:-$self}") ;; *) newpath=${newpath:+$newpath:}$p ;; esac
+done
+IFS=$oldifs
+PATH=$newpath
+export PATH
+cmd=${1:-}
+case $cmd in ci|clean-install|install-clean|ic) ;; *) exec npm "$@" ;; esac
+shift
+root=${KGATE_INSTALL_ROOT:-}
+dir=${KGATE_INSTALL_DIR:-}
+inside=
+[ -z "$root" ] || case $PWD/ in "$root"/*) inside=1 ;; esac
+if [ -z "$dir" ] || [ -z "$inside" ] || [ ! -f package.json ] || [ ! -f package-lock.json ]; then exec npm "$cmd" "$@"; fi
+mkdir -p "$dir" 2>/dev/null
+[ -w "$dir" ] || exec npm "$cmd" "$@"
+now() { t=$(date +%s.%N 2>/dev/null); case $t in *N*|"") date +%s ;; *) printf '%s\n' "$t" ;; esac; }
+since() { awk -v a="$1" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }'; }
+sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
+record() { [ -z "${KGATE_INSTALL_RESULT:-}" ] || printf '%s %s\n' "$1" "$2" >>"$KGATE_INSTALL_RESULT" 2>/dev/null || :; }
+marker=node_modules/.kgate-install-done
+log=${TMPDIR:-/tmp}/kgate-npm-ci.$$.log
+start=$(now)
+key=$({ cat package.json package-lock.json; [ ! -f .npmrc ] || cat .npmrc; node -v; npm -v; printf 'ci %s\n' "$*"; } 2>/dev/null | sum | cut -c1-16)
+tarball=$dir/$key.tar
+if [ -e "$tarball" ]; then
+  rm -rf node_modules
+  # tar exits 0 on a file cut at a block boundary: a whole file is one whose last member, the marker, came out.
+  if tar -xf "$tarball" 2>/dev/null && [ -e "$marker" ]; then
+    rm -f "$marker"
+    touch "$tarball" 2>/dev/null || :
+    secs=$(since "$start")
+    record hit "$secs"
+    echo "kgate-install: hit $key, unpacked in ${secs}s"
+    exit 0
+  fi
+  echo "kgate-install: $key.tar did not unpack, removing it" >&2
+  rm -rf node_modules
+  rm -f "$tarball"
+fi
+npm ci --prefer-offline --no-audit --no-fund "$@" >"$log" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  tail -30 "$log"
+  echo "kgate-install: npm ci failed (full output in $log)" >&2
+  exit "$rc"
+fi
+rm -f "$log"
+installed=$(since "$start")
+# Publish unless another pod did while this one installed. Not compressed (packing and unpacking are most of what a hit costs), written under its own temp name and renamed.
+if [ -e "$tarball" ]; then
+  note="not published (another pod did)"
+else
+  tmp=$(mktemp "$dir/.$key.tmp.XXXXXX") || tmp=
+  if [ -n "$tmp" ] && tar -cf "$tmp" node_modules && : >"$marker" && tar -rf "$tmp" "$marker" && rm -f "$marker" && chmod 0644 "$tmp" && mv -f "$tmp" "$tarball"; then
+    note="published $key.tar"
+  else
+    [ -z "$tmp" ] || rm -f "$tmp"
+    rm -f "$marker"
+    note="publishing failed (continuing without the cache)"
+  fi
+fi
+secs=$(since "$start")
+record miss "$secs"
+echo "kgate-install: miss $key, npm ci ${installed}s, $note"
+# keep the 2 newest keys of this repo, and drop a temp file nobody is writing any more
+ls -t "$dir"/*.tar 2>/dev/null | tail -n +3 | while read -r old; do rm -f "$old"; done
+find "$dir" -maxdepth 1 -name '.*.tmp.*' -mmin +60 -exec rm -f {} + 2>/dev/null || :
+exit 0
+"""
 
 # The pod side on a kubectl cluster, where the image may have no python3. It prints the markers `kgate.py --pod` prints, so the Mac side reads both the same way.
 # Usage: sh kgate.sh DIR. DIR holds job.sh (job_sh) and files.nul (the shipped file list, NUL-separated).
@@ -866,6 +964,17 @@ kg_check() {
 }
 kg_tools || exit 71
 say "preflight ok $n tools"
+# [install] npm = true: a directory with INSTALL_SH as `npm` goes first on PATH (after the tool checks, which meet the real npm). The wrapper writes one line per cached
+# install to install.result, which the job user must be able to write.
+iresult=
+if [ -n "${INSTALL_DIR:-}" ] && command -v npm >/dev/null 2>&1; then
+  if mkdir -p "$dir/bin" && cp "$dir/install.sh" "$dir/bin/npm" && chmod 755 "$dir/bin" "$dir/bin/npm" && : > "$dir/install.result" && chmod 666 "$dir/install.result"; then
+    iresult=$dir/install.result
+    KGATE_INSTALL_BIN=$(cd "$dir/bin" && pwd -P); KGATE_INSTALL_ROOT=$ROOT; KGATE_INSTALL_DIR=$INSTALL_DIR; KGATE_INSTALL_RESULT=$iresult
+    PATH=$KGATE_INSTALL_BIN:$PATH
+    export PATH KGATE_INSTALL_BIN KGATE_INSTALL_ROOT KGATE_INSTALL_DIR KGATE_INSTALL_RESULT
+  fi
+fi
 cg=${KGATE_CGROUP:-/sys/fs/cgroup}
 up0=; { read up0 _ < /proc/uptime; } 2>/dev/null
 say "running $*"
@@ -879,12 +988,15 @@ peak=unknown
 printf '\n'; say "peak $peak"
 say "cpu $cpu"
 [ -n "$up0" ] && [ -n "$up1" ] && say "clock $up0 $up1"
+ires=
+[ -z "$iresult" ] || ires=$(awk '{ s += $2; if ($1 == "miss") m = 1 } END { if (NR) printf "%s %.1f", (m ? "miss" : "hit"), s }' "$iresult" 2>/dev/null)
+say "install ${ires:-none 0.0}"
 say "end $(date +%s) exit $code"
 exit "$code"
 """
 
 
-MARKER = r"kgate\[%s\]: (start|running|peak|cpu|clock|end|hash|commit|image|preflight)\b(.*)"
+MARKER = r"kgate\[%s\]: (start|running|peak|cpu|clock|end|hash|commit|image|preflight|install)\b(.*)"
 
 
 class Markers:
@@ -1065,6 +1177,35 @@ def prepare_user(job, euid=None, chown=os.lchown, root=""):
     return {"user": uid, "group": gid, "extra_groups": []}, {"HOME": home, "npm_config_cache": cache + "/npm", "CARGO_HOME": cache + "/cargo"}
 
 
+def install_setup(base, root, cache_dir, path):
+    """[install] npm = true, pod side: a folder with INSTALL_SH as `npm` and a file the job user can write, in `base` (the job's own folder). Returns (env additions, result file);
+    nothing when the image has no npm."""
+    if shutil.which("npm", path=path) is None:
+        return {}, None
+    bin_dir, result = os.path.join(base, "bin"), os.path.join(base, "install.result")
+    os.makedirs(bin_dir, exist_ok=True)
+    for d in (base, bin_dir):
+        os.chmod(d, 0o755)
+    with open(os.path.join(bin_dir, "npm"), "w") as f:
+        f.write(INSTALL_SH)
+    os.chmod(os.path.join(bin_dir, "npm"), 0o755)
+    open(result, "w").close()
+    os.chmod(result, 0o666)
+    return {"PATH": bin_dir + ":" + path, "KGATE_INSTALL_BIN": bin_dir, "KGATE_INSTALL_ROOT": root, "KGATE_INSTALL_DIR": cache_dir, "KGATE_INSTALL_RESULT": result}, result
+
+
+def install_result(result):
+    """What the cached npm ci did, from the lines INSTALL_SH wrote: `hit|miss SECONDS` (miss when any install missed, the seconds added up), or `none 0.0` when it never ran."""
+    try:
+        with open(result) as f:
+            rows = [line.split() for line in f if len(line.split()) == 2]
+    except (OSError, TypeError):
+        rows = []
+    if not rows:
+        return "none 0.0"
+    return "%s %.1f" % ("miss" if any(r[0] == "miss" for r in rows) else "hit", sum(float(r[1]) for r in rows))
+
+
 def pod_main(jobfile):
     """Inside the pod: verify the tree hash, check the tool versions, run CMD, report peak memory and its exit code."""
     with open(jobfile) as f:
@@ -1091,6 +1232,10 @@ def pod_main(jobfile):
                 % (name, version, json.dumps(line[:120]), cmd, run.returncode))
             return 71
     out("kgate: preflight ok %d tools\n" % len(job["tools"]))
+    result = None
+    if job.get("install"):
+        extra, result = install_setup(os.path.dirname(os.path.abspath(jobfile)), job["root"], "%s/u%d/nm/%s" % (os.environ.get("KGATE_CACHE_ROOT") or CACHE_ROOT, job["uid"], job["install"]["repo"]), env.get("PATH", ""))   # KGATE_CACHE_ROOT: the tests only, as in POD_SH
+        env.update(extra)
     meter = PeakMeter()
     meter.start()
     t0 = time.monotonic()
@@ -1106,6 +1251,7 @@ def pod_main(jobfile):
     out("\nkgate: peak %s %s\n" % (peak if peak is not None else "unknown", source))
     out("kgate: cpu %s\n" % (cpu if cpu is not None else "unknown"))
     out("kgate: clock %.3f %.3f\n" % (t0, t1))
+    out("kgate: install %s\n" % install_result(result))
     out("kgate: end %d exit %d\n" % (time.time(), code if code >= 0 else 128 - code))
     return code if code >= 0 else 128 - code
 
@@ -1695,7 +1841,7 @@ class Job:
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
-                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "cpu_usec": None, "run_s": None, "ran": False,
+                    "profile": None, "cpu": None, "mem": None, "mem_limit": None, "peak_bytes": None, "peak_source": None, "cpu_usec": None, "run_s": None, "install": None, "install_s": None, "ran": False,
                     "exit": None, "reason": None, "out_files": 0, "cleanup": None, "output": self.id + ".log", "priority_class": None}
         self.cluster = Cluster(HOSTS, KEY)
         self.kcfg = None
@@ -1770,7 +1916,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "github_ci": None, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
+                "services": [], "cluster": "homelab", "github_ci": None, "install": {"npm": False}, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": []}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -2221,9 +2367,18 @@ class Job:
                "own": [wt] + ([common] if not common.startswith(wt + "/") else []),
                "head": self.rec["head"], "tools": {k: list(v) for k, v in prof["tools"].items()},
                "cache": {"root": CACHE_ROOT, "cap": CACHE_CAP}}
+        install_repo = re.sub(r"[^A-Za-z0-9._-]", "_", self.rec["repo"] or "repo").lstrip(".") or "repo"   # one cache folder per repo, the same for every clone of it
+        if prof["install"]["npm"] and self.cluster.kind != "kubectl":
+            job["install"] = {"repo": install_repo}
         if self.cluster.kind == "kubectl":
-            shipped = {"cache/%s/job.sh" % self.id: job_sh({**job, "tools": prof["tools"], "cache_cap": self.kcfg["cache_cap"]}).encode(),
+            kube = {**job, "tools": prof["tools"], "cache_cap": self.kcfg["cache_cap"]}
+            if prof["install"]["npm"] and prof["cache_pvc"]:   # without a claim /cache is gone with the pod: nothing to keep
+                kube["install_dir"] = "/cache/nm/" + install_repo
+            elif prof["install"]["npm"]:
+                self.note("[install] npm = true: this profile has no cache claim, so npm ci runs as typed")
+            shipped = {"cache/%s/job.sh" % self.id: job_sh(kube).encode(),
                        "cache/%s/kgate.sh" % self.id: POD_SH.encode(),
+                       "cache/%s/install.sh" % self.id: INSTALL_SH.encode(),
                        "cache/%s/files.nul" % self.id: b"".join(os.fsencode(f) + b"\0" for f in files)}
         else:
             shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
@@ -2303,6 +2458,9 @@ class Job:
                 self.rec["run_s"] = round(max(float(clock[1]) - float(clock[0]), 0.0), 2)
             except ValueError:
                 pass
+        got = re.fullmatch(r"(hit|miss|none) ([0-9.]+)", seen.get("install", ""))
+        if got:   # what the cached npm ci did in the pod (INSTALL_SH): none when the command never ran it
+            self.rec["install"], self.rec["install_s"] = got.group(1), float(got.group(2))
         if "hash" in seen and seen["hash"].startswith("MISMATCH"):
             raise Unavailable("tree hash differs: " + seen["hash"].replace("MISMATCH", "").strip() + " (CMD not run)")
         if seen.get("image", "").startswith("FAILED"):
