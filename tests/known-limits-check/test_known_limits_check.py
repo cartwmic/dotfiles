@@ -2,8 +2,8 @@
 
 The fixture is the past mistake, written generically: a PR description accepted a known limit on the
 condition that a follow-up ticket be filed, named no ticket, and nothing failed until a reviewer noticed.
-The check finds Known-limits blocks loosely (a heading, an inline "Known limits:" line, a bold label, or a
-list item that is just the label), then judges strictly: every limit unit carries its own marker
+The check finds Known-limits blocks loosely (a heading whose text is the label, the label alone on its
+line, or an inline "Known limits:" line), then judges strictly: every limit unit carries its own marker
 ("Follow-up: KEY", "Tracked: KEY" / "Tracked in KEY", a /browse/KEY link, or the permanent form), with no
 inheritance from a parent. The check must fail on that body and pass on the corrected ones. Nothing here
 writes inside the repo.
@@ -439,7 +439,7 @@ class KnownLimitsCheck(unittest.TestCase):
         text = "# PR\n\n**Known limits**\n\n- A. Follow-up: PROJ-1.\n\n**Export**\n\n- B is slow\n"
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn('ended by label "**Export**"', out.stdout)
+        self.assertIn('1 unit(s), ended by label "**Export**"', out.stdout)
 
     def test_the_cost_of_group_titles_in_heading_blocks_is_pinned(self):
         text = "# PR\n\n## Known limits\n\n- A. Follow-up: PROJ-1.\n\n**Testing**\n\n- ran it\n"
@@ -469,7 +469,79 @@ class KnownLimitsCheck(unittest.TestCase):
         text = "## Known limits\n\n- A. Follow-up: PROJ-1.\n\n## Testing\n\n- ran it\n"
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertIn('block 1, lines 3-4, 1 item(s), ended by heading "## Testing" at line 5', out.stdout)
+        self.assertIn('block 1, lines 3-3, 1 unit(s), ended by heading "## Testing" at line 5', out.stdout)
+    # -- round 6: the comment pre-pass removes only the comment text -----------------------------
+
+    def test_an_inline_comment_on_the_heading_hides_nothing(self):
+        text = ("## Summary\n\nAdds X.\n\n## Known limits <!-- list each with a follow-up -->\n\n"
+                "- B breaks, no ticket.\n\n## Testing\n\n- ran it\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B breaks", out.stderr)
+
+    def test_a_limit_line_with_an_inline_comment_is_still_judged(self):
+        text = "## Known limits\n\n- A (Follow-up: PROJ-1)\n- B breaks on big repos <!-- ask Sam -->\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B breaks", out.stderr)
+        text = "## Known limits\n\n- A (Follow-up: PROJ-1) <!-- ok -->\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_multi_line_comment_is_still_removed(self):
+        text = "## Known limits\n\n- A (Follow-up: PROJ-1)\n<!-- - B breaks, no ticket.\nstill hidden -->\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    # -- round 6: the trailer cut takes the last Decisions line ----------------------------------
+
+    def test_the_trailer_cut_takes_the_last_decisions_line(self):
+        text = ("## Summary\n\nAdds X.\n\n**Decisions:** we chose sqlite over postgres.\n\n"
+                "## Known limits\n\n- B breaks, no ticket.\n\nDecisions: #12\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B breaks", out.stderr)
+
+    # -- round 6: an inline block ends at the next label line ------------------------------------
+
+    def test_an_inline_none_block_ends_at_the_next_label_line(self):
+        text = "**Known limits:** none.\n**Testing:** ran the suite.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ended by label", out.stdout)
+        text = "Known limits: None\nTesting: ran the suite\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("ended by label", out.stdout)
+
+    def test_an_inline_block_still_judges_its_opener(self):
+        text = "Known limits: emoji print as ?\nTesting: ran it\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("emoji print as ?", out.stderr)
+
+    # -- round 6 / decision #1259: any label line ends a bold or Label: block --------------------
+
+    def test_a_plain_label_only_line_ends_a_label_block_pinned(self):
+        text = "# PR\n\n**Known limits**\n\n- A (Follow-up: PROJ-1)\n\nAlso:\n\n- B breaks, no ticket\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('block 1, lines 5-5, 1 unit(s), ended by label "Also:" at line 7', out.stdout)
+
+    def test_a_bold_run_in_line_ends_a_label_block_pinned(self):
+        text = "# PR\n\nKnown limits:\n\n- A (Follow-up: PROJ-1)\n\n**Emoji:** prints ?, no ticket.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('1 unit(s), ended by label "**Emoji:** prints ?, no ticket." at line 7', out.stdout)
+
+    # -- round 6: emphasis-wrapped and quoted labels are strays ----------------------------------
+
+    def test_emphasis_wrapped_labels_are_strays(self):
+        cases = ["*Known limits*", "***Known limits***", "> **Known limits**"]
+        for line in cases:
+            with self.subTest(line=line):
+                text = "## Summary\n\nAdds X.\n\n" + line + "\n\n- B breaks, no ticket.\n"
+                out = run("--body-file", self.body(text))
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("does not read", out.stderr)
 
 if __name__ == "__main__":
     unittest.main()

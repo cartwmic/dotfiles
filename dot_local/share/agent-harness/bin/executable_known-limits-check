@@ -8,12 +8,13 @@ limit when nobody files it: nothing fails until a reviewer notices, rounds later
 escape loud when the body is written or reviewed. The reviewer brief (reviewer-brief.md section 1) runs it
 on the body as filed. Design: find loosely, judge strictly, fail loudly on anything in between.
 
-The body is prepared first. Fenced code blocks and HTML comments are dropped; a fence or comment that
-never closes is an error, because what follows it would silently vanish from the scan. The trailer (the
-"Decisions:" or "**Decisions:**" line and everything after it) is dropped. Then every line is classified,
-from its text alone: blank, heading, rule ("---"), list item, continuation (2+ spaces or a tab), label
-(a bold-led line, or "Word: ..." at column 0 with up to four words before the colon and no "//"), or
-paragraph.
+The body is prepared first. Fenced code blocks are dropped; from HTML comments only the comment text is
+removed, so the rest of the line keeps its meaning, and a fence or comment that never closes is an error,
+because what follows it would silently vanish from the scan. The trailer — the LAST "Decisions:" or
+"**Decisions:**" line and everything after it — is dropped, so an earlier "Decisions:" label in the
+summary cannot swallow a Known limits block that follows it. Then every line is classified, from its text
+alone: blank, heading, rule ("---"), list item, continuation (2+ spaces or a tab), label (a bold-led line,
+or "Word: ..." at column 0 with up to four words before the colon and no "//"), or paragraph.
 
 A Known-limits block opens at one of three forms, matched without case over the label words "known limits",
 "known limitations", "limitations", "accepted limits" and "accepted limitations":
@@ -31,13 +32,16 @@ whether or not it carries a ticket, because the check does not read that form.
 A heading block ends before the next heading of the same or higher level, a rule, or another Known-limits
 start; deeper headings and label-only lines inside it are group titles, kept for context and not judged —
 so a list under a group title inside a heading block is read as limits. A bold or "Label:" block ends
-before the next heading, rule, another start, a bold-led line, or a plain label-only line ("Testing:");
-that a bold group title ends such a block is accepted (decision #1258). An inline block ends at the first
-blank line. Every block found prints one span line: its lines, its item count, and what ended it, so a
-boundary is visible on every run, pass or fail.
+before the next heading, rule, another start, or ANY label line — a bold group title ("**Export**"), a
+plain label-only line ("Also:", "Testing:"), or a bold run-in line ("**Emoji:** prints ?"); that any
+label line ends such a block is accepted (decision #1259, widening #1258). Group limits under a
+"## Known limits" heading block instead, where label lines are group titles. An inline block ends at the
+first blank line or the next label line. Every block found prints one span line: its lines, its unit
+count, and what ended it, so a boundary is visible on every run, pass or fail.
 
 Outside blocks, a line is a stray when a heading, bold-led line, list item or "> " quote starts with a
-label word, or a paragraph starts with "known limit" / "accepted limit", or a paragraph starts with bare
+label word, or a paragraph starts with "known limit" / "accepted limit" after leading ">", quote and
+emphasis markers ("*Known limits*", "> **Known limits**") are stripped, or a paragraph starts with bare
 "Limitations" alone or followed by a colon. Backticks are not stripped: a line that opens with a
 backticked label is code, not a mention. An empty block fails.
 
@@ -181,6 +185,7 @@ def stray_mention(kind, text):
         return bool(LABEL_RE.match(re.sub(r"^(\*\*|__)", "", t)))
     if kind == "paragraph":
         t2 = re.sub(r"^>\s*", "", t)
+        t2 = re.sub(r"^[\*_]+", "", t2)  # italics, bold runs and quotes before the label word (f5)
         m = LABEL_RE.match(t2)
         if not m:
             return False
@@ -211,8 +216,12 @@ def prepare(text):
                 in_fence = False
             continue
         if in_comment:
+            # inside a multi-line comment: keep only what follows the closing -->
             if "-->" in line:
                 in_comment = False
+                kept.append((no, line.split("-->", 1)[1]))
+            else:
+                kept.append((no, ""))
             continue
         m = re.match(r"^\s*(`{3,}|~{3,})", line)
         if m:
@@ -222,10 +231,13 @@ def prepare(text):
             fence_line = no
             continue
         if "<!--" in line:
-            if "-->" in line.split("<!--", 1)[1]:
-                continue
-            in_comment = True
-            comment_line = no
+            # remove only the comment text; the rest of the line stays (f1)
+            reduced = re.sub(r"<!--.*?-->", "", line)
+            if "<!--" in reduced:
+                in_comment = True
+                comment_line = no
+                reduced = reduced.split("<!--", 1)[0]
+            kept.append((no, reduced))
             continue
         kept.append((no, line))
     if in_fence:
@@ -234,13 +246,16 @@ def prepare(text):
     if in_comment:
         errors.append((comment_line, "an HTML comment opens here and never closes, so the rest of the body "
                                      "cannot be read. Close it with -->."))
-    out = []
-    for no, line in kept:
+    # the trailer is the LAST Decisions line and everything after it (f2): an earlier "Decisions:"
+    # label in the summary must not swallow the Known limits block that follows it
+    cut = None
+    for idx, (no, line) in enumerate(kept):
         s = line.strip()
         if s.startswith("Decisions:") or s.startswith("**Decisions:**"):
-            break
-        out.append((no, line))
-    return out, errors
+            cut = idx
+    if cut is not None:
+        kept = kept[:cut]
+    return kept, errors
 
 
 def end_of_block(lines, i, form, level):
@@ -327,6 +342,10 @@ def find_blocks(lines, errors):
                 break
             if kind2 == "rule":
                 reason = 'rule "%s"' % trunc(t2.strip())
+                break
+            if kind2 == "label":
+                # the next section's label ends the inline block even with no blank between (f3)
+                reason = 'label "%s"' % trunc(t2.strip())
                 break
             j += 1
         blocks.append({"form": "C", "opener": no, "content_start": i, "end": j, "reason": reason})
@@ -450,6 +469,13 @@ def judge_unit(u, name, failures, marked_keys, counts):
                                  '"accepted as permanent (decision #N)" to this item.%s' % (trunc(text), hint)))
 
 
+def none_text_of(t):
+    """A unit's text with a leading (possibly bold-wrapped) label and colon removed, for the None check."""
+    t = t.strip()
+    t = re.sub(r"^(?:\*\*\s*)?(?:" + LABEL_SRC + r")\s*:?\s*(?:\*\*)?\s*", "", t, flags=re.IGNORECASE)
+    return t.strip()
+
+
 def check_body(text, name):
     """Print one span line per block and one line per failure; return (failures, marked keys, limits, blocks)."""
     lines, errors = prepare(text)
@@ -468,20 +494,18 @@ def check_body(text, name):
                 collect(u["children"])
 
         collect(units)
-        n_items = sum(1 for u in flat if u["kind"] == "item")
         nonblank = [no for no, t in block_lines if t.strip()]
         start_line = nonblank[0] if nonblank else b["opener"]
-        end_line = block_lines[-1][0] if block_lines else b["opener"]
+        end_line = nonblank[-1] if nonblank else b["opener"]
         if b["end"] < len(lines):
-            print("known-limits: block %d, lines %d-%d, %d item(s), ended by %s at line %d"
-                  % (idx, start_line, end_line, n_items, b["reason"], lines[b["end"]][0]))
+            print("known-limits: block %d, lines %d-%d, %d unit(s), ended by %s at line %d"
+                  % (idx, start_line, end_line, len(flat), b["reason"], lines[b["end"]][0]))
         else:
-            print("known-limits: block %d, lines %d-%d, %d item(s), ended by %s"
-                  % (idx, start_line, end_line, n_items, b["reason"]))
+            print("known-limits: block %d, lines %d-%d, %d unit(s), ended by %s"
+                  % (idx, start_line, end_line, len(flat), b["reason"]))
         # "None" / "n/a" as the only content passes with zero limits; together with items it is an error
         texts = [" ".join(u["parts"]) for u in flat]
-        none_idx = [k for k, t in enumerate(texts)
-                    if NONE_TEXT.match(re.sub(r"^" + LABEL_SRC + r"\s*:?\s*", "", t, flags=re.IGNORECASE).strip())]
+        none_idx = [k for k, t in enumerate(texts) if NONE_TEXT.match(none_text_of(t))]
         if none_idx:
             if len(texts) > len(none_idx):
                 failures.append((flat[none_idx[0]]["first"], '"None" appears in a Known limits block that '
