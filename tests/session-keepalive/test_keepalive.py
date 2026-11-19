@@ -179,6 +179,15 @@ class TickTest(unittest.TestCase):
     def tearDown(self):
         self.env.close()
 
+    def test_the_tunnel_probe_tests_reachability_without_verifying_the_certificate(self):
+        # A host behind a private certificate authority must not read as stale: the probe sends nothing
+        # and reads nothing, so it skips certificate checks.
+        self.env.run()
+        probes = [c for c in self.env.calls if c.startswith("curl ")]
+        self.assertTrue(probes)
+        for c in probes:
+            self.assertIn("--insecure", c.split())
+
     def test_connected_and_reachable_does_nothing(self):
         r = self.env.run()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

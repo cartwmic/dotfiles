@@ -21,7 +21,7 @@ Per kind:
 | Field | Kind | Meaning |
 |---|---|---|
 | `connection` | `viscosity` | The Viscosity connection name, exactly as Viscosity lists it. Same charset as `label`: no comma (the tick reads Viscosity's comma-joined name/state list) and no quote (the name goes into AppleScript source). |
-| `host` | `viscosity` | The host probed over HTTPS through the tunnel. Any HTTP status counts as reachable. |
+| `host` | `viscosity` | The host probed over HTTPS through the tunnel. Any HTTP status counts as reachable. The certificate is not verified (`curl --insecure`): the probe tests reachability only, sends no credentials and reads no content, and hosts inside a VPN often use a private certificate authority. |
 | `probe` | `command` | Required shell command, run through `/bin/sh -c`; exit 0 is healthy. |
 | `refresh` | `command` | Optional shell command; required when the check sets `mode: refresh`. |
 | `probeTimeoutSeconds` | `command` | 5 to 120. Default 20. |

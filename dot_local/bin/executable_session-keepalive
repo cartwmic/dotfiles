@@ -170,10 +170,13 @@ def connection_states():
     return dict(zip(parts[:n], parts[n:]))
 
 def probe(host):
-    """One HTTPS probe: any HTTP status counts as reachable; a timeout, TLS or connection failure
-    does not. Latency is the wall time, so a failed probe carries one too."""
+    """One HTTPS probe through the tunnel: any HTTP status counts as reachable; a timeout or a
+    connection failure does not. It tests reachability only: it sends no credentials and reads no
+    content, so the certificate is not verified (--insecure). A host behind a private certificate
+    authority, common inside a VPN, would otherwise read as stale while the tunnel works.
+    Latency is the wall time, so a failed probe carries one too."""
     start = time.monotonic()
-    r = run(["curl", "-sS", "-o", os.devnull, "--max-time", PROBE_MAX_TIME, "-w", "%{http_code}",
+    r = run(["curl", "-sS", "--insecure", "-o", os.devnull, "--max-time", PROBE_MAX_TIME, "-w", "%{http_code}",
              "https://" + host], 20)
     latency = round((time.monotonic() - start) * 1000)
     status = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
