@@ -76,7 +76,6 @@ python3 scripts/ci-par.py \
   tests/dotfiles-update \
   tests/agent-kill-guard \
   tests/config-show \
-  tests/known-limits-check \
   tests/disposition-check \
   tests/stop-running-jobs \
   tests/homelab-chat \

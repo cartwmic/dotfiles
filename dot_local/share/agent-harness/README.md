@@ -17,7 +17,6 @@ dot_local/share/agent-harness/
     profile                  # rendered from profile.tmpl: just the chezmoi profile name, read by bash_rules
   bin/
     config-show              # prints a config file's keys with every value masked (see "Config reader"); source name executable_config-show
-    known-limits-check       # checks a PR body's "Known limits" section: every item names a tracker ticket or says "accepted as permanent (decision #N)"; the reviewer brief runs it (source name executable_known-limits-check)
     disposition-check        # refuses a `fixed` review disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3); the reviewer brief runs it at re-review (source name executable_disposition-check)
   canonical/
     instructions/
