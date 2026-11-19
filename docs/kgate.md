@@ -12,6 +12,8 @@ One ssh connection per job. Every ssh a homelab job runs (the probe, each kubect
 run-and-wake -- kgate -- sh -c 'npm ci && npm run typecheck && npm test'
 ```
 
+A suite too slow for one pod can be split across several with `kgate-split` (`docs/kgate-split.md`, personal profile): its `[split]` table in the same `kgate.toml` is ignored by `kgate`.
+
 The pane that started the job is woken when it ends, with the exit code and the log path. The cluster side (image, `kgate` namespace, pull token) is in the homelab repo, `docs/kgate.md`.
 
 ## CLI

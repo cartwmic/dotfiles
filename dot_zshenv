@@ -41,6 +41,11 @@ fi
 # line does nothing there. See docs/agent-scratch.md.
 [ -f "$HOME/.config/agent-scratch/workshop.env" ] && . "$HOME/.config/agent-scratch/workshop.env"
 
+# Work-profile agent-harness environment (the ticket-tracker lookup known-limits-check uses):
+# work Mac only. The file is not deployed on other profiles, so this line does nothing there.
+# See docs/profiles.md.
+[ -f "$HOME/.config/agent-harness/work-env.zsh" ] && . "$HOME/.config/agent-harness/work-env.zsh"
+
 # Agent shells on the Omarchy box only: WAYLAND_DISPLAY and HYPRLAND_INSTANCE_SIGNATURE. t3code.service starts before Hyprland, so an agent
 # shell inherits neither, and grim ("failed to create display") and hyprctl ("HYPRLAND_INSTANCE_SIGNATURE not set!") fail. session.sh looks up
 # the live Hyprland instance each time a shell starts, so a Hyprland restart (new signature) needs nothing else. It keeps a signature whose

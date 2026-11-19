@@ -207,6 +207,7 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 .local/share/pi-mcp-lazy/seed/browser-harness.json
+.config/agent-harness/work-env.zsh
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
@@ -375,6 +376,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/bin/pr-body-check
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).
 .local/bin/coordinator
+# kgate-split serves a work queue from this host's LAN address to pods on the personal homelab cluster: personal only (docs/profiles.md).
+.local/bin/kgate-split
 .pi/agent/extensions/openrouter-gate
 .pi/agent/extensions/openrouter-gate/**
 .pi/agent/extensions/claude-compat-guard

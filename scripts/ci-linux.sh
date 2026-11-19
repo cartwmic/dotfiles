@@ -47,6 +47,8 @@ python3 scripts/ci-par.py \
   tests/release-skills \
   tests/pr-body-check \
   tests/review-intent \
+  tests/known-limits-check \
+  tests/mcp-ticket-lookup \
   'dot_local/share/session-recap:test_*.py' \
   tests/pi-op-shim \
   tests/seed-op-connect-token \
@@ -85,6 +87,7 @@ python3 scripts/ci-par.py \
   tests/axon-playbook \
   tests/spotlight-workshop \
   tests/t3-hook \
+  tests/cursor \
   tests/agent-host \
   tests/t3-hub \
   tests/t3-pin \
@@ -110,7 +113,8 @@ python3 scripts/ci-par.py \
   tests/mcp-pins \
   tests/release-pins \
   tests/ci-main-status \
-  tests/ci-main-status-any-repo || status=1
+  tests/ci-main-status-any-repo \
+  tests/kgate-split || status=1
 
 # tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
 # timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,
