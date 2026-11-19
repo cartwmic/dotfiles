@@ -2,7 +2,11 @@
 
 The fixture is the past mistake, written generically: a PR description accepted a known limit on the
 condition that a follow-up ticket be filed, named no ticket, and nothing failed until a reviewer noticed.
-The check must fail on that body and pass on the corrected ones. Nothing here writes inside the repo.
+The check finds Known-limits blocks loosely (a heading, an inline "Known limits:" line, a bold label, or a
+list item that is just the label), then judges strictly: every limit unit carries its own marker
+("Follow-up: KEY", "Tracked: KEY" / "Tracked in KEY", a /browse/KEY link, or the permanent form), with no
+inheritance from a parent. The check must fail on that body and pass on the corrected ones. Nothing here
+writes inside the repo.
 
     python3 -m unittest discover -s tests/known-limits-check -v
 """
@@ -22,7 +26,7 @@ PAST_MISTAKE = (
     "## Known limits\n\n"
     "- Characters outside the font print as ?. A follow-up ticket will be filed.\n"
 )
-FIXED_WITH_TICKET = PAST_MISTAKE.replace("will be filed.", "will be filed (PROJ-123).")
+FIXED_WITH_TICKET = PAST_MISTAKE.replace("will be filed.", "will be filed. Follow-up: PROJ-123.")
 FIXED_PERMANENT = PAST_MISTAKE.replace("will be filed.", "will be filed, accepted as permanent (decision #1).")
 
 
@@ -51,6 +55,8 @@ class KnownLimitsCheck(unittest.TestCase):
         p.write_text("#!/bin/sh\n" + "\n".join(lines) + "\n")
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
         return str(p)
+
+    # -- the past mistake and the corrected forms -------------------------------------------
 
     def test_the_past_mistake_fails_and_names_the_line(self):
         out = run("--body-file", self.body(PAST_MISTAKE))
@@ -94,9 +100,11 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertIn("bad.md", out.stderr)
         self.assertNotIn("good.md:", out.stderr)
 
+    # -- the tracker hook --------------------------------------------------------------------
+
     def test_tracker_command_confirms_each_distinct_ticket(self):
         tracker = self.tracker("tracker-refuses-second", ['[ "$1" = PROJ-2 ] && exit 1', "exit 0"])
-        text = PAST_MISTAKE.replace("will be filed.", "will be filed (PROJ-1). Also (PROJ-2) tracks the rest.")
+        text = PAST_MISTAKE.replace("will be filed.", "will be filed. Follow-up: PROJ-1. Also Tracked: PROJ-2.")
         out = run("--body-file", self.body(text), "--tracker-cmd", tracker)
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("PROJ-2 is not confirmed", out.stderr)
@@ -124,60 +132,175 @@ class KnownLimitsCheck(unittest.TestCase):
         out = run("--body-file", self.body(FIXED_WITH_TICKET), "--tracker-cmd", "/nonexistent/tracker")
         self.assertEqual(out.returncode, 2, out.stderr)
 
+    def test_usage_errors_exit_2(self):
+        self.assertEqual(run("--nope").returncode, 2)
+        self.assertEqual(run("--body-file").returncode, 2)
+        self.assertEqual(run("--body-file", "/nonexistent/body.md").returncode, 2)
+
+    # -- units: wrapping, paragraphs, lead-ins ------------------------------------------------
+
     def test_a_wrapped_bullet_with_the_ticket_on_the_continuation_passes(self):
         text = "# PR\n\n## Known limits\n\n- Characters outside the font print as ?; tracked in\n  PROJ-123.\n"
-        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
-
-    def test_known_limits_as_the_last_section_ends_before_the_decisions_line(self):
-        text = ("# PR\n\n## Known limits\n\n- Tracked in PROJ-1.\n\n"
-                "Decisions: #1\n\nGenerated with a coding agent\n")
         self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
 
     def test_a_wrapped_bullet_with_no_ticket_on_any_of_its_lines_fails(self):
         text = "# PR\n\n## Known limits\n\n- Characters outside the font print as ?; a follow-up\n  will be filed.\n"
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("item at line 5", out.stderr)
+        self.assertIn("line 5", out.stderr)
 
     def test_a_paragraph_limit_under_the_heading_fails(self):
         text = "# PR\n\n## Known limits\n\nCharacters outside the font print as ?. A follow-up ticket will be filed.\n"
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("item at line 5", out.stderr)
+        self.assertIn("line 5", out.stderr)
 
     def test_an_intro_line_followed_by_an_untracked_bullet_fails(self):
         text = ("# PR\n\n## Known limits\n\nThese are accepted for this PR:\n\n"
                 "- Characters outside the font print as ?. A follow-up ticket will be filed.\n")
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("item at line 7", out.stderr)
+        self.assertIn("line 7", out.stderr)
 
     def test_an_item_a_paragraph_then_an_untracked_item_fails(self):
         text = ("# PR\n\n## Known limits\n\n- A is slow (PROJ-1).\n\nAlso:\n\n"
                 "- Characters outside the font print as ?. A follow-up ticket will be filed.\n")
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("item at line 9", out.stderr)
+        self.assertIn("line 9", out.stderr)
 
     def test_an_intro_ending_in_a_colon_is_covered_by_its_ticketed_list(self):
         text = "# PR\n\n## Known limits\n\nThese are accepted:\n\n- Tracked in PROJ-1.\n- Tracked in PROJ-2.\n"
         self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
 
     def test_a_leadin_bullet_with_ticketed_sub_bullets_passes(self):
-        text = "# PR\n\n## Known limits\n\n- Font gaps:\n  - Emoji print as ? (PROJ-1).\n"
+        text = "# PR\n\n## Known limits\n\n- Font gaps:\n  - Emoji print as ? Follow-up: PROJ-1.\n"
         self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
 
-    def test_standard_names_that_share_the_ticket_shape_are_not_tickets(self):
+    # -- the body trailer ---------------------------------------------------------------------
+
+    def test_known_limits_as_the_last_section_ends_before_the_decisions_line(self):
+        text = ("# PR\n\n## Known limits\n\n- Tracked in PROJ-1.\n\n"
+                "Decisions: #1\n\nGenerated with a coding agent\n")
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_none_block_before_the_trailers_passes(self):
+        text = "# PR\n\n## Known limits\n\nNone.\n\nDecisions: #12\n\nGenerated with a coding agent\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_the_trailers_are_not_reported_as_limits(self):
         text = ("# PR\n\n## Known limits\n\n"
-                "- Characters outside the font print as ? on UTF-8 input, hashed with SHA-256, stamped ISO-8601.\n")
+                "Characters outside the font print as ?. A follow-up ticket will be filed.\n\n"
+                "Decisions: #12\n\nGenerated with a coding agent\n")
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertNotIn("OK", out.stdout)
+        self.assertIn("Characters outside the font print as ?", out.stderr)
+        self.assertNotIn("Decisions", out.stderr)
+        self.assertNotIn("Generated with", out.stderr)
 
-    def test_usage_errors_exit_2(self):
-        self.assertEqual(run("--nope").returncode, 2)
-        self.assertEqual(run("--body-file").returncode, 2)
-        self.assertEqual(run("--body-file", "/nonexistent/body.md").returncode, 2)
+    # -- bare keys are not coverage -----------------------------------------------------------
+
+    def test_a_bare_key_is_not_coverage(self):
+        for key in ("UTF-8", "PROJ-1"):
+            text = "# PR\n\n## Known limits\n\n- Emoji print as ? (%s).\n" % key
+            with self.subTest(key=key):
+                out = run("--body-file", self.body(text))
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("is not marked as coverage", out.stderr)
+                self.assertIn('Add "Follow-up: %s"' % key, out.stderr)
+
+    def test_gpt4_in_prose_is_a_bare_key(self):
+        text = ("# PR\n\n## Known limits\n\n"
+                "- Prompts over the GPT-4 context limit are cut. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn('Add "Follow-up: GPT-4"', out.stderr)
+
+    # -- round 3: nesting is judged per unit, with no inheritance -----------------------------
+
+    def test_a_marked_parent_with_an_untracked_child_fails(self):
+        text = ("# PR\n\n## Known limits\n\n- Emoji print as ? Follow-up: PROJ-1.\n"
+                "  - Ligatures break. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 6", out.stderr)
+
+    def test_a_group_label_with_one_covered_and_one_untracked_child_fails(self):
+        text = ("# PR\n\n## Known limits\n\n- Rendering:\n"
+                "  - Emoji print as ? Follow-up: PROJ-1.\n"
+                "  - Ligatures break. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 7", out.stderr)
+
+    def test_a_one_space_list_with_an_untracked_item_fails(self):
+        text = ("# PR\n\n## Known limits\n\n - Emoji print as ? Follow-up: PROJ-1.\n"
+                " - Ligatures break. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 6", out.stderr)
+
+    def test_a_loose_nested_list_with_blank_lines_fails(self):
+        text = ("# PR\n\n## Known limits\n\n- Rendering:\n\n"
+                "  - Emoji print as ? Follow-up: PROJ-1.\n\n"
+                "  - Ligatures break. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 9", out.stderr)
+
+    def test_a_numbered_nested_list_fails(self):
+        text = ("# PR\n\n## Known limits\n\n1. Rendering\n"
+                "   1. Emoji (PROJ-1).\n"
+                "   2. Ligatures break.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 6", out.stderr)
+
+    # -- round 3: the other block-opening forms -----------------------------------------------
+
+    def test_an_inline_known_limits_line_opens_the_section(self):
+        text = "Known limits: Characters outside the font print as ?. A follow-up ticket will be filed.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 1", out.stderr)
+
+    def test_an_inline_known_limits_line_with_a_marker_passes(self):
+        text = "Known limits: Characters outside the font print as ?. Follow-up: PROJ-1.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_bold_label_with_a_colon_opens_the_section(self):
+        text = "# PR\n\n**Known limits:**\n\n- Characters outside the font print as ?. Follow-up: PROJ-1.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_sub_heading_does_not_end_the_section(self):
+        text = ("# PR\n\n## Known limits\n\n### Rendering\n\n"
+                "- Emoji print as ? Follow-up: PROJ-1.\n"
+                "- Ligatures break. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 8", out.stderr)
+
+    def test_a_stray_label_line_fails(self):
+        text = "# PR\n\nKnown limits - rendering\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("looks like a known-limits header", out.stderr)
+
+    # -- round 2: a prose limit in a block that also has a list -------------------------------
+
+    def test_a_prose_limit_after_a_covered_list_fails(self):
+        text = ("# PR\n\n## Known limits\n\n- B is slow. Follow-up: PROJ-1.\n\n"
+                "Limit A is untracked.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 7", out.stderr)
+
+    def test_a_prose_limit_before_a_covered_list_fails(self):
+        text = ("# PR\n\n## Known limits\n\nLimit A is untracked.\n\n"
+                "- B is slow. Follow-up: PROJ-1.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("line 5", out.stderr)
 
 
 if __name__ == "__main__":

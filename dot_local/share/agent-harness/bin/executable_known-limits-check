@@ -1,34 +1,41 @@
 #!/usr/bin/env python3
-"""known-limits-check: every item of a PR body's "Known limits" section carries a follow-up or a permanent acceptance.
+"""known-limits-check: every limit in a PR body's Known-limits block carries a follow-up or a permanent acceptance.
 
 usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD]
 
 A PR description that accepts a known limit on the condition that a follow-up ticket be filed loses the
 limit when nobody files it: nothing fails until a reviewer notices, rounds later. This check makes the
 escape loud when the body is written or reviewed. The reviewer brief (reviewer-brief.md section 1) runs it
-on the body as filed.
+on the body as filed. Design: find loosely, judge strictly, fail loudly on anything in between.
 
-The body text comes from --body-file files (repeatable) or stdin when no file is given. Each "Known
-limits" section starts at a heading whose text is "Known limits" (a markdown heading of any level, or a
-bold-only line, case-insensitive, trailing colon allowed). The section holds items, not physical lines: a
-line that opens with -, *, + or "N." starts an item, and a nested sub-bullet is part of its parent item; a
-following non-blank line that is indented, or that follows the item with no blank line between, joins it.
-Prose under the heading, and a paragraph between items, is an item too, held to the same rule; a lead-in
-line ending in ":" that is directly followed by a list is covered by that list, not an item of its own.
-Blank lines before the section's first content do not end anything. Once the section has content, it ends
-at the next heading, or at a line beginning "Decisions:" (every body ends with one, so the attribution
-line after it is outside too). Every item's joined text must carry one of:
+Finding is loose. Before scanning, fenced code blocks, HTML comments, and the body's trailer (the
+"Decisions:" line and everything after it) are dropped. A block opens at any of four forms, matched without
+case: a markdown heading whose text is the label ("## Known limits", colon optional), an inline
+"Known limits: ..." line, a bold "**Known limits**" label, or a list item that is just the label. The label
+is "known limits", "known limitations", "limitations", "accepted limits" or "accepted limitations". A
+heading block runs to the next heading of the same or higher level, so a sub-heading stays inside; the
+other blocks run to the end of their paragraph plus the list that follows it (a list-label block holds its
+child items). A line that starts with the label, after any #, -, *, >, "N." or ** marker, but matches none
+of the four forms, fails as a stray; a mention mid-sentence does not start the line, so it is ignored. An
+empty block fails.
 
-  a tracker ticket key    PROJECT-123 (uppercase letters, a dash, digits, at a word boundary; common
-                          non-ticket tokens such as UTF-8, SHA-256 and ISO-8601 do not count)
-  a permanent acceptance  accepted as permanent (decision #N)
+Judging is strict. Units, not physical lines: every list item at any depth is a unit, and so is every
+paragraph, except a lead-in paragraph ending in ":" that is directly followed by a list. Nesting: a list
+item nests under the open item indented less than it, and an item at or above the block's first item's
+indent is top-level, so a list indented by one to three spaces is still flat. Continuation: an item
+includes its indented continuation lines and a lazy continuation (a non-blank line directly after it, with
+no blank line between). Coverage counts only on the unit that carries it, with no inheritance: every leaf
+needs its own marker, and a parent with children passes without one only when its text ends in ":" (a
+group label). The markers are "Follow-up: KEY", "Tracked: KEY", "Tracked in KEY", a "/browse/KEY" link,
+"accepted as permanent (decision #N)", or the alias "Permanent: decision N". A bare key with no marker
+fails, with the one-word fix. A block whose text is "None" or "n/a" passes with zero limits.
 
-An item with neither is reported with its file, first line number and the two accepted forms. Exit 0 all
-sections conform (a body with no "Known limits" section conforms); 1 an item has neither; 2 bad arguments,
-an unreadable file, or the tracker command could not be run.
+The body text comes from --body-file files (repeatable) or stdin when no file is given. Exit 0 every block
+passes (a body with no Known-limits block passes); 1 a stray line, an empty block, or an uncovered limit;
+2 bad arguments, an unreadable file, or the tracker command could not be run. All failures are printed.
 
-With --tracker-cmd CMD (or KNOWN_LIMITS_TRACKER_CMD in the environment, when the flag is absent) every
-ticket key found is also confirmed: CMD runs once per distinct key with the key as its only argument, and
+With --tracker-cmd CMD (or KNOWN_LIMITS_TRACKER_CMD in the environment, when the flag is absent) every key
+that carries a marker is confirmed: CMD runs once per distinct key with the key as its only argument, and
 exit 0 means the ticket exists and is open. Without a tracker command the check stays on shape only, so it
 works wherever the dotfiles deploy, with or without a tracker.
 """
@@ -38,121 +45,329 @@ import shlex
 import subprocess
 import sys
 
-TICKET = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
-# Standard names that share the ticket shape (UTF-8, SHA-256, ISO-8601, RFC-1234, HTTP-2, ...) are not tickets.
-NON_TICKET = re.compile(r"^(UTF|SHA|ISO|RFC|HTTP|HTTPS|IEEE|TLS|CRC|AES|RSA|BASE|MD)(-[0-9]+)+$")
-PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\d+\s*\)", re.IGNORECASE)
-HEADING = re.compile(r"^(#{1,6})\s+(.*?)(\s*:)?\s*$")
-BOLD = re.compile(r"^\s*(\*\*|__)(.+?)(\*\*|__)\s*:?\s*$")
-LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*)$")
+LABEL_SRC = r"known\s+limitations|known\s+limits|accepted\s+limitations|accepted\s+limits|limitations"
+LABEL_RE = re.compile(LABEL_SRC, re.IGNORECASE)
+HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+LIST_ITEM = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
+BOLD = re.compile(r"^\*\*(.+?)\*\*\s*:?\s*(.*)$")
+KEY = re.compile(r"\b[A-Z][A-Z0-9]+-[0-9]+\b")  # case-sensitive: a key is uppercase
+MARKER = re.compile(r"\b(?:follow-up|tracked)\s*(?::|in\b)\s*([A-Z][A-Z0-9]+-[0-9]+)", re.IGNORECASE)
+BROWSE = re.compile(r"/browse/([A-Z][A-Z0-9]+-[0-9]+)")
+PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\s*\d+\s*\)", re.IGNORECASE)
+PERMANENT_ALIAS = re.compile(r"permanent\s*:\s*(?:decision\s*#?|#)\s*\d+", re.IGNORECASE)
+FENCE = re.compile(r"^\s*(```|~~~)")
+NONE_TEXT = re.compile(r"^(?:none|n/a)\.?$", re.IGNORECASE)
+TRUNC = 60
 
 
-def heading_text(line):
-    """The heading's own words, without markup, or None when the line starts no heading."""
-    m = HEADING.match(line)
-    if m:
-        text = m.group(2)
-    else:
-        m = BOLD.match(line)
-        if not m:
-            return None
-        text = m.group(2)
-    return re.sub(r"\*\*|__|\*|_", "", text).strip().rstrip(":").strip()
+def trunc(text):
+    return text if len(text) <= TRUNC else text[:TRUNC - 3] + "..."
 
 
-def is_known_limits(text):
-    t = text.lower()
-    return t == "known limits" or t.startswith("known limits ")
+def label_entry(text):
+    """(label, rest) when text begins with the label followed by nothing or a colon; else None."""
+    m = LABEL_RE.match(text)
+    if not m:
+        return None
+    rest = text[m.end():].lstrip()
+    if rest.startswith(":"):
+        return (m.group(0).rstrip(), rest[1:].strip())
+    if not rest:
+        return (m.group(0).rstrip(), "")
+    return None
 
 
-def ticket_keys(text):
-    """Every ticket key in the text, with the standard names that share the shape left out."""
-    return [k for k in TICKET.findall(text) if not NON_TICKET.match(k)]
+def bold_entry(stripped):
+    """(label, rest) for a **label** / **label:** line; else None."""
+    m = BOLD.match(stripped)
+    if not m:
+        return None
+    inner = m.group(1).strip()
+    if inner.endswith(":"):
+        inner = inner[:-1].strip()
+    if LABEL_RE.fullmatch(inner):
+        return (inner, m.group(2).strip())
+    return None
 
 
-def next_nonblank(lines, i):
-    """The index of the next non-blank line at or after i, or len(lines)."""
-    while i < len(lines) and not lines[i].strip():
+def strip_markers(stripped):
+    t = re.sub(r"^#{1,6}\s+", "", stripped)
+    t = re.sub(r"^[-*>]\s+", "", t)
+    t = re.sub(r"^\d+[.)]\s+", "", t)
+    t = re.sub(r"^\*\*\s*", "", t)
+    return t.strip()
+
+
+def prepare(text):
+    """Drop fenced code blocks, HTML comments and the Decisions trailer; keep original line numbers."""
+    lines = text.splitlines()
+    kept = []
+    in_fence = False
+    in_comment = False
+    for no, line in enumerate(lines, 1):
+        if in_fence:
+            if FENCE.match(line):
+                in_fence = False
+            continue
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if FENCE.match(line):
+            in_fence = True
+            continue
+        if "<!--" in line:
+            if "-->" in line.split("<!--", 1)[1]:
+                continue
+            in_comment = True
+            continue
+        kept.append((no, line))
+    out = []
+    for no, line in kept:
+        if line.strip().startswith("Decisions:"):
+            break
+        out.append((no, line))
+    return out
+
+
+def list_end(lines, k):
+    """End index (exclusive) of the list starting at k: items, continuations, and lazy lines."""
+    j = k
+    prev_blank = False
+    while j < len(lines):
+        text = lines[j][1]
+        if not text.strip():
+            prev_blank = True
+            j += 1
+            continue
+        if HEADING.match(text.strip()):
+            break
+        if LIST_ITEM.match(text) or text[:1] in (" ", "\t") or not prev_blank:
+            j += 1
+            prev_blank = False
+            continue
+        break
+    return j
+
+
+def paragraph_and_list_end(lines, i):
+    """End index (exclusive) of the paragraph at i plus the list that follows it."""
+    j = i + 1
+    while j < len(lines) and lines[j][1].strip():
+        j += 1
+    k = j
+    while k < len(lines) and not lines[k][1].strip():
+        k += 1
+    if k < len(lines) and LIST_ITEM.match(lines[k][1]):
+        return list_end(lines, k)
+    return j
+
+
+def find_blocks(lines, failures):
+    """One pass: blocks (loose), stray label-like lines (loud). A block is a dict with its line range."""
+    blocks = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        no, text = lines[i]
+        stripped = text.strip()
+        m = HEADING.match(stripped)
+        if m:
+            entry = label_entry(m.group(2))
+            if entry is not None:
+                level = len(m.group(1))
+                j = i + 1
+                while j < n:
+                    m2 = HEADING.match(lines[j][1].strip())
+                    if m2 and len(m2.group(1)) <= level:
+                        break
+                    j += 1
+                blocks.append({"label": entry[0], "kind": "heading", "opener": no,
+                               "rest": entry[1], "start": i + 1, "end": j})
+                i = j
+                continue
+        bold = bold_entry(stripped)
+        if bold is not None:
+            j = paragraph_and_list_end(lines, i)
+            blocks.append({"label": bold[0], "kind": "inline", "opener": no,
+                           "rest": bold[1], "start": i + 1, "end": j})
+            i = j
+            continue
+        lm = LIST_ITEM.match(text)
+        if lm:
+            entry = label_entry(lm.group(2).strip())
+            if entry is not None:
+                indent = len(lm.group(1))
+                j = i + 1
+                while j < n:
+                    t = lines[j][1]
+                    if not t.strip():
+                        j += 1
+                        continue
+                    if HEADING.match(t.strip()):
+                        break
+                    if len(t) - len(t.lstrip()) <= indent:
+                        break
+                    j += 1
+                blocks.append({"label": entry[0], "kind": "listlabel", "opener": no,
+                               "rest": entry[1], "start": i + 1, "end": j})
+                i = j
+                continue
+        lm2 = LABEL_RE.match(stripped)
+        if lm2 is not None and stripped[lm2.end():].lstrip().startswith(":"):
+            # inline form: "Known limits: ..." opens a block over its paragraph plus the list that follows
+            j = paragraph_and_list_end(lines, i)
+            rest = stripped[lm2.end():].lstrip().lstrip(":").strip()
+            blocks.append({"label": lm2.group(0).rstrip(), "kind": "inline", "opener": no,
+                           "rest": rest, "start": i + 1, "end": j})
+            i = j
+            continue
+        if LABEL_RE.match(strip_markers(stripped)):
+            failures.append((no, '"%s" looks like a known-limits header but is not one this check reads. '
+                             'Use a "## Known limits" heading, a "Known limits:" line, or a "**Known limits**" label.'
+                             % trunc(stripped)))
         i += 1
-    return i
+    return blocks
+
+
+def parse_units(block_lines):
+    """Build the unit tree for a block's lines. Returns (units, has_list)."""
+    units = []
+    stack = []  # open list items as (indent, unit)
+    para = None
+    prev_blank = True
+    top_indent = None
+    state = {"has_list": False}
+
+    def flush_para():
+        nonlocal para
+        if para is not None:
+            units.append(para)
+            para = None
+
+    for no, text in block_lines:
+        stripped = text.strip()
+        if not stripped:
+            prev_blank = True
+            continue
+        if HEADING.match(stripped):
+            # a sub-heading inside the block is a group label, not a unit; it does not end the block
+            flush_para()
+            prev_blank = False
+            continue
+        indent = len(text) - len(text.lstrip())
+        m = LIST_ITEM.match(text)
+        if m:
+            state["has_list"] = True
+            flush_para()
+            item_indent = len(m.group(1))
+            unit = {"kind": "item", "first": no, "last": no, "parts": [m.group(2).strip()], "children": []}
+            if top_indent is None:
+                top_indent = item_indent
+            if item_indent <= top_indent:
+                stack.clear()
+                units.append(unit)
+            else:
+                while stack and stack[-1][0] >= item_indent:
+                    stack.pop()
+                if stack:
+                    stack[-1][1]["children"].append(unit)
+                else:
+                    units.append(unit)
+            stack.append((item_indent, unit))
+            prev_blank = False
+            continue
+        if para is not None and not prev_blank:
+            para["parts"].append(stripped)
+            para["last"] = no
+            prev_blank = False
+            continue
+        if stack and (indent > stack[-1][0] or not prev_blank):
+            # continuation of the innermost open item: indented, or lazy (no blank between)
+            stack[-1][1]["parts"].append(stripped)
+            stack[-1][1]["last"] = no
+            prev_blank = False
+            continue
+        flush_para()
+        para = {"kind": "para", "first": no, "last": no, "parts": [stripped], "children": []}
+        prev_blank = False
+    flush_para()
+
+    # a lead-in paragraph ending in ":" directly followed by a list is covered by that list, not a unit
+    kept = []
+    for u in units:
+        if u["kind"] == "para" and u["parts"][-1].endswith(":"):
+            k = 0
+            for idx, (no, t) in enumerate(block_lines):
+                if no == u["last"]:
+                    k = idx + 1
+                    break
+            while k < len(block_lines) and not block_lines[k][1].strip():
+                k += 1
+            if k < len(block_lines) and LIST_ITEM.match(block_lines[k][1]):
+                continue
+        kept.append(u)
+    return kept, state["has_list"]
+
+
+def marker_keys(text):
+    """Keys that carry a marker: Follow-up: KEY, Tracked: KEY / Tracked in KEY, a /browse/KEY link."""
+    return MARKER.findall(text) + BROWSE.findall(text)
+
+
+def bare_keys(text, keys):
+    """KEY-shaped tokens in text that no marker covers."""
+    marked = set(keys)
+    return [k for k in KEY.findall(text) if k not in marked]
+
+
+def judge_unit(u, name, failures, marked_keys, counts):
+    """Judge one unit on its own text; children are judged independently (no inheritance)."""
+    for c in u["children"]:
+        judge_unit(c, name, failures, marked_keys, counts)
+    text = " ".join(u["parts"])
+    keys = marker_keys(text)
+    if keys or PERMANENT.search(text) or PERMANENT_ALIAS.search(text):
+        marked_keys.update(keys)
+        counts[0] += 1
+        return
+    if u["children"] and text.rstrip().endswith(":"):
+        return  # a group label: its children carry the limits
+    bare = bare_keys(text, keys)
+    if bare:
+        failures.append((u["first"], '"%s" is not marked as coverage. Bare keys are not read, because "UTF-8" looks like one. '
+                         'Add "Follow-up: %s" before it.' % (bare[0], bare[0])))
+        return
+    failures.append((u["first"], 'limit has no follow-up: "%s". Add "Follow-up: PROJ-123" or '
+                                 '"accepted as permanent (decision #N)" to this item.' % trunc(text)))
 
 
 def check_body(text, name):
-    """Print one line per offending item; return (bad count, ticket keys found)."""
-    bad = 0
-    tickets = set()
-    lines = text.splitlines()
-    section = False
-    item = None       # {"first": line number, "parts": [text, ...]}
-    blank = False
-    started = False   # True once the section has seen an item or a prose block
-
-    def flush():
-        nonlocal bad, item
-        if item is None:
-            return
-        joined = " ".join(item["parts"])
-        keys = ticket_keys(joined)
-        tickets.update(keys)
-        if not keys and not PERMANENT.search(joined):
-            bad += 1
-            print("known-limits-check: %s: item at line %d of the Known limits section names no ticket and no permanent acceptance: %s"
-                  % (name, item["first"], joined), file=sys.stderr)
-            print("  name a tracker ticket (PROJECT-123) or write: accepted as permanent (decision #N)", file=sys.stderr)
-        item = None
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        no = i + 1
-        i += 1
-        head = heading_text(line)
-        if head is not None:
-            flush()
-            section = is_known_limits(head)
-            blank = False
-            started = False
+    """Print one line per failure; return (failure count, marked keys, limits found, blocks found)."""
+    lines = prepare(text)
+    failures = []
+    blocks = find_blocks(lines, failures)
+    marked_keys = set()
+    counts = [0]
+    for b in blocks:
+        block_lines = lines[b["start"]:b["end"]]
+        units, has_list = parse_units(block_lines)
+        if b["rest"]:
+            units.insert(0, {"kind": "para", "first": b["opener"], "last": b["opener"],
+                             "parts": [b["rest"]], "children": []})
+        if not has_list:
+            texts = [" ".join(u["parts"]) for u in units]
+            joined = re.sub(r"^" + LABEL_SRC + r"\s*:?\s*", "", " ".join(texts), flags=re.IGNORECASE).strip()
+            if joined and NONE_TEXT.match(joined):
+                continue  # "None" / "n/a": pass with zero limits
+        if not units:
+            failures.append((b["opener"], '"%s" block is empty. List each limit as a bullet, or write "None".' % b["label"]))
             continue
-        if not section:
-            continue
-        stripped = line.strip()
-        if not stripped:
-            if started:
-                blank = True
-            continue
-        indented = line[:1] in (" ", "\t")
-        m = LIST_ITEM.match(line)
-        if m:
-            if item is not None and indented:
-                # a nested sub-bullet is part of its parent item
-                item["parts"].append(m.group(1).strip())
-                blank = False
-                continue
-            flush()
-            item = {"first": no, "parts": [m.group(1).strip()]}
-            started = True
-            blank = False
-            continue
-        if item is not None and (indented or not blank):
-            # a continuation of the open item: indented, or no blank line between
-            item["parts"].append(stripped)
-            blank = False
-            continue
-        # a new block: the open item (if any) ends here
-        flush()
-        if started and blank and stripped.startswith("Decisions:"):
-            section = False
-            continue
-        if stripped.endswith(":"):
-            j = next_nonblank(lines, i)
-            if j < len(lines) and LIST_ITEM.match(lines[j]):
-                # a lead-in directly followed by its list is covered by that list
-                continue
-        item = {"first": no, "parts": [stripped]}
-        started = True
-        blank = False
-    flush()
-    return bad, tickets
+        for u in units:
+            judge_unit(u, name, failures, marked_keys, counts)
+    for no, msg in failures:
+        print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
+    return len(failures), marked_keys, counts[0], len(blocks)
 
 
 def confirm(tickets, tracker):
@@ -170,6 +385,12 @@ def confirm(tickets, tracker):
                   % (key, done.returncode, (": " + done.stderr.strip()) if done.stderr.strip() else ""), file=sys.stderr)
             print("  the ticket must exist and be open, or the limit needs a different follow-up", file=sys.stderr)
     return bad
+
+
+def usage(why):
+    print("known-limits-check: %s" % why, file=sys.stderr)
+    print("usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD]", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def main(argv):
@@ -215,28 +436,28 @@ def main(argv):
             return 2
 
     bad = 0
-    tickets = set()
+    marked_keys = set()
+    limits = 0
+    blocks = 0
     for name, text in texts:
-        body_bad, body_tickets = check_body(text, name)
+        body_bad, body_keys, body_limits, body_blocks = check_body(text, name)
         bad += body_bad
-        tickets.update(body_tickets)
+        marked_keys.update(body_keys)
+        limits += body_limits
+        blocks += body_blocks
 
-    if tracker is not None and tickets:
+    if tracker is not None and marked_keys:
         try:
-            bad += confirm(tickets, tracker)
+            bad += confirm(marked_keys, tracker)
         except (OSError, subprocess.TimeoutExpired):
             return 2
 
     if bad:
-        print("known-limits-check: FAIL: %d item(s) need a ticket or a permanent acceptance" % bad, file=sys.stderr)
+        print("known-limits-check: FAIL: %d problem(s) in the Known-limits block(s)" % bad, file=sys.stderr)
         return 1
-    print("known-limits-check: OK (%d ticket(s)%s)" % (len(tickets), ", tracker confirmed" if tracker is not None and tickets else ""))
+    suffix = ", tracker confirmed" if tracker is not None and marked_keys else ""
+    print("known-limits-check: OK (%d limit(s) in %d block(s), all covered%s)" % (limits, blocks, suffix))
     return 0
-
-
-def usage(why):
-    print("known-limits-check: %s\nusage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD]" % why, file=sys.stderr)
-    raise SystemExit(2)
 
 
 if __name__ == "__main__":
