@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""mcp-ticket-lookup KEY — confirm one ticket key exists through a single read-only MCP tool.
+
+usage: mcp-ticket-lookup KEY
+
+Runs one non-interactive claude turn whose only permitted tool is the MCP tool named by
+KNOWN_LIMITS_MCP_TOOL (each profile supplies it in its own environment; this repo ships no
+tool name). The turn is locked down: every built-in tool is removed (--tools ""), only that
+one tool is allowed (--allowedTools), and any other tool call is denied automatically
+(--permission-prompts none, no bypass mode). The turn is asked for a fixed reply, FOUND <KEY>
+when the ticket exists or MISSING when it does not, and the echoed key must equal the
+requested key exactly. The lookup is read-only: the tool this check names is a get-issue
+read, and nothing here can write.
+
+Exit 0 the reply is exactly "FOUND KEY" with the echoed key equal to the requested one; 1 the
+reply is MISSING; 2 anything else: bad usage, the tool name unset, claude failed or timed out,
+or the reply was neither form. The key is read as one argument validated against the
+ticket-key pattern and handed to claude as an argv element, never through a shell. Claude's
+own output is never printed, so nothing from it (a token included) reaches a log or a file.
+The timeout is MCP_TICKET_LOOKUP_TIMEOUT seconds (default 180; the test suite sets it short).
+"""
+import os
+import re
+import subprocess
+import sys
+
+KEY = re.compile(r"^[A-Z][A-Z0-9]+-[0-9]+$")
+
+
+def timeout():
+    try:
+        return int(os.environ.get("MCP_TICKET_LOOKUP_TIMEOUT", "180"))
+    except ValueError:
+        return 180
+
+
+def main(argv):
+    if len(argv) != 1 or not KEY.match(argv[0]):
+        print("mcp-ticket-lookup: usage: mcp-ticket-lookup KEY (KEY matches PROJ-123)", file=sys.stderr)
+        return 2
+    key = argv[0]
+    tool = os.environ.get("KNOWN_LIMITS_MCP_TOOL", "").strip()
+    if not tool:
+        print("mcp-ticket-lookup: KNOWN_LIMITS_MCP_TOOL is not set; no lookup tool is configured", file=sys.stderr)
+        return 2
+    prompt = ("Use the %s tool once to look up ticket %s. Then reply with exactly one line and "
+              "nothing else: FOUND %s when the ticket exists, or MISSING when it does not."
+              % (tool, key, key))
+    try:
+        done = subprocess.run(
+            ["claude", "-p", prompt,
+             "--tools", "",
+             "--allowedTools", tool,
+             "--permission-prompts", "none"],
+            capture_output=True, text=True, timeout=timeout())
+    except (OSError, subprocess.TimeoutExpired):
+        print("mcp-ticket-lookup: the claude lookup failed or timed out", file=sys.stderr)
+        return 2
+    if done.returncode != 0:
+        print("mcp-ticket-lookup: the claude lookup exited %d" % done.returncode, file=sys.stderr)
+        return 2
+    reply = done.stdout.strip()
+    if reply == "MISSING":
+        return 1
+    if reply == "FOUND " + key:
+        return 0
+    print("mcp-ticket-lookup: the reply was neither FOUND %s nor MISSING" % key, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

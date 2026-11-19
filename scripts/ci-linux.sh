@@ -48,6 +48,7 @@ python3 scripts/ci-par.py \
   tests/pr-body-check \
   tests/review-intent \
   tests/known-limits-check \
+  tests/mcp-ticket-lookup \
   'dot_local/share/session-recap:test_*.py' \
   tests/pi-op-shim \
   tests/seed-op-connect-token \

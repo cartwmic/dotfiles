@@ -38,7 +38,9 @@ ticket does not pass. A GitHub issue URL is looked up with "gh issue view <url> 
 issue must exist (closed counts: the marker promises a filed ticket, and a closed one proves it was
 filed). A ticket key is confirmed with the command from --tracker-cmd or KNOWN_LIMITS_TRACKER_CMD, run
 once per distinct key with the key as its only argument; exit 0 confirms it. Each profile supplies its
-own tracker command through its own environment, outside this repo. When no lookup is configured for a
+own tracker command through its own environment: the work profile sets it to the mcp-ticket-lookup
+helper, which confirms a key through one read-only MCP tool named by KNOWN_LIMITS_MCP_TOOL, and the
+personal profile sets none, because its markers are issue URLs. When no lookup is configured for a
 key, or the tracker cannot be reached, the check fails with exit 1 and a message saying the key could
 not be confirmed; it never passes silently. --no-lookup turns lookups off; a caller passes it on
 purpose, for the test suite or documented offline use, never in the reviewer brief.

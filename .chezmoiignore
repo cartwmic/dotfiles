@@ -207,6 +207,7 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 {{- if ne .profile "axon-work-computer" }}
 .local/share/pi-mcp-lazy/seed/browser-harness.json
+.config/agent-harness/work-env.zsh
 {{- end }}
 
 {{- if not (and (eq .chezmoi.os "linux") (eq .profile "personal")) }}
