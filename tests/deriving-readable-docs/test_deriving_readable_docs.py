@@ -776,11 +776,17 @@ class EarlyExitsSheetTest(unittest.TestCase):
     def test_a_line_outside_every_function_and_a_non_code_file_get_no_exit_text(self):
         self.assertNotIn("exits", sheet_of("a.ts", "const a = 1;\nconst b = 2;\n", 2))
         self.assertNotIn("exits", sheet_of("notes.md", "# a\n\n- b\n", 3))
+        self.assertEqual(exit_rows(sheet_of("a.ts", "function f() {\n  if (x) return;\n  go();\n}\nconst a = 1;\n", 3)), [(2, "return")])  # the same file, inside the function
+        self.assertNotIn("exits", sheet_of("a.ts", "function f() {\n  if (x) return;\n  go();\n}\nconst a = 1;\n", 5))
 
     def test_a_file_whose_braces_do_not_balance_says_so_and_the_sheet_still_prints(self):
         out = sheet_of("a.ts", "function f() {\n  if (x) {\n    return 1;\n  go();\n", 4)
         self.assertIn("(early exits not listed: this file could not be read as code)", out)
         self.assertIn("go();", out)
+
+    def test_a_stray_closing_brace_is_not_balanced_either(self):
+        out = sheet_of("a.ts", "function f() {\n  go();\n}\n}\nfunction g() {\n  if (x) return;\n  go();\n}\n", 7)
+        self.assertIn("(early exits not listed", out)
 
     def test_python_exits_nested_defs_and_loops(self):
         code = ("import sys\n\ndef run(items, mode):\n    if mode == 'x':\n        return 1\n    for i in items:\n        if i is None:\n            continue\n"
@@ -793,6 +799,10 @@ class EarlyExitsSheetTest(unittest.TestCase):
         self.assertIn("[under line 4: if mode == 'x':]", out)
         self.assertNotIn("return 5", out)
         self.assertEqual(exit_rows(sheet_of("run.py", code, 22)), [(5, "return"), (16, "raise"), (18, "exit"), (21, "continue")])  # inside the second loop its continue counts
+
+    def test_a_python_exit_in_an_else_branch_says_it_is_in_the_else(self):
+        out = sheet_of("f.py", "def f(x):\n    if x:\n        go()\n    else:\n        return 1\n    done = 2\n    return done\n", 6)
+        self.assertIn("[in the else of line 2: if x:]", out)
 
     def test_python_that_does_not_parse_says_so(self):
         out = sheet_of("old.py", "def f(:\n    return 1\n", 2)

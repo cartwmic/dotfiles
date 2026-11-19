@@ -6,15 +6,18 @@ usage: early_exits.py <file> <line>
 A sentence about what a function does is true on the path the writer followed and often false on another: an
 earlier `return`, `throw`, `continue` or `break` skips the cited line. For a line inside a function this lists,
 from the function's first line down to (not including) that line, each statement that leaves the function or the
-loop around the line: return, throw / raise, continue and break (only when the loop also holds the line),
+loop around the line (given a range, check_citations.py asks for its last line and marks the exits that sit inside
+the range): return, throw / raise, continue and break (only when the loop also holds the line),
 process.exit / sys.exit. A `return` inside a nested callback or inner function is not an exit of the function and
 is left out. Each exit prints with its line, its source and, when the exit line does not show it, the `if`,
-`else` or `catch` line it sits under.
+`else` or `catch` line it sits under (a Python exit in an `else:` says "in the else of" that `if`).
 
 Python files are read with the `ast` module. TS/JS files (.ts .tsx .js .jsx .mjs .cjs .mts .cts) are read with a
 small scanner, not a parser: strings, template literals, regex literals and comments are skipped, and each `{`
 is classed as a function body, loop, switch, condition or plain block from the words before it. Braces that do not
-balance, or a Python syntax error, print "exits not listed" instead of a guess. Other file types print nothing.
+balance (a stray `}` too), or a Python syntax error, print "exits not listed" instead of a guess. Other file types print
+nothing. Known gaps: text in JSX that reads `return` or `throw` is listed as an exit; an exit is a statement, so a
+condition that skips code without leaving (an `if/else if` chain, a ternary, a flag test) is not listed.
 
 Exit 0 always (it is a reading aid). 2: usage error. Stdlib only. As a library: `early_exits(text, ext, line)`
 returns None when the file type is not read or the line is in no function, else a dict
@@ -185,7 +188,7 @@ def js_blocks_and_events(src):
     """Return (blocks, events, balanced). A block: dict(kind, open, close, head). An event is an exit token."""
     toks = js_tokens(src)
     blocks, stack, events = [], [], []
-    head, stmt = [], None
+    head, stmt, stray = [], None, False
     for i, (t, line) in enumerate(toks):
         if stmt is None and t not in (",", ")"):
             stmt = line
@@ -196,6 +199,7 @@ def js_blocks_and_events(src):
             head, stmt = [], None
         elif t == "}":
             closed = stack.pop() if stack else None
+            stray = stray or closed is None
             if closed:
                 closed["close"] = line
             if closed and closed["kind"] == "obj":
@@ -222,7 +226,7 @@ def js_blocks_and_events(src):
                 cond = next((b for b in reversed(stack) if b["kind"] in ("cond", "else")), None)
                 events.append({"kind": kind, "line": line, "stmt": stmt if prev in (")", "else") else line, "func": func, "brk": brk, "cond": cond})
             head.append(t)
-    return blocks, events, not stack
+    return blocks, events, not stack and not stray
 
 
 def js_exits(src, line):
@@ -289,8 +293,11 @@ def py_exits(src, line):
                 elif kind is None and exit_call(child):
                     kind = "exit"
                 if kind:
-                    guard = next((a for a in reversed(chain) if isinstance(a, (ast.If, ast.ExceptHandler))), None)
-                    out.append({"line": child.lineno, "kind": kind, "guard": guard.lineno if guard and guard.lineno != child.lineno else None})
+                    k = max((i for i, a in enumerate(chain) if isinstance(a, (ast.If, ast.ExceptHandler))), default=None)
+                    guard = chain[k] if k is not None else None
+                    below = (chain + [child])[k + 1] if k is not None else None  # the part of the `if` the exit sits in
+                    out.append({"line": child.lineno, "kind": kind, "guard": guard.lineno if guard and guard.lineno != child.lineno else None,
+                                "else": isinstance(guard, ast.If) and below in guard.orelse})
             visit(child, chain + [child])
 
     visit(fn, [fn])
@@ -327,7 +334,7 @@ def render(found, lines, line, first=None):
     for e in exits:
         row = "%6d  %-12s %s" % (e["line"], e["kind"], short(lines[e["line"] - 1].strip()))
         if e["guard"]:
-            row += "    [under line %d: %s]" % (e["guard"], short(lines[e["guard"] - 1].strip(), 70))
+            row += "    [%s line %d: %s]" % ("in the else of" if e.get("else") else "under", e["guard"], short(lines[e["guard"] - 1].strip(), 70))
         if first is not None and e["line"] >= first:
             row += "    [inside the cited lines]"
         rows.append(row)

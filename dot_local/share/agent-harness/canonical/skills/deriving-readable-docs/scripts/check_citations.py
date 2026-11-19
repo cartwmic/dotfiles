@@ -46,8 +46,9 @@ With --points (the raw harvest, points.json), two more checks run:
              does not cite: the entry is wrong, or it cites that test.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
           Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
-          range (return, throw, continue, break, process.exit): the other paths a sentence about the function must
-          state or leave out. See early_exits.py; "no early exits" and "not listed" print differently.
+          range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
+          paths a sentence about the function must state or leave out. See early_exits.py; "no early exits" and
+          "not listed" print differently.
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
 sentences never change the exit code. Stdlib only.
 """
