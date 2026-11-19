@@ -51,7 +51,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: apt packages for the Linux suites (zsh, lsof, rsync, openssh-server, bubblewrap)
         run: sudo apt-get install -y -qq zsh lsof rsync openssh-server bubblewrap >/dev/null
-      # A commit that cuts text from an existing test needs a `Test-edit:` trailer (dotfiles#629 commit 236a1ce). Its own unit
+      # A commit that cuts text from an existing test needs a `Test-edit:` line in its message (dotfiles#629 commit 236a1ce). Its own unit
       # suite is tests/test-edit-check, in scripts/ci-linux.sh. PRs only: it needs the PR's base, and main has none.
       - name: "Test edits: fail when a commit removes text from an existing test and says nothing (scripts/check-test-edits.py)"
         if: github.event_name == 'pull_request'

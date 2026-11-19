@@ -123,6 +123,29 @@ class CheckTestEdits(unittest.TestCase):
         self.assertEqual(code, 2, out)
         self.assertIn("fetch-depth: 0", out)
 
+    def test_a_test_edit_line_in_its_own_paragraph_above_co_authored_by_passes(self):
+        message = (
+            "fix the check\n\nTest-edit: the sentence is a search report; the old text was not a claim\n\n"
+            "Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>"
+        )
+        base = self.pr({TEST: TEST_AS_ADDED}, {TEST: TEST_WEAKENED}, message)
+        code, out = self.run_check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("the old text was not a claim", out)
+
+    def test_a_main_merged_into_the_pr_with_a_test_cut_is_not_blamed(self):
+        base = self.commit({TEST: TEST_AS_ADDED, "README": "x\n"}, "base")
+        self.git("checkout", "-q", "-b", "pr")
+        self.commit({"pr1.txt": "pr\n"}, "pr adds a file")
+        self.commit({"pr2.txt": "pr\n"}, "pr adds another file")
+        self.git("checkout", "-q", "main")
+        self.commit({TEST: TEST_WEAKENED}, "main cuts the test without a trailer")
+        self.git("checkout", "-q", "pr")
+        self.git("merge", "-q", "--no-edit", "main")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("walked 2 commits", out)
+
 
 if __name__ == "__main__":
     unittest.main()

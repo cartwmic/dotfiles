@@ -11,12 +11,15 @@ shortening of the removed text (nothing new is written, ignoring spaces). Those 
 check less. Edits that add or change text are not caught: telling a changed expectation from a fixed one needs judgment, and a
 reviewer makes it (reviewer-brief.md).
 
-The way through is a commit trailer that says why the test was wrong, not the code:
+The way through is a `Test-edit:` line in the commit's message, in any paragraph, that says why the test was wrong, not the code:
 
     Test-edit: <why the removed text was wrong, in one line>
 
-A declared edit passes and is printed, so the CI log and the reviewer see each one. Only the trailer in the commit's own message
+A declared edit passes and is printed, so the CI log and the reviewer see each one. Only a line in the commit's own message
 counts. A commit amended or squashed into an earlier one before it is pushed is not seen.
+
+The walk follows first parents from BASE to HEAD. A main merged into the PR reaches HEAD through a second parent, so its commits
+are not blamed on the PR. The cost: a side branch merged into the PR is not walked either.
 
 Exit 0 clean, 1 an undeclared edit, 2 BASE or HEAD does not resolve (a shallow checkout: fetch the history first).
 """
@@ -88,8 +91,10 @@ def weakened_files(commit):
 
 
 def declared(commit):
-    out = git("log", "-1", "--format=%(trailers:key=" + TRAILER + ",valueonly,separator=%x1f)", commit)
-    return [reason.strip() for reason in out.strip().split("\x1f") if reason.strip()]
+    """The reasons in a commit's message: each `Test-edit:` line, in any paragraph (git's key match is case-insensitive too)."""
+    message = git("log", "-1", "--format=%B", commit)
+    reasons = (match.group(1).strip() for match in re.finditer(r"^" + TRAILER + r":(.*)$", message, re.MULTILINE | re.IGNORECASE))
+    return [reason for reason in reasons if reason]
 
 
 def main(argv):
@@ -98,7 +103,8 @@ def main(argv):
         return 2
     try:
         base, head = (git("rev-parse", "--verify", "--quiet", rev + "^{commit}").strip() for rev in argv[1:])
-        commits = git("rev-list", "--no-merges", "--reverse", base + ".." + head).split()
+        # First parents only, so a main merged into the PR is not walked. A side branch merged into the PR is not walked either.
+        commits = git("rev-list", "--first-parent", "--no-merges", "--reverse", base + ".." + head).split()
     except RuntimeError as err:
         print("check-test-edits: cannot read %s..%s (%s); fetch the full history (fetch-depth: 0)" % (argv[1], argv[2], err), file=sys.stderr)
         return 2
@@ -116,7 +122,7 @@ def main(argv):
                 failed += 1
                 print(
                     "FAIL test-edit: %s removes text from the existing test %s and does not say why.\n"
-                    "  Fix the code so the original test passes. If the test itself was wrong, add a trailer to the commit message:\n"
+                    "  Fix the code so the original test passes. If the test itself was wrong, add a line to the commit message:\n"
                     "  %s: <why the removed text was wrong, in one line>" % (commit[:8], path, TRAILER)
                 )
     return 1 if failed else 0
