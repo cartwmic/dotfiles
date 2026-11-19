@@ -113,17 +113,18 @@ def child_env(**extra):
     return env
 
 def kill_group(p):
-    """SIGTERM the child's whole process group, then SIGKILL after 2 s, so a helper that wedged or
-    left an orphaned child behind cannot outlive the tick."""
+    """SIGTERM the child's whole process group, give it up to 2 s, then SIGKILL the whole group
+    whether or not the first process has already exited: a leftover member that ignores SIGTERM
+    must not outlive the tick (review R6-B1)."""
     try:
         os.killpg(p.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         pass
     try:
         p.wait(timeout=2)
-        return
     except subprocess.TimeoutExpired:
         pass
+    time.sleep(0.2)   # let the rest of the group act on SIGTERM before the hard kill
     try:
         os.killpg(p.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
@@ -145,7 +146,20 @@ def run(cmd, timeout, env=None):
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_group(p)
-        out, err = p.communicate()
+        try:
+            # Bounded: a process that left the group (its own session) may still hold the pipes.
+            out, err = p.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            for f in (p.stdout, p.stderr):
+                try:
+                    f.close()
+                except OSError:
+                    pass
+            out, err = "", ""
+            try:
+                p.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
         return subprocess.CompletedProcess(cmd, 124, out or "", "timed out after %gs" % timeout)
     return subprocess.CompletedProcess(cmd, p.returncode, out or "", err or "")
 

@@ -71,9 +71,12 @@ The worst tick is bounded: a refreshing command check can hold it for about 5 mi
 
 An alert is a macOS notification (title "Session keepalive", subtitle the check's label, message "VPN tunnel is not passing traffic" for a viscosity check or "session check failing" for a command check) plus the optional per-check `alertCommand` (30-second timeout), each at most once per stale episode. A part that failed is logged as `alert-failed` and only that part is tried again on the next stale tick. A probe that answers again ends the episode and is logged as a recovery, so a session that goes stale again later alerts again.
 
+If the clock moves back, a pending refresh waits until the clock passes the last refresh time again: it errs on the
+side of fewer sign-in prompts. (An interval check, by contrast, becomes due at once.)
+
 ## Children and their environment
 
-Every child — probe, refresh, alert command, `osascript`, `curl` — runs in its own process group: on timeout the whole group gets `SIGTERM`, then `SIGKILL` after 2 s, so a wedged helper or an orphaned child cannot outlive the tick. A probe that exits but leaves a child holding its stdout pipe is bounded by the timeout and the group kill the same way.
+Every child — probe, refresh, alert command, `osascript`, `curl` — runs in its own process group: on timeout the whole group gets `SIGTERM`, then `SIGKILL` after up to 2 s whether or not the first process already exited; reading its output afterwards is bounded too, so a child that ignores `SIGTERM` or left the group while holding the pipe cannot hold the tick, so a wedged helper or an orphaned child cannot outlive the tick. A probe that exits but leaves a child holding its stdout pipe is bounded by the timeout and the group kill the same way.
 
 Each child's environment is this process's environment minus `SESSION_KEEPALIVE_CHECKS` (the check list is config for the tick alone, not for children), plus that call's own variables: the alert command gets `SESSION_KEEPALIVE_REASON` and `SESSION_KEEPALIVE_CHECK`. `os.environ` is never mutated.
 

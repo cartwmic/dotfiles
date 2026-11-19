@@ -10,6 +10,7 @@ Run: python3 -m unittest discover -s tests/session-keepalive
 """
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import time
@@ -56,6 +57,19 @@ FAKE_ORPHAN_SLEEPER = """#!/bin/sh
 sleep 30
 """
 
+# R6-B1: a leftover child that ignores SIGTERM (only SIGKILL stops it).
+FAKE_TERM_IGNORER = """#!/bin/sh
+trap '' TERM
+sleep 25
+"""
+
+# R6-B1: a child that leaves the probe's process group (its own session) and keeps the stdout pipe open.
+FAKE_SESSION_ESCAPER = """#!/usr/bin/env python3
+import os, sys, time
+os.setsid()
+time.sleep(25)
+"""
+
 
 def viscosity_check(**over):
     check = {"label": CONN, "kind": "viscosity", "mode": "alert", "connection": CONN, "host": HOST}
@@ -85,6 +99,8 @@ class Env:
         (self.bin / "pgrep").write_text(FAKE_PGREP)
         (self.bin / "alert-cmd").write_text(FAKE_ALERT_COMMAND)
         (self.bin / "orphan-sleeper").write_text(FAKE_ORPHAN_SLEEPER)
+        (self.bin / "term-ignorer").write_text(FAKE_TERM_IGNORER)
+        (self.bin / "session-escaper").write_text(FAKE_SESSION_ESCAPER)
         for f in self.bin.iterdir():
             f.chmod(0o755)
         self.checks = [viscosity_check()] if checks is None else checks
@@ -276,6 +292,15 @@ class TickTest(unittest.TestCase):
         self.assertEqual(line["state"], "Disconnected")
         self.assertEqual(line["action"], "idle")
         self.assertNotIn("curl", self.env.joined_calls())
+
+    def test_not_connected_ends_the_episode(self):
+        # R6-N2: a stale streak and an open episode are cleared when the connection is not Connected,
+        # so a tunnel that comes back stale later starts a fresh episode (and alerts again).
+        self.env.seed(CONN, failStreak=3, episode={"alerted": True, "notified": True})
+        self.env.run(FAKE_CONN_STATE="%s, Disconnected" % CONN)
+        state = self.env.check_state(CONN)
+        self.assertEqual(state["failStreak"], 0)
+        self.assertIsNone(state["episode"])
 
     def test_unconfigured_ticks_and_exits_clean(self):
         r = self.env.run(SESSION_KEEPALIVE_CHECKS="")
@@ -578,6 +603,55 @@ class CommandCheckTest(unittest.TestCase):
         self.assertNotIn("STDOUT-TOKEN-5z", r.stdout + r.stderr)
         left = subprocess.run(["pgrep", "-f", "orphan-sleeper"], capture_output=True, text=True)
         self.assertNotEqual(left.returncode, 0, left.stdout)
+
+    def test_a_leftover_child_that_ignores_sigterm_does_not_hold_the_tick(self):
+        # R6-B1: the probe is killed at its timeout; its child ignores SIGTERM and keeps the pipe. The
+        # whole group is SIGKILLed whether or not the first process already exited, so the tick ends
+        # within seconds, not when the child's 25 s sleep ends, and nothing is left running.
+        probe = self.env.write_probe("aws", body="term-ignorer & wait")
+        self.configure(command_check("aws", probe, probeTimeoutSeconds=1))
+        start = time.monotonic()
+        r = self.env.run()
+        took = time.monotonic() - start
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertLess(took, 12, "the tick waited on a child that ignored SIGTERM")
+        self.assertEqual(self.env.lines()[-1]["probe"]["exitCode"], 124)
+        left = subprocess.run(["pgrep", "-f", "term-ignorer"], capture_output=True, text=True)
+        self.assertNotEqual(left.returncode, 0, left.stdout)
+
+    def test_a_child_that_left_the_group_cannot_hold_the_tick_on_the_pipe(self):
+        # R6-B1: a child in its own session escapes the group kill but still holds stdout. Output
+        # collection after a timeout is bounded, so the tick still ends within seconds.
+        probe = self.env.write_probe("aws", body="session-escaper & exit 0")
+        self.configure(command_check("aws", probe, probeTimeoutSeconds=1))
+        try:
+            start = time.monotonic()
+            r = self.env.run()
+            took = time.monotonic() - start
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertLess(took, 12, "the tick waited on a pipe held by an escaped child")
+            self.assertEqual(self.env.lines()[-1]["probe"]["exitCode"], 124)
+        finally:
+            subprocess.run(["pkill", "-f", str(self.env.bin / "session-escaper")], capture_output=True)
+
+    def test_the_refresh_time_is_saved_before_the_refresh_runs(self):
+        # R6-N1: a tick killed mid-refresh (an apply's launchctl bootout, a crash) must not lose the
+        # refresh time, or the next tick refreshes again and breaks the 15-minute promise.
+        probe = self.env.write_probe("aws", fail_first=99)
+        refresh = self.env.write_refresh("aws", body="sleep 20")
+        self.configure(command_check("aws", probe, mode="refresh", refresh=refresh, refreshTimeoutSeconds=60))
+        self.env.run()   # first failure
+        p = subprocess.Popen([str(SCRIPT)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             env=self.env.env, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and "refresh aws" not in self.env.joined_calls():
+                time.sleep(0.2)
+            self.assertIn("refresh aws", self.env.joined_calls())
+        finally:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+        self.assertGreater(self.env.check_state("aws")["lastRefresh"], 0)
 
     def test_the_refresh_timeout_is_exit_124(self):
         probe = self.env.write_probe("aws", fail_first=99)
