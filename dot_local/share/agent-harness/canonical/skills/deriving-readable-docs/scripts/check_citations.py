@@ -17,22 +17,28 @@ joined by commas or "and". These checks FAIL a claim, because a miss is a fact t
             path (journey 111). The words one..twenty in the cited text count as digits.
   string    every `backticked` or "double-quoted" string in the claim (a repo path that exists is exempt) must
             appear there. A one-word string must appear as written; a longer one needs each of its words.
-  overreach a sentence with every, all, always, never, only, next, none, any (or anything, anyone ...) or a count
-            of things ("three parts"), whose citations are all test or journey files. A test proves the cases it
-            runs, not a set. Cite the code that defines the set, or word the sentence to the test's cases
-            ("in the test", "for example", "at least"), or label it inferred.
-  uncited   the same words, or "no <noun>", in a sentence after the doc header with no citation, source label
-            ("(README)", "(code comment)"), or "inferred" / "from your list" in it.
-Listed only, because a script cannot judge them (the check pass, references/check-brief.md, takes the list):
-  overreach  every, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
-  count      a count of things: "three parts", "6 words"
+  overreach a sentence with one of the words every, each, all, always, never, only, or a count in words ("three
+            parts": two..twelve, dozen), whose citations are all test or journey files. A test proves the cases it
+            runs, not a set. Not these: a word inside a hyphenated one ("read-only"), "each other", and "each" that
+            spreads over a listed set ("A and B each", "once each", "one commit each"). Cite the code that defines
+            the set, or word the sentence to the test's case ("in the test", "in this case", "the test shows",
+            "for example", "such as", "at least", "e.g."), or label it inferred or "from your list". A bare "the
+            test" does not clear it. With --points a file is a test when the harvest lists it; without, when its
+            path says so (tests/, .test., _test, journey, e2e, spec, conformance ...).
+  uncited   a sentence after the doc header with no citation, source label ("(README)", "(code comment)"), or
+            "inferred" / "from your list" in it, that holds a word of the overreach list below or a count of
+            things in digits or words.
+Listed too, whatever the citations, because a script cannot judge them (the check pass, references/check-brief.md, takes the list):
+  overreach  every, each, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
+  count      a count of things: "three parts", "6 words" (a count in words also FAILs under overreach above)
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
 With --points (the raw harvest, points.json), two more checks run:
   counts     the doc header's numbers for harvested, left out, used, read by name only and not cited must equal
              the numbers computed from the harvest and this doc's citations. A point is used when a citation of
              the doc overlaps its body (its start line up to the next point of the file); read by name only when
              every such citation is in a sentence that says inferred; left out when --left-out lists its id
-             (`P12`) or its file (a path, or a folder ending in /), one per line.
+             (`P12`) or its file (a path, or a folder ending in /), one per line. It prints the computed line,
+             `Counts: harvested N; left out N; used N; read by name only N; not cited N.`, for the header.
   not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
              does not cite: the entry is wrong, or it cites that test.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
@@ -148,12 +154,18 @@ def claims(text, repo):
 NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")
 WORDS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
 QUOTED = re.compile(r'"([^"\n]+)"|\u201c([^\u201d\n]+)\u201d')
-OVERREACH = re.compile(r"\b(every(?:thing|one|where|body)?|each|all|always|never|only|next|none|any(?:thing|one|where|body)?|no(?=\s+(?!longer\b)[a-z]))\b", re.I)
-# A count of things: "three parts", "6 words". Not a time ("45 minutes") or a bare status code ("409 and").
-QUANT = re.compile(r"\b(every(?:thing|one|where|body)?|each|all|always|never|only)\b", re.I)
+# A whole word: not inside a hyphenated one ("read-only", "ask-only"), and not "each other".
+OVERREACH = re.compile(r"(?<![\w-])(every(?:thing|one|where|body)?|each(?!\s+other\b)|all|always|never|only|next|none|any(?:thing|one|where|body)?|no(?=\s+(?!longer\b)[a-z]))(?![\w-])", re.I)
+# The words the overreach FAIL is made of; a count of things ("three parts", "6 words") is COUNT below.
+QUANT = re.compile(r"(?<![\w-])(every(?:thing|one|where|body)?|each(?!\s+other\b)|all|always|never|only)(?![\w-])", re.I)
+# "each" that hands a verb or a number to a set the sentence lists: "A, B and C each give", "once each", "one commit each".
+NUMBERISH = set(WORDS) | {"once", "twice", "thrice", "dozen"}
+NOT_SUBJECT = {"on", "in", "of", "for", "to", "at", "by", "with", "from", "per", "into", "than", "and", "or", "but", "if", "when", "that", "the", "a", "an", "is", "are"}
 # A sentence worded to the cases a test runs, or labelled as inferred or from the caller's list, is not an overreach.
-SCOPED = re.compile(r"\bin the (?:tests?|journeys?|fixtures?)\b|\bthe (?:test|journey)(?:'s)?\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
+SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\bthe (?:tests?|journeys?) (?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?)\b|\bthe (?:test|journey)'s\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
+# A test path by its name; used only when no harvest is given (--points), which decides it otherwise.
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|proof|journeys?|e2e|smoke|specs?|conformance|support)(/|\.)|\.(test|spec|journey)\.|_test\.|(^|/)test_|-journey|\.bats$", re.I)
+# A count of things: "three parts", "6 words". Not a time ("45 minutes") or a bare status code ("409 and").
 COUNT = re.compile(r"(?<![\w.])(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|\d+)\s+(?!(?:is|was|has|does|as|this|its|his|yes)\b)(?:[a-z-]+\s+)?(?!(?:seconds?|minutes?|hours?|days?|weeks?|bytes?|times?|chars?|characters?)\b)[a-z-]+s\b", re.I)
 TIME_SCALE = {"second": (1000,), "minute": (60, 60000), "hour": (60, 3600, 3600000), "day": (24, 86400, 86400000)}
 TIME_UNIT = re.compile(r"^[\s-]*(second|minute|hour|day)s?\b", re.I)
@@ -164,6 +176,22 @@ COMMENT_START = {
     "#": {".py", ".sh", ".bash", ".zsh", ".rb", ".yml", ".yaml", ".toml", ".ex", ".exs", ".bats", ".tmpl"},
     "--": {".sql", ".lua", ".hs"},
 }
+
+
+def quantifiers(sent):
+    """The quantifier words of a sentence that a test cannot prove: QUANT without an "each" that spreads a verb or a
+    number over a set the sentence lists ("A, B and C each give", "once each", "one commit each")."""
+    out = []
+    for m in QUANT.finditer(sent):
+        if m.group(1).lower() == "each":
+            before = re.findall(r"[\w'-]+", sent[:m.start()].lower())
+            prev = before[-1] if before else ""
+            counted = prev in NUMBERISH or prev.isdigit() or (len(before) > 1 and (before[-2] in NUMBERISH or before[-2].isdigit()) and prev not in NOT_SUBJECT)
+            listed = prev not in NOT_SUBJECT and "and" in before[-4:-1]
+            if counted or listed:
+                continue
+        out.append(m.group(1).lower())
+    return out
 
 
 def numbers_in(text):
@@ -229,7 +257,7 @@ def read_lines(cache, repo, path):
     return cache[path]
 
 
-def check_claim(c, repo, cache, test_files=frozenset()):
+def check_claim(c, repo, cache, test_files=None):
     """Return (failures, flags) for one claim; each is a list of (doc_line, kind, detail)."""
     fails, flags = [], []
     n = c["line"]
@@ -256,7 +284,8 @@ def check_claim(c, repo, cache, test_files=frozenset()):
         says = SAYS_SOURCE.search(c["text"] + " " + c["label"])
         if not says and all(comment_only(read_lines(cache, repo, p)[lo - 1:hi], p) for p, lo, hi, _ in ranges):
             flags.append((n, "comment", "%s are only comment lines and the sentence does not say so" % ", ".join("%s:%d-%d" % r[:3] for r in ranges)))
-    testonly = bool(c["cites"]) and all(p in test_files or TEST_PATH.search(p) for p, _, _ in c["cites"])
+    # with a harvest, only its files are tests (a defining file under conformance/ or support/ is not); without one, the path name decides
+    testonly = bool(c["cites"]) and all((p in test_files) if test_files is not None else bool(TEST_PATH.search(p)) for p, _, _ in c["cites"])
     labelled = SAYS_SOURCE.search(c["label"] or "")
     for kind, kind_text in () if c["header"] else (("overreach", c["text"]), ("uncited", c["uncited"])):  # the header describes the doc
         for raw in sentences(kind_text):
@@ -271,7 +300,7 @@ def check_claim(c, repo, cache, test_files=frozenset()):
             scoped = labelled or SCOPED.search(kind_text)  # a clause after a semicolon is still the case the sentence names
             if kind == "uncited" and not scoped and not SAYS_SOURCE.search(raw):
                 fails.append((n, "uncited", detail))
-            elif kind == "overreach" and testonly and not scoped and (QUANT.search(sent) or (count and not count.group(0)[0].isdigit())):
+            elif kind == "overreach" and testonly and not scoped and (quantifiers(sent) or (count and not count.group(0)[0].isdigit())):
                 fails.append((n, "overreach", detail))
     return fails, flags
 
@@ -312,9 +341,8 @@ def point_counts(points, left_out, cited):
             "read by name only": len(named), "not cited": len(live) - len(used) - len(named)}
 
 
-def header_counts(doc_text, points, left_out, cited):
-    """FAIL each header number that differs from the computed one, and each of the five that the header lacks."""
-    want = point_counts(points, left_out, cited)
+def header_counts(doc_text, want):
+    """FAIL each header number that differs from the computed one (want), and each of the five that the header lacks."""
     header = [(n, line) for n, line, in_header, heading in doc_lines(doc_text) if in_header and not heading]
     fails = []
     for key, pat in COUNT_KEYS:
@@ -369,14 +397,14 @@ def line_count(full):
 
 
 def check(doc_text, repo, points=None, left_out=()):
-    """Return (checked, bad, fails, flags). bad is [(doc_line, citation, reason)]; fails and flags are
-    [(doc_line, kind, detail)]. Claims are only judged when all their citations are good. points is the
+    """Return (checked, bad, fails, flags, counts). bad is [(doc_line, citation, reason)]; fails and flags are
+    [(doc_line, kind, detail)]; counts is the header's five numbers (None without points or with a bad citation). Claims are only judged when all their citations are good. points is the
     harvest (a list of dicts) and left_out its ids and paths; with them the header counts and the
     "Not backed" strings are checked too."""
     repo = os.path.realpath(repo)
     checked, bad, fails, flags, cache = 0, [], [], [], {}
     kept = [p for p in points or [] if not is_left_out(p, left_out)]
-    test_files = frozenset(p["file"] for p in kept)
+    test_files = frozenset(p["file"] for p in kept) if points is not None else None
     cited = []  # (path, start, end, inferred) of every citation whose claim is judged
     for c in claims(doc_text, repo):
         before = len(bad)
@@ -400,10 +428,12 @@ def check(doc_text, repo, points=None, left_out=()):
             flags += g
             inferred = bool(re.search(r"\binferred\b", c["text"] + " " + c["label"], re.I))
             cited += [(p, lo, hi, inferred) for p, lo, hi in c["cites"]]
+    counts = None
     if points is not None and not bad:
-        fails += header_counts(doc_text, points, left_out, cited)
+        counts = point_counts(points, left_out, cited)
+        fails += header_counts(doc_text, counts)
         fails += not_backed(doc_text, repo, kept, cache)
-    return checked, bad, sorted(set(fails)), flags
+    return checked, bad, sorted(set(fails)), flags, counts
 
 
 def sheet(doc_text, repo):
@@ -450,7 +480,7 @@ def main(argv):
         if opts.get("--left-out"):
             with open(opts["--left-out"], encoding="utf-8") as f:
                 left_out = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    checked, bad, fails, flags = check(text, repo, points, left_out or ())
+    checked, bad, fails, flags, counts = check(text, repo, points, left_out or ())
     for n, cite, reason in bad:
         print("%s:%d: %s: %s" % (doc, n, cite, reason))
     for n, kind, detail in fails:
@@ -458,6 +488,8 @@ def main(argv):
     for n, kind, detail in flags:
         print("%s:%d: flag %s: %s" % (doc, n, kind, detail))
     print("checked %d citations, %d bad" % (checked, len(bad)))
+    if counts:
+        print("Counts: " + "; ".join("%s %d" % (k, counts[k]) for k, _ in COUNT_KEYS) + ".")  # the line the header carries
     print("%d failed checks, %d flagged sentences (list them for the check pass)" % (len(fails), len(flags)))
     if not checked:
         print("no citations found: an uncited doc cannot be checked", file=sys.stderr)
