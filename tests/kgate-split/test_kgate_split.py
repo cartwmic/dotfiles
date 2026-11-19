@@ -168,6 +168,17 @@ class Settings(unittest.TestCase):
         s = K.parse_settings('[split]\nlist = "a"\nrun = "b {items}"\npods = 6\nlanes = 4\n', pods=2)
         self.assertEqual((s["pods"], s["lanes"]), (2, 4))
 
+    def test_files_is_a_table_of_names_and_paths(self):
+        s = K.parse_settings('[split]\nlist = "a"\nrun = "b {items}"\n[split.files]\ncore = "~/x/core"\n')
+        self.assertEqual(s["files"], {"core": "~/x/core"})
+        self.assertEqual(K.parse_settings('[split]\nlist = "a"\nrun = "b {items}"\n')["files"], {})
+        for text, why in (('[split]\nlist = "a"\nrun = "b {items}"\nfiles = "x"\n', "table"), ('[split]\nlist = "a"\nrun = "b {items}"\n[split.files]\n"a/b" = "x"\n', "name"),
+                          ('[split]\nlist = "a"\nrun = "b {items}"\n[split.files]\n"-x" = "x"\n', "name"), ('[split]\nlist = "a"\nrun = "b {items}"\n[split.files]\ncore = 3\n', "path")):
+            with self.subTest(text):
+                with self.assertRaises(ValueError) as e:
+                    K.parse_settings(text)
+                self.assertIn(why, str(e.exception))
+
     def test_bad_settings_are_refused_with_the_reason(self):
         for text, why in (("", "no [split]"), ('[split]\nlist = "a"\n', "run"), ('[split]\nlist = "a"\nrun = "b"\n', "{items}"),
                           ('[split]\nlist = "a"\nrun = "b {items}"\npods = 0\n', "pods"), ('[split]\nlist = "a"\nrun = "b {items}"\nwhat = 1\n', "unknown")):
@@ -331,6 +342,33 @@ class Runs(Base):
         self.assertEqual(done.returncode, 69, done.stdout + done.stderr)
         self.assertIn("setup failed (exit 7)", done.stdout)
         self.assertIn("VERDICT: NOT RUN", done.stdout)
+
+    def test_a_host_file_is_served_to_every_pods_setup_and_tests_by_name(self):
+        core = self.tmp / "host-core"
+        core.write_bytes(b"core\x00bytes\n")
+        repo = write_repo(self.tmp, {"t.sh": 'cmp "$KGATE_SPLIT_FILES/core" "' + str(core) + '" && echo ok > /dev/null\n'},
+                          f'pods = 2\nsetup = \'test -s "$KGATE_SPLIT_FILES/core" && cp "$KGATE_SPLIT_FILES/core" "$KGATE_OUT/core-seen"\'\n[split.files]\ncore = "{core}"\n')
+        done = self.run_split(repo, "run", "--seed", "3")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = json.loads((self.rundir() / "plan.json").read_text())
+        self.assertEqual(list(plan["files"]), ["core"])
+        self.assertEqual(len(plan["files"]["core"]), 64)
+        for pod in (1,):
+            self.assertEqual((self.rundir() / "pods" / str(pod) / "core-seen").read_bytes(), b"core\x00bytes\n")
+
+    def test_a_host_file_that_is_missing_stops_the_run_before_any_pod_starts(self):
+        repo = write_repo(self.tmp, {"t.sh": "exit 0\n"}, '[split.files]\ncore = "' + str(self.tmp / "nope") + '"\n')
+        done = self.run_split(repo, "run")
+        self.assertEqual(done.returncode, 69, done.stdout + done.stderr)
+        self.assertIn("files.core: cannot read", done.stderr)
+        self.assertIn("No kgate job was started", done.stderr)
+        self.assertEqual(list((self.state / "kgate").glob("kgate-*.out")), [])
+
+    def test_a_relative_host_file_is_read_next_to_the_profile(self):
+        repo = write_repo(self.tmp, {"t.sh": 'test -s "$KGATE_SPLIT_FILES/core"\n'}, '[split.files]\ncore = "core.bin"\n')
+        (repo / "core.bin").write_text("x")
+        done = self.run_split(repo, "run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_a_pod_stops_claiming_after_the_cap_and_a_leftover_pod_runs_the_rest(self):
         repo = write_repo(self.tmp, {f"t{i}.sh": "sleep 0.6\n" for i in range(6)}, "claim_seconds = 1\n")
