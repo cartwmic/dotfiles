@@ -8,20 +8,38 @@ limit when nobody files it: nothing fails until a reviewer notices, rounds later
 escape loud when the body is written or reviewed. The reviewer brief (reviewer-brief.md section 1) runs it
 on the body as filed. Design: find loosely, judge strictly, fail loudly on anything in between.
 
-Finding is loose. Before scanning, fenced code blocks, HTML comments, and the body's trailer (the
-"Decisions:" line and everything after it) are dropped. A block opens at any of four forms, matched without
-case: a markdown heading whose text is the label ("## Known limits", colon optional), an inline
-"Known limits: ..." line, a bold "**Known limits**" label, or a list item that is just the label (with
-nothing after it; "- Known limits: X" states a limit or names a rule, it does not open a block). The label
-is "known limits", "known limitations", "limitations", "accepted limits" or "accepted limitations". A
-heading block runs to the next heading of the same or higher level, so a sub-heading stays inside. A bold
-or inline label that stands alone on its line holds a section the same way: to the next heading, the next
-bold-label-only line, or the end of the body. A label that carries text on its own line ("Known limits: X."
-or "**Known limits:** X") opens a block over the rest of that paragraph plus the list that follows it (a
-list-label block holds its child items). A line that starts with the label, after any #, -, *, >, "N." or
-** marker, but matches none of the four forms and itself looks like a label (the label alone, or ending in
-a colon), fails as a stray; an ordinary sentence that merely starts with the label word is ignored. An
-empty block fails.
+The body is prepared first. Fenced code blocks and HTML comments are dropped; a fence or comment that
+never closes is an error, because what follows it would silently vanish from the scan. The trailer (the
+"Decisions:" or "**Decisions:**" line and everything after it) is dropped. Then every line is classified,
+from its text alone: blank, heading, rule ("---"), list item, continuation (2+ spaces or a tab), label
+(a bold-led line, or "Word: ..." at column 0 with up to four words before the colon and no "//"), or
+paragraph.
+
+A Known-limits block opens at one of three forms, matched without case over the label words "known limits",
+"known limitations", "limitations", "accepted limits" and "accepted limitations":
+  A. a heading whose text is a label word, with an optional parenthetical suffix and/or colon
+     ("## Known limits", "## Known limits (v1):"); a heading that mixes the label with other words
+     ("## Known limitations in this PR") is an error, not silence.
+  B. a label word alone on its line, optionally bold-wrapped and/or with a colon
+     ("**Known limits**", "Known limits:").
+  C. a label word followed by a colon and text, on its own line at column 0
+     ("Known limits: X. Follow-up: PROJ-1.", "**Known limits:** None") — a one-unit block over that
+     line and its lazy continuation lines.
+A list item that starts with a label word ("- Known limits: X") is never a block: it is a stray, loud
+whether or not it carries a ticket, because the check does not read that form.
+
+A heading block ends before the next heading of the same or higher level, a rule, or another Known-limits
+start; deeper headings and label-only lines inside it are group titles, kept for context and not judged —
+so a list under a group title inside a heading block is read as limits. A bold or "Label:" block ends
+before the next heading, rule, another start, a bold-led line, or a plain label-only line ("Testing:");
+that a bold group title ends such a block is accepted (decision #1258). An inline block ends at the first
+blank line. Every block found prints one span line: its lines, its item count, and what ended it, so a
+boundary is visible on every run, pass or fail.
+
+Outside blocks, a line is a stray when a heading, bold-led line, list item or "> " quote starts with a
+label word, or a paragraph starts with "known limit" / "accepted limit", or a paragraph starts with bare
+"Limitations" alone or followed by a colon. Backticks are not stripped: a line that opens with a
+backticked label is code, not a mention. An empty block fails.
 
 Judging is strict. Units, not physical lines: every list item at any depth is a unit, and so is every
 paragraph, except a lead-in paragraph ending in ":" that is directly followed by a list. Nesting: a list
@@ -33,12 +51,13 @@ needs its own marker, and a parent with children passes without one only when it
 group label). The markers are "Follow-up: KEY", "Tracked: KEY", "Tracked in KEY", a "/browse/KEY" link, a
 GitHub issue URL (https://.../issues/N), "accepted as permanent (decision #N)", or the alias
 "Permanent: decision N". The marker words match without case; the key does not, so "follow-up: x86-64" is
-not coverage. A bare key with no marker fails, with the one-word fix. A block whose text is "None" or
-"n/a" passes with zero limits.
+not coverage. A bare key with no marker fails, with the one-word fix. A block whose only content is "None"
+or "n/a" passes with zero limits; "None" next to listed limits is an error.
 
 The body text comes from --body-file files (repeatable) or stdin when no file is given. Exit 0 every block
-passes (a body with no Known-limits block passes); 1 a stray line, an empty block, or an uncovered limit;
-2 bad arguments, an unreadable file, or the tracker command could not be run. All failures are printed.
+passes (a body with no Known-limits block passes); 1 an error, a stray line, an empty block, or an
+uncovered limit; 2 bad arguments, an unreadable file, or the tracker command could not be run. All
+failures are printed, and every failing run ends with a short how-to footer.
 
 With --tracker-cmd CMD (or KNOWN_LIMITS_TRACKER_CMD in the environment, when the flag is absent) every
 reference that carries a marker is confirmed: CMD runs once per distinct reference with it as the only
@@ -56,7 +75,11 @@ LABEL_SRC = r"known\s+limitations|known\s+limits|accepted\s+limitations|accepted
 LABEL_RE = re.compile(LABEL_SRC, re.IGNORECASE)
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 LIST_ITEM = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
-BOLD = re.compile(r"^\*\*(.+?)\*\*\s*:?\s*(.*)$")
+RULE = re.compile(r"^\s*(?:-\s*){3,}$|^\s*(?:\*\s*){3,}$|^\s*(?:_\s*){3,}$")
+BOLD_SPAN = re.compile(r"^\*\*[^*]{1,60}\*\*|^__[^_]{1,60}__")
+BOLD_ONLY = re.compile(r"^\*\*[^*]{1,60}\*\*:?\s*$|^__[^_]{1,60}__:?\s*$")
+LABEL_KIND = re.compile(r"^[A-Z][^:\n]{0,39}:(\s|$)")
+LABEL_ONLY = re.compile(r"^[A-Z][^:\n]{0,39}:\s*$")
 KEY = re.compile(r"\b[A-Z][A-Z0-9]+-[0-9]+\b")  # case-sensitive: a key is uppercase
 # the marker words match without case; the key does not (x86-64 is not a ticket)
 MARKER = re.compile(r"\b(?i:follow-up|tracked)\s*(?::|(?i:in)\b)\s*([A-Z][A-Z0-9]+-[0-9]+)")
@@ -64,7 +87,6 @@ BROWSE = re.compile(r"/browse/([A-Z][A-Z0-9]+-[0-9]+)")
 ISSUE = re.compile(r"https?://\S+/issues/\d+\b")
 PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\s*\d+\s*\)", re.IGNORECASE)
 PERMANENT_ALIAS = re.compile(r"permanent\s*:\s*(?:decision\s*#?|#)\s*\d+", re.IGNORECASE)
-FENCE = re.compile(r"^\s*(```|~~~)")
 NONE_TEXT = re.compile(r"^(?:none|n/a)\.?$", re.IGNORECASE)
 TRUNC = 60
 
@@ -73,203 +95,248 @@ def trunc(text):
     return text if len(text) <= TRUNC else text[:TRUNC - 3] + "..."
 
 
-def label_entry(text):
-    """(label, rest) when text begins with the label followed by nothing or a colon; else None."""
-    m = LABEL_RE.match(text)
-    if not m:
-        return None
-    rest = text[m.end():].lstrip()
-    if rest.startswith(":"):
-        return (m.group(0).rstrip(), rest[1:].strip())
-    if not rest:
-        return (m.group(0).rstrip(), "")
+def classify(text):
+    """One line's kind, from its text alone: blank, heading, rule, item, continuation, label, paragraph."""
+    if not text.strip():
+        return "blank"
+    if text[0] == "#" and HEADING.match(text):
+        return "heading"
+    if RULE.match(text):
+        return "rule"
+    if LIST_ITEM.match(text):
+        return "item"
+    if text.startswith("\t") or text.startswith("  "):
+        return "continuation"
+    if BOLD_SPAN.match(text) or (LABEL_KIND.match(text) and "//" not in text.split(":")[0]):
+        return "label"
+    return "paragraph"
+
+
+def form_a(htext):
+    """True when a heading's text is a label word, with an optional parenthetical suffix and/or colon."""
+    t = htext.strip()
+    if t.endswith(":"):
+        t = t[:-1].strip()
+    if LABEL_RE.fullmatch(t):
+        return True
+    return bool(re.match(r"^(" + LABEL_SRC + r")\s*\([^()]*\)$", t, re.IGNORECASE))
+
+
+def form_b(stripped):
+    """True when the whole line is a bold-wrapped or plain label word, optionally with a colon."""
+    t = stripped.strip()
+    m = re.match(r"^\*\*(.*)\*\*\s*:?\s*$", t) or re.match(r"^__(.*)__\s*:?\s*$", t)
+    if m:
+        inner = m.group(1).strip()
+        if inner.endswith(":"):
+            inner = inner[:-1].strip()
+    else:
+        inner = t[:-1].strip() if t.endswith(":") else t
+    return bool(LABEL_RE.fullmatch(inner))
+
+
+def form_c(stripped):
+    """The text after the label when the line is 'Known limits: X' or '**Known limits:** X' at column 0;
+    None when it is not that form."""
+    t = stripped.strip()
+    m = re.match(r"^(" + LABEL_SRC + r")\s*:\s*(.*)$", t, re.IGNORECASE)
+    if m:
+        return m.group(2).strip()
+    m = re.match(r"^\*\*(.+?)\*\*\s*:?\s*(.*)$", t)
+    if m:
+        inner = m.group(1).strip()
+        rest = m.group(2).strip()
+        had_colon = inner.endswith(":") or rest.startswith(":")
+        if inner.endswith(":"):
+            inner = inner[:-1].strip()
+        if had_colon and LABEL_RE.fullmatch(inner):
+            return rest.lstrip(":").strip()
     return None
 
 
-def bold_entry(stripped):
-    """(label, rest) for a **label** / **label:** line; else None."""
-    m = BOLD.match(stripped)
-    if not m:
-        return None
-    inner = m.group(1).strip()
-    if inner.endswith(":"):
-        inner = inner[:-1].strip()
-    if LABEL_RE.fullmatch(inner):
-        return (inner, m.group(2).strip())
+def start_form_at(lines, i):
+    """None, "A", "B" or "C" — does the line at index i open a Known-limits block?"""
+    text = lines[i][1]
+    kind = classify(text)
+    stripped = text.strip()
+    if kind == "heading":
+        return "A" if form_a(HEADING.match(stripped).group(2)) else None
+    if kind == "label":
+        if form_b(stripped):
+            return "B"
+        if form_c(stripped):
+            return "C"
     return None
 
 
-def strip_markers(stripped):
-    t = re.sub(r"^#{1,6}\s+", "", stripped)
-    t = re.sub(r"^[-*>]\s+", "", t)
-    t = re.sub(r"^\d+[.)]\s+", "", t)
-    t = re.sub(r"^\*\*\s*", "", t)
-    return t.strip()
+def stray_mention(kind, text):
+    """True when a line outside every block is a label mention this check does not read (A1).
+    Backticks are not stripped: a line that opens with a backticked Known limits is code, not a mention."""
+    t = text.strip()
+    if kind == "heading":
+        return bool(LABEL_RE.match(HEADING.match(t).group(2)))
+    if kind == "item":
+        return bool(LABEL_RE.match(LIST_ITEM.match(text).group(2).strip()))
+    if kind == "label":
+        return bool(LABEL_RE.match(re.sub(r"^(\*\*|__)", "", t)))
+    if kind == "paragraph":
+        t2 = re.sub(r"^>\s*", "", t)
+        m = LABEL_RE.match(t2)
+        if not m:
+            return False
+        if m.group(0).lower().replace(" ", "").startswith(("knownlimit", "acceptedlimit")):
+            return True
+        rest = t2[m.end():].strip()
+        return rest == "" or rest.startswith(":")
+    return False
 
 
 def prepare(text):
-    """Drop fenced code blocks, HTML comments and the Decisions trailer; keep original line numbers."""
+    """Drop fenced code blocks, HTML comments and the Decisions trailer; keep original line numbers.
+    Returns (lines, errors): an unclosed fence or comment is an error, because what follows it would
+    silently vanish from the scan."""
     lines = text.splitlines()
     kept = []
+    errors = []
     in_fence = False
+    fence_char = ""
+    fence_len = 0
+    fence_line = 0
     in_comment = False
+    comment_line = 0
     for no, line in enumerate(lines, 1):
         if in_fence:
-            if FENCE.match(line):
+            s = line.strip()
+            if s.startswith(fence_char * fence_len) and set(s) <= {fence_char}:
                 in_fence = False
             continue
         if in_comment:
             if "-->" in line:
                 in_comment = False
             continue
-        if FENCE.match(line):
+        m = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if m:
             in_fence = True
+            fence_char = m.group(1)[0]
+            fence_len = len(m.group(1))
+            fence_line = no
             continue
         if "<!--" in line:
             if "-->" in line.split("<!--", 1)[1]:
                 continue
             in_comment = True
+            comment_line = no
             continue
         kept.append((no, line))
+    if in_fence:
+        errors.append((fence_line, "a code fence opens here and never closes, so the rest of the body "
+                                   "cannot be read. Close it."))
+    if in_comment:
+        errors.append((comment_line, "an HTML comment opens here and never closes, so the rest of the body "
+                                     "cannot be read. Close it with -->."))
     out = []
     for no, line in kept:
-        if line.strip().startswith("Decisions:"):
+        s = line.strip()
+        if s.startswith("Decisions:") or s.startswith("**Decisions:**"):
             break
         out.append((no, line))
-    return out
+    return out, errors
 
 
-def list_end(lines, k):
-    """End index (exclusive) of the list starting at k: items, continuations, and lazy lines."""
-    j = k
-    prev_blank = False
-    while j < len(lines):
+def end_of_block(lines, i, form, level):
+    """(end index exclusive, reason) for a form A or B block that opens at index i."""
+    j = i + 1
+    n = len(lines)
+    while j < n:
         text = lines[j][1]
-        if not text.strip():
-            prev_blank = True
+        stripped = text.strip()
+        if start_form_at(lines, j) is not None:
+            return j, "another Known limits start"
+        kind = classify(text)
+        if kind == "heading":
+            lvl = len(HEADING.match(stripped).group(1))
+            if form == "B" or lvl <= level:
+                return j, 'heading "%s"' % trunc(stripped)
             j += 1
             continue
-        if HEADING.match(text.strip()):
-            break
-        if LIST_ITEM.match(text) or text[:1] in (" ", "\t") or not prev_blank:
-            j += 1
-            prev_blank = False
-            continue
-        break
-    return j
-
-
-def paragraph_and_list_end(lines, i):
-    """End index (exclusive) of the paragraph at i plus the list that follows it."""
-    j = i + 1
-    while j < len(lines) and lines[j][1].strip():
+        if kind == "rule":
+            return j, 'rule "%s"' % trunc(stripped)
+        if form == "B" and kind == "label" and (BOLD_SPAN.match(stripped) or LABEL_ONLY.match(stripped)):
+            return j, 'label "%s"' % trunc(stripped)
         j += 1
-    k = j
-    while k < len(lines) and not lines[k][1].strip():
-        k += 1
-    if k < len(lines) and LIST_ITEM.match(lines[k][1]):
-        return list_end(lines, k)
-    return j
+    return n, "end of body"
 
 
-def bold_label_only(stripped):
-    """True for a line that is nothing but a bold label, optionally with a colon."""
-    return bool(re.match(r"^\*\*[^*]+\*\*:?\s*$", stripped))
-
-
-def section_end(lines, i):
-    """End index (exclusive) of a standalone-label section: the next heading, the next bold-label-only
-    line, or the end of the prepared lines (the Decisions trailer is already dropped)."""
-    j = i + 1
-    while j < len(lines):
-        s = lines[j][1].strip()
-        if HEADING.match(s) or bold_label_only(s):
-            break
-        j += 1
-    return j
-
-
-def find_blocks(lines, failures):
-    """One pass: blocks (loose), stray label-like lines (loud). A block is a dict with its line range."""
+def find_blocks(lines, errors):
+    """Classify lines and find Known-limits blocks (design sections 5 to 7, amended A1 to A3, A5).
+    Returns the blocks; appends (line, message) errors for strays and extra-words headings."""
     blocks = []
     i = 0
     n = len(lines)
     while i < n:
         no, text = lines[i]
         stripped = text.strip()
-        m = HEADING.match(stripped)
-        if m:
-            entry = label_entry(m.group(2))
-            if entry is not None:
-                level = len(m.group(1))
-                j = i + 1
-                while j < n:
-                    m2 = HEADING.match(lines[j][1].strip())
-                    if m2 and len(m2.group(1)) <= level:
-                        break
-                    j += 1
-                blocks.append({"label": entry[0], "kind": "heading", "opener": no,
-                               "rest": entry[1], "start": i + 1, "end": j})
-                i = j
-                continue
-        bold = bold_entry(stripped)
-        if bold is not None:
-            # a bold label alone on its line holds a section, like a heading; with text after it, the
-            # block is the rest of the paragraph plus the list that follows
-            j = section_end(lines, i) if not bold[1] else paragraph_and_list_end(lines, i)
-            blocks.append({"label": bold[0], "kind": "inline", "opener": no,
-                           "rest": bold[1], "start": i + 1, "end": j})
-            i = j
+        form = start_form_at(lines, i)
+        if form is None:
+            kind = classify(text)
+            if kind == "heading":
+                htext = HEADING.match(stripped).group(2)
+                if re.search(r"known limit|accepted limit", htext, re.IGNORECASE):
+                    errors.append((no, 'heading "%s" mixes known limits with other words. Use a heading '
+                                   'of its own, "## Known limits", and move other content to its own '
+                                   'heading.' % trunc(stripped)))
+                    i += 1
+                    continue
+            if kind in ("heading", "item", "label", "paragraph") and stray_mention(kind, text):
+                errors.append((no, '"%s" is written in a form this check does not read. Use "## Known '
+                                   'limits" or "**Known limits**" on its own line, followed by a list.'
+                               % trunc(stripped)))
+            i += 1
             continue
-        lm = LIST_ITEM.match(text)
-        if lm:
-            entry = label_entry(lm.group(2).strip())
-            if entry is not None and entry[1] == "":
-                # a list item counts as a label block only when it is just the label; "- Known limits: X"
-                # names a rule or states a limit, it does not open a block
-                indent = len(lm.group(1))
-                j = i + 1
-                while j < n:
-                    t = lines[j][1]
-                    if not t.strip():
-                        j += 1
-                        continue
-                    if HEADING.match(t.strip()):
-                        break
-                    if len(t) - len(t.lstrip()) <= indent:
-                        break
-                    j += 1
-                blocks.append({"label": entry[0], "kind": "listlabel", "opener": no,
-                               "rest": entry[1], "start": i + 1, "end": j})
-                i = j
-                continue
-        lm2 = LABEL_RE.match(stripped)
-        if lm2 is not None and stripped[lm2.end():].lstrip().startswith(":"):
-            # inline form: "Known limits: ..." opens a block; alone on its line it holds a section, with
-            # text after the colon the block is the rest of the paragraph plus the list that follows
-            rest = stripped[lm2.end():].lstrip().lstrip(":").strip()
-            j = section_end(lines, i) if not rest else paragraph_and_list_end(lines, i)
-            blocks.append({"label": lm2.group(0).rstrip(), "kind": "inline", "opener": no,
-                           "rest": rest, "start": i + 1, "end": j})
-            i = j
+        if form == "A":
+            level = len(HEADING.match(stripped).group(1))
+            end, reason = end_of_block(lines, i, "A", level)
+            group_titles = set()
+            for k in range(i + 1, end):
+                s = lines[k][1].strip()
+                if classify(lines[k][1]) == "label" and (BOLD_ONLY.match(s) or LABEL_ONLY.match(s)):
+                    group_titles.add(lines[k][0])
+            blocks.append({"form": "A", "opener": no, "content_start": i + 1, "end": end,
+                           "reason": reason, "group_titles": group_titles})
+            i = end
             continue
-        t = strip_markers(stripped)
-        lm3 = LABEL_RE.match(t)
-        if lm3 is not None:
-            after = t[lm3.end():].strip()
-            if after == "" or after.endswith(":"):
-                # only a line that itself looks like a label is a stray; a sentence that merely starts
-                # with the label word is ordinary prose
-                failures.append((no, '"%s" looks like a known-limits header but is not one this check reads. '
-                                 'Use a "## Known limits" heading, a "Known limits:" line, or a "**Known limits**" label, '
-                                 'or reword the sentence.'
-                                 % trunc(stripped)))
-        i += 1
+        if form == "B":
+            end, reason = end_of_block(lines, i, "B", None)
+            blocks.append({"form": "B", "opener": no, "content_start": i + 1, "end": end, "reason": reason})
+            i = end
+            continue
+        # form C: a one-unit inline block; the opener line is its content
+        j = i + 1
+        reason = "end of body"
+        while j < n:
+            t2 = lines[j][1]
+            if not t2.strip():
+                reason = "blank line"
+                break
+            if start_form_at(lines, j) is not None:
+                reason = "another Known limits start"
+                break
+            kind2 = classify(t2)
+            if kind2 == "heading":
+                reason = 'heading "%s"' % trunc(t2.strip())
+                break
+            if kind2 == "rule":
+                reason = 'rule "%s"' % trunc(t2.strip())
+                break
+            j += 1
+        blocks.append({"form": "C", "opener": no, "content_start": i, "end": j, "reason": reason})
+        i = j
     return blocks
 
 
-def parse_units(block_lines):
-    """Build the unit tree for a block's lines. Returns (units, has_list)."""
+def parse_units(block_lines, group_titles=None):
+    """Build the unit tree for a block's lines. Returns (units, has_list).
+    group_titles is a set of line numbers to treat as group labels (kept for context, not units)."""
     units = []
     stack = []  # open list items as (indent, unit)
     para = None
@@ -288,8 +355,9 @@ def parse_units(block_lines):
         if not stripped:
             prev_blank = True
             continue
-        if HEADING.match(stripped):
-            # a sub-heading inside the block is a group label, not a unit; it does not end the block
+        if HEADING.match(stripped) or (group_titles and no in group_titles):
+            # a sub-heading, or a label-only line in a heading block, is a group label, not a unit;
+            # it does not end the block
             flush_para()
             prev_blank = False
             continue
@@ -377,30 +445,53 @@ def judge_unit(u, name, failures, marked_keys, counts):
         failures.append((u["first"], '"%s" is not marked as coverage. Bare keys are not read, because "UTF-8" looks like one. '
                          'Add "Follow-up: %s" before it.' % (bare[0], bare[0])))
         return
+    hint = " If this starts a new section, give it a heading or a label." if u["kind"] == "para" else ""
     failures.append((u["first"], 'limit has no follow-up: "%s". Add "Follow-up: PROJ-123" or '
-                                 '"accepted as permanent (decision #N)" to this item.' % trunc(text)))
+                                 '"accepted as permanent (decision #N)" to this item.%s' % (trunc(text), hint)))
 
 
 def check_body(text, name):
-    """Print one line per failure; return (failure count, marked keys, limits found, blocks found)."""
-    lines = prepare(text)
-    failures = []
-    blocks = find_blocks(lines, failures)
+    """Print one span line per block and one line per failure; return (failures, marked keys, limits, blocks)."""
+    lines, errors = prepare(text)
+    blocks = find_blocks(lines, errors)
+    failures = list(errors)
     marked_keys = set()
     counts = [0]
-    for b in blocks:
-        block_lines = lines[b["start"]:b["end"]]
-        units, has_list = parse_units(block_lines)
-        if b["rest"]:
-            units.insert(0, {"kind": "para", "first": b["opener"], "last": b["opener"],
-                             "parts": [b["rest"]], "children": []})
-        if not has_list:
-            texts = [" ".join(u["parts"]) for u in units]
-            joined = re.sub(r"^" + LABEL_SRC + r"\s*:?\s*", "", " ".join(texts), flags=re.IGNORECASE).strip()
-            if joined and NONE_TEXT.match(joined):
-                continue  # "None" / "n/a": pass with zero limits
-        if not units:
-            failures.append((b["opener"], '"%s" block is empty. List each limit as a bullet, or write "None".' % b["label"]))
+    for idx, b in enumerate(blocks, 1):
+        block_lines = lines[b["content_start"]:b["end"]]
+        units, has_list = parse_units(block_lines, b.get("group_titles"))
+        flat = []
+
+        def collect(us):
+            for u in us:
+                flat.append(u)
+                collect(u["children"])
+
+        collect(units)
+        n_items = sum(1 for u in flat if u["kind"] == "item")
+        nonblank = [no for no, t in block_lines if t.strip()]
+        start_line = nonblank[0] if nonblank else b["opener"]
+        end_line = block_lines[-1][0] if block_lines else b["opener"]
+        if b["end"] < len(lines):
+            print("known-limits: block %d, lines %d-%d, %d item(s), ended by %s at line %d"
+                  % (idx, start_line, end_line, n_items, b["reason"], lines[b["end"]][0]))
+        else:
+            print("known-limits: block %d, lines %d-%d, %d item(s), ended by %s"
+                  % (idx, start_line, end_line, n_items, b["reason"]))
+        # "None" / "n/a" as the only content passes with zero limits; together with items it is an error
+        texts = [" ".join(u["parts"]) for u in flat]
+        none_idx = [k for k, t in enumerate(texts)
+                    if NONE_TEXT.match(re.sub(r"^" + LABEL_SRC + r"\s*:?\s*", "", t, flags=re.IGNORECASE).strip())]
+        if none_idx:
+            if len(texts) > len(none_idx):
+                failures.append((flat[none_idx[0]]["first"], '"None" appears in a Known limits block that '
+                               'also lists limits. Remove "None" or the items.'))
+            continue
+        if not flat:
+            failures.append((b["opener"], "the Known limits block has no list items. List each limit as "
+                                          '"- ...", or write "Known limits: None". If the next line is a '
+                                          'bold or "Label:" line, it ended the block: group limits with '
+                                          '"###" sub-headings or nested lists, and drop intro lines.'))
             continue
         for u in units:
             judge_unit(u, name, failures, marked_keys, counts)
@@ -493,6 +584,12 @@ def main(argv):
 
     if bad:
         print("known-limits-check: FAIL: %d problem(s) in the Known-limits block(s)" % bad, file=sys.stderr)
+        print("How to write known limits:", file=sys.stderr)
+        print("  ## Known limits", file=sys.stderr)
+        print("  - <limit> (Follow-up: PROJ-123)", file=sys.stderr)
+        print("  - <limit>: accepted as permanent (decision #4)", file=sys.stderr)
+        print('  The block ends at the next heading, "---", or "Label:" / **Label** line.', file=sys.stderr)
+        print("  No limits:  Known limits: None", file=sys.stderr)
         return 1
     suffix = ", tracker confirmed" if tracker is not None and marked_keys else ""
     print("known-limits-check: OK (%d limit(s) in %d block(s), all covered%s)" % (limits, blocks, suffix))

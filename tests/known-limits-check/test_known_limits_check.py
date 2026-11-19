@@ -285,10 +285,11 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertIn("line 8", out.stderr)
 
     def test_a_stray_label_line_fails(self):
-        text = "# PR\n\nKnown limits and caveats:\n"
-        out = run("--body-file", self.body(text))
-        self.assertEqual(out.returncode, 1, out.stderr)
-        self.assertIn("looks like a known-limits header", out.stderr)
+        for line in ("Known limits - rendering", "Known limits and caveats:"):
+            with self.subTest(line=line):
+                out = run("--body-file", self.body("# PR\n\n" + line + "\n"))
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("does not read", out.stderr)
 
     # -- round 2: a prose limit in a block that also has a list -------------------------------
 
@@ -364,17 +365,111 @@ class KnownLimitsCheck(unittest.TestCase):
 
     # -- round 4 notes: list-label form and the stray rule --------------------------------------
 
-    def test_a_list_item_with_text_after_the_label_is_not_a_label_block(self):
-        text = "# PR\n\n- Known limits: rendering is slow\n"
-        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+    def test_a_list_item_starting_with_the_label_fails(self):
+        out = run("--body-file", self.body("# PR\n\n## Summary\n\n- Known limits: emoji print as ?, no ticket yet.\n"))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("does not read", out.stderr)
+        text = "# PR\n\n## Summary\n\n- Known limits: rendering is slow. Follow-up: PROJ-1.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 1, "the list-label form is not read, covered or not")
 
     def test_ordinary_sentences_are_not_stray(self):
-        for line in ("Limitations of this approach are listed in the design doc.",
-                     "Known limits are below."):
-            with self.subTest(line=line):
-                text = "# PR\n\n" + line + "\n"
-                self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+        text = "# PR\n\nLimitations of this approach are listed in the design doc.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
 
+    def test_a_paragraph_starting_with_known_limits_is_stray(self):
+        out = run("--body-file", self.body("# PR\n\nKnown limits are below.\n"))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("does not read", out.stderr)
+
+    # -- round 5: label-like lines in the wrong form fail loudly --------------------------------
+
+    def test_label_like_lines_in_the_wrong_form_fail(self):
+        cases = [
+            "## Known limits (v1)",
+            "## Known limitations in this PR",
+            "### Limitations of this change",
+            "**Known limits (v1)**",
+        ]
+        for line in cases:
+            with self.subTest(line=line):
+                text = "# PR\n\n" + line + "\n\n- A breaks, no ticket.\n"
+                out = run("--body-file", self.body(text))
+                self.assertEqual(out.returncode, 1, out.stderr)
+
+    # -- round 5: what ends a bold or Label: block ----------------------------------------------
+
+    def test_a_plain_label_line_ends_a_label_block(self):
+        text = "# PR\n\nKnown limits:\n\n- A. Follow-up: PROJ-1.\n\nTesting:\n\n- ran it\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_bold_run_in_label_ends_a_label_block(self):
+        text = "# PR\n\n**Known limits**\n\n- A. Follow-up: PROJ-1.\n\n**Testing:** ran the suite.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_prose_before_a_plain_label_under_a_bold_label_fails(self):
+        text = ("# PR\n\n**Known limits**\n\n- A. Follow-up: PROJ-1.\n\n"
+                "B untracked.\n\nTesting:\n\n- ran it\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B untracked", out.stderr)
+        self.assertNotIn("ran it", out.stderr)
+
+    def test_a_bold_run_in_label_right_after_a_label_block_is_empty_loud(self):
+        text = "# PR\n\n**Known limits**\n\n**Emoji:** prints ?.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("no list items", out.stderr)
+
+    # -- round 5 / decision #1258: group titles inside blocks -----------------------------------
+
+    def test_a_bold_group_title_inside_a_heading_block_ends_nothing(self):
+        text = "# PR\n\n## Known limits\n\n- A. Follow-up: PROJ-1.\n\n**Export**\n\n- B is slow\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B is slow", out.stderr)
+
+    def test_a_label_line_with_text_inside_a_heading_block_is_judged(self):
+        text = "# PR\n\n## Known limits\n\n- A. Follow-up: PROJ-1.\n\nNote: B is slow\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B is slow", out.stderr)
+
+    def test_a_bold_group_title_ends_a_label_block_residual(self):
+        # decision #1258: a bold group title inside a bold or Label: known-limits block ends the block
+        text = "# PR\n\n**Known limits**\n\n- A. Follow-up: PROJ-1.\n\n**Export**\n\n- B is slow\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('ended by label "**Export**"', out.stdout)
+
+    def test_the_cost_of_group_titles_in_heading_blocks_is_pinned(self):
+        text = "# PR\n\n## Known limits\n\n- A. Follow-up: PROJ-1.\n\n**Testing**\n\n- ran it\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 1)
+
+    # -- round 5: the pre-pass fails loudly on an unclosed fence or comment ---------------------
+
+    def test_an_unclosed_fence_fails_loud(self):
+        text = "# PR\n\n## Summary\n\n```\n- A breaks, no ticket.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("never closes", out.stderr)
+
+    def test_an_unclosed_comment_fails_loud(self):
+        text = "# PR\n\n## Summary\n\n<!-- under construction\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("never closes", out.stderr)
+
+    def test_a_bold_decisions_line_ends_the_body(self):
+        text = "# PR\n\n## Known limits\n\n- A. Follow-up: PROJ-1.\n\n**Decisions:** #3\n\nGenerated\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    # -- round 5: the span line ------------------------------------------------------------------
+
+    def test_a_passing_body_prints_the_block_span(self):
+        text = "## Known limits\n\n- A. Follow-up: PROJ-1.\n\n## Testing\n\n- ran it\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn('block 1, lines 3-4, 1 item(s), ended by heading "## Testing" at line 5', out.stdout)
 
 if __name__ == "__main__":
     unittest.main()
