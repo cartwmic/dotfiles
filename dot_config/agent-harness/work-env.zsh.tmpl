@@ -1,0 +1,11 @@
+# Work-only agent-harness environment, sourced by ~/.zshenv when present. chezmoi deploys
+# this file on the work profile only (.chezmoiignore), so the guarded source line in
+# dot_zshenv does nothing elsewhere. The tracker command points known-limits-check's
+# ticket-key lookup at the mcp-ticket-lookup helper. The MCP tool name comes from this
+# machine's own chezmoi data (workEnv.mcpTool); it is never in this repository.
+export KNOWN_LIMITS_TRACKER_CMD="$HOME/.local/share/agent-harness/bin/mcp-ticket-lookup"
+{{- with index . "workEnv" }}
+{{- with index . "mcpTool" }}
+export KNOWN_LIMITS_MCP_TOOL="{{ . }}"
+{{- end }}
+{{- end }}

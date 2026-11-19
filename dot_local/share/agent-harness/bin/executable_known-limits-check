@@ -1,0 +1,645 @@
+#!/usr/bin/env python3
+"""known-limits-check: every limit a PR body lists under "## Known limits" is tracked or accepted.
+
+usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD] [--no-lookup]
+
+A PR description that accepts a known limit on the condition that a follow-up ticket be filed loses the
+limit when nobody files it: nothing fails until a reviewer notices, rounds later. This check makes the
+escape loud when the body is written or reviewed. The reviewer brief (reviewer-brief.md section 1) runs
+it on the body as filed. Design: one accepted form, closed contents, a reserved phrase, strict judging,
+and a tracker lookup so a made-up ticket cannot pass.
+
+One form is accepted. A section opens only at the heading line "## Known limits" (case-insensitive,
+column 0, exactly two #, nothing else on the line). It ends just before the next level-1 or level-2
+heading, a thematic break ("---") at column 0, the body's Decisions trailer, or the end of the body;
+nothing else ends it. Inside, every non-blank line must be a list item at column 0, an indented
+continuation line, or the single line "None"; a fence, an HTML comment, a sub-heading or any other text
+is an error, so a limit cannot hide after the list. The section is closed: its contents are never
+stripped or skipped. Outside the section the phrase "known limit" (and "accepted limit") is reserved:
+any mention, in any decoration, fails with the exact rewrite. Bare limit labels ("Limitations:",
+"*Limitations*", a heading that starts with "Limitations") fail the same way. Fenced blocks and inline
+code spans outside the section are skipped by the phrase scan, except on label-shaped lines, which are
+scanned with the backticks deleted; an unclosed fence is an error, so a fence cannot swallow the rest of
+the body. From the end of the body, trailing attribution lines and then a final "Decisions:" line are
+outside the section (the phrase scan still reads them); a Decisions line anywhere else is an ordinary
+line, and inside the section that is an error.
+
+Judging is strict. Units, not physical lines: every list item at any depth is its own unit. Coverage
+counts only on the unit that carries it, with no inheritance: every leaf needs its own marker, and a
+parent with children passes without one only when its text ends in ":" (a group label). The markers are
+"Follow-up: KEY", "Tracked: KEY", "Tracked in KEY", a "/browse/KEY" link, a GitHub issue URL
+(https://.../issues/N), "accepted as permanent (decision #N)", or the alias "Permanent: decision N".
+The marker words match without case; the key does not, so "follow-up: x86-64" is not coverage. A bare
+key with no marker fails, with the one-word fix. "None" (or "None.") must be the only line in the
+section; next to listed limits it is an error.
+
+Tracker lookup: every marker-carrying reference is confirmed before the check passes, so a made-up
+ticket does not pass. A GitHub issue URL is looked up with "gh issue view <url> --json state"; the
+issue must exist (closed counts: the marker promises a filed ticket, and a closed one proves it was
+filed). A ticket key is confirmed with the command from --tracker-cmd or KNOWN_LIMITS_TRACKER_CMD, run
+once per distinct key with the key as its only argument; exit 0 confirms it. Each profile supplies its
+own tracker command through its own environment: the work profile sets it to the mcp-ticket-lookup
+helper, which confirms a key through one read-only MCP tool named by KNOWN_LIMITS_MCP_TOOL, and the
+personal profile sets none, because its markers are issue URLs. When no lookup is configured for a
+key, or the tracker cannot be reached, the check fails with exit 1 and a message saying the key could
+not be confirmed; it never passes silently. --no-lookup turns lookups off; a caller passes it on
+purpose, for the test suite or documented offline use, never in the reviewer brief.
+
+The body text comes from --body-file files (repeatable) or stdin when no file is given. Exit 0 the body
+passes; 1 any structural error, stray mention, uncovered limit, or unconfirmed reference; 2 bad
+arguments or an unreadable body file. All failures are printed, and every failing run ends with a short
+how-to footer.
+"""
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+# -- the judge (kept) ----------------------------------------------------------------------
+KEY = re.compile(r"\b[A-Z][A-Z0-9]+-[0-9]+\b")  # case-sensitive: a key is uppercase
+# the marker words match without case; the key does not (x86-64 is not a ticket)
+MARKER = re.compile(r"\b(?i:follow-up|tracked)\s*(?::|(?i:in)\b)\s*([A-Z][A-Z0-9]+-[0-9]+)")
+BROWSE = re.compile(r"/browse/([A-Z][A-Z0-9]+-[0-9]+)")
+ISSUE = re.compile(r"https?://\S+/issues/\d+\b")
+PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\s*\d+\s*\)", re.IGNORECASE)
+PERMANENT_ALIAS = re.compile(r"permanent\s*:\s*(?:decision\s*#?|#)\s*\d+", re.IGNORECASE)
+TRUNC = 60
+
+# -- the finder ----------------------------------------------------------------------------
+SECTION_HEADING = re.compile(r"^## +known limits[ \t]*$", re.IGNORECASE)
+END_HEADING = re.compile(r"^#{1,2}([ \t]|$)")  # a level-1 or level-2 heading ends the section
+SUBHEADING = re.compile(r"^#{3,6}([ \t]|$)")  # a deeper heading inside the section is an error
+LIST_ITEM = re.compile(r"^(?:[-*+]|\d[.)])(?:[ \t]+(.*))?$", re.DOTALL)  # column 0
+NONE_LINE = re.compile(r"^none\.?$", re.IGNORECASE)
+ATTRIBUTION = re.compile(r"^(?:\U0001f916|Generated\b|Co-Authored-By:)")
+DECISIONS_LINE = re.compile(r"^(?:\*\*)?Decisions:")
+PHRASE = re.compile(r"\b(?:known|accepted)\s+limits?(?:ations?)?\b", re.IGNORECASE)
+BARE_LABEL = re.compile(r"^limits?(?:\s*(:.*))?$|^limitations?\s*(:.*)?$", re.IGNORECASE)
+LABEL_WORD = re.compile(r"^(?:known\s+limits?|accepted\s+limits?|limitations?)\b\s*:?", re.IGNORECASE)
+HEADING_ANY = re.compile(r"^#{1,6}\s+(.*)$")
+LIST_PREFIX = re.compile(r"^(?:[-*+]|\d[.)])\s+")
+QUOTE_PREFIX = re.compile(r"^(?:>\s*)+")
+ZERO_WIDTH = "\u200b\u200c\u200d\u2060\ufeff"
+
+
+def trunc(text):
+    return text if len(text) <= TRUNC else text[:TRUNC - 3] + "..."
+
+
+# -- the finder: normalization, trailer, section -------------------------------------------
+
+def normalize(raw):
+    """Decode and normalize a body: UTF-8, no BOM, LF line endings. None when not UTF-8."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def trailer_start(lines):
+    """The index of the first line of the body's trailer, or None.
+    From the end: skip blank lines, drop trailing attribution lines, then drop a final
+    Decisions line. Everything dropped is outside the section; the phrase scan still reads it."""
+    i = len(lines) - 1
+    while i >= 0 and not lines[i][1].strip():
+        i -= 1
+    cut = None
+    while i >= 0 and ATTRIBUTION.match(lines[i][1]):
+        cut = i
+        i -= 1
+        while i >= 0 and not lines[i][1].strip():
+            i -= 1
+    if i >= 0 and DECISIONS_LINE.match(lines[i][1]):
+        cut = i
+    return cut
+
+
+def thematic_break(text):
+    """A thematic break at column 0: three or more -, * or _, all the same, optional spaces between."""
+    s = text.replace(" ", "")
+    return len(s) >= 3 and s[0] in "-*_" and set(s) == {s[0]}
+
+
+def find_section(lines, trailer_idx, errors):
+    """Find the Known limits section and classify its contents.
+    Returns a dict {start, end, none, content} or None when there is no section heading."""
+    headings = [i for i, (_, t) in enumerate(lines) if SECTION_HEADING.match(t)]
+    if not headings:
+        return None
+    for i in headings[1:]:
+        errors.append((lines[i][0], 'second "## Known limits" heading (first is line %d); '
+                       "merge its items into the first section and delete this heading" % lines[headings[0]][0]))
+    start = headings[0]
+    end = trailer_idx if trailer_idx is not None else len(lines)
+    for i in range(start + 1, end):
+        t = lines[i][1]
+        if END_HEADING.match(t) or thematic_break(t):
+            end = i
+            break
+    content = lines[start + 1:end]
+    none_line = classify_section(lines[start][0], content, errors)
+    return {"headings": headings, "start_idx": start, "end_idx": end,
+            "start_no": lines[start][0], "none": none_line, "content": content}
+
+
+def classify_section(heading_no, content, errors):
+    """Classify each non-blank line of the section. Returns the line number of the None line,
+    or None. Every non-blank line must be a list item at column 0, an indented continuation,
+    or the single line None; anything else is an error, and the errors are collected."""
+    nonblank = [(no, t) for no, t in content if t.strip()]
+    if not nonblank:
+        errors.append((heading_no, 'Known limits section is empty; write the single line "None", '
+                       "or delete the heading"))
+        return None
+    none_lines = []
+    item_seen = False
+    for no, t in content:
+        if not t.strip():
+            continue
+        if "<!--" in t:
+            errors.append((no, "HTML comment inside the Known limits section; delete it "
+                               "(hidden text cannot list or track a limit)"))
+            continue
+        stripped = t.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            errors.append((no, "code fence inside the Known limits section; write each limit "
+                               "as plain list-item text"))
+            continue
+        if SUBHEADING.match(t):
+            errors.append((no, "sub-heading inside the Known limits section; make it a list item, "
+                               'or end the section with a "##" heading first'))
+            continue
+        if NONE_LINE.match(t.strip()):
+            none_lines.append(no)
+            continue
+        m = LIST_ITEM.match(t)
+        if m:
+            if m.group(1) is not None and NONE_LINE.match(m.group(1).strip() or ""):
+                errors.append((no, 'write no limits as the single line "None", not as a list item'))
+                continue
+            item_seen = True
+            continue
+        if t.startswith("  ") or t.startswith("\t"):
+            if not item_seen:
+                errors.append((no, "indented line before the first list item; make it a list item "
+                                   "starting at column 0"))
+            continue
+        errors.append((no, "text in the Known limits section that is not a list item. Make it a list "
+                           'item ("- ..."), indent it under the item it belongs to, or end the section '
+                           'with a "##" heading or "---" before it. If there are no limits, the section '
+                           'is the single line "None"'))
+    if none_lines and (item_seen or len(none_lines) < len(nonblank)):
+        errors.append((none_lines[0], '"None" must be the only line in the Known limits section; '
+                       "delete it or delete the items"))
+        return None
+    return none_lines[0] if none_lines else None
+
+# -- the finder: the reserved phrase outside the section ------------------------------------
+
+def clean(text):
+    """Replace HTML tags and &nbsp; with a space; delete zero-width characters."""
+    text = re.sub(r"</?[A-Za-z][^>\n]*>", " ", text)
+    text = text.replace("&nbsp;", " ")
+    for ch in ZERO_WIDTH:
+        text = text.replace(ch, "")
+    return text
+
+
+def strip_decoration(text):
+    """Delete the decoration characters, so emphasis, quotes and backticks cannot hide the phrase."""
+    return re.sub(r"[*_~`>]", "", clean(text))
+
+
+def shape_of(raw):
+    """One line's stray shape: (kind, detail) where kind is "label", "inline", "heading", "bare"
+    or None, and detail carries the rewrite text. Backticks are deleted first, so a label written
+    in code is still label-shaped (A3); plain prose mentions are None here and are caught by the
+    joined phrase scan as text."""
+    t = strip_decoration(raw).strip()
+    is_heading = HEADING_ANY.match(t) is not None
+    body = re.sub(r"^#{1,6}\s+", "", t)
+    body = LIST_PREFIX.sub("", body).strip()
+    if BARE_LABEL.match(body):
+        word = body.split(":")[0].strip()
+        return ("bare", word)
+    if is_heading and re.match(r"limits?\b|limitations?\b", body, re.IGNORECASE):
+        return ("bare", body.split()[0].strip())  # a heading that starts with a limit word (A2)
+    m = PHRASE.match(body)
+    if not m:
+        return (None, "")
+    rest = body[m.end():].strip()
+    if rest in ("", ":", "."):
+        return ("label", "")
+    if rest.startswith(":"):
+        text = rest[1:].strip()
+        return ("inline", text)
+    if is_heading:
+        return ("heading", "")
+    return (None, "")
+
+
+def stray_scan(lines, section, errors):
+    """The reserved-phrase scan over everything outside the section, trailer included.
+    Fenced blocks and inline code spans are skipped, except on label-shaped lines, which are
+    scanned with the backticks deleted (A3); an unclosed fence outside the section is an error,
+    so a fence cannot swallow the rest of the body. Bare limit labels fail on sight (A2)."""
+    skip = set()
+    if section:
+        skip.update(section["headings"])
+        skip.update(range(section["start_idx"] + 1, section["end_idx"]))
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    fence_opener = None
+    pieces = []
+    shaped = {}  # line number -> (kind, detail), for lines the phrase scan must classify
+    for i, (no, t) in enumerate(lines):
+        if i in skip:
+            pieces.append((no, ""))
+            continue
+        if in_fence:
+            s = t.strip()
+            if s.startswith(fence_char * fence_len) and set(s) <= {fence_char}:
+                in_fence = False
+                pieces.append((no, ""))
+                continue
+            kind, detail = shape_of(t)
+            if kind == "bare":
+                bare_label_error(no, detail, section, errors)
+                pieces.append((no, ""))
+            elif kind:
+                shaped[no] = (kind, detail)
+                pieces.append((no, strip_decoration(t)))
+            else:
+                pieces.append((no, ""))
+            continue
+        m = re.match(r"^\s*(`{3,}|~{3,})", t)
+        if m:
+            in_fence = True
+            fence_char = m.group(1)[0]
+            fence_len = len(m.group(1))
+            fence_opener = (i, no)
+            pieces.append((no, ""))
+            continue
+        kind, detail = shape_of(t)
+        if kind == "bare":
+            bare_label_error(no, detail, section, errors)
+            pieces.append((no, ""))
+        elif kind:
+            shaped[no] = (kind, detail)
+            pieces.append((no, strip_decoration(t)))
+        else:
+            pieces.append((no, strip_decoration(re.sub(r"`[^`]*`", " ", t))))
+    if in_fence and fence_opener and (section is None or fence_opener[0] >= section["end_idx"]):
+        errors.append((fence_opener[1], "fence never closes; close it, because what follows it "
+                       "would silently vanish from the scan"))
+    scan_text = "\n".join(p for _, p in pieces)
+    starts = []
+    pos = 0
+    for no, p in pieces:
+        starts.append((pos, no))
+        pos += len(p) + 1
+    for m in PHRASE.finditer(scan_text):
+        line_no = starts[0][1]
+        for off, no in starts:
+            if off <= m.start():
+                line_no = no
+            else:
+                break
+        if line_no in shaped:
+            kind, detail = shaped[line_no]
+            if kind == "label":
+                errors.append((line_no, 'known limits written as a label; replace this line with '
+                               '"## Known limits"' + section_suffix(section)))
+            elif kind == "inline":
+                inline_error(line_no, detail, section, errors)
+            elif kind == "heading":
+                errors.append((line_no, "heading mentions known limits; the section heading must be "
+                               'exactly "## Known limits". Rename this heading so it does not say '
+                               '"known limit", and put limits under "## Known limits"'))
+        else:
+            errors.append((line_no, '"known limit" appears outside the "## Known limits" section. '
+                           "If this lists limits, move each one into that section as a list item; "
+                           'otherwise reword it without the words "known limit"'))
+
+
+def section_suffix(section):
+    if section:
+        return " (or move its items into the section at line %d)" % section["start_no"]
+    return ""
+
+
+def bare_label_error(no, word, section, errors):
+    errors.append((no, '"%s" written as a label; replace this line with "## Known limits"%s'
+                   % (word, section_suffix(section))))
+
+
+def inline_error(no, text, section, errors):
+    if section:
+        errors.append((no, 'known limits written inline; delete this line and add "- %s" to the '
+                       "section at line %d" % (text or "None", section["start_no"])))
+        return
+    rewrite = "None" if text.lower().rstrip(".") == "none" else "- %s" % text
+    errors.append((no, 'known limits written inline; replace this line with:\n\n  ## Known limits\n\n  %s'
+                   % rewrite))
+
+# -- the judge (kept): units, markers, coverage ---------------------------------------------
+
+def parse_units(block_lines, group_titles=None):
+    """Build the unit tree for a block's lines. Returns (units, has_list).
+    group_titles is a set of line numbers to treat as group labels (kept for context, not units)."""
+    units = []
+    stack = []  # open list items as (indent, unit)
+    para = None
+    prev_blank = True
+    top_indent = None
+    state = {"has_list": False}
+
+    def flush_para():
+        nonlocal para
+        if para is not None:
+            units.append(para)
+            para = None
+
+    for no, text in block_lines:
+        stripped = text.strip()
+        if not stripped:
+            prev_blank = True
+            continue
+        if HEADING_ANY.match(stripped) or (group_titles and no in group_titles):
+            # a sub-heading, or a label-only line in a heading block, is a group label, not a unit;
+            # it does not end the block
+            flush_para()
+            prev_blank = False
+            continue
+        indent = len(text) - len(text.lstrip())
+        m = re.match(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$", text)
+        if m:
+            state["has_list"] = True
+            flush_para()
+            item_indent = len(m.group(1))
+            unit = {"kind": "item", "first": no, "last": no, "parts": [m.group(2).strip()], "children": []}
+            if top_indent is None:
+                top_indent = item_indent
+            if item_indent <= top_indent:
+                stack.clear()
+                units.append(unit)
+            else:
+                while stack and stack[-1][0] >= item_indent:
+                    stack.pop()
+                if stack:
+                    stack[-1][1]["children"].append(unit)
+                else:
+                    units.append(unit)
+            stack.append((item_indent, unit))
+            prev_blank = False
+            continue
+        if para is not None and not prev_blank:
+            para["parts"].append(stripped)
+            para["last"] = no
+            prev_blank = False
+            continue
+        if stack and (indent > stack[-1][0] or not prev_blank):
+            # continuation of the innermost open item: indented, or lazy (no blank between)
+            stack[-1][1]["parts"].append(stripped)
+            stack[-1][1]["last"] = no
+            prev_blank = False
+            continue
+        flush_para()
+        para = {"kind": "para", "first": no, "last": no, "parts": [stripped], "children": []}
+        prev_blank = False
+    flush_para()
+
+    # a lead-in paragraph ending in ":" directly followed by a list is covered by that list, not a unit
+    kept = []
+    for u in units:
+        if u["kind"] == "para" and u["parts"][-1].endswith(":"):
+            k = 0
+            for idx, (no, t) in enumerate(block_lines):
+                if no == u["last"]:
+                    k = idx + 1
+                    break
+            while k < len(block_lines) and not block_lines[k][1].strip():
+                k += 1
+            if k < len(block_lines) and re.match(r"^(\s*)(?:[-*+]|\d+[.)])\s+", block_lines[k][1]):
+                continue
+        kept.append(u)
+    return kept, state["has_list"]
+
+
+def marker_keys(text):
+    """References that carry a marker: Follow-up: KEY, Tracked: KEY / Tracked in KEY, a /browse/KEY link,
+    or a GitHub issue URL. Keys come back as keys; issue URLs come back as the full URL."""
+    return MARKER.findall(text) + BROWSE.findall(text) + ISSUE.findall(text)
+
+
+def bare_keys(text, keys):
+    """KEY-shaped tokens in text that no marker covers."""
+    marked = set(keys)
+    return [k for k in KEY.findall(text) if k not in marked]
+
+
+def judge_unit(u, name, failures, marked_keys, counts):
+    """Judge one unit on its own text; children are judged independently (no inheritance)."""
+    for c in u["children"]:
+        judge_unit(c, name, failures, marked_keys, counts)
+    text = " ".join(u["parts"])
+    keys = marker_keys(text)
+    if keys or PERMANENT.search(text) or PERMANENT_ALIAS.search(text):
+        marked_keys.update(keys)
+        counts[0] += 1
+        return
+    if u["children"] and text.rstrip().endswith(":"):
+        return  # a group label: its children carry the limits
+    bare = bare_keys(text, keys)
+    if bare:
+        failures.append((u["first"], '"%s" is not marked as coverage. Bare keys are not read, because "UTF-8" looks like one. '
+                         'Add "Follow-up: %s" before it.' % (bare[0], bare[0])))
+        return
+    hint = " If this starts a new section, give it a heading or a label." if u["kind"] == "para" else ""
+    failures.append((u["first"], 'limit has no follow-up: "%s". Add "Follow-up: PROJ-123" or '
+                                 '"accepted as permanent (decision #N)" to this item.%s' % (trunc(text), hint)))
+
+# -- composition: finder, then judge, then lookup -------------------------------------------
+
+def structural_check(text):
+    """The finder alone: (every structural error and stray mention, sorted by line, the section).
+    This is the seam between the finder and the judge: coverage runs only when errors is empty."""
+    errors = []
+    lines = [(no, t) for no, t in enumerate(text.split("\n"), 1)]
+    section = find_section(lines, trailer_start(lines), errors)
+    stray_scan(lines, section, errors)
+    return sorted(errors), section
+
+
+def check_body(text, name):
+    """Run the finder; when it reports no structural error, run the judge on the section.
+    Returns (failure count, marked references, limits, sections found)."""
+    errors, section = structural_check(text)
+    if errors:
+        for no, msg in sorted(errors):
+            print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
+        return len(errors), set(), 0, 0
+    if section is None:
+        print("known-limits: no Known limits section")
+        return 0, set(), 0, 0
+    if section["none"] is not None:
+        return 0, set(), 0, 1
+    units, _ = parse_units(section["content"])
+    failures = []
+    marked = set()
+    counts = [0]
+    for u in units:
+        judge_unit(u, name, failures, marked, counts)
+    for no, msg in failures:
+        print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
+    return len(failures), marked, counts[0], 1
+
+
+# -- the tracker lookup ---------------------------------------------------------------------
+
+def gh_unconfirmed(url):
+    """The reason a GitHub issue URL could not be confirmed, or None when the issue exists.
+    Closed counts: the marker promises a filed ticket, and a closed one proves it was filed.
+    gh resolves pull requests through the same command, so the returned URL must be an
+    issue URL: naming this PR's own number would otherwise confirm a ticket that was
+    never filed."""
+    try:
+        done = subprocess.run(["gh", "issue", "view", url, "--json", "state,url"],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "the gh lookup could not be run: %s" % e
+    if done.returncode != 0:
+        return "gh issue view failed: %s" % (done.stderr.strip() or ("exit %d" % done.returncode))
+    try:
+        found = json.loads(done.stdout)
+    except ValueError:
+        found = {}
+    if not found.get("state"):
+        return "gh issue view printed no state"
+    returned = found.get("url") or ""
+    if not re.search(r"/issues/[0-9]+$", returned):
+        return "the returned reference is a pull request, not an issue"
+    return None
+
+
+def tracker_unconfirmed(key, tracker):
+    """The reason a ticket key could not be confirmed, or None when the tracker confirms it."""
+    if tracker is None:
+        return ("no tracker lookup is configured for ticket keys; set KNOWN_LIMITS_TRACKER_CMD or "
+                "pass --tracker-cmd, or pass --no-lookup to skip lookups on purpose")
+    try:
+        done = subprocess.run(tracker + [key], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "the tracker command could not be run: %s" % e
+    if done.returncode != 0:
+        return "the tracker command did not confirm it: %s" % (done.stderr.strip() or ("exit %d" % done.returncode))
+    return None
+
+
+def confirm_refs(refs, tracker, lookup):
+    """Confirm every marked reference. Returns the (ref, reason) pairs that could not be
+    confirmed; each one is a failure (exit 1), never a silent pass."""
+    bad = []
+    if not lookup:
+        return bad
+    for ref in sorted(refs):
+        reason = gh_unconfirmed(ref) if ref.startswith("http") else tracker_unconfirmed(ref, tracker)
+        if reason:
+            bad.append((ref, reason))
+    return bad
+
+
+def usage(why):
+    print("known-limits-check: %s" % why, file=sys.stderr)
+    print("usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD] [--no-lookup]", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def main(argv):
+    bodies = []
+    tracker = None
+    lookup = True
+    args = list(argv)
+    while args:
+        a = args.pop(0)
+        if a == "--body-file":
+            if not args:
+                usage("--body-file needs a file")
+            bodies.append(args.pop(0))
+        elif a.startswith("--body-file="):
+            bodies.append(a.split("=", 1)[1])
+        elif a == "--tracker-cmd":
+            if not args:
+                usage("--tracker-cmd needs a command")
+            tracker = shlex.split(args.pop(0))
+        elif a.startswith("--tracker-cmd="):
+            tracker = shlex.split(a.split("=", 1)[1])
+        elif a == "--no-lookup":
+            lookup = False
+        elif a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        else:
+            usage("unknown argument %r" % a)
+    if tracker is None:
+        env = os.environ.get("KNOWN_LIMITS_TRACKER_CMD", "").strip()
+        if env:
+            tracker = shlex.split(env)
+    if not bodies:
+        bodies = ["-"]
+
+    bad = 0
+    marked_keys = set()
+    limits = 0
+    sections = 0
+    for body in bodies:
+        try:
+            raw = sys.stdin.buffer.read() if body == "-" else open(body, "rb").read()
+        except OSError as e:
+            print("known-limits-check: cannot read %s: %s" % (body, e), file=sys.stderr)
+            return 2
+        text = normalize(raw)
+        if text is None:
+            print("known-limits-check: %s: body is not UTF-8; cannot read it" % body, file=sys.stderr)
+            bad += 1
+            continue
+        body_bad, body_keys, body_limits, body_sections = check_body(text, body)
+        bad += body_bad
+        marked_keys.update(body_keys)
+        limits += body_limits
+        sections += body_sections
+
+    unconfirmed = confirm_refs(marked_keys, tracker, lookup)
+    for ref, reason in unconfirmed:
+        bad += 1
+        print("known-limits-check: %s could not be confirmed: %s" % (ref, reason), file=sys.stderr)
+    if unconfirmed:
+        print("  the ticket or issue must exist, or the limit needs a different follow-up; "
+              "--no-lookup skips lookups only when a caller passes it on purpose", file=sys.stderr)
+
+    if bad:
+        print("known-limits-check: FAIL: %d problem(s)" % bad, file=sys.stderr)
+        print("How to write known limits:", file=sys.stderr)
+        print("  ## Known limits", file=sys.stderr)
+        print("  - <limit> Follow-up: PROJ-123", file=sys.stderr)
+        print("  - <limit>, accepted as permanent (decision #4)", file=sys.stderr)
+        print('  The section ends at the next # or ## heading, a "---" line, or the Decisions trailer.',
+              file=sys.stderr)
+        print("  No limits: the single line None", file=sys.stderr)
+        return 1
+    if sections == 0:
+        return 0
+    suffix = ", lookups off" if not lookup else (", references confirmed" if marked_keys else "")
+    print("known-limits-check: OK (%d limit(s) in %d section(s), all covered%s)"
+          % (limits, sections, suffix))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

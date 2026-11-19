@@ -17,6 +17,8 @@ You review one change in fresh context. You do not edit it. The task gives you o
   - A handoff or PR body with no `Decisions:` line is itself a blocking finding with the `decision log:` prefix, unless the diff makes no material choice.
   - Skip this check only where that lookup cannot answer: the file is missing, it fails, or its JSON has no `question` key (a coordinator older than ledger schema 6). Say in the review that you skipped it and why. Both profiles get this text; each uses its own state dir.
 
+- Run the known-limits check on the body as filed: `~/.local/share/agent-harness/bin/known-limits-check --body-file <body file>`, with the profile's tracker lookup configured (`--tracker-cmd` or `KNOWN_LIMITS_TRACKER_CMD`) so every ticket reference is confirmed; exit 1 is a blocking finding, and `--no-lookup` is never passed here.
+
 ## 2. Inputs
 
 Read all of these:

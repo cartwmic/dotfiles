@@ -126,7 +126,10 @@ check stays small.
   real data only when its shape matters, keep it under 100 MB, and put it
   under `.hill-climb/<name>/data/`, where git ignores it and kits skip it.
 - **Profile once.** Before step 1, find where the time or the errors go.
-  Attack the biggest part first.
+  Attack the biggest part first. For a speed goal in a repo whose gate runs
+  on kgate, start from the cost picture: `kgate report --days 7 --repo <repo>`
+  prints, per command, runs, median and slowest-tenth wall time, CPU-seconds,
+  cores used against cores asked for, and peak memory.
 
 ## Helpers
 

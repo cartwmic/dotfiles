@@ -221,7 +221,7 @@ class Fixture(unittest.TestCase):
 
     def write_fixture(self):
         repos = {r: str(self.src) for r in ("cartwmic/dotfiles", "cartwmic/loop-engine", "cartwmic/agent-kit", "cartwmic/coordinator",
-                                            "cartwmic/alert-steward", "StoryCraftTW/storycraft")}
+                                            "cartwmic/alert-steward", "StoryCraftTW/storycraft", "cartwmic/retro")}
         repos.update(getattr(self, "extra_repos", {}))
         Path(self.env["FAKE_GH_FIXTURE"]).write_text(json.dumps(
             {"repos": repos, "runs": self.runs, "fail": self.failing, "attempts": self.attempts,
@@ -498,6 +498,7 @@ class TipFlag(Fixture):
                              ("alert-steward", "image.yml"))}
         runs["cartwmic/dotfiles|ci.yml"] = [run(2, self.c3, status="queued", age=5), run(1, self.c2, "success", age=1)]
         runs["StoryCraftTW/storycraft|ci.yml"] = [run(1, self.c3, "success")]
+        runs["cartwmic/retro|unit.yml"] = [run(1, self.c3, "success")]
         self.runs = runs
         self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
         rc, out = self.status("--all")
@@ -641,6 +642,16 @@ class MergeGateFlag(Fixture):
         rc, out = self.status("--merge-gate", "storycraft")
         self.assertEqual(rc, 1, out)
         self.assertIn("storycraft: RED", out)
+
+    def test_retro_reads_its_unit_workflow_on_main(self):
+        self.runs = {"cartwmic/retro|unit.yml": []}
+        rc, out = self.status("--merge-gate", "retro")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("retro: UNTESTED", out)
+        self.runs = {"cartwmic/retro|unit.yml": [run(1, self.c3, "failure")]}
+        rc, out = self.status("--merge-gate", "retro")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("retro: RED", out)
 
     def test_the_coordinators_full_name_is_its_table_entry(self):
         # `--merge-gate cartwmic/coordinator` once took the any-repo path and died on a private free-plan repo's
@@ -1313,6 +1324,7 @@ class AllAndHomelab(Fixture):
         self.assertIn("amazon-itemizer: n/a", out)
         self.assertIn("alert-steward: UNTESTED", out)
         self.assertIn("storycraft: UNTESTED", out)
+        self.assertIn("retro: UNTESTED", out)
 
     def test_all_untested_without_red_exits_2(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")],
@@ -1343,7 +1355,7 @@ class AllAndHomelab(Fixture):
         self.env["PATH"] = str(empty)
         rc, out = self.status("--all")
         self.assertEqual(rc, 1, out)
-        for name in ("dotfiles", "loop-engine", "agent-kit", "coordinator", "alert-steward", "storycraft"):
+        for name in ("dotfiles", "loop-engine", "agent-kit", "coordinator", "alert-steward", "storycraft", "retro"):
             self.assertIn(f"{name}: ERROR  cannot read state: gh could not start", out)
         self.assertIn("homelab: n/a", out)
         self.assertIn("amazon-itemizer: n/a", out)
