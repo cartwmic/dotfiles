@@ -1,5 +1,6 @@
 """dot_cursor/modify_hooks.json.tmpl installs the coordinator's Cursor T3 hooks on both desktop profiles
-from `src/t3-hook/hook.ts --print-cursor-hooks-json`, keeping unrelated hooks and older checkouts intact.
+from `src/t3-hook/hook.ts --print-cursor-hooks-json`, keeping unrelated hooks and older checkouts intact,
+and one Shell guard entry (tests/cursor/test_shell_guard.py runs that entry) whatever the coordinator checkout is.
 
     python3 -m unittest discover -s tests/t3-hook -v
 """
@@ -24,6 +25,7 @@ def printing_hook(payload):
 
 
 OLDER_SRC = "process.exit(1);\n"
+GUARD = {"command": 'python3 -I "$HOME/.cursor/hooks/shell_guard.py"', "matcher": "Shell"}
 
 PRINTED = {
     "schema": 1,
@@ -96,14 +98,31 @@ class CursorHooksModifyTest(unittest.TestCase):
         r = subprocess.run(["sh", "-c", script], input=json.dumps(existing), capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0)
         self.assertIn("WARN", r.stderr)
-        self.assertEqual(json.loads(r.stdout), existing)
+        self.assertEqual(json.loads(r.stdout), {"version": 1, "hooks": {"sessionStart": [{"command": "echo keep"}], "preToolUse": [GUARD]}})
 
     def test_missing_or_removed_cleans_only_ours(self):
         existing = {"version": 1, "hooks": {"beforeSubmitPrompt": [{"command": "echo user"}, {"command": "node /x/src/t3-coordinator/hook.ts --cursor"}]}}
         script = render({"profile": PERSONAL, "instances": {"coordinator": {"repo": MISSING}}})
         r = subprocess.run(["sh", "-c", script], input=json.dumps(existing), capture_output=True, text=True, timeout=30)
         self.assertEqual((r.returncode, r.stderr), (0, ""))
-        self.assertEqual(json.loads(r.stdout), {"version": 1, "hooks": {"beforeSubmitPrompt": [{"command": "echo user"}]}})
+        self.assertEqual(json.loads(r.stdout), {"version": 1, "hooks": {"beforeSubmitPrompt": [{"command": "echo user"}], "preToolUse": [GUARD]}})
+
+    def test_one_shell_guard_entry_beside_the_t3_entries_and_a_foreign_one_on_every_checkout(self):
+        foreign = {"command": "echo mine", "matcher": "Read"}
+        stale_guard = {"command": "python3 /old/.cursor/hooks/shell_guard.py", "matcher": "Shell"}  # an older spelling of ours: replaced, not duplicated
+        user = {"version": 1, "hooks": {"preToolUse": [foreign, stale_guard]}}
+        for profile in (PERSONAL, WORK):
+            for name, repo in (("new", NEW), ("older", OLDER), ("missing", MISSING)):
+                with self.subTest(profile=profile, checkout=name):
+                    script = render({"profile": profile, "instances": {"coordinator": {"repo": repo}}})
+                    r = subprocess.run(["sh", "-c", script], input=json.dumps(user), capture_output=True, text=True, timeout=30)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    pre = json.loads(r.stdout)["hooks"]["preToolUse"]
+                    self.assertEqual([h for h in pre if "shell_guard.py" in h["command"]], [GUARD])
+                    self.assertIn(foreign, pre)
+                    self.assertEqual(any("src/t3-hook/hook.ts" in h["command"] for h in pre), name == "new")  # the T3 entries stay as they were
+                    r2 = subprocess.run(["sh", "-c", script], input=r.stdout, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(r2.stdout, r.stdout)
 
 
 if __name__ == "__main__":

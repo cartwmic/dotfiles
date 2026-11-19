@@ -1,0 +1,25 @@
+#!/bin/sh
+# Set the fleet MCP servers (hindsight and shartifacts, the same two the Claude fleet seats get) in ~/.cursor/mcp.json (both desktop profiles: personal and axon-work-computer).
+# The entries come from the canonical server file through the fleet_mcp_servers template, so the Hindsight bank and X-Origin follow the profile.
+# Cursor's remote form is url and headers only, and it reads an environment variable as ${env:NAME}, so ${NAME} and ${NAME:-} become ${env:NAME}.
+# Every other server and top-level key is kept. A missing or empty file becomes {}. A file that is not a JSON object comes out unchanged, with a warning.
+set -eu
+
+FLEET={{ includeTemplate "shquote" (includeTemplate "fleet_mcp_servers" .) }}
+
+in=$(mktemp)
+trap 'rm -f "$in"' EXIT
+cat > "$in"
+
+if ! jq -s -e 'length == 0 or (length == 1 and (.[0] | type) == "object" and ((.[0].mcpServers // {}) | type) == "object")' "$in" >/dev/null 2>&1; then
+  printf '[modify_mcp] WARN: ~/.cursor/mcp.json is not a JSON object with an mcpServers object; left as it is\n' >&2
+  cat "$in"
+  exit 0
+fi
+
+exec jq -s --argjson fleet "$FLEET" '
+  def env_syntax: if type == "string" then gsub("\\$\\{(?<n>[A-Za-z_][A-Za-z0-9_]*)(:-)?\\}"; "${env:\(.n)}") else . end;
+  def cursor_entry: {url: (.url | env_syntax)} + (if .headers then {headers: (.headers | map_values(env_syntax))} else {} end);
+  (if length == 0 then {} else .[0] end)
+  | .mcpServers = ((.mcpServers // {}) + ($fleet.mcpServers | map_values(cursor_entry)))
+' "$in"
