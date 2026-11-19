@@ -27,7 +27,6 @@ import sys
 
 JS_EXT = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"}
 PY_EXT = {".py"}
-MAX_EXITS = 40
 
 
 # --- TS/JS ----------------------------------------------------------------------------------------------------
@@ -325,15 +324,13 @@ def render(found, lines, line, first=None):
     if not exits:
         return "   (no early exits between the start of `%s` (line %d) and line %d)" % (fn, found["fn_line"], line)
     rows = ["   early exits between the start of `%s` (line %d) and line %d; each can skip the line:" % (fn, found["fn_line"], line)]
-    for e in exits[:MAX_EXITS]:
+    for e in exits:
         row = "%6d  %-12s %s" % (e["line"], e["kind"], short(lines[e["line"] - 1].strip()))
         if e["guard"]:
             row += "    [under line %d: %s]" % (e["guard"], short(lines[e["guard"] - 1].strip(), 70))
         if first is not None and e["line"] >= first:
             row += "    [inside the cited lines]"
         rows.append(row)
-    if len(exits) > MAX_EXITS:
-        rows.append("        ... %d more" % (len(exits) - MAX_EXITS))
     return "\n".join(rows)
 
 
