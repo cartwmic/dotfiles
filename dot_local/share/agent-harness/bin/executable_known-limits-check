@@ -11,8 +11,9 @@ on the body as filed. Design: find loosely, judge strictly, fail loudly on anyth
 The body is prepared first. Fenced code blocks are dropped; from HTML comments only the comment text is
 removed, so the rest of the line keeps its meaning, and a fence or comment that never closes is an error,
 because what follows it would silently vanish from the scan. The trailer — the LAST "Decisions:" or
-"**Decisions:**" line and everything after it — is dropped, so an earlier "Decisions:" label in the
-summary cannot swallow a Known limits block that follows it. Then every line is classified, from its text
+"**Decisions:**" line and everything after it — is dropped, but only when no Known-limits block or stray
+follows that line: a "Decisions:" label in the summary with a block after it is body text, not a trailer,
+and cutting it would drop the block. Then every line is classified, from its text
 alone: blank, heading, rule ("---"), list item, continuation (2+ spaces or a tab), label (a bold-led line,
 or "Word: ..." at column 0 with up to four words before the colon and no "//"), or paragraph.
 
@@ -246,13 +247,24 @@ def prepare(text):
     if in_comment:
         errors.append((comment_line, "an HTML comment opens here and never closes, so the rest of the body "
                                      "cannot be read. Close it with -->."))
-    # the trailer is the LAST Decisions line and everything after it (f2): an earlier "Decisions:"
-    # label in the summary must not swallow the Known limits block that follows it
+    # the trailer is the LAST Decisions line and everything after it — unless a Known-limits start or a
+    # stray follows that line, in which case it is a label in the body, not a trailer, and cutting would
+    # drop the block that follows it (f2)
     cut = None
     for idx, (no, line) in enumerate(kept):
         s = line.strip()
         if s.startswith("Decisions:") or s.startswith("**Decisions:**"):
             cut = idx
+    if cut is not None:
+        for k in range(cut + 1, len(kept)):
+            text = kept[k][1]
+            blocked = start_form_at(kept, k) is not None
+            if not blocked:
+                kind = classify(text)
+                blocked = kind in ("heading", "item", "label", "paragraph") and stray_mention(kind, text)
+            if blocked:
+                cut = None
+                break
     if cut is not None:
         kept = kept[:cut]
     return kept, errors
