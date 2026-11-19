@@ -9,8 +9,8 @@ be checked. findings-contract.md rule 3 therefore requires a fixed disposition t
 lives, and this check refuses the dispositions that cannot be checked. The reviewer brief
 (reviewer-brief.md section 6) runs it at re-review, from round 2 on, on the item's log beside the change:
 
-    ~/.local/share/agent-harness/bin/disposition-check --head <head> --repo <the checkout> \
-        ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl
+    ~/.local/share/agent-harness/bin/disposition-check --head <head> --base <merge-base with the base branch> \
+        --repo <the checkout> ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl
 
 Each FILE is a review log, one JSON object per line ('-' reads stdin). The log is append-only and the
 latest disposition of a finding wins (as report.json reads it), so the check reads each finding's latest

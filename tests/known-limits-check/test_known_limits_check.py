@@ -139,6 +139,34 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("item at line 5", out.stderr)
 
+    def test_a_paragraph_limit_under_the_heading_fails(self):
+        text = "# PR\n\n## Known limits\n\nCharacters outside the font print as ?. A follow-up ticket will be filed.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("item at line 5", out.stderr)
+
+    def test_an_intro_line_followed_by_an_untracked_bullet_fails(self):
+        text = ("# PR\n\n## Known limits\n\nThese are accepted for this PR:\n\n"
+                "- Characters outside the font print as ?. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("item at line 7", out.stderr)
+
+    def test_an_item_a_paragraph_then_an_untracked_item_fails(self):
+        text = ("# PR\n\n## Known limits\n\n- A is slow (PROJ-1).\n\nAlso:\n\n"
+                "- Characters outside the font print as ?. A follow-up ticket will be filed.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("item at line 9", out.stderr)
+
+    def test_an_intro_ending_in_a_colon_is_covered_by_its_ticketed_list(self):
+        text = "# PR\n\n## Known limits\n\nThese are accepted:\n\n- Tracked in PROJ-1.\n- Tracked in PROJ-2.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_leadin_bullet_with_ticketed_sub_bullets_passes(self):
+        text = "# PR\n\n## Known limits\n\n- Font gaps:\n  - Emoji print as ? (PROJ-1).\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
     def test_standard_names_that_share_the_ticket_shape_are_not_tickets(self):
         text = ("# PR\n\n## Known limits\n\n"
                 "- Characters outside the font print as ? on UTF-8 input, hashed with SHA-256, stamped ISO-8601.\n")

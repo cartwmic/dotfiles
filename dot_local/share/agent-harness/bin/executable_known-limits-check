@@ -10,12 +10,14 @@ on the body as filed.
 
 The body text comes from --body-file files (repeatable) or stdin when no file is given. Each "Known
 limits" section starts at a heading whose text is "Known limits" (a markdown heading of any level, or a
-bold-only line, case-insensitive, trailing colon allowed). The section holds list items, not physical
-lines: a line that opens with -, *, + or "N." starts an item; a following non-blank line that is indented,
-or that follows the item with no blank line between, joins it. The section ends at the next heading, or at
-the first non-blank, non-indented line that is no list item and follows a blank line (a "Decisions:" line
-or an attribution line ends it); prose directly under the heading, before the first item, is held to the
-same rule as an item. Every item's joined text must carry one of:
+bold-only line, case-insensitive, trailing colon allowed). The section holds items, not physical lines: a
+line that opens with -, *, + or "N." starts an item, and a nested sub-bullet is part of its parent item; a
+following non-blank line that is indented, or that follows the item with no blank line between, joins it.
+Prose under the heading, and a paragraph between items, is an item too, held to the same rule; a lead-in
+line ending in ":" that is directly followed by a list is covered by that list, not an item of its own.
+Blank lines before the section's first content do not end anything. Once the section has content, it ends
+at the next heading, or at a line beginning "Decisions:" (every body ends with one, so the attribution
+line after it is outside too). Every item's joined text must carry one of:
 
   a tracker ticket key    PROJECT-123 (uppercase letters, a dash, digits, at a word boundary; common
                           non-ticket tokens such as UTF-8, SHA-256 and ISO-8601 do not count)
@@ -68,13 +70,22 @@ def ticket_keys(text):
     return [k for k in TICKET.findall(text) if not NON_TICKET.match(k)]
 
 
+def next_nonblank(lines, i):
+    """The index of the next non-blank line at or after i, or len(lines)."""
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    return i
+
+
 def check_body(text, name):
     """Print one line per offending item; return (bad count, ticket keys found)."""
     bad = 0
     tickets = set()
+    lines = text.splitlines()
     section = False
     item = None       # {"first": line number, "parts": [text, ...]}
     blank = False
+    started = False   # True once the section has seen an item or a prose block
 
     def flush():
         nonlocal bad, item
@@ -90,39 +101,55 @@ def check_body(text, name):
             print("  name a tracker ticket (PROJECT-123) or write: accepted as permanent (decision #N)", file=sys.stderr)
         item = None
 
-    for no, line in enumerate(text.splitlines(), 1):
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        no = i + 1
+        i += 1
         head = heading_text(line)
         if head is not None:
             flush()
             section = is_known_limits(head)
             blank = False
+            started = False
             continue
         if not section:
             continue
         stripped = line.strip()
         if not stripped:
-            blank = True
-            continue
-        m = LIST_ITEM.match(line)
-        if m:
-            flush()
-            item = {"first": no, "parts": [m.group(1).strip()]}
-            blank = False
+            if started:
+                blank = True
             continue
         indented = line[:1] in (" ", "\t")
-        if item is not None:
-            if indented or not blank:
-                item["parts"].append(stripped)
+        m = LIST_ITEM.match(line)
+        if m:
+            if item is not None and indented:
+                # a nested sub-bullet is part of its parent item
+                item["parts"].append(m.group(1).strip())
                 blank = False
-            else:
-                flush()
-                section = False
-            continue
-        if blank:
+                continue
             flush()
+            item = {"first": no, "parts": [m.group(1).strip()]}
+            started = True
+            blank = False
+            continue
+        if item is not None and (indented or not blank):
+            # a continuation of the open item: indented, or no blank line between
+            item["parts"].append(stripped)
+            blank = False
+            continue
+        # a new block: the open item (if any) ends here
+        flush()
+        if started and blank and stripped.startswith("Decisions:"):
             section = False
             continue
+        if stripped.endswith(":"):
+            j = next_nonblank(lines, i)
+            if j < len(lines) and LIST_ITEM.match(lines[j]):
+                # a lead-in directly followed by its list is covered by that list
+                continue
         item = {"first": no, "parts": [stripped]}
+        started = True
         blank = False
     flush()
     return bad, tickets

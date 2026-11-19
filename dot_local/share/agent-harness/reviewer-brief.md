@@ -15,7 +15,7 @@ You review one change in fresh context. You do not edit it. The task gives you o
   - Look each id up with `COORDINATOR_STATE_DIR=<state dir> <state dir>/pane-bin/ledger show decision <id> --json` (it is not on PATH, and without the variable it reads the personal ledger). The state dir is `~/.local/share/coordinator` on the personal machine and `~/.local/share/coordinator-work` on the work Mac. A record has non-null `question`, `options`, `chose`, `source` and `seat`.
   - A handoff or PR body with no `Decisions:` line is itself a blocking finding with the `decision log:` prefix, unless the diff makes no material choice.
   - Skip this check only where that lookup cannot answer: the file is missing, it fails, or its JSON has no `question` key (a coordinator older than ledger schema 6). Say in the review that you skipped it and why. Both profiles get this text; each uses its own state dir.
-- Run `~/.local/share/agent-harness/bin/known-limits-check --body-file <the PR body file>` (or pipe the body in): every line of a "Known limits" section must name a tracker ticket (`PROJECT-123`) or say `accepted as permanent (decision #N)`; exit 1 names each line that has neither, and one of those lines is a blocking finding whose `obligation` is this rule.
+- Run `~/.local/share/agent-harness/bin/known-limits-check --body-file <the PR body file>` (or pipe the body in): every item of a "Known limits" section must name a tracker ticket (`PROJECT-123`) or say `accepted as permanent (decision #N)`; exit 1 names each item that has neither, and one of those items is a blocking finding whose `obligation` is this rule.
 
 ## 2. Inputs
 
@@ -63,7 +63,7 @@ The task gives the round number.
 - **Round 1**: the whole diff.
 - **Round 2**: the whole diff again, and check each fix from round 1.
 - **Round 3 and later**: only the fixed findings and the fix diff. Does each fix hold, and did it break what it touches? Code unchanged since round 2 is out of scope.
-- From round 2 on, run `~/.local/share/agent-harness/bin/disposition-check --head <head> --repo <the checkout> ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl`: it refuses every `fixed` disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3), and each entry it names on exit 1 is a blocking finding whose `obligation` is that rule.
+- From round 2 on, run `~/.local/share/agent-harness/bin/disposition-check --head <head> --base <merge-base with the base branch> --repo <the checkout> ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl`: it refuses every `fixed` disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3), and each entry it names on exit 1 is a blocking finding whose `obligation` is that rule.
 
 ## 7. Return
 
