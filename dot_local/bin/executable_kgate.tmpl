@@ -9,6 +9,7 @@ heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few o
     kgate cancel [--wait SECONDS] JOB_ID      stop that one job (kgate's id or the run-and-wake id; exact match only)
     kgate cancel --list                       the jobs that are running now
     kgate cluster-setup NAME --from-context CTX   write a one-context kubeconfig and a cluster-file skeleton (once, for a profile with cluster = "NAME")
+    kgate report [--days N] [--repo NAME] [--all] [--json]   read-only: per repo and command, the job log's runs, times, cores, memory and jobs that did not run
 
 `cancel` is the only supported way to stop a job: it signals that job's one client and nothing else. Never pkill.
 
@@ -68,6 +69,7 @@ import shutil
 import shlex
 import signal
 import stat
+import statistics
 import subprocess
 import sys
 import tarfile
@@ -2496,6 +2498,7 @@ USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SI
              "       kgate cancel [--wait SECONDS] JOB_ID     stop that one job (kgate's id or the run-and-wake id); exit 0 once it ended, 69 if it did not in time\n" \
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate cluster-setup NAME --from-context CTX [--namespace NS]   write a one-context kubeconfig and a cluster-file skeleton (profiles with cluster = NAME)\n" \
+             "       kgate report [--days N] [--repo NAME] [--all] [--json]   read-only summary of the job log, per repo and command (docs/kgate.md)\n" \
              "cpu (--cpu or the profile) is rounded up to whole 4-cpu slots on the homelab (1-3 -> 4, 6 -> 8); the client prints a line when it does.\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 1800 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
@@ -2734,6 +2737,172 @@ def cancel_main(argv):
     return cancel_orphan(state, e, rec)
 
 
+# kgate report: a read-only summary of the job log, per repo and command (docs/kgate.md, "Report"). The report_* functions
+# take the records and the clock as arguments and do no I/O. read_job_log and report_main are the only I/O.
+REPORT_SLOW_WALL_S = 300  # a row whose median wall is over this is listed first
+REPORT_TOP_ROWS = 30  # the text table shows this many rows unless --all
+REPORT_NOT_RAN_EXITS = (69, 75, 137, 143)  # could not start or finish, not scheduled in time (75), or killed: SIGKILL, SIGTERM
+G14_NODE = "cartwmic-g14-wsl"
+
+
+def report_command(cmd):
+    """The command as the gate runs it: leading `env` and NAME=value words dropped. They carry ids and payloads that differ per run."""
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return cmd
+    while words and (words[0] == "env" or re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0])):
+        words = words[1:]
+    return shlex.join(words) if words else cmd
+
+
+def report_node_class(node):
+    if node is None:
+        return "unplaced"  # the job never got a node
+    return "g14" if node == G14_NODE else "other"
+
+
+def report_when(rec):
+    try:
+        return datetime.datetime.strptime(rec["start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def report_p90(xs):
+    """Nearest rank over sorted xs: nine runs in ten finish within it, so it is where the slowest tenth starts."""
+    return xs[-(-len(xs) * 9 // 10) - 1] if xs else None
+
+
+def report_row(key, recs):
+    repo, cmd, node = key
+    ran = [r for r in recs if r.get("exit") not in REPORT_NOT_RAN_EXITS]
+    timed = [r for r in ran if r.get("duration_s") is not None and r.get("pod_start_s") is not None]
+    walls = sorted(r["duration_s"] - r["pod_start_s"] for r in timed)  # execution time, not the queue or the pod start
+    counted = [r for r in timed if r.get("cpu_usec") is not None and r.get("run_s")]  # cpu_usec is in newer records only
+    cpu_s = [r["cpu_usec"] / 1e6 for r in counted]
+    run_total = sum(r["run_s"] for r in counted)
+    asked = [r["cpu"] for r in timed if r.get("cpu") is not None]
+    peaks = [(r["peak_bytes"], parse_qty(r.get("mem_limit") or "")) for r in timed if r.get("peak_bytes") is not None]
+    shares = [100.0 * peak / limit for peak, limit in peaks if limit]
+    wall_median = statistics.median(walls) if walls else None
+    return {
+        "repo": repo, "cmd": cmd, "node": node,
+        "runs": len(recs), "not_run": len(recs) - len(ran), "timed_runs": len(timed),
+        "wall_median_s": None if wall_median is None else round(wall_median, 1),
+        "wall_p90_s": None if not walls else round(report_p90(walls), 1),
+        "total_wall_s": None if not walls else round(sum(walls), 1),  # what the gate cost in all
+        "cpu_median_s": round(statistics.median(cpu_s), 1) if cpu_s else None,
+        "cores_used": round(sum(cpu_s) / run_total, 2) if counted else None,  # average busy cores while CMD ran
+        "cores_asked_median": statistics.median(asked) if asked else None,
+        "peak_max_bytes": max(peak for peak, _ in peaks) if peaks else None,
+        "limit_max_bytes": max(limit for _, limit in peaks if limit) if shares else None,
+        "peak_pct_of_limit_max": round(max(shares), 1) if shares else None,  # the worst job's peak as a share of its limit
+        "slow": wall_median is not None and wall_median > REPORT_SLOW_WALL_S,
+    }
+
+
+def report_rows(records, now, days, repo=None):
+    """One row per (repo, command, node class) for jobs started in the last `days` days. Rows over REPORT_SLOW_WALL_S come
+    first, then the rest; within each, the most total wall time first, so a gate that runs often outranks a one-off."""
+    since = now - datetime.timedelta(days=days)
+    groups = {}
+    for rec in records:
+        when = report_when(rec)
+        if when is None or when < since or (repo is not None and rec.get("repo") != repo):
+            continue
+        key = (rec.get("repo") or "(no repo)", report_command(rec.get("cmd") or ""), report_node_class(rec.get("node")))
+        groups.setdefault(key, []).append(rec)
+    rows = [report_row(key, recs) for key, recs in groups.items()]
+    rows.sort(key=lambda r: (not r["slow"], -(r["total_wall_s"] or 0), r["repo"], r["cmd"], r["node"]))
+    return rows
+
+
+def report_fmt(value, digits, suffix=""):
+    return "-" if value is None else "%.*f%s" % (digits, value, suffix)
+
+
+def report_short(cmd, width=48):
+    return cmd if len(cmd) <= width else cmd[:width - 3] + "..."
+
+
+def report_gib(nbytes):
+    return None if nbytes is None else nbytes / 2**30
+
+
+def report_hours(seconds):
+    return None if seconds is None else seconds / 3600
+
+
+def report_text(rows, since, days, repo, jobs, bad, path, top=None):
+    shown = rows if top is None else rows[:top]
+    head = ["", "repo", "command", "node", "runs", "not run", "wall med s", "wall p90 s", "wall total h", "cpu-s med",
+            "cores used", "cores asked", "peak max GiB", "limit GiB", "peak % limit"]
+    body = [["SLOW" if r["slow"] else "", r["repo"], report_short(r["cmd"]), r["node"], str(r["runs"]), str(r["not_run"]),
+             report_fmt(r["wall_median_s"], 0), report_fmt(r["wall_p90_s"], 0), report_fmt(report_hours(r["total_wall_s"]), 1),
+             report_fmt(r["cpu_median_s"], 1), report_fmt(r["cores_used"], 2), report_fmt(r["cores_asked_median"], 1),
+             report_fmt(report_gib(r["peak_max_bytes"]), 2), report_fmt(report_gib(r["limit_max_bytes"]), 2),
+             report_fmt(r["peak_pct_of_limit_max"], 0, "%")] for r in shown]
+    widths = [max(len(cell) for cell in col) for col in zip(head, *body)]
+    table = ["  ".join(cell.ljust(w) for cell, w in zip(line, widths)).rstrip() for line in [head] + body]
+    out = ["kgate report: %d jobs started since %s UTC (last %d days)%s; log %s"
+           % (jobs, since.strftime("%Y-%m-%d %H:%M"), days, " for repo " + repo if repo else "", path)]
+    if bad:
+        out.append("%d unreadable line(s) in the log skipped" % bad)
+    out += table if rows else ["no jobs in this window"]
+    if len(shown) < len(rows):
+        out.append("%d more rows not shown; --all lists every row" % (len(rows) - len(shown)))
+    out += ["",
+            "node: g14 = cartwmic-g14-wsl; other = any other node; unplaced = the job never got a node.",
+            "not run: exit 69 or 75, or killed (137, 143). Timings, CPU and memory use only the jobs that ran.",
+            "wall = duration_s - pod_start_s; med = median; p90 = nearest rank (nine runs in ten finish within it); total h = all wall time.",
+            "cpu-s and cores use only records that have cpu_usec. cores used = CPU-s / run_s over those jobs; cores asked = median cpu request.",
+            "peak %% limit = the worst job's peak memory as a share of its limit. SLOW = median wall over %d s, listed first." % REPORT_SLOW_WALL_S]
+    return out
+
+
+def read_job_log(path):
+    """The records of the job log and how many lines could not be read. A missing log is an empty one."""
+    records, bad = [], 0
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    records.append(json.loads(line))
+                except ValueError:
+                    bad += 1
+    except FileNotFoundError:
+        pass
+    return records, bad
+
+
+def report_main(argv):
+    p = _Quiet(prog="kgate report", add_help=False, allow_abbrev=False)
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--repo")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true")
+    try:
+        o = p.parse_args(argv)
+        if o.days < 1:
+            raise SystemExit(USAGE_TEXT)
+    except SystemExit as err:
+        print(err.code if isinstance(err.code, str) else USAGE_TEXT, file=sys.stderr)
+        return USAGE
+    path = os.path.join(state_dir(), "log.jsonl")
+    records, bad = read_job_log(path)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    since = now - datetime.timedelta(days=o.days)
+    rows = report_rows(records, now, o.days, o.repo)
+    jobs = sum(r["runs"] for r in rows)
+    if o.json:
+        print(json.dumps({"repo": o.repo, "window_days": o.days, "since": since.isoformat(), "jobs": jobs, "unreadable_lines": bad,
+                          "slow_wall_s": REPORT_SLOW_WALL_S, "rows": rows}, indent=2))
+    else:
+        print("\n".join(report_text(rows, since, o.days, o.repo, jobs, bad, path, None if o.all else REPORT_TOP_ROWS)))
+    return 0
+
+
 def main(argv):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
@@ -2744,6 +2913,8 @@ def main(argv):
         return cancel_main(argv[1:])
     if argv[:1] == ["cluster-setup"]:
         return cluster_setup(argv[1:])
+    if argv[:1] == ["report"]:
+        return report_main(argv[1:])
     try:
         opts = parse_args(argv)
     except SystemExit as e:

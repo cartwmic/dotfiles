@@ -26,6 +26,7 @@ kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SIZE] [--mem-limit SIZE
 - `--cpu`, `--mem`, `--mem-limit`, `--image`: override the profile. `--mem` sets the memory request, `--mem-limit` the limit (see "Memory: request and limit"). `--node`: pin one node (never an excluded one: see "Nodes kgate never uses"). On the homelab `--cpu` is rounded up to whole 4-CPU slots (see "CPU slots").
 - CMD runs in the same directory, at the same absolute path, inside the pod.
 - `kgate cancel [--wait SECONDS] JOB_ID` and `kgate cancel --list` stop one job and list the running ones; see "Cancelling a job".
+- `kgate report [--days N] [--repo NAME] [--all] [--json]` summarises the job log and changes nothing; see "Report".
 
 ## What it does
 
@@ -250,6 +251,18 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `cleanup_attempts` | delete attempts made, only on a job that created a pod; `cleanup` is true when one was confirmed |
 | `cancelled` | only on a job stopped by `kgate cancel` or ended by a later job because its client was gone: `true` |
 | `reaped_by` | only on a job ended because its client was gone: the id of the kgate job that ended it |
+
+## Report
+
+`kgate report [--days N] [--repo NAME] [--all] [--json]` reads `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl` and writes nothing. It covers the jobs that started in the last `--days` (default 7). It prints one row per repo, command and node class. Rows whose median wall is over 300 s come first, then the rest; within each group, the most total wall time comes first, so a gate that runs often ranks above a one-off. The text table shows the first 30 rows; `--all` shows every row. `--json` always prints every row. The command is on both desktop profiles, as the kgate binary is.
+
+- `runs`: jobs in the row. `not run`: jobs that exited 69 or 75 (could not start or finish; not scheduled before `--sched-wait`), or were killed (137, 143: `kgate cancel`, an interrupt, or an orphan ended by the next job).
+- `wall med s`, `wall p90 s`, `wall total h`: execution time, `duration_s - pod_start_s`, over the jobs that ran. Jobs that did not run are left out, so a job killed at the limit does not move the median. p90 is the nearest rank: nine runs in ten finish within it. Total is the sum over those jobs.
+- `cpu-s med`, `cores used`, `cores asked`: from `cpu_usec`, which only newer records have; older records are left out of these three. Cores used is the total CPU-s over the total `run_s` of those jobs. Cores asked is the median CPU request. `cpu_usec` also counts the pod's unpack and checks, so cores used reads a little high. A pod with no CPU limit can use more cores than it asked for.
+- `peak max GiB`, `limit GiB`, `peak % limit`: the highest `peak_bytes` and the highest `mem_limit` in the row, and the worst single job's peak as a share of its own limit. 100% means that job reached its limit.
+- node: `g14` is `cartwmic-g14-wsl`; `other` is any other node; `unplaced` is a job that never got a node.
+
+The command is grouped as the gate runs it: leading `env` and `NAME=value` words are dropped, since they carry ids and payloads that differ from run to run. So `env KGATE_RUNS=30 scripts/gate.sh` and `scripts/gate.sh` are one row, while `scripts/gate.sh` and `sh scripts/gate.sh` stay apart. Lines in the log that do not parse are skipped and counted in the header. A missing log is an empty report. The code is `report_*` in `dot_local/bin/executable_kgate.tmpl`; tests are `tests/kgate/test_report.py`, on a fixture log.
 
 ## A second cluster, reached through kubectl
 
