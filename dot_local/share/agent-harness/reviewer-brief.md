@@ -62,6 +62,7 @@ The task gives the round number.
 - **Round 1**: the whole diff.
 - **Round 2**: the whole diff again, and check each fix from round 1.
 - **Round 3 and later**: only the fixed findings and the fix diff. Does each fix hold, and did it break what it touches? Code unchanged since round 2 is out of scope.
+- From round 2 on, run `~/.local/share/agent-harness/bin/disposition-check --head <head> --base <merge-base with the base branch> --repo <the checkout> ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl`: it refuses every `fixed` disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3), and each entry it names on exit 1 is a blocking finding whose `obligation` is that rule.
 
 ## 7. Return
 

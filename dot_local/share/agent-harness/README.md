@@ -17,6 +17,7 @@ dot_local/share/agent-harness/
     profile                  # rendered from profile.tmpl: just the chezmoi profile name, read by bash_rules
   bin/
     config-show              # prints a config file's keys with every value masked (see "Config reader"); source name executable_config-show
+    disposition-check        # refuses a `fixed` review disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3); the reviewer brief runs it at re-review (source name executable_disposition-check)
   canonical/
     instructions/
       AGENTS.md
