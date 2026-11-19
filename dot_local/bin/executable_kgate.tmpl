@@ -2857,7 +2857,9 @@ def report_text(rows, since, days, repo, jobs, bad, path, top=None):
             "not run: exit 69 or 75, or killed (137, 143). Timings, CPU and memory use only the jobs that ran.",
             "wall = duration_s - pod_start_s; med = median; p90 = nearest rank (nine runs in ten finish within it); total h = all wall time.",
             "cpu-s and cores use only records that have cpu_usec. cores used = CPU-s / run_s over those jobs; cores asked = median cpu request.",
-            "peak %% limit = the worst job's peak memory as a share of its limit. SLOW = median wall over %d s, listed first." % REPORT_SLOW_WALL_S]
+            "peak max GiB and limit GiB are each the row's highest value, so they can come from different jobs. "
+            "peak %% limit = the worst job's peak memory as a share of that job's own limit. SLOW = median wall over %d s, listed first."
+            % REPORT_SLOW_WALL_S]
     return out
 
 

@@ -158,6 +158,7 @@ class ReportCommand(unittest.TestCase):
         self.assertTrue(gate[0].startswith("SLOW"))
         self.assertIn("1150", gate[0])
         self.assertIn("not run: exit 69 or 75, or killed (137, 143).", r.stdout)
+        self.assertIn("peak max GiB and limit GiB are each the row's highest value", r.stdout)
 
     def test_no_log_is_an_empty_report(self):
         r = self.run_report(None)
