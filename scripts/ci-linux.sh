@@ -60,6 +60,7 @@ python3 scripts/ci-par.py \
   tests/session-cost \
   tests/schedules-check \
   tests/agent-events \
+  tests/session-keepalive \
   tests/mistakes-report \
   tests/le-verify-clean \
   tests/instances \

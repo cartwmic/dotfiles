@@ -349,6 +349,20 @@ Library/LaunchAgents/local.qmd-refresh.plist
 71_qmd_refresh_launchd.sh
 {{- end }}
 
+{{- $sk := includeTemplate "session_keepalive_config" . | fromJson }}
+{{- if ne .chezmoi.os "darwin" }}
+# session-keepalive (docs/session-keepalive.md): launchd, so macOS only. The tick and its load script deploy on
+# every macOS profile and are inert while the sessionKeepalive data block is unset; a profile with the block gets
+# the agent, whatever the profile.
+.local/bin/session-keepalive
+79_session_keepalive_launchd.sh
+{{- end }}
+{{- if or (ne .chezmoi.os "darwin") (not $sk.enabled) }}
+# The keepalive plist is deployed only while the sessionKeepalive data block is set; the load script removes an
+# installed one when the block is taken away.
+Library/LaunchAgents/local.session-keepalive.plist
+{{- end }}
+
 {{- if ne .profile "personal" }}
 # The homelab Connect token seed (agents' op reads through the homelab 1Password Connect server): personal only (docs/profiles.md).
 .local/user_scripts/seed_op_connect_token.sh

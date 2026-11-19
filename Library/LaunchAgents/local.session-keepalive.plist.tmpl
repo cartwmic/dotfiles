@@ -1,0 +1,37 @@
+{{- /* Renders empty when sessionKeepalive is not set: .chezmoiignore leaves the plist out then, and
+         run_onchange_after_79 unloads the agent and removes an installed plist. The empty render also keeps the
+         load script's "# plist:" hash working while the feature is off. */ -}}
+{{- $cfg := includeTemplate "session_keepalive_config" . | fromJson -}}
+{{- if $cfg.enabled -}}
+{{- $home := .chezmoi.homeDir | html -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- session-keepalive (docs/session-keepalive.md): one tick of ~/.local/bin/session-keepalive every {{ $cfg.intervalSeconds }} seconds.
+     Checks and everything else: chezmoi data sessionKeepalive (.chezmoitemplates/session_keepalive_config).
+     NOTE: `chezmoi diff` prints SESSION_KEEPALIVE_CHECKS below with every command and URL. That diff is local to
+     this machine - never paste it into a PR, an issue or a chat. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.session-keepalive</string>
+  <key>ProgramArguments</key>
+  <array><string>/usr/bin/python3</string><string>{{ $home }}/.local/bin/session-keepalive</string></array>
+  <key>StartInterval</key><integer>{{ $cfg.intervalSeconds }}</integer>
+  <!-- Not at load: loading it (apply, login) does not probe; the first run is one interval later. -->
+  <key>RunAtLoad</key><false/>
+  <!-- A tick is a handful of short-lived children (curl, osascript, sh -c with timeouts); plain nice is enough
+       (see local.agent-events for why not ProcessType Background). -->
+  <key>Nice</key><integer>10</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- chezmoi data sessionKeepalive (.chezmoitemplates/session_keepalive_config). No real names here: they are
+         local data. Every value is escaped (html) so a command with & < > or quotes still renders a valid plist. -->
+    <key>SESSION_KEEPALIVE_CHECKS</key><string>{{ $cfg.checks | toJson | html }}</string>
+    <key>PATH</key><string>{{ $home }}/.local/share/mise/shims:{{ $home }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <!-- The tick writes its own log.jsonl and per-check state files next to this; launchd.log only catches its
+       stray output. -->
+  <key>StandardOutPath</key><string>{{ $home }}/.local/state/session-keepalive/launchd.log</string>
+  <key>StandardErrorPath</key><string>{{ $home }}/.local/state/session-keepalive/launchd.log</string>
+</dict>
+</plist>
+{{- end -}}

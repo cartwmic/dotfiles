@@ -29,6 +29,28 @@ data:
   # qmd:
   #   refresh: {enabled: true, intervalMinutes: 60}   # 15 to 1440; enabled: false removes the agent
   #   (add cleanup: false to stop the daily `qmd cleanup` that qmd-refresh runs at most once per 24 h; docs/qmd.md "Daily cleanup")
+  # session-keepalive (macOS; docs/session-keepalive.md). A general keepalive for VPNs and other sessions: a list
+  # of checks, each with a probe, an optional refresh action and a mode. The block's presence turns the feature on;
+  # leave it out (or remove it) and the agent is not deployed, or unloaded and removed on the next apply. The values
+  # are machine-specific and stay in this local file, never in this public repo.
+  # sessionKeepalive:
+  #   intervalSeconds: 120           # the launchd StartInterval of the one agent, 30 to 3600
+  #   checks:
+  #     - label: "Example VPN"       # shown in notifications; also the state filename
+  #       kind: viscosity
+  #       mode: refresh              # alert (the default) | refresh; refresh tells Viscosity to disconnect and
+  #                                  # connect again at most once per 15 minutes, which can open the connection's
+  #                                  # browser sign-in (the owner's credentials), so refresh is always explicit
+  #       connection: "Example VPN"  # the Viscosity connection name, exactly as Viscosity lists it
+  #       host: git.example.com      # probed over HTTPS through the tunnel; any HTTP status counts as reachable
+  #     - label: example-cloud       # a command check: any session whose health is one command's exit code
+  #       kind: command
+  #       mode: alert                # MFA- or Okta-gated sessions stay alert-only: the tool never types, stores
+  #                                  # or pipes a password
+  #       probe: aws sts get-caller-identity --profile example
+  #       intervalSeconds: 600       # optional per-check minimum interval between runs, 30 to 3600
+  #       alertCommand: /Users/you/bin/page-me  # optional per-check extra command on alert (SESSION_KEEPALIVE_REASON
+  #                                             # and SESSION_KEEPALIVE_CHECK are set)
   # Always-on agent-events metrics (macOS; dot_local/share/agent-events/README.md). On by default on personal only.
   # enabled: false unloads and removes the LaunchAgent on the next apply. A bad value fails the apply.
   # agentEvents:

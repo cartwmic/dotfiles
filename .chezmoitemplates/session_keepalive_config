@@ -1,0 +1,148 @@
+{{- /* session_keepalive_config: the session keepalive's settings as JSON {"enabled", "intervalSeconds", "checks"}
+(docs/session-keepalive.md). Local chezmoi data sessionKeepalive: a list of checks, each with a probe, an optional
+refresh action and a mode. The committed code is generic; every work-specific value lives in this local data block.
+
+  intervalSeconds  the launchd StartInterval of the one agent, 30 to 3600. Default 120.
+
+Each check (a map):
+  label             local name used in notifications, logs and the state filename. A letter or digit, then up to 63
+                    of letters, digits, space, dot, underscore, hyphen: no comma, quote or slash. Unique across
+                    checks, case-insensitively.
+  kind              "viscosity" (a Viscosity VPN connection) or "command" (any session whose health is one
+                    command's exit code: aws sts get-caller-identity, az account get-access-token, an authenticated
+                    curl against Grafana or Splunk).
+  mode              "alert" (the default: report a stale session and touch nothing) or "refresh" (also run the
+                    refresh action, at most once per 15 minutes). A refresh can open a browser sign-in holding the
+                    owner's credentials, so refresh is always explicit here; MFA- or Okta-gated sessions stay
+                    alert-only - the tool never types, stores or pipes a password.
+  intervalSeconds   optional per-check minimum interval between runs, 30 to 3600. Default: the tick interval (the
+                    check then runs on every tick).
+  alertCommand      optional extra command run through sh -c on alert, with SESSION_KEEPALIVE_REASON and
+                    SESSION_KEEPALIVE_CHECK in its environment.
+  kind viscosity:  connection  the Viscosity connection name, exactly as Viscosity lists it (same charset as label:
+                                no comma - the tick reads Viscosity's comma-joined name/state list - and no quote -
+                                the name goes into AppleScript source).
+                   host       the host the tick probes over HTTPS through the tunnel; a hostname. Any HTTP status
+                              counts as reachable.
+  kind command:    probe                 required shell command, run through /bin/sh -c; exit 0 is healthy.
+                   refresh               optional shell command for mode refresh.
+                   probeTimeoutSeconds   optional, 5 to 120. Default 20.
+                   refreshTimeoutSeconds optional, 10 to 600. Default 120.
+
+The block's presence turns the feature on; the agent is deployed on any macOS profile with the block. An absent block
+prints {"enabled": false} and deploys nothing. Any other key or value fails the whole render, so a typo applies
+nothing. Used by the plist, its load script and .chezmoiignore. */ -}}
+{{- $raw := dig "sessionKeepalive" dict . -}}
+{{- if not (kindIs "map" $raw) -}}
+{{-   fail (printf "sessionKeepalive must be a map with intervalSeconds and checks, got %q" (printf "%v" $raw)) -}}
+{{- end -}}
+{{- range $k, $_ := $raw -}}
+{{-   if not (has $k (list "intervalSeconds" "checks")) -}}
+{{-     fail (printf "sessionKeepalive.%s is not a setting (intervalSeconds, checks)" $k) -}}
+{{-   end -}}
+{{- end -}}
+{{- if not $raw -}}{{ dict "enabled" false | toJson }}{{- else -}}
+{{-   $checksRaw := get $raw "checks" -}}
+{{-   if or (not $checksRaw) (ne (kindIs "slice" $checksRaw) true) -}}
+{{-     fail "sessionKeepalive.checks must be a non-empty list of checks" -}}
+{{-   end -}}
+{{-   $interval := printf "%v" (get $raw "intervalSeconds") -}}
+{{-   if eq $interval "" }}{{-   $interval = "120" }}{{-   end -}}
+{{-   if not (regexMatch "^[0-9]+$" $interval) -}}
+{{-     fail (printf "sessionKeepalive.intervalSeconds must be a whole number of seconds, got %q" $interval) -}}
+{{-   end -}}
+{{-   if or (lt (atoi $interval) 30) (gt (atoi $interval) 3600) -}}
+{{-     fail (printf "sessionKeepalive.intervalSeconds must be between 30 and 3600, got %s" $interval) -}}
+{{-   end -}}
+{{-   $checks := list -}}
+{{-   range $i, $c := $checksRaw -}}
+{{-     if not (kindIs "map" $c) -}}
+{{-       fail (printf "sessionKeepalive.checks[%d] is not a map" $i) -}}
+{{-     end -}}
+{{-     $label := printf "%v" (get $c "label") -}}
+{{-     if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$" $label) -}}
+{{-       fail (printf "sessionKeepalive.checks[%d].label must be a letter or digit, then up to 63 of letters, digits, space, dot, underscore, hyphen (no comma, quote or slash), got %q" $i $label) -}}
+{{-     end -}}
+{{-     range $prev := $checks -}}
+{{-       if eq (lower (get $prev "label")) (lower $label) -}}
+{{-         fail (printf "sessionKeepalive.checks: label %q is duplicated (labels are unique case-insensitively)" $label) -}}
+{{-       end -}}
+{{-     end -}}
+{{-     $kind := printf "%v" (get $c "kind") -}}
+{{-     if not (has $kind (list "viscosity" "command")) -}}
+{{-       fail (printf "sessionKeepalive.checks[%d] (%s): kind must be viscosity or command, got %q" $i $label $kind) -}}
+{{-     end -}}
+{{-     range $k, $_ := $c -}}
+{{-       if eq $kind "viscosity" -}}
+{{-         if not (has $k (list "label" "kind" "mode" "intervalSeconds" "alertCommand" "connection" "host")) -}}
+{{-           fail (printf "sessionKeepalive.checks[%d] (%s): %s is not a setting of a viscosity check" $i $label $k) -}}
+{{-         end -}}
+{{-       else -}}
+{{-         if not (has $k (list "label" "kind" "mode" "intervalSeconds" "alertCommand" "probe" "refresh" "probeTimeoutSeconds" "refreshTimeoutSeconds")) -}}
+{{-           fail (printf "sessionKeepalive.checks[%d] (%s): %s is not a setting of a command check" $i $label $k) -}}
+{{-         end -}}
+{{-       end -}}
+{{-     end -}}
+{{-     $mode := printf "%v" (get $c "mode") -}}
+{{-     if eq $mode "" }}{{-   $mode = "alert" }}{{-   end -}}
+{{-     if not (has $mode (list "alert" "refresh")) -}}
+{{-       fail (printf "sessionKeepalive.checks[%d] (%s): mode must be alert or refresh, got %q" $i $label $mode) -}}
+{{-     end -}}
+{{-     $perInterval := printf "%v" (get $c "intervalSeconds") -}}
+{{-     if ne $perInterval "" -}}
+{{-       if not (regexMatch "^[0-9]+$" $perInterval) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): intervalSeconds must be a whole number of seconds, got %q" $i $label $perInterval) -}}
+{{-       end -}}
+{{-       if or (lt (atoi $perInterval) 30) (gt (atoi $perInterval) 3600) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): intervalSeconds must be between 30 and 3600, got %s" $i $label $perInterval) -}}
+{{-       end -}}
+{{-     end -}}
+{{-     $alertCommand := printf "%v" (get $c "alertCommand") -}}
+{{-     $out := dict "label" $label "kind" $kind "mode" $mode -}}
+{{-     if ne $perInterval "" }}{{-   $_ := set $out "intervalSeconds" (atoi $perInterval) -}}{{-   end -}}
+{{-     if ne $alertCommand "" }}{{-   $_ := set $out "alertCommand" $alertCommand -}}{{-   end -}}
+{{-     if eq $kind "viscosity" }}
+{{-       $connection := printf "%v" (get $c "connection") -}}
+{{-       if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$" $connection) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): connection must be the Viscosity connection name (a letter or digit, then up to 63 of letters, digits, space, dot, underscore, hyphen; no comma or quote), got %q" $i $label $connection) -}}
+{{-       end -}}
+{{-       $host := printf "%v" (get $c "host") -}}
+{{-       if not (regexMatch "^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$" $host) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): host must be a hostname, got %q" $i $label $host) -}}
+{{-       end -}}
+{{-       $_ := set $out "connection" $connection -}}
+{{-       $_ := set $out "host" $host -}}
+{{-     else }}
+{{-       $probe := printf "%v" (get $c "probe") -}}
+{{-       if eq $probe "" -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): probe is required for a command check" $i $label) -}}
+{{-       end -}}
+{{-       $refresh := printf "%v" (get $c "refresh") -}}
+{{-       if and (eq $mode "refresh") (eq $refresh "") -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): mode refresh needs a refresh command" $i $label) -}}
+{{-       end -}}
+{{-       $probeTimeout := printf "%v" (get $c "probeTimeoutSeconds") -}}
+{{-       if eq $probeTimeout "" }}{{-   $probeTimeout = "20" }}{{-   end -}}
+{{-       if not (regexMatch "^[0-9]+$" $probeTimeout) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): probeTimeoutSeconds must be a whole number of seconds, got %q" $i $label $probeTimeout) -}}
+{{-       end -}}
+{{-       if or (lt (atoi $probeTimeout) 5) (gt (atoi $probeTimeout) 120) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): probeTimeoutSeconds must be between 5 and 120, got %s" $i $label $probeTimeout) -}}
+{{-       end -}}
+{{-       $refreshTimeout := printf "%v" (get $c "refreshTimeoutSeconds") -}}
+{{-       if eq $refreshTimeout "" }}{{-   $refreshTimeout = "120" }}{{-   end -}}
+{{-       if not (regexMatch "^[0-9]+$" $refreshTimeout) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): refreshTimeoutSeconds must be a whole number of seconds, got %q" $i $label $refreshTimeout) -}}
+{{-       end -}}
+{{-       if or (lt (atoi $refreshTimeout) 10) (gt (atoi $refreshTimeout) 600) -}}
+{{-         fail (printf "sessionKeepalive.checks[%d] (%s): refreshTimeoutSeconds must be between 10 and 600, got %s" $i $label $refreshTimeout) -}}
+{{-       end -}}
+{{-       $_ := set $out "probe" $probe -}}
+{{-       if ne $refresh "" }}{{-   $_ := set $out "refresh" $refresh -}}{{-   end -}}
+{{-       $_ := set $out "probeTimeoutSeconds" (atoi $probeTimeout) -}}
+{{-       $_ := set $out "refreshTimeoutSeconds" (atoi $refreshTimeout) -}}
+{{-     end }}
+{{-     $checks = append $checks $out -}}
+{{-   end -}}
+{{-   dict "enabled" true "intervalSeconds" (atoi $interval) "checks" $checks | toJson -}}
+{{- end -}}
