@@ -825,8 +825,24 @@ class EarlyExitsSheetTest(unittest.TestCase):
         code = "function a(x) {\n  if (x) return 1;\n  return 2;\n}\nfunction b(y) {\n  if (y) throw new Error('y');\n  return 3;\n}\n"
         rc, out = check("- Both. `a.js:3-7`\n", {"a.js": code}, "--sheet")
         self.assertEqual(out.count("early exits between"), 2)
-        self.assertIn("`function a(x) {` (line 1) and line 3", out)
+        self.assertIn("`function a(x) {` (line 1) and line 7", out)
         self.assertIn("`function b(y) {` (line 5) and line 7", out)
+
+    def test_a_range_that_starts_in_one_function_lists_that_functions_exits_inside_the_range(self):
+        code = "function a(x) {\n  if (x) return 1;\n  return 2;\n}\nfunction b(y) {\n  if (y) throw new Error('y');\n  return 3;\n}\n"
+        rc, out = check("- Both. `a.js:3-7`\n", {"a.js": code}, "--sheet")
+        self.assertEqual(exit_rows(out), [(2, "return"), (3, "return"), (6, "throw")])  # line 3 is the first function's own return, inside the range
+        self.assertEqual([int(l.split()[0]) for l in out.splitlines() if "[inside the cited lines]" in l], [3, 6])  # line 2 is above the range
+        py = "def a(x):\n    if x:\n        return 1\n    return 2\n\ndef b(y):\n    if y:\n        raise ValueError(y)\n    return 3\n"
+        rc, out = check("- Both. `a.py:4-9`\n", {"a.py": py}, "--sheet")
+        self.assertEqual(exit_rows(out), [(3, "return"), (4, "return"), (8, "raise")])
+        self.assertEqual([int(l.split()[0]) for l in out.splitlines() if "[inside the cited lines]" in l], [4, 8])
+
+    def test_an_exit_of_the_first_function_after_the_range_end_is_not_listed(self):
+        code = "function a(x) {\n  if (x) return 1;\n  function b(y) {\n    if (y) throw new Error('y');\n    return 3;\n  }\n  return b(x);\n}\n"
+        rc, out = check("- Both. `a.js:2-5`\n", {"a.js": code}, "--sheet")  # the range ends inside the nested b; a's return on line 7 comes after it
+        self.assertEqual(exit_rows(out), [(2, "return"), (4, "throw")])
+        self.assertNotIn("return b(x)", out)
 
     def test_the_cli_prints_the_same_list_and_a_bad_call_exits_2(self):
         with make_repo({"src/gate.ts": TS_GATE}) as repo:

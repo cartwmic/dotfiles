@@ -47,8 +47,9 @@ With --points (the raw harvest, points.json), two more checks run:
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
           Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
           range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
-          paths a sentence about the function must state or leave out. See early_exits.py; "no early exits" and
-          "not listed" print differently.
+          paths a sentence about the function must state or leave out. When the range starts in another function, that
+          function's exits above the last line are listed too, since they sit inside the range. See early_exits.py;
+          "no early exits" and "not listed" print differently.
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
 sentences never change the exit code. Stdlib only.
 """
@@ -469,15 +470,16 @@ def check(doc_text, repo, points=None, left_out=()):
 
 def exits_note(cache, repo, path, lo, hi):
     """The early-exit text for a cited range: the exits above its last line in the function that holds it, and, when
-    the range starts in another function, the exits above its first line there. None when there is nothing to say."""
+    the range starts in another function, that function's exits above its last line too (they sit inside the range).
+    None when there is nothing to say."""
     try:
         lines = read_lines(cache, repo, path)
         text, ext = "\n".join(lines), os.path.splitext(path)[1]
         found = [(early_exits.early_exits(text, ext, hi), hi)]
         if lo != hi:
-            low = early_exits.early_exits(text, ext, lo)
-            if low and not low.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or low["fn_line"] != found[0][0]["fn_line"]):
-                found.insert(0, (low, lo))
+            first_fn = early_exits.early_exits(text, ext, lo, upto=hi)
+            if first_fn and not first_fn.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or first_fn["fn_line"] != found[0][0]["fn_line"]):
+                found.insert(0, (first_fn, hi))
         notes = [early_exits.render(f, lines, cut, lo) for f, cut in found]
         return "\n".join(n for n in notes if n) or None
     except (OSError, RecursionError):
