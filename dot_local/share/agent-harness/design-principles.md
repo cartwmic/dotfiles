@@ -84,7 +84,7 @@ Every component that acts for a user records enough to replay one user action: w
 **Test:** from the logs alone, replay one action and name a seeded fault (§12).
 
 ## 15. Fast proof
-Observable proof tests and journeys should be optimized aggressively for time. In practice, wait for a fact when one can be observed instead of sleeping a fixed time, run independent tests and journeys in parallel, measure and report suite time, and treat a slow suite as a defect.
+Observable proof tests and journeys should be optimized aggressively for time. In practice, wait for a fact when one can be observed instead of sleeping a fixed time, run independent tests and journeys in parallel, measure and report suite time, and treat a slow suite as a defect. Pay a start-up cost once, not once per test: share the compile cache with child processes, call a command's function inside the test process, copy a prepared fixture instead of building it again. Keep at least one test per command that starts it for real.
 
 ## 16. Built to last
 Every change should leave the system easier to understand and change than it found it. Small scope is not licence for shortcuts: build only what the need requires (§4), and build that properly, with clear organization, the right layer and the repo's established patterns. No workarounds, duplicated logic, special cases bolted on, or "clean up later" left behind. When a change makes code, configuration, docs or tests unused, delete them in the same change. When the existing structure no longer fits the change, fix the structure instead of working around it. Scope this to what the change touches; do not retrofit the rest.
