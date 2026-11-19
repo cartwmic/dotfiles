@@ -322,6 +322,11 @@ class AgentKitBumpTests(unittest.TestCase):
     def test_a_pr_body_that_fails_the_body_check_stops_before_the_merge_and_applies_nothing(self):
         self.refused_gate("pr-body-check")
 
+    def test_the_pr_body_stop_message_shows_the_gates_stdout_and_its_refusal_reason(self):
+        # The body check printed on stdout and refused on stderr. The stop message must carry the refusal, not only stdout.
+        result = self.refused_gate("pr-body-check")
+        self.assertIn("pr-body-check: RED on stdout\npr-body-check: refused by the test", result.stderr)
+
     def test_a_live_edit_to_a_pin_file_stops_before_the_apply(self):
         self.world()
         lock = self.home / KIT_DEST / "package-lock.json"
