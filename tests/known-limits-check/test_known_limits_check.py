@@ -358,7 +358,7 @@ class KnownLimitsCheck(unittest.TestCase):
     def test_a_github_issue_url_is_looked_up_with_gh(self):
         gh = self.tracker("gh", ['[ "$1" = issue ] || exit 10',
                                  '[ "$3" = "https://example.com/issues/44" ] || exit 11',
-                                 'echo "{\\\"state\\\": \\\"OPEN\\\"}"'])
+                                 'echo "{\\\"state\\\": \\\"OPEN\\\", \\\"url\\\": \\\"https://example.com/issues/44\\\"}"'])
         env = dict(os.environ, PATH=str(Path(self.tmp)) + os.pathsep + os.environ["PATH"])
         text = "## Known limits\n- A. Tracked in https://example.com/issues/44.\n"
         out = run("--body-file", self.body(text), env=env)
@@ -373,8 +373,16 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("https://example.com/issues/44 could not be confirmed", out.stderr)
 
+    def test_a_pull_request_number_as_an_issue_url_does_not_confirm(self):
+        gh = self.tracker("gh", ['echo "{\\"state\\": \\"OPEN\\", \\"url\\": \\"https://example.com/o/r/pull/44\\"}"'])
+        env = dict(os.environ, PATH=str(Path(self.tmp)) + os.pathsep + os.environ["PATH"])
+        text = "## Known limits\n- A. Tracked in https://example.com/issues/44.\n"
+        out = run("--body-file", self.body(text), env=env)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("pull request, not an issue", out.stderr)
+
     def test_a_closed_issue_counts_as_filed(self):
-        gh = self.tracker("gh", ['echo "{\\\"state\\\": \\\"CLOSED\\\"}"'])
+        gh = self.tracker("gh", ['echo "{\\\"state\\\": \\\"CLOSED\\\", \\\"url\\\": \\\"https://example.com/issues/44\\\"}"'])
         env = dict(os.environ, PATH=str(Path(self.tmp)) + os.pathsep + os.environ["PATH"])
         text = "## Known limits\n- A. Tracked in https://example.com/issues/44.\n"
         out = run("--body-file", self.body(text), env=env)

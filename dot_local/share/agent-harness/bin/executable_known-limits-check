@@ -503,20 +503,26 @@ def check_body(text, name):
 
 def gh_unconfirmed(url):
     """The reason a GitHub issue URL could not be confirmed, or None when the issue exists.
-    Closed counts: the marker promises a filed ticket, and a closed one proves it was filed."""
+    Closed counts: the marker promises a filed ticket, and a closed one proves it was filed.
+    gh resolves pull requests through the same command, so the returned URL must be an
+    issue URL: naming this PR's own number would otherwise confirm a ticket that was
+    never filed."""
     try:
-        done = subprocess.run(["gh", "issue", "view", url, "--json", "state"],
+        done = subprocess.run(["gh", "issue", "view", url, "--json", "state,url"],
                               capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return "the gh lookup could not be run: %s" % e
     if done.returncode != 0:
         return "gh issue view failed: %s" % (done.stderr.strip() or ("exit %d" % done.returncode))
     try:
-        state = json.loads(done.stdout).get("state")
+        found = json.loads(done.stdout)
     except ValueError:
-        state = None
-    if not state:
+        found = {}
+    if not found.get("state"):
         return "gh issue view printed no state"
+    returned = found.get("url") or ""
+    if "/issues/" not in returned:
+        return "the returned reference is a pull request, not an issue"
     return None
 
 
