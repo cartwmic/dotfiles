@@ -28,7 +28,8 @@ class RequestCLI(unittest.TestCase):
     def reserve(self):
         return self.cli('reserve', '--key', 'arbitrary/key', '--json')['token']
 
-    def start(self, token=None, **updates):
+    def start(self, token=None, pipe=False, **updates):
+        # pipe=True hands the caller the live stdout pipe (to close it); read it only with readline().
         request = dict(schema_version=1, request_key='arbitrary/key', token=token or self.reserve(),
                        kind='single', source_kind='generic', source_id='captured', material='fact alpha',
                        instructions='Recap', command=[sys.executable, str(self.backend)],
@@ -38,16 +39,35 @@ class RequestCLI(unittest.TestCase):
         path = self.root / (str(time.time_ns()) + '.json')
         path.write_text(json.dumps(request))
         path.chmod(0o600)
-        process = subprocess.Popen([sys.executable, str(CLI), 'run', '--request-file', str(path), '--json-lines'],
-                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        accepted = json.loads(process.stdout.readline())
+        # Output goes to files, not pipes. A buffered readline() on a pipe can pull the terminal
+        # line into Python's buffer too, and communicate(timeout=...) reads the fd directly and
+        # returns nothing: the test then failed at random on busy machines.
+        self.stdout_path, self.stderr_path = self.root / 'stdout', self.root / 'stderr'
+        command = [sys.executable, str(CLI), 'run', '--request-file', str(path), '--json-lines']
+        with self.stdout_path.open('w') as stdout, self.stderr_path.open('w') as stderr:
+            process = subprocess.Popen(command, env=self.env, stderr=stderr, text=True,
+                                       stdout=subprocess.PIPE if pipe else stdout)
+        if pipe:
+            accepted = json.loads(process.stdout.readline())
+        else:
+            end = time.monotonic() + 8
+            while '\n' not in self.stdout_path.read_text() and time.monotonic() < end:
+                time.sleep(.01)
+            lines = self.stdout_path.read_text().splitlines()
+            self.assertTrue(lines, self.report('no accepted line'))
+            accepted = json.loads(lines[0])
         self.assertFalse(path.exists())
         return process, accepted
 
+    def report(self, what):
+        return '%s; stdout: %r; stderr: %r' % (what, self.stdout_path.read_text(), self.stderr_path.read_text())
+
     def finish(self, process):
-        output, error = process.communicate(timeout=8)
-        self.assertEqual(process.returncode, 0, error)
-        return json.loads(output.strip().splitlines()[-1])
+        process.wait(timeout=8)
+        self.assertEqual(process.returncode, 0, self.report('exit %s' % process.returncode))
+        lines = self.stdout_path.read_text().splitlines()
+        self.assertGreater(len(lines), 1, self.report('no terminal line'))
+        return json.loads(lines[-1])
 
     def test_saved_current_and_safe_record(self):
         process, accepted = self.start()
@@ -254,14 +274,13 @@ class RequestCLI(unittest.TestCase):
     def test_broken_pipe_detached_save(self):
         gate = self.root / 'release'
         self.backend.write_text('import pathlib,time\np=pathlib.Path(' + repr(str(gate)) + ')\nwhile not p.exists(): time.sleep(.01)\nprint("after departure")\n')
-        process, _ = self.start()
+        process, _ = self.start(pipe=True)
         process.stdout.close()
         gate.touch()
         process.wait(timeout=5)
-        self.assertEqual(process.returncode, 0, process.stderr.read())
+        self.assertEqual(process.returncode, 0, self.stderr_path.read_text())
         records = self.cli('list', '--json')['records']
         self.assertEqual(records[0]['summary'], 'after departure')
-        process.stderr.close()
 
 
 if __name__ == '__main__':

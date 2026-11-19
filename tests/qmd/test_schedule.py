@@ -477,13 +477,16 @@ class RunnerTest(unittest.TestCase):
 
     def test_the_day_file_never_passes_the_cap(self):
         # 1.5 MB of output (more than a pipe holds) against a 4000-byte cap: the run still finishes, its output is cut to fit,
-        # and later runs add a line only while one fits.
+        # and later runs add a line only while one fits. The day file is named from the clock; pinned, so a run that crosses midnight
+        # cannot start a second file in the middle of this loop.
+        self.env["QMD_REFRESH_LOG_DATE"] = "2026-06-15"
         (self.fake / "out").write_text("".join("line %06d of real output\n" % i for i in range(60000)))
         cap = 4000
         for i in range(12):
             self.assertEqual(self.run_(QMD_REFRESH_LOG_MAX_BYTES=str(cap)), 0)
             self.assertLessEqual(len(self.day.encode()), cap, i)
         log = self.day
+        self.assertTrue((self.logs / "qmd-refresh-2026-06-15.log").is_file(), "the pinned day file")
         self.assertIn("line 000000 of real output", log)
         self.assertIn("(output cut: the day log is near its size cap)", log)
         self.assertNotIn("line 059999", log)

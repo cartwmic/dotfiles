@@ -1,8 +1,8 @@
 Seat: reviewer (the model your seat table gives reviewers). You did not write these docs.
 
-Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), the flag list from `check_citations.py` for your range, and `points.json` with the writer's left-out list. Judge header counts (points harvested, left out, used) against `points.json`, the hand-added points the header lists, and the points the doc cites. Your slice is about 100 claims or fewer.
+Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), the flag list from `check_citations.py` for your range, and `points.json` with the writer's left-out list. The `Counts:` line was computed by the script from `points.json` and the doc's citations (`--points`); judge the rest of the header (inputs, hand-added points, the left-out reason) against `points.json` and the left-out list. Your slice is about 100 claims or fewer.
 
-A claim is every sentence, bullet and table row in your range, including header counts. Skip only provenance lines (repo, commit). For each one, open the cited lines yourself, and the code around them when the sentence says what the code does. Give each claim one verdict:
+A claim is every sentence, bullet and table row in your range. Skip only provenance lines (repo, commit, the `Counts:` line). For each one, open the cited lines yourself, and the code around them when the sentence says what the code does. Give each claim one verdict:
 
 - HOLDS: the cited lines show everything the sentence says, and nothing in the code contradicts it.
 - WRONG: the sentence says something the cited lines or the code contradict.
