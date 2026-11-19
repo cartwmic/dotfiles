@@ -14,10 +14,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import test_kgate as T  # loads the rendered kgate script once; its module is shared with test_kgate
+import test_kgate as T  # the module under test: test_kgate's copy of the rendered kgate script
 
 K = T.K
-SCRIPT = T.SCRIPT
+# test_kgate deletes its rendered script when its own module ends, which can come before this module runs, so render a copy here.
+_SCRIPT_DIR = tempfile.mkdtemp(prefix="kgate-report-script-")
+SCRIPT = Path(_SCRIPT_DIR) / "kgate"
+SCRIPT.write_text(T.render_script("personal"))
+SCRIPT.chmod(0o755)
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "report-log.jsonl"
 NOW = datetime.datetime(2026, 11, 19, 12, 0, tzinfo=datetime.timezone.utc)
 GIB = 2**30
@@ -182,6 +186,10 @@ class ReportCommand(unittest.TestCase):
         every = self.run_report("\n".join(lines) + "\n", ["--days", "36500", "--all"])
         self.assertEqual(sum("make step" in line for line in every.stdout.splitlines()), 35)
         self.assertNotIn("more rows not shown", every.stdout)
+
+
+def tearDownModule():
+    shutil.rmtree(_SCRIPT_DIR, True)
 
 
 if __name__ == "__main__":
