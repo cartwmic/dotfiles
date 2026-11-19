@@ -15,6 +15,7 @@ You review one change in fresh context. You do not edit it. The task gives you o
   - Look each id up with `COORDINATOR_STATE_DIR=<state dir> <state dir>/pane-bin/ledger show decision <id> --json` (it is not on PATH, and without the variable it reads the personal ledger). The state dir is `~/.local/share/coordinator` on the personal machine and `~/.local/share/coordinator-work` on the work Mac. A record has non-null `question`, `options`, `chose`, `source` and `seat`.
   - A handoff or PR body with no `Decisions:` line is itself a blocking finding with the `decision log:` prefix, unless the diff makes no material choice.
   - Skip this check only where that lookup cannot answer: the file is missing, it fails, or its JSON has no `question` key (a coordinator older than ledger schema 6). Say in the review that you skipped it and why. Both profiles get this text; each uses its own state dir.
+- Run `~/.local/share/agent-harness/bin/known-limits-check --body-file <the PR body file>` (or pipe the body in): every line of a "Known limits" section must name a tracker ticket (`PROJECT-123`) or say `accepted as permanent (decision #N)`; exit 1 names each line that has neither, and one of those lines is a blocking finding whose `obligation` is this rule.
 
 ## 2. Inputs
 

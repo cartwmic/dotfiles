@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""known-limits-check: every line of a PR body's "Known limits" section carries a follow-up or a permanent acceptance.
+
+usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD]
+
+A PR description that accepts a known limit on the condition that a follow-up ticket be filed loses the
+limit when nobody files it: nothing fails until a reviewer notices, rounds later. This check makes the
+escape loud when the body is written or reviewed. PR-preflight flows run it before a PR is opened; the
+reviewer brief (reviewer-brief.md) runs it on the body as filed.
+
+The body text comes from --body-file files (repeatable) or stdin when no file is given. Each "Known
+limits" section starts at a heading whose text is "Known limits" (a markdown heading of any level, or a
+bold-only line, case-insensitive, trailing colon allowed) and runs to the next heading or the end of the
+file. Every non-empty line in the section must carry one of:
+
+  a tracker ticket key    PROJECT-123 (two or more capitals, a dash, digits)
+  a permanent acceptance  accepted as permanent (decision #N)
+
+A line with neither is reported with its file, line number and the two accepted forms. Exit 0 all
+sections conform (a body with no "Known limits" section conforms); 1 a line has neither; 2 bad
+arguments, an unreadable file, or the tracker command could not be run.
+
+With --tracker-cmd CMD (or KNOWN_LIMITS_TRACKER_CMD in the environment) every ticket key found is also
+confirmed: CMD runs once per distinct key with the key as its only argument, and exit 0 means the ticket
+exists and is open. Without a tracker command the check stays on shape only, so it works wherever the
+dotfiles deploy, with or without a tracker.
+"""
+import re
+import shlex
+import subprocess
+import sys
+
+TICKET = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\d+\s*\)", re.IGNORECASE)
+HEADING = re.compile(r"^(#{1,6})\s+(.*?)(\s*:)?\s*$")
+BOLD = re.compile(r"^\s*(\*\*|__)(.+?)(\*\*|__)\s*:?\s*$")
+
+
+def heading_text(line):
+    """The heading's own words, without markup, or None when the line starts no heading."""
+    m = HEADING.match(line)
+    if m:
+        text = m.group(2)
+    else:
+        m = BOLD.match(line)
+        if not m:
+            return None
+        text = m.group(2)
+    return re.sub(r"\*\*|__|\*|_", "", text).strip().rstrip(":").strip()
+
+
+def is_known_limits(text):
+    t = text.lower()
+    return t == "known limits" or t.startswith("known limits ")
+
+
+def main(argv):
+    bodies = []
+    tracker = None
+    args = list(argv)
+    while args:
+        a = args.pop(0)
+        if a == "--body-file":
+            if not args:
+                usage("--body-file needs a file")
+            bodies.append(args.pop(0))
+        elif a.startswith("--body-file="):
+            bodies.append(a.split("=", 1)[1])
+        elif a == "--tracker-cmd":
+            if not args:
+                usage("--tracker-cmd needs a command")
+            tracker = shlex.split(args.pop(0))
+        elif a.startswith("--tracker-cmd="):
+            tracker = shlex.split(a.split("=", 1)[1])
+        elif a in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        else:
+            usage("unknown argument %r" % a)
+    if not bodies:
+        bodies = ["-"]
+
+    texts = []
+    for body in bodies:
+        try:
+            if body == "-":
+                texts.append((body, sys.stdin.read()))
+            else:
+                with open(body, encoding="utf-8") as fh:
+                    texts.append((body, fh.read()))
+        except OSError as e:
+            print("known-limits-check: cannot read %s: %s" % (body, e), file=sys.stderr)
+            return 2
+
+    bad = 0
+    tickets = set()
+    for name, text in texts:
+        section = False
+        for no, line in enumerate(text.splitlines(), 1):
+            head = heading_text(line)
+            if head is not None:
+                section = is_known_limits(head)
+                continue
+            if not section or not line.strip():
+                continue
+            hit = TICKET.search(line)
+            if hit:
+                tickets.add(hit.group(0))
+            if hit or PERMANENT.search(line):
+                continue
+            bad += 1
+            print("known-limits-check: %s: line %d of the Known limits section names no ticket and no permanent acceptance: %s"
+                  % (name, no, line.strip()), file=sys.stderr)
+            print("  name a tracker ticket (PROJECT-123) or write: accepted as permanent (decision #N)", file=sys.stderr)
+
+    if tracker is not None and tickets:
+        for key in sorted(tickets):
+            try:
+                done = subprocess.run(tracker + [key], capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                print("known-limits-check: the tracker command failed on %s: %s" % (key, e), file=sys.stderr)
+                return 2
+            if done.returncode != 0:
+                bad += 1
+                print("known-limits-check: ticket %s is not confirmed: the tracker command exited %d%s"
+                      % (key, done.returncode, (": " + done.stderr.strip()) if done.stderr.strip() else ""), file=sys.stderr)
+                print("  the ticket must exist and be open, or the limit needs a different follow-up", file=sys.stderr)
+
+    if bad:
+        print("known-limits-check: FAIL: %d line(s) need a ticket or a permanent acceptance" % bad, file=sys.stderr)
+        return 1
+    print("known-limits-check: OK (%d ticket(s)%s)" % (len(tickets), ", tracker confirmed" if tracker is not None and tickets else ""))
+    return 0
+
+
+def usage(why):
+    print("known-limits-check: %s\nusage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD]" % why, file=sys.stderr)
+    raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
