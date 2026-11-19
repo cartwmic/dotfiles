@@ -112,7 +112,8 @@ python3 scripts/ci-par.py \
   tests/mcp-pins \
   tests/release-pins \
   tests/ci-main-status \
-  tests/ci-main-status-any-repo || status=1
+  tests/ci-main-status-any-repo \
+  tests/test-edit-check || status=1
 
 # tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
 # timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,

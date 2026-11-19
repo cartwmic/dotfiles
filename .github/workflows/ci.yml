@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0 # the test-edit step below walks every commit of the PR
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -50,6 +51,14 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: apt packages for the Linux suites (zsh, lsof, rsync, openssh-server, bubblewrap)
         run: sudo apt-get install -y -qq zsh lsof rsync openssh-server bubblewrap >/dev/null
+      # A commit that cuts text from an existing test needs a `Test-edit:` trailer (dotfiles#629 commit 236a1ce). Its own unit
+      # suite is tests/test-edit-check, in scripts/ci-linux.sh. PRs only: it needs the PR's base, and main has none.
+      - name: "Test edits: fail when a commit removes text from an existing test and says nothing (scripts/check-test-edits.py)"
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check-test-edits.py "$BASE_SHA" "$HEAD_SHA"
       - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
 
