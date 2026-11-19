@@ -11,12 +11,16 @@ on the body as filed. Design: find loosely, judge strictly, fail loudly on anyth
 Finding is loose. Before scanning, fenced code blocks, HTML comments, and the body's trailer (the
 "Decisions:" line and everything after it) are dropped. A block opens at any of four forms, matched without
 case: a markdown heading whose text is the label ("## Known limits", colon optional), an inline
-"Known limits: ..." line, a bold "**Known limits**" label, or a list item that is just the label. The label
+"Known limits: ..." line, a bold "**Known limits**" label, or a list item that is just the label (with
+nothing after it; "- Known limits: X" states a limit or names a rule, it does not open a block). The label
 is "known limits", "known limitations", "limitations", "accepted limits" or "accepted limitations". A
-heading block runs to the next heading of the same or higher level, so a sub-heading stays inside; the
-other blocks run to the end of their paragraph plus the list that follows it (a list-label block holds its
-child items). A line that starts with the label, after any #, -, *, >, "N." or ** marker, but matches none
-of the four forms, fails as a stray; a mention mid-sentence does not start the line, so it is ignored. An
+heading block runs to the next heading of the same or higher level, so a sub-heading stays inside. A bold
+or inline label that stands alone on its line holds a section the same way: to the next heading, the next
+bold-label-only line, or the end of the body. A label that carries text on its own line ("Known limits: X."
+or "**Known limits:** X") opens a block over the rest of that paragraph plus the list that follows it (a
+list-label block holds its child items). A line that starts with the label, after any #, -, *, >, "N." or
+** marker, but matches none of the four forms and itself looks like a label (the label alone, or ending in
+a colon), fails as a stray; an ordinary sentence that merely starts with the label word is ignored. An
 empty block fails.
 
 Judging is strict. Units, not physical lines: every list item at any depth is a unit, and so is every
@@ -26,18 +30,21 @@ indent is top-level, so a list indented by one to three spaces is still flat. Co
 includes its indented continuation lines and a lazy continuation (a non-blank line directly after it, with
 no blank line between). Coverage counts only on the unit that carries it, with no inheritance: every leaf
 needs its own marker, and a parent with children passes without one only when its text ends in ":" (a
-group label). The markers are "Follow-up: KEY", "Tracked: KEY", "Tracked in KEY", a "/browse/KEY" link,
-"accepted as permanent (decision #N)", or the alias "Permanent: decision N". A bare key with no marker
-fails, with the one-word fix. A block whose text is "None" or "n/a" passes with zero limits.
+group label). The markers are "Follow-up: KEY", "Tracked: KEY", "Tracked in KEY", a "/browse/KEY" link, a
+GitHub issue URL (https://.../issues/N), "accepted as permanent (decision #N)", or the alias
+"Permanent: decision N". The marker words match without case; the key does not, so "follow-up: x86-64" is
+not coverage. A bare key with no marker fails, with the one-word fix. A block whose text is "None" or
+"n/a" passes with zero limits.
 
 The body text comes from --body-file files (repeatable) or stdin when no file is given. Exit 0 every block
 passes (a body with no Known-limits block passes); 1 a stray line, an empty block, or an uncovered limit;
 2 bad arguments, an unreadable file, or the tracker command could not be run. All failures are printed.
 
-With --tracker-cmd CMD (or KNOWN_LIMITS_TRACKER_CMD in the environment, when the flag is absent) every key
-that carries a marker is confirmed: CMD runs once per distinct key with the key as its only argument, and
-exit 0 means the ticket exists and is open. Without a tracker command the check stays on shape only, so it
-works wherever the dotfiles deploy, with or without a tracker.
+With --tracker-cmd CMD (or KNOWN_LIMITS_TRACKER_CMD in the environment, when the flag is absent) every
+reference that carries a marker is confirmed: CMD runs once per distinct reference with it as the only
+argument — the key for KEY-shaped and /browse/ references, the full URL for a GitHub issue link — and
+exit 0 means the ticket or issue exists and is open. Without a tracker command the check stays on shape
+only, so it works wherever the dotfiles deploy, with or without a tracker.
 """
 import os
 import re
@@ -51,8 +58,10 @@ HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 LIST_ITEM = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
 BOLD = re.compile(r"^\*\*(.+?)\*\*\s*:?\s*(.*)$")
 KEY = re.compile(r"\b[A-Z][A-Z0-9]+-[0-9]+\b")  # case-sensitive: a key is uppercase
-MARKER = re.compile(r"\b(?:follow-up|tracked)\s*(?::|in\b)\s*([A-Z][A-Z0-9]+-[0-9]+)", re.IGNORECASE)
+# the marker words match without case; the key does not (x86-64 is not a ticket)
+MARKER = re.compile(r"\b(?i:follow-up|tracked)\s*(?::|(?i:in)\b)\s*([A-Z][A-Z0-9]+-[0-9]+)")
 BROWSE = re.compile(r"/browse/([A-Z][A-Z0-9]+-[0-9]+)")
+ISSUE = re.compile(r"https?://\S+/issues/\d+\b")
 PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\s*\d+\s*\)", re.IGNORECASE)
 PERMANENT_ALIAS = re.compile(r"permanent\s*:\s*(?:decision\s*#?|#)\s*\d+", re.IGNORECASE)
 FENCE = re.compile(r"^\s*(```|~~~)")
@@ -163,6 +172,23 @@ def paragraph_and_list_end(lines, i):
     return j
 
 
+def bold_label_only(stripped):
+    """True for a line that is nothing but a bold label, optionally with a colon."""
+    return bool(re.match(r"^\*\*[^*]+\*\*:?\s*$", stripped))
+
+
+def section_end(lines, i):
+    """End index (exclusive) of a standalone-label section: the next heading, the next bold-label-only
+    line, or the end of the prepared lines (the Decisions trailer is already dropped)."""
+    j = i + 1
+    while j < len(lines):
+        s = lines[j][1].strip()
+        if HEADING.match(s) or bold_label_only(s):
+            break
+        j += 1
+    return j
+
+
 def find_blocks(lines, failures):
     """One pass: blocks (loose), stray label-like lines (loud). A block is a dict with its line range."""
     blocks = []
@@ -188,7 +214,9 @@ def find_blocks(lines, failures):
                 continue
         bold = bold_entry(stripped)
         if bold is not None:
-            j = paragraph_and_list_end(lines, i)
+            # a bold label alone on its line holds a section, like a heading; with text after it, the
+            # block is the rest of the paragraph plus the list that follows
+            j = section_end(lines, i) if not bold[1] else paragraph_and_list_end(lines, i)
             blocks.append({"label": bold[0], "kind": "inline", "opener": no,
                            "rest": bold[1], "start": i + 1, "end": j})
             i = j
@@ -196,7 +224,9 @@ def find_blocks(lines, failures):
         lm = LIST_ITEM.match(text)
         if lm:
             entry = label_entry(lm.group(2).strip())
-            if entry is not None:
+            if entry is not None and entry[1] == "":
+                # a list item counts as a label block only when it is just the label; "- Known limits: X"
+                # names a rule or states a limit, it does not open a block
                 indent = len(lm.group(1))
                 j = i + 1
                 while j < n:
@@ -215,17 +245,25 @@ def find_blocks(lines, failures):
                 continue
         lm2 = LABEL_RE.match(stripped)
         if lm2 is not None and stripped[lm2.end():].lstrip().startswith(":"):
-            # inline form: "Known limits: ..." opens a block over its paragraph plus the list that follows
-            j = paragraph_and_list_end(lines, i)
+            # inline form: "Known limits: ..." opens a block; alone on its line it holds a section, with
+            # text after the colon the block is the rest of the paragraph plus the list that follows
             rest = stripped[lm2.end():].lstrip().lstrip(":").strip()
+            j = section_end(lines, i) if not rest else paragraph_and_list_end(lines, i)
             blocks.append({"label": lm2.group(0).rstrip(), "kind": "inline", "opener": no,
                            "rest": rest, "start": i + 1, "end": j})
             i = j
             continue
-        if LABEL_RE.match(strip_markers(stripped)):
-            failures.append((no, '"%s" looks like a known-limits header but is not one this check reads. '
-                             'Use a "## Known limits" heading, a "Known limits:" line, or a "**Known limits**" label.'
-                             % trunc(stripped)))
+        t = strip_markers(stripped)
+        lm3 = LABEL_RE.match(t)
+        if lm3 is not None:
+            after = t[lm3.end():].strip()
+            if after == "" or after.endswith(":"):
+                # only a line that itself looks like a label is a stray; a sentence that merely starts
+                # with the label word is ordinary prose
+                failures.append((no, '"%s" looks like a known-limits header but is not one this check reads. '
+                                 'Use a "## Known limits" heading, a "Known limits:" line, or a "**Known limits**" label, '
+                                 'or reword the sentence.'
+                                 % trunc(stripped)))
         i += 1
     return blocks
 
@@ -311,8 +349,9 @@ def parse_units(block_lines):
 
 
 def marker_keys(text):
-    """Keys that carry a marker: Follow-up: KEY, Tracked: KEY / Tracked in KEY, a /browse/KEY link."""
-    return MARKER.findall(text) + BROWSE.findall(text)
+    """References that carry a marker: Follow-up: KEY, Tracked: KEY / Tracked in KEY, a /browse/KEY link,
+    or a GitHub issue URL. Keys come back as keys; issue URLs come back as the full URL."""
+    return MARKER.findall(text) + BROWSE.findall(text) + ISSUE.findall(text)
 
 
 def bare_keys(text, keys):

@@ -81,8 +81,12 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertEqual(run("--body-file", self.body(text)).returncode, 1)
 
     def test_a_lowercase_ticket_is_not_a_ticket(self):
-        text = PAST_MISTAKE.replace("will be filed.", "will be filed (proj-123).")
-        self.assertEqual(run("--body-file", self.body(text)).returncode, 1)
+        for text in (
+            PAST_MISTAKE.replace("will be filed.", "will be filed (proj-123)."),
+            PAST_MISTAKE.replace("will be filed.", "will be filed. follow-up: proj-1."),
+        ):
+            with self.subTest(body=text.splitlines()[3]):
+                self.assertEqual(run("--body-file", self.body(text)).returncode, 1)
 
     def test_a_permanent_acceptance_needs_its_decision_number(self):
         text = PAST_MISTAKE.replace("will be filed.", "will be filed, accepted as permanent (decision TBD).")
@@ -281,7 +285,7 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertIn("line 8", out.stderr)
 
     def test_a_stray_label_line_fails(self):
-        text = "# PR\n\nKnown limits - rendering\n"
+        text = "# PR\n\nKnown limits and caveats:\n"
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("looks like a known-limits header", out.stderr)
@@ -301,6 +305,75 @@ class KnownLimitsCheck(unittest.TestCase):
         out = run("--body-file", self.body(text))
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("line 5", out.stderr)
+
+    # -- round 4: marker keys are case-sensitive -----------------------------------------------
+
+    def test_a_marker_key_is_case_sensitive(self):
+        for text in (
+            "- Only amd64 images are built. Follow-up: x86-64 and arm64 images later.",
+            "- Emoji print as ?. Follow-up: utf-16 output needs a decision.",
+            "- A. follow-up: proj-1.",
+        ):
+            with self.subTest(body=text):
+                out = run("--body-file", self.body("# PR\n\n## Known limits\n\n" + text + "\n"))
+                self.assertEqual(out.returncode, 1, out.stderr)
+        text = "# PR\n\n## Known limits\n\n- A. follow-up: PROJ-1.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_tracked_in_marker_key_is_case_sensitive(self):
+        text = "# PR\n\n## Known limits\n\n- Old logs are not migrated. Tracked in sha-256 rollout notes.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 1)
+
+    # -- round 4: a standalone bold or inline label holds a section ----------------------------
+
+    def test_a_bold_label_with_none_under_it_passes(self):
+        text = "# PR\n\n**Known limits**\n\nNone.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_bold_label_with_covered_prose_passes(self):
+        text = "# PR\n\n**Known limits**\n\nEmoji print as ?. Follow-up: PROJ-1.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_an_inline_label_with_covered_prose_passes(self):
+        text = "# PR\n\nKnown limits:\n\nEmoji print as ?. Follow-up: PROJ-1.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_prose_after_the_list_under_a_bold_label_fails(self):
+        text = ("# PR\n\n**Known limits**\n\n- A. Follow-up: PROJ-1.\n\n"
+                "B also breaks; ticket to come.\n\n**Testing**\n\nran it\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("B also breaks", out.stderr)
+
+    def test_a_covered_list_followed_by_another_bold_label_passes(self):
+        text = "# PR\n\n**Known limits**\n\n- A. Follow-up: PROJ-1.\n\n**Testing**\n\n- ran it\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    # -- round 4: a GitHub issue URL is coverage ------------------------------------------------
+
+    def test_a_github_issue_url_is_coverage(self):
+        text = "# PR\n\n## Known limits\n\n- Emoji gap. Follow-up: https://github.com/o/r/issues/12\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_tracker_that_refuses_an_issue_url_fails(self):
+        tracker = self.tracker("tracker-refuse-url", ["exit 1"])
+        text = "# PR\n\n## Known limits\n\n- Emoji gap. Follow-up: https://github.com/o/r/issues/12\n"
+        out = run("--body-file", self.body(text), "--tracker-cmd", tracker)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("not confirmed", out.stderr)
+
+    # -- round 4 notes: list-label form and the stray rule --------------------------------------
+
+    def test_a_list_item_with_text_after_the_label_is_not_a_label_block(self):
+        text = "# PR\n\n- Known limits: rendering is slow\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_ordinary_sentences_are_not_stray(self):
+        for line in ("Limitations of this approach are listed in the design doc.",
+                     "Known limits are below."):
+            with self.subTest(line=line):
+                text = "# PR\n\n" + line + "\n"
+                self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
 
 
 if __name__ == "__main__":
