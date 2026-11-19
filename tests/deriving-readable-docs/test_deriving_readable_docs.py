@@ -1,6 +1,7 @@
 """harvest_points.py and check_citations.py, run as the skill runs them: as scripts, on throwaway repos.
 Run: python3 -I tests/deriving-readable-docs/test_deriving_readable_docs.py"""
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -678,6 +679,234 @@ class SheetTest(unittest.TestCase):
         self.assertIn("     1  one", out)
         self.assertIn("     2  two", out)
         self.assertNotIn("three", out)
+
+
+def sheet_of(path, code, line):
+    """The --sheet output for a one-claim doc that cites `path:line` in a repo holding only that file."""
+    rc, out = check("- It does a thing. `%s:%d`\n" % (path, line), {path: code}, "--sheet")
+    assert rc == 0, out
+    return out
+
+
+def exit_rows(out):
+    """The (line, kind) rows of the early-exit list in a --sheet output."""
+    return [(int(m.group(1)), m.group(2)) for m in re.finditer(r"^ {2,}(\d+)  (return|throw|raise|continue|break|process\.exit|exit)\s", out, re.M)
+            if "early exits between" in out]
+
+
+TS_GATE = """export function gate(argv: string[], seen: Set<string>): string {
+  if (argv[0] !== 'send') return 'pass';
+  const key = argv[1];
+  if (key === undefined) {
+    throw new Error('no key');
+  }
+  if (seen.has(key))
+    return 'again';
+  for (const a of argv) {
+    if (a === '--skip') continue;
+    if (a === '--stop') break;
+    use(a);
+  }
+  const names = argv.map((a) => {
+    return a.trim();
+  });
+  const ok = true;
+  return 'sent ' + names.join(',') + ok;
+}
+"""
+
+
+class EarlyExitsSheetTest(unittest.TestCase):
+    """--sheet lists, under a cited range inside a function, the exits that can skip the range (deriving-readable-docs
+    lab: 20 of the 31 first-pass errors left were a sentence true on one path of a function and false on another)."""
+
+    def test_ts_guard_clauses_throw_and_a_loop_exit_above_the_cited_line_are_listed(self):
+        out = sheet_of("src/gate.ts", TS_GATE, 12)
+        self.assertIn("early exits between the start of `export function gate(argv: string[], seen: Set<string>): string {` (line 1) and line 12", out)
+        self.assertEqual(exit_rows(out), [(2, "return"), (5, "throw"), (8, "return"), (10, "continue"), (11, "break")])
+        self.assertIn("[under line 4: if (key === undefined) {]", out)  # a throw inside a block names the if above it
+        self.assertIn("[under line 7: if (seen.has(key))]", out)  # the exit on the line after a bare `if (...)`
+
+    def test_a_return_in_a_nested_callback_is_not_an_exit_of_the_function(self):
+        out = sheet_of("src/gate.ts", TS_GATE, 18)  # after the loop (its continue and break are not listed) and the .map callback
+        self.assertEqual(exit_rows(out), [(2, "return"), (5, "throw"), (8, "return")])
+        self.assertNotIn("return a.trim();", out)
+
+    def test_a_loop_exit_counts_only_when_the_loop_also_holds_the_cited_line(self):
+        out = sheet_of("src/gate.ts", TS_GATE, 10)  # on the continue's own line: it is not above the line
+        self.assertEqual(exit_rows(out), [(2, "return"), (5, "throw"), (8, "return")])
+        code = "function f(xs) {\n  for (const x of xs) {\n    if (x) break;\n  }\n  return xs.length;\n}\n"
+        self.assertIn("(no early exits between the start of `function f(xs) {` (line 1) and line 5)", sheet_of("a.js", code, 5))
+
+    def test_a_for_loop_header_with_semicolons_is_a_loop_not_a_function(self):
+        code = "function f(xs) {\n  for (let i = 0; i < 3; i++) {\n    if (xs[i]) continue;\n    use(i);\n  }\n  for (;;) {\n    if (xs) break;\n    go();\n  }\n}\n"
+        out = sheet_of("a.js", code, 4)
+        self.assertIn("`function f(xs) {` (line 1) and line 4", out)
+        self.assertEqual(exit_rows(out), [(3, "continue")])
+        self.assertEqual(exit_rows(sheet_of("a.js", code, 8)), [(7, "break")])
+
+    def test_a_callback_after_a_closed_object_is_labelled_by_its_own_line(self):
+        code = "export const h = {\n  a: { b: 1 },\n  run: (x) => {\n    if (x) return;\n    go();\n  },\n};\n"
+        self.assertIn("`run: (x) => {` (line 3) and line 5", sheet_of("a.ts", code, 5))
+
+    def test_a_break_that_ends_a_switch_case_is_not_an_exit(self):
+        code = "function f(k) {\n  switch (k) {\n    case 1:\n      a();\n      break;\n    case 2:\n      b();\n  }\n}\n"
+        self.assertIn("(no early exits between", sheet_of("a.js", code, 7))
+
+    def test_process_exit_and_python_style_exits_are_listed(self):
+        code = "function main() {\n  if (bad) {\n    process.exit(2);\n  }\n  run();\n}\n"
+        self.assertEqual(exit_rows(sheet_of("cli.ts", code, 5)), [(3, "process.exit")])
+
+    def test_words_and_braces_in_strings_templates_regexes_and_comments_are_not_exits(self):
+        code = ("function f(a) {\n  const s = \"return { \";\n  // return early\n  /* throw { */\n  const t = `x ${ { b: 1 }.b } return`;\n"
+                "  const r = /[}]\\/ return/;\n  const u = a / 2 / 3;\n  const o = { return: 1, throw: 2 };\n  o.return(); o.break();\n  return u;\n}\n")
+        out = sheet_of("a.js", code, 10)
+        self.assertIn("(no early exits between the start of `function f(a) {` (line 1) and line 10)", out)
+
+    def test_typed_functions_methods_arrows_and_callbacks_are_found_as_the_enclosing_function(self):
+        code = ("class K {\n  async run(a: string): Promise<{ ok: boolean }> {\n    if (!a) return { ok: false };\n    return { ok: true };\n  }\n}\n"
+                "const h = async (x: number): Promise<void> => {\n  if (x) return;\n  go();\n};\n"
+                "describe('d', () => {\n  it('works', () => {\n    if (skip) return;\n    expect(1).toBe(1);\n  });\n});\n")
+        self.assertIn("early exits between the start of `async run(a: string): Promise<{ ok: boolean }> {` (line 2) and line 4", sheet_of("a.ts", code, 4))
+        self.assertEqual(exit_rows(sheet_of("a.ts", code, 9)), [(8, "return")])
+        out = sheet_of("a.ts", code, 14)
+        self.assertEqual(exit_rows(out), [(13, "return")])
+        self.assertIn("`it('works', () => {` (line 12)", out)
+
+    def test_a_line_outside_every_function_and_a_non_code_file_get_no_exit_text(self):
+        self.assertNotIn("exits", sheet_of("a.ts", "const a = 1;\nconst b = 2;\n", 2))
+        self.assertNotIn("exits", sheet_of("notes.md", "# a\n\n- b\n", 3))
+        self.assertEqual(exit_rows(sheet_of("a.ts", "function f() {\n  if (x) return;\n  go();\n}\nconst a = 1;\n", 3)), [(2, "return")])  # the same file, inside the function
+        self.assertNotIn("exits", sheet_of("a.ts", "function f() {\n  if (x) return;\n  go();\n}\nconst a = 1;\n", 5))
+
+    def test_a_file_whose_braces_do_not_balance_says_so_and_the_sheet_still_prints(self):
+        out = sheet_of("a.ts", "function f() {\n  if (x) {\n    return 1;\n  go();\n", 4)
+        self.assertIn("(early exits not listed: this file could not be read as code)", out)
+        self.assertIn("go();", out)
+
+    def test_a_stray_closing_brace_is_not_balanced_either(self):
+        out = sheet_of("a.ts", "function f() {\n  go();\n}\n}\nfunction g() {\n  if (x) return;\n  go();\n}\n", 7)
+        self.assertIn("(early exits not listed", out)
+
+    def test_python_exits_nested_defs_and_loops(self):
+        code = ("import sys\n\ndef run(items, mode):\n    if mode == 'x':\n        return 1\n    for i in items:\n        if i is None:\n            continue\n"
+                "        if i == 0:\n            break\n    def inner():\n        return 5\n    try:\n        go()\n    except ValueError:\n"
+                "        raise RuntimeError('bad')\n    if mode == 'q':\n        sys.exit(3)\n    for j in items:\n        if j:\n            continue\n"
+                "        done = j\n    return items\n")
+        out = sheet_of("run.py", code, 23)
+        self.assertIn("early exits between the start of `def run(items, mode):` (line 3) and line 23", out)
+        self.assertEqual(exit_rows(out), [(5, "return"), (16, "raise"), (18, "exit")])  # both loops (lines 6 to 10 and 19 to 22) closed before line 23, so their continue and break are not listed
+        self.assertIn("[under line 4: if mode == 'x':]", out)
+        self.assertNotIn("return 5", out)
+        self.assertEqual(exit_rows(sheet_of("run.py", code, 22)), [(5, "return"), (16, "raise"), (18, "exit"), (21, "continue")])  # inside the second loop its continue counts
+
+    def test_a_python_exit_in_an_else_branch_says_it_is_in_the_else(self):
+        out = sheet_of("f.py", "def f(x):\n    if x:\n        go()\n    else:\n        return 1\n    done = 2\n    return done\n", 6)
+        self.assertIn("[in the else of line 2: if x:]", out)
+
+    def test_python_that_does_not_parse_says_so(self):
+        out = sheet_of("old.py", "def f(:\n    return 1\n", 2)
+        self.assertIn("(early exits not listed", out)
+
+    def test_every_cited_range_in_a_claim_gets_its_own_list(self):
+        rc, out = check("- Both. `src/gate.ts:12`, `src/gate.ts:4`\n", {"src/gate.ts": TS_GATE}, "--sheet")
+        self.assertEqual(out.count("early exits between"), 2)
+        self.assertIn("and line 4;", out)
+
+    def test_a_range_lists_the_exits_above_its_last_line_and_marks_those_inside_it(self):
+        rc, out = check("- It gates. `src/gate.ts:4-12`\n", {"src/gate.ts": TS_GATE}, "--sheet")
+        self.assertIn("and line 12;", out)
+        self.assertEqual(exit_rows(out), [(2, "return"), (5, "throw"), (8, "return"), (10, "continue"), (11, "break")])
+        marked = [l for l in out.splitlines() if "[inside the cited lines]" in l]
+        self.assertEqual([int(l.split()[0]) for l in marked], [5, 8, 10, 11])  # line 2 is above the range
+        self.assertNotIn("[inside the cited lines]", sheet_of("src/gate.ts", TS_GATE, 12))
+
+    def test_a_range_that_starts_in_one_function_and_ends_in_another_lists_both(self):
+        code = "function a(x) {\n  if (x) return 1;\n  return 2;\n}\nfunction b(y) {\n  if (y) throw new Error('y');\n  return 3;\n}\n"
+        rc, out = check("- Both. `a.js:3-7`\n", {"a.js": code}, "--sheet")
+        self.assertEqual(out.count("early exits between"), 2)
+        self.assertIn("`function a(x) {` (line 1) and line 4;", out)  # a ends on line 4: its exits cannot skip line 7
+        self.assertIn("`function b(y) {` (line 5) and line 7;", out)
+        self.assertNotIn("(line 1) and line 7", out)
+
+    def test_a_range_that_starts_in_one_function_lists_that_functions_exits_inside_the_range(self):
+        code = "function a(x) {\n  if (x) return 1;\n  return 2;\n}\nfunction b(y) {\n  if (y) throw new Error('y');\n  return 3;\n}\n"
+        rc, out = check("- Both. `a.js:3-7`\n", {"a.js": code}, "--sheet")
+        self.assertEqual(exit_rows(out), [(2, "return"), (3, "return"), (6, "throw")])  # line 3 is the first function's own return, inside the range
+        self.assertEqual([int(l.split()[0]) for l in out.splitlines() if "[inside the cited lines]" in l], [3, 6])  # line 2 is above the range
+        py = "def a(x):\n    if x:\n        return 1\n    return 2\n\ndef b(y):\n    if y:\n        raise ValueError(y)\n    return 3\n"
+        rc, out = check("- Both. `a.py:4-9`\n", {"a.py": py}, "--sheet")
+        self.assertEqual(exit_rows(out), [(3, "return"), (4, "return"), (8, "raise")])
+        self.assertEqual([int(l.split()[0]) for l in out.splitlines() if "[inside the cited lines]" in l], [4, 8])
+
+    def test_a_range_that_starts_inside_a_loop_and_ends_after_it_lists_the_loops_continue(self):
+        js = "function a(xs) {\n  for (const x of xs) {\n    if (!x) continue;\n    use(x);\n    log(x);\n  }\n  return 1;\n}\n"
+        self.assertEqual(exit_rows(sheet_of("a.js", js, 5)), [(3, "continue")])  # inside the loop: unchanged
+        rc, out = check("- It uses x. `a.js:4-7`\n", {"a.js": js}, "--sheet")  # the loop closes on line 6, inside the range
+        self.assertEqual(exit_rows(out), [(3, "continue")])
+        self.assertNotIn("(no early exits", out)
+        self.assertNotIn("[inside the cited lines]", out)  # the continue is above the range
+        py = "def a(xs):\n    for x in xs:\n        if not x:\n            continue\n        use(x)\n        log(x)\n    return 1\n"
+        rc, out = check("- It uses x. `a.py:5-7`\n", {"a.py": py}, "--sheet")
+        self.assertEqual(exit_rows(out), [(4, "continue")])
+        self.assertNotIn("(no early exits", out)
+
+    def test_a_break_in_a_loop_that_starts_before_the_range_and_ends_after_its_first_line_is_listed(self):
+        py = "def a(xs):\n    while xs:\n        if xs[0]:\n            break\n        use(xs)\n    return 1\n"
+        rc, out = check("- It uses xs. `a.py:5-6`\n", {"a.py": py}, "--sheet")
+        self.assertEqual(exit_rows(out), [(4, "break")])
+
+    def test_a_loop_that_lies_wholly_inside_the_range_lists_its_continue_marked_inside(self):
+        js = "function a(xs) {\n  setup();\n  for (const x of xs) {\n    if (!x) continue;\n    use(x);\n  }\n  return 1;\n}\n"
+        rc, out = check("- It loops. `a.js:2-7`\n", {"a.js": js}, "--sheet")
+        self.assertEqual(exit_rows(out), [(4, "continue")])
+        self.assertEqual([int(l.split()[0]) for l in out.splitlines() if "[inside the cited lines]" in l], [4])
+
+    def test_a_range_that_starts_inside_a_loop_and_runs_into_another_function_lists_the_loops_exit_too(self):
+        js = ("function a(xs) {\n  for (const x of xs) {\n    if (!x) continue;\n    use(x);\n    log(x);\n  }\n  return 1;\n}\n"
+              "function b(y) {\n  if (y) throw new Error('y');\n  return 3;\n}\n")
+        rc, out = check("- Both. `a.js:4-11`\n", {"a.js": js}, "--sheet")
+        self.assertEqual(exit_rows(out), [(3, "continue"), (7, "return"), (10, "throw")])
+        self.assertEqual(out.count("early exits between"), 2)
+        py = ("def a(xs):\n    for x in xs:\n        if not x:\n            continue\n        use(x)\n        log(x)\n    return 1\n\n"
+              "def b(y):\n    if y:\n        raise ValueError(y)\n    return 3\n")
+        rc, out = check("- Both. `a.py:5-12`\n", {"a.py": py}, "--sheet")
+        self.assertEqual(exit_rows(out), [(4, "continue"), (7, "return"), (11, "raise")])
+
+    def test_a_loop_that_closed_before_the_range_starts_does_not_list_its_continue(self):
+        py = "def a(xs):\n    for x in xs:\n        if not x:\n            continue\n        use(x)\n    log(xs)\n    return 1\n\ndef b(y):\n    if y:\n        raise ValueError(y)\n    return 3\n"
+        rc, out = check("- It logs. `a.py:6-7`\n", {"a.py": py}, "--sheet")
+        self.assertIn("(no early exits between the start of `def a(xs):` (line 1) and line 7)", out)
+        rc, out = check("- Both. `a.py:6-12`\n", {"a.py": py}, "--sheet")
+        self.assertEqual(exit_rows(out), [(7, "return"), (11, "raise")])  # no continue (line 4)
+        js = "function a(xs) {\n  for (const x of xs) {\n    if (!x) continue;\n    use(x);\n  }\n  log(xs);\n  return 1;\n}\n"
+        rc, out = check("- It logs. `a.js:6-7`\n", {"a.js": js}, "--sheet")
+        self.assertIn("(no early exits between the start of `function a(xs) {` (line 1) and line 7)", out)
+
+    def test_the_first_functions_header_names_its_own_last_line_not_the_ranges(self):
+        py = "def a(x):\n    if x:\n        return 1\n    return 2\n\ndef b(y):\n    if y:\n        raise ValueError(y)\n    return 3\n"
+        rc, out = check("- Both. `a.py:4-9`\n", {"a.py": py}, "--sheet")
+        self.assertIn("`def a(x):` (line 1) and line 4;", out)
+        self.assertIn("`def b(y):` (line 6) and line 9;", out)
+        self.assertNotIn("(line 1) and line 9", out)
+        # a first function with no exits says so against its own end
+        py2 = "def a(x):\n    use(x)\n    log(x)\n\ndef b(y):\n    return 3\n"
+        rc, out = check("- Both. `a.py:3-6`\n", {"a.py": py2}, "--sheet")
+        self.assertIn("(no early exits between the start of `def a(x):` (line 1) and line 3)", out)
+
+    def test_an_exit_of_the_first_function_after_the_range_end_is_not_listed(self):
+        code = "function a(x) {\n  if (x) return 1;\n  function b(y) {\n    if (y) throw new Error('y');\n    return 3;\n  }\n  return b(x);\n}\n"
+        rc, out = check("- Both. `a.js:2-5`\n", {"a.js": code}, "--sheet")  # the range ends inside the nested b; a's return on line 7 comes after it
+        self.assertEqual(exit_rows(out), [(2, "return"), (4, "throw")])
+        self.assertNotIn("return b(x)", out)
+
+    def test_the_cli_prints_the_same_list_and_a_bad_call_exits_2(self):
+        with make_repo({"src/gate.ts": TS_GATE}) as repo:
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "early_exits.py"), str(Path(repo) / "src/gate.ts"), "12"], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0)
+            self.assertEqual(exit_rows(r.stdout), [(2, "return"), (5, "throw"), (8, "return"), (10, "continue"), (11, "break")])
+        r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "early_exits.py")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
 
 
 if __name__ == "__main__":

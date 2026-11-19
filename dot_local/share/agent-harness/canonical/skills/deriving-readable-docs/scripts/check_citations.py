@@ -45,6 +45,12 @@ With --points (the raw harvest, points.json), two more checks run:
   not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
              does not cite: the entry is wrong, or it cites that test.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
+          Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
+          range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
+          paths a sentence about the function must state or leave out. A continue or break counts when its loop
+          overlaps the range. When the range starts in another function, that function's exits above the last line
+          (or above its own end) are listed too, since they sit inside the range. See early_exits.py;
+          "no early exits" and "not listed" print differently.
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
 sentences never change the exit code. Stdlib only.
 """
@@ -53,6 +59,10 @@ import json
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
+sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
+import early_exits  # noqa: E402
 
 SPAN = re.compile(r"`([^`\n]+)`")
 PART = re.compile(r"^([^\s:`]+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$")
@@ -459,8 +469,27 @@ def check(doc_text, repo, points=None, left_out=()):
     return checked, bad, sorted(set(fails)), flags, counts
 
 
+def exits_note(cache, repo, path, lo, hi):
+    """The early-exit text for a cited range: the exits above its last line in the function that holds it, and, when
+    the range starts in another function, that function's exits above its last line, or above its own end if that comes
+    first, too (they sit inside the range). A continue or break counts when its loop overlaps the range. None when there is nothing to say."""
+    try:
+        lines = read_lines(cache, repo, path)
+        text, ext = "\n".join(lines), os.path.splitext(path)[1]
+        found = [(early_exits.early_exits(text, ext, hi, first=lo), hi)]
+        if lo != hi:
+            first_fn = early_exits.early_exits(text, ext, lo, upto=hi)
+            if first_fn and not first_fn.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or first_fn["fn_line"] != found[0][0]["fn_line"]):
+                found.insert(0, (first_fn, min(hi, first_fn["fn_end"])))  # its exits cannot skip lines past its own end
+        notes = [early_exits.render(f, lines, cut, lo) for f, cut in found]
+        return "\n".join(n for n in notes if n) or None
+    except (OSError, RecursionError):
+        return None
+
+
 def sheet(doc_text, repo):
-    """Print each claim with the lines it cites, for the writer's own read before the check pass."""
+    """Print each claim with the lines it cites, and the early exits above each range, for the writer's own read
+    before the check pass."""
     cache = {}
     for c in claims(doc_text, repo):
         if c.get("heading") or not c["cites"]:
@@ -473,6 +502,10 @@ def sheet(doc_text, repo):
                     print("%6d  %s" % (i, text))
             except OSError:
                 print("       (cannot read the file)")
+                continue
+            note = exits_note(cache, repo, path, lo, hi)
+            if note:
+                print(note)
 
 
 def main(argv):
