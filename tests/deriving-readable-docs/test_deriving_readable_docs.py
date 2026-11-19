@@ -143,11 +143,26 @@ class HarvestTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
-def check(doc, files):
+def check(doc, files, *extra):
     with make_repo(files) as repo, tempfile.TemporaryDirectory() as d:
         docp = Path(d) / "DOC.md"
         docp.write_text(doc)
-        r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), str(docp), repo], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), str(docp), repo, *extra], capture_output=True, text=True)
+    return r.returncode, r.stdout
+
+
+def check_counted(doc, files, left_out=None):
+    """check() with the harvest of the repo as --points, as the skill runs it (step 2 then step 7)."""
+    with make_repo(files) as repo, tempfile.TemporaryDirectory() as d:
+        pts = Path(d) / "points.json"
+        pts.write_text(harvest(repo)[1])
+        extra = ["--points", str(pts)]
+        if left_out is not None:
+            (Path(d) / "left-out.txt").write_text(left_out)
+            extra += ["--left-out", str(Path(d) / "left-out.txt")]
+        docp = Path(d) / "DOC.md"
+        docp.write_text(doc)
+        r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), str(docp), repo, *extra], capture_output=True, text=True)
     return r.returncode, r.stdout
 
 
@@ -369,11 +384,14 @@ class ClaimTest(unittest.TestCase):
         self.assertIn("flag count: 6 words", check("- It warns at 6 words. `a.ts:1`\n", {"a.ts": "6\n"})[1])
         self.assertNotIn("flag count", check("- It waits 45 minutes, exit 409 and 2 seconds. `a.ts:1`\n", {"a.ts": "45 409 2\n"})[1])
 
-    def test_spec_860_an_uncited_overreach_sentence_after_the_header_is_listed(self):
+    def test_spec_860_an_uncited_overreach_sentence_after_the_header_fails_unless_it_says_where_it_comes_from(self):
         doc = HEADER + "- The Limits section is refreshed. `a.ts:1`\n- It sits in src/status-limits.ts (only push-test names cover it).\n"
         code, out = check(doc, {"a.ts": "x\n"})
-        self.assertEqual(code, 0)
-        self.assertIn("flag uncited: only", out)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL uncited: only", out)
+        self.assertEqual(check(doc.replace("(only push", "(README: only push"), {"a.ts": "x\n"})[0], 0)
+        self.assertEqual(check(doc.replace("It sits", "Inferred: it sits"), {"a.ts": "x\n"})[0], 0)
+        self.assertEqual(check(doc.replace("(only push-test names cover it)", "and no test covers it"), {"a.ts": "x\n"})[0], 1)  # "no <noun>" counts here
         self.assertNotIn("flag overreach", check("# Doc\n\nEvery citation is shown. `a.ts:1`\n\n## Part\n\n- It runs. `a.ts:1`\n", {"a.ts": "x\n"})[1])
 
     def test_claims_are_not_judged_when_a_citation_under_them_is_bad(self):
@@ -381,6 +399,285 @@ class ClaimTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("1 bad", out)
         self.assertNotIn("FAIL", out)
+
+
+# Round-1 sentences from the coordinator and agent-kit docs of 2026-11-18 (explore-codemap climb), where fresh checkers
+# found 13% of claims wrong, overstated or unsupported. Each test below names the doc line it comes from and keeps a
+# shortened copy of the lines that line cited.
+PEERS_TEST = (
+    "describe('http peers', () => {\n"
+    "  it('refuses a source that is not a peer', async () => {\n"
+    "    expect(await post({ source: 'agent.zed' })).toEqual(403);\n"
+    "  });\n"
+    "});\n"
+)
+BROKEN_TEST = (
+    "it.each([\n"
+    "  ['state'], ['scope'], ['delete'], ['project verb'], ['project ref'],\n"
+    "])('refuses a broken %s', (subject) => {\n"
+    "  expect(run(subject).exit).toBe(2);\n"
+    "});\n"
+)
+PEERS_FILES = {"src/inbox/http.peers.test.ts": PEERS_TEST, "src/inbox/http.ts": "export const peers = new Set();\n"}
+
+
+class OverreachFailTest(unittest.TestCase):
+    def test_agent_kit_prd_53_only_on_a_sentence_that_cites_tests_alone_fails(self):
+        doc = "- Another agent can post only if its name is on the inbox's peer list. `src/inbox/http.peers.test.ts:2-4`\n"
+        code, out = check(doc, PEERS_FILES)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL overreach: only | Another agent can post only", out)
+        self.assertIn("1 failed checks", out)
+
+    def test_coordinator_prd_33_a_heading_sentence_with_only_fails_the_same_way(self):
+        code, out = check("**Only Michael counts.** A message from a second account is dropped. `src/inbox/http.peers.test.ts:2-4`\n", PEERS_FILES)
+        self.assertEqual((code, "FAIL overreach: only" in out), (1, True))
+
+    def test_the_fix_names_the_case_cites_the_code_or_labels_it(self):
+        base = "- Another agent can post only if its name is on the inbox's peer list. `src/inbox/http.peers.test.ts:2-4`"
+        for fixed in (
+            base.replace("Another agent can post only", "In the test, a source that is not a peer is refused; a post is accepted only"),
+            base.replace("only if", "for example only if"),
+            base.replace("Another", "Inferred: another"),
+            base + ", `src/inbox/http.ts:1`",  # the code that defines the set is cited too
+            base + " (README)",
+        ):
+            self.assertEqual(check(fixed + "\n", PEERS_FILES)[0], 0, fixed)
+
+    def test_agent_kit_design_115_a_count_in_words_of_a_test_set_fails_but_a_digit_value_does_not(self):
+        files = {"src/board/c08.conformance.test.ts": BROKEN_TEST, "src/board/cli.ts": "export {};\n"}
+        code, out = check("- It refuses four broken subjects. `src/board/c08.conformance.test.ts:1-5`\n", files)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL overreach: four broken subjects", out)
+        self.assertEqual(check("- It exits 2 on each case. `src/board/c08.conformance.test.ts:4`\n", files)[0], 1)  # each is a quantifier
+        code, out = check("- It exits 2 for a broken subject. `src/board/c08.conformance.test.ts:4`\n", files)
+        self.assertEqual(code, 0, out)
+
+    def test_words_outside_the_list_and_non_test_citations_only_list_the_sentence(self):
+        for word in ("next", "none", "any", "No answer is sent"):
+            doc = "- With none of it set, the next wake is sent. `src/inbox/http.peers.test.ts:2-4`\n" if word == "next" else "- It sends %s. `src/inbox/http.peers.test.ts:2-4`\n" % word
+            code, out = check(doc, PEERS_FILES)
+            self.assertEqual(code, 0, doc + out)
+            self.assertIn("flag overreach", out)
+        self.assertEqual(check("- Every peer is listed. `src/inbox/http.ts:1`\n", PEERS_FILES)[0], 0)  # source code can define the set
+
+    def test_a_test_path_is_found_by_name_or_by_the_harvest(self):
+        files = {"Pay.Tests/PayTests.cs": "public class PayTests {\n  [Fact]\n  public void Charges() {}\n}\n", "src/x.cs": "class X {}\n"}
+        doc = "- It always charges. `Pay.Tests/PayTests.cs:3`\n"
+        self.assertEqual(check(doc, files)[0], 0)  # not a test by its name
+        counts = "# D\n\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n## P\n\n"
+        code, out = check_counted(counts + doc, files)  # the harvest knows it is one
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL overreach: always", out)
+
+
+class OverreachWordFormTest(unittest.TestCase):
+    """A test-only sentence that holds an overreach word only inside another word, or in a phrase that claims no set."""
+
+    def passes(self, sentence, listed=False):
+        code, out = check("- %s `src/inbox/http.peers.test.ts:2-4`\n" % sentence, PEERS_FILES)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("FAIL", out)
+        if not listed:
+            self.assertNotIn("overreach", out)  # not even listed for the check pass
+
+    def test_read_only_is_not_the_word_only(self):
+        self.passes("It opens a read-only file.")
+
+    def test_ask_only_is_not_the_word_only(self):
+        self.passes("Jira is ask-only.")
+
+    def test_whitespace_only_is_not_the_word_only(self):
+        self.passes("A whitespace-only note is refused.")
+
+    def test_each_other_is_not_the_word_each(self):
+        self.passes("A and B import nothing from each other.")
+
+    def test_the_bare_words_still_fail(self):
+        for sentence in ("It opens only a file.", "It opens a file each time.", "It posts a read-only file and only that."):
+            code, out = check("- %s `src/inbox/http.peers.test.ts:2-4`\n" % sentence, PEERS_FILES)
+            self.assertEqual(code, 1, sentence + out)
+
+    def test_each_that_spreads_over_a_listed_set_is_not_a_claim_about_the_set(self):
+        for sentence in ("A refused source, a missing token and an expired token each give a 403.",
+                         "An expired token and a missing token each say so.",
+                         "It runs the refusal once each.",
+                         "A source and a token are refused, one 403 each."):
+            self.passes(sentence, listed=True)  # still listed for the check pass, which judges it
+        code, out = check("- It exits 2 on each case. `src/inbox/http.peers.test.ts:2-4`\n", PEERS_FILES)
+        self.assertEqual(code, 1, out)  # each as a determiner is still a claim about the set
+
+    def test_the_bare_words_the_test_do_not_clear_the_fail_but_a_real_scope_does(self):
+        base = "- Every source is refused%s. `src/inbox/http.peers.test.ts:2-4`\n"
+        for tail in (", as the test file names", ", and the test is short"):
+            self.assertEqual(check(base % tail, PEERS_FILES)[0], 1, tail)
+        for tail in (" in the test", ", the test shows", " in this case", ", the test's case"):
+            code, out = check(base % tail, PEERS_FILES)
+            self.assertEqual(code, 0, tail + out)
+
+    def test_the_test_then_any_verb_scopes_a_claim_but_the_test_as_an_object_does_not(self):
+        base = "- Every source is refused%s. `src/inbox/http.peers.test.ts:2-4`\n"
+        for tail in (", the test puts a reply id on the first part", ", the test sets a bad token", ", the test makes one call"):
+            code, out = check(base % tail, PEERS_FILES)
+            self.assertEqual(code, 0, tail + out)
+        for tail in (", as the test files name", ", as the test fixtures say", ", as the test file names", ", and the test is short", ", the test was added"):
+            self.assertEqual(check(base % tail, PEERS_FILES)[0], 1, tail)
+
+    def test_an_and_after_a_comma_joins_clauses_so_each_before_a_noun_still_fails(self):
+        for sentence in ("It checks the token, and the message names each problem.",
+                         "It refuses a source, and a test regenerates each golden report.",
+                         "It lists the peers, and the JSON carries each rank."):
+            code, out = check("- %s `src/inbox/http.peers.test.ts:2-4`\n" % sentence, PEERS_FILES)
+            self.assertEqual(code, 1, sentence + out)
+            self.assertIn("FAIL overreach: each", out)
+
+
+class HarvestDecidesTestFilesTest(unittest.TestCase):
+    FILES = {"conformance/server.ts": "export const server = () => 'ok';\n", "src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n"}
+    HEAD = "# Doc\n\n- Counts: harvested 1; left out 0; used 0; read by name only 0; not cited 1.\n\n## Part\n\n"
+
+    def test_a_file_under_conformance_is_defining_code_when_the_harvest_does_not_list_it(self):
+        doc = "- The server always answers ok. `conformance/server.ts:1`\n"
+        self.assertEqual(check(doc, self.FILES)[0], 1)  # no harvest: the folder name says test
+        code, out = check_counted(self.HEAD + doc, self.FILES)
+        self.assertEqual(code, 0, out)  # with the harvest, it is code
+
+
+def counted_doc(counts, body):
+    return "# Doc\n\n- Repo: r.\n- Counts: %s.\n\n## Part\n\n%s" % (counts, body)
+
+
+COUNT_FILES = {
+    "src/a.test.ts": "it('one', () => {\n  expect(1).toBe(1);\n});\nit('two', () => {\n  expect(2).toBe(2);\n});\nit('three', () => {\n  expect(3).toBe(3);\n});\n",
+    "src/b.test.ts": "it('four', () => {\n  expect(4).toBe(4);\n});\n",
+    "evals/c.test.ts": "it('five', () => {\n  expect(5).toBe(5);\n});\n",
+}
+
+
+class HeaderCountsTest(unittest.TestCase):
+    def counts(self, line, body="- It checks 2. `src/a.test.ts:1-6`\n- Four is checked. `src/b.test.ts:2`\n", left_out="evals/\n"):
+        return check_counted(counted_doc(line, body), COUNT_FILES, left_out)
+
+    def test_right_numbers_pass(self):
+        code, out = self.counts("harvested 5; left out 1; used 3; read by name only 0; not cited 1")
+        self.assertEqual(code, 0, out)
+
+    def test_agent_kit_spec_5_used_590_a_range_that_spans_two_points_counts_both(self):
+        code, out = self.counts("harvested 5; left out 1; used 2; read by name only 0; not cited 2")
+        self.assertEqual(code, 1, out)
+        self.assertIn("header says used 2; the harvest and this doc's citations give 3", out)
+        self.assertIn("header says not cited 2; the harvest and this doc's citations give 1", out)
+
+    def test_left_out_by_id_by_file_and_by_folder(self):
+        for left_out in ("P1\n", "evals/c.test.ts\n", "evals/\n"):
+            self.assertEqual(self.counts("harvested 5; left out 1; used 3; read by name only 0; not cited 1", left_out=left_out)[0], 0, left_out)
+        code, out = self.counts("harvested 5; left out 0; used 3; read by name only 0; not cited 2", left_out="")
+        self.assertEqual(code, 0, out)
+
+    def test_a_point_cited_only_in_a_sentence_that_says_inferred_is_read_by_name_only(self):
+        body = "- It checks 2. `src/a.test.ts:1-6`\n- Inferred: four is checked. `src/b.test.ts:2`\n"
+        self.assertEqual(self.counts("harvested 5; left out 1; used 2; read by name only 1; not cited 1", body)[0], 0)
+        self.assertEqual(self.counts("harvested 5; left out 1; used 3; read by name only 0; not cited 1", body)[0], 1)
+
+    def test_a_header_without_one_of_the_five_counts_fails_and_names_the_value(self):
+        code, out = self.counts("harvested 5; left out 1; used 3; not cited 1")
+        self.assertEqual(code, 1)
+        self.assertIn("header has no `read by name only N` (the harvest and this doc's citations give 0)", out)
+
+    def test_thousands_separators_and_words_between_key_and_number_are_read(self):
+        files = {"src/a.test.ts": "".join("it('t%d', () => {\n  expect(1).toBe(1);\n});\n" % i for i in range(1200))}
+        doc = counted_doc("Points harvested: 1,200. Left out: 0. Points used in this document, body read and cited as proven: 1. "
+                          "Points read by name only: 0. Points not cited, with no claim made: 1,199", "- It checks one. `src/a.test.ts:1-3`\n")
+        code, out = check_counted(doc, files)
+        self.assertEqual(code, 0, out)
+
+    def test_counts_are_not_checked_without_points(self):
+        self.assertEqual(check(counted_doc("harvested 99", "- It checks 2. `src/a.test.ts:1-6`\n"), COUNT_FILES)[0], 0)
+
+    def test_left_out_without_points_is_a_usage_error(self):
+        self.assertEqual(check("- It runs. `a.ts:1`\n", {"a.ts": "x\n"}, "--left-out", "x.txt")[0], 2)
+
+
+NOT_BACKED = (
+    "# Doc\n\n- Counts: harvested 2; left out 0; used 1; read by name only 0; not cited 1.\n\n## Part\n\n- It runs. `src/a.test.ts:1-3`\n\n"
+    "## Not backed by any validation point\n\n%s\n"
+)
+NOT_BACKED_FILES = {
+    "src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n",
+    "scripts/publish.test.mjs": "it('publishes', () => {\n  // builds images/hub/Dockerfile and pushes it\n  expect(push).toBeCalled();\n});\n",
+    "images/hub/Dockerfile": "FROM node\n",
+}
+
+
+class CountsLineTest(unittest.TestCase):
+    def test_the_computed_counts_line_is_printed_with_points_and_pastes_into_the_header(self):
+        body = "- It checks 2. `src/a.test.ts:1-6`\n- Four is checked. `src/b.test.ts:2`\n"
+        code, out = check_counted(counted_doc("harvested 0", body), COUNT_FILES, "evals/\n")
+        self.assertEqual(code, 1)
+        line = "Counts: harvested 5; left out 1; used 3; read by name only 0; not cited 1."
+        self.assertIn(line, out.splitlines())
+        code, out = check_counted(counted_doc(line[len("Counts: "):-1], body), COUNT_FILES, "evals/\n")
+        self.assertEqual(code, 0, out)  # the line as printed is the header the check accepts
+
+    def test_no_counts_line_without_points(self):
+        self.assertNotIn("Counts:", check("- It runs. `a.ts:1`\n", {"a.ts": "x\n"})[1])
+
+
+class NotBackedTest(unittest.TestCase):
+    def test_coordinator_prd_60_a_searched_name_that_a_test_file_holds_fails(self):
+        entry = '- The hub image is built from `images/hub/Dockerfile`. I searched the test files for "Dockerfile" and found no match.'
+        code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL not-backed: `Dockerfile` is in a test file, scripts/publish.test.mjs:2; cite it or drop the entry", out)
+
+    def test_citing_the_line_that_holds_it_passes(self):
+        entry = '- The hub image is built from `images/hub/Dockerfile`. A comment in a publish test names "Dockerfile" without asserting it. `scripts/publish.test.mjs:2`'
+        doc = (NOT_BACKED % entry).replace("used 1; read by name only 0; not cited 1", "used 2; read by name only 0; not cited 0")
+        code, out = check_counted(doc, NOT_BACKED_FILES)
+        self.assertEqual(code, 0, out)
+
+    def test_a_name_no_test_holds_a_bare_word_and_text_outside_the_section_are_not_checked(self):
+        for entry in ('- The hub image starts from `FROM node`. `images/hub/Dockerfile:1`', '- The hub image is `FROM`. `images/hub/Dockerfile:1`', '- The hub builds. I searched for "Dockerfile".'):
+            doc = NOT_BACKED % entry
+            if "Dockerfile" in entry:
+                doc = doc.replace("## Not backed by any validation point", "## Other notes")
+            self.assertEqual(check_counted(doc, NOT_BACKED_FILES)[0], 0, entry)
+
+    def test_a_search_sentence_in_a_not_backed_section_is_not_an_overreach_or_uncited_fail(self):
+        for entry in ('- The hub image is built from `images/hub/Dockerfile:1`. I grepped the test files for `FROM` and found no match.',
+                      '- The hub image is built from `images/hub/Dockerfile:1`. I searched the test files for `FROM`; none of them has it.',
+                      '- The hub image is built from `images/hub/Dockerfile:1`. No test asserts it; the only hits are in the Dockerfile.'):
+            code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
+            self.assertEqual(code, 0, entry + out)
+
+    def test_a_claim_in_a_not_backed_section_that_is_no_search_report_still_fails(self):
+        entry = '- The hub image always retries three times. I grepped the test files for `retry` and found no match.'
+        code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL uncited: always", out)
+
+    def test_the_same_sentence_outside_a_not_backed_section_still_fails(self):
+        doc = "# Doc\n\n## Part\n\n- It runs. `src/a.test.ts:1-3`\n- I grepped the test files for `FROM` and found no match.\n"
+        code, out = check(doc, {"src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL uncited: no", out)
+
+    def test_a_file_the_writer_left_out_is_not_a_test_file(self):
+        entry = '- The hub image is built from `images/hub/Dockerfile`. I searched the test files for "Dockerfile" and found no match.'
+        self.assertEqual(check_counted(NOT_BACKED % entry, NOT_BACKED_FILES, left_out="scripts/\n")[0], 1)  # the count in the header is now wrong, nothing else
+        code, out = check_counted((NOT_BACKED % entry).replace("harvested 2; left out 0; used 1; read by name only 0; not cited 1", "harvested 2; left out 1; used 1; read by name only 0; not cited 0"), NOT_BACKED_FILES, left_out="scripts/\n")
+        self.assertEqual(code, 0, out)
+
+
+class SheetTest(unittest.TestCase):
+    def test_sheet_prints_each_claim_with_its_cited_lines_and_skips_the_checks(self):
+        code, out = check("- It is wrong about 99. `src/a.rs:1-2`\n", REPO, "--sheet")
+        self.assertEqual(code, 0)  # the number 99 would fail the check; the sheet does not check
+        self.assertIn("== doc line 1: It is wrong about 99.", out)
+        self.assertIn("-- src/a.rs:1-2", out)
+        self.assertIn("     1  one", out)
+        self.assertIn("     2  two", out)
+        self.assertNotIn("three", out)
 
 
 if __name__ == "__main__":
