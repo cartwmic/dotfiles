@@ -471,6 +471,13 @@ class BumpTests(Fixture):
         self.assertEqual(self.load()["prs"][0]["state"], "OPEN")
         self.assert_nothing_applied()
 
+    def test_d3_the_pr_body_stop_message_shows_the_gates_stdout_and_its_refusal_reason(self):
+        self.world()
+        self.refuse = "pr-body-check"
+        result = self.bump()
+        self.assert_stopped(result, "gates", "pr-body-check dotfiles 100 exited 1")
+        self.assertIn("pr-body-check: RED on stdout\nrefused by the fake pr-body-check", result.stderr, "stdout and the refusal reason from stderr both show")
+
     def test_d3_a_head_pushed_after_the_checks_is_not_merged(self):
         self.world()
         self.state["move_head_after_checks"] = True
