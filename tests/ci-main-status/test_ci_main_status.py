@@ -642,6 +642,17 @@ class MergeGateFlag(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("storycraft: RED", out)
 
+    def test_the_coordinators_full_name_is_its_table_entry(self):
+        # `--merge-gate cartwmic/coordinator` once took the any-repo path and died on a private free-plan repo's
+        # rulesets 403 (and has no required checks to read anyway); its OWNER/REPO now gives the journal verdict.
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
+        rc, out = self.status("--merge-gate", "coordinator")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("coordinator: GREEN", out)
+        self.assertEqual(self.status("--merge-gate", "cartwmic/coordinator"), (rc, out))
+        self.assertEqual(self.status("--merge-gate", "CartWmic/Coordinator"), (rc, out))
+        self.assertEqual(self.status("--tip", "cartwmic/coordinator"), self.status("--tip", "coordinator"))
+
     def test_with_tip_is_a_usage_error(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
         rc, out = self.status("--tip", "--merge-gate", "dotfiles")
