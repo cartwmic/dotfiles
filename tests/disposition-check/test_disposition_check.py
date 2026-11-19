@@ -17,6 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/share/agent-harness/bin/executable_disposition-check"
 
+OUTSIDE = "0123456789abcdef0123456789abcdef01234567"
+
 
 def disposition(fid, **kw):
     rec = {"event": "disposition", "at": "2026-11-19T00:00:00Z", "id": fid, "outcome": "fixed"}
@@ -32,14 +34,16 @@ class DispositionCheck(unittest.TestCase):
         self.git("init", "-q", ".")
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "test")
-        (self.repo / "f").write_text("a\n")
+        (self.repo / "f").write_text("root\n")
         self.git("add", "f")
-        self.git("commit", "-qm", "base")
+        self.git("commit", "-qm", "root")
+        self.root = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.repo / "f").write_text("base\n")
+        self.git("commit", "-qam", "base")
         self.base = self.git("rev-parse", "HEAD").stdout.strip()
-        (self.repo / "f").write_text("b\n")
+        (self.repo / "f").write_text("head\n")
         self.git("commit", "-qam", "fix")
         self.head = self.git("rev-parse", "HEAD").stdout.strip()
-        self.outside = "0123456789abcdef0123456789abcdef01234567"
 
     def tearDown(self):
         import shutil
@@ -59,25 +63,33 @@ class DispositionCheck(unittest.TestCase):
         return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=30)
 
     def test_the_past_mistake_fails_a_sha_outside_the_change(self):
-        log = self.log(disposition("r1.f1", sha=self.outside))
-        out = self.run_check("--head", self.head, "--repo", str(self.repo), log)
+        log = self.log(disposition("r1.f1", sha=OUTSIDE))
+        out = self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log)
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("r1.f1", out.stderr)
         self.assertIn("artifact", out.stderr)
 
     def test_the_corrected_disposition_names_the_artifact(self):
-        log = self.log(disposition("r1.f1", sha=self.outside, artifact="docs/follow-up.md"))
-        self.assertEqual(self.run_check("--head", self.head, "--repo", str(self.repo), log).returncode, 0)
+        log = self.log(disposition("r1.f1", sha=OUTSIDE, artifact="docs/follow-up.md"))
+        self.assertEqual(self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log).returncode, 0)
 
     def test_an_artifact_alone_passes(self):
         log = self.log(disposition("r1.f1", artifact="PROJ-123"))
-        self.assertEqual(self.run_check("--head", self.head, "--repo", str(self.repo), log).returncode, 0)
+        self.assertEqual(self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log).returncode, 0)
 
-    def test_a_sha_in_the_change_passes_without_an_artifact(self):
-        for sha in (self.base, self.head):
-            with self.subTest(sha=sha[:12]):
-                log = self.log(disposition("r1.f1", sha=sha))
-                self.assertEqual(self.run_check("--head", self.head, "--repo", str(self.repo), log).returncode, 0)
+    def test_a_sha_of_the_change_passes_without_an_artifact(self):
+        log = self.log(disposition("r1.f1", sha=self.head))
+        self.assertEqual(self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log).returncode, 0)
+
+    def test_a_sha_at_or_before_the_base_is_not_the_change(self):
+        log = self.log(disposition("r1.f1", sha=self.base))
+        out = self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("not part of the change", out.stderr)
+
+    def test_without_a_base_a_sha_reachable_from_the_head_passes(self):
+        log = self.log(disposition("r1.f1", sha=self.root))
+        self.assertEqual(self.run_check("--head", self.head, "--repo", str(self.repo), log).returncode, 0)
 
     def test_a_fixed_disposition_with_neither_field_is_refused_even_without_a_head(self):
         log = self.log(disposition("r1.f1"))
@@ -86,33 +98,60 @@ class DispositionCheck(unittest.TestCase):
         self.assertIn("neither a sha nor an artifact", out.stderr)
 
     def test_without_a_head_only_the_shape_is_checked(self):
-        log = self.log(disposition("r1.f1", sha=self.outside))
+        log = self.log(disposition("r1.f1", sha=OUTSIDE))
         self.assertEqual(self.run_check(log).returncode, 0)
 
-    def test_other_events_and_broken_lines_are_ignored(self):
+    def test_the_latest_disposition_wins_a_corrected_fixed_passes(self):
+        log = self.log(
+            disposition("r1.f1", sha=OUTSIDE),
+            disposition("r1.f1", sha=OUTSIDE, artifact="PROJ-123"),
+        )
+        self.assertEqual(self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log).returncode, 0)
+
+    def test_the_latest_disposition_wins_a_later_rejected_passes(self):
+        log = self.log(
+            disposition("r1.f1", sha=OUTSIDE),
+            json.dumps({"event": "disposition", "at": "t", "id": "r1.f1", "outcome": "rejected", "reason": "the triage test it failed"}),
+        )
+        self.assertEqual(self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log).returncode, 0)
+
+    def test_the_latest_disposition_wins_a_later_sha_only_fixed_fails(self):
+        log = self.log(
+            disposition("r1.f1", artifact="PROJ-123"),
+            disposition("r1.f1", sha=OUTSIDE),
+        )
+        out = self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("r1.f1", out.stderr)
+
+    def test_other_events_and_other_fields_are_ignored(self):
         log = self.log(
             json.dumps({"event": "round", "at": "t", "round": 1, "review_round": 1, "stage": "diff",
                         "verdict": "fail", "head": self.head, "reviewer": "r", "session": "s"}),
-            "not json at all",
-            disposition("r1.f1", sha=self.outside, artifact="PROJ-123"),
-        )
-        self.assertEqual(self.run_check("--head", self.head, "--repo", str(self.repo), log).returncode, 0)
-
-    def test_a_rejected_or_residual_disposition_is_not_checked(self):
-        log = self.log(
             json.dumps({"event": "disposition", "at": "t", "id": "r1.f1", "outcome": "rejected", "reason": "the triage test it failed"}),
             json.dumps({"event": "disposition", "at": "t", "id": "r1.f2", "outcome": "residual", "accepted_by": "who"}),
         )
-        self.assertEqual(self.run_check("--head", self.head, "--repo", str(self.repo), log).returncode, 0)
+        self.assertEqual(self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log).returncode, 0)
+
+    def test_a_damaged_line_is_warned_about_with_its_line_number(self):
+        log = self.log(
+            disposition("r1.f1", artifact="PROJ-123"),
+            "{not json",
+        )
+        out = self.run_check("--head", self.head, "--base", self.base, "--repo", str(self.repo), log)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("warning", out.stderr)
+        self.assertIn("findings.jsonl:2 is not valid JSON", out.stderr)
 
     def test_stdin_is_read_when_the_log_is_a_dash(self):
-        text = disposition("r1.f1", sha=self.outside) + "\n"
-        out = subprocess.run([sys.executable, str(SCRIPT), "--head", self.head, "--repo", str(self.repo), "-"],
+        text = disposition("r1.f1", sha=OUTSIDE) + "\n"
+        out = subprocess.run([sys.executable, str(SCRIPT), "--head", self.head, "--base", self.base,
+                              "--repo", str(self.repo), "-"],
                              capture_output=True, text=True, timeout=30, input=text)
         self.assertEqual(out.returncode, 1, out.stderr)
 
     def test_an_unresolvable_head_is_an_error(self):
-        log = self.log(disposition("r1.f1", sha=self.outside))
+        log = self.log(disposition("r1.f1", sha=OUTSIDE))
         out = self.run_check("--head", "deadbeef", "--repo", str(self.repo), log)
         self.assertEqual(out.returncode, 2, out.stderr)
 

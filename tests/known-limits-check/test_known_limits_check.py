@@ -23,12 +23,12 @@ PAST_MISTAKE = (
     "- Characters outside the font print as ?. A follow-up ticket will be filed.\n"
 )
 FIXED_WITH_TICKET = PAST_MISTAKE.replace("will be filed.", "will be filed (PROJ-123).")
-FIXED_PERMANENT = PAST_MISTAKE.replace("will be filed.", "will be filed, accepted as permanent (decision #1244).")
+FIXED_PERMANENT = PAST_MISTAKE.replace("will be filed.", "will be filed, accepted as permanent (decision #1).")
 
 
-def run(*args, stdin=None):
+def run(*args, stdin=None, env=None):
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
-                          timeout=30, input=stdin)
+                          timeout=30, input=stdin, env=env)
 
 
 class KnownLimitsCheck(unittest.TestCase):
@@ -44,6 +44,12 @@ class KnownLimitsCheck(unittest.TestCase):
     def body(self, text, name="body.md"):
         p = Path(self.tmp) / name
         p.write_text(text)
+        return str(p)
+
+    def tracker(self, name, lines):
+        p = Path(self.tmp) / name
+        p.write_text("#!/bin/sh\n" + "\n".join(lines) + "\n")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC)
         return str(p)
 
     def test_the_past_mistake_fails_and_names_the_line(self):
@@ -89,35 +95,56 @@ class KnownLimitsCheck(unittest.TestCase):
         self.assertNotIn("good.md:", out.stderr)
 
     def test_tracker_command_confirms_each_distinct_ticket(self):
-        tracker = Path(self.tmp) / "tracker-ok"
-        tracker.write_text("#!/bin/sh\necho \"confirmed $1\"\n")
-        tracker.chmod(tracker.stat().st_mode | stat.S_IEXEC)
+        tracker = self.tracker("tracker-refuses-second", ['[ "$1" = PROJ-2 ] && exit 1', "exit 0"])
         text = PAST_MISTAKE.replace("will be filed.", "will be filed (PROJ-1). Also (PROJ-2) tracks the rest.")
-        out = run("--body-file", self.body(text), "--tracker-cmd", str(tracker))
+        out = run("--body-file", self.body(text), "--tracker-cmd", tracker)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("PROJ-2 is not confirmed", out.stderr)
+
+    def test_a_tracker_that_accepts_everything_confirms(self):
+        tracker = self.tracker("tracker-ok", ["exit 0"])
+        out = run("--body-file", self.body(FIXED_WITH_TICKET), "--tracker-cmd", tracker)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("tracker confirmed", out.stdout)
 
     def test_tracker_command_refuses_a_ticket_that_is_not_open(self):
-        tracker = Path(self.tmp) / "tracker-shut"
-        tracker.write_text("#!/bin/sh\necho \"$1 is closed\" >&2\nexit 1\n")
-        tracker.chmod(tracker.stat().st_mode | stat.S_IEXEC)
-        text = FIXED_WITH_TICKET
-        out = run("--body-file", self.body(text), "--tracker-cmd", str(tracker))
+        tracker = self.tracker("tracker-shut", ['echo "$1 is closed" >&2', "exit 1"])
+        out = run("--body-file", self.body(FIXED_WITH_TICKET), "--tracker-cmd", tracker)
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("PROJ-123 is not confirmed", out.stderr)
 
     def test_tracker_command_from_the_environment(self):
-        tracker = Path(self.tmp) / "tracker-env"
-        tracker.write_text("#!/bin/sh\nexit 0\n")
-        tracker.chmod(tracker.stat().st_mode | stat.S_IEXEC)
-        env = dict(os.environ, KNOWN_LIMITS_TRACKER_CMD=str(tracker))
-        out = subprocess.run([sys.executable, str(SCRIPT), "--body-file", self.body(FIXED_WITH_TICKET)],
-                             capture_output=True, text=True, timeout=30, env=env)
-        self.assertEqual(out.returncode, 0, out.stderr)
+        tracker = self.tracker("tracker-env", ['echo "$1 is closed" >&2', "exit 1"])
+        env = dict(os.environ, KNOWN_LIMITS_TRACKER_CMD=tracker)
+        out = run("--body-file", self.body(FIXED_WITH_TICKET), env=env)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("PROJ-123 is not confirmed", out.stderr)
 
     def test_a_missing_tracker_command_is_an_error_not_a_failure(self):
         out = run("--body-file", self.body(FIXED_WITH_TICKET), "--tracker-cmd", "/nonexistent/tracker")
         self.assertEqual(out.returncode, 2, out.stderr)
+
+    def test_a_wrapped_bullet_with_the_ticket_on_the_continuation_passes(self):
+        text = "# PR\n\n## Known limits\n\n- Characters outside the font print as ?; tracked in\n  PROJ-123.\n"
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_known_limits_as_the_last_section_ends_before_the_decisions_line(self):
+        text = ("# PR\n\n## Known limits\n\n- Tracked in PROJ-1.\n\n"
+                "Decisions: #1\n\nGenerated with a coding agent\n")
+        self.assertEqual(run("--body-file", self.body(text)).returncode, 0)
+
+    def test_a_wrapped_bullet_with_no_ticket_on_any_of_its_lines_fails(self):
+        text = "# PR\n\n## Known limits\n\n- Characters outside the font print as ?; a follow-up\n  will be filed.\n"
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("item at line 5", out.stderr)
+
+    def test_standard_names_that_share_the_ticket_shape_are_not_tickets(self):
+        text = ("# PR\n\n## Known limits\n\n"
+                "- Characters outside the font print as ? on UTF-8 input, hashed with SHA-256, stamped ISO-8601.\n")
+        out = run("--body-file", self.body(text))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertNotIn("OK", out.stdout)
 
     def test_usage_errors_exit_2(self):
         self.assertEqual(run("--nope").returncode, 2)

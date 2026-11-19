@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 """disposition-check: a fixed review disposition names where the fix lives, and the name can be checked.
 
-usage: disposition-check [--head SHA] [--repo DIR] FILE [FILE ...]
+usage: disposition-check [--head SHA] [--base SHA] [--repo DIR] FILE [FILE ...]
 
 A review finding whose fix is an artifact outside the diff (a tracker ticket, a doc, a config change
 elsewhere) was once marked fixed with only a commit sha: the log looked fixed while nothing in it could
 be checked. findings-contract.md rule 3 therefore requires a fixed disposition to say where the fix
-lives, and this check refuses the dispositions that cannot be checked. Review and triage flows run it on
-a review log (findings.jsonl) beside the change it is about.
+lives, and this check refuses the dispositions that cannot be checked. The reviewer brief
+(reviewer-brief.md section 6) runs it at re-review, from round 2 on, on the item's log beside the change:
 
-Each FILE is a review log, one JSON object per line ('-' reads stdin). For every disposition event with
-outcome 'fixed':
+    ~/.local/share/agent-harness/bin/disposition-check --head <head> --repo <the checkout> \
+        ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl
+
+Each FILE is a review log, one JSON object per line ('-' reads stdin). The log is append-only and the
+latest disposition of a finding wins (as report.json reads it), so the check reads each finding's latest
+disposition event across the whole file, whatever its outcome, and judges only those whose latest outcome
+is 'fixed':
 
   sha only   the sha must be a commit of the reviewed change: it must exist in --repo and be the head or
-             an ancestor of it (--head). A sha that is missing or outside the change means the fix is not
-             in the diff, so the disposition needs an artifact reference instead.
+             an ancestor of it (--head), and with --base it must also be in base..head, that is, not an
+             ancestor of the base. A sha that is missing or outside the change means the fix is not in
+             the diff, so the disposition needs an artifact reference instead.
   artifact   any non-blank reference (a tracker ticket key, a doc path, a config location) passes; whether
              it really carries the fix is judged, not checked (findings-contract.md rule 5).
   neither    refused.
 
 Without --head the sha cannot be placed in a change, so only the neither-and-no-artifact shape is
-checked; review flows always pass --head. --repo is the checkout to read the commits from (default: the
-current directory). Exit 0 every fixed disposition can be checked; 1 one cannot (each is named); 2 bad
-arguments, an unreadable file, or git failed.
+checked; review flows always pass --head and --base. --repo is the checkout to read the commits from
+(default: the current directory). A line that is not valid JSON is warned about with its line number, not
+checked. Exit 0 every fixed disposition can be checked; 1 one cannot (each is named); 2 bad arguments, an
+unreadable file, or git failed.
 """
 import json
 import subprocess
@@ -33,22 +40,25 @@ def git(repo, *args):
     return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=60)
 
 
-def commit_in_change(repo, sha, head):
-    """True when sha exists in repo and is the head or an ancestor of it."""
+def commit_in_change(repo, sha, head, base):
+    """True when sha exists in repo and is a commit of the reviewed change (base..head, head included)."""
     if git(repo, "cat-file", "-e", sha + "^{commit}").returncode != 0:
         return False, "no commit %s in the repo" % sha
     if sha == head:
         return True, ""
     done = git(repo, "merge-base", "--is-ancestor", sha, head)
-    if done.returncode == 0:
-        return True, ""
-    if done.returncode == 1:
-        return False, "%s is not an ancestor of the head %s" % (sha, head)
-    return False, "git failed: %s" % done.stderr.strip()
+    if done.returncode != 0:
+        if done.returncode == 1:
+            return False, "%s is not an ancestor of the head %s" % (sha, head)
+        return False, "git failed: %s" % done.stderr.strip()
+    if base is not None and git(repo, "merge-base", "--is-ancestor", sha, base).returncode == 0:
+        return False, "%s is at or before the base %s, so it is not part of the change" % (sha, base)
+    return True, ""
 
 
 def main(argv):
     head = None
+    base = None
     repo = "."
     files = []
     args = list(argv)
@@ -60,6 +70,12 @@ def main(argv):
             head = args.pop(0)
         elif a.startswith("--head="):
             head = a.split("=", 1)[1]
+        elif a == "--base":
+            if not args:
+                usage("--base needs a commit sha")
+            base = args.pop(0)
+        elif a.startswith("--base="):
+            base = a.split("=", 1)[1]
         elif a == "--repo":
             if not args:
                 usage("--repo needs a directory")
@@ -79,6 +95,12 @@ def main(argv):
             print("disposition-check: cannot resolve head %s in %s: %s" % (head, repo, done.stderr.strip()), file=sys.stderr)
             return 2
         head = done.stdout.strip()
+    if base is not None:
+        done = git(repo, "rev-parse", "--verify", base + "^{commit}")
+        if done.returncode != 0:
+            print("disposition-check: cannot resolve base %s in %s: %s" % (base, repo, done.stderr.strip()), file=sys.stderr)
+            return 2
+        base = done.stdout.strip()
 
     bad = 0
     for path in files:
@@ -89,6 +111,7 @@ def main(argv):
             except OSError as e:
                 print("disposition-check: cannot read %s: %s" % (path, e), file=sys.stderr)
                 return 2
+        latest = {}  # finding id -> (line number, record); the log is append-only, the latest disposition wins
         try:
             for no, line in enumerate(fh, 1):
                 line = line.strip()
@@ -97,32 +120,38 @@ def main(argv):
                 try:
                     rec = json.loads(line)
                 except ValueError:
+                    print("disposition-check: warning: %s:%d is not valid JSON, so it is not checked" % (path, no), file=sys.stderr)
                     continue
-                if not isinstance(rec, dict) or rec.get("event") != "disposition" or rec.get("outcome") != "fixed":
+                if not isinstance(rec, dict) or rec.get("event") != "disposition" or not rec.get("id"):
                     continue
-                fid = rec.get("id", "?")
-                sha = rec.get("sha", "")
-                artifact = rec.get("artifact", "")
-                sha = sha.strip() if isinstance(sha, str) else ""
-                artifact = artifact.strip() if isinstance(artifact, str) else ""
-                if artifact:
-                    continue
-                if not sha:
-                    bad += 1
-                    print("disposition-check: %s:%d: finding %s is fixed with neither a sha nor an artifact reference"
-                          % (path, no, fid), file=sys.stderr)
-                    print("  name the commit that fixes it, or the ticket, doc path or config location that carries the fix", file=sys.stderr)
-                    continue
-                if head is None:
-                    continue
-                ok, why = commit_in_change(repo, sha, head)
-                if not ok:
-                    bad += 1
-                    print("disposition-check: %s:%d: finding %s is fixed with sha %s, but %s" % (path, no, fid, sha, why), file=sys.stderr)
-                    print("  the fix is not in this diff: record the artifact that carries it (a ticket key, a doc path or a config location)", file=sys.stderr)
+                latest[rec["id"]] = (no, rec)
         finally:
             if fh is not sys.stdin:
                 fh.close()
+        for fid in sorted(latest):
+            no, rec = latest[fid]
+            if rec.get("outcome") != "fixed":
+                continue
+            where = "%s:%d" % (path, no)
+            sha = rec.get("sha", "")
+            artifact = rec.get("artifact", "")
+            sha = sha.strip() if isinstance(sha, str) else ""
+            artifact = artifact.strip() if isinstance(artifact, str) else ""
+            if artifact:
+                continue
+            if not sha:
+                bad += 1
+                print("disposition-check: %s: finding %s is fixed with neither a sha nor an artifact reference"
+                      % (where, fid), file=sys.stderr)
+                print("  name the commit that fixes it, or the ticket, doc path or config location that carries the fix", file=sys.stderr)
+                continue
+            if head is None:
+                continue
+            ok, why = commit_in_change(repo, sha, head, base)
+            if not ok:
+                bad += 1
+                print("disposition-check: %s: finding %s is fixed with sha %s, but %s" % (where, fid, sha, why), file=sys.stderr)
+                print("  the fix is not in this diff: record the artifact that carries it (a ticket key, a doc path or a config location)", file=sys.stderr)
 
     if bad:
         print("disposition-check: FAIL: %d fixed disposition(s) cannot be checked" % bad, file=sys.stderr)
@@ -132,7 +161,7 @@ def main(argv):
 
 
 def usage(why):
-    print("disposition-check: %s\nusage: disposition-check [--head SHA] [--repo DIR] FILE [FILE ...]" % why, file=sys.stderr)
+    print("disposition-check: %s\nusage: disposition-check [--head SHA] [--base SHA] [--repo DIR] FILE [FILE ...]" % why, file=sys.stderr)
     raise SystemExit(2)
 
 
