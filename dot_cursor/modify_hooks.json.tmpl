@@ -1,7 +1,9 @@
 #!/bin/sh
-# Install or update the coordinator's Cursor T3 hooks in ~/.cursor/hooks.json (both desktop profiles: personal and axon-work-computer).
+# Install or update the coordinator's Cursor T3 hooks and the Shell guard in ~/.cursor/hooks.json (both desktop profiles: personal and axon-work-computer).
 # Reads the hook entries from <repo>/src/t3-hook/hook.ts --print-cursor-hooks-json at apply time, strips any prior t3-hook/t3-coordinator
 # entries, preserves unrelated user/team hooks, and leaves existing entries untouched if the checkout does not support --print-cursor-hooks-json yet.
+# The Shell guard (a preToolUse entry running ~/.cursor/hooks/shell_guard.py, which runs the shared pkill/bash-rules classifier) does not depend on the coordinator:
+# it is stripped by its script path and added once at the end in every mode, so a re-apply never duplicates it.
 set -eu
 
 {{- $t3repo := "" }}
@@ -35,22 +37,28 @@ if [ "$T3_WANT" = true ]; then
     T3_JSON=$T3_PRINTED
   else
     T3_MODE=keep
-    printf '[modify_hooks] WARN: %s/src/t3-hook/hook.ts did not print Cursor hooks (no --print-cursor-hooks-json, or it did not run here); ~/.cursor/hooks.json left as it is\n' "$T3_REPO" >&2
+    printf '[modify_hooks] WARN: %s/src/t3-hook/hook.ts did not print Cursor hooks (no --print-cursor-hooks-json, or it did not run here); its T3 entries in ~/.cursor/hooks.json are left as they are (the shell guard entry is still set)\n' "$T3_REPO" >&2
   fi
 fi
 
 exec jq -s --arg mode "$T3_MODE" --argjson printed "$T3_JSON" --arg repo "$T3_REPO" --arg state "$T3_STATE" '
   def sq: "\u0027" + gsub("\u0027"; "\u0027\\\u0027\u0027") + "\u0027";
   def ours: ((.command? // "") | (contains("src/t3-hook/hook.ts") or contains("src/t3-coordinator/hook.ts")));
-  def strip_ours:
+  def guard: ((.command? // "") | contains("cursor/hooks/shell_guard.py"));
+  def strip(p):
     if (.hooks | type) == "object" then
       .hooks |= (with_entries(
         if (.value | type) == "array"
-        then .value |= map(select(ours | not)) | select(.value != [])
+        then .value |= map(select(p | not)) | select(.value != [])
         else . end
       ))
       | if (.hooks | length) == 0 then del(.hooks) else . end
     else . end;
+  def strip_ours: strip(ours);
+  def add_guard:
+    .version = (.version // 1)
+    | .hooks = (.hooks // {})
+    | .hooks.preToolUse = ((.hooks.preToolUse // []) + [{command: "python3 -I \"$HOME/.cursor/hooks/shell_guard.py\"", matcher: "Shell"}]);
   def target_path($t): if $t == "coordinator" then ($repo + "/src/t3-coordinator/hook.ts") else ($repo + "/src/t3-hook/hook.ts") end;
   def entry_cmd($e):
     ("COORDINATOR_STATE_DIR=\"" + $state + "\" node --experimental-strip-types --disable-warning=ExperimentalWarning " + (target_path($e.target) | sq)
@@ -73,4 +81,5 @@ exec jq -s --arg mode "$T3_MODE" --argjson printed "$T3_JSON" --arg repo "$T3_RE
   | if $mode == "keep" then .
     else (strip_ours | if $mode == "set" then add_ours else .version = (.version // 1) end)
     end
+  | strip(guard) | add_guard
 '
