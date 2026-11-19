@@ -20,10 +20,13 @@ joined by commas or "and". These checks FAIL a claim, because a miss is a fact t
   overreach a sentence with one of the words every, each, all, always, never, only, or a count in words ("three
             parts": two..twelve, dozen), whose citations are all test or journey files. A test proves the cases it
             runs, not a set. Not these: a word inside a hyphenated one ("read-only"), "each other", and "each" that
-            spreads over a listed set ("A and B each", "once each", "one commit each"). Cite the code that defines
+            spreads over a listed set ("A and B each", "once each", "one commit each"; an "and" after a comma does
+            not close a list: ", and the message names each problem" FAILs). Cite the code that defines
             the set, or word the sentence to the test's case ("in the test", "in this case", "the test shows",
-            "for example", "such as", "at least", "e.g."), or label it inferred or "from your list". A bare "the
-            test" does not clear it. With --points a file is a test when the harvest lists it; without, when its
+            "the test puts" and other "the test <verb>", "for example", "such as", "at least", "e.g."), or label it
+            inferred or "from your list". A bare "the test" does not clear it. In a "Not backed" section a sentence
+            that reports the search or what the tests do ("I grepped ... and found no match", "no test asserts it", "the
+            only hits are in x.ts") is not judged here; not-backed below checks the entry. With --points a file is a test when the harvest lists it; without, when its
             path says so (tests/, .test., _test, journey, e2e, spec, conformance ...).
   uncited   a sentence after the doc header with no citation, source label ("(README)", "(code comment)"), or
             "inferred" / "from your list" in it, that holds a word of the overreach list below or a count of
@@ -121,13 +124,16 @@ LABEL = re.compile(r"^\s*\(([^)]*)\)")
 
 def claims(text, repo):
     """Yield one dict per claim: line, text (the words before the citation group), cites, label (a parenthetical
-    right after the group, such as "code comment"), and uncited (words after the last group, or a whole line with none)."""
+    right after the group, such as "code comment"), uncited (words after the last group, or a whole line with none), and
+    not_backed (the claim sits under a "Not backed" heading)."""
+    section = False
     for n, line, header, heading in doc_lines(text):
         items = line_items(line, repo)
         if heading:
+            section = bool(re.match(r"#+\s.*not backed", line, re.I))
             for _, _, cites, _ in items:
                 if cites:
-                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True}
+                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True, "not_backed": section}
             continue
         groups = []  # [first_start, last_end, cites]
         for start, end, cites, _ in items:
@@ -144,10 +150,10 @@ def claims(text, repo):
             if label and not SAYS_SOURCE.search(label.group(1)):
                 label = None  # a parenthetical that is not a source label is a sentence: it is listed as uncited text
             yield {"line": n, "text": line[prev:start] if prev else LIST_MARK.sub("", line[:start]), "cites": cites, "label": label.group(1) if label else "",
-                   "uncited": "", "header": header}
+                   "uncited": "", "header": header, "not_backed": section}
             prev = end + (label.end() if label else 0)
         if not header and line[prev:].strip():
-            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header}
+            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header, "not_backed": section}
 
 
 # --- text that a script can compare ---------------------------------------------------------------------------
@@ -162,7 +168,13 @@ QUANT = re.compile(r"(?<![\w-])(every(?:thing|one|where|body)?|each(?!\s+other\b
 NUMBERISH = set(WORDS) | {"once", "twice", "thrice", "dozen"}
 NOT_SUBJECT = {"on", "in", "of", "for", "to", "at", "by", "with", "from", "per", "into", "than", "and", "or", "but", "if", "when", "that", "the", "a", "an", "is", "are"}
 # A sentence worded to the cases a test runs, or labelled as inferred or from the caller's list, is not an overreach.
-SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\bthe (?:tests?|journeys?) (?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?)\b|\bthe (?:test|journey)'s\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
+# "the test" then a verb: the explicit list, or any word ending in -s that is not a noun or "is/was/has" ("the test puts").
+TEST_VERB = r"(?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?|(?!(?:is|was|has|as|its|this|files|cases|suites|names|results|titles|paths|lines|ids)\b)(?![a-z]*ss\b)[a-z]+s)"
+SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\bthe (?:tests?|journeys?) " + TEST_VERB + r"\b|\bthe (?:test|journey)'s\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
+# In a "Not backed" section, a sentence that reports the search or what the tests do ("I grepped the tests for X and found
+# no match", "no test asserts it", "the only hits are in pr.ts", "the tests only check the main file") says what was
+# looked for; not_backed() checks the entry against the harvest.
+SEARCH = re.compile(r"\b(?:grepp?ed|searched|searches|search|hits?|found|finds?|none|tests?|journeys?|match)\b", re.I)
 # A test path by its name; used only when no harvest is given (--points), which decides it otherwise.
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|proof|journeys?|e2e|smoke|specs?|conformance|support)(/|\.)|\.(test|spec|journey)\.|_test\.|(^|/)test_|-journey|\.bats$", re.I)
 # A count of things: "three parts", "6 words". Not a time ("45 minutes") or a bare status code ("409 and").
@@ -178,6 +190,16 @@ COMMENT_START = {
 }
 
 
+def closes_list(before):
+    """True if an "and" within the three words before "each" closes a list ("A, B and C each give"). An "and" that
+    follows a comma joins two clauses (", and the message names each problem"), so it does not."""
+    words = list(re.finditer(r"[\w'-]+", before))
+    for w in words[-4:-1]:
+        if w.group(0).lower() == "and" and not before[:w.start()].rstrip().endswith(","):
+            return True
+    return False
+
+
 def quantifiers(sent):
     """The quantifier words of a sentence that a test cannot prove: QUANT without an "each" that spreads a verb or a
     number over a set the sentence lists ("A, B and C each give", "once each", "one commit each")."""
@@ -187,7 +209,7 @@ def quantifiers(sent):
             before = re.findall(r"[\w'-]+", sent[:m.start()].lower())
             prev = before[-1] if before else ""
             counted = prev in NUMBERISH or prev.isdigit() or (len(before) > 1 and (before[-2] in NUMBERISH or before[-2].isdigit()) and prev not in NOT_SUBJECT)
-            listed = prev not in NOT_SUBJECT and "and" in before[-4:-1]
+            listed = prev not in NOT_SUBJECT and closes_list(sent[:m.start()])
             if counted or listed:
                 continue
         out.append(m.group(1).lower())
@@ -298,6 +320,7 @@ def check_claim(c, repo, cache, test_files=None):
             detail = "%s | %s" % (what, raw.strip())
             flags.append((n, kind if kind == "uncited" else ("count" if count and not hits else "overreach"), detail))
             scoped = labelled or SCOPED.search(kind_text)  # a clause after a semicolon is still the case the sentence names
+            scoped = scoped or (c.get("not_backed") and SEARCH.search(sent))  # a search report in a "Not backed" section
             if kind == "uncited" and not scoped and not SAYS_SOURCE.search(raw):
                 fails.append((n, "uncited", detail))
             elif kind == "overreach" and testonly and not scoped and (quantifiers(sent) or (count and not count.group(0)[0].isdigit())):

@@ -515,6 +515,22 @@ class OverreachWordFormTest(unittest.TestCase):
             code, out = check(base % tail, PEERS_FILES)
             self.assertEqual(code, 0, tail + out)
 
+    def test_the_test_then_any_verb_scopes_a_claim_but_the_test_as_an_object_does_not(self):
+        base = "- Every source is refused%s. `src/inbox/http.peers.test.ts:2-4`\n"
+        for tail in (", the test puts a reply id on the first part", ", the test sets a bad token", ", the test makes one call"):
+            code, out = check(base % tail, PEERS_FILES)
+            self.assertEqual(code, 0, tail + out)
+        for tail in (", as the test files name", ", as the test file names", ", and the test is short", ", the test was added"):
+            self.assertEqual(check(base % tail, PEERS_FILES)[0], 1, tail)
+
+    def test_an_and_after_a_comma_joins_clauses_so_each_before_a_noun_still_fails(self):
+        for sentence in ("It checks the token, and the message names each problem.",
+                         "It refuses a source, and a test regenerates each golden report.",
+                         "It lists the peers, and the JSON carries each rank."):
+            code, out = check("- %s `src/inbox/http.peers.test.ts:2-4`\n" % sentence, PEERS_FILES)
+            self.assertEqual(code, 1, sentence + out)
+            self.assertIn("FAIL overreach: each", out)
+
 
 class HarvestDecidesTestFilesTest(unittest.TestCase):
     FILES = {"conformance/server.ts": "export const server = () => 'ok';\n", "src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n"}
@@ -627,8 +643,27 @@ class NotBackedTest(unittest.TestCase):
                 doc = doc.replace("## Not backed by any validation point", "## Other notes")
             self.assertEqual(check_counted(doc, NOT_BACKED_FILES)[0], 0, entry)
 
+    def test_a_search_sentence_in_a_not_backed_section_is_not_an_overreach_or_uncited_fail(self):
+        for entry in ('- The hub image is built from `images/hub/Dockerfile:1`. I grepped the test files for `FROM` and found no match.',
+                      '- The hub image is built from `images/hub/Dockerfile:1`. I searched the test files for `FROM`; none of them has it.',
+                      '- The hub image is built from `images/hub/Dockerfile:1`. No test asserts it; the only hits are in the Dockerfile.'):
+            code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
+            self.assertEqual(code, 0, entry + out)
+
+    def test_a_claim_in_a_not_backed_section_that_is_no_search_report_still_fails(self):
+        entry = '- The hub image always retries three times. I grepped the test files for `retry` and found no match.'
+        code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL uncited: always", out)
+
+    def test_the_same_sentence_outside_a_not_backed_section_still_fails(self):
+        doc = "# Doc\n\n## Part\n\n- It runs. `src/a.test.ts:1-3`\n- I grepped the test files for `FROM` and found no match.\n"
+        code, out = check(doc, {"src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL uncited: no", out)
+
     def test_a_file_the_writer_left_out_is_not_a_test_file(self):
-        entry = '- The hub image is built from `images/hub/Dockerfile`. I searched the test files for "Dockerfile".'
+        entry = '- The hub image is built from `images/hub/Dockerfile`. I searched the test files for "Dockerfile" and found no match.'
         self.assertEqual(check_counted(NOT_BACKED % entry, NOT_BACKED_FILES, left_out="scripts/\n")[0], 1)  # the count in the header is now wrong, nothing else
         code, out = check_counted((NOT_BACKED % entry).replace("harvested 2; left out 0; used 1; read by name only 0; not cited 1", "harvested 2; left out 1; used 1; read by name only 0; not cited 0"), NOT_BACKED_FILES, left_out="scripts/\n")
         self.assertEqual(code, 0, out)
