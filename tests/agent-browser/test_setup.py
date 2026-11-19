@@ -1,4 +1,4 @@
-"""run_onchange_after_91_browse_setup.sh: the real script (rendered by real chezmoi) against a scratch HOME with a fake `browse` shim.
+"""run_onchange_after_91_browse_setup.sh, on both profiles: the real script (rendered by real chezmoi) against a scratch HOME with a fake `browse` shim.
 It must turn Browse's auto-update off, delete the self-updating ~/.local/bin/browse that `browse install` writes (it would shadow the pin),
 remove what browser-harness left, and leave everything else alone."""
 import os
@@ -12,19 +12,24 @@ TMPL = ROOT / "run_onchange_after_91_browse_setup.sh.tmpl"
 SHIM = '#!/bin/sh\necho "$@" >> "$FAKE_LOG"\n[ "$1" = --version ] && echo 0.1.0\nexit 0\n'
 
 
-def render():
+PROFILES = ("personal", "axon-work-computer")
+
+
+def render(profile):
     with tempfile.TemporaryDirectory() as tmp:
         cfg = Path(tmp) / "chezmoi.yaml"
-        cfg.write_text("data:\n  profile: personal\n")
+        cfg.write_text("data:\n  profile: %s\n" % profile)
         return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "execute-template"],
                               input=TMPL.read_text(), capture_output=True, text=True, timeout=60, check=True,
                               env=dict(os.environ, HOME=tmp)).stdout
 
 
-class SetupTest(unittest.TestCase):
+class SetupCases:   # every case runs for each profile below
+    profile = None
+
     @classmethod
     def setUpClass(cls):
-        cls.script = render()
+        cls.script = render(cls.profile)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="browse-setup-test-")
@@ -84,6 +89,14 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("mise install", r.stdout)
         self.assertTrue(copy.exists(), "must not delete the only browse there is")
+
+
+class PersonalSetupTest(SetupCases, unittest.TestCase):
+    profile = "personal"
+
+
+class WorkSetupTest(SetupCases, unittest.TestCase):
+    profile = "axon-work-computer"
 
 
 if __name__ == "__main__":

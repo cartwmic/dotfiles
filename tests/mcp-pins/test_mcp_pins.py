@@ -1,8 +1,8 @@
-"""rea starts straight from a pinned mise install, never through `npx` / `npm exec`; the Playwright MCP server is gone.
+"""rea and browse start straight from a pinned mise install, never through `npx` / `npm exec`; the Playwright MCP server and browser-harness are gone.
 
-Renders the canonical MCP file with real chezmoi for both desktop profiles and checks that rea runs a mise shim, that mise
-pins the npm package behind that shim at an exact version, that no `playwright` server is rendered, and that applying
-Claude's MCP step removes a leftover `playwright` registration.
+Renders the canonical MCP file with real chezmoi for both desktop profiles and checks that rea and browse run a mise shim, that mise
+pins the npm package behind each shim at an exact version (browse's pin is in conf.d/browse.toml, rea's in config.toml), that no
+`playwright` or `browser-harness` server is rendered, and that applying Claude's MCP step removes a leftover `playwright` registration.
 """
 import json
 import os
@@ -19,10 +19,8 @@ BROWSE_MISE = ROOT / "dot_config/mise/conf.d/browse.toml"
 APPLY = ROOT / "dot_local/user_scripts/executable_apply_harness_config.sh"
 HOME = "/Users/test"
 PROFILES = ("personal", "axon-work-computer")
-# canonical server name -> (shim it must run, mise tool that provides the shim)
-SERVERS = {"rea": ("rea", "npm:rea-agents")}
-# the same, for servers only the personal profile renders (the work render has none of them); their pin lives in conf.d/browse.toml
-PERSONAL_SERVERS = {"browse": ("browse", "npm:@opencode/browse")}
+# canonical server name -> (shim it must run, mise tool that provides the shim, the mise file that pins it)
+SERVERS = {"rea": ("rea", "npm:rea-agents", MISE), "browse": ("browse", "npm:@opencode/browse", BROWSE_MISE)}
 WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
              "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 
@@ -42,34 +40,28 @@ class McpPinTests(unittest.TestCase):
     def test_each_profile_runs_the_mise_shim_directly(self):
         for profile in PROFILES:
             servers = render(profile)
-            for name, (shim, _tool) in SERVERS.items():
+            for name, (shim, _tool, _file) in SERVERS.items():
                 with self.subTest(profile=profile, server=name):
                     self.assertEqual(servers[name]["command"], f"{HOME}/.local/share/mise/shims/{shim}",
                                      f"{name} must start from the pinned mise install, not through npx or npm exec")
 
     def test_mise_pins_each_package_at_an_exact_version(self):
-        tools = tomllib.loads(MISE.read_text())["tools"]
-        for name, (_shim, tool) in SERVERS.items():
+        for name, (_shim, tool, file) in SERVERS.items():
             with self.subTest(tool=tool):
-                self.assertIn(tool, tools, f"{MISE.name} [tools] must install {tool} (the {name} MCP server)")
-                self.assertRegex(str(tools[tool]), r"^\d+\.\d+\.\d+$", f"{tool} must be pinned to an exact version")
-
-    def test_the_personal_profile_runs_browse_from_its_mise_shim_and_the_work_profile_has_none(self):
-        for name, (shim, _tool) in PERSONAL_SERVERS.items():
-            with self.subTest(server=name):
-                self.assertEqual(render("personal")[name]["command"], f"{HOME}/.local/share/mise/shims/{shim}")
-                self.assertNotIn(name, render("axon-work-computer"))
-        self.assertNotIn("browser-harness", render("personal"))   # retired there (ask 1192); the work Mac keeps it
-
-    def test_mise_pins_the_personal_packages_at_an_exact_version(self):
-        tools = tomllib.loads(BROWSE_MISE.read_text())["tools"]
-        for name, (_shim, tool) in PERSONAL_SERVERS.items():
-            with self.subTest(tool=tool):
-                self.assertIn(tool, tools, f"{BROWSE_MISE.name} [tools] must install {tool} (the {name} MCP server)")
+                tools = tomllib.loads(file.read_text())["tools"]
+                self.assertIn(tool, tools, f"{file.name} [tools] must install {tool} (the {name} MCP server)")
                 version = tools[tool]["version"] if isinstance(tools[tool], dict) else tools[tool]   # an inline table when the pin carries an option
                 self.assertRegex(str(version), r"^\d+\.\d+\.\d+$", f"{tool} must be pinned to an exact version")
-                self.assertIs(tools[tool].get("allow_low_downloads"), True,
-                              f"mise's package-age guard refuses {tool} without allow_low_downloads (ledger #3148); the install fails at apply")
+
+    def test_browse_is_allowed_below_mise_s_download_threshold(self):
+        tool = tomllib.loads(BROWSE_MISE.read_text())["tools"]["npm:@opencode/browse"]
+        self.assertIs(tool.get("allow_low_downloads"), True,
+                      "mise's package-age guard refuses npm:@opencode/browse without allow_low_downloads (ledger #3148); the install fails at apply")
+
+    def test_browser_harness_is_gone(self):
+        for profile in PROFILES:
+            with self.subTest(profile=profile):
+                self.assertNotIn("browser-harness", render(profile))
 
     def test_playwright_mcp_server_is_gone(self):
         for profile in PROFILES:

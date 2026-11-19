@@ -2,11 +2,11 @@
 
 Pi, Claude Code and Codex start every enabled MCP server when a session opens and never stop one. For the local servers
 that costs most of an idle session's memory (cartwmic/dotfiles#14 for Pi; ask #1040 for Claude Code and Codex, where each
-session held its own `rea` and `browser-harness`). `pi-mcp-lazy` (deployed to `~/.local/bin/pi-mcp-lazy`) sits in front of one
+session held its own `rea`). `pi-mcp-lazy` (deployed to `~/.local/bin/pi-mcp-lazy`) sits in front of one
 local server so it runs only once a session first uses it.
 
 The harnesses' MCP clients are unchanged. Each still reads its own config (`~/.pi/agent/mcp.json`, Claude's `~/.claude.json`,
-`~/.codex/config.toml`) and still starts one stdio process per server, but for `rea` (both profiles) and `browser-harness` (work profile only) that process is the
+`~/.codex/config.toml`) and still starts one stdio process per server, but for `rea` that process is the
 stand-in. The apply script writes the same wrapped command into all three. The rest of this file says "Pi" where the first client
 was Pi; it holds for Claude Code and Codex unless a line says otherwise.
 
@@ -33,13 +33,10 @@ was Pi; it holds for Claude Code and Codex unless a line says otherwise.
   tail of its stderr. The stand-in stays up and the next request tries again.
 - Closing Pi's stdin, SIGTERM and SIGHUP stop the real server too, so exiting Pi or `/reload` leaves nothing behind.
 
-Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on both profiles; `browser-harness` on
-`axon-work-computer` only; the source is `servers.list.tmpl`, which renders those lines only on that profile). One server per line,
+Which servers: `~/.local/share/pi-mcp-lazy/servers.list` (`rea` on both profiles; the source is `servers.list.tmpl`). One server per line,
 optionally followed by that server's idle seconds and the word `pi-only` (a `pi-only` server is wrapped for Pi and left as rendered
-for Claude Code and Codex; no current server uses it). `browser-harness` is `604800` (a week, so never stopped): stopping it would
-close the agent's own Chrome tab. A listed name that the profile does not render is skipped: `browser-harness` is not rendered on
-Linux with the work profile, which has no Linux machine. The remote HTTP servers (`hindsight`, `context7`, `ticktick`, and the
-work servers) are not touched. On the personal profile the browser server is `browse` (OpenCode Browse). It has no line in
+for Claude Code and Codex; no current server uses it). A listed name that the profile does not render is skipped. The remote HTTP servers (`hindsight`, `context7`, `ticktick`, and the
+work servers) are not touched. On both profiles the browser server is `browse` (OpenCode Browse). It has no line in
 `servers.list`, so it is not wrapped: it starts at session start, as any server not listed does.
 
 ### jira (work profile)
@@ -74,8 +71,7 @@ credentials.
 - Ask whether serving would show Pi any tools: `pi-mcp-lazy --check NAME -- COMMAND [ARGS...]` (exit 0 if the state copy, else
   the seed, holds at least one tool; starts nothing). The apply uses it after each refresh.
 - Regenerate the seeds from the real servers (do this when preparing a change that bumps a server):
-  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh rea -- ~/.local/share/mise/shims/rea mcp`,
-  and for `browser-harness`: `PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh browser-harness -- uvx --from browser-use==1.0.2 python -I ~/.local/share/browser-harness-mcp/server.py` (no Chrome needed). The seed's `key` holds the command line it was saved with, so it
+  `mkdir -p dot_local/share/pi-mcp-lazy/seed && PI_MCP_LAZY_STATE_DIR=dot_local/share/pi-mcp-lazy/seed pi-mcp-lazy --refresh rea -- ~/.local/share/mise/shims/rea mcp`. The seed's `key` holds the command line it was saved with, so it
   names the path of the machine that saved it; on another home a seed is still served, with the stale note, until the apply-time refresh writes a state copy.
 - Environment: `PI_MCP_LAZY_STATE_DIR`, `PI_MCP_LAZY_SEED_DIR`, `PI_MCP_LAZY_GRACE` (seconds between SIGTERM and SIGKILL,
   default 1.0), `PI_MCP_LAZY_START_TIMEOUT` (default 120).
@@ -86,14 +82,14 @@ credentials.
 apply run (the first harness that wraps it does it; the saved copy is shared; a `pi-only` name is skipped for Claude and Codex) and then rewrites that entry in the harness's rendered MCP
 file to `{"command": "~/.local/bin/pi-mcp-lazy", "args": [NAME, IDLE, "--", <original command and args>]}`, keeping any other
 keys of the entry (`env` reaches the real server through the stand-in). Claude's registration step replaces a stored entry that
-differs, so the first apply moves an existing `rea` and `browser-harness` registration to the wrapped form. A failed refresh is
+differs, so the first apply moves an existing `rea` registration to the wrapped form. A failed refresh is
 logged by name with the stderr tail (URLs and env values hidden). The entry is still wrapped when `--check` finds a saved list with
 tools (an older state copy, or the seed), checked for each harness; otherwise it is left as rendered and the harness starts the
 server at session start. The canonical `servers.json` is unchanged.
 
 ## Accepted limits
 
-- A cold first call can take seconds (server start: `browser-harness` about 1.6 s, `rea` 2-3 s). Pi's per-request timeout is 60 seconds
+- A cold first call can take seconds (server start: `rea` 2-3 s). Pi's per-request timeout is 60 seconds
   by default; add a larger `"timeout"` to the entry if a cold start is ever slower.
 - Sessions already running when an apply lands keep the servers they started until they end.
 - When `rea` idles out after 600 s, its in-memory state (an opened binary) is gone, and its prompts read empty until the next call.

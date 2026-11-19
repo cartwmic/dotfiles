@@ -28,27 +28,12 @@
     "hindsight": {
       "type": "http",
       "url": "https://hindsight-api.internal.cartwmic.com/mcp/{{ if eq .profile "axon-work-computer" }}work{{ else }}cartwmic{{ end }}/"
-    }{{ if and (eq .profile "personal") (or (eq .chezmoi.os "darwin") (eq .chezmoi.os "linux")) (not (includeTemplate "container" . | fromJson).enabled) }},
+    }{{ if and (or (eq .chezmoi.os "darwin") (eq .chezmoi.os "linux")) (not (includeTemplate "container" . | fromJson).enabled) }},
     "browse": {
       "command": "{{ .chezmoi.homeDir }}/.local/share/mise/shims/browse",
       "args": [
         "mcp"
       ]
-    }{{ end }}{{ if and (eq .profile "axon-work-computer") (eq .chezmoi.os "darwin") }},
-    "browser-harness": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "browser-use==1.0.2",
-        "python",
-        "-I",
-        "{{ .chezmoi.homeDir }}/.local/share/browser-harness-mcp/server.py"
-      ],
-      "env": {
-        "BU_CDP_URL": "http://127.0.0.1:9333",
-        "ANONYMIZED_TELEMETRY": "false",
-        "BH_TELEMETRY": "0"
-      }
     }{{ end }}{{ if eq .profile "axon-work-computer" }},
     "jira": {
       "type": "http",

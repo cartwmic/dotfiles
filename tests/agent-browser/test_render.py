@@ -1,6 +1,6 @@
 """The agent-browser pieces as chezmoi renders them for both desktop profiles (real chezmoi, scratch config and HOME).
-Personal (macOS and Linux): the `browse` MCP entry (OpenCode Browse), its mise pin, the download helper and the skill. Work Mac (axon-work-computer, macOS):
-the `browser-harness` MCP entry (it runs browser-use) and its launcher, unchanged. The agent-chrome launcher: macOS on both profiles, Linux on personal only."""
+Both profiles (personal macOS and Linux, work macOS): the `browse` MCP entry (OpenCode Browse), its mise pin, the download helper and the skill.
+browser-harness is on neither. The agent-chrome launcher: macOS on both profiles, Linux on personal only."""
 import json
 import os
 import subprocess
@@ -15,15 +15,11 @@ PROFILES = ("personal", "axon-work-computer")
 DARWIN = sys.platform == "darwin"
 LINUX = sys.platform.startswith("linux")
 LAUNCHER = ".local/bin/agent-chrome"
-ENTRY = {   # browser-harness, the work Mac's entry
-    "command": "uvx",
-    "args": ["--from", "browser-use==1.0.2", "python", "-I", "<server.py>"],
-    "env": {"BU_CDP_URL": "http://127.0.0.1:9333", "ANONYMIZED_TELEMETRY": "false", "BH_TELEMETRY": "0"},
-}
 BROWSE = {"command": "/Users/test/.local/share/mise/shims/browse", "args": ["mcp"]}
-PERSONAL_ONLY = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/bin/agent-login", ".local/share/agent-harness/canonical/skills/using-browse/SKILL.md"]
-WORK_ONLY = ".local/share/browser-harness-mcp/server.py"
-SEED = ".local/share/pi-mcp-lazy/seed/browser-harness.json"
+BROWSE_FILES = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/share/agent-harness/canonical/skills/using-browse/SKILL.md"]
+BROWSE_IGNORED = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/share/agent-harness/canonical/skills/using-browse", "91_browse_setup.sh"]
+LOGIN = ".local/bin/agent-login"   # personal only: it reads logins through the personal profile's op shim
+HARNESS_PATHS = [".local/share/browser-harness-mcp", ".local/share/browser-harness-mcp/server.py", ".local/share/pi-mcp-lazy/seed/browser-harness.json"]
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
@@ -54,33 +50,28 @@ class AgentBrowserRenderTest(unittest.TestCase):
     def servers(self, profile):
         return json.loads(chezmoi(profile, "execute-template", stdin=TMPL.read_text()))["mcpServers"]
 
-    def test_the_work_mac_entry_is_browser_harness_pinned_and_pointed_at_9333(self):
+    def test_the_entry_is_browse_run_from_the_pinned_shim_with_no_env_on_both_profiles(self):
+        for profile, os_name in (("personal", "linux"), ("personal", "darwin"), ("axon-work-computer", "darwin")):
+            with self.subTest(profile=profile, os=os_name):
+                servers = self.servers_as(profile, os_name, home="/Users/test")
+                self.assertEqual(servers["browse"], BROWSE)
+                self.assertNotIn("browser-harness", servers)
+
+    def test_files_deploy_on_both_profiles_and_browser_harness_on_neither(self):
         for profile in PROFILES:
             with self.subTest(profile=profile):
-                servers = self.servers(profile)
-                if DARWIN and profile == "axon-work-computer":
-                    entry = dict(servers["browser-harness"])
-                    server = entry["args"][-1]
-                    self.assertTrue(server.endswith("/.local/share/browser-harness-mcp/server.py"), server)
-                    entry["args"] = entry["args"][:-1] + ["<server.py>"]
-                    self.assertEqual(entry, ENTRY)
-                else:
-                    self.assertNotIn("browser-harness", servers)
+                managed = set(chezmoi(profile, "managed").split())
+                for path in BROWSE_FILES:
+                    self.assertIn(path, managed, path)
+                for path in HARNESS_PATHS:
+                    self.assertNotIn(path, managed, path)
 
-    def test_the_personal_entry_is_browse_run_from_the_pinned_shim_with_no_env(self):
-        servers = self.servers_as("personal", "linux", home="/Users/test")
-        self.assertEqual(servers["browse"], BROWSE)
-        self.assertNotIn("browser-harness", servers)
-
-    def test_files_deploy_where_expected(self):
-        managed = {p: set(chezmoi(p, "managed").split()) for p in PROFILES}
-        for path in PERSONAL_ONLY:   # the work profile gets no Browse, no helper and no skill
-            self.assertIn(path, managed["personal"], path)
-            self.assertNotIn(path, managed["axon-work-computer"], path)
-        self.assertEqual(WORK_ONLY in managed["axon-work-computer"], DARWIN)
-        self.assertNotIn(WORK_ONLY, managed["personal"])   # personal never deploys browser-harness's launcher, on any OS
-        self.assertNotIn(SEED, managed["personal"])
-        self.assertIn(SEED, managed["axon-work-computer"])   # the work profile still gets its seed
+    def test_agent_login_is_personal_only_and_agent_download_is_on_both(self):
+        for profile in PROFILES:
+            with self.subTest(profile=profile):
+                managed = set(chezmoi(profile, "managed").split())
+                self.assertEqual(LOGIN in managed, profile == "personal")
+                self.assertIn(".local/bin/agent-download", managed)
 
     def test_launcher_deploys_where_expected(self):
         for profile in PROFILES:
@@ -93,12 +84,11 @@ class AgentBrowserRenderTest(unittest.TestCase):
         return json.loads(chezmoi(profile, "execute-template", "--override-data", data, stdin=TMPL.read_text()))["mcpServers"]
 
     def test_the_mcp_entries_by_os_and_profile_whatever_the_host(self):
-        for profile, os_name, browse, harness in (("personal", "darwin", True, False), ("personal", "linux", True, False),
-                                                  ("axon-work-computer", "darwin", False, True),
-                                                  ("axon-work-computer", "linux", False, False)):   # the work profile has no Linux box
+        # The work profile has no Linux machine (docs/profiles.md), so that combination is not asserted; test_servers_json_is_valid... still renders it.
+        for profile, os_name in (("personal", "darwin"), ("personal", "linux"), ("axon-work-computer", "darwin")):
             with self.subTest(profile=profile, os=os_name):
                 servers = self.servers_as(profile, os_name)
-                self.assertEqual(("browse" in servers, "browser-harness" in servers), (browse, harness))
+                self.assertEqual(("browse" in servers, "browser-harness" in servers), (True, False))
 
     def test_container_mode_has_no_browser_entry_because_the_pod_leaves_out_the_pin(self):
         data = json.dumps({"chezmoi": {"os": "linux"}, "container": {"enabled": True}})
@@ -114,31 +104,35 @@ class AgentBrowserRenderTest(unittest.TestCase):
                     servers = self.servers_as(profile, os_name)   # json.loads inside: raises on a stray or missing comma
                     self.assertIn("hindsight", servers)
                     self.assertEqual("jira" in servers, profile == "axon-work-computer")
-                    self.assertEqual("browser-harness" in servers, profile == "axon-work-computer" and os_name == "darwin")
-                    self.assertEqual("browse" in servers, profile == "personal")
+                    self.assertNotIn("browser-harness", servers)
 
     def test_the_ignore_file_by_os_and_profile_whatever_the_host(self):
-        def ignored(profile, os_name):
-            data = json.dumps({"chezmoi": {"os": os_name}})
+        def ignored(profile, os_name, container=False):
+            data = json.dumps({"chezmoi": {"os": os_name}, **({"container": {"enabled": True}} if container else {})})
             return chezmoi(profile, "execute-template", "--override-data", data, stdin=(ROOT / ".chezmoiignore").read_text()).splitlines()
-        for profile, os_name, launcher, harness in (("personal", "darwin", True, False), ("axon-work-computer", "darwin", True, True),
-                                                    ("personal", "linux", True, False), ("axon-work-computer", "linux", False, False)):
+        for profile, os_name, launcher in (("personal", "darwin", True), ("axon-work-computer", "darwin", True),
+                                           ("personal", "linux", True), ("axon-work-computer", "linux", False)):
             with self.subTest(profile=profile, os=os_name):
                 lines = ignored(profile, os_name)
                 self.assertEqual(".local/bin/agent-chrome" in lines, not launcher)
-                self.assertEqual(".local/share/browser-harness-mcp" in lines, not harness)
-                self.assertEqual(".local/share/pi-mcp-lazy/seed/browser-harness.json" in lines, profile != "axon-work-computer")
-                for path in PERSONAL_ONLY[:2] + ["91_browse_setup.sh"]:   # the work profile leaves out Browse and its helpers
-                    self.assertEqual(path in lines, profile != "personal", path)
+                for path in BROWSE_IGNORED + HARNESS_PATHS:   # Browse and its helpers are on both profiles; browser-harness has no path left to ignore
+                    self.assertNotIn(path, lines, path)
+                self.assertEqual(LOGIN in lines, profile != "personal")   # agent-login stays personal only
+        with self.subTest(profile="termux"):   # the phone host has no Chrome to drive, as before
+            lines = ignored("termux", "linux")
+            for path in BROWSE_IGNORED:
+                self.assertIn(path, lines, path)
+        with self.subTest(container=True):   # the agent host pod has no desktop: it still leaves Browse out
+            lines = ignored("personal", "linux", container=True)
+            for path in BROWSE_IGNORED[:3]:
+                self.assertIn(path, lines, path)
 
     def test_entries_carry_no_secret_placeholder(self):
-        self.assertNotIn("${", json.dumps(ENTRY))
         self.assertNotIn("${", json.dumps(BROWSE))
         text = TMPL.read_text()
-        for name in ("browse", "browser-harness"):
-            block = text[text.index('"%s"' % name):text.index('{{ end }}', text.index('"%s"' % name))]
-            self.assertNotIn("op://", block)
-            self.assertNotIn("${", block)
+        block = text[text.index('"browse"'):text.index('{{ end }}', text.index('"browse"'))]
+        self.assertNotIn("op://", block)
+        self.assertNotIn("${", block)
 
 
 if __name__ == "__main__":

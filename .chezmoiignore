@@ -191,7 +191,7 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 {{- end }}
 
 {{- if not (or (eq .chezmoi.os "darwin") (and (eq .chezmoi.os "linux") (eq .profile "personal"))) }}
-# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher that Browse (personal) and browser-harness (work) drive.
+# Agent browser (agent-harness README, "Agent browser"): macOS (both desktop profiles) and personal Linux (Omarchy, Wayland). The Chrome launcher that Browse drives.
 .local/bin/agent-chrome
 {{- end }}
 
@@ -200,13 +200,8 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 .local/bin/le-verify-clean
 {{- end }}
 
-{{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
-# browser-harness (the work Mac's browser tool): its MCP server launcher and its pi-mcp-lazy seed. The MCP entry is gated the same way in servers.json.tmpl. The personal profile uses Browse instead (docs/profiles.md).
-.local/share/browser-harness-mcp
-.local/share/browser-harness-mcp/**
-{{- end }}
 {{- if ne .profile "axon-work-computer" }}
-.local/share/pi-mcp-lazy/seed/browser-harness.json
+# The work profile's agent-harness environment (docs/profiles.md): the known-limits-check ticket lookup. The personal profile's markers are GitHub issue URLs, which the built-in lookup covers.
 .config/agent-harness/work-env.zsh
 {{- end }}
 
@@ -310,6 +305,15 @@ Library/**
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
+# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal and work, not Termux (a phone host with no Chrome to drive). The pin, the download helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
+.config/mise/conf.d/browse.toml
+.local/bin/agent-download
+.local/share/agent-harness/canonical/skills/using-browse
+.local/share/agent-harness/canonical/skills/using-browse/**
+91_browse_setup.sh
+{{- end }}
+
+{{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
 # QMD search (docs/qmd.md): personal and work, not Termux. The pin, the collections, the skill that tells agents how to call it, and the two scripts.
 .config/mise/conf.d/qmd.toml
 .config/qmd
@@ -323,13 +327,8 @@ Library/**
 {{- end }}
 
 {{- if ne .profile "personal" }}
-# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal only. A new Chrome extension with debugger access to every site is something the employer might care about, so it is asked before the work Mac gets it (rule 272f08d0). The pin, the download helper, the sign-in helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
-.config/mise/conf.d/browse.toml
-.local/bin/agent-download
+# agent-login (docs/profiles.md): personal only. It reads logins through the personal profile's op shim and 1Password Connect, which the work profile does not have. OpenCode Browse and agent-download are on the work profile too (block above).
 .local/bin/agent-login
-.local/share/agent-harness/canonical/skills/using-browse
-.local/share/agent-harness/canonical/skills/using-browse/**
-91_browse_setup.sh
 {{- end }}
 
 {{- if ne .profile "personal" }}
