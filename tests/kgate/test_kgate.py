@@ -165,6 +165,13 @@ NODE_AUTH_TOKEN = "op://developer/item/password"
             with self.assertRaises(K.Unavailable, msg=bad):
                 K.parse_profile(bad)
 
+    def test_the_split_table_is_kgate_splits_and_does_not_change_the_profile(self):
+        with_split = K.parse_profile(self.GOOD + '\n[split]\nlist = "ls"\nrun = "sh {items}"\npods = 4\n')
+        self.assertEqual(with_split, K.parse_profile(self.GOOD))
+        with self.assertRaises(K.Unavailable) as e:
+            K.parse_profile('nope = 1\n[split]\nlist = "ls"')
+        self.assertIn("unknown keys: nope", str(e.exception))
+
     def test_rejects_bad_shapes(self):
         for bad in ['nope = 1', '[tools]\nnode = 24', '[tools]\nnode = {cmd = "x"}', '[secrets]\nX = "plain"',
                     '[secrets]\n"1X" = "op://a/b/c"', 'services = "docker"', 'image = ']:
