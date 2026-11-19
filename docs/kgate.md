@@ -245,6 +245,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `node`, `image`, `profile`, `cpu`, `mem`, `mem_limit` | where and how it ran; `cpu` is the CPU request the pod asked for (on the homelab, after the round-up to whole slots, see "CPU slots"); `mem` is the memory request and `mem_limit` the limit |
 | `cpu_usec` | the job container's CPU time in microseconds: `usage_usec` in its cgroup's `cpu.stat`, read once when CMD ends, the way `memory.peak` is. It counts the container's whole life, so it includes the pod side's own unpack, tree hash and tool checks as well as CMD. One busy core for `run_s` seconds reads as about `run_s` × 1,000,000. Null when `cpu.stat` cannot be read (the field is not the same as `cpu`, the CPU request) |
 | `peak_bytes`, `peak_source` | the container's peak memory: `cgroup` (`memory.peak`, kernel 5.19 and later) or `sampled` (highest `memory.current` seen every 0.5 s, on older kernels). It includes page cache. |
+| `install`, `install_s` | the cached `npm ci` (see "Cached npm install"): `hit` (unpacked from the node cache), `miss` (a real `npm ci`, then kept) or `none` (the command never ran `npm ci`, or the profile has no `[install]` step), and the seconds the install steps took in the pod (0.0 for `none`). Both null when the pod never ran CMD |
 | `ran` | CMD started |
 | `exit`, `reason` | exit code; the reason when it is 69 |
 | `out_files`, `cleanup`, `output`, `cmd` | files copied back; pod and Secrets confirmed deleted; log file; the command |
@@ -397,6 +398,9 @@ services = ["docker"]                            # optional; see below
 [github_ci]                                      # optional; see "GitHub CI is the receipt"
 workflow = "ci.yml"
 suites = ["tests/heavy-gate"]
+
+[install]                                        # optional; see "Cached npm install"
+npm = true                                       # `npm ci` in the job is served from the node cache
 ```
 
 - **Tools.** The pod runs the command and the expected version must appear in its output as a whole version (`1.98.0` does not match `11.98.0` or `1.98.01`). Any tool with a version command fits without changing kgate: `cargo`, `rustc`, `helm`, `kustomize`, `ansible-lint`, `python3`.
@@ -410,6 +414,26 @@ suites = ["tests/heavy-gate"]
 ## GitHub CI is the receipt
 
 Playbook 83fbe006: do not run a suite on kgate when GitHub CI already ran it green on the same commit. A profile with a `[github_ci]` table (`workflow`, a workflow file name such as `ci.yml`; `suites`, a list of strings) makes kgate check first. It refuses with exit 69 (`GitHub CI already ran this suite green on <sha12> (<run url>): GitHub's run is the receipt`) when all of these hold: one of `suites` appears in the shell-quoted CMD; the worktree is clean (`git status --porcelain` is empty, untracked files that are not ignored count); and `gh run list --workflow <workflow> --commit <HEAD>`, run in the worktree, shows a completed, successful run on exactly `HEAD` whose event is `push` or `workflow_dispatch` (a `pull_request` run tests the merge commit, not `HEAD`, so it never counts). The check runs after the profile is read and before any cluster call. If `gh` is missing, not signed in, takes over 15 s or fails, kgate prints one `kgate:` note with the first line of its error and runs the job as before. A profile with no `[github_ci]` table, or a table of the wrong shape (a profile error, exit 69), is unchanged or refused like any other bad key. To run the suite anyway, change something in the tree or use a CMD the suites do not name. The dotfiles `kgate.toml` lists `tests/heavy-gate`, `tests/workstream-rank` and `scripts/ci-linux.sh`.
+
+## Cached npm install
+
+`npm ci` spends its time deleting and rebuilding `node_modules`, not downloading, and every pod starts with none. A profile with
+
+```toml
+[install]
+npm = true
+```
+
+makes the pod put a small `npm` first on the job's `PATH` (`INSTALL_SH` in the kgate file; the homelab pod side writes it, a kubectl cluster's job ships it). Callers keep typing the same command: `sh -c 'npm ci && npm run typecheck && npm test'` stays the command, and its `npm ci` is served from the node cache. kgate refuses nothing and rewrites nothing.
+
+- **What it intercepts.** `npm ci` (also `clean-install`, `ic`, `install-clean`) typed by the command itself, run in a folder inside the shipped tree that has both `package.json` and `package-lock.json`. Every other npm command, `npm ci` in a fixture folder outside the tree or without a lock file, and everything the real npm starts (lifecycle scripts, tests that run `npm ci`), meets the real npm: the wrapper takes its own folder out of `PATH` before it calls it.
+- **Key and layout.** `/cache/u<uid>/nm/<repo>/<key>.tar`, one folder per repo (the repo's name as in the record's `repo`, so every clone of it shares one). `key` is the first 16 hex characters of the sha256 of `package.json`, `package-lock.json`, `.npmrc`, the node and npm versions and the arguments after `ci`, so a changed lock, another node or `--omit=dev` is a different key. The tar is not compressed (packing and unpacking are most of what a hit costs) and ends with a marker file, so a cut file is never trusted.
+- **Hit, miss, damage.** A hit deletes `node_modules` and unpacks the tar, and sets the file's time to now. A miss runs `npm ci --prefer-offline --no-audit --no-fund` (the caller's own arguments after it), then writes the tar under a temporary name and renames it into place, so a pod reading the folder sees a whole file or none; a pod that finds the file there when its install ends does not write one. A tar that does not unpack is removed and the pod does a real install. A failed `npm ci` fails the command with npm's exit code and keeps nothing.
+- **Disk.** The 2 newest keys of each repo stay (about 560 MB per key for the coordinator). Each `nm/<repo>` folder is an entry of the node cache's least-recently-used trim (see "The node cache"), so one repo's installs never push out another's together.
+- **kubectl clusters.** The step works where `/cache` outlives the pod: the profile needs `cache_pvc`, and the folder is `/cache/nm/<repo>` on the claim. Without a claim kgate prints a note and `npm ci` runs as typed.
+- **pip is not covered, and `[install] pip` is refused.** A Python gate's `pip` is usually a venv's own (`/tmp/v/bin/pip`), which a `PATH` wrapper never sees, and setting `PIP_CACHE_DIR` and `UV_CACHE_DIR` per repo gains nothing: pods already keep pip's cache in `HOME` on the node. Measured 2026-11-19 on amazon-itemizer's real command (`python3 -m venv /tmp/v && /tmp/v/bin/pip install -q -e . pytest pytest-xdist pyotp playwright`), two jobs on the same node: as it is today 15.1 s then 14.7 s; with a fresh per-repo `PIP_CACHE_DIR` cold 16.6 s then warm 19.3 s (ledger decision #4361). A mechanism with a measured gain (a kept venv, for example) is a later change.
+- **A package that writes the checkout's path into `node_modules` at install time** would break in another checkout of the same repo. Check a new repo for it once. What a test stops proving: that a clean install works on every run; a miss still does one, and any lock change is a miss.
+- **Proof of the record.** `install` and `install_s` in `log.jsonl`: `miss` then `hit` on the same node, `hit` well under 10 s for a repo whose install takes 20 to 60 s.
 
 ## Memory: request and limit
 
@@ -435,7 +459,7 @@ Every homelab pod mounts `/var/lib/kgate/cache` on its node (a host path) at `/c
 
 - **The cap is 8 GiB** (`CACHE_CAP`), the disk the cache may use when a job starts. It was 4 GiB, which is below what the hot gates keep warm. Agent-4's cache at 15:51Z on 2026-11-16 was 7.93 GiB, all uid 1000: Go build cache 3.9 GiB, Go modules 2.1, pnpm 0.44, pip 0.28, npm 0.20, per-gate scratch folders under `HOME` (about 0.28 GiB each, they are trimmed like any entry) and small ones. A 4 GiB trim of that data removes Go modules, pnpm and pip, and the next Go job downloads the modules again. Agent-4 had 27 GB free and its pods are capped at 12Gi. `KGATE_CACHE_CAP` (bytes) in the client's environment overrides it, for a live proof of the trim.
 - **The job enforces it, at its own start, on an idle node.** Every job holds a shared lock on `/cache/.kgate-use` for as long as it runs. A job that starts first tries to take that lock exclusively. That works only when no other job is running on the node, so a running job's caches are never removed. If it works and the cache is over the cap, the pod side removes the least recently used entries, oldest first, until the cache is within the cap, prints `kgate: cache over <cap> MiB: removed the <n> least recently used entries (<m> MiB)` and then takes the shared lock and runs CMD. Jobs that start meanwhile wait for the trim. A job does not trim when it ends: the lock is let go when its process exits, after the `end` line, and nothing runs after that line (a trim there ran inside the 10 s the client gives the exec stream to close, was cut off, and the client then blamed CMD for a process it had not left, dotfiles#493). A node that is never idle is not trimmed (the large nodes: the G14 has 906 GiB). There is no new cluster object and no timer.
-- **An entry is trimmed whole.** Entries are the children of `/cache`, of each `u<uid>` folder, of its `home` and of its `home/.cache`; anything else under those is part of its entry. "Used" is the newest of mtime, atime and ctime in the entry. An entry is renamed into `/cache/.kgate-trash` and then deleted, so a trim that is cut short never leaves half an entry, and the next trim empties the trash.
+- **An entry is trimmed whole.** Entries are the children of `/cache`, of each `u<uid>` folder, of its `home`, of its `home/.cache` and of its `nm` (the cached npm install, one folder per repo); anything else under those is part of its entry. "Used" is the newest of mtime, atime and ctime in the entry. An entry is renamed into `/cache/.kgate-trash` and then deleted, so a trim that is cut short never leaves half an entry, and the next trim empties the trash.
 - A trim that fails is printed (`kgate: cache not trimmed: ...`) and CMD still runs. A kubectl cluster has no node cache (its `/cache` is an emptyDir or a claim) and is unchanged.
 
 ## Switching a gate: the parity run
