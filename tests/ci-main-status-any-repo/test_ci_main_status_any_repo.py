@@ -287,6 +287,46 @@ class Gate(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("rate limit", out)
 
+    UPGRADE_403 = "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"
+
+    def test_the_upgrade_403_on_the_rules_read_means_no_rulesets_not_an_error_about_the_read(self):
+        # A private repo on a free plan: GitHub refuses the rulesets endpoint because rulesets do not exist there.
+        # The read no longer refuses on that alone. With nothing required anywhere the gate still exits 1, but for
+        # the row-8 reason (nothing to verify), never for the rules read.
+        self.repos["example-org/private-free"] = {
+            "branches": {"main": {"protected": False, "commit": {"sha": SHA}}},
+            "rules": {"main": self.UPGRADE_403},
+        }
+        rc, out = self.status("--merge-gate", "example-org/private-free")
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Upgrade to GitHub Pro", out)
+        self.assertIn("no required checks readable on main", out)
+
+    def test_the_upgrade_403_with_classic_checks_uses_the_classic_set(self):
+        self.repos["example-org/private-free"] = {
+            "branches": {"main": classic(checks=["tests"], contexts=["tests"])},
+            "rules": {"main": self.UPGRADE_403},
+            "check_runs": {SHA: [check_row("tests")]},
+        }
+        rc, out = self.status("--merge-gate", "example-org/private-free")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GREEN  all 1 required checks passed", out)
+
+    def test_other_403s_and_a_404_on_the_rules_read_still_refuse(self):
+        for text in ("HTTP 403: API rate limit exceeded", "HTTP 403: Resource not accessible by integration",
+                     "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 404)",
+                     "HTTP 500: Upgrade to GitHub Pro", "HTTP 404: Not Found"):
+            with self.subTest(text=text):
+                self.repos["example-org/example-repo"] = {
+                    "branches": {"main": classic(checks=["tests"], contexts=["tests"])},
+                    "rules": {"main": text},
+                    "check_runs": {SHA: [check_row("tests")]},
+                }
+                rc, out = self.status("--merge-gate", "example-org/example-repo")
+                self.assertEqual(rc, 1, out)
+                self.assertIn("cannot read state", out)
+                self.assertNotIn("GREEN", out)
+
     def test_a_failure_on_the_rules_second_page_is_error(self):
         # R's first page reads, the second fails: gh --paginate exits non-zero, and any page failing is ERROR.
         self.repos["example-org/example-repo"] = {

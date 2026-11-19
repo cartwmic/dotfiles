@@ -30,6 +30,10 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
 
+The coordinator's full name, cartwmic/coordinator, is its table entry: it gets the journal verdict, the same as the short
+name, including --pr and --tip. Its main state is the journal, and the any-repo path below has no journal to read (the repo has
+no required checks), so it could only refuse. Every other table repo's full name (cartwmic/dotfiles, ...) keeps the any-repo path.
+
 Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the exact set
 of checks GitHub requires to merge into the default branch, from two sources both always read. Classic branch
 protection comes from the branch itself (GET repos/.../branches/{b}, read access is enough; it carries
@@ -186,6 +190,13 @@ def gh(args, not_found_ok=False):
         raise Unreadable(f"gh {' '.join(args[:2])} returned non-JSON: {e}")
 
 
+def no_rulesets_on_plan(e):
+    """True for exactly GitHub's refusal of a feature the repo's plan does not have: HTTP 403 with its "Upgrade to
+    GitHub Pro or make this repository public" text. Any other 403 (a rate limit, no permission) is not this."""
+    text = str(e)
+    return "HTTP 403" in text and "Upgrade to GitHub Pro" in text
+
+
 def main_tip(repo):
     return gh(["api", f"repos/{repo}/branches/main"])["commit"]["sha"]
 
@@ -215,7 +226,8 @@ def required_checks(repo, branch, pr=None):
     protection.enabled and protection.required_status_checks to a non-admin -- the classic /protection endpoints
     answer 404 to a non-admin even when protection exists, so they are never called). R = GET
     repos/{repo}/rules/branches/{b}?per_page=100 --paginate (row 2: a non-200, or any page failing, is
-    unreadable), the active rules already merged across org and repo rulesets; the branch name is URL-encoded (a
+    unreadable -- except GitHub's "Upgrade to GitHub Pro or make this repository public" 403, which a private
+    repo on a free plan answers because it has no rulesets: that reads as no rules, and nothing else does), the active rules already merged across org and repo rulesets; the branch name is URL-encoded (a
     name with / must work). Row 3: a malformed response is unreadable -- an unexpected JSON value type at ANY
     depth the gate reads (an unknown rule TYPE is not malformed; row 5a handles it). Row 4: C is the classic set
     when protection.enabled, else empty; both checks[].context and contexts are read and de-duplicated, and an
@@ -273,7 +285,12 @@ def required_checks(repo, branch, pr=None):
                     classic.add(c)
 
     # Row 2: R non-200, or any page failing, raises. Row 3: R's shape. Rows 5 and 5a: S, and unknown types.
-    rules = gh(["api", f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", "--paginate"])
+    try:
+        rules = gh(["api", f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", "--paginate"])
+    except Unreadable as e:
+        if not no_rulesets_on_plan(e):
+            raise
+        rules = []   # a private repo on a free plan: GitHub says rulesets do not exist there, so none apply
     if not isinstance(rules, list):
         raise bad("the branch rules response is not an array")
     rulesets, unknown = set(), set()
@@ -886,6 +903,8 @@ def main(argv):
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
+    by_slug = {v["github"].lower(): k for k, v in REPOS.items() if v and v.get("journal")}
+    argv = [by_slug.get(a.lower(), a) for a in argv]   # the journal repo's OWNER/REPO is its table entry: the any-repo path cannot read it
     pr = None
     if "--pr" in argv:
         k = argv.index("--pr")
