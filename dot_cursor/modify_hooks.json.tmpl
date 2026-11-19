@@ -37,7 +37,7 @@ if [ "$T3_WANT" = true ]; then
     T3_JSON=$T3_PRINTED
   else
     T3_MODE=keep
-    printf '[modify_hooks] WARN: %s/src/t3-hook/hook.ts did not print Cursor hooks (no --print-cursor-hooks-json, or it did not run here); ~/.cursor/hooks.json left as it is\n' "$T3_REPO" >&2
+    printf '[modify_hooks] WARN: %s/src/t3-hook/hook.ts did not print Cursor hooks (no --print-cursor-hooks-json, or it did not run here); its T3 entries in ~/.cursor/hooks.json are left as they are (the shell guard entry is still set)\n' "$T3_REPO" >&2
   fi
 fi
 
