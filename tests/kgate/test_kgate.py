@@ -5208,7 +5208,8 @@ class SshMux:
         self.assert_one_master_closed_last()
 
     def test_a_waiting_job_polls_over_the_one_connection(self):
-        done = self.job("--wait", "5", "--sched-wait", "5", "--", "true", env={"FAKE_POD": "pending"})
+        # --wait must outlast --sched-wait: the wait deadline starts at the job's start, the scheduling deadline at the pod's creation, so with both at 5 s a slow runner lets a poll land between them and exit 69 instead of 75
+        done = self.job("--wait", "60", "--sched-wait", "5", "--", "true", env={"FAKE_POD": "pending"})
         self.assertEqual(done.returncode, 75, done.stdout)
         working, _ = self.assert_one_master_closed_last()
         polls = [c for c in working if "get pod" in c[-1] and "-o json" in c[-1]]
