@@ -110,17 +110,28 @@ class Deal(unittest.TestCase):
     IDS = [f"t{i:02d}" for i in range(20)]
     DUR = {f"t{i:02d}": float(20 - i) for i in range(20)}
 
-    def test_longer_than_the_median_come_first_longest_first(self):
+    def test_longer_than_the_median_come_first(self):
         order, est, median = K.deal(self.IDS, self.DUR, 1)
         self.assertEqual(median, 10.5)
-        self.assertEqual(order[:10], [f"t{i:02d}" for i in range(10)])
+        self.assertEqual(set(order[:10]), {f"t{i:02d}" for i in range(10)})
+
+    def test_a_test_far_longer_than_the_rest_is_always_first(self):
+        dur = dict(self.DUR, t00=400.0)
+        for seed in range(100):
+            with self.subTest(seed=seed):
+                self.assertEqual(K.deal(self.IDS, dur, seed)[0][0], "t00")
 
     def test_the_seed_changes_the_order_even_when_every_id_has_a_record(self):
         a = K.deal(self.IDS, self.DUR, 1)[0]
         b = K.deal(self.IDS, self.DUR, 2)[0]
         self.assertNotEqual(a, b)
-        self.assertEqual(a[:10], b[:10])
+        self.assertEqual(set(a[:10]), set(b[:10]))
         self.assertEqual(sorted(a), sorted(self.IDS))
+
+    def test_the_seed_also_moves_the_long_half_with_distinct_recorded_times(self):
+        # the long half has no tied times here (20..11 s), so the order would be the same for every seed if the seed only broke ties
+        orders = {tuple(K.deal(self.IDS, self.DUR, seed)[0][:10]) for seed in range(30)}
+        self.assertGreater(len(orders), 15)
 
     def test_the_same_seed_gives_the_same_order_whatever_order_the_list_came_in(self):
         self.assertEqual(K.deal(self.IDS, self.DUR, 7)[0], K.deal(list(reversed(self.IDS)), self.DUR, 7)[0])

@@ -22,6 +22,7 @@ import argparse
 import hmac
 import http.server
 import json
+import math
 import os
 import random
 import re
@@ -46,6 +47,7 @@ SETTINGS = {"list", "run", "setup", "pods", "lanes", "durations", "claim_seconds
 PORT_RANGE = "47390-47399"   # the range the host firewall opens to the cluster's LAN (homelab#524); KGATE_SPLIT_PORTS overrides it
 STAGGER_S = 2                # pods start this far apart: creating many at once failed some (etcdserver: request timed out)
 STUCK_FACTOR, STUCK_FLOOR_S = 10, 120   # a test is killed at max(10 x its recorded median, 120 s)
+JITTER_SIGMA = 0.5           # spread of the seeded jitter on the long half's order (decision #4356, revised after review round 1)
 SLOW_FACTOR = 3              # the receipt lists tests that ran over 3 x their record
 KILL_GRACE_S = 5
 CLAIM_TRIES = 3
@@ -68,14 +70,16 @@ def median_of(durations, ids):
 
 def deal(ids, durations, seed):
     """The hand-out order, a pure function of the ids (as a set), their recorded seconds and the seed.
-    An id longer than the median is handed out longest first, so the queue's speed win stays. The others (at or below the median, or with
-    no record, which counts as the median) are handed out in the seed's random order: that is what moves tests next to each other and
-    lets an order-dependent test fail on a normal run. Equal times in the first half are broken by the seed too."""
+    An id longer than the median is handed out roughly longest first, so the queue's speed win stays: its recorded time is multiplied by a
+    seeded jitter (exp of 0.5 x a normal draw, so a test twice as long as its neighbour still goes first about 5 times in 6) before the
+    sort. The others (at or below the median, or with no record, which counts as the median) are handed out in the seed's random order.
+    Both halves change with the seed: that is what moves tests next to each other and lets an order-dependent test fail on a normal run."""
     median = median_of(durations, ids)
     est = {i: durations.get(i, median) for i in ids}
     rng = random.Random(seed)
     key = {i: rng.random() for i in sorted(ids)}
-    long = sorted((i for i in ids if est[i] > median), key=lambda i: (-est[i], key[i]))
+    jitter = {i: math.exp(JITTER_SIGMA * rng.gauss(0, 1)) for i in sorted(ids)}
+    long = sorted((i for i in ids if est[i] > median), key=lambda i: (-est[i] * jitter[i], key[i]))
     short = sorted((i for i in ids if est[i] <= median), key=lambda i: key[i])
     return long + short, est, median
 
@@ -723,7 +727,7 @@ def cmd_durations(args):
         print("kgate-split: [split] has no durations file to write", file=sys.stderr)
         return 64
     repo, green = repo_name(root), []
-    for d in sorted(kgate_state_dir().glob("split-*-*"), key=lambda d: int(d.name.split("-")[1]), reverse=True):
+    for d in sorted((d for d in kgate_state_dir().glob("split-*-*") if re.fullmatch(r"split-\d+-\d+", d.name)), key=lambda d: int(d.name.split("-")[1]), reverse=True):
         try:
             plan = json.loads((d / "plan.json").read_text())
             if plan["repo"] == repo and check(d)["exit"] == 0:
