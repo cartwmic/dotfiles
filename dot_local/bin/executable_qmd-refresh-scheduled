@@ -8,6 +8,7 @@
 # starts a second copy of a running agent, and qmd-refresh's lock refuses one started by hand, so runs cannot pile up. Never --reembed.
 #
 # Log: ${QMD_REFRESH_LOG_DIR:-~/Library/Logs/qmd-refresh}/qmd-refresh-YYYY-MM-DD.log, one block per run with local timestamps.
+#  QMD_REFRESH_LOG_DATE=YYYY-MM-DD names the day file instead of today (the tests pin it).
 #  - status 75 (another refresh holds the lock, or heavy-gate gave up waiting for a quiet Mac) writes one line, nothing else.
 #  - noise is dropped: terminal escapes, progress bars, heavy-gate's echo of the job script, and the per-chunk "truncated to fit
 #    embedding context" warnings (counted instead; they are expected with QMD_EMBED_CONTEXT_SIZE=506).
@@ -39,7 +40,7 @@ refresh=${QMD_REFRESH_BIN:-$HOME/.local/bin/qmd-refresh}
 case $keep$cap in ''|*[!0-9]*) echo "$prog: QMD_REFRESH_LOG_DAYS and QMD_REFRESH_LOG_MAX_BYTES must be whole numbers" >&2; exit 2 ;; esac
 
 mkdir -p "$logdir"
-log=$logdir/qmd-refresh-$(date +%Y-%m-%d).log
+log=$logdir/qmd-refresh-${QMD_REFRESH_LOG_DATE:-$(date +%Y-%m-%d)}.log
 find "$logdir" -maxdepth 1 -type f -name 'qmd-refresh-*.log' -mtime "+$keep" -exec rm -f {} + 2>/dev/null || :
 size() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 [ ! -f "$logdir/launchd.log" ] || [ "$(size "$logdir/launchd.log")" -le "$cap" ] || : > "$logdir/launchd.log"
