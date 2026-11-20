@@ -212,6 +212,10 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && gh pr merge 5 --squash -R cartwmic/dotfiles"))
         # The documented chain pins the head the checks read; the hook ignores `--match-head-commit` and reads only the gate shapes and the PR number.
         self.assertIsNone(check("ci-main-status --merge-gate X --pr 5 && pr-body-check X 5 && gh pr merge 5 --squash --match-head-commit " + "a" * 40))
+        # eval-cases has no CI: its gate is `--merge-gate eval-cases --pr N` (or the OWNER/REPO form), with the same body check and merge.
+        for repo in ("eval-cases", "cartwmic/eval-cases"):
+            self.assertIsNone(check(f"ci-main-status --merge-gate {repo} --pr 1 && pr-body-check cartwmic/eval-cases 1 && gh pr merge 1 -R cartwmic/eval-cases --squash --match-head-commit " + "a" * 40))
+        self.assertIn("pr-body-check", check("ci-main-status --merge-gate eval-cases --pr 1 && gh pr merge 1 -R cartwmic/eval-cases --squash"))
         self.assertIn("--match-head-commit <head sha>", check("gh pr merge 12"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")

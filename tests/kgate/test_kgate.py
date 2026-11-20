@@ -590,6 +590,9 @@ def fake_delete(fake, pods):
     """The delete of a pod, shared by both fakes. FAKE_DELETE_FAIL: "N" fails the first N pod deletes with an etcd timeout, "always" fails every one.
     FAKE_DELETE_HANG: "N" makes the first N pod deletes hang. FAKE_DELETE_SLOW: "S" makes the first pod delete take S seconds, and writes <fake>/delete-started
     when it begins (the test signals the client while it is in flight). A pod delete that succeeds is written to <fake>/deleted-pods."""
+    for x in pods:   # the Secrets the quota fake of the homelab keeps (<fake>/secrets/NAME)
+        if x.startswith("secret/") and os.path.exists(os.path.join(fake, "secrets", x[7:])):
+            os.unlink(os.path.join(fake, "secrets", x[7:]))
     named = [x for x in pods if x.startswith("pod/")]
     if not named:
         return 0   # the sweep's label delete
@@ -657,6 +660,33 @@ if a[:2] == ["get", "pods"] or a[:2] == ["get", "secrets"]:
 if a[:2] == ["create", "-f"]:
     manifest = json.load(sys.stdin)
     log({"manifest": manifest})
+    if os.environ.get("FAKE_QUOTA_CPU"):
+        # A namespace ResourceQuota of requests.cpu=FAKE_QUOTA_CPU. The file <fake>/quota-full holds the cpu other jobs use of it (none when the file is not there).
+        # Like the API server, the List is made item by item: the Secrets that come first go in, then the pod is refused when it does not fit, and a Secret that is
+        # already there is refused (AlreadyExists) whatever happens to the pod. The pod made is logged as {"created": name}.
+        limit = int(os.environ["FAKE_QUOTA_CPU"])
+        used_file = os.path.join(fake, "quota-full")
+        used = int(open(used_file).read()) if os.path.exists(used_file) else 0
+        os.makedirs(os.path.join(fake, "secrets"), exist_ok=True)
+        failed = False
+        for item in manifest["items"]:
+            name = item["metadata"]["name"]
+            if item["kind"] == "Secret":
+                path = os.path.join(fake, "secrets", name)
+                if os.path.exists(path):
+                    sys.stderr.write('Error from server (AlreadyExists): error when creating "STDIN": secrets "%s" already exists\n' % name); failed = True
+                else:
+                    open(path, "w").close()
+                continue
+            asked = int(item["spec"]["containers"][0]["resources"]["requests"]["cpu"])
+            if os.environ.get("FAKE_CREATE_ERROR"):
+                sys.stderr.write(os.environ["FAKE_CREATE_ERROR"] + "\n"); failed = True
+            elif used + asked > limit:
+                sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "%s" is forbidden: exceeded quota: scratch-cpu, requested: requests.cpu=%d, used: requests.cpu=%d, limited: requests.cpu=%d\n'
+                                 % (name, asked, used, limit)); failed = True
+            else:
+                log({"created": name})
+        sys.exit(1 if failed else 0)
     if os.environ.get("FAKE_CREATE_PENDING"):   # the cluster is full: the pod just created is listed as waiting for room, for the jobs that look next
         pod = manifest["items"][-1]
         pod["metadata"]["creationTimestamp"] = "2026-11-16T12:00:00Z"
@@ -5018,6 +5048,106 @@ class QueueHomelab(unittest.TestCase):
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertIn("queued: behind kgate-1-1", done.stdout)
         self.assertEqual(self.creates(), 0)
+
+
+QUOTA_LAUNCH = QUEUE_LAUNCH.replace("K.QUEUE_QUIET_S", "K.QUOTA_FIRST_DELAY, K.QUOTA_MAX_DELAY = @DELAYS@\nK.QUEUE_QUIET_S")   # the quota retry, shortened too
+
+
+class QuotaHomelab(unittest.TestCase):
+    """The homelab's namespace can carry a ResourceQuota. A create it refuses is waited out in the local queue, with the flock let go while the job sleeps, so a job
+    that fits is not held up by one that does not. The fake cluster's quota is requests.cpu 12 (FAKE_QUOTA_CPU); <fake>/quota-full says how much other jobs use."""
+    for _name in ("kgate", "kgate_popen", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+    for _name in ("read_until", "start"):
+        locals()[_name] = getattr(QueueHomelab, _name)
+
+    def launcher(self):
+        stub = self.tmp / "quota_launch.py"
+        stub.write_text((QUOTA_LAUNCH % 0).replace("@DELAYS@", "%s, %s" % getattr(self, "delays", (0.2, 0.4))))
+        return [sys.executable, str(stub), str(SCRIPT)]
+
+    def full(self, used, limit=12):
+        (self.fake / "quota-full").write_text(str(used))
+        return {"FAKE_QUOTA_CPU": str(limit)}
+
+    def room(self):
+        (self.fake / "quota-full").unlink()
+
+    def created(self):
+        return sum(1 for c in self.calls() if "created" in c)
+
+    def secrets(self):
+        path = self.fake / "secrets"
+        return sorted(os.listdir(path)) if path.exists() else []
+
+    def test_a_job_the_quota_refuses_waits_in_the_queue_then_runs(self):
+        env = self.full(used=12)
+        proc = self.start("--cpu", "4", "--", "sh", "-c", "echo ran-after-the-quota", env=env)
+        seen = self.read_until(proc, "queued: waiting for quota: exceeded quota: scratch-cpu, requested: requests.cpu=4, used: requests.cpu=12, limited: requests.cpu=12")
+        time.sleep(1)   # several retries at 0.2 s, 0.4 s
+        self.assertEqual((self.created(), self.secrets()), (0, []), "no pod, and the Secrets of each refused create are taken out again")
+        self.assertIsNone(proc.poll())
+        self.room()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("ran-after-the-quota", seen)
+        self.assertEqual(seen.count("waiting for quota"), 1, "the same message is said once")
+        self.assertIn("left the queue after", seen)
+        self.assertEqual(self.created(), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"], rec["cleanup"]), (0, True, True))
+        self.assertGreater(rec["quota_wait_s"], 0.5)
+
+    def test_a_job_that_fits_is_not_blocked_while_another_waits_for_quota(self):
+        self.delays = (60, 60)   # the first job sleeps a minute between its tries: holding the flock that long would stop the second from being placed
+        env = self.full(used=4)   # 8 of the 12 are free: the first job asks 12, the second 4
+        first = self.start("--cpu", "12", "--", "sh", "-c", "echo first-ran", env=env)
+        end = time.time() + 30
+        while not any("manifest" in c for c in self.calls()) and time.time() < end:   # the first job's create has been refused
+            time.sleep(0.1)
+        second = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo second-ran", env=env)
+        self.assertEqual(second.returncode, 0, second.stdout)
+        self.assertIn("second-ran", second.stdout)
+        self.assertNotIn("another job is being placed", second.stdout)
+        self.assertIsNone(first.poll(), "the first is still waiting")
+        self.assertEqual(self.created(), 1)
+        first.send_signal(signal.SIGTERM)
+        out, _ = first.communicate(timeout=30)
+        self.assertIn("queued: waiting for quota", out)
+
+    def test_a_request_above_the_quotas_own_limit_fails_at_once(self):
+        done = self.kgate("--wait", "600", "--cpu", "16", "--", "true", env={"FAKE_QUOTA_CPU": "12"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertRegex(rec["reason"], r"^request exceeds the namespace quota: exceeded quota: scratch-cpu, requested: requests.cpu=16, used: requests.cpu=0, limited: requests.cpu=12$")
+        self.assertNotIn("queued", done.stdout)
+        self.assertEqual((self.created(), rec["ran"], rec["cleanup"], self.secrets()), (0, False, True, []))
+
+    def test_a_quota_that_never_frees_ends_at_the_deadline_with_the_message(self):
+        done = self.kgate("--wait", "3", "--cpu", "4", "--", "true", env=self.full(used=12))
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertRegex(rec["reason"], r"^quota not available within 3s: exceeded quota: scratch-cpu, requested: requests.cpu=4, used: requests.cpu=12, limited: requests.cpu=12$")
+        self.assertIn("quota_wait_s", rec)
+        self.assertEqual((self.created(), rec["ran"], rec["cleanup"], self.secrets()), (0, False, True, []))
+
+    def test_any_other_refusal_stays_fatal_even_when_it_says_exceeded_quota(self):
+        for text in ("Error from server (Forbidden): pods is forbidden: violates PodSecurity",
+                     "error: the webhook said exceeded quota: please stop"):
+            done = self.kgate("--wait", "600", "--cpu", "4", "--", "true", env={"FAKE_QUOTA_CPU": "12", "FAKE_CREATE_ERROR": text})
+            self.assertEqual(done.returncode, 69, done.stdout)
+            self.assertEqual(self.records()[-1]["reason"], "could not create the pod: " + text)
+            self.assertNotIn("queued", done.stdout)
+
+    def test_a_job_stopped_while_it_waits_for_quota_ends_143_and_leaves_nothing(self):
+        proc = self.start("--cpu", "4", "--", "true", env=self.full(used=12))
+        self.read_until(proc, "queued: waiting for quota")
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 143, out)
+        self.assertEqual((self.created(), self.secrets()), (0, []))
+        self.assertEqual(list((self.state / "kgate" / "queue").glob("kgate-*.json")), [])
 
 
 class PodLostReason(unittest.TestCase):
