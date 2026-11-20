@@ -34,7 +34,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import PRINTED_BEGIN, PRINTED_END, TAG, doc_lines, line_items, prose_sentences, word_count, words_of  # noqa: E402
+from claims import TAG, doc_lines, line_items, part1_slice, prose_sentences, word_count, words_of  # noqa: E402
 
 COUNTS = re.compile(r"^\W*Counts:\s+claims checked\s+(\d+);\s*HOLDS\s+(\d+);\s*WRONG\s+(\d+);\s*OVERSTATED\s+(\d+);\s*UNSUPPORTED\s+(\d+)\s*\.?\s*$", re.M)
 FINDING = re.compile(r"^\s*(?:[-*]\s*)?(?:[^|\s]*?:)?\d+\s*\|\s*(WRONG|OVERSTATED|UNSUPPORTED)\s*\|(?:\s*(MISSING_CONDITION|NAME|COUNT|KIND|OTHER)\s*\|)?", re.M)
@@ -249,23 +249,12 @@ def cmd_lab(argv):
 
 # --- --reader ------------------------------------------------------------------------------------------------
 def part1_text(guide):
-    """Part 1 of a guide: the text under the heading `Part 1`, up to the heading `Part 2`, with tags and printed blocks removed."""
-    out, inside, printed = [], False, False
-    for line in guide.splitlines():
-        if re.match(r"#+\s+Part 1\b", line):
-            inside = True
-            continue
-        if re.match(r"#+\s+Part 2\b", line):
-            break
-        if line.strip() == PRINTED_BEGIN:
-            printed = True
-        elif line.strip() == PRINTED_END:
-            printed = False
-        elif inside and not printed:
-            out.append(re.sub(r"[ \t]+", " ", TAG.sub("", line)).rstrip())
-    if not inside:
+    """Part 1 of a guide with its tags removed: what the reader gets."""
+    part1 = part1_slice(guide)
+    if not part1:
         raise ScoreError("no heading `Part 1` in the guide")
-    return "\n".join(out).strip()
+    lines = [re.sub(r"[ \t]+", " ", TAG.sub("", l)).rstrip() for l in part1.split("\n")]
+    return "\n".join(l for l in lines if l is not None).strip()
 
 
 def questions():

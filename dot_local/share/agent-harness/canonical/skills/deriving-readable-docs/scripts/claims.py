@@ -198,3 +198,24 @@ def appendix_index(text, repo):
             k += 1
             index["A%s.%d" % (sec, k)] = (n, s)
     return index
+
+
+def part1_slice(guide):
+    """The guide with every line outside Part 1 blanked, so line numbers stay the same. Part 1 runs from the heading `Part 1` to the
+    heading `Part 2`; printed blocks inside it are blanked too. A guide with no `Part 1` heading gives "" (and no Part 2 heading means to the end)."""
+    out, inside, printed = [], False, False
+    for line in guide.splitlines():
+        if re.match(r"#+\s+Part 1\b", line):
+            inside = True
+        elif re.match(r"#+\s+Part 2\b", line):
+            inside = False
+        if line.strip() == PRINTED_BEGIN:
+            printed = True
+            out.append("")
+            continue
+        if line.strip() == PRINTED_END:
+            printed = False
+            out.append("")
+            continue
+        out.append(line if inside and not printed else "")
+    return "\n".join(out) if any(out) else ""
