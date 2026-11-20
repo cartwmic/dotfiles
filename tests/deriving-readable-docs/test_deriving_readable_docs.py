@@ -909,5 +909,113 @@ class EarlyExitsSheetTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class RangeListTest(unittest.TestCase):
+    def test_a_bare_range_after_a_comma_is_a_second_range_of_the_same_file(self):
+        code, out = check("It reads it in the test (`src/a.rs:1, 3`).\n", REPO)
+        self.assertEqual(code, 0)
+        self.assertIn("checked 2 citations, 0 bad", out)
+        code, out = check("It reads it in the test (`src/a.rs:1, 9`).\n", REPO)
+        self.assertEqual(code, 1)
+        self.assertIn("src/a.rs:9: line out of range (file has 3 lines)", out)
+
+    def test_a_zero_padded_number_matches_the_same_number_in_the_code(self):
+        files = {"src/t.rs": "let retries = 5;\n"}
+        code, out = check("It retries 05 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAIL number", out)
+        code, out = check("It retries 06 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL number: 06 is not in the cited lines", out)
+
+
+class BudgetTest(unittest.TestCase):
+    """--max-words: a section draft or a doc over its word budget FAILs, so a length limit is kept by a script."""
+    DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`). It does another thing in the test, in this case (`src/a.rs:1-3`).\n"  # 18 words
+
+    def test_the_word_count_prints_without_citations_and_without_a_budget(self):
+        code, out = check(self.DOC, REPO)
+        self.assertEqual(code, 0)
+        self.assertIn("checked 2 citations, 0 bad, 18 words", out)
+
+    def test_a_draft_over_the_budget_fails_with_the_count(self):
+        code, out = check(self.DOC, REPO, "--max-words", "17")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL budget: 18 words, budget 17", out)
+
+    def test_a_draft_at_the_budget_passes(self):
+        code, out = check(self.DOC, REPO, "--max-words", "18")
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAIL budget", out)
+
+    def test_the_header_fenced_code_and_list_marks_are_not_words(self):
+        doc = "# Doc\n\nRepo: r, commit: abc, many words here before the first section heading.\n\n## Part\n\n```\nthree words inside\n```\n- It runs in the test (`src/a.rs:1`).\n1. It stops in the test (`src/a.rs:2`).\n"
+        code, out = check(doc, REPO, "--max-words", "11")
+        self.assertEqual(code, 0)
+        self.assertIn("checked 2 citations, 0 bad, 11 words", out)  # Part, It runs in the test, It stops in the test
+
+    def test_a_backticked_name_that_is_not_a_citation_counts_as_a_word(self):
+        code, out = check("## Part\n\nThe `isMessageId` check runs in the test (`src/a.rs:1`).\n", REPO)
+        self.assertIn("8 words", out)
+
+    def test_a_budget_that_is_not_a_number_is_a_usage_error(self):
+        code, out = check(self.DOC, REPO, "--max-words", "lots")
+        self.assertEqual(code, 2)
+
+
+class AuditTest(unittest.TestCase):
+    """--audit: each sentence with citations needs its own audit row, so a one-line summary of the audit FAILs."""
+    DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`).\n\nIt does another thing in the test (`src/a.rs:1-3`).\n"
+    ROW = '%d | assert: src/a.rs:%d "%s" | exits: none listed | found: nothing | result: HOLDS\n'
+
+    def audited(self, audit, doc=None):
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "audit.md"
+            a.write_text(audit)
+            return check(doc or self.DOC, REPO, "--audit", str(a))
+
+    def test_a_row_for_each_sentence_passes(self):
+        code, out = self.audited(self.ROW % (3, 2, "two") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 0, out)
+
+    def test_a_summary_line_is_not_a_row(self):
+        code, out = self.audited("Sentences 3 and 5 checked: HOLDS.\n")
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+        self.assertIn(":5: FAIL audit", out)
+
+    def test_a_sentence_missing_from_the_audit_fails_alone(self):
+        code, out = self.audited(self.ROW % (3, 2, "two"))
+        self.assertEqual(code, 1)
+        self.assertNotIn(":3: FAIL audit", out)
+        self.assertIn(":5: FAIL audit", out)
+
+    def test_a_quote_that_is_not_on_the_line_fails(self):
+        code, out = self.audited(self.ROW % (3, 2, "three") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+
+    def test_an_assert_that_is_not_one_of_the_sentences_citations_fails(self):
+        code, out = self.audited(self.ROW % (3, 3, "three") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+        self.assertNotIn(":5: FAIL audit", out)
+
+    def test_two_cited_sentences_on_one_line_each_need_a_row(self):
+        doc = "## Part\n\nIt runs in the test (`src/a.rs:1`). It stops in the test (`src/a.rs:3`).\n"
+        code, out = self.audited(self.ROW % (3, 1, "one"), doc)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count("FAIL audit"), 1)
+
+    def test_a_row_without_exits_found_and_result_is_not_a_row(self):
+        code, out = self.audited('3 | assert: src/a.rs:2 "two"\n' + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+
+    def test_without_the_option_nothing_is_asked_for(self):
+        code, out = check(self.DOC, REPO)
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAIL audit", out)
+
+
 if __name__ == "__main__":
     unittest.main()
