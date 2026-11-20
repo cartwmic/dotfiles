@@ -8,7 +8,8 @@ This script collects the ledger ids a change cites and prints one markdown block
 round's brief.md:   review-intent --pr cartwmic/coordinator#782 >> round-1/brief.md   (add --body-file round-1/brief.md when the brief itself cites ids)
 
 Inputs: the PR's agent record (--pr; the file <traces dir>/emitted/review/<repo>#N/pr-record.md when it exists), else the PR body (--pr, read with gh); any text files
-(--body-file, repeatable); and ids given by hand. With --pr, the decisions the ledger links to that PR (a live decision whose `pr` is that PR) are collected as well.
+(--body-file, repeatable); and ids given by hand. When the record is used, the decisions the ledger links to that PR (a live decision whose `pr` is that PR) are collected too, because the record is no longer
+where `ledger pr-decisions-check` has them listed; the body path is unchanged.
 The traces dir is $AGENT_TRACES_DIR, else ~/.local/share/agent-traces. Read-only: it reads the ledger and prints.
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
   every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
@@ -110,15 +111,15 @@ class Ledger:
 
 
     def decisions_for_pr(self, repo, n):
-        """The ids of the live decisions the ledger links to the PR (`decisions.pr`, compared without regard to case, as GitHub does). Nothing found when the ledger cannot list them."""
+        """The ids of the live decisions the ledger links to the PR (`decisions.pr`, compared without regard to case, as GitHub does). A ledger that cannot list them is an error: a linked decision must not drop out because a call failed."""
         env = dict(os.environ, COORDINATOR_STATE_DIR=self.state)
         p = subprocess.run([self.bin, "list", "decisions", "--json"], env=env, capture_output=True, text=True)
-        if p.returncode != 0:
-            return []
         try:
+            if p.returncode != 0:
+                raise ValueError(p.stderr.strip())
             rows = json.loads(p.stdout)
-        except ValueError:
-            return []
+        except ValueError as e:
+            raise Usage("review-intent: the ledger could not list decisions (needed for the PR's linked decisions): %s" % e)
         want = ("%s#%s" % (repo, n)).lower()
         return sorted(r["id"] for r in rows if isinstance(r, dict) and not r.get("voided_at") and str(r.get("pr") or "").lower() == want)
 
@@ -177,15 +178,15 @@ def record_path(spec):
 
 
 def pr_text(spec):
-    """The text the PR's ids are read from: its agent record when there is one, else its body."""
+    """(text, from_record): the PR's agent record when there is one, else its body."""
     path = record_path(spec)
     if os.path.isfile(path):
         try:
             with open(path, encoding="utf-8") as fh:
-                return fh.read()
+                return fh.read(), True
         except OSError as e:
             raise Usage("review-intent: cannot read %s: %s" % (path, e.strerror))
-    return pr_body(spec)
+    return pr_body(spec), False
 
 
 def pr_body(spec):
@@ -367,6 +368,7 @@ def main(argv):
     try:
         o = parse(argv)
         texts = []
+        from_record = False
         for f in o["files"]:
             try:
                 with open(f, encoding="utf-8") as fh:
@@ -374,10 +376,11 @@ def main(argv):
             except OSError as e:
                 raise Usage("review-intent: cannot read %s: %s" % (f, e.strerror))
         if o["pr"]:
-            texts.append(pr_text(o["pr"]))
+            text, from_record = pr_text(o["pr"])
+            texts.append(text)
         approvals = pr_approvals(o["pr"]) if o["pr"] else []
         ledger = Ledger(o["state"] or default_state_dir())
-        linked = ledger.decisions_for_pr(*pr_ref(o["pr"])) if o["pr"] else []
+        linked = ledger.decisions_for_pr(*pr_ref(o["pr"])) if o["pr"] and from_record else []
         block, errors = build(texts, o["asks"], o["decisions"], ledger, approvals, linked)
     except Usage as e:
         print(e, file=sys.stderr)

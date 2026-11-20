@@ -231,6 +231,22 @@ class ReviewIntent(unittest.TestCase):
         r = self.run_script(None, "--pr", "cartwmic/coordinator#903")
         self.assertEqual((r.returncode, self.marker(r.stdout)[:2]), (0, ("8", "41")), r.stderr)
 
+    def test_without_a_record_the_ledger_linked_decisions_are_not_added(self):
+        self.put(asks=[ask(8)], decisions=[decision(60, pr="cartwmic/coordinator#906")])
+        self.put_pr(files=[], contents={}, body="ask #8")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#906")
+        self.assertEqual((r.returncode, self.marker(r.stdout)[:2]), (0, ("8", "none")), r.stderr)
+
+    def test_a_ledger_that_cannot_list_decisions_is_an_error_when_the_record_is_used(self):
+        self.put(asks=[ask(7)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("coordinator#907", "ask #7")
+        (self.dir / "pane-bin/ledger").write_text(FAKE_LEDGER.replace('if sys.argv[1] == "list":', 'if sys.argv[1] == "list":\n    print("boom", file=sys.stderr); sys.exit(1)\nif False:'), encoding="utf-8")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#907")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("could not list decisions", r.stderr)
+        self.assertEqual(r.stdout, "")
+
     def test_decisions_the_ledger_links_to_the_pr_come_with_their_asks(self):
         self.put(asks=[ask(7, answer="exactly this")], decisions=[
             decision(50, ask_id=7, pr="cartwmic/coordinator#904"), decision(51, pr="cartwmic/coordinator#905"),
