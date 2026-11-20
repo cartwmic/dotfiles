@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """ci-main-status: is main green, red, or untested? Read before every merge.
 
-usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro)
+usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases)
        ci-main-status [--tip | --merge-gate] --all
-       ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below)
+       ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below; for eval-cases the PR being merged, below)
        ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
@@ -29,6 +29,17 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+
+A table repo marked no_ci has no CI and cannot have required checks (today eval-cases: a private repo on a plan with no
+rulesets or branch protection; GitHub answers 403 "Upgrade to GitHub Pro or make this repository public"). Main has no state
+to read, so its merge gate is the PR's own review and body check: `--merge-gate eval-cases --pr N` (or cartwmic/eval-cases)
+reads PR N's head from GitHub, then runs `agent-traces review verify --item eval-cases#N --head <head> --require-block`
+and `pr-body-check cartwmic/eval-cases N`. Both run, and both exit 0: one "no CI" line naming what it passed on, exit 0.
+Either fails: a line for each (the failing one with its reason), exit 1. A missing agent-traces or pr-body-check is a failure
+(both are personal-profile tools, so on the work profile this gate exits 1). `--merge-gate eval-cases` without --pr exits 1:
+it cannot know which PR is merging, so pass --pr N. Without --merge-gate (plain status, --tip, --all) and with --merge-gate
+--all it prints one "n/a (no CI ...)" line and exits 0, like homelab: it never changes the exit of the other repos.
+One more no-CI repo is one more REPOS row ({"github": "owner/repo", "no_ci": True}) and its ORDER entry.
 
 The coordinator's full name, cartwmic/coordinator, is its table entry: it gets the journal verdict, the same as the short
 name, including --pr and --tip. Its main state is the journal, and the any-repo path below has no journal to read (the repo has
@@ -131,8 +142,9 @@ REPOS = {
     "alert-steward": {"github": "cartwmic/alert-steward", "workflow": "image.yml"},
     "storycraft": {"github": "StoryCraftTW/storycraft", "workflow": "ci.yml"},
     "retro": {"github": "cartwmic/retro", "workflow": "unit.yml"},
+    "eval-cases": {"github": "cartwmic/eval-cases", "no_ci": True},   # private, no CI, no required checks possible: gated on review verify + pr-body-check
 }
-ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab", "amazon-itemizer", "alert-steward", "storycraft", "retro"]
+ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab", "amazon-itemizer", "alert-steward", "storycraft", "retro", "eval-cases"]
 JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/main-journeys.jsonl")
 LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-journeys.lock.d")
@@ -872,10 +884,46 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
                f"and no run is going. Start one."]
 
 
-def check(name, tip_only=False, pr=None):
+def run_step(label, argv):
+    """One gate step's (ok, one line saying what it said). A program that cannot start, or exits non-zero, is not ok."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True)
+    except OSError as e:
+        return False, f"{label}: FAILED  {argv[0]} could not start ({e.strerror}); is it on PATH?"
+    said = [line.strip() for line in (r.stdout + r.stderr).splitlines() if line.strip()]
+    if r.returncode:
+        return False, f"{label}: FAILED  exit {r.returncode}: {said[-1] if said else 'no output'}"
+    first = said[0].removeprefix(label + ": ") if said else "no output"
+    return True, f"{label}: OK  {first}"
+
+
+def no_ci_gate(name, spec, pr):
+    """The merge gate of a repo with no CI: PR `pr`'s review verify at its head and its body check, both run, both must exit 0."""
+    repo = spec["github"]
+    head = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid"])["headRefOid"]
+    steps = [run_step("review verify", ["agent-traces", "review", "verify", "--item", f"{name}#{pr}", "--head", head, "--require-block"]),
+             run_step("pr-body-check", ["pr-body-check", repo, str(pr)])]
+    where = f"{repo} PR #{pr} head {head}"
+    if all(ok for ok, _ in steps):
+        return 0, [f"{name}: no CI (no required checks are possible on this repo). Passed on review verify and pr-body-check for {where}"] + [f"    {line}" for _, line in steps]
+    return 1, [f"{name}: RED  no CI, and the merge gate failed for {where}"] + [f"    {line}" for _, line in steps]
+
+
+def no_ci(name, spec, tip_only, pr, gate):
+    if gate and pr:
+        return no_ci_gate(name, spec, pr)
+    if gate:
+        return 1, [f"{name}: ERROR  no CI, so the merge gate is the PR's review verify and body check, and it cannot tell which PR is merging. "
+                   f"Pass --pr N: ci-main-status --merge-gate {name} --pr N"]
+    return 0, [f"{name}: n/a (no CI, no required checks possible; its merge gate is ci-main-status --merge-gate {name} --pr N)"]
+
+
+def check(name, tip_only=False, pr=None, gate=False):
     spec = REPOS[name]
     if spec is None:
         return 0, [f"{name}: n/a (gate is per-PR only)"]
+    if spec.get("no_ci"):
+        return no_ci(name, spec, tip_only, pr, gate)
     if "journal" in spec:
         verdicts, going = journal_verdicts()
     else:
@@ -887,10 +935,10 @@ def check(name, tip_only=False, pr=None):
     return code, lines
 
 
-def describe(name, tip_only=False, pr=None):
+def describe(name, tip_only=False, pr=None, gate=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     try:
-        return check(name, tip_only, pr)
+        return check(name, tip_only, pr, gate)
     except Unreadable as e:
         return 1, [f"{name}: ERROR  cannot read state: {e}"]
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
@@ -904,8 +952,8 @@ def main(argv):
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
-    by_slug = {v["github"].lower(): k for k, v in REPOS.items() if v and v.get("journal")}
-    argv = [by_slug.get(a.lower(), a) for a in argv]   # the journal repo's OWNER/REPO is its table entry: the any-repo path cannot read it
+    by_slug = {v["github"].lower(): k for k, v in REPOS.items() if v and (v.get("journal") or v.get("no_ci"))}
+    argv = [by_slug.get(a.lower(), a) for a in argv]   # the journal and no-CI repos' OWNER/REPO is their table entry: the any-repo path has no required checks to read for them
     pr = None
     if "--pr" in argv:
         k = argv.index("--pr")
@@ -923,13 +971,13 @@ def main(argv):
     elif len(argv) == 1 and "/" in argv[0] and not tip_only:
         names = argv   # OWNER/REPO: a GitHub repo not in the table; --tip is not for these repos
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N]", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N]  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases)", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
     for name in names:
         if name in REPOS:
-            code, lines = describe(name, tip_only, pr)
+            code, lines = describe(name, tip_only, pr, merge_gate and len(names) == 1)
         else:
             code, lines = describe_any(name, pr)
         print("\n".join(lines))
