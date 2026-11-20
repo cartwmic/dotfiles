@@ -1,14 +1,17 @@
 """Black-box tests for scripts/check-untested-hunks.py (the check for a fix whose changed lines no test depends on, dotfiles#641).
 
 Each test builds a scratch git repo with a script and its unittest file, commits a change, and runs the real script over the pull request.
+The budget and SIGTERM tests use fake slow tests (SLOW_SECONDS) against a budget of 1-2 s, so the file runs in seconds.
 
     python3 -m unittest discover -s tests/untested-hunks-check
 """
 
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -29,6 +32,30 @@ EDGE = "    def test_the_first_line_of_the_loop_counts(self):\n        self.asse
 TESTS = HEADER + INSIDE + LABEL
 TESTS_FOR_LABEL = HEADER + INSIDE + NEW_LABEL  # the fix's test: the case its finding named, nothing about `counts`
 TESTS_FOR_BOTH = HEADER + INSIDE + NEW_LABEL + EDGE
+
+# The budget and SIGTERM tests. PACE is the switch: the fake slow test sleeps only while PACE is 'slow', so one hunk (the one that sets
+# PACE back to 'slow' when undone) is slow and the others are quick. The hunks sit on lines 2 (label) and 5 (PACE), so the quick one
+# is checked first, even with one worker.
+SLOW_SECONDS = 10
+PACED_BASE = "def label(kind):\n    return kind\n\n\nPACE = 'slow'\n"
+PACED_FIXED = "def label(kind):\n    return 'exit: ' + kind\n\n\nPACE = 'fast'\n"
+PACE_ONLY_FIXED = "def label(kind):\n    return kind\n\n\nPACE = 'fast'\n"
+PACE_FAST_BASE = "def label(kind):\n    return kind\n\n\nPACE = 'fast'\n"
+PACE_FAST_LABEL = "def label(kind):\n    return 'exit: ' + kind\n\n\nPACE = 'fast'\n"
+OWN_LOADS = HEADER + "    def test_loads(self):\n        self.assertTrue(tool)\n\n"
+OWN_PACE_IS_FAST = HEADER + "    def test_pace_is_fast(self):\n        self.assertEqual(tool.PACE, 'fast')\n\n"
+ELSEWHERE = "tests/elsewhere/test_slow.py"  # sorts before tests/tool/, so a run in name order reaches it first
+SLOW_WHEN_SLOW = HEADER + (
+    "    def test_slow_while_paced_slow(self):\n        import os, time\n        if tool.PACE == 'slow':\n"
+    "            if os.environ.get('UNTESTED_TEST_MARK'):\n"
+    "                Path(os.environ['UNTESTED_TEST_MARK']).write_text(str(os.getpid()))\n"
+    f"            time.sleep({SLOW_SECONDS})\n\n"
+)
+ALWAYS_SLOW = HEADER + f"    def test_slow(self):\n        import time\n        time.sleep({SLOW_SECONDS})\n\n"
+ALWAYS_SLOW_MARKED = HEADER + (
+    "    def test_slow(self):\n        import os, time\n        Path(os.environ['UNTESTED_TEST_MARK']).write_text(str(os.getpid()))\n"
+    f"        time.sleep({SLOW_SECONDS})\n\n"
+)
 
 
 class CheckUntestedHunks(unittest.TestCase):
@@ -52,10 +79,38 @@ class CheckUntestedHunks(unittest.TestCase):
         self.git("commit", "-q", "-m", message)
         return self.git("rev-parse", "HEAD")
 
-    def run_check(self, base, head="HEAD", timeout="600"):
+    def run_check(self, base, head="HEAD", timeout="600", budget="1500"):
         done = subprocess.run([sys.executable, str(SCRIPT), base, head], cwd=self.repo, capture_output=True, text=True,
-                              env=dict(os.environ, UNTESTED_HUNKS_TIMEOUT=timeout))
+                              env=dict(os.environ, UNTESTED_HUNKS_TIMEOUT=timeout, UNTESTED_HUNKS_BUDGET=budget))
         return done.returncode, done.stdout + done.stderr
+
+    def sigterm_run(self, base):
+        """Start the checker on base..HEAD, wait until a test run has written its pid (its test is slow), then send SIGTERM.
+        Returns (exit code, pid of that test run, the scratch directory, output, seconds from SIGTERM to exit)."""
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        mark = Path(scratch.name) / "pid"
+        env = dict(os.environ, UNTESTED_HUNKS_BUDGET="1500", TMPDIR=scratch.name, UNTESTED_TEST_MARK=str(mark))
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), base, "HEAD"], cwd=self.repo, env=env, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        waited = time.monotonic()
+        while not (mark.exists() and mark.read_text().strip()):
+            if proc.poll() is not None or time.monotonic() - waited > 60:
+                out, err = proc.communicate()
+                self.fail("no test run started (exit %s): %s%s" % (proc.returncode, out, err))
+            time.sleep(0.05)
+        sent = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        return proc.returncode, int(mark.read_text()), Path(scratch.name), out + err, time.monotonic() - sent
+
+    def assert_stopped_clean(self, code, pid, scratch, out, seconds):
+        self.assertEqual(code, 143, out)  # 128 + SIGTERM: the checker's own exit
+        self.assertLess(seconds, SLOW_SECONDS - 2, out)  # the test run was stopped, not left to finish its sleep
+        self.assertEqual(self.git("worktree", "list").count("\n"), 0, out)
+        self.assertEqual([p.name for p in scratch.iterdir() if p.name.startswith("untested-hunks-")], [], out)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)  # the test run is gone: killed and reaped
 
     def pr(self, second, message="fix the finding", first=None):
         """A base commit holding the script and its tests, then the commit under test; returns the base."""
@@ -273,6 +328,54 @@ class CheckUntestedHunks(unittest.TestCase):
         self.assertEqual(code, 0, out)  # undone, wait(1) never returns: the new test notices (as a timeout)
         self.assertNotIn("NOT CHECKED", out)
         self.assertNotIn("FAIL", out)
+
+    def test_the_budget_stops_a_test_run_in_flight_and_keeps_the_verdicts_it_reached(self):
+        base = self.commit({CODE: PACED_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
+        self.commit({CODE: PACED_FIXED}, "fix")
+        started = time.monotonic()
+        code, out = self.run_check(base, budget="2")
+        self.assertLess(time.monotonic() - started, SLOW_SECONDS - 2, out)
+        self.assertEqual(code, 1, out)  # the label hunk is a FAIL, printed before the budget ends
+        self.assertIn("FAIL untested change: scripts/tool.py changes at line 2", out)
+        self.assertIn("NOT CHECKED scripts/tool.py line 5: time budget", out)  # the PACE hunk was in its slow test when the budget ended
+        self.assertEqual(self.git("worktree", "list").count("\n"), 0, out)
+
+    def test_a_budget_spent_before_the_unchanged_run_prints_not_checked_for_each_hunk(self):
+        base = self.commit({CODE: TOOL, TEST: ALWAYS_SLOW}, "base")
+        self.commit({CODE: TOOL_FIXED}, "fix")
+        started = time.monotonic()
+        code, out = self.run_check(base, budget="1")
+        self.assertLess(time.monotonic() - started, SLOW_SECONDS - 2, out)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("NOT CHECKED scripts/tool.py line"), 2, out)
+        self.assertEqual(out.count("time budget"), 2, out)
+        self.assertNotIn("FAIL", out)
+
+    def test_the_scripts_own_test_folder_runs_first_so_a_slow_file_elsewhere_is_not_reached(self):
+        base = self.commit({CODE: PACED_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
+        self.commit({CODE: PACE_ONLY_FIXED, TEST: OWN_PACE_IS_FAST}, "fix")
+        started = time.monotonic()
+        code, out = self.run_check(base, budget="2")
+        self.assertLess(time.monotonic() - started, SLOW_SECONDS - 2, out)
+        self.assertEqual(code, 0, out)  # the PACE hunk is caught by the own file, so the slow file never runs
+        self.assertNotIn("NOT CHECKED", out)
+
+    def test_each_hunk_runs_the_scripts_own_test_folder_before_the_other_files(self):
+        base = self.commit({CODE: PACE_FAST_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
+        self.commit({CODE: PACE_FAST_LABEL}, "fix")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 1, out)  # the label hunk survives both files: its FAIL lists them in the order they ran
+        self.assertIn("tests that name it: %s, %s)" % (TEST, ELSEWHERE), out)
+
+    def test_sigterm_during_a_hunk_run_kills_it_and_removes_the_scratch_worktrees(self):
+        base = self.commit({CODE: PACED_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
+        self.commit({CODE: PACED_FIXED}, "fix")
+        self.assert_stopped_clean(*self.sigterm_run(base))
+
+    def test_sigterm_during_the_unchanged_run_kills_it_and_removes_the_scratch_worktrees(self):
+        base = self.commit({CODE: TOOL, TEST: ALWAYS_SLOW_MARKED}, "base")
+        self.commit({CODE: TOOL_FIXED}, "fix")
+        self.assert_stopped_clean(*self.sigterm_run(base))
 
     def test_a_base_that_does_not_resolve_fails_closed(self):
         self.commit({CODE: TOOL}, "base")
