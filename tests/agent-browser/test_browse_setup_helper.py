@@ -1,10 +1,13 @@
 """agent-browse-setup: the real script against fakes, in a scratch HOME. It never touches a real Chrome, the real relay or the real agent profile.
 Fakes: `agent-chrome` and `browse` (scripts first on PATH) and a Chrome debug port (an HTTP server in this process that serves /json/list and records
 the PUT /json/new calls that open pages). A thread plays the person: it waits for the pairing code file, reads it, and "types" it (the fake `browse pair` ends
-connected), or installs the extension when the Web Store page is opened."""
+connected), or installs the extension when the Web Store page is opened.
+Every test bounds each wait the helper can reach (--wait-seconds, a short settle, a fake `browse pair` that gives up after 5 s), so a regression fails in
+seconds with the helper's output, and a helper that still hangs is killed with everything it started (own process group), never left behind."""
 import http.server
 import json
 import os
+import signal
 import socketserver
 import stat
 import subprocess
@@ -22,6 +25,8 @@ EXT = "mfnicocicmmlkpjnaffgihfjhdgjkdjg"
 STORE = "https://chromewebstore.google.com/detail/" + EXT
 SETTINGS = "chrome-extension://%s/settings.html" % EXT
 CODE = "PAIRCODE-7741-QXZ"   # what the fake `browse pair` prints; no output of the helper may contain it
+HELPER_TIMEOUT = 30   # a run that is still going after this is a bug: it is killed with its children and the test fails
+PAIR_CAP = 5          # the fake `browse pair` gives up after this many seconds whatever --wait-seconds says
 
 FAKE_AGENT_CHROME = "#!/bin/sh\necho agent-chrome >> \"$FAKE_DIR/calls.log\"\n[ -z \"$FAKE_CHROME_FAIL\" ] || { echo 'chrome is broken' >&2; exit 1; }\nexit 0\n"
 FAKE_BROWSE = """#!@PY@
@@ -30,23 +35,24 @@ d = os.environ["FAKE_DIR"]
 def flag(name): return os.path.exists(os.path.join(d, name))
 open(os.path.join(d, "calls.log"), "a").write("browse " + " ".join(sys.argv[1:]) + "\\n")
 if sys.argv[1:] == ["status", "--json"]:
-    # browse 0.1.0 with no relay running: no `connected` key, only `relay` and `setup`. A tool call (`tabs`) starts the relay.
+    # browse 0.1.0 with no relay running: no `connected` key, only `relay` and `setup`. Any tool call (here: any command but status and pair) starts the relay.
     print(json.dumps({"connected": flag("connected")} if flag("relay-up") else {"relay": {"running": False}, "setup": {"installed": True}}))
-elif sys.argv[1:] == ["tabs"]:
-    open(os.path.join(d, "relay-up"), "w").close()
-    print(json.dumps({"tabs": []}))
 elif sys.argv[1:] == ["status"]:
     print("Extension: " + ("connected" if flag("connected") else "not connected"))
-elif sys.argv[1] == "pair":
+elif sys.argv[1] != "pair":
+    open(os.path.join(d, "relay-up"), "w").close()
+    print(json.dumps({"tabs": []}))
+else:
+    open(os.path.join(d, "relay-up"), "w").close()   # `browse pair` serves a relay too
     open(os.path.join(d, "pair-out-mode"), "w").write(oct(stat.S_IMODE(os.fstat(1).st_mode)))
     print("Pairing code: %s" % os.environ["FAKE_CODE"]); print("Waiting for the browser that redeems it..."); sys.stdout.flush()
-    deadline = time.time() + int(sys.argv[3])
+    deadline = time.time() + min(int(sys.argv[3]), @CAP@)
     while time.time() < deadline:
         if flag("redeemed"):
             open(os.path.join(d, "connected"), "w").close(); sys.exit(0)
         time.sleep(0.1)
     sys.exit(1)
-""".replace("@PY@", sys.executable)
+""".replace("@PY@", sys.executable).replace("@CAP@", str(PAIR_CAP))
 
 
 class FakeChrome:
@@ -110,6 +116,13 @@ class SetupHelperTest(unittest.TestCase):
     def flag(self, name):
         (self.fake / name).write_text("")
 
+    def install_extension_folder(self, version="0.1.5_0", manifest=True):
+        """What Chrome leaves in the agent profile for an installed extension."""
+        d = self.home / ".local/share/agent-chrome-profile/Default/Extensions" / EXT / version
+        d.mkdir(parents=True)
+        if manifest:
+            (d / "manifest.json").write_text("{}")
+
     def calls(self):
         p = self.fake / "calls.log"
         return p.read_text().splitlines() if p.exists() else []
@@ -134,7 +147,23 @@ class SetupHelperTest(unittest.TestCase):
         env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.home), "AGENT_CHROME_PORT": str(chrome.port),
                "FAKE_DIR": str(self.fake), "FAKE_CODE": CODE, "XDG_STATE_HOME": str(self.home / ".local/state"), "AGENT_BROWSE_SETUP_SETTLE": "1"}
         env.update(extra)
-        return subprocess.run(["sh", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=60)
+        proc = subprocess.Popen(["sh", str(SCRIPT), *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            out, err = proc.communicate(timeout=HELPER_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            self.kill_group(proc)
+            out, err = proc.communicate()
+            self.fail("the helper was still running after %ss (killed with its children)\nstdout:\n%s\nstderr:\n%s" % (HELPER_TIMEOUT, out, err))
+        finally:
+            self.kill_group(proc)   # a fake `browse pair` the helper left behind
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
+    @staticmethod
+    def kill_group(proc):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     def log(self):
         return (self.state / "agent-browse-setup.log").read_text()
@@ -146,18 +175,18 @@ class SetupHelperTest(unittest.TestCase):
 
     def test_a_paired_profile_with_no_relay_running_is_connected_once_the_helper_starts_the_relay(self):
         chrome = self.chrome(extension_installed=True)
-        self.flag("connected")   # paired: but `browse status --json` shows it only while a relay runs
-        r = self.run_helper(chrome)
+        self.flag("connected")   # paired: but `browse status --json` shows it only while a relay runs, and nothing has started one
+        r = self.run_helper(chrome, "--wait-seconds", "1")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(chrome.opened, [])
         self.assertEqual([c for c in self.calls() if c.startswith("browse pair")], [])
-        self.assertLess(self.calls().index("browse tabs"), self.calls().index("browse status --json"))   # the relay is started before the first check
         self.assertEqual(r.stdout.splitlines()[-1], "Extension: connected")
 
-    def test_already_connected_prints_the_status_and_changes_nothing(self):
+    def test_a_relay_that_is_already_running_and_connected_prints_the_status_and_changes_nothing(self):
         chrome = self.chrome(extension_installed=True)
+        self.flag("relay-up")
         self.flag("connected")
-        r = self.run_helper(chrome)
+        r = self.run_helper(chrome, "--wait-seconds", "1")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(chrome.opened, [])
         self.assertEqual([c for c in self.calls() if c.startswith("browse pair")], [])
@@ -165,8 +194,9 @@ class SetupHelperTest(unittest.TestCase):
 
     def test_a_paired_profile_that_reads_connected_a_moment_after_chrome_starts_is_left_alone(self):
         chrome = self.chrome(extension_installed=False)   # the service worker is not up yet either
-        threading.Timer(1.5, lambda: (self.flag("connected"), chrome.workers.append({"type": "service_worker", "url": "chrome-extension://%s/sw.js" % EXT}))).start()
-        r = self.run_helper(chrome, AGENT_BROWSE_SETUP_SETTLE="6")
+        self.flag("relay-up")
+        threading.Timer(1.0, lambda: (self.flag("connected"), chrome.workers.append({"type": "service_worker", "url": "chrome-extension://%s/sw.js" % EXT}))).start()
+        r = self.run_helper(chrome, "--wait-seconds", "2", AGENT_BROWSE_SETUP_SETTLE="4")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(chrome.opened, [])
         self.assertEqual([c for c in self.calls() if c.startswith("browse pair")], [])
@@ -198,7 +228,7 @@ class SetupHelperTest(unittest.TestCase):
                 threading.Timer(1.0, lambda: chrome.workers.append({"type": "service_worker", "url": "chrome-extension://%s/sw.js" % EXT})).start()
         chrome = self.chrome(extension_installed=False, on_open=install_when_store_opens)
         person = self.person_redeems()
-        r = self.run_helper(chrome)
+        r = self.run_helper(chrome, "--wait-seconds", "8")
         person.join(timeout=5)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(chrome.opened, [STORE, SETTINGS])
@@ -207,12 +237,53 @@ class SetupHelperTest(unittest.TestCase):
 
     def test_extension_never_installed_fails_naming_the_store_page_and_never_pairs(self):
         chrome = self.chrome(extension_installed=False)
-        r = self.run_helper(chrome, "--wait-seconds", "2")
+        r = self.run_helper(chrome, "--wait-seconds", "1")
         self.assertEqual(r.returncode, 1)
         self.assertEqual(chrome.opened, [STORE])
         self.assertIn(STORE, r.stderr)
         self.assertEqual([c for c in self.calls() if c.startswith("browse pair")], [])
         self.assertIn("ERROR: the extension did not appear", self.log())
+
+    def test_an_extension_folder_in_the_profile_counts_as_installed_when_chrome_lists_no_service_worker(self):
+        chrome = self.chrome(extension_installed=False)   # an idle worker is not listed
+        self.install_extension_folder()
+        person = self.person_redeems()
+        r = self.run_helper(chrome, "--wait-seconds", "5")
+        person.join(timeout=5)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(chrome.opened, [SETTINGS])   # no Store page
+        self.assertIn("browse pair --wait-seconds 5", self.calls())
+        self.assert_code_not_leaked(r)
+
+    def test_an_extension_folder_with_no_version_inside_is_not_an_install(self):
+        chrome = self.chrome(extension_installed=False)
+        (self.home / ".local/share/agent-chrome-profile/Default/Extensions" / EXT).mkdir(parents=True)
+        r = self.run_helper(chrome, "--wait-seconds", "1")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(chrome.opened, [STORE])
+        self.assertEqual([c for c in self.calls() if c.startswith("browse pair")], [])
+
+    def test_a_version_folder_with_no_manifest_is_not_an_install(self):
+        chrome = self.chrome(extension_installed=False)
+        self.install_extension_folder(manifest=False)
+        r = self.run_helper(chrome, "--wait-seconds", "1")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(chrome.opened, [STORE])
+
+    def test_an_extension_folder_that_appears_while_the_helper_waits_after_the_store_page_carries_it_on(self):
+        chrome = self.chrome(extension_installed=False, on_open=lambda c, url: url == STORE and threading.Timer(1.0, self.install_extension_folder).start())
+        person = self.person_redeems()
+        r = self.run_helper(chrome, "--wait-seconds", "8")
+        person.join(timeout=5)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(chrome.opened, [STORE, SETTINGS])
+        self.assert_code_not_leaked(r)
+
+    def test_the_helper_looks_in_the_profile_agent_chrome_starts(self):
+        line = 'PROFILE="$HOME/.local/share/agent-chrome-profile"'
+        for script in (SCRIPT, SCRIPT.with_name("executable_agent-chrome")):
+            with self.subTest(script=script.name):
+                self.assertIn(line, script.read_text().splitlines())
 
     def test_a_code_nobody_types_fails_and_still_ends_with_the_status(self):
         chrome = self.chrome(extension_installed=True)
