@@ -24,6 +24,16 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/user_scripts/executable_agent_kit_bump.py"
 PRINCIPLE_HEADINGS = re.findall(r"(?m)^## (\d+)\. (.+)$", (ROOT / "dot_local/share/agent-harness/design-principles.md").read_text())
 LAST_PRINCIPLE = (int(PRINCIPLE_HEADINGS[-1][0]), PRINCIPLE_HEADINGS[-1][1])
+
+
+def _load_body_check():
+    spec = importlib.util.spec_from_file_location("bump_pr_body", ROOT / "scripts/bump_pr_body.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+body_problems = _load_body_check().problems  # the check shared with tests/release-skills (loop_engine_bump.py)
 INSTALL_TEMPLATE = "run_onchange_after_65_agent_kit_install.sh.tmpl"
 KIT_SRC = "dot_local/share/agent-kit"
 KIT_DEST = ".local/share/agent-kit"
@@ -245,6 +255,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(len(prs), 1)
         self.assertIn("| %d | %s |" % LAST_PRINCIPLE, prs[0]["body"])
         self.assertRegex(prs[0]["body"], r"(?m)^Decisions: none material$")
+        self.assertEqual(body_problems(prs[0]["body"], str(self.dir)), [], "the PR body carries script bookkeeping")
 
         # Checks, then the two gates in order, then the squash merge, which must name the head the checks ran on.
         calls = self.calls()
@@ -558,11 +569,20 @@ class BodyTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("agent_kit_bump", SCRIPT)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        body = module.pr_body(NEW)
+        body = module.pr_body(NEW, "1" * 40, "2026-11-20")
         rows = {int(m.group(1)) for m in re.finditer(r"^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", body, re.M)}
         self.assertEqual(rows, set(range(1, LAST_PRINCIPLE[0] + 1)))
         self.assertRegex(body, r"(?m)^Decisions: none material$")
         self.assertEqual(re.findall(r"(?<![\w-])(?:D-\d+|D\d+|MK-\d+|T\d+)(?![\w-])", body), [])
+        self.assertEqual(body_problems(body), [])
+        proven = body.split("## Proven\n", 1)[1].split("\nPrinciples", 1)[0]
+        self.assertIn("2026-11-20", proven)
+        self.assertIn("1" * 40, proven)
+
+    def test_the_shared_check_fails_the_body_the_script_wrote_before_the_fix(self):
+        old = ("Pin `@cartwmic/agent-kit` to 0.52.0 (package.json and package-lock.json), made by `agent_kit_bump.py 0.52.0` "
+               "(playbook rule 7c57de5a).\n\n| 13 | Resolve | n/a | the merge runs under the standing dotfiles grant (playbook rule 7c57de5a). |\n")
+        self.assertEqual(sorted({p.split(":")[0] for p in body_problems(old)}), ["a rule id", "no Proven section"])
 
 
 if __name__ == "__main__":

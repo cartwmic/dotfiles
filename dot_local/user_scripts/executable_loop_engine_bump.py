@@ -71,8 +71,8 @@ PRINCIPLES = [
     ("Fix the cause; no arbitrary caps or unrequested defense in depth", "n/a", "No cap, threshold or extra guard is added."),
     ("Good enough for personal software", "pass", "Personal profile only for the apply; the work Mac takes the merged pins with its own chezmoi update."),
     ("Prior art before building", "n/a", "No new capability; the bundles come from the Loop Engine release."),
-    ("Verified from the outside", "pass", "The verify step runs verify-deployed on the changed bundles and reads the active mise versions back (log step verify)."),
-    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the merge runs under the standing dotfiles grant (playbook rule 7c57de5a)."),
+    ("Verified from the outside", "pass", "Before the merge the script compared every skill file with the release tag (see Proven); after it, it runs verify-deployed on the changed bundles and reads the active mise versions back."),
+    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the owner's standing grant lets the script merge a Loop Engine release bump once its checks pass."),
     ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/loop-engine-bump/log.jsonl."),
     ("Fast proof", "n/a", "The import runs no journey; the proof is the PR's CI run."),
     ("Built to last", "pass", "The script replaces the pins and shipped skills in place; nothing old is left behind."),
@@ -84,6 +84,26 @@ def principles_section():
     rows = ["| %d | %s | %s | %s |" % (number, name, result, evidence) for number, (name, result, evidence) in enumerate(PRINCIPLES, 1)]
     return "\n".join(["Principles (`~/.local/share/agent-harness/design-principles.md`):", "", "| # | Principle | Result | Evidence |",
                       "|---|---|---|---|", *rows, "", "Decisions: none material", ""])
+
+
+def release_body(tag, import_output, head, day):
+    """The PR body. The import tool's closing lines (the scratch worktree it names and the steps for it) are left out: the worktree
+    is gone after the run and the script does those steps itself. Proven carries the two lines the import checked: the tag's
+    files against its tree hashes, and the pins it moved."""
+    summary = []
+    for line in import_output.splitlines():
+        if line.startswith("applied to "):
+            break
+        summary.append(line)
+    checked = [line for line in summary if line.startswith(("tag ", "pins:"))]
+    return ("Import of the %s skill bundles and the five Loop Engine pins (%s), made by `loop_engine_bump.py %s`. Every Loop "
+            "Engine release updates the dotfiles pins and skills.\n\n```\n%s\n```\n\n"
+            "Profiles: both. The pins and canonical skills land on personal and axon-work-computer; the script "
+            "applies them on personal only, and the work Mac gets them with its own chezmoi update.\n\n"
+            "## Proven\n\nChecked by the script before the PR, %s, head %s:\n\n```\n%s\n```\n\n"
+            "Runs after the merge, not yet: the scoped apply of these files on the personal computer, `mise install`, and "
+            "`import_release_skills.py verify-deployed`.\n\n%s"
+            % (tag, ", ".join(TOOLS), tag, "\n".join(summary), day, head, "\n".join(checked), principles_section()))
 
 
 class Stop(Exception):
@@ -209,11 +229,8 @@ def publish(source, tag, branch, log):
         git(wt.path, "add", "-A", step="publish")
         git(wt.path, "commit", "-q", "-m", title, step="publish")
         git(wt.path, "push", "-q", "--force", "origin", "HEAD:refs/heads/" + branch, step="publish")
-        body = ("Import of the %s skill bundles and the five Loop Engine pins (%s), made by "
-                "`loop_engine_bump.py %s` (playbook rule 7c57de5a).\n\n```\n%s```\n\n"
-                "Profiles: both. The pins and canonical skills land on personal and axon-work-computer; the script "
-                "applies them on personal only, and the work Mac gets them with its own chezmoi update.\n\n"
-                "%s" % (tag, ", ".join(TOOLS), tag, result.stdout, principles_section()))
+        body = release_body(tag, result.stdout, git(wt.path, "rev-parse", "HEAD", step="publish").stdout.strip(),
+                            datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body], "publish",
             cwd=source)
     pr = find_pr(source, branch)

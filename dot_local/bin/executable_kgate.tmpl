@@ -2164,13 +2164,17 @@ class Job:
         not made to wait behind PR gates), and one flock around "look, create, wait for the scheduler's answer", so two clients never both see room that only one
         of them gets. A job that cannot read the waiting pods creates its pod as before. The wait counts against --wait.
         A create the namespace's ResourceQuota refuses is a wait too: the job releases the flock, says "queued: waiting for quota: ...", sleeps with the quota backoff
-        and tries again, so a job that fits (it asks less than this one) is not held up by the sleep. It ends at --wait like the kubectl cluster's quota wait."""
+        and tries again. It ends at --wait like the kubectl cluster's quota wait. The refusal marks its ticket ("quota": true), and a marked ticket holds back every job
+        ordered after it, whatever that job asks: the job keeps its place in line, so a stream of small jobs that fit cannot take the quota a large one waits for
+        (a 12-CPU job waited out its whole --wait behind 4-CPU jobs that retry every 3 s). The flock is still let go for the sleep, so a job ordered before it
+        (a higher priority, or an earlier one) is placed meanwhile, and nobody sleeps holding it."""
         mine = pod_shape(next(i for i in manifests["items"] if i["kind"] == "Pod"))
         queue = os.path.join(self.state, "queue")
         os.makedirs(queue, exist_ok=True)
         ticket = os.path.join(queue, self.id + ".json")
         ident = proc_identity(os.getpid())
-        write_json_atomic(ticket, {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": deadline, "shape": mine})
+        entry = {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": deadline, "shape": mine}
+        write_json_atomic(ticket, entry)
         t_wait, last, noted = None, None, False
         quota = QuotaWait(self)
         with open(os.path.join(queue, ".lock"), "a") as lock:
@@ -2184,13 +2188,15 @@ class Job:
                             why = "another job is being placed"
                         else:
                             try:
-                                why = self.cluster_full(mine)
+                                why = self.queued_behind(queue, mine) or self.cluster_full(mine)   # looked at again under the flock: a job ahead may have been refused since the look above
                                 if not why:
                                     refused = self.try_create(manifests)
                                     if refused is None:
                                         self.settle()
                                         break
                                     why, pause = quota.refused(refused)   # the flock is let go below, before the sleep
+                                    entry["quota"] = True   # the job keeps its place: while this ticket is there, no job ordered after it is placed (queued_behind)
+                                    write_json_atomic(ticket, entry)
                             finally:
                                 fcntl.flock(lock, fcntl.LOCK_UN)
                     if pause:   # the quota refused the pod: take out the Secrets that went in ahead of it. Outside the flock, because a failed delete is retried for a while.
@@ -2215,7 +2221,8 @@ class Job:
             self.note("left the queue after %.0fs; creating the pod" % self.rec["queue_wait_s"])
 
     def queued_behind(self, queue, mine):
-        """What holds this job back among the clients on this machine: a live ticket made before this one (the higher priority first, then the older) that blocks it. None when there is none."""
+        """What holds this job back among the clients on this machine: a live ticket made before this one (the higher priority first, then the older) that blocks it, or
+        that the namespace quota refused (it holds back every later job, whatever that asks, so a job the quota refuses keeps its place). None when there is none."""
         order = lambda t: (-t["shape"]["priority"], t["t"], t["id"])
         tickets = []
         for name in os.listdir(queue):
@@ -2233,7 +2240,9 @@ class Job:
                 continue
             tickets.append(t)
         mine_key = (-mine["priority"], self.t0, self.id)
-        ahead = next((t for t in sorted(tickets, key=order) if order(t) < mine_key and blocks(t["shape"], mine)), None)
+        ahead = next((t for t in sorted(tickets, key=order) if order(t) < mine_key and (t.get("quota") or blocks(t["shape"], mine))), None)
+        if ahead and ahead.get("quota"):
+            return "behind %s, which the quota refused and was first" % ahead["id"]
         return "behind %s, which asks no more of the cluster and was first" % ahead["id"] if ahead else None
 
     def cluster_full(self, mine):

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the seat-* instances, pi and pi-lead below; container mode owns only the four seat-lead, seat-builder, seat-planner and seat-reviewer instances).
+# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the seat-* instances, pi and pi-lead below; container mode owns only the five seat-lead, seat-builder, seat-planner, seat-reviewer and seat-scout instances).
 # The hub pair (claude-hub, codex-hub, data switch t3Hub.enabled) is personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # The hub as the default (data switch hub.enabled, below) applies on the personal profile on macOS and Linux. Personal Linux also owns two more instances, pi and pi-lead (see "pi" and "pi-lead" below).
 # Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
@@ -54,7 +54,7 @@
 #   and threads that are archived, settled, snoozed, deleted or sub-agents; it fires once per finished run, so a big thread nobody returns to is still
 #   compacted once. Applies on every apply, hub switch on or off; to change it, edit IDLE_COMPACTION; '' leaves the key as T3 has it. Source of the
 #   values: T3's settings contract (IDLE_COMPACTION_MODES), checked in the installed 0.1.10 nightly.
-# seat-lead, seat-builder, seat-planner, seat-reviewer  (every file this template runs on: personal macOS and personal Linux), and seat-computer (personal macOS and Linux, not container mode)
+# seat-lead, seat-builder, seat-planner, seat-reviewer, seat-scout  (every file this template runs on: personal macOS and personal Linux), and seat-computer (personal macOS and Linux, not container mode)
 #               One claudeAgent instance per agent seat, so a seat starts with its own settings instead of the default ones. Each has its own
 #               autoCompactWindow, optionally an `environment` entry, and `launchArgs` of
 #                 --settings <home>/.claude/fleet/seat-<seat>.json --strict-mcp-config --mcp-config <home>/.claude/fleet/mcp.json
@@ -68,7 +68,14 @@
 #                 seat-builder   window 300000  advisor on
 #                 seat-planner   window 300000  advisor on
 #                 seat-reviewer  window 300000  advisor OFF  prompt cache 5 minutes (FORCE_PROMPT_CACHING_5M=1)  idleCompaction off
+#                 seat-scout     window 200000  advisor OFF  MCP file mcp-scout.json (empty: a scout reads and searches, T3 still adds t3-code); read-only seat file (fleet_seat)
 #                 seat-computer  window 200000  advisor OFF  MCP file mcp-computer.json (hindsight, shartifacts and the browser tool: browse on personal)
+#               The builder's advisor runs on Opus 5.5 (claude-opus-5-5): fleet_seat puts `advisorModel` in seat-builder.json, which Claude Code reads over the global
+#               advisorModel in ~/.claude/settings.json (Fable 5.2). Checked on the installed binary: a session started with the rendered seat file sent the advisor tool
+#               with model claude-opus-5-5, and its usage iterations list an advisor_message from claude-opus-5-5. The other seats keep the global advisor.
+#               CLAUDE_CODE_SUBAGENT_MODEL=claude-haiku-5-5 (seat-lead, seat-builder, seat-planner only): helpers a session starts with the Agent tool and no model run on Haiku 5.5.
+#               It does not reach a helper whose definition names a model (the reader, or an Agent call that passes `model`), the built-in Explore and Plan kinds, a fork,
+#               or a definition with `model: inherit`; those keep what they have (docs/profiles.md "Agent seat instances" lists the checked results).
 #               seat-computer is the Computer use seat (browser and screen). It is a claudeAgent instance like the others and sets no ANTHROPIC_BASE_URL: it routes
 #               through the CLIProxy hub the way the other seat instances do, by way of ~/.claude/settings.json when the hub is on. Its launchArgs differ from the
 #               others in the MCP file only. It is not written in container mode (the Browse entry has the same gate) and the work profile has no T3 settings file here.
@@ -81,12 +88,12 @@
 #               thread over 200K tokens would be compacted then, a wasted re-read of a thread nobody returns to. The reviewer instance therefore
 #               sets its own `config.idleCompaction` to "off" (T3's per-instance "Compact idle threads: Never"); the reviewer still auto-compacts at
 #               its window. A running session keeps the environment it started with, so this reaches new sessions only.
-#               seat-builder, seat-planner, seat-reviewer and seat-computer also get `--add-dir <home>/.claude/fleet/worker` (before --strict-mcp-config: --add-dir takes several values) and the
+#               seat-builder, seat-planner, seat-reviewer, seat-scout and seat-computer also get `--add-dir <home>/.claude/fleet/worker` (before --strict-mcp-config: --add-dir takes several values) and the
 #               environment variable CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1. Their seat file excludes ~/.claude/CLAUDE.md; the worker folder holds the same instructions
 #               without the hindsight guide, plus the skill that carries the guide (docs/profiles.md "Agent seat instances"). The lead, coordinator and default instances are unchanged.
 #               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
 #               is deployed for it to point at.
-# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and every seat-* instance (lead, builder, planner, reviewer, computer, and homelab-chat on Linux outside container mode); an `environment` entry, merged by name so other entries stay):
+# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and every seat-* instance (lead, builder, planner, reviewer, scout, computer, and homelab-chat on Linux outside container mode); an `environment` entry, merged by name so other entries stay):
 #               T3 delivers a message to a running session as an interrupt (priority "now"). When it lands while Claude Code is still running a
 #               PreToolUse hook, that call is skipped, and Claude Code 2.1.322/323 reports it as "The user doesn't want to take this action right now. STOP
 #               what you are doing and wait for the user to tell you how to proceed." (three false declines in the coordinator session, 2026-11-12/13). With this
@@ -124,7 +131,8 @@ set -eu
 {{- $want := dict }}
 {{- $owned := list "claude-hub" "codex-hub" }}
 {{- $fleet := printf "%s/.claude/fleet" $home }}
-{{- $seats := list (dict "id" "lead" "window" "200000" "advisor" false "mcp" "mcp") (dict "id" "builder" "window" "300000" "advisor" true "mcp" "mcp") (dict "id" "planner" "window" "300000" "advisor" true "mcp" "mcp") (dict "id" "reviewer" "window" "300000" "advisor" false "cache5m" true "mcp" "mcp") }}
+{{- /* subagent: the seat's helpers (sub-agents started with the Agent tool) default to Haiku 5.5 (CLAUDE_CODE_SUBAGENT_MODEL, set below). Lead, builder and planner only; the reviewer, computer and scout instances leave helpers on their own defaults. */}}
+{{- $seats := list (dict "id" "lead" "window" "200000" "advisor" false "subagent" true "mcp" "mcp") (dict "id" "builder" "window" "300000" "advisor" true "subagent" true "mcp" "mcp") (dict "id" "planner" "window" "300000" "advisor" true "subagent" true "mcp" "mcp") (dict "id" "reviewer" "window" "300000" "advisor" false "cache5m" true "mcp" "mcp") (dict "id" "scout" "window" "200000" "advisor" false "mcp" "mcp-scout") }}
 {{- /* seat-computer: the Computer use seat (docs/profiles.md, "Agent seat instances"). Personal profile on macOS and Linux, outside container mode (the same gate as the Browse entry in servers.json.tmpl). Window 200000, no advisor. Its MCP file adds the browser tool (mcp-computer.json). It adds no ANTHROPIC_BASE_URL: it routes the way the other seat instances do, through ~/.claude/settings.json. */}}
 {{- if and (eq .profile "personal") (or (eq .chezmoi.os "darwin") (eq .chezmoi.os "linux")) (not (includeTemplate "container" . | fromJson).enabled) }}
 {{-   $seats = append $seats (dict "id" "computer" "window" "200000" "advisor" false "mcp" "mcp-computer") }}
@@ -136,11 +144,12 @@ set -eu
 {{-   if not $seat.advisor }}{{ $_ := set $inst "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy) }}{{ end }}
 {{- /* Reviewer seat only: 5-minute prompt cache writes and no idle compaction (see the seat-reviewer note in the header). */}}
 {{-   if hasKey $seat "cache5m" }}{{ $_ := set $inst "environment" (append (get $inst "environment") (dict "name" "FORCE_PROMPT_CACHING_5M" "value" "1" "sensitive" false)) }}{{ $_ := set (get $inst "config") "idleCompaction" "off" }}{{ end }}
-{{- /* Builder, planner, reviewer and computer: the instructions come from the worker folder, not ~/.claude/CLAUDE.md (excluded in the seat file by fleet_seat). Both pieces are needed: --add-dir adds the folder, the variable makes Claude Code read CLAUDE.md from an added folder. --add-dir takes several values, so it goes before another flag. */}}
-{{-   if has $seat.id (list "builder" "planner" "reviewer" "computer") }}
+{{- /* Builder, planner, reviewer, computer and scout: the instructions come from the worker folder, not ~/.claude/CLAUDE.md (excluded in the seat file by fleet_seat). Both pieces are needed: --add-dir adds the folder, the variable makes Claude Code read CLAUDE.md from an added folder. --add-dir takes several values, so it goes before another flag. */}}
+{{-   if has $seat.id (list "builder" "planner" "reviewer" "computer" "scout") }}
 {{-     $_ := set $inst.config "launchArgs" (replace " --strict-mcp-config" (printf " --add-dir %s/worker --strict-mcp-config" $fleet) $inst.config.launchArgs) }}
 {{-     $_ := set $inst "environment" (append $inst.environment (dict "name" "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" "value" "1" "sensitive" false)) }}
 {{-   end }}
+{{-   if hasKey $seat "subagent" }}{{ $_ := set $inst "environment" (append $inst.environment (dict "name" "CLAUDE_CODE_SUBAGENT_MODEL" "value" "claude-haiku-5-5" "sensitive" false)) }}{{ end }}
 {{-   $want = set $want (printf "seat-%s" $seat.id) $inst }}
 {{-   $owned = append $owned (printf "seat-%s" $seat.id) }}
 {{- end }}
