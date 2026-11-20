@@ -45,13 +45,14 @@ class SettingsRenderTests(unittest.TestCase):
                 self.assertIs(comp["enabled"], False)
                 self.assertNotIn("modelOverrides", comp)  # no per-model native triggers alongside the extension
 
-    def test_pi_subagent_default_model_is_haiku_on_personal_only(self):
+    def test_pi_subagent_default_model_is_haiku_on_personal_and_the_work_builders_model_on_work(self):
         # pi-subagents docs/models.md: subagents.defaultModel is the default for every sub-agent that sets no model of its own.
-        # Personal sets it to a model it already lists in enabledModels. Work sets none: a model change on the work machine waits for the owner's answer; it keeps its disableThinking switch.
+        # Personal: Haiku 5.5. Work: the model its builder seat runs on (work-glm/<workGlmModelId>, profile-work.md's Builder row); it keeps its disableThinking switch.
         personal, work = render("personal"), render("axon-work-computer")
         self.assertEqual(personal["subagents"], {"defaultModel": "claude-compat/claude-haiku-5-5"})
-        self.assertIn(personal["subagents"]["defaultModel"], personal["enabledModels"])
-        self.assertEqual(work["subagents"], {"disableThinking": True})
+        self.assertEqual(work["subagents"], {"defaultModel": "work-glm/test-model", "disableThinking": True})
+        for settings in (personal, work):
+            self.assertIn(settings["subagents"]["defaultModel"], settings["enabledModels"])
 
     def test_summary_cap_is_raised_above_the_default(self):
         for profile in ("personal", "axon-work-computer"):
