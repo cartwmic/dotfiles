@@ -214,6 +214,7 @@ class Process(unittest.TestCase):
     def test_a_bad_flag_is_a_usage_error(self):
         r = self.prune("--force")
         self.assertEqual(r.returncode, 64)
+        self.assertIn("kgate prune [--delete]", r.stderr)  # the usage text names the subcommand
 
 
 if __name__ == "__main__":
