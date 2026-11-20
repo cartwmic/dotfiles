@@ -23,26 +23,11 @@ are not blamed on the PR. The cost: a side branch merged into the PR is not walk
 
 Exit 0 clean, 1 an undeclared edit, 2 BASE or HEAD does not resolve (a shallow checkout: fetch the history first).
 """
-import re
-import subprocess
 import sys
 
+from commit_range import declared, git, hunks, is_test_file, walk
+
 TRAILER = "Test-edit"
-
-
-def git(*args):
-    done = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, text=True)
-    if done.returncode != 0:
-        raise RuntimeError("git %s: %s" % (" ".join(args), done.stderr.strip()))
-    return done.stdout
-
-
-def is_test_file(path):
-    parts = path.split("/")
-    name = parts[-1]
-    if "tests" in parts[:-1] or "fixtures" in parts[:-1]:
-        return True
-    return re.match(r"(test_.*\.py|.*_test\.py|.*\.(test|spec)\.[a-z]+|.*\.journey\.ts)$", name) is not None
 
 
 def is_shortening(removed, added):
@@ -55,46 +40,13 @@ def is_shortening(removed, added):
     return all(ch in letters for ch in new)
 
 
-def hunks(patch):
-    """Yield (path, removed_lines, added_lines) for each hunk of a -U0 patch, for files that existed before."""
-    path = None
-    current = None
-    in_header = False
-    for line in patch.splitlines():
-        if line.startswith("diff --git"):
-            if current:
-                yield current
-            path, current, in_header = None, None, True
-        elif in_header and line.startswith("--- a/"):
-            path = line[6:]
-        elif in_header and line.startswith("--- "):
-            path = None  # a new file: nothing existing was edited
-        elif line.startswith("@@"):
-            if current:
-                yield current
-            current, in_header = [path, [], []], False
-        elif current and line.startswith("-"):
-            current[1].append(line[1:])
-        elif current and line.startswith("+"):
-            current[2].append(line[1:])
-    if current:
-        yield current
-
-
 def weakened_files(commit):
     patch = git("show", "-U0", "-M", "--format=", "--no-color", commit)
     found = []
-    for path, removed, added in hunks(patch):
+    for path, removed, added, _start, _count in hunks(patch):
         if path and is_test_file(path) and removed and is_shortening(removed, added) and path not in found:
             found.append(path)
     return found
-
-
-def declared(commit):
-    """The reasons in a commit's message: each `Test-edit:` line, in any paragraph (git's key match is case-insensitive too)."""
-    message = git("log", "-1", "--format=%B", commit)
-    reasons = (match.group(1).strip() for match in re.finditer(r"^" + TRAILER + r":(.*)$", message, re.MULTILINE | re.IGNORECASE))
-    return [reason for reason in reasons if reason]
 
 
 def main(argv):
@@ -102,9 +54,7 @@ def main(argv):
         print("usage: check-test-edits.py BASE HEAD", file=sys.stderr)
         return 2
     try:
-        base, head = (git("rev-parse", "--verify", "--quiet", rev + "^{commit}").strip() for rev in argv[1:])
-        # First parents only, so a main merged into the PR is not walked. A side branch merged into the PR is not walked either.
-        commits = git("rev-list", "--first-parent", "--no-merges", "--reverse", base + ".." + head).split()
+        base, head, commits = walk(argv[1], argv[2])
     except RuntimeError as err:
         print("check-test-edits: cannot read %s..%s (%s); fetch the full history (fetch-depth: 0)" % (argv[1], argv[2], err), file=sys.stderr)
         return 2
@@ -114,7 +64,7 @@ def main(argv):
         files = weakened_files(commit)
         if not files:
             continue
-        reasons = declared(commit)
+        reasons = declared(commit, TRAILER)
         for path in files:
             if reasons:
                 print("DECLARED test-edit: %s %s: %s" % (commit[:8], path, "; ".join(reasons)))

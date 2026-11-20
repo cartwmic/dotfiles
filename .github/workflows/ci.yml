@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          fetch-depth: 0 # the test-edit step below walks every commit of the PR
+          fetch-depth: 0 # the two commit-walk steps below read every commit of the PR
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -61,6 +61,17 @@ jobs:
         run: python3 scripts/check-test-edits.py "$BASE_SHA" "$HEAD_SHA"
       - name: "Linux checks: scripts/ci-linux.sh (four node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
+      # A pull request that changes what a Python script does needs a test that notices each changed hunk (dotfiles#641: two fix
+      # commits added tests, none for the loop rule they rewrote, and review round 2 found the regression there). It undoes each hunk
+      # in a copy of HEAD and runs the tests that name the script. Its own unit suite is tests/untested-hunks-check. After the suites,
+      # whatever they did, so a red here never hides a red suite (and the reverse). PRs only, like the step above.
+      - name: "Untested hunks: fail when the pull request changes a script and no test depends on a changed hunk (scripts/check-untested-hunks.py)"
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        timeout-minutes: 30 # the checker stops its own run at 1500 s (UNTESTED_HUNKS_BUDGET) and prints NOT CHECKED for the rest; a test file stops at 600 s (UNTESTED_HUNKS_TIMEOUT)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 -u scripts/check-untested-hunks.py "$BASE_SHA" "$HEAD_SHA"
 
   # Its own job, so a lagging pin turns the run red without stopping `tests` from running and reporting on its own merits
   # (2026-11-17: two releases three minutes apart each blocked the other's bump PR, and every open PR's suites never ran).
