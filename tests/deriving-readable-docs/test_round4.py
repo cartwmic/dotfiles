@@ -427,6 +427,37 @@ class SliceWasTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class SliceWasRecordsTest(unittest.TestCase):
+    """The record step takes the same --was, so a Part 1 sentence only --was picked up is recorded."""
+    TEMPLATE = ("# Part 1: In plain English\n\n## What it is\n\nNotes saves notes. [A3.0001]\nWho it is for: people who take notes. [A3.0001]\n\n## How to start\n\nYou run `notes add`. [A4.0001]\n\n"
+                "## What you can do\n\nYou can keep 5 notes a day. [A4.0002]\n%s\n\n# Part 2: Appendix\n\n## A3 The product\n\nNotes saves notes. `src/cli.py:1` [A3.0001]\n\n"
+                "## A4 Adding\n\nIt saves a note. `src/cli.py:3` [A4.0001]\nIt stops after 5 notes. `src/cli.py:7` [A4.0002]\nIt lists notes. `src/cli.py:3` [A4.0003]\n")
+
+    def run_record(self, *extra):
+        new = self.TEMPLATE % "You can list your notes. [A4.0003]"
+        old = self.TEMPLATE % "You can list notes. [A4.0003]"
+        n = new.split("\n").index("You can keep 5 notes a day. [A4.0002]") + 1
+        m = new.split("\n").index("You can list your notes. [A4.0003]") + 1
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "src").mkdir()
+            (Path(d) / "src/cli.py").write_text("x\n" * 10)
+            Path(d, "GUIDE.md").write_text(new)
+            Path(d, "OLD.md").write_text(old)
+            Path(d, "ids.txt").write_text("%d\n" % n)
+            (Path(d) / "rep").mkdir()
+            Path(d, "rep", "part1-1.md").write_text("Slice: slice-1\nread | %d.1 | HOLDS | src/cli.py:7\nread | %d.1 | HOLDS | src/cli.py:3\n" % (n, m))
+            args = [str(Path(d, x)) if x == "OLD.md" else x for x in extra]
+            code, out, err = script("slice.py", Path(d, "GUIDE.md"), d, "--ids", Path(d, "ids.txt"), *args, "--reports", Path(d, "rep"), "--record-fixed", Path(d, "fixed-ids.txt"))
+            self.assertEqual(code, 0, err)
+            return Path(d, "fixed-ids.txt").read_text()
+
+    def test_without_was_only_the_listed_sentence_is_recorded(self):
+        self.assertEqual(self.run_record(), "A4.0002 | You can keep 5 notes a day.\n")
+
+    def test_with_was_the_reworded_sentence_is_recorded_too(self):
+        self.assertIn("A4.0003 | You can list your notes.", self.run_record("--was", "OLD.md"))
+
+
 class ScoreOutIsAFileTest(unittest.TestCase):
     REPORT = "Slice: slice-1\nread | 3.1 | HOLDS | a.rs:1\nCounts: claims checked 1; HOLDS 1; WRONG 0; OVERSTATED 0; UNSUPPORTED 0.\n"
 
@@ -532,7 +563,7 @@ class BatchSixDocsTest(unittest.TestCase):
     def test_the_check_brief_is_version_8_and_counts_the_next_sentence_in_the_appendix(self):
         text = self.ref("check-brief.md")
         self.assertIn("version 8", text)
-        self.assertRegex(text, r"(?i)appendix claim: a condition[^\n]*very next sentence of the same doc line")
+        self.assertRegex(text, r"(?i)appendix claim: a condition[^\n]*very next appendix line in the same section")
         self.assertRegex(text, r"(?i)log: v8")
 
     def test_fix_rounds_says_what_to_cut_over_1000_words(self):
@@ -540,6 +571,17 @@ class BatchSixDocsTest(unittest.TestCase):
         self.assertRegex(text, r"(?i)over 1,000 words")
         self.assertRegex(text, r"(?i)never cut How to start or the Who it is for")
         self.assertIn("--was", text)
+
+    def test_the_record_step_takes_the_same_was(self):
+        text = self.ref("fix-rounds.md")
+        step = text.split("4. `python3")[1].split("\n")[0]
+        self.assertIn("--was", step)
+        self.assertRegex(self.skill, r"same with `--was --reports")
+
+    def test_skill_step_7_lists_all_ten_absolute_words(self):
+        step = self.skill.split("7. **Assemble and gate.**")[1].split("8. **Check")[0]
+        for w in ("any", "anything", "every", "all", "only", "always", "never", "nothing", "none", "unless"):
+            self.assertRegex(step, r"\b%s\b" % w, w)
 
     def test_the_reader_check_runs_on_the_shipped_guide(self):
         text = self.ref("reader-check.md")
