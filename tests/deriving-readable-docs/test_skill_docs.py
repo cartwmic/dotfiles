@@ -51,7 +51,7 @@ class EveryStepIsAScriptCallTest(unittest.TestCase):
 
     def test_every_flag_in_a_command_is_one_its_script_has(self):
         seen = 0
-        for cmd in re.findall(r"`(python3 -I [^`]+)`", SKILL):
+        for cmd in re.findall(r"`(python3 -I [^`]+)`", SKILL + READER + DRAFTING + CHECK_BRIEF):
             script = re.search(r"scripts/(\w+\.py)", cmd)
             self.assertIsNotNone(script, cmd)
             source = (SKILL_DIR / "scripts" / script.group(1)).read_text(encoding="utf-8")
@@ -140,10 +140,11 @@ class RoundTwoTest(unittest.TestCase):
         for word in ("--guards", "guards.md", "not relevant", "evidence.md"):
             self.assertIn(word, DRAFTING, word)
 
-    def test_the_reader_bar_is_every_unknown_word_defined_and_five_of_five(self):
+    def test_the_reader_bar_is_five_of_five_and_the_lint_and_the_unknown_list_does_not_gate(self):
         self.assertRegex(READER, r"5 of 5|5/5")
-        self.assertRegex(READER, r"(?i)glossary[^.\n]*15|15[^.\n]*glossary")
-        self.assertRegex(READER, r"--unknown")
+        self.assertRegex(READER, r"(?i)does not gate")
+        self.assertNotRegex(READER + SKILL + DRAFTING, r"--unknown|15 entries|at most 15")
+        self.assertIn("--surfaces", READER)
         self.assertNotRegex(READER, r"at most 3 unknown")
         self.assertNotRegex(READER, r"at least 4 of 5")
 
@@ -155,14 +156,43 @@ class RoundTwoTest(unittest.TestCase):
 
     def test_the_check_brief_tells_checkers_a_value_set_on_the_cited_line_holds_for_count(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)set on the cited line")
-        self.assertRegex(CHECK_BRIEF, r"version 6")
-        self.assertNotRegex(CHECK_BRIEF, r"version 5")
+        self.assertRegex(CHECK_BRIEF, r"version 7")
+        self.assertNotRegex(CHECK_BRIEF, r"version [56]")
 
     def test_a_glossary_entry_is_tagged_like_any_other_part_1_sentence(self):
         self.assertRegex(DRAFTING, r"(?i)glossary[^\n]*each[^\n]*tag")
 
-    def test_words_defined_in_the_text_come_off_the_unknown_list_before_the_lint(self):
-        self.assertRegex(READER, r"(?i)defined[^.\n]*(text|where it is first used)[^.\n]*(remove|off|leave out|take)")
+    def test_the_reader_does_not_list_a_word_the_text_defines(self):
+        self.assertRegex(READER, r"(?i)do not list a word the text defines")
+
+    def test_every_session_the_skill_starts_names_its_model(self):
+        self.assertIn("scout session (Sonnet)", SKILL)
+        self.assertIn("fresh Opus session per writer", SKILL)
+        self.assertIn("Opus front writer", SKILL)
+        self.assertIn("Opus checker session", SKILL)
+        self.assertIn("fresh Opus reader", SKILL)
+        self.assertIn("fresh Opus grader", SKILL)
+        self.assertIn("Seat: checker, Opus", CHECK_BRIEF)
+        self.assertNotIn("the model the caller's table gives", DRAFTING + SKILL)
+        self.assertNotIn("the model your seat table gives", CHECK_BRIEF)
+
+    def test_the_front_writer_brief_states_the_backtick_cap_the_surfaces_rule_and_no_ai_slop(self):
+        front = DRAFTING.split("**Front writer**", 1)[1]
+        self.assertRegex(front, r"(?i)at most 8 distinct backticked")
+        self.assertIn("surfaces.json", front)
+        self.assertIn("no-ai-slop", front)
+
+    def test_step_9_has_the_lead_use_a_front_writer_session_for_part_1_and_a_list_of_ids(self):
+        self.assertRegex(SKILL, r"(?i)Part 1 finding is fixed by a fresh Opus front-writer session")
+        self.assertIn("--ids", SKILL)
+        self.assertIn("--record-fixed", SKILL)
+        self.assertIn("--fixed", SKILL)
+        self.assertIn("--slices", SKILL)
+
+    def test_the_check_brief_asks_for_a_row_for_every_claim_and_the_next_sentence_rule(self):
+        self.assertRegex(CHECK_BRIEF, r"read \| N\.k \| VERDICT \| path:line")
+        self.assertRegex(CHECK_BRIEF, r"(?i)very next sentence that carries the same tag")
+        self.assertRegex(CHECK_BRIEF, r"(?i)at most 60 claims")
 
     def test_the_check_brief_says_how_to_judge_by_default_in_part_1(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)by default")

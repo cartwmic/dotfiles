@@ -2,7 +2,7 @@
 """Score a round of checker reports, a lab draft, or a reader's answers. Reads files only; the arithmetic is the script's, not the lead's.
 
 usage:
-  score.py [NAME=]REPORTS... [--doc GUIDE.md ...] [--repo DIR] [--out DIR]
+  score.py [NAME=]REPORTS... [--doc GUIDE.md ...] [--repo DIR] [--slices DIR] [--out DIR]
   score.py --lab BEHAVIOURS.txt DRAFT.md REPO [--out DIR]
   score.py --reader GUIDE.md [--answers ANSWERS.md]
   score.py --pool GROUP=SCORE.json,LAB.json [GROUP=SCORE.json,LAB.json ...]
@@ -10,10 +10,15 @@ usage:
 Score. Each REPORTS is one repo: a folder of checker reports (every .md and .txt file in it, not below it) or one report file.
 NAME= labels it (default: the folder or file name). A report ends with the line `Counts: claims checked N; HOLDS N; WRONG N;
 OVERSTATED N; UNSUPPORTED N.` (references/check-brief.md) and has one finding line per error:
-`doc line | WRONG|OVERSTATED|UNSUPPORTED | CAUSE | ...`, CAUSE one of MISSING_CONDITION, NAME, COUNT, KIND, OTHER. A finding with no cause
+`claim id (N.k) | WRONG|OVERSTATED|UNSUPPORTED | CAUSE | ...` (a bare doc line N also counts), CAUSE one of MISSING_CONDITION, NAME, COUNT, KIND, OTHER. A finding with no cause
 (a version 4 report) is counted as UNTAGGED. A report whose file name starts with `part1` is Part 1; every other report is the appendix.
 Exit 1, naming the file, when a report has no Counts line or two, when HOLDS+WRONG+OVERSTATED+UNSUPPORTED is not claims checked,
 or when its finding lines are not as many as WRONG+OVERSTATED+UNSUPPORTED. Nothing found for a repo is an error too.
+The depth floor (check brief version 7). A report also holds one row for each claim it was given: `read | <claim id> | <verdict> | <path:line>`, the line the
+checker actually opened (`outside` for a glossary entry with no tag, which has no line). Exit 1 when it has no such rows (a report in the old format cannot be
+judged), a row names no path:line (a HOLDS row too), the rows are not as many as claims checked or do not add up to the Counts line, or two rows share an id.
+With --repo, a path:line must be a line of a file in the repo. With --slices DIR (the folder slice.py wrote), the report's line `Slice: slice-K` names
+DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only.
 Prints per repo, and pooled over all repos: claims, the four verdicts, errors, the rate (errors / claims) for all, the appendix and Part 1,
 and claims by cause. With --doc (repeatable) and --repo it adds words, errors per 1,000 words and words per claim, counted as
 check_citations.py counts them. With --out DIR it also writes score.txt and score.json there.
@@ -32,7 +37,8 @@ condition lines cited, conditional words per 1,000, and the claim-count differen
 
 --reader. Without --answers: prints the reader's brief (the five questions of references/reader-check.md and Part 1 with its tags removed,
 nothing else). With --answers: checks the reader's answers file (`## Q1` to `## Q5`, each with `> quoted sentence` lines): every quote must be a sentence
-of Part 1 (tags removed, spaces collapsed), and every answer needs a quote or the words NOT IN TEXT. Exit 1 on a quote not in Part 1.
+of Part 1 (tags removed, spaces collapsed), and every answer needs a quote or the words NOT IN TEXT. Exit 1 on a quote not in Part 1. It also prints the
+words the reader listed under `## Unknown words` (`unknown words: N (a, b)`); that list is for the report and never fails the check.
 Part 1 is the text from the heading `Part 1` to the heading `Part 2`.
 """
 import json
@@ -42,10 +48,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import TAG, doc_lines, line_items, part1_slice, prose_sentences, word_count, words_of  # noqa: E402
+from claims import TAG, doc_lines, line_items, part1_slice, prose_sentences, split_lines, word_count, words_of  # noqa: E402
 
 COUNTS = re.compile(r"^\W*Counts:\s+claims checked\s+(\d+);\s*HOLDS\s+(\d+);\s*WRONG\s+(\d+);\s*OVERSTATED\s+(\d+);\s*UNSUPPORTED\s+(\d+)\s*\.?\s*$", re.M)
-FINDING = re.compile(r"^\s*(?:[-*]\s*)?(?:[^|\s]*?:)?\d+\s*\|\s*(WRONG|OVERSTATED|UNSUPPORTED)\s*\|(?:\s*(MISSING_CONDITION|NAME|COUNT|KIND|OTHER)\s*\|)?", re.M)
+FINDING = re.compile(r"^\s*(?:[-*]\s*)?(?:[^|\s]*?:)?(?:\d+(?:\.\d+)?|A\d+\.\w+)\s*\|\s*(WRONG|OVERSTATED|UNSUPPORTED)\s*\|(?:\s*(MISSING_CONDITION|NAME|COUNT|KIND|OTHER)\s*\|)?", re.M)
+READ_ROW = re.compile(r"^\s*(?:[-*]\s*)?read\s*\|(.*)$", re.M | re.I)
+SLICE_LINE = re.compile(r"^\W*Slice:\s*(\S+)\s*$", re.M)
+EVIDENCE = re.compile(r"^(\S+?):(\d+)(?:-(\d+))?$")
+VERDICTS = ("HOLDS", "WRONG", "OVERSTATED", "UNSUPPORTED")
 CAUSES = ("MISSING_CONDITION", "NAME", "COUNT", "KIND", "OTHER", "UNTAGGED")
 CONDITIONAL = re.compile(r"(?<![\w-])(when|if|unless|only|except|otherwise|falls? back)(?![\w-])", re.I)
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,7 +70,68 @@ def read(path):
         return f.read()
 
 
-def parse_report(path):
+def parse_rows(path, text):
+    """[(claim id, verdict, evidence)] for the `read | id | verdict | path:line` rows of a report. A row with no path:line (or `outside`) is an error."""
+    rows, seen = [], set()
+    for m in READ_ROW.finditer(text):
+        cells = [c.strip() for c in m.group(1).split("|")]
+        if len(cells) < 3 or not re.fullmatch(r"\d+\.\d+", cells[0]) or cells[1].upper() not in VERDICTS:
+            raise ScoreError("%s: a row `read |%s` is not `read | <claim id N.k> | HOLDS, WRONG, OVERSTATED or UNSUPPORTED | <path:line>`" % (path, m.group(1).rstrip()))
+        if not (EVIDENCE.match(cells[2]) or cells[2] == "outside"):
+            raise ScoreError("%s: row %s names no path:line (the line the checker read; HOLDS too): `%s`" % (path, cells[0], cells[2]))
+        if cells[0] in seen:
+            raise ScoreError("%s: two rows for claim %s" % (path, cells[0]))
+        seen.add(cells[0])
+        rows.append((cells[0], cells[1].upper(), cells[2]))
+    return rows
+
+
+def check_rows(path, text, rows, counts, ctx):
+    claims, tallies = counts[0], dict(zip(VERDICTS, counts[1:]))
+    if not rows:
+        raise ScoreError("%s: no `read | <claim id> | <verdict> | <path:line>` rows: check brief version 7 asks for one row for each claim, so a report in the old "
+                         "format (a verdict count and no line read) cannot be judged" % path)
+    shown = {v: sum(1 for r in rows if r[1] == v) for v in VERDICTS}
+    if len(rows) != claims or shown != tallies:
+        raise ScoreError("%s: the %d read rows show %s, but the Counts line says %d claims, %s" % (
+            path, len(rows), ", ".join("%s %d" % kv for kv in shown.items()), claims, ", ".join("%s %d" % kv for kv in tallies.items())))
+    if ctx.get("repo"):
+        cache = {}
+        for cid, _, ev in rows:
+            m = EVIDENCE.match(ev)
+            if not m:
+                continue
+            full = os.path.realpath(os.path.join(ctx["repo"], m.group(1)))
+            if not (full.startswith(ctx["repo"] + os.sep) and os.path.isfile(full)):
+                raise ScoreError("%s: row %s reads %s, which is not a file of the repo" % (path, cid, ev))
+            if full not in cache:
+                cache[full] = len(split_lines(read(full)))
+            if int(m.group(2)) > cache[full] or int(m.group(3) or m.group(2)) > cache[full]:
+                raise ScoreError("%s: row %s reads %s, but the file has %d lines" % (path, cid, ev, cache[full]))
+    if ctx.get("slices"):
+        name = SLICE_LINE.search(text)
+        if not name or not re.fullmatch(r"[\w.-]+", name.group(1)):
+            raise ScoreError("%s: no line `Slice: slice-K` naming the claims file it was given" % path)
+        claims_file = os.path.join(ctx["slices"], name.group(1) + ".claims.txt")
+        if not os.path.isfile(claims_file):
+            raise ScoreError("%s: Slice %s has no %s" % (path, name.group(1), claims_file))
+        given = {}
+        for l in read(claims_file).splitlines():
+            parts = [p.strip() for p in l.split("|", 2)]
+            if len(parts) == 3:
+                given[parts[0]] = parts[1]
+        missing = [i for i in given if i not in {r[0] for r in rows}]
+        extra = [r[0] for r in rows if r[0] not in given]
+        if missing or extra:
+            raise ScoreError("%s: no read row for claim %s of its slice%s" % (path, ", ".join(missing[:8]) + (" and %d more" % (len(missing) - 8) if len(missing) > 8 else ""),
+                                                                             "; rows for claims not in it: " + ", ".join(extra[:8]) if extra else "") if missing else
+                             "%s: rows for claims that are not in its slice: %s" % (path, ", ".join(extra[:8])))
+        for cid, _, ev in rows:
+            if (given[cid] == "outside") != (ev == "outside"):
+                raise ScoreError("%s: row %s: `outside` is for an untagged glossary entry only, and such an entry takes `outside`, not a line" % (path, cid))
+
+
+def parse_report(path, ctx=None):
     """{"file", "part1", "claims", "holds", "wrong", "overstated", "unsupported", "causes"} for one checker report."""
     text = read(path)
     found = COUNTS.findall(text)
@@ -72,6 +143,7 @@ def parse_report(path):
     rows = FINDING.findall(text)
     if len(rows) != wrong + over + unsup:
         raise ScoreError("%s: %d finding lines (`doc line | verdict | CAUSE | ...`), but WRONG+OVERSTATED+UNSUPPORTED is %d" % (path, len(rows), wrong + over + unsup))
+    check_rows(path, text, parse_rows(path, text), (claims, holds, wrong, over, unsup), ctx or {})
     causes = dict.fromkeys(CAUSES, 0)
     for _, cause in rows:
         causes[cause or "UNTAGGED"] += 1
@@ -103,8 +175,8 @@ def totals(reports):
     return t
 
 
-def score_repo(name, specs, docs, repo):
-    reports = [parse_report(f) for s in specs for f in report_files(s)]
+def score_repo(name, specs, docs, repo, slices=None):
+    reports = [parse_report(f, {"repo": os.path.realpath(repo) if repo else None, "slices": slices}) for s in specs for f in report_files(s)]
     out = totals(reports)
     out["name"] = name
     out["reports"] = [r["file"] for r in reports]
@@ -148,11 +220,13 @@ def render_repo(r):
 
 
 def cmd_score(argv):
-    docs, repo, out_dir, specs = [], None, None, []
+    docs, repo, out_dir, specs, slices = [], None, None, [], None
     it = iter(argv)
     for a in it:
         if a == "--doc":
             docs.append(next(it, None))
+        elif a == "--slices":
+            slices = next(it, None)
         elif a == "--repo":
             repo = next(it, None)
         elif a == "--out":
@@ -161,12 +235,12 @@ def cmd_score(argv):
             raise ScoreError("unknown option %s" % a)
         else:
             specs.append(a)
-    if not specs or None in docs or (docs and not repo):
-        raise ScoreError("usage: score.py [NAME=]REPORTS... [--doc GUIDE.md ... --repo DIR] [--out DIR]")
+    if not specs or None in docs or (docs and not repo) or (slices is not None and not os.path.isdir(slices)):
+        raise ScoreError("usage: score.py [NAME=]REPORTS... [--doc GUIDE.md ... --repo DIR] [--slices DIR] [--out DIR]")
     repos = []
     for spec in specs:
         name, _, path = spec.partition("=") if "=" in spec else (os.path.basename(os.path.normpath(spec)), "", spec)
-        repos.append(score_repo(name, [path], docs if len(specs) == 1 else [], repo))
+        repos.append(score_repo(name, [path], docs if len(specs) == 1 else [], repo, slices))
     lines = []
     for r in repos:
         lines += render_repo(r) + [""]
@@ -352,12 +426,21 @@ def cmd_reader(argv):
         qs = questions()
         print("You are a fresh reader. You have only the text below; do not look anything else up. Answer in a file with a heading `## Q1` to `## Q5`, "
               "each with your answer, then under it the sentence of the text you used, copied exactly, on a line starting with `> `. If the text does not say, "
-              "write NOT IN TEXT. End with `## Unknown words`: every word or phrase you did not understand, one a line.\n")
+              "write NOT IN TEXT. End with `## Unknown words`: every word or phrase you did not understand, one a line. Do not list a word the text itself defines "
+              "where it first uses it.\n")
         print("\n".join("%d. %s" % (i, q) for i, q in enumerate(qs, 1)))
         print("\n---\n\n" + part1)
         return 0
-    have, bad, quotes, section, per_q = squash_text(part1), [], 0, None, {}
+    have, bad, quotes, section, per_q, unknown = squash_text(part1), [], 0, None, {}, []
     for n, line in enumerate(read(answers).splitlines(), 1):
+        if re.match(r"#+\s+Unknown words\b", line, re.I):
+            section = "unknown"
+            continue
+        if section == "unknown" and not re.match(r"#+\s", line):
+            word = re.sub(r"^\s*(?:[-*]\s+)?", "", line).strip()
+            if word:
+                unknown.append(word)
+            continue
         h = re.match(r"#+\s+(Q\d)\b", line)
         if h:
             section = h.group(1)
@@ -379,6 +462,7 @@ def cmd_reader(argv):
     for q in missing:
         print("%s: %s has no quote and no NOT IN TEXT" % (answers, q))
     print("%d quotes, %d not in Part 1; %d answers without a quote" % (quotes, len(bad), len(missing)))
+    print("unknown words: %d%s" % (len(unknown), " (%s)" % ", ".join(unknown) if unknown else ""))
     return 1 if bad or missing else 0
 
 

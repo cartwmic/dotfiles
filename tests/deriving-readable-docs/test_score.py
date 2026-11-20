@@ -16,7 +16,10 @@ def run(*args, cwd=None):
 
 
 def counts(claims, holds, wrong, over, unsup):
-    return "Counts: claims checked %d; HOLDS %d; WRONG %d; OVERSTATED %d; UNSUPPORTED %d.\n" % (claims, holds, wrong, over, unsup)
+    """The `read` rows check brief version 7 asks for (one a claim, each with the line read), then the Counts line."""
+    verdicts = ["HOLDS"] * holds + ["WRONG"] * wrong + ["OVERSTATED"] * over + ["UNSUPPORTED"] * unsup
+    rows = "".join("read | %d.1 | %s | src/x.py:1\n" % (i, v) for i, v in enumerate(verdicts, 1))
+    return rows + "Counts: claims checked %d; HOLDS %d; WRONG %d; OVERSTATED %d; UNSUPPORTED %d.\n" % (claims, holds, wrong, over, unsup)
 
 
 # finding lines in the two shapes the r4 reports used, with and without a cause tag
@@ -117,6 +120,8 @@ class ScoreTest(unittest.TestCase):
     def test_words_and_errors_per_1000_words_come_from_the_doc_as_the_check_counts_them(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
             Path(repo, "a.rs").write_text("x\n" * 5)
+            Path(repo, "src").mkdir()
+            Path(repo, "src/x.py").write_text("x\n")
             Path(d, "GUIDE.md").write_text("## A4 S\n\nIt reads one file (`a.rs:1`). It writes two files (`a.rs:2`).\n\n<!-- printed -->\nrow row row row\n<!-- /printed -->\n")
             rep = Path(d, "reports")
             rep.mkdir()
@@ -137,6 +142,8 @@ class ClaimCountTest(unittest.TestCase):
     def score(self, checkers_claims, doc):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
             Path(repo, "a.rs").write_text("x\n" * 5)
+            Path(repo, "src").mkdir()
+            Path(repo, "src/x.py").write_text("x\n")
             Path(d, "GUIDE.md").write_text(doc)
             rep = Path(d, "reports")
             rep.mkdir()

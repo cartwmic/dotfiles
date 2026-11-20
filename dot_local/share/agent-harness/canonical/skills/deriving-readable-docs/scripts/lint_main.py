@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Check Part 1 of a GUIDE.md reads as plain English and says nothing the appendix does not.
 
-usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--unknown unknown.txt]
+usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--fixed fixed-ids.txt]
 
 Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `doc:line: FAIL kind: detail` (or `warn`), then a count; exit 1 on any FAIL.
   part1-words       over 1,000 words warns, over 1,200 fails (headings and backticked names count; citations, printed blocks and tags do not)
   sentence-length   a sentence of more than 18 words fails, and so does an average above 14
   heading-depth     a heading deeper than two levels (###) fails
   tag               every sentence ends in a tag such as [A4.3f9a] and every tag must name an appendix line (the id that line carries at its end)
-  condition         a sentence whose tagged appendix lines hold a condition word (CONDITION below) must name a condition too, or say "by default"
+  condition         a sentence whose tagged appendix lines hold a condition word (CONDITION below) must name a condition too. "By default" passes only when
+                    the tagged appendix sentence itself states a default. The very next sentence with the same tag may carry the condition.
+                    In the appendix line, `without` and `otherwise` count only where they open a clause (at its start or after , ; : ( or a dash), and a
+                    word inside quotation marks or a backticked name is not the sentence's own condition
   label             a sentence whose tagged appendix line says its source (README, a file such as CONTRACT.md, a code comment, help text) must say a source too
   how-to-start      Part 1 needs a `## How to start` section with at least one sentence, and each sentence must rest on a cited appendix line
-  glossary          an optional `## Glossary` at the end: at most 15 entries, each `term: definition`; with --unknown every word of that file needs an entry
+  glossary          an optional `## Glossary` at the end, each entry `term: definition`, any number. An entry with no tag defines a term from outside the
+                    repo and makes no claim about it: it holds no backticked name and no --flag. An entry about the repo carries a tag like any sentence
+  fixed             with --fixed (the file `slice.py --record-fixed` writes), a warning when a Part 1 sentence a checker already fixed was reworded
   citation          a `path:line` in Part 1 fails: the code belongs in the appendix
   backticks         more than 8 distinct backticked names fails, and so does one that is not a surface name (a row of surfaces.json, or its first word)
   flags             more than 3 `--flag` tokens fails
@@ -28,9 +33,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I lea
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import SPAN, TAG, appendix_index, doc_lines, line_items, part1_slice, prose_sentences, strip_code, word_count, words_of  # noqa: E402
 
-WORDS_WARN, WORDS_FAIL, SENTENCE_MAX, SENTENCE_AVG, NAMES_MAX, FLAGS_MAX, JARGON_PER_1000, GLOSSARY_MAX = 1000, 1200, 18, 14, 8, 3, 4, 15
-# The words that make an appendix sentence conditional, and the phrases that let a Part 1 sentence say so: one list, used on both sides.
-CONDITION = re.compile(r"(?<![\w-])(?:if|unless|only|when|whenever|except|by default|in the default setup|until|without|otherwise|while|once|other than|as long as|apart from)(?![\w-])", re.I)
+WORDS_WARN, WORDS_FAIL, SENTENCE_MAX, SENTENCE_AVG, NAMES_MAX, FLAGS_MAX, JARGON_PER_1000 = 1000, 1200, 18, 14, 8, 3, 4
+# The words that make an appendix sentence conditional, and let a Part 1 sentence say so: one list, used on both sides.
+CONDITION = re.compile(r"(?<![\w-])(?:if|unless|only|when|whenever|except|until|without|otherwise|while|once|other than|as long as|apart from)(?![\w-])", re.I)
+CLAUSE_ONLY = {"without", "otherwise"}  # in an appendix sentence these count only where they open a clause
+CLAUSE_START = re.compile(r"(?:^|[.!?,;:(\u2014\u2013])\s*$")
+BY_DEFAULT = re.compile(r"(?<![\w-])(?:by default|in the default setup)(?![\w-])", re.I)
+A_DEFAULT = re.compile(r"(?<![\w-])defaults?(?:ed|s)?(?![\w-])", re.I)
 # A source an appendix sentence names for itself: the README, a file such as CONTRACT.md, a code comment, help text, a test title, the docs.
 SOURCE_LABEL = re.compile(r"(?<![\w-])(?:README|[\w-]+\.(?:md|rst|txt)|code comments?|help text|test titles?|docs|documentation)(?![\w-])", re.I)
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +60,34 @@ def surface_names(rows):
     return names
 
 
+def appendix_conditions(text):
+    """The condition words an appendix sentence holds. A word inside quotation marks or a backticked name is not the sentence's own; `without` and `otherwise` count
+    only where they open a clause, so "fails with a 401 without a token" holds none."""
+    plain = re.sub(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d', " ", SPAN.sub(" ", text))
+    found = set()
+    for m in CONDITION.finditer(plain):
+        word = m.group(0).lower()
+        if word not in CLAUSE_ONLY or CLAUSE_START.search(plain[:m.start()]):
+            found.add(word)
+    return sorted(found)
+
+
+def names_condition(bare, appendix_text):
+    """Does a Part 1 sentence (its tags taken out) name a condition? Any condition word does. "By default" does only when the appendix sentence states a default."""
+    return bool(CONDITION.search(bare)) or (bool(BY_DEFAULT.search(bare)) and bool(A_DEFAULT.search(appendix_text)))
+
+
+def read_fixed(path):
+    """{tags: sentence} from a file of `A4.3f9a [A4.77b0] | the sentence` rows."""
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for l in f:
+            tags, bar, sentence = l.partition("|")
+            if bar and tags.strip():
+                out[" ".join(sorted(tags.split()))] = sentence.strip()
+    return out
+
+
 def jargon_hits(text, terms):
     return sum(len(re.findall(r"(?<![\w-])" + re.escape(t) + r"(?![\w-])", text, re.I)) for t in terms)
 
@@ -62,8 +99,8 @@ def section_lines(part1):
     return {name: (n + 1, (heads[i + 1][0] - 1) if i + 1 < len(heads) else total) for i, (n, name) in enumerate(heads)}
 
 
-def lint(guide, repo, rows, terms, unknown=()):
-    """Return (fails, warns) as [(doc_line, kind, detail)]. `unknown` is the words a reader did not know that Part 1 does not define where it uses them."""
+def lint(guide, repo, rows, terms, fixed=None):
+    """Return (fails, warns) as [(doc_line, kind, detail)]. `fixed` is {tags: sentence}: Part 1 sentences a checker already fixed."""
     fails, warns = [], []
     part1 = part1_slice(guide)
     if not part1:
@@ -75,6 +112,8 @@ def lint(guide, repo, rows, terms, unknown=()):
     elif words > WORDS_WARN:
         warns.append((1, "part1-words", "%d words, budget %d" % (words, WORDS_WARN)))
     sents = prose_sentences(part1, repo)
+    sections = section_lines(part1)
+    gloss = next((v for k, v in sections.items() if k.startswith("glossary")), None)
     lengths = [len(words_of(s)) for _, s in sents]
     for (n, s), k in zip(sents, lengths):
         if k > SENTENCE_MAX:
@@ -104,10 +143,11 @@ def lint(guide, repo, rows, terms, unknown=()):
     prose_text = "\n".join(strip_code(l) for l in text_lines)
     if words and jargon_hits(prose_text, terms) * 1000 / words > JARGON_PER_1000:
         fails.append((1, "jargon", "%d hits in %d words, limit %d per 1,000" % (jargon_hits(prose_text, terms), words, JARGON_PER_1000)))
-    for n, s in sents:
+    for i, (n, s) in enumerate(sents):
         tags = TAG.findall(s)
         if not tags:
-            fails.append((n, "tag", "no [A#.#] tag | %s" % s))
+            if not (gloss and gloss[0] <= n <= gloss[1]):  # a glossary entry may define an outside term and carry no tag
+                fails.append((n, "tag", "no [A#.#] tag | %s" % s))
             continue
         backed = [index[t.strip("[]")][1] for t in tags if t.strip("[]") in index]
         for t in tags:
@@ -118,9 +158,11 @@ def lint(guide, repo, rows, terms, unknown=()):
         bare = TAG.sub(" ", s)
         for t in tags:
             text = index.get(t.strip("[]"), (0, ""))[1]
-            words = sorted({m.group(0).lower() for m in CONDITION.finditer(text)})
-            if words and not CONDITION.search(bare):
-                fails.append((n, "condition", "%s holds %s and the sentence names no condition: state it, or say \"by default\" | %s" % (t, ", ".join("\"%s\"" % w for w in words), s)))
+            words = appendix_conditions(text)
+            nxt = sents[i + 1][1] if i + 1 < len(sents) else ""
+            carried = t in TAG.findall(nxt) and names_condition(TAG.sub(" ", nxt), text)  # the very next sentence with the same tag carries it
+            if words and not names_condition(bare, text) and not carried:
+                fails.append((n, "condition", "%s holds %s and the sentence names no condition: state it (\"by default\" counts only when the line states a default) | %s" % (t, ", ".join("\"%s\"" % w for w in words), s)))
             labels = sorted({m.group(0) for m in SOURCE_LABEL.finditer(text)})
             if labels and not SOURCE_LABEL.search(bare):
                 fails.append((n, "label", "%s says its source (%s) and the sentence drops it | %s" % (t, ", ".join(labels), s)))
@@ -133,7 +175,6 @@ def lint(guide, repo, rows, terms, unknown=()):
         for tok in [a or b for a, b in quoted] + [m.group(1) for m in SPAN.finditer(bare)]:
             if squash(tok) and squash(tok) not in have_sq:
                 fails.append((n, "appendix-match", "%r is not in %s | %s" % (tok, ", ".join(tags), s)))
-    sections = section_lines(part1)
     start = next((v for k, v in sections.items() if k.startswith("how to start")), None)
     steps = [(n, t) for n, t in sents if start and start[0] <= n <= start[1]]
     if not steps:
@@ -142,32 +183,30 @@ def lint(guide, repo, rows, terms, unknown=()):
         for tag in TAG.findall(t):
             if tag.strip("[]") in index and not index[tag.strip("[]")][2]:
                 fails.append((n, "how-to-start", "the step rests on %s, an appendix line with no citation: cite it there | %s" % (tag, t)))
-    gloss = next((v for k, v in sections.items() if k.startswith("glossary")), None)
-    entries = [(n, t) for n, t in sents if gloss and gloss[0] <= n <= gloss[1]]
-    if len(entries) > GLOSSARY_MAX:
-        fails.append((gloss[0], "glossary", "%d entries, limit %d" % (len(entries), GLOSSARY_MAX)))
-    terms_defined = set()
-    for n, t in entries:
-        m = re.match(r"\s*(?:[-*]\s+)?\**([^:]+?)\**\s*:\s+\S", TAG.sub(" ", t))
-        if not m:
+    for n, t in [(n, t) for n, t in sents if gloss and gloss[0] <= n <= gloss[1]]:
+        if not re.match(r"\s*(?:[-*]\s+)?\**([^:]+?)\**\s*:\s+\S", TAG.sub(" ", t)):
             fails.append((n, "glossary", "an entry reads `term: definition` | %s" % t))
-        else:
-            terms_defined.add(squash(m.group(1)))
-    for word in unknown:
-        if squash(word) not in terms_defined:
-            fails.append((gloss[0] if gloss else 1, "glossary", "the reader did not know \"%s\" and Part 1 has no glossary entry for it: add `%s: ...` or define it where it is first used" % (word, word)))
+        elif not TAG.search(t) and (SPAN.search(t) or FLAG.search(t)):
+            fails.append((n, "glossary", "an entry with no tag defines a term from outside the repo and names nothing of it (no `name`, no --flag): tag it to an appendix line | %s" % t))
+    by_tags = {}
+    for n, t in sents:
+        by_tags.setdefault(" ".join(sorted(TAG.findall(t))).replace("[", "").replace("]", ""), []).append(squash(TAG.sub(" ", t)))
+    for tags, was in (fixed or {}).items():
+        now = by_tags.get(tags)
+        if now and squash(was) not in now:
+            warns.append((1, "fixed", "a sentence a checker already fixed was reworded (%s): was \"%s\" | now \"%s\"" % (tags, was, next(t for n, t in sents if " ".join(sorted(TAG.findall(t))).replace("[", "").replace("]", "") == tags and squash(TAG.sub(" ", t)) == now[0]).replace("\n", " ").strip())))
     return sorted(set(fails)), warns
 
 
 def main(argv):
     args, opts, it = [], {}, iter(argv[1:])
     for a in it:
-        if a in ("--surfaces", "--jargon", "--unknown"):
+        if a in ("--surfaces", "--jargon", "--fixed"):
             opts[a] = next(it, None)
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or not opts.get("--surfaces") or not os.path.isfile(opts["--surfaces"]) \
-            or (opts.get("--jargon") and not os.path.isfile(opts["--jargon"])) or (opts.get("--unknown") and not os.path.isfile(opts["--unknown"])):
+            or (opts.get("--jargon") and not os.path.isfile(opts["--jargon"])) or (opts.get("--fixed") and not os.path.isfile(opts["--fixed"])):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     jargon = opts.get("--jargon") or os.path.join(SKILL, "references", "jargon.txt")
@@ -177,11 +216,7 @@ def main(argv):
         terms = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     with open(args[0], encoding="utf-8", errors="replace") as f:
         guide = f.read()
-    unknown = []
-    if opts.get("--unknown"):
-        with open(opts["--unknown"], encoding="utf-8") as f:
-            unknown = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    fails, warns = lint(guide, os.path.realpath(args[1]), rows, terms, unknown)
+    fails, warns = lint(guide, os.path.realpath(args[1]), rows, terms, read_fixed(opts["--fixed"]) if opts.get("--fixed") else None)
     for n, kind, detail in warns:
         print("%s:%d: warn %s: %s" % (args[0], n, kind, detail))
     for n, kind, detail in fails:

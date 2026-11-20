@@ -190,9 +190,9 @@ class ResolveTest(unittest.TestCase):
         self.assertEqual(out.splitlines(), ["/health | main.go:%d" % line_of("main.go", "/health"), "serve | cmd/serve.go:%d" % line_of("cmd/serve.go", "Use:"),
                                             "teleport | NOT FOUND"])
 
-    def test_a_name_that_only_a_test_a_doc_or_vendored_code_holds_is_not_found(self):
+    def test_a_name_that_only_a_test_holds_is_a_weak_match_and_one_only_a_doc_or_vendored_code_holds_is_not_found(self):
         code, out = self.resolve("--hidden-in-test\nGuide\n/vendored\n")
-        self.assertEqual(out.splitlines(), ["--hidden-in-test | NOT FOUND", "Guide | NOT FOUND", "/vendored | NOT FOUND"])
+        self.assertEqual(out.splitlines(), ["--hidden-in-test | WEAK MATCH tests/test_cli.py:1", "Guide | NOT FOUND", "/vendored | NOT FOUND"])
 
     def test_a_quoted_line_wins_over_an_earlier_bare_one(self):
         files = {"a.py": "# build the thing\n", "b.py": 'cmd = "build"\n'}

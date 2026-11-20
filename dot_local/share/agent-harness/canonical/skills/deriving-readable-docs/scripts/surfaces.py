@@ -19,10 +19,12 @@ It is a reading aid and a completeness check, not the truth. It misses what a re
 a hand-parsed argv, a third-party args module, UI code. A scout reads the README and names those; --resolve checks each name.
 
 --json prints the rows as a JSON array of {kind, name, file, line}.
---resolve names.txt reads one name a line (the name as it appears in the code; # starts a comment) and prints `name | path:line` for
-the line of a non-test, non-doc file that defines it (function, class, def, const, a Go method and the like), else the first line that holds it in quotes,
-else the first that holds it bare, or `name | NOT FOUND`. A name found only in a test or a doc is NOT FOUND: a scout cannot invent a surface. Exit 0; a NOT FOUND row is dropped by the lead.
-Exit 2 on bad usage.
+--resolve names.txt reads one name a line (the name as it appears in the code; # starts a comment) and prints `name | path:line` for the product: a file
+that is not a test, a fixture, a script (a `scripts/` folder) or a doc. Order: the surface row the scan above found with that exact name (a command before a
+route, a flag, an event; the shallowest file first, so `src/reach/cli.ts` beats `src/reach/usecases/x/send.ts`), else the line that defines it (function,
+class, def, const, a Go method and the like), else the first line that holds it in quotes, else the first that holds it bare. A name that only a script, a test or a
+fixture holds prints `name | WEAK MATCH path:line`: it is not a surface of the product. A name found nowhere, or only in a doc, is `name | NOT FOUND`:
+a scout cannot invent a surface. Exit 0; the lead drops the NOT FOUND and WEAK MATCH rows. Exit 2 on bad usage.
 """
 import json
 import os
@@ -33,6 +35,7 @@ import sys
 KINDS = ("entry", "command", "flag", "route", "event", "env", "config", "manifest", "export", "doc", "ci")
 SKIP_DIRS = {"node_modules", "vendor", "dist", "target", "build", ".git", "__pycache__", ".venv", "venv", ".tox", "site-packages"}
 TEST = re.compile(r"(^|/)(tests?|__tests__|e2e|spec|testdata|fixtures?|__snapshots__)(/|$)|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*\.py$|(^|/)conftest\.py$")
+SCRIPTS = re.compile(r"(^|/)scripts?/")  # build and smoke scripts: not the product, so a name only they hold is a weak match
 MAX_BYTES = 800_000
 CAP = {"export": 200, "doc": 100, "ci": 200}
 MANIFESTS = {"package.json", "pyproject.toml", "Cargo.toml", "go.mod", "setup.py", "Makefile", "Dockerfile", "compose.yaml", "compose.yml",
@@ -319,30 +322,57 @@ def definition(name):
                       r"|^\s*func\s*\([^)]*\)\s*" + n + r"\s*\(")
 
 
-def resolve(repo, names):
-    """[(name, "path:line" or None)]: the line of a non-test, non-doc file that defines the name, else the first that holds it in quotes, else the first that holds it bare."""
-    files = [f for f in list_files(repo) if not TEST.search(f) and not re.search(r"\.(md|mdx|rst|txt|adoc)$", f) and not f.endswith((".lock", ".json", ".svg", ".map", ".min.js"))]
-    cache, out = {}, []
-    for name in names:
-        defn = definition(name)
-        bare = re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])")
-        quoted = re.compile(r"[\"'`]" + re.escape(name) + r"[\"'`]")
-        hit = {"def": None, "quoted": None, "bare": None}
-        for f in files:
-            if f not in cache:
-                cache[f] = (read_text(repo, f) or "").split("\n")
-            for i, l in enumerate(cache[f], 1):
-                if defn.search(l):
-                    hit["def"] = (f, i)
-                    break
-                if hit["quoted"] is None and quoted.search(l):
-                    hit["quoted"] = (f, i)
-                elif hit["bare"] is None and bare.search(l):
-                    hit["bare"] = (f, i)
-            if hit["def"]:
+KIND_ORDER = {"command": 0, "route": 1, "flag": 2, "event": 3, "env": 4}
+
+
+def scan_row(rows, name):
+    """The row the scan found for a name, or None: its exact name (a flag also by the name before its argument), a command first, then the shallowest file."""
+    hits = [r for r in rows if not SCRIPTS.search(r["file"]) and (r["name"] == name or (r["kind"] == "flag" and r["name"].split(" ")[0] == name))]
+    return min(hits, key=lambda r: (KIND_ORDER.get(r["kind"], 9), r["file"].count("/"), r["file"], r["line"])) if hits else None
+
+
+def find_line(files, read, name):
+    """(file, line) of the line that defines the name in these files, else the first that holds it in quotes, else the first that holds it bare; None if none."""
+    defn = definition(name)
+    bare = re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])")
+    quoted = re.compile(r"[\"'`]" + re.escape(name) + r"[\"'`]")
+    hit = {"def": None, "quoted": None, "bare": None}
+    for f in files:
+        for i, l in enumerate(read(f), 1):
+            if defn.search(l):
+                hit["def"] = (f, i)
                 break
-        found = hit["def"] or hit["quoted"] or hit["bare"]
-        out.append((name, "%s:%d" % found if found else None))
+            if hit["quoted"] is None and quoted.search(l):
+                hit["quoted"] = (f, i)
+            elif hit["bare"] is None and bare.search(l):
+                hit["bare"] = (f, i)
+        if hit["def"]:
+            break
+    return hit["def"] or hit["quoted"] or hit["bare"]
+
+
+def resolve(repo, names):
+    """[(name, status, "path:line" or None)]: status is "found" (in the product), "weak" (only in a script, a test or a fixture) or None (not found, or only in a doc)."""
+    files = [f for f in list_files(repo) if not re.search(r"\.(md|mdx|rst|txt|adoc)$", f) and not f.endswith((".lock", ".json", ".svg", ".map", ".min.js"))]
+    product = [f for f in files if not TEST.search(f) and not SCRIPTS.search(f)]
+    weak = [f for f in files if TEST.search(f) or SCRIPTS.search(f)]
+    cache = {}
+
+    def read(f):
+        if f not in cache:
+            cache[f] = (read_text(repo, f) or "").split("\n")
+        return cache[f]
+
+    rows, _ = scan(repo)
+    out = []
+    for name in names:
+        row = scan_row(rows, name)
+        found = (row["file"], row["line"]) if row else find_line(product, read, name)
+        if found:
+            out.append((name, "found", "%s:%d" % found))
+            continue
+        found = find_line(weak, read, name)
+        out.append((name, "weak", "%s:%d" % found) if found else (name, None, None))
     return out
 
 
@@ -359,8 +389,8 @@ def main(argv):
     repo = os.path.realpath(args[0])
     if names_file:
         names = [l.strip() for l in open(names_file, encoding="utf-8", errors="replace") if l.strip() and not l.lstrip().startswith("#")]
-        for name, where in resolve(repo, names):
-            print("%s | %s" % (name, where or "NOT FOUND"))
+        for name, status, where in resolve(repo, names):
+            print("%s | %s" % (name, {"found": where, "weak": "WEAK MATCH %s" % where}.get(status, "NOT FOUND")))
         return 0
     rows, per = scan(repo)
     if "--json" in argv:

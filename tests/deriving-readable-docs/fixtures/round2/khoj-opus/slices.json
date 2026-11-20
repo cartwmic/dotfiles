@@ -1,0 +1,42 @@
+[
+  {
+    "first_line": 1,
+    "claims": 76,
+    "n": 1,
+    "last_line": 115,
+    "over": false,
+    "flags": 24
+  },
+  {
+    "first_line": 116,
+    "claims": 92,
+    "n": 2,
+    "last_line": 719,
+    "over": false,
+    "flags": 18
+  },
+  {
+    "first_line": 720,
+    "claims": 94,
+    "n": 3,
+    "last_line": 860,
+    "over": false,
+    "flags": 16
+  },
+  {
+    "first_line": 861,
+    "claims": 96,
+    "n": 4,
+    "last_line": 1010,
+    "over": false,
+    "flags": 25
+  },
+  {
+    "first_line": 1011,
+    "claims": 51,
+    "n": 5,
+    "last_line": 1141,
+    "over": false,
+    "flags": 15
+  }
+]

@@ -64,7 +64,7 @@ class AssembleTest(unittest.TestCase):
         code, out, err, guide, _ = self.assemble()
         self.assertIn("Date: 2026-11-20.", guide)
         self.assertIn("Commit: no git.", guide)
-        self.assertIn("Counts: 3 surfaces (command 1, flag 2); 1 scout names found, 1 not found and dropped; 1 test cases in 1 files; 1 of 3 named surfaces appear in tests.", guide)
+        self.assertIn("Counts: 3 surfaces (command 1, flag 2); 1 scout names found, 1 not found and dropped, 0 weak matches (only in scripts or tests) dropped; 1 test cases in 1 files; 1 of 3 named surfaces appear in tests.", guide)
 
     def test_a2_lists_the_surfaces_no_test_names(self):
         code, out, err, guide, _ = self.assemble()

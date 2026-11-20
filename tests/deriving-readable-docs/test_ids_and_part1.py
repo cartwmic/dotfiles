@@ -179,9 +179,10 @@ class ConditionTest(unittest.TestCase):
         code, out = lint(guide)
         self.assertEqual(code, 0, out)
 
-    def test_by_default_and_in_the_default_setup_name_a_condition(self):
+    def test_by_default_names_a_condition_only_when_the_appendix_sentence_states_a_default(self):
+        """The round 2 writers pasted "by default" to get past this check. It now counts when the tagged line itself says default (test_round3.py has the refusals)."""
         for phrase in ("by default", "in the default setup"):
-            guide = GUIDE.replace("It stops after 5 notes in one day.", "It stops after 5 notes in one day when the limit is on.")
+            guide = GUIDE.replace("It stops after 5 notes in one day.", "It stops after 5 notes in one day when the limit is on, which defaults to 5.")
             guide = guide.replace("You can keep up to 5 notes in one day. [A4.b2]", "You can keep 5 notes a day %s. [A4.b2]" % phrase)
             code, out = lint(guide)
             self.assertEqual(code, 0, "%s: %s" % (phrase, out))
@@ -255,36 +256,9 @@ class GlossaryTest(unittest.TestCase):
     def test_a_glossary_with_entries_in_the_form_passes(self):
         self.assertEqual(lint(self.WITH)[0], 0, lint(self.WITH)[1])
 
-    def test_more_than_fifteen_entries_fail(self):
-        entries = "".join("- term%d: a thing. [A3.a1]\n" % i for i in range(16))
-        guide = GUIDE.replace("# Part 2: Appendix", "## Glossary\n\n%s\n# Part 2: Appendix" % entries)
-        code, out = lint(guide)
-        self.assertEqual(code, 1)
-        self.assertIn("FAIL glossary:", out)
-        self.assertIn("16 entries", out)
-
     def test_an_entry_with_no_term_and_definition_fails(self):
         guide = GUIDE.replace("# Part 2: Appendix", "## Glossary\n\n- A line with no colon at all. [A3.a1]\n\n# Part 2: Appendix")
         self.assertIn("FAIL glossary:", lint(guide)[1])
-
-    def _unknown(self, guide, words):
-        with tempfile.TemporaryDirectory() as d:
-            u = Path(d, "unknown.txt")
-            u.write_text(words)
-            return lint(guide, "--unknown", str(u))
-
-    def test_a_word_the_reader_did_not_know_needs_a_glossary_entry(self):
-        code, out = self._unknown(self.WITH, "slug\n")
-        self.assertEqual(code, 0, out)
-        code, out = self._unknown(self.WITH, "slug\nREADME\n")
-        self.assertEqual(code, 1)
-        self.assertIn("FAIL glossary:", out)
-        self.assertIn("README", out)
-
-    def test_an_unknown_word_with_no_glossary_at_all_fails(self):
-        code, out = self._unknown(GUIDE, "slug\n")
-        self.assertEqual(code, 1)
-        self.assertIn("slug", out)
 
 
 def positional_ids(guide):

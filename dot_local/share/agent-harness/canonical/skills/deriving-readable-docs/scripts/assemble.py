@@ -9,7 +9,7 @@ usage: assemble.py <work> <repo> [-o GUIDE.md] [--clean] [--index] [--date YYYY-
                     (`stamp.py A4.md` gives them), and no id is on two lines
   surfaces.json     from `surfaces.py <repo> --json`
   points.json       from `harvest_points.py <repo>` (optional: without it the evidence block says no tests were found)
-  scout.resolved    from `surfaces.py <repo> --resolve scout.txt` (optional)
+  scout.resolved    from `surfaces.py <repo> --resolve scout.txt` (optional); a NOT FOUND or WEAK MATCH row is counted in the header and left out of A1
   not-read.txt      one path or folder a line that nobody read (optional); each must exist in <repo>
 Writes GUIDE.md (default <work>/GUIDE.md): the header, Part 1, then Part 2 with A1 Surfaces and A2 Evidence (both printed from the files above), A3, A4 and on,
 and A-last Not read. Everything a script printed sits between `<!-- printed -->` and `<!-- /printed -->`: check_citations.py and lint_main.py do not
@@ -30,7 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import PRINTED_BEGIN, PRINTED_END, TAG, appendix_index, appendix_lines, appendix_problems  # noqa: E402
+from claims import PRINTED_BEGIN, PRINTED_END, TAG, appendix_index, appendix_lines, appendix_problems, multi_sentence_lines  # noqa: E402
 
 SECTION_FILE = re.compile(r"^A(\d+)\.md$")
 NAMED_KINDS = ("command", "flag", "route", "event", "env")
@@ -99,7 +99,8 @@ def build(work, repo, date, need_part1=True):
     named, never = named_in_tests(repo, rows, test_files)
     per = {k: sum(1 for r in rows if r["kind"] == k) for k in KINDS}
     scout = [l.strip() for l in read(os.path.join(work, "scout.resolved")).splitlines() if l.strip()] if os.path.isfile(os.path.join(work, "scout.resolved")) else []
-    scout_found = [l for l in scout if not l.endswith("| NOT FOUND")]
+    scout_weak = [l for l in scout if "| WEAK MATCH " in l]
+    scout_found = [l for l in scout if not l.endswith("| NOT FOUND") and l not in scout_weak]
     part1 = ""
     if need_part1:
         if not os.path.isfile(os.path.join(work, "part1.md")):
@@ -113,8 +114,8 @@ def build(work, repo, date, need_part1=True):
         "# %s guide" % os.path.basename(repo.rstrip("/")),
         "",
         "Repo: %s. Commit: %s. Date: %s." % (os.path.basename(repo.rstrip("/")), commit_of(repo), date),
-        "Counts: %d surfaces (%s); %d scout names found, %d not found and dropped; %d test cases in %d files; %d of %d named surfaces appear in tests."
-        % (len(rows), ", ".join("%s %d" % (k, per[k]) for k in KINDS if per[k]) or "none", len(scout_found), len(scout) - len(scout_found),
+        "Counts: %d surfaces (%s); %d scout names found, %d not found and dropped, %d weak matches (only in scripts or tests) dropped; %d test cases in %d files; %d of %d named surfaces appear in tests."
+        % (len(rows), ", ".join("%s %d" % (k, per[k]) for k in KINDS if per[k]) or "none", len(scout_found), len(scout) - len(scout_found) - len(scout_weak), len(scout_weak),
            len(points), len(test_files), len(named), len(named) + len(never)),
         "Evidence: code and the repo's own words first; tests where the repo has them (A2).")
     a1 = ["## A1 Surfaces", "", printed(*([row(r) for r in rows] + ["scout | %s" % l for l in scout_found] or ["none found"]))]
@@ -124,6 +125,9 @@ def build(work, repo, date, need_part1=True):
     last = ["## A-last Not read", "", printed(*(not_read or ["none"]))]
     parts = [header, "# Part 1: In plain English", part1, "# Part 2: Appendix: technical detail", "\n".join(a1), "\n".join(a2), *secs, "\n".join(last)]
     text = "\n\n".join(p for p in parts if p) + "\n"
+    many = multi_sentence_lines(text)
+    if many:
+        raise AssembleError("; ".join("doc line %d holds %d sentences: write one sentence on each line, then run stamp.py" % m for m in many[:5]) + (" (and %d more lines)" % (len(many) - 5) if len(many) > 5 else ""))
     unstamped, dups = appendix_problems(text, repo)
     if unstamped:
         by_section = {}

@@ -30,6 +30,13 @@ SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`\"'(\[*_])")
 TAG_AFTER_STOP = re.compile(r"([.!?])((?:\s*\[%s\])+)" % ID)
 
 
+def split_lines(text):
+    """The lines of a text numbered as `cat -n` and the Read tool number them: cut at "\\n" only. str.splitlines() also cuts at a form feed, a vertical tab and
+    a few other marks, which shifts every number after one (khoj.el has eleven form feeds)."""
+    lines = [l[:-1] if l.endswith("\r") else l for l in text.split("\n")]
+    return lines[:-1] if lines and lines[-1] == "" else lines
+
+
 def is_path(repo, path, strict):
     """Should this token be checked as a file citation? Skip clock times, hosts and ports. A whole-span
     token such as `Makefile:5` is checked even with no dot or slash, so a missing file is reported."""
@@ -73,8 +80,8 @@ def doc_lines(text):
     """Yield (doc_line_no, line, in_header, is_heading) for each line outside fenced code blocks and printed blocks. A heading's
     citations are checked, but its words are not judged as a claim.
     The header is everything before the first `## ` heading (a doc with none has no header)."""
-    fenced, printed, header = False, False, any(l.startswith("## ") for l in text.splitlines())
-    for n, line in enumerate(text.splitlines(), 1):
+    fenced, printed, header = False, False, any(l.startswith("## ") for l in split_lines(text))
+    for n, line in enumerate(split_lines(text), 1):
         if line.strip() == PRINTED_BEGIN:
             printed = True
             continue
@@ -210,7 +217,7 @@ def appendix_lines(text, repo):
     by_line, out, sec = {}, [], None
     for n, s in prose_sentences(text, repo):
         by_line.setdefault(n, []).append(s)
-    raw = text.splitlines()
+    raw = split_lines(text)
     for n, line, header, heading in doc_lines(text):
         if heading:
             m = re.match(r"(#+)\s+A(\d+)\b", line)
@@ -250,7 +257,7 @@ def stamp_text(text):
     """(new_text, stamped): give each prose line of a section file that has no id one, at its end: `[A4.3f9a]`, the section number from the nearest `## A<n>`
     heading, then four hex digits taken from the line, moved on until they differ from every id already in the file. Lines that have an id are left alone;
     headings, fenced code, printed blocks and table rows are not prose lines. Raises ValueError when prose comes before the first `## A<n>` heading."""
-    lines, taken, sec, stamped = text.splitlines(), set(TAG.findall(text)), None, 0
+    lines, taken, sec, stamped = split_lines(text), set(TAG.findall(text)), None, 0
     for n, line, header, heading in doc_lines(text):
         if heading:
             m = re.match(r"#+\s+A(\d+)\b", line)
@@ -273,11 +280,65 @@ def stamp_text(text):
     return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), stamped
 
 
+def sentence_count(line):
+    """How many sentences one prose line holds. Backtick spans (citations, code names), ids and a list mark are left out first."""
+    text = re.sub(r"\s+", " ", SPAN.sub(" ", TAG.sub(" ", LIST_MARK.sub("", line)))).strip()
+    return len([p for p in split_sentences(text) if words_of(p)])
+
+
+def multi_sentence_lines(text):
+    """[(doc_line, sentences)] for each prose line of the appendix sections that holds more than one sentence. An id sits at the end of a line and a Part 1
+    tag points at a line, so a line with two sentences has one id for two claims: the sentences stay one a line."""
+    out, sec = [], None
+    for n, line, header, heading in doc_lines(text):
+        if heading:
+            m = re.match(r"#+\s+A(\d+)\b", line)
+            if m:
+                sec = m.group(1)
+            elif len(re.match(r"#+", line).group(0)) <= 2:
+                sec = None
+            continue
+        if sec is None or header or line.lstrip().startswith("|"):
+            continue
+        if sentence_count(line) > 1:
+            out.append((n, sentence_count(line)))
+    return out
+
+
+def untagged_glossary_lines(text):
+    """The doc lines of the Part 1 `## Glossary` section that carry no tag: each defines a term from outside the repo and makes no claim about it."""
+    out, part1, gloss = set(), False, False
+    for n, line, header, heading in doc_lines(text):
+        if heading:
+            if re.match(r"#+\s+Part 1\b", line):
+                part1, gloss = True, False
+            elif re.match(r"#+\s+Part 2\b", line):
+                part1, gloss = False, False
+            elif len(re.match(r"#+", line).group(0)) <= 2:
+                gloss = part1 and bool(re.match(r"#+\s+glossary\b", line, re.I))
+            continue
+        if gloss and not TAG.search(line):
+            out.add(n)
+    return out
+
+
+def claim_ids(text, repo):
+    """[(id, doc_line, sentence, kind)] for every claim of the doc, in order. An id is `N.k`: doc line N, sentence k of that line (k is 1 on a line of one
+    sentence). kind is "claim", or "outside" for an untagged glossary entry. The sentence has its citations taken out, and its tags put back at its end."""
+    out, seen, outside = [], {}, untagged_glossary_lines(text)
+    for n, s in prose_sentences(text, repo):
+        seen[n] = seen.get(n, 0) + 1
+        tags = "".join(TAG.findall(s))
+        plain = re.sub(r"\s+([.!?])", r"\1", re.sub(r"\s+", " ", TAG.sub("", s))).strip()
+        out.append(("%d.%d" % (n, seen[n]), n, plain + (" " + tags if tags else ""), "outside" if n in outside else "claim"))
+    return out
+
+
 def part1_slice(guide):
     """The guide with every line outside Part 1 blanked, so line numbers stay the same. Part 1 runs from the heading `Part 1` to the
     heading `Part 2`; printed blocks inside it are blanked too. A guide with no `Part 1` heading gives "" (and no Part 2 heading means to the end)."""
     out, inside, printed = [], False, False
-    for line in guide.splitlines():
+    for line in split_lines(guide):
         if re.match(r"#+\s+Part 1\b", line):
             inside = True
         elif re.match(r"#+\s+Part 2\b", line):
