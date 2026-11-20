@@ -4,7 +4,7 @@ Two fresh sessions, one script. The reader sees Part 1 only, never the repo. The
 
 ## Reader
 
-Start a fresh Sonnet session with the output of `python3 -I <skill dir>/scripts/score.py --reader GUIDE.md`: the instructions, the five questions below and Part 1 with its tags removed. Nothing else: no repo, no appendix, no tools that read the web or the disk. It writes `answers.md`.
+Start a fresh Opus session with the output of `python3 -I <skill dir>/scripts/score.py --reader GUIDE.md`: the instructions, the five questions below and Part 1 with its tags removed. Nothing else: no repo, no appendix, no tools that read the web or the disk. It writes `answers.md`.
 
 ## Questions
 
@@ -14,7 +14,7 @@ Start a fresh Sonnet session with the output of `python3 -I <skill dir>/scripts/
 4. What does it need installed, read, or configured, and what does it write or keep?
 5. Name one thing it does not do, or one case where it stops or says no.
 
-The reader also lists every word or phrase it did not understand, under `## Unknown words`, one a line.
+The reader also lists every word or phrase it did not understand, under `## Unknown words`, one a line. Save that list to a file and run `python3 -I <skill dir>/scripts/lint_main.py GUIDE.md <repo> --unknown unknown.txt`: it fails a word that has no entry in the guide's `## Glossary` (at most 15 entries, `term: definition`, at the end of Part 1).
 
 ## Quote check (script)
 
@@ -26,7 +26,11 @@ A fresh Opus session gets `answers.md` and the repo (at the commit), not the rea
 
 ## Pass bar
 
-At least 4 of 5 CORRECT, no WRONG, at most 3 unknown words flagged, and every quote found. When the README and the code state no limit, Q5 may be NOT IN TEXT, and the bar is then 4 CORRECT among Q1 to Q4.
+5 of 5 CORRECT, no WRONG, every quote found, and every word the reader listed as unknown defined in Part 1 where it is first used, or in the glossary of at most 15 entries at the end of Part 1 (`lint_main.py --unknown` checks the glossary entries exist). When the README and the code state no limit, Q5 may be NOT IN TEXT, and the bar is then 4 of 4 CORRECT among Q1 to Q4.
+
+## One fix round
+
+If the bar is missed, the front writer fixes Part 1 once (adds the missing answer, defines the word, or adds a glossary entry), the guide is checked again (`lint_main.py`, then the changed sentences by a fresh checker), and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round.
 
 ## Limit
 

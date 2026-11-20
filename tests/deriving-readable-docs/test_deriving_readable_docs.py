@@ -851,10 +851,16 @@ class AuditTest(unittest.TestCase):
     DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`).\n\nIt does another thing in the test (`src/a.rs:1-3`).\n"
     ROW = '%d | assert: src/a.rs:%d "%s" | exits: none listed | callers: none found | found: nothing | result: HOLDS\n'
 
+    # The condition sheet and the evidence file the audit also asks for (test_guards_audit.py tests those): here they are complete, so these tests
+    # are about the audit rows alone.
+    EVIDENCE = 'src/a.rs:1 "one"\nsrc/a.rs:2 "two"\nsrc/a.rs:3 "three"\n'
+
     def audited(self, audit, doc=None):
         with tempfile.TemporaryDirectory() as d:
             a = Path(d) / "audit.md"
             a.write_text(audit)
+            (Path(d) / "guards.md").write_text("# no guards: the cited file is not code the exits are read from\n")
+            (Path(d) / "evidence.md").write_text(self.EVIDENCE)
             return check(doc or self.DOC, REPO, "--audit", str(a))
 
     def test_a_row_for_each_sentence_passes(self):

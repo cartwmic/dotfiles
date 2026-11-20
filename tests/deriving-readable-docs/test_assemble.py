@@ -22,8 +22,8 @@ SURFACES = [
 ]
 POINTS = [{"id": "P1", "name": "test_tag", "kind": "test", "file": "tests/test_cli.py", "line": 1, "framework": "pytest", "context": ""}]
 PART1 = "## What it is\n\nNotes saves short notes. [A3.1]\nYou tag a note with an option. [A4.1]\n"
-A3 = "## A3 The product as a whole\n\nNotes saves short notes (README) `README.md:1`.\n"
-A4 = "## A4 Tagging\n\nThe --tag option sets a tag `src/cli.py:2`. The --color option sets a color `src/cli.py:3`.\n"
+A3 = "## A3 The product as a whole\n\nNotes saves short notes `README.md:1`. [A3.1]\n"
+A4 = "## A4 Tagging\n\nThe --tag option sets a tag `src/cli.py:2`. [A4.1]\nThe --color option sets a color `src/cli.py:3`. [A4.2]\n"
 
 
 def setup(d, repo, **over):
@@ -105,11 +105,32 @@ class AssembleTest(unittest.TestCase):
             setup(d, repo, **{"part1.md": None})
             code, out, err = run("assemble.py", d, repo, "--index")
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines(), ["A3.1 | Notes saves short notes (README) .", "A4.1 | The --tag option sets a tag .", "A4.2 | The --color option sets a color ."])
+        self.assertEqual(out.splitlines(), ["A3.1 | Notes saves short notes .", "A4.1 | The --tag option sets a tag .", "A4.2 | The --color option sets a color ."])
+
+    def test_a_prose_line_with_no_id_is_an_error_that_names_the_file_and_stamp_py(self):
+        code, out, err, guide, _ = self.assemble(**{"A4.md": A4 + "A third line with no id.\n"})
+        self.assertEqual(code, 1)
+        self.assertIn("A4.md has 1 lines with no id", err)
+        self.assertIn("stamp.py", err)
+        self.assertIsNone(guide)
+
+    def test_an_id_on_two_lines_is_an_error(self):
+        code, out, err, guide, _ = self.assemble(**{"A4.md": A4.replace("[A4.2]", "[A4.1]")})
+        self.assertEqual(code, 1)
+        self.assertIn("id A4.1 is on two lines", err)
+
+    def test_stamped_section_files_assemble_and_the_tags_stay_in_the_clean_copy_out(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo, **{"A4.md": "## A4 Tagging\n\nThe --tag option sets a tag `src/cli.py:2`.\n"})
+            code, out, err = run("stamp.py", str(Path(d, "A4.md")))
+            self.assertEqual(code, 0, out + err)
+            code, out, err = run("assemble.py", d, repo, "--index")
+        self.assertEqual(code, 0, err)
+        self.assertRegex(out, r"A4\.[0-9a-f]{4} \| The --tag option sets a tag \.")
 
     def test_the_assembled_guide_passes_lint_main_and_the_tags_resolve(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
-            setup(d, repo, **{"part1.md": "## What it is\n\nNotes saves short notes. [A3.1]\nYou set a tag with an option. [A4.1]\n"})
+            setup(d, repo, **{"part1.md": "## What it is\n\nNotes saves short notes. [A3.1]\n\n## How to start\n\nYou set a tag with an option. [A4.1]\n"})
             run("assemble.py", d, repo, "--date", "2026-11-20")
             code, out, err = run("lint_main.py", str(Path(d, "GUIDE.md")), repo, "--surfaces", str(Path(d, "surfaces.json")))
         self.assertEqual(code, 0, out + err)

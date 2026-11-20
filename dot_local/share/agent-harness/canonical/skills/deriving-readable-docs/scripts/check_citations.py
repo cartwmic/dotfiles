@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the `path:line` citations in a derived doc: the line exists, and the cited text backs the sentence.
 
-usage: check_citations.py <doc.md> <repo> [--max-words N] [--max-sentence-words N] [--audit audit.md] [--sheet]
+usage: check_citations.py <doc.md> <repo> [--max-words N] [--max-sentence-words N] [--audit audit.md [--guards-file F] [--evidence-file F]] [--sheet | --guards]
 
 A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
 read; several may share one backtick span, separated by commas or semicolons (`src/a.ts:12, 40-45` is two ranges of one file); one inside a span with other
@@ -40,11 +40,19 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
             above the first `## ` heading and the headings and backticked names included; citations, fenced code, printed blocks
             (what assemble.py prints, such as the header) and bare list marks are not words.
             A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
-The last check:
-  audit     with --audit FILE, FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
+The last checks, with --audit FILE (the writer's own pass; run on a section draft, not on the whole guide):
+  audit     FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
             `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
             doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
             that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited.
+  guards    FAIL when the condition sheet is missing or a guard on it is unmarked. The sheet is the output of --guards, saved as guards.md beside FILE (or
+            --guards-file): one row `guard | path:line | kind | source | covered:` for each early exit above a cited line (the exits --sheet lists). Each row ends
+            `covered: <id>` (the id of a draft line that cites the same file and states the condition) or `covered: not relevant: <reason of three words or more>`.
+            A guard the sheet leaves out, or an id the draft does not carry, fails. A file the exits cannot be read from has no rows: read the function by hand.
+  evidence  FAIL when the evidence file (evidence.md beside FILE, or --evidence-file) is missing or a cited range has no row in it: a row is
+            `path:line "the line, copied"` with a line inside the range and the text on that line, so each cited line was opened and read.
+  uncited   FAIL a sentence with no citation unless it says "inferred" or "from your list": a README label alone is not a citation.
+--guards prints the condition sheet to save and mark (see guards above); the checks above are skipped.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
           Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
           range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
@@ -53,7 +61,7 @@ The last check:
           (or above its own end) are listed too, since they sit inside the range. See early_exits.py;
           "no early exits" and "not listed" print differently.
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
-sentences never change the exit code. Stdlib only.
+sentences never change the exit code. The last lines count the failed checks by name, as `2 failed checks (number 1, string 1)`. Stdlib only.
 """
 import os
 import re
@@ -62,7 +70,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
-from claims import (SAYS_SOURCE, SPAN, claims, prose_sentences, sentences, strip_code, word_count, words_of)  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, strip_code, word_count, words_of)  # noqa: E402
 
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
 
@@ -220,7 +228,7 @@ def check_claim(c, repo, cache):
             detail = "%s | %s" % (what, raw.strip())
             flags.append((n, kind if kind == "uncited" else ("count" if count and not hits else "overreach"), detail))
             scoped = labelled or SCOPED.search(kind_text)  # a clause after a semicolon is still the case the sentence names
-            if kind == "uncited" and not scoped and not SAYS_SOURCE.search(raw):
+            if kind == "uncited" and not scoped and not says_source(raw, c.get("part1", False)):
                 fails.append((n, "uncited", detail))
             elif kind == "overreach" and testonly and not scoped and (quantifiers(sent) or (count and not count.group(0)[0].isdigit())):
                 fails.append((n, "overreach", detail))
@@ -261,22 +269,138 @@ def check(doc_text, repo):
     return checked, bad, sorted(set(fails)), flags
 
 
+def exit_sets(cache, repo, path, lo, hi):
+    """[(found, cut)] for a cited range: the function that holds its last line, and, when the range starts in another function, that function too
+    (its exits above its own end sit inside the range). found is what early_exits.early_exits returns; cut is the line the exits are listed above."""
+    lines = read_lines(cache, repo, path)
+    text, ext = "\n".join(lines), os.path.splitext(path)[1]
+    found = [(early_exits.early_exits(text, ext, hi, first=lo), hi)]
+    if lo != hi:
+        first_fn = early_exits.early_exits(text, ext, lo, upto=hi)
+        if first_fn and not first_fn.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or first_fn["fn_line"] != found[0][0]["fn_line"]):
+            found.insert(0, (first_fn, min(hi, first_fn["fn_end"])))  # its exits cannot skip lines past its own end
+    return lines, found
+
+
 def exits_note(cache, repo, path, lo, hi):
     """The early-exit text for a cited range: the exits above its last line in the function that holds it, and, when
     the range starts in another function, that function's exits above its last line, or above its own end if that comes
     first, too (they sit inside the range). A continue or break counts when its loop overlaps the range. None when there is nothing to say."""
     try:
-        lines = read_lines(cache, repo, path)
-        text, ext = "\n".join(lines), os.path.splitext(path)[1]
-        found = [(early_exits.early_exits(text, ext, hi, first=lo), hi)]
-        if lo != hi:
-            first_fn = early_exits.early_exits(text, ext, lo, upto=hi)
-            if first_fn and not first_fn.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or first_fn["fn_line"] != found[0][0]["fn_line"]):
-                found.insert(0, (first_fn, min(hi, first_fn["fn_end"])))  # its exits cannot skip lines past its own end
+        lines, found = exit_sets(cache, repo, path, lo, hi)
         notes = [early_exits.render(f, lines, cut, lo) for f, cut in found]
         return "\n".join(n for n in notes if n) or None
     except (OSError, RecursionError):
         return None
+
+
+GUARD_HEAD = ("# guards: each early exit above a cited line (return, throw, continue, break, exit). Save this as guards.md beside the audit.\n"
+              "# End every row with `covered: <id>` (an id of a draft line that cites the same file and states the condition) or `covered: not relevant: <reason>`.")
+GUARD_ROW = re.compile(r"^\s*guard\s*\|\s*([^\s|]+?):(\d+)\s*\|(.*)\|\s*covered:(.*)$")
+EVIDENCE_ROW = re.compile(r"([\w./@+-]+):(\d+)(?:-\d+)?`?[^\"\u201c`\n]*?[\"\u201c`]([^\"\u201d`\n]{2,})[\"\u201d`]")
+
+
+def guards(doc_text, repo):
+    """{(path, line): (kind, source text, doc_line)}: each early exit above a cited range, with the first doc line that cites it."""
+    cache, out = {}, {}
+    for c in claims(doc_text, repo):
+        if c.get("heading") or not c["cites"]:
+            continue
+        for path, lo, hi in c["cites"]:
+            try:
+                lines, found = exit_sets(cache, repo, path, lo, hi)
+            except (OSError, RecursionError):
+                continue
+            for f, _ in found:
+                for e in (f.get("exits", []) if f and not f.get("unreadable") else []):
+                    out.setdefault((path, e["line"]), (e["kind"], lines[e["line"] - 1].strip().replace("|", "/"), c["line"]))
+    return out
+
+
+def print_guards(doc_text, repo):
+    print(GUARD_HEAD)
+    for (path, line), (kind, text, _) in sorted(guards(doc_text, repo).items()):
+        print("guard | %s:%d | %s | %s | covered:" % (path, line, kind, text[:110]))
+
+
+def ids_citing(doc_text, repo):
+    """{id: {cited paths}} for each id of a line of the doc that holds citations."""
+    out, raw = {}, doc_text.splitlines()
+    for n, line, _, heading in doc_lines(doc_text):
+        if heading:
+            continue
+        paths = {p for _, _, cites, _ in line_items(raw[n - 1], repo) for p, _, _ in cites}
+        for t in TAG.findall(raw[n - 1]):
+            out.setdefault(t.strip("[]"), set()).update(paths)
+    return out
+
+
+def guard_fails(doc_text, repo, sheet_text, where):
+    """[(doc_line, "guards", detail)]: the sheet at `where` is missing (sheet_text None), or a guard is not on it, not marked, or marked with a reason
+    that is too short or an id the draft does not carry for that file."""
+    if sheet_text is None:
+        return [(1, "guards", "no condition sheet at %s: run --guards, save the output there and mark every guard" % where)]
+    marks = {}
+    for raw in sheet_text.splitlines():
+        m = GUARD_ROW.match(raw)
+        if m:
+            marks[(m.group(1), int(m.group(2)))] = m.group(4).strip()
+    known, fails = ids_citing(doc_text, repo), []
+    for (path, line), (kind, text, n) in sorted(guards(doc_text, repo).items()):
+        where_ = "%s:%d" % (path, line)
+        mark = next((v for (p, l), v in marks.items() if l == line and (p == path or p.endswith("/" + path) or path.endswith("/" + p))), None)
+        if mark is None:
+            fails.append((n, "guards", "guard %s (%s) is not in the sheet: run --guards again and mark it" % (where_, kind)))
+        elif not mark:
+            fails.append((n, "guards", "guard %s (%s) is unmarked: end its row with `covered: <id>` or `covered: not relevant: <reason>`" % (where_, kind)))
+        elif mark.lower().startswith("not relevant"):
+            if len(words_of(mark.split(":", 1)[1] if ":" in mark else "")) < 3:
+                fails.append((n, "guards", "guard %s says `not relevant` with no reason of three words or more" % where_))
+        else:
+            ids = re.findall(r"A\d+\.\w+", mark)
+            if not ids:
+                fails.append((n, "guards", "guard %s is marked with neither an id nor `not relevant: <reason>`" % where_))
+            for i in ids:
+                if i not in known:
+                    fails.append((n, "guards", "guard %s is covered by %s, which no line of the draft carries" % (where_, i)))
+                elif not any(p == path or p.endswith("/" + path) or path.endswith("/" + p) for p in known[i]):
+                    fails.append((n, "guards", "guard %s is covered by %s, which does not cite %s" % (where_, i, path)))
+    return fails
+
+
+def evidence_fails(doc_text, repo, evidence_text, where):
+    """[(doc_line, "evidence", detail)]: the evidence file is missing, or a cited range has no row with a line inside it and that line's text."""
+    if evidence_text is None:
+        return [(1, "evidence", "no evidence file at %s: write one row `path:line \"the line, copied\"` for each cited range" % where)]
+    rows = [(m.group(1), int(m.group(2)), [squash(q) for q in re.split(r"\u2026|\.\.\.", m.group(3)) if squash(q)]) for l in evidence_text.splitlines() for m in [EVIDENCE_ROW.search(l)] if m]
+    cache, fails = {}, []
+    for c in claims(doc_text, repo):
+        if c.get("heading"):
+            continue
+        for path, lo, hi in c["cites"]:
+            ok = False
+            for p, line, parts in rows:
+                if (p == path or p.endswith("/" + path) or path.endswith("/" + p)) and lo <= line <= hi and parts:
+                    try:
+                        have = squash(read_lines(cache, repo, path)[line - 1])
+                    except (OSError, IndexError):
+                        continue
+                    ok = ok or all(q in have for q in parts)
+            if not ok:
+                fails.append((c["line"], "evidence", "no evidence row for %s:%d%s: copy the line you read, as `path:line \"text\"`" % (path, lo, "-%d" % hi if hi != lo else "")))
+    return fails
+
+
+def uncited_fails(doc_text, repo):
+    """[(doc_line, "uncited", detail)]: a sentence of a draft with no citation that does not say "inferred" or "from your list"."""
+    out = []
+    for c in claims(doc_text, repo):
+        if c.get("heading") or c["header"] or c.get("part1") or not c["uncited"].strip():
+            continue
+        for raw in sentences(c["uncited"]):
+            if words_of(raw) and not re.search(r"\binferred\b|\bfrom your list\b", raw, re.I):
+                out.append((c["line"], "uncited", "no citation and no \"inferred\" label: cite the line that shows it, or label it inferred | %s" % raw.strip()))
+    return out
 
 
 def sheet(doc_text, repo):
@@ -342,14 +466,15 @@ def main(argv):
     args, opts = [], {}
     it = iter(argv[1:])
     for a in it:
-        if a in ("--max-words", "--max-sentence-words", "--audit"):
+        if a in ("--max-words", "--max-sentence-words", "--audit", "--guards-file", "--evidence-file"):
             opts[a] = next(it, None)
-        elif a == "--sheet":
+        elif a in ("--sheet", "--guards"):
             opts[a] = True
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) \
-            or any(opts.get(k) is None or (k not in ("--sheet", "--max-words", "--max-sentence-words") and not os.path.isfile(opts[k])) for k in opts) \
+            or any(opts.get(k) is None or (k in ("--audit",) and not os.path.isfile(opts[k])) for k in opts) \
+            or (("--guards-file" in opts or "--evidence-file" in opts) and "--audit" not in opts) \
             or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-sentence-words")):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
@@ -359,11 +484,23 @@ def main(argv):
     if opts.get("--sheet"):
         sheet(text, os.path.realpath(repo))
         return 0
+    if opts.get("--guards"):
+        print_guards(text, os.path.realpath(repo))
+        return 0
     checked, bad, fails, flags = check(text, repo)
     words = word_count(text, os.path.realpath(repo))
     if opts.get("--audit"):
+        real = os.path.realpath(repo)
         with open(opts["--audit"], encoding="utf-8", errors="replace") as f:
-            fails = sorted(set(fails + (audit_fails(text, os.path.realpath(repo), f.read()) if not bad else [])))
+            extra = audit_fails(text, real, f.read()) if not bad else []
+        folder = os.path.dirname(os.path.abspath(opts["--audit"]))
+        for key, name, check_files in (("--guards-file", "guards.md", guard_fails), ("--evidence-file", "evidence.md", evidence_fails)):
+            where = opts.get(key) or os.path.join(folder, name)
+            body = open(where, encoding="utf-8", errors="replace").read() if os.path.isfile(where) else None
+            extra += check_files(text, real, body, where) if not bad else []
+        extra += uncited_fails(text, real) if not bad else []
+        have = {(n, k) for n, k, _ in fails}
+        fails = sorted(set(fails + [e for e in extra if (e[0], e[1]) not in have or e[1] not in ("uncited",)]))
     if "--max-words" in opts and words > int(opts["--max-words"]):
         fails = sorted(set(fails + [(1, "budget", "%d words, budget %s: drop behaviours, do not join them" % (words, opts["--max-words"]))]))
     prose = prose_sentences(text, os.path.realpath(repo))
@@ -380,7 +517,12 @@ def main(argv):
     print("checked %d citations, %d bad, %d words" % (checked, len(bad), words))
     claim_words = sum(len(words_of(s)) for _, s in prose)
     print("%d claims, %d words in them, %.1f words per claim" % (len(prose), claim_words, claim_words / len(prose) if prose else 0))
-    print("%d failed checks, %d flagged sentences (list them for the check pass)" % (len(fails), len(flags)))
+    names = {}
+    for _, kind, _ in fails:
+        names[kind] = names.get(kind, 0) + 1
+    if bad:
+        names["citation"] = len(bad)
+    print("%d failed checks%s, %d flagged sentences (list them for the check pass)" % (len(fails) + len(bad), " (%s)" % ", ".join("%s %d" % kv for kv in sorted(names.items())) if names else "", len(flags)))
     if not checked:
         print("no citations found: an uncited doc cannot be checked", file=sys.stderr)
         return 2

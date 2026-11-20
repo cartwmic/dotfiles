@@ -7,7 +7,9 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs"
 SKILL = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 DRAFTING = (SKILL_DIR / "references/drafting.md").read_text(encoding="utf-8")
-CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py")
+READER = (SKILL_DIR / "references/reader-check.md").read_text(encoding="utf-8")
+CHECK_BRIEF = (SKILL_DIR / "references/check-brief.md").read_text(encoding="utf-8")
+CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py")
 
 
 def frontmatter(text):
@@ -95,6 +97,66 @@ class DraftingLimitTest(unittest.TestCase):
         self.assertNotIn("B/25", DRAFTING)
         self.assertNotIn("thin sentences", DRAFTING)
         self.assertRegex(DRAFTING, r"about 14 words")
+
+
+class RoundTwoTest(unittest.TestCase):
+    """What the second climb round changed in the written method."""
+    INPUT_RULE = "the appendix sentences plus the index"
+
+    def step(self, n):
+        m = re.search(r"^%d\. (.*)$" % n, SKILL, re.M)
+        self.assertIsNotNone(m, "step %d" % n)
+        return m.group(1)
+
+    def test_the_front_writer_input_rule_is_one_sentence_in_both_files(self):
+        self.assertIn(self.INPUT_RULE, self.step(6))
+        self.assertIn(self.INPUT_RULE, DRAFTING)
+        self.assertNotIn("index only", SKILL.lower())
+
+    def test_step_5_asks_for_six_to_ten_appendix_sections_grouping_scout_names(self):
+        self.assertRegex(self.step(5), r"6-10 appendix sections")
+        self.assertRegex(self.step(5), r"(?i)group[^.]*scout")
+
+    def test_stamping_is_a_step_before_the_audit_and_the_assembly(self):
+        self.assertRegex(self.step(5), r"stamp\.py")
+        self.assertRegex(DRAFTING, r"stamp\.py")
+
+    def test_step_9_stops_after_two_fix_rounds_and_cuts_or_narrows(self):
+        step = self.step(9)
+        self.assertRegex(step, r"at most 2 fix rounds")
+        self.assertRegex(step, r"(?i)cut|narrow")
+        self.assertRegex(step, r"(?i)split[^.]*(rather|not)[^.]*checker")
+
+    def test_part_1_has_a_how_to_start_section_in_the_front_writers_list(self):
+        self.assertIn("How to start", SKILL)
+        self.assertRegex(DRAFTING, r"(?i)how to start")
+        self.assertRegex(DRAFTING, r"(?i)frame writer[^\n]*how to start|how to start[^\n]*frame writer|install")
+
+    def test_drafting_warns_against_cat_n_on_several_files(self):
+        self.assertRegex(DRAFTING, r"cat -n")
+        self.assertRegex(DRAFTING, r"(?i)several files|more than one file")
+
+    def test_drafting_asks_for_the_guard_sheet_and_the_evidence_file(self):
+        for word in ("--guards", "guards.md", "not relevant", "evidence.md"):
+            self.assertIn(word, DRAFTING, word)
+
+    def test_the_reader_bar_is_every_unknown_word_defined_and_five_of_five(self):
+        self.assertRegex(READER, r"5 of 5|5/5")
+        self.assertRegex(READER, r"(?i)glossary[^.\n]*15|15[^.\n]*glossary")
+        self.assertRegex(READER, r"--unknown")
+        self.assertNotRegex(READER, r"at most 3 unknown")
+        self.assertNotRegex(READER, r"at least 4 of 5")
+
+    def test_the_reader_is_opus_and_gets_one_fix_round(self):
+        reader = READER.split("## Reader", 1)[1].split("##", 1)[0]
+        self.assertIn("Opus", reader)
+        self.assertNotIn("Sonnet", reader)
+        self.assertRegex(READER, r"(?i)one (reader )?fix round")
+
+    def test_the_check_brief_tells_checkers_a_value_set_on_the_cited_line_holds_for_count(self):
+        self.assertRegex(CHECK_BRIEF, r"(?i)set on the cited line")
+        self.assertRegex(CHECK_BRIEF, r"version 6")
+        self.assertNotRegex(CHECK_BRIEF, r"version 5")
 
 
 if __name__ == "__main__":

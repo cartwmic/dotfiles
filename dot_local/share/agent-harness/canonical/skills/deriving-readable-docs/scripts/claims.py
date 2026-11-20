@@ -5,7 +5,11 @@ A doc line is skipped when it is inside a fenced code block or inside a printed 
 which assemble.py writes around rows a script printed: they are not claims and not words).
 A citation is a backticked `path:LINE` or `path:START-END`; see line_items. A sentence is the text of a line with its
 citations taken out, split after . ! or ? when a capital letter, digit, quote or bracket follows. A tag such as [A4.2] is not a word.
+
+An id is a tag at the end of an appendix line, `[A4.3f9a]`: the section, a dot and a short name that stays with the line when the line is edited, split
+or moved and is never reused. A Part 1 sentence ends with the ids of the appendix lines it restates. `stamp_text` gives each prose line of a section file an id.
 """
+import hashlib
 import os
 import re
 
@@ -18,11 +22,12 @@ IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 JOIN = re.compile(r"^(?:[\s,;&]|and)*$")
 LABEL = re.compile(r"^\s*\(([^)]*)\)")
-TAG = re.compile(r"\[A\d+(?:\.\d+)?\]")  # a Part 1 sentence's pointer into the appendix
-SAYS_SOURCE = re.compile(r"comment|header|readme|docs?\b|documentation|stated|says|source text|prd|agents\.md|\[A\d+(?:\.\d+)?\]", re.I)
+ID = r"A\d+\.\w+"  # section, a dot, the line's own name
+TAG = re.compile(r"\[%s\]" % ID)  # an id at the end of an appendix line, or a Part 1 sentence's pointer to one
+SAYS_SOURCE = re.compile(r"comment|header|readme|docs?\b|documentation|stated|says|source text|prd|agents\.md", re.I)  # a tag is not a source: only a Part 1 tag is, see says_source
 PRINTED_BEGIN, PRINTED_END = "<!-- printed -->", "<!-- /printed -->"
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`\"'(\[*_])")
-TAG_AFTER_STOP = re.compile(r"([.!?])((?:\s*\[A\d+(?:\.\d+)?\])+)")
+TAG_AFTER_STOP = re.compile(r"([.!?])((?:\s*\[%s\])+)" % ID)
 
 
 def is_path(repo, path, strict):
@@ -92,13 +97,19 @@ def doc_lines(text):
 
 def claims(text, repo):
     """Yield one dict per claim: line, text (the words before the citation group), cites, label (a parenthetical
-    right after the group, such as "code comment") and uncited (words after the last group, or a whole line with none)."""
+    right after the group, such as "code comment") and uncited (words after the last group, or a whole line with none; an id after
+    the last group is no words). part1 is true inside Part 1, where a tag is a sentence's source (see says_source)."""
+    part1 = False
     for n, line, header, heading in doc_lines(text):
         items = line_items(line, repo)
         if heading:
+            if re.match(r"#+\s+Part 1\b", line):
+                part1 = True
+            elif re.match(r"#+\s+Part 2\b", line):
+                part1 = False
             for _, _, cites, _ in items:
                 if cites:
-                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True}
+                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True, "part1": part1}
             continue
         groups = []  # [first_start, last_end, cites]
         for start, end, cites, _ in items:
@@ -115,10 +126,16 @@ def claims(text, repo):
             if label and not SAYS_SOURCE.search(label.group(1)):
                 label = None  # a parenthetical that is not a source label is a sentence: it is listed as uncited text
             yield {"line": n, "text": line[prev:start] if prev else LIST_MARK.sub("", line[:start]), "cites": cites, "label": label.group(1) if label else "",
-                   "uncited": "", "header": header}
+                   "uncited": "", "header": header, "part1": part1}
             prev = end + (label.end() if label else 0)
-        if not header and line[prev:].strip():
-            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header}
+        if not header and TAG.sub("", line[prev:]).strip():
+            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:] if part1 else TAG.sub("", line[prev:]), "header": header, "part1": part1}
+
+
+def says_source(text, part1=False):
+    """Does the text name its source? A word such as README or "code comment" does. Inside Part 1 a tag does too: it points at the appendix sentence
+    the sentence restates. An id at the end of an appendix line names nothing."""
+    return bool(SAYS_SOURCE.search(text)) or (part1 and bool(TAG.search(text)))
 
 
 def tags_before_stop(text):
@@ -185,24 +202,75 @@ def word_count(doc_text, repo):
     return total
 
 
-def appendix_index(text, repo):
-    """{"A4.2": (doc_line, sentence)}: the sentences of each `## A<n> ...` section of the appendix, numbered from 1 in order.
-    A Part 1 tag [A4.2] points at the second sentence of section A4. Sentences above the first A section are not indexed."""
-    index, sec, k = {}, None, 0
-    by_line = {}
+def appendix_lines(text, repo):
+    """The prose lines of the appendix sections, as dicts {line, section, ids, text, cited}: the line's doc number, its section number (`## A4 ...` is "4"),
+    the ids it carries (`[A4.3f9a]`), its sentences joined with ids and citations taken out, and whether it holds a citation.
+    A heading `## A<n> ...` starts a section; a deeper heading (`###`) stays inside it; any other heading, such as `# Part 2` or `## A-last`, ends it.
+    Table rows are not lines of the appendix: they carry no id."""
+    by_line, out, sec = {}, [], None
     for n, s in prose_sentences(text, repo):
         by_line.setdefault(n, []).append(s)
+    raw = text.splitlines()
+    for n, line, header, heading in doc_lines(text):
+        if heading:
+            m = re.match(r"(#+)\s+A(\d+)\b", line)
+            if m:
+                sec = m.group(2)
+            elif len(re.match(r"#+", line).group(0)) <= 2:
+                sec = None
+            continue
+        if sec is None or header or line.lstrip().startswith("|") or n not in by_line:
+            continue
+        body = " ".join(by_line[n])
+        out.append({"line": n, "section": sec, "ids": [t.strip("[]") for t in TAG.findall(raw[n - 1])], "text": re.sub(r"\s+", " ", TAG.sub("", body)).strip(),
+                    "cited": any(cites for _, _, cites, _ in line_items(raw[n - 1], repo))})
+    return out
+
+
+def appendix_index(text, repo):
+    """{"A4.3f9a": (doc_line, sentences, cited)}: each id of an appendix line (see appendix_lines) with the line's sentences and whether it is cited. A Part 1
+    tag [A4.3f9a] points at it. An id is not a position: cutting or splitting a line does not change the other ids."""
+    return {i: (l["line"], l["text"], l["cited"]) for l in appendix_lines(text, repo) for i in l["ids"]}
+
+
+def appendix_problems(text, repo):
+    """(unstamped, duplicates): the appendix lines with no id as [(doc_line, text)], and ids carried by two lines as [(id, first_line, second_line)]."""
+    unstamped, seen, dups = [], {}, []
+    for l in appendix_lines(text, repo):
+        if not l["ids"]:
+            unstamped.append((l["line"], l["text"]))
+        for i in l["ids"]:
+            if i in seen and seen[i] != l["line"]:
+                dups.append((i, seen[i], l["line"]))
+            seen.setdefault(i, l["line"])
+    return unstamped, dups
+
+
+def stamp_text(text):
+    """(new_text, stamped): give each prose line of a section file that has no id one, at its end: `[A4.3f9a]`, the section number from the nearest `## A<n>`
+    heading, then four hex digits taken from the line, moved on until they differ from every id already in the file. Lines that have an id are left alone;
+    headings, fenced code, printed blocks and table rows are not prose lines. Raises ValueError when prose comes before the first `## A<n>` heading."""
+    lines, taken, sec, stamped = text.splitlines(), set(TAG.findall(text)), None, 0
     for n, line, header, heading in doc_lines(text):
         if heading:
             m = re.match(r"#+\s+A(\d+)\b", line)
-            sec, k = (m.group(1), 0) if m else (None, 0)
+            if m:
+                sec = m.group(1)
+            continue
+        if header or line.lstrip().startswith("|") or TAG.search(line):
             continue
         if sec is None:
-            continue
-        for s in by_line.get(n, []):
-            k += 1
-            index["A%s.%d" % (sec, k)] = (n, s)
-    return index
+            raise ValueError("line %d comes before the first `## A<n>` heading" % n)
+        salt = 0
+        while True:
+            tag = "[A%s.%s]" % (sec, hashlib.sha1(("%s|%s|%d" % (sec, line.strip(), salt)).encode("utf-8")).hexdigest()[:4])
+            if tag not in taken:
+                break
+            salt += 1
+        taken.add(tag)
+        lines[n - 1] = line.rstrip() + " " + tag
+        stamped += 1
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), stamped
 
 
 def part1_slice(guide):

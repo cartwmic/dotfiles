@@ -16,6 +16,9 @@ GUIDE = """# Part 1: In plain English
 ## What it is
 
 Notes lets you save short notes from the terminal. [A3.1]
+
+## How to start
+
 You run `notes add` to save one. [A4.1]
 
 ## What you can do
@@ -26,12 +29,12 @@ You can keep up to 5 notes in one day. [A4.2]
 
 ## A3 The product as a whole
 
-Notes saves short notes from the terminal (README).
+Notes saves short notes from the terminal. `src/cli.py:1` [A3.1]
 
 ## A4 Adding notes
 
-The `notes add` command saves a note (`src/cli.py:3`).
-It stops after 5 notes in one day (`src/cli.py:7`).
+The `notes add` command saves a note. `src/cli.py:3` [A4.1]
+It stops after 5 notes in one day. `src/cli.py:7` [A4.2]
 """
 
 
@@ -76,8 +79,8 @@ class LintMainTest(unittest.TestCase):
         self.fails(GUIDE.replace("You run `notes add` to save one. [A4.1]", "You run `notes add` to save one."), "tag")
 
     def test_a_tag_that_names_no_appendix_sentence_fails(self):
-        out = self.fails(GUIDE.replace("[A4.2]", "[A4.9]"), "tag")
-        self.assertIn("[A4.9] names no appendix sentence", out)
+        out = self.fails(GUIDE.replace("in one day. [A4.2]\n\n# Part 2", "in one day. [A4.9]\n\n# Part 2"), "tag")
+        self.assertIn("[A4.9] names no appendix line", out)
 
     def test_a_tag_after_the_full_stop_counts(self):
         guide = GUIDE.replace("You run `notes add` to save one. [A4.1]", "You run `notes add` to save one. [A4.1]")
@@ -127,7 +130,7 @@ class LintMainTest(unittest.TestCase):
         self.fails(GUIDE.replace("to save one.", 'to save one called "daily".'), "appendix-match")
 
     def test_a_number_in_a_different_appendix_sentence_than_the_tagged_one_fails(self):
-        self.fails(GUIDE.replace("[A4.2]", "[A4.1]"), "appendix-match")
+        self.fails(GUIDE.replace("in one day. [A4.2]\n\n# Part 2", "in one day. [A4.1]\n\n# Part 2"), "appendix-match")
 
     def test_part_1_over_1000_words_warns_and_over_1200_fails(self):
         filler = "\n".join("Notes lets you %s. [A3.1]" % sentence(8) for _ in range(95))

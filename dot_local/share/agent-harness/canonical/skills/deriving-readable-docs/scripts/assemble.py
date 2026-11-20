@@ -5,7 +5,8 @@ usage: assemble.py <work> <repo> [-o GUIDE.md] [--clean] [--index] [--date YYYY-
 
 <work> holds the parts, by name:
   part1.md          the front writer's text: `## ` sections only; assemble adds the `# Part 1: In plain English` heading
-  A3.md, A4.md ...  the frame and the section writers, each starting `## A<n> <title>`; the numbers run from 3 with no gap
+  A3.md, A4.md ...  the frame and the section writers, each starting `## A<n> <title>`; the numbers run from 3 with no gap; every prose line ends in an id
+                    (`stamp.py A4.md` gives them), and no id is on two lines
   surfaces.json     from `surfaces.py <repo> --json`
   points.json       from `harvest_points.py <repo>` (optional: without it the evidence block says no tests were found)
   scout.resolved    from `surfaces.py <repo> --resolve scout.txt` (optional)
@@ -17,8 +18,8 @@ read it as claims or count it as words.
   A2        a surface of kind command, flag, route, event or env is named in tests when its name (first word, at least 3 characters) is in the text of a test file of
             points.json; the ones never named are listed
 --clean also writes the guide without tags and printed markers, next to -o as GUIDE.clean.md.
---index prints every appendix sentence as `A4.2 | sentence` (section A4, second sentence) and writes nothing: it is what the front writer tags from.
-Exit 1 when a part is missing or misnumbered, or a not-read path does not exist; 2 on bad usage. Stdlib only.
+--index prints every appendix line as `A4.3f9a | sentences` (the id the line carries) and writes nothing: it is what the front writer tags from.
+Exit 1 when a part is missing or misnumbered, a prose line has no id or an id is on two lines, or a not-read path does not exist; 2 on bad usage. Stdlib only.
 """
 import datetime
 import json
@@ -29,7 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import PRINTED_BEGIN, PRINTED_END, TAG, appendix_index  # noqa: E402
+from claims import PRINTED_BEGIN, PRINTED_END, TAG, appendix_index, appendix_lines, appendix_problems  # noqa: E402
 
 SECTION_FILE = re.compile(r"^A(\d+)\.md$")
 NAMED_KINDS = ("command", "flag", "route", "event", "env")
@@ -122,7 +123,17 @@ def build(work, repo, date, need_part1=True):
                                        "never named in tests:", *([row(r) for r in never] or ["none"]))]
     last = ["## A-last Not read", "", printed(*(not_read or ["none"]))]
     parts = [header, "# Part 1: In plain English", part1, "# Part 2: Appendix: technical detail", "\n".join(a1), "\n".join(a2), *secs, "\n".join(last)]
-    return "\n\n".join(p for p in parts if p) + "\n"
+    text = "\n\n".join(p for p in parts if p) + "\n"
+    unstamped, dups = appendix_problems(text, repo)
+    if unstamped:
+        by_section = {}
+        for l in appendix_lines(text, repo):
+            if not l["ids"]:
+                by_section.setdefault(l["section"], []).append(l["text"])
+        raise AssembleError("; ".join("A%s.md has %d lines with no id (first: %s): run stamp.py on it" % (k, len(v), v[0][:50]) for k, v in sorted(by_section.items())))
+    if dups:
+        raise AssembleError("; ".join("id %s is on two lines (doc lines %d and %d): one line keeps it" % d for d in dups))
+    return text
 
 
 def clean(text):
@@ -151,7 +162,7 @@ def main(argv):
         print(e, file=sys.stderr)
         return 1
     if "--index" in flags:
-        for tag, (_, sentence) in appendix_index(text, repo).items():
+        for tag, (_, sentence, _) in appendix_index(text, repo).items():
             print("%s | %s" % (tag, sentence))
         return 0
     out = out or os.path.join(work, "GUIDE.md")

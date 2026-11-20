@@ -8,7 +8,9 @@ Prints one row per surface, `kind | name | path:line`, grouped by kind. Every ro
 the tests), so it is a safe `path:line` to cite. Kinds: entry, command, flag, route, event, env, config, manifest, export, doc, ci.
   Python   [project.scripts], __main__.py, `if __name__ == "__main__"`, add_argument, click options, route decorators, os.environ / getenv
   Go       `package main`, cobra `Use:`, flag.X and Flags().X, urfave/cli Name:, Handle and HandleFunc, regexp route tables (`^/...`), os.Getenv
-  JS, TS   package.json bin, main, exports and every script; .command(, .option(, app.get( and router.use(, socket.on(, process.env.X
+  JS, TS   package.json bin, main, exports and every script; .command(, .option(, app.get( and router.use(, socket.on(, process.env.X;
+           in a file that reads argv (process.argv, parseArgs, yargs, commander): a default `program = 'name'`, a `usage: name` string, `case 'cmd':` arms,
+           `command === 'cmd'` tests and the option names of a parseArgs table, as --name
   Rust     [[bin]], fn main in src/main.rs and src/bin/, clap #[arg(...)] with its field name, #[command(...)], env::var, pub items of lib.rs
   Shell    a #! file, the -x|--long) arms of a case, ${VAR:-default} and export VAR=
   Any      Dockerfile ENTRYPOINT and CMD, compose services, Makefile and Taskfile targets, CI `run:` steps,
@@ -18,8 +20,8 @@ a hand-parsed argv, a third-party args module, UI code. A scout reads the README
 
 --json prints the rows as a JSON array of {kind, name, file, line}.
 --resolve names.txt reads one name a line (the name as it appears in the code; # starts a comment) and prints `name | path:line` for
-the first line of a non-test, non-doc file that holds it, or `name | NOT FOUND`. A line that holds the name in quotes wins over one
-that holds it bare. A name found only in a test or a doc is NOT FOUND: a scout cannot invent a surface. Exit 0; a NOT FOUND row is dropped by the lead.
+the line of a non-test, non-doc file that defines it (function, class, def, const, a Go method and the like), else the first line that holds it in quotes,
+else the first that holds it bare, or `name | NOT FOUND`. A name found only in a test or a doc is NOT FOUND: a scout cannot invent a surface. Exit 0; a NOT FOUND row is dropped by the lead.
 Exit 2 on bad usage.
 """
 import json
@@ -126,6 +128,59 @@ class Rows:
         self.rows.append({"kind": kind, "name": name or "?", "file": f, "line": i})
 
 
+ARGV = re.compile(r"process\.argv|\bparseArgs\b|\byargs\b|\bcommander\b|\bargv\b")
+PROGRAM = re.compile(r"\bprogram\s*=\s*['\"]([A-Za-z][\w-]*)['\"]")
+USAGE = re.compile(r"['\"`]usage:\s*([A-Za-z][\w-]*)")
+CASE = re.compile(r"^\s*case\s+['\"]([\w:-]+)['\"]\s*:")
+COMMAND_TEST = re.compile(r"\b(?:command|cmd|verb|subcommand)\s*[!=]==\s*['\"]([\w-]+)['\"]")
+OPTION_ENTRY = re.compile(r"^\s*(?:'([\w-]+)'|\"([\w-]+)\"|([A-Za-z_]\w*))\s*:\s*\{\s*type:\s*['\"](?:string|boolean)['\"]")
+OPTIONS_OPEN = re.compile(r"\boptions:\s*\{")
+OPTION_KEY = re.compile(r"^\s*(?:'([\w-]+)'|\"([\w-]+)\"|([A-Za-z_]\w*))\s*:")
+
+
+def inline_option_keys(line):
+    """The keys of every `options: { a: ..., 'b-c': ... }` on one line, at the top level of the braces."""
+    keys = []
+    for m in OPTIONS_OPEN.finditer(line):
+        depth, start = 1, m.end()
+        for j in range(start, len(line)):
+            depth += (line[j] == "{") - (line[j] == "}")
+            if depth == 0:
+                body = line[start:j]
+                break
+        else:
+            body = line[start:]
+        top, d, cur = [], 0, ""
+        for ch in body:
+            d += (ch in "{[(") - (ch in "}])")
+            if ch == "," and d == 0:
+                top.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        top.append(cur)
+        for part in top:
+            k = OPTION_KEY.match(part)
+            if k:
+                keys.append(k.group(1) or k.group(2) or k.group(3))
+    return keys
+
+
+def js_cli_rows(rows, f, lines):
+    """The command lines and options of a TS/JS file that reads argv: its default program name, `usage: name`, case arms, command tests, parseArgs options."""
+    seen = set()
+    for i, l in enumerate(lines, 1):
+        names = [m.group(1) for m in PROGRAM.finditer(l)] + [m.group(1) for m in USAGE.finditer(l)]
+        names += [m.group(1) for m in CASE.finditer(l)] + [m.group(1) for m in COMMAND_TEST.finditer(l)]
+        for name in names:
+            if name not in seen:
+                seen.add(name)
+                rows.add("command", name, f, i)
+        o = OPTION_ENTRY.match(l)
+        for key in ([o.group(1) or o.group(2) or o.group(3)] if o else []) + inline_option_keys(l):
+            rows.add("flag", "--" + key, f, i)
+
+
 def manifest_rows(rows, f, lines):
     base = os.path.basename(f)
     rows.add("manifest", base, f, 1)
@@ -218,6 +273,8 @@ def scan(repo):
                 m = rx.search(l)
                 if m:
                     rows.add(kind, (m.group(g) if g else l) or l, f, i)
+        if re.search(JS, f) and ARGV.search(text):
+            js_cli_rows(rows, f, lines)
         if f.endswith(".go"):
             for i, l in enumerate(lines[1:], 2):
                 m = GO_FLAG_NAME.match(l)
@@ -256,27 +313,36 @@ def scan(repo):
     return out, per
 
 
+def definition(name):
+    n = re.escape(name)
+    return re.compile(r"(?:^|[\s;])(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|class|interface|type|enum|struct|trait|def|fn|func|const|let|var)\s+" + n + r"(?![\w-])"
+                      r"|^\s*func\s*\([^)]*\)\s*" + n + r"\s*\(")
+
+
 def resolve(repo, names):
-    """[(name, "path:line" or None)]: the first line of a non-test, non-doc file that holds the name, quoted over bare."""
+    """[(name, "path:line" or None)]: the line of a non-test, non-doc file that defines the name, else the first that holds it in quotes, else the first that holds it bare."""
     files = [f for f in list_files(repo) if not TEST.search(f) and not re.search(r"\.(md|mdx|rst|txt|adoc)$", f) and not f.endswith((".lock", ".json", ".svg", ".map", ".min.js"))]
     cache, out = {}, []
     for name in names:
+        defn = definition(name)
         bare = re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])")
         quoted = re.compile(r"[\"'`]" + re.escape(name) + r"[\"'`]")
-        found, any_hit = None, None
+        hit = {"def": None, "quoted": None, "bare": None}
         for f in files:
             if f not in cache:
                 cache[f] = (read_text(repo, f) or "").split("\n")
             for i, l in enumerate(cache[f], 1):
-                if quoted.search(l):
-                    found = (f, i)
+                if defn.search(l):
+                    hit["def"] = (f, i)
                     break
-                if any_hit is None and bare.search(l):
-                    any_hit = (f, i)
-            if found:
+                if hit["quoted"] is None and quoted.search(l):
+                    hit["quoted"] = (f, i)
+                elif hit["bare"] is None and bare.search(l):
+                    hit["bare"] = (f, i)
+            if hit["def"]:
                 break
-        hit = found or any_hit
-        out.append((name, "%s:%d" % hit if hit else None))
+        found = hit["def"] or hit["quoted"] or hit["bare"]
+        out.append((name, "%s:%d" % found if found else None))
     return out
 
 

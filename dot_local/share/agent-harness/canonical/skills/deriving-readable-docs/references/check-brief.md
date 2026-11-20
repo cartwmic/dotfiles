@@ -1,5 +1,5 @@
 Seat: reviewer (the model your seat table gives reviewers). You did not write this doc.
-Check brief, version 5. Frozen for a lab and a climb: change it only with a log entry, because scores from different versions do not compare.
+Check brief, version 6. Frozen for a lab and a climb: change it only with a log entry, because scores from different versions do not compare.
 
 Check one slice of a derived doc against the repo. Inputs: the doc path, your line range of it, the repo path (at the commit in the doc header), and the flag list from `check_citations.py` for your range (`slice.py` cuts slices and builds the lists). Your slice is about 100 claims or fewer. The doc is one `GUIDE.md`: a plain-English Part 1, then an appendix whose sentences each carry `path:line` citations. Tests may or may not exist.
 
@@ -19,7 +19,7 @@ General rules:
 - Check every claim in your range, not a sample. Check the flagged ones first.
 - Do not edit the doc.
 
-Part 1 sentences have no `path:line`. Each ends with tags such as `[A4.2]` that point at appendix sentences (the second sentence of section A4). Judge a Part 1 sentence against the tagged appendix sentences and the code they cite: it must say no more than they show, and it adds no number, name, quantifier or condition of its own. A tag that points at no appendix sentence, or at one about something else, makes it UNSUPPORTED. A Part 1 sentence may leave detail out; leaving out is not an error. A sentence that is misleading because of what it leaves out is OVERSTATED.
+Part 1 sentences have no `path:line`. Each ends with tags such as `[A4.3f9a]` that point at appendix lines by id (an id stays with its line when the line is edited). Judge a Part 1 sentence against the tagged appendix sentences and the code they cite: it must say no more than they show, and it adds no number, name, quantifier or condition of its own. A tag that points at no appendix sentence, or at one about something else, makes it UNSUPPORTED. A Part 1 sentence may leave detail out; leaving out is not an error. A sentence that is misleading because of what it leaves out is OVERSTATED.
 
 Checks every claim of these kinds must pass. Do them in addition to reading the cited lines:
 
@@ -41,3 +41,5 @@ Report one line per non-HOLDS claim: `doc line | verdict | CAUSE | the words tha
 
 End with one line, in this exact form: `Counts: claims checked N; HOLDS N; WRONG N; OVERSTATED N; UNSUPPORTED N.` The four verdict numbers add up to N, and there is one finding line for each WRONG, OVERSTATED and UNSUPPORTED. A script reads it. The lead names the file of a Part 1 slice `part1.md` or `part1-<anything>.md`; the script scores those apart from the appendix.
 8. A default, limit or configuration value ("defaults to 30 seconds", "reads `server.yml`"): the sentence must cite the line that sets it, and the value must be on that line. A value taken from a README or help text must say so.
+
+A value set on the cited line holds for COUNT: when the sentence names a number or name and the cited line sets it (a constant, a default, a limit), the line is the whole definition and the claim is not a COUNT error. COUNT is for a number or an overreach word that the code does not define.

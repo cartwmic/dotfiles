@@ -206,5 +206,100 @@ class ResolveTest(unittest.TestCase):
             self.assertEqual(run(repo, "--resolve", "/no/such")[0], 2)
 
 
+# A TS repo built like agent-kit: no package.json bin, each command line reached through a run function with a default program name, a
+# `case` dispatch, `command === 'x'` tests and parseArgs option tables.
+TS_CLI = {
+    "package.json": '{\n  "name": "kit",\n  "exports": {}\n}\n',
+    "src/reach/cli.ts": "import { parseArgs } from 'node:util';\nconst OPTIONS = {\n  text: { type: 'string' },\n  'reply-to': { type: 'string' },\n  'as-file': { type: 'boolean' },\n} as const;\n"
+                        "export function run(argv: string[], { program = 'reach' }: CliEnv): number {\n  const [command, ...rest] = argv;\n"
+                        "  if (command !== 'send' && command !== 'react') return 2;\n  return 0;\n}\n",
+    "src/jobs/cli.ts": "import { parseArgs } from 'node:util';\nexport async function runJobsCli(argv: string[], { program = 'jobs' }: Options) {\n  switch (verb) {\n    case 'list':\n      return 0;\n"
+                       "    case 'add': {\n      return 1;\n    }\n    case 'remove':\n      return 2;\n  }\n}\n",
+    "src/board/cli.ts": "import { parseArgs } from 'node:util';\nconst bad = () => err(`usage: board <${names}> [args]`);\n"
+                        "const o = parseArgs({ args, options: { dir: { type: 'string' }, 'tick-id': str, all: { type: 'boolean' } }, strict: true });\n",
+    "src/traces/cli.ts": "import { parseArgs } from 'node:util';\nconst USAGE = [\n  'usage: traces review normalize <findings.json>',\n  'usage: traces review add <file>',\n];\n",
+    "src/playbook/cli.ts": "export function run(options) {\n  const { program = 'playbook' } = options;\n  if (command === 'show') return 0;\n  if (command === 'add') return 1;\n  return process.argv.length;\n}\n",
+    "src/other/state.ts": "switch (kind) {\n  case 'open':\n    return 1;\n}\nconst x = command === 'not-a-cli';\n",
+}
+
+
+def ts_rows(files):
+    with make_repo(files) as repo:
+        code, out = run(repo, "--json")
+        assert code == 0, out
+        return json.loads(out)
+
+
+class TsCliTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.rows = ts_rows(TS_CLI)
+        cls.cmds = {(r["name"], r["file"]) for r in cls.rows if r["kind"] == "command"}
+        cls.flags = {(r["name"], r["file"]) for r in cls.rows if r["kind"] == "flag"}
+
+    def line(self, path, needle):
+        for i, l in enumerate(TS_CLI[path].split("\n"), 1):
+            if needle in l:
+                return i
+
+    def test_the_five_command_lines_are_found_by_their_default_program_name_or_usage_line(self):
+        for name, path in (("reach", "src/reach/cli.ts"), ("jobs", "src/jobs/cli.ts"), ("playbook", "src/playbook/cli.ts"), ("board", "src/board/cli.ts"), ("traces", "src/traces/cli.ts")):
+            self.assertIn((name, path), self.cmds, sorted(self.cmds))
+
+    def test_a_usage_line_that_repeats_is_one_row_and_names_the_first_line(self):
+        rows = [r for r in self.rows if r["kind"] == "command" and r["name"] == "traces"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["line"], self.line("src/traces/cli.ts", "usage: traces review normalize"))
+
+    def test_case_arms_and_command_tests_in_a_file_that_reads_argv_are_subcommands(self):
+        for name in ("list", "add", "remove"):
+            self.assertIn((name, "src/jobs/cli.ts"), self.cmds)
+        self.assertIn(("send", "src/reach/cli.ts"), self.cmds)
+        self.assertIn(("react", "src/reach/cli.ts"), self.cmds)
+        self.assertIn(("show", "src/playbook/cli.ts"), self.cmds)
+
+    def test_a_switch_or_comparison_in_a_file_that_reads_no_argv_is_not_a_command(self):
+        self.assertFalse([r for r in self.rows if r["file"] == "src/other/state.ts" and r["kind"] == "command"])
+
+    def test_parse_args_option_names_are_flags(self):
+        for name in ("--text", "--reply-to", "--as-file"):
+            self.assertIn((name, "src/reach/cli.ts"), self.flags)
+        for name in ("--dir", "--tick-id", "--all"):
+            self.assertIn((name, "src/board/cli.ts"), self.flags)
+        self.assertNotIn(("--type", "src/board/cli.ts"), self.flags)
+
+    def test_every_row_is_a_literal_line_of_the_repo(self):
+        for r in self.rows:
+            if r["kind"] in ("command", "flag"):
+                self.assertTrue(r["file"] in TS_CLI and 1 <= r["line"] <= len(TS_CLI[r["file"]].split("\n")), r)
+                self.assertTrue(TS_CLI[r["file"]].split("\n")[r["line"] - 1].strip(), r)
+
+    def test_a_package_json_bin_is_still_an_entry(self):
+        rows = ts_rows(dict(TS_CLI, **{"package.json": '{\n  "bin": { "kit": "./cli.js" }\n}\n'}))
+        self.assertTrue([r for r in rows if r["kind"] == "entry" and r["name"].startswith("bin")])
+
+
+class ResolveDefinitionTest(unittest.TestCase):
+    def resolve(self, files, name):
+        with make_repo(files) as repo, tempfile.TemporaryDirectory() as d:
+            Path(d, "n.txt").write_text(name + "\n")
+            return run(repo, "--resolve", str(Path(d, "n.txt")))[1].strip()
+
+    def test_the_definition_wins_over_an_earlier_use(self):
+        files = {"a.ts": "import { runBoard } from './b.ts';\nrunBoard();\n", "b.ts": "export function runBoard() {\n}\n"}
+        self.assertEqual(self.resolve(files, "runBoard"), "runBoard | b.ts:1")
+
+    def test_python_def_class_and_const_are_definitions(self):
+        self.assertEqual(self.resolve({"a.py": "x = Thing()\n", "b.py": "class Thing:\n    pass\n"}, "Thing"), "Thing | b.py:1")
+        self.assertEqual(self.resolve({"a.py": "run_it()\n", "b.py": "def run_it():\n    pass\n"}, "run_it"), "run_it | b.py:1")
+        self.assertEqual(self.resolve({"a.ts": "use(LIMIT);\n", "b.ts": "export const LIMIT = 5;\n"}, "LIMIT"), "LIMIT | b.ts:1")
+
+    def test_a_go_method_definition_wins_too(self):
+        self.assertEqual(self.resolve({"a.go": "s.Serve()\n", "b.go": "func (s *S) Serve() {\n}\n"}, "Serve"), "Serve | b.go:1")
+
+    def test_with_no_definition_the_quoted_line_still_wins_over_the_bare_one(self):
+        self.assertEqual(self.resolve({"a.py": "# build it\n", "b.py": 'cmd = "build"\n'}, "build"), "build | b.py:1")
+
+
 if __name__ == "__main__":
     unittest.main()

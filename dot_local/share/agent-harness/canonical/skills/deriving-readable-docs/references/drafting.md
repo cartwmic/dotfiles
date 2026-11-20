@@ -4,6 +4,8 @@ For the section writer: a fresh session that drafts one section of the appendix 
 
 Why a budget: the first run of this method, with no limit, wrote 3,800 claims (88,000 words) for a repo whose earlier draft had 540, and the number of wrong claims went up from 88 to 189. About 6 in 10 of them dropped a condition the code has (a branch, a flag, another caller). You have a word budget: write fewer, better-read sentences.
 
+Round 2 adds two files the audit now requires, `work/guards.md` and `work/evidence.md`, and an id on every appendix line (`stamp.py`). Both files exist to make you read the code: a script checks them against the real lines.
+
 Keep your work files in your work folder. They are not part of the draft and are never cited. Fresh checkers are not yours; the audit below is your own pass, so the checker finds nothing.
 
 ## What counts as evidence
@@ -16,6 +18,8 @@ Your budget is B words, counted as the check counts them: a word is any space-se
 
 ## Stage 1: evidence file (`work/evidence.md`)
 
+Open files one at a time. Never run `cat -n` on several files at once: the line numbers restart at 1 for each file, and a number from the wrong file ends up in a citation. Use `Read`, or `cat -n` on one file, and note its path with each number.
+
 For each behaviour you kept, and only those, open the code that defines it, the whole function or command and its helpers, and write one row per line you will cite:
 
 | row | `path:line` | the line, verbatim | trigger: who calls it, with which input | value or effect, verbatim | set here, or by the caller or a fixture? | the conditions of the whole function |
@@ -25,6 +29,8 @@ For each behaviour you kept, and only those, open the code that defines it, the 
 - **Set here**: yes only when the line defines the value (a default, a constant, a limit). A value that comes from a caller, a config file or a test's own choice is an example, not the rule.
 - **Conditions**: open the whole function and write its flags, branches, early exits, skipped inputs, other callers and other values. `python3 -I <skill dir>/scripts/early_exits.py <file> <line>` lists the exits above a line of a function (Python and TS/JS). Write "not read" if you did not open it: a "not read" row backs only a sentence worded "in the test" or "(help text)".
 - For a test or journey row: the compared expression and the value it is compared with, not the title or the failure message. If the line compares only a count, a length or the existence of a row, write that.
+
+Write each row so the check can find it: the `path:line` and the line's text in double quotes, for example `` `src/a.ts:4` | "return doIt(x);" | called with a number | ... ``. `check_citations.py --audit` fails when a cited line (or a cited range) has no such row, or when the quoted text is not on that line. A row copied from memory fails; only a read line passes.
 
 Then add one line per behaviour you plan to describe, naming the rows it rests on.
 
@@ -42,11 +48,15 @@ Then add one line per behaviour you plan to describe, naming the rows it rests o
 10. Narrow, do not stack. When a sentence would need a branch, flag, caller or exception it does not state, narrow the claim to the case you read or drop it. Do not add clause after clause ("unless A, B or C"): a sentence that needs two "unless" clauses is about the wrong case. Add an exception only when you have read it in the code and cite its line. Do not hedge ("usually", "may") and do not pad.
 11. Write for a person. The sentences stay narrow, each with its own citation, but lay them out as short paragraphs or list items grouped by what the reader wants to know, not as one claim per line where that hurts reading. Do not merge two behaviours into one sentence to save space.
 
+Run `python3 -I <skill dir>/scripts/stamp.py draft.md` once the sentences are in place. It adds an id such as `[A4.3f9a]` at the end of each appendix line and leaves a line that has one. An edit to a line keeps its id, so a Part 1 tag that points at it still holds.
+
 Then load `no-ai-slop` (Skill tool) and apply it in edit mode to the draft, keeping every citation, number and name as written. Put the `Voice:` line in your report. Run `python3 -I <skill dir>/scripts/check_citations.py draft.md <repo> --max-words B --max-sentence-words 18` and fix every FAIL, a sentence over 18 words included.
 
 ## Stage 3: audit (`work/audit.md`)
 
 Run the same command with `--sheet`. It prints each sentence with its cited lines, and under them the function's early exits above the last cited line: each `return`, `throw`, `continue`, `break` or `exit` that skips the cited code (a `continue` or `break` counts when its loop overlaps the cited lines). An exit marked `[inside the cited lines]` is one of the lines you cite: the sentence states its condition, or you narrow the cited range and the sentence to the lines before it. "No early exits" means none were found; "not listed" means the script could not read the file, so read the function yourself.
+
+**The condition sheet (`work/guards.md`).** Run `python3 -I <skill dir>/scripts/check_citations.py draft.md <repo> --guards > work/guards.md`. It prints one row for each early exit above a cited line: `guard | path:line | kind | the line | covered:`. Finish every row. After `covered:` write the id of the sentence that states the condition (`A4.3f9a`; it must be in the draft and cite that file), or `not relevant: <the reason, in at least three words>`. `--audit` fails when the sheet is missing, a guard has no mark, an id is not in the draft or cites another file, or a guard is left off the sheet. An uncited sentence with no "inferred" label fails too.
 
 Go through the sentences twice in this session, before you hand the section over. A pass by any other session is a checker, not your audit.
 
@@ -69,7 +79,7 @@ The questions, as a fresh checker asks them (`references/check-brief.md`). Be th
 - F. A comment, title or README that needs a label? A negative claim you did not grep?
 - G. What a thing is, read from its definition?
 
-When any answer is "no" or "not sure", edit the sentence now: narrow it to what the lines show, add the missing condition, add the line that does show it, or cut it if no narrower true sentence exists. Audit the edited sentence again. Stop when every line says HOLDS. A sentence you edited, or that no-ai-slop reworded, is audited again. Run the check with `--audit work/audit.md` (and without `--sheet`) once more on the final draft: it FAILs a sentence that has no row with all five fields whose assert is one of its own citations, with its text on that line. The draft that passes is the one you hand over.
+When any answer is "no" or "not sure", edit the sentence now: narrow it to what the lines show, add the missing condition, add the line that does show it, or cut it if no narrower true sentence exists. Audit the edited sentence again. Stop when every line says HOLDS. A sentence you edited, or that no-ai-slop reworded, is audited again. Run the check with `--audit work/audit.md` (and without `--sheet`; it reads `work/guards.md` and `work/evidence.md` beside the audit file, or the paths in `--guards-file` and `--evidence-file`) once more on the final draft: it FAILs a sentence that has no row with all five fields whose assert is one of its own citations, with its text on that line. The draft that passes is the one you hand over.
 
 ## Briefing the writers (the lead)
 
@@ -77,10 +87,10 @@ Start one fresh session per writer; never one session for the whole repo. Each b
 
 - The paths: the repo (read only, at the commit), `surfaces.json` and `scout.txt`, this skill's folder, and the one folder the writer may write in (`draft.md` and `work/`).
 - The method: read this file, and `SKILL.md` for the citation form and the rules for every sentence.
-- Limits: no subagents, no security or privacy language, change nothing in the repo. Each draft runs `check_citations.py --max-words <budget> --max-sentence-words 18 --audit <its audit file>` and fails when it is over, when a sentence has more than 18 words, or when a sentence has no audit row.
+- Limits: no subagents, no security or privacy language, change nothing in the repo. Each draft runs `check_citations.py --max-words <budget> --max-sentence-words 18 --audit <its audit file>` and fails when it is over, when a sentence has more than 18 words, when a sentence has no audit row, when a guard on the condition sheet is not marked, or when a cited line has no evidence row. The frame writer and the section writers are told to plan the whole appendix at 6-10 sections, grouping capabilities that share code.
 
 **Section writer** (one per capability, `A4` and on). The section heading `## A<n> <capability>`; the capability and its surfaces by name; the files its code sits in (names only, no earlier text and no checker findings); its word budget B. Report: path of `draft.md`, number of sentences, the word count, the `Voice:` line, and in at most five lines what it could not cover or cut.
 
 **Frame writer** (one, `A3`, heading `## A3 The product as a whole`). Writes, from the README (labelled), the directory layout, the entry points and manifests and the config loaders: purpose and users; the parts and what each owns, each with its `path:line`; what it needs and keeps; stated limits. It follows Stages 0 to 3 and its budget is the A3 budget.
 
-**Front writer** (one, Part 1). Gets the assembled appendix and `assemble.py --index` output (every appendix sentence with its tag `A<n>.<k>`), and nothing else about the repo: it does not open the code. It writes Part 1 as plain English under five headings: what it is and who it is for; what you can do (up to eight capabilities, one short paragraph each); how the parts fit (at most six sentences); what it needs and keeps; what it does not do. Every sentence ends with the tags of the one to three appendix sentences it restates. It may drop detail. It adds no fact, no number, no quantifier and no condition the tagged sentences lack. No `path:line` and no more than three `--flag` tokens. Part 1 passes `lint_main.py` before it is handed over.
+**Front writer** (one, Part 1). Gets the appendix sentences plus the index (`assemble.py --index`: every appendix id with its sentences) and nothing else about the repo: it does not open the code. It writes Part 1 as plain English under six headings: what it is and who it is for; how to start; what you can do (up to eight capabilities, one short paragraph each); how the parts fit (at most six sentences); what it needs and keeps; what it does not do. How to start holds the first install or run step, each step one sentence tagged to the appendix line that cites it. A sentence the frame writer's install or run lines cover is restated there, not invented. Every sentence ends with the ids of the one to three appendix lines it restates, for example `[A4.3f9a]`. It may drop detail, but it keeps each condition the tagged lines state (if, unless, only when, by default) and each label ("The README says", "the code comment says"). It adds no fact, no number, no quantifier and no condition the tagged lines lack. No `path:line` and no more than three `--flag` tokens. A word a newcomer would not know is defined where it is first used, or in a `## Glossary` at the end of Part 1 of at most 15 lines, each `term: definition`. Part 1 passes `lint_main.py` before it is handed over.
