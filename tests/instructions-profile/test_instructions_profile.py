@@ -79,6 +79,19 @@ SCHEDULE_RULE = (
     "A schedule is agent work if a run starts or messages a model. Agent work on a clock is a kit job in the "
     "coordinator (`coordinator jobs`), and I approve it first unless it is a one-off less than 24 hours out."
 )
+BAR_HEADING = "## The bar"
+BAR_QUESTION = (
+    "What is the bar for <repo>? Personal (my own project, good enough) or shared "
+    "(work I share and want to be proud of)?"
+)
+BAR_TABLE_HEADING = "## Bar table"
+BAR_ROWS = {
+    "personal": (
+        "| `github.com/StoryCraftTW/storycraft` | shared |",
+        "| `github.com/cartwmic/*`, `gitea.internal.cartwmic.com/cartwmic/*` | personal |",
+    ),
+    "axon-work-computer": ("| `git.example.test/*`, `github.com/axon-*` | shared |",),
+}
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
@@ -173,6 +186,34 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(text.count(SCHEDULE_HEADING), int(profile == "personal"))
                     self.assertEqual(text.count(SCHEDULE_RULE), int(profile == "personal"))
                     self.assertEqual("coordinator schedules check" in text, profile == "personal")
+
+    def test_bar_rule_and_table_in_every_harness(self):
+        for name, template in TEMPLATES.items():
+            for profile in ("personal", "axon-work-computer"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    self.assertEqual(text.count(BAR_HEADING), 1)
+                    self.assertEqual(text.count(BAR_QUESTION), 1)
+                    self.assertEqual(text.count(BAR_TABLE_HEADING), 1)
+                    self.assertLess(text.index(BAR_HEADING), text.index(BAR_TABLE_HEADING))
+                    for row in BAR_ROWS[profile]:
+                        self.assertEqual(text.count(row), 1)
+                    other = "axon-work-computer" if profile == "personal" else "personal"
+                    for row in BAR_ROWS[other]:
+                        self.assertNotIn(row, text)
+
+    def test_termux_has_the_rule_but_no_table(self):
+        for name, template in TEMPLATES.items():
+            with self.subTest(harness=name):
+                text = render(template, "termux")
+                self.assertEqual(text.count(BAR_HEADING), 1)
+                self.assertNotIn(BAR_TABLE_HEADING, text)
+
+    def test_no_render_carries_the_old_risk_tolerance_block(self):
+        for name, template in TEMPLATES.items():
+            for profile in ("personal", "axon-work-computer", "termux"):
+                with self.subTest(harness=name, profile=profile):
+                    self.assertNotIn("Risk tolerance is high", render(template, profile))
 
 
 if __name__ == "__main__":

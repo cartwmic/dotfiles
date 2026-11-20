@@ -25,3 +25,12 @@ Each agent seat has a model. This is a rule, not a mechanism: there is no launch
 - Sessions I open myself are not covered by this table. Their default is set separately.
 - No OpenAI models for now.
 - If you are unsure of a model ID for a harness, use the human names above. Agents read this table; nothing parses it.
+
+## Bar table
+
+First match wins.
+
+| Remote | Bar |
+|---|---|
+| `github.com/StoryCraftTW/storycraft` | shared |
+| `github.com/cartwmic/*`, `gitea.internal.cartwmic.com/cartwmic/*` | personal |
