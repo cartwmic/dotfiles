@@ -9,7 +9,7 @@ SKILL = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 DRAFTING = (SKILL_DIR / "references/drafting.md").read_text(encoding="utf-8")
 READER = (SKILL_DIR / "references/reader-check.md").read_text(encoding="utf-8")
 CHECK_BRIEF = (SKILL_DIR / "references/check-brief.md").read_text(encoding="utf-8")
-CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py")
+CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py")
 
 
 def frontmatter(text):
@@ -156,8 +156,8 @@ class RoundTwoTest(unittest.TestCase):
 
     def test_the_check_brief_tells_checkers_a_value_set_on_the_cited_line_holds_for_count(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)set on the cited line")
-        self.assertRegex(CHECK_BRIEF, r"version 7")
-        self.assertNotRegex(CHECK_BRIEF, r"version [56]")
+        self.assertRegex(CHECK_BRIEF, r"version 8")
+        self.assertNotRegex(CHECK_BRIEF, r"version [567]\b")
 
     def test_a_glossary_entry_is_tagged_like_any_other_part_1_sentence(self):
         self.assertRegex(DRAFTING, r"(?i)glossary[^\n]*each[^\n]*tag")

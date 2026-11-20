@@ -395,5 +395,162 @@ class GlossaryInCheckCitationsTest(unittest.TestCase):
         self.assertIn("flag uncited: every | Store: every note goes here", out)
 
 
+class SliceWasTest(unittest.TestCase):
+    OLD = ("## A4 Notes\n\nIt saves a note. `src/cli.py:3` [A4.aaaa]\nIt stops after 5 notes. `src/cli.py:7` [A4.bbbb]\n"
+           "It lists notes. `src/cli.py:3` [A4.cccc]\nIt deletes a note. `src/cli.py:3` [A4.dddd]\n")
+    NEW = ("## A4 Notes\n\nIt deletes a note. `src/cli.py:3` [A4.dddd]\nIt saves a note. `src/cli.py:3` [A4.aaaa]\nIt stops after 5 notes a day. `src/cli.py:7` [A4.bbbb]\n"
+           "The count is per user. `src/cli.py:7` [A4.eeee]\nIt lists notes. `src/cli.py:3` [A4.cccc]\n")
+
+    def picked(self, *extra, ids="A4.aaaa\n"):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "src").mkdir()
+            (Path(d) / "src/cli.py").write_text(CLI)
+            Path(d, "GUIDE.md").write_text(self.NEW)
+            Path(d, "OLD.md").write_text(self.OLD)
+            Path(d, "ids.txt").write_text(ids)
+            code, out, err = script("slice.py", Path(d, "GUIDE.md"), d, "--ids", Path(d, "ids.txt"), "--out", Path(d, "o"), *[str(Path(d, x)) if x == "OLD.md" else x for x in extra])
+            claims = Path(d, "o/slice-1.claims.txt").read_text() if Path(d, "o/slice-1.claims.txt").exists() else ""
+        self.assertEqual(code, 0, err)
+        return re.findall(r"A4\.\w{4}", claims)
+
+    def test_without_was_only_the_listed_ids_are_re_checked(self):
+        self.assertEqual(self.picked(), ["A4.aaaa"])
+
+    def test_with_was_a_split_off_line_a_reworded_line_and_a_moved_line_are_picked_up_too(self):
+        self.assertEqual(sorted(self.picked("--was", "OLD.md")), ["A4.aaaa", "A4.bbbb", "A4.dddd", "A4.eeee"])
+
+    def test_a_line_after_an_edited_or_cut_neighbour_is_as_it_was_and_is_not_picked(self):
+        self.assertNotIn("A4.cccc", self.picked("--was", "OLD.md"))
+
+    def test_was_needs_ids_and_a_file(self):
+        code, _, err = script("slice.py", "/no/doc.md", "/tmp", "--was", "x.md")
+        self.assertEqual(code, 2)
+
+
+class ScoreOutIsAFileTest(unittest.TestCase):
+    REPORT = "Slice: slice-1\nread | 3.1 | HOLDS | a.rs:1\nCounts: claims checked 1; HOLDS 1; WRONG 0; OVERSTATED 0; UNSUPPORTED 0.\n"
+
+    def setup(self, d):
+        (Path(d) / "reports").mkdir()
+        Path(d, "reports/A.md").write_text(self.REPORT)
+
+    def test_out_writes_the_json_at_the_path_and_the_text_beside_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.setup(d)
+            code, out, err = script("score.py", Path(d, "reports"), "--out", Path(d, "score.json"))
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(Path(d, "score.json").read_text())["repos"][0]["claims"], 1)
+            self.assertIn("claims", Path(d, "score.txt").read_text())
+            self.assertFalse(Path(d, "score").exists())
+
+    def test_a_folder_or_a_name_that_is_not_json_is_a_usage_error_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.setup(d)
+            Path(d, "score").mkdir()
+            for target in (Path(d, "score"), Path(d, "score.txt"), Path(d, "newname")):
+                code, out, err = script("score.py", Path(d, "reports"), "--out", target)
+                self.assertEqual(code, 2, (target, err))
+                self.assertIn("file path that ends in .json, not a folder", err)
+            self.assertEqual(list(Path(d, "score").iterdir()), [])
+            self.assertFalse(Path(d, "newname").exists())
+
+    def test_lab_out_is_a_file_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "beh.txt").write_text("B1 | a.rs:1 |\n")
+            Path(d, "draft.md").write_text("## A4 S\n\nIt reads one file. `a.rs:1` [A4.aaaa]\n")
+            Path(d, "a.rs").write_text("x\n")
+            code, out, err = script("score.py", "--lab", Path(d, "beh.txt"), Path(d, "draft.md"), d, "--out", Path(d, "lab.json"))
+            self.assertEqual(code, 0, err)
+            self.assertEqual(json.loads(Path(d, "lab.json").read_text())["behaviours"], 1)
+            code, out, err = script("score.py", "--lab", Path(d, "beh.txt"), Path(d, "draft.md"), d, "--out", Path(d, "labdir"))
+            self.assertEqual(code, 2, err)
+
+
+class LintBriefTest(unittest.TestCase):
+    BRIEF = "Seat: writer, Opus\n\nSection A4 Notes.\n\nFiles:\n- src/cli.py\n- `src/lib/`\n\nBudget 600 words.\n"
+
+    def lint(self, brief, files=("src/cli.py", "src/lib/a.py")):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "brief.md").write_text(brief)
+            repo = Path(d, "r")
+            for f in files:
+                (repo / f).parent.mkdir(parents=True, exist_ok=True)
+                (repo / f).write_text("x\n")
+            return script("lint_brief.py", Path(d, "brief.md"), repo)
+
+    def test_a_brief_whose_files_all_exist_passes(self):
+        code, out, _ = self.lint(self.BRIEF)
+        self.assertEqual(code, 0, out)
+
+    def test_a_file_the_repo_does_not_have_fails_and_is_named_with_its_brief_line(self):
+        code, out, _ = self.lint(self.BRIEF.replace("- src/cli.py", "- src/cli.py\n- src/missing.py"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("brief.md:7: FAIL file: src/missing.py does not exist in the repo", out)
+
+    def test_a_path_outside_the_repo_fails(self):
+        code, out, _ = self.lint(self.BRIEF.replace("- src/cli.py", "- ../brief.md"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("outside the repo", out)
+
+    def test_a_brief_with_no_files_list_fails_and_paths_on_one_line_are_each_checked(self):
+        code, out, _ = self.lint("Seat: writer\n\nSection A4.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL files", out)
+        code, out, _ = self.lint("Files: src/cli.py, src/nope.py\n\nx\n")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(out.count("FAIL file:"), 1, out)
+
+    def test_the_list_ends_at_the_first_blank_line(self):
+        code, out, _ = self.lint("Files:\n- src/cli.py\n\nRead src/nowhere.py for the README.\n")
+        self.assertEqual(code, 0, out)
+
+
+class BatchSixDocsTest(unittest.TestCase):
+    """The method files say what the batch-6 scripts now do."""
+    ref = staticmethod(lambda n: (SKILL_DIR / "references" / n).read_text(encoding="utf-8"))
+    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_drafting_names_precedence_in_the_same_sentence(self):
+        text = self.ref("drafting.md")
+        self.assertRegex(text, r"If no earlier case applies")
+        self.assertRegex(text, r"(?i)position alone")
+
+    def test_the_front_writer_reads_the_whole_subsection_of_each_tag(self):
+        self.assertRegex(self.ref("drafting.md"), r"(?i)tag's whole appendix subsection")
+
+    def test_the_front_writer_brief_names_absolute_words_and_the_1000_cap(self):
+        text = self.ref("drafting.md")
+        self.assertRegex(text, r"(?i)absolute word")
+        self.assertRegex(text, r"1,000 words at every step")
+
+    def test_the_front_writer_brief_asks_for_a_who_it_is_for_sentence(self):
+        self.assertIn("Who it is for:", self.ref("drafting.md"))
+
+    def test_writers_write_evidence_and_audit_files_by_hand(self):
+        self.assertRegex(self.ref("drafting.md"), r"(?i)no script generates or fills")
+
+    def test_the_check_brief_is_version_8_and_counts_the_next_sentence_in_the_appendix(self):
+        text = self.ref("check-brief.md")
+        self.assertIn("version 8", text)
+        self.assertRegex(text, r"(?i)appendix claim: a condition[^\n]*very next sentence of the same doc line")
+        self.assertRegex(text, r"(?i)log: v8")
+
+    def test_fix_rounds_says_what_to_cut_over_1000_words(self):
+        text = self.ref("fix-rounds.md")
+        self.assertRegex(text, r"(?i)over 1,000 words")
+        self.assertRegex(text, r"(?i)never cut How to start or the Who it is for")
+        self.assertIn("--was", text)
+
+    def test_the_reader_check_runs_on_the_shipped_guide(self):
+        text = self.ref("reader-check.md")
+        self.assertRegex(text, r"(?i)shipped guide")
+        self.assertIn("#4966", text)
+
+    def test_skill_step_2_scout_writes_surface_names_and_groups(self):
+        self.assertIn("groups.txt", self.skill)
+        self.assertRegex(self.skill, r"never a file path")
+        self.assertIn("lint_brief.py", self.skill)
+
+
 if __name__ == "__main__":
     unittest.main()

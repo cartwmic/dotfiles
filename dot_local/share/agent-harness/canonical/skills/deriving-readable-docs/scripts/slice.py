@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cut a doc into slices of at most 60 claims and build each slice's claim list and flag list for a fresh checker.
 
-usage: slice.py <doc.md> <repo> [--max-claims N] [--out DIR] [--ids FILE [--reports DIR --record-fixed FILE]]
+usage: slice.py <doc.md> <repo> [--max-claims N] [--out DIR] [--ids FILE [--was OLD.md] [--reports DIR --record-fixed FILE]]
 
 A claim is a sentence, bullet or table row of the prose (headings, the header, fenced code and printed blocks are not): the count the check prints.
 Each claim has an id `N.k`: doc line N, sentence k of that line. Part 1 and the appendix are cut apart (the heading `Part 2` starts a slice). Each part goes into
@@ -14,6 +14,10 @@ no line to read), and slices.json (`[{n, first_line, last_line, claims, flags, o
 --ids FILE re-checks only the sentences it lists, one id a line or separated by commas or spaces (a # starts a comment): a doc line `N`, a claim id `N.k`,
 or an id of an appendix line (`A4.3f9a`). The slices then hold those claims only, cut the same way and apart for Part 1 and the appendix. An id that is
 nowhere in the doc is an error (exit 1).
+--was OLD.md (with --ids) is the guide as it stood when the last round was cut: the slices then also hold each claim the fix changed without the ids file saying so, found by
+text as well as by id: a claim whose sentence (tags and citations aside) is not in OLD.md (a line a fix split in two: the half that got a new id; or reworded), and a claim
+whose sentence is in OLD.md but whose neighbour before it is not the one it had, when that old neighbour is still in the guide (a line that moved, so an "earlier case" now
+means something else). A neighbour that was edited or cut does not count: the claim after it is as it was.
 --record-fixed FILE (with --ids and --reports DIR) is run once the fix round's checkers have reported: DIR holds their reports. It writes the Part 1 sentences of the
 list to FILE as `tags | sentence`, one row for each set of tags, replacing the row with the same tags. A sentence its report marks HOLDS is recorded as it stands;
 any other verdict, or no row, records `tags | cut`. lint_main.py --fixed FILE then warns when a later fix reworded a recorded sentence, and skips a `cut` row. Exit 2 on bad
@@ -28,6 +32,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import TAG, appendix_index, claim_ids, doc_lines, split_lines  # noqa: E402
+
+squash = lambda sentence: " ".join(re.findall(r"[a-z0-9]+", TAG.sub(" ", sentence).lower()))
 
 FLAG = re.compile(r"^.*?:(\d+): flag ")
 MAX_CLAIMS = 60
@@ -135,6 +141,23 @@ def read_ids(path, claims, text, repo):
     return [c for c in claims if c[0] in chosen]
 
 
+def changed_since(old_text, claims, repo):
+    """The ids of the claims a fix changed, found by text: a claim whose sentence is not in the old guide (split or reworded), or whose sentence is in it but whose neighbour
+    before it is no longer the one it had while that old neighbour is still in the guide (moved)."""
+    old = claim_ids(old_text, repo)
+    old_texts, old_before = {squash(c[2]) for c in old}, {}
+    for prev, cur in zip([None] + old[:-1], old):
+        old_before.setdefault(squash(cur[2]), squash(prev[2]) if prev else None)
+    now_texts, out = {squash(c[2]) for c in claims}, set()
+    for prev, cur in zip([None] + claims[:-1], claims):
+        t = squash(cur[2])
+        if t not in old_texts:
+            out.add(cur[0])
+        elif (squash(prev[2]) if prev else None) != old_before[t] and old_before[t] in now_texts:
+            out.add(cur[0])
+    return out
+
+
 READ_ROW = re.compile(r"^\s*(?:[-*]\s*)?read\s*\|\s*(\d+\.\d+)\s*\|\s*(\w+)\s*\|", re.M | re.I)
 
 
@@ -168,7 +191,7 @@ def record_fixed(path, chosen, part1_range, verdicts):
 
 
 def main(argv):
-    args, limit, out, ids, fixed, reports, it = [], MAX_CLAIMS, None, None, None, None, iter(argv[1:])
+    args, limit, out, ids, fixed, reports, was, it = [], MAX_CLAIMS, None, None, None, None, None, iter(argv[1:])
     for a in it:
         if a == "--max-claims":
             v = next(it, "")
@@ -181,11 +204,13 @@ def main(argv):
             fixed = next(it, None)
         elif a == "--reports":
             reports = next(it, None)
+        elif a == "--was":
+            was = next(it, None)
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or limit is None or (out is not None and not out) \
             or (ids is not None and not os.path.isfile(ids)) or (fixed is not None and (not fixed or ids is None or not reports)) \
-            or (reports is not None and (not os.path.isdir(reports) or fixed is None)):
+            or (reports is not None and (not os.path.isdir(reports) or fixed is None)) or (was is not None and (ids is None or not os.path.isfile(was))):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     doc, repo = args[0], os.path.realpath(args[1])
@@ -196,6 +221,10 @@ def main(argv):
     if ids:
         try:
             chosen = read_ids(ids, claims, text, repo)
+            if was:
+                with open(was, encoding="utf-8", errors="replace") as f:
+                    moved = changed_since(f.read(), claims, repo)
+                chosen = [c for c in claims if c in chosen or c[0] in moved]
         except SliceError as e:
             print(e, file=sys.stderr)
             return 1

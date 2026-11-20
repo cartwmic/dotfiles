@@ -2,8 +2,8 @@
 """Score a round of checker reports, a lab draft, or a reader's answers. Reads files only; the arithmetic is the script's, not the lead's.
 
 usage:
-  score.py [NAME=]REPORTS... [--doc GUIDE.md ...] [--repo DIR] [--slices DIR] [--out DIR]
-  score.py --lab BEHAVIOURS.txt DRAFT.md REPO [--out DIR]
+  score.py [NAME=]REPORTS... [--doc GUIDE.md ...] [--repo DIR] [--slices DIR] [--out FILE.json]
+  score.py --lab BEHAVIOURS.txt DRAFT.md REPO [--out FILE.json]
   score.py --reader GUIDE.md [--answers ANSWERS.md]
   score.py --pool GROUP=SCORE.json,LAB.json [GROUP=SCORE.json,LAB.json ...]
 
@@ -14,7 +14,7 @@ OVERSTATED N; UNSUPPORTED N.` (references/check-brief.md) and has one finding li
 (a version 4 report) is counted as UNTAGGED. A report whose file name starts with `part1` is Part 1; every other report is the appendix.
 Exit 1, naming the file, when a report has no Counts line or two, when HOLDS+WRONG+OVERSTATED+UNSUPPORTED is not claims checked,
 or when its finding lines are not as many as WRONG+OVERSTATED+UNSUPPORTED. Nothing found for a repo is an error too.
-The depth floor (check brief version 7). A report also holds one row for each claim it was given: `read | <claim id> | <verdict> | <path:line>`, the line the
+The depth floor (check brief version 8). A report also holds one row for each claim it was given: `read | <claim id> | <verdict> | <path:line>`, the line the
 checker actually opened (`outside` for a glossary entry with no tag, which has no line). Exit 1 when it has no such rows (a report in the old format cannot be
 judged), a row names no path:line (a HOLDS row too), the rows are not as many as claims checked or do not add up to the Counts line, or two rows share an id.
 With --slices, a report that read fewer than one distinct line for every three claims also prints a depth warning (it never changes the exit code); the report records the
@@ -22,7 +22,7 @@ lines read, not the tool calls, so tool calls are not judged. With --repo, a pat
 DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only.
 Prints per repo, and pooled over all repos: claims, the four verdicts, errors, the rate (errors / claims) for all, the appendix and Part 1,
 and claims by cause. With --doc (repeatable) and --repo it adds words, errors per 1,000 words and words per claim, counted as
-check_citations.py counts them. With --out DIR it also writes score.txt and score.json there.
+check_citations.py counts them. With --out FILE.json it writes the numbers there and the printed text beside it as FILE.txt (a path, never a folder: a folder or a name that does not end in .json is a usage error).
 When --slices names a folder that holds fewer claims than the guide (a fix round), the words, the words per claim and the errors per 1,000 words are those of the
 re-checked sentences, not of the whole guide, so the counts compared are alike. The rates use the checkers' claim count. When the script counts the doc's sentences differently, the output adds
 `claim count: checkers N, script M, difference +K`, so the two are never mixed up. Words per claim divides by the script's sentences.
@@ -91,7 +91,7 @@ def parse_rows(path, text):
 def check_rows(path, text, rows, counts, ctx):
     claims, tallies = counts[0], dict(zip(VERDICTS, counts[1:]))
     if not rows:
-        raise ScoreError("%s: no `read | <claim id> | <verdict> | <path:line>` rows: check brief version 7 asks for one row for each claim, so a report in the old "
+        raise ScoreError("%s: no `read | <claim id> | <verdict> | <path:line>` rows: check brief version 8 asks for one row for each claim, so a report in the old "
                          "format (a verdict count and no line read) cannot be judged" % path)
     shown = {v: sum(1 for r in rows if r[1] == v) for v in VERDICTS}
     if len(rows) != claims or shown != tallies:
@@ -253,8 +253,23 @@ def render_repo(r):
     return lines
 
 
+def check_out_path(path):
+    """--out names a file that ends in .json (the text, when there is one, goes beside it as .txt); a folder or any other name is a usage error."""
+    if path is not None and (os.path.isdir(path) or not path.endswith(".json")):
+        raise ScoreError("usage: --out takes a file path that ends in .json, not a folder (got %s)" % path)
+
+
+def write_out(path, data, text=None):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(data)
+    if text is not None:
+        with open(path[:-len(".json")] + ".txt", "w", encoding="utf-8") as f:
+            f.write(text)
+
+
 def cmd_score(argv):
-    docs, repo, out_dir, specs, slices = [], None, None, [], None
+    docs, repo, out_path, specs, slices = [], None, None, [], None
     it = iter(argv)
     for a in it:
         if a == "--doc":
@@ -264,13 +279,14 @@ def cmd_score(argv):
         elif a == "--repo":
             repo = next(it, None)
         elif a == "--out":
-            out_dir = next(it, None)
+            out_path = next(it, None)
         elif a.startswith("--"):
             raise ScoreError("unknown option %s" % a)
         else:
             specs.append(a)
     if not specs or None in docs or (docs and not repo) or (slices is not None and not os.path.isdir(slices)):
-        raise ScoreError("usage: score.py [NAME=]REPORTS... [--doc GUIDE.md ... --repo DIR] [--slices DIR] [--out DIR]")
+        raise ScoreError("usage: score.py [NAME=]REPORTS... [--doc GUIDE.md ... --repo DIR] [--slices DIR] [--out FILE.json]")
+    check_out_path(out_path)
     repos = []
     for spec in specs:
         name, _, path = spec.partition("=") if "=" in spec else (os.path.basename(os.path.normpath(spec)), "", spec)
@@ -287,12 +303,8 @@ def cmd_score(argv):
         lines += ["pooled over %d repos" % len(repos)] + render_repo(pooled)[1:]
         result["pooled"] = pooled
     print("\n".join(lines).rstrip())
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, "score.txt"), "w", encoding="utf-8") as f:
-            f.write("\n".join(lines).rstrip() + "\n")
-        with open(os.path.join(out_dir, "score.json"), "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2)
+    if out_path:
+        write_out(out_path, json.dumps(result, indent=2), "\n".join(lines).rstrip() + "\n")
     return 0
 
 
@@ -332,13 +344,14 @@ def covered(loc, cites):
 
 
 def cmd_lab(argv):
-    out_dir = None
+    out_path = None
     if "--out" in argv:
         i = argv.index("--out")
-        out_dir = argv[i + 1] if i + 1 < len(argv) else None
+        out_path = argv[i + 1] if i + 1 < len(argv) else None
         argv = argv[:i] + argv[i + 2:]
     if len(argv) != 3 or not os.path.isfile(argv[0]) or not os.path.isfile(argv[1]) or not os.path.isdir(argv[2]):
-        raise ScoreError("usage: score.py --lab BEHAVIOURS.txt DRAFT.md REPO [--out DIR]")
+        raise ScoreError("usage: score.py --lab BEHAVIOURS.txt DRAFT.md REPO [--out FILE.json]")
+    check_out_path(out_path)
     behaviours, draft, repo = read_behaviours(argv[0]), read(argv[1]), os.path.realpath(argv[2])
     cites = [c for _, line, _, _ in doc_lines(draft) for _, _, cs, _ in line_items(line, repo) for c in cs]
     kept = [b for b in behaviours if covered(b[1], cites)]
@@ -362,10 +375,8 @@ def cmd_lab(argv):
     if result["conditions_not_cited"]:
         lines.append("condition lines not cited: " + "; ".join(result["conditions_not_cited"]))
     print("\n".join(lines))
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, "lab.json"), "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2)
+    if out_path:
+        write_out(out_path, json.dumps(result, indent=2))
     return 0
 
 

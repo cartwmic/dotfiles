@@ -1,6 +1,6 @@
 # Reader check: can someone learn the product from Part 1 alone
 
-Two fresh sessions, one script. The reader sees Part 1 only, never the repo. The grader sees the reader's answers and the repo, never the reader's reasoning. Why two: the script catches a quote the reader made up; only a grader reading the code can say an answer is wrong.
+It runs on the shipped guide: the one left after the last fix round (decision #4966), not on round 1's guide. Two fresh sessions, one script. The reader sees Part 1 only, never the repo. The grader sees the reader's answers and the repo, never the reader's reasoning. Why two: the script catches a quote the reader made up; only a grader reading the code can say an answer is wrong.
 
 ## Reader
 

@@ -16,7 +16,7 @@ def run(*args, cwd=None):
 
 
 def counts(claims, holds, wrong, over, unsup):
-    """The `read` rows check brief version 7 asks for (one a claim, each with the line read), then the Counts line."""
+    """The `read` rows check brief version 8 asks for (one a claim, each with the line read), then the Counts line."""
     verdicts = ["HOLDS"] * holds + ["WRONG"] * wrong + ["OVERSTATED"] * over + ["UNSUPPORTED"] * unsup
     rows = "".join("read | %d.1 | %s | src/x.py:1\n" % (i, v) for i, v in enumerate(verdicts, 1))
     return rows + "Counts: claims checked %d; HOLDS %d; WRONG %d; OVERSTATED %d; UNSUPPORTED %d.\n" % (claims, holds, wrong, over, unsup)
@@ -126,10 +126,10 @@ class ScoreTest(unittest.TestCase):
             rep = Path(d, "reports")
             rep.mkdir()
             write_reports(rep, {"A.md": V5_ROW + counts(2, 1, 1, 0, 0)})
-            out_dir = Path(d, "out")
-            code, out, err = run(str(rep), "--doc", str(Path(d, "GUIDE.md")), "--repo", repo, "--out", str(out_dir))
-            data = json.loads(Path(out_dir, "score.json").read_text())
-            txt = Path(out_dir, "score.txt").read_text()
+            out_file = Path(d, "out", "score.json")
+            code, out, err = run(str(rep), "--doc", str(Path(d, "GUIDE.md")), "--repo", repo, "--out", str(out_file))
+            data = json.loads(out_file.read_text())
+            txt = out_file.with_suffix(".txt").read_text()
         self.assertEqual(code, 0, err)
         self.assertIn("words: 10; errors per 1,000 words: 100.00; script claims: 2; words per claim: 4.0", out)
         self.assertEqual(data["repos"][0]["errors"], 1)
