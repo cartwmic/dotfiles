@@ -2021,6 +2021,12 @@ class NoCiRepo(Fixture):
                 self.assertNotIn("eval-cases: ERROR", out)
         self.assertEqual(self.calls(), [])
 
+    def test_the_usage_line_names_eval_cases_among_the_repos(self):
+        rc, out = self.status("--merge-gate")   # no repo: a usage error, printed on stderr
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage:", out)
+        self.assertIn("eval-cases", out)
+
     def test_pr_with_plain_status_is_still_a_usage_error(self):
         rc, out = self.status("eval-cases", "--pr", "1")
         self.assertEqual(rc, 1, out)
