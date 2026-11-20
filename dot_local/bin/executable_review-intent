@@ -7,7 +7,10 @@ A reviewer judges a change against the owner's words, not against a lead's resta
 This script collects the ledger ids a change cites and prints one markdown block that quotes each ask and decision exactly, so the driver appends it to the
 round's brief.md:   review-intent --pr cartwmic/coordinator#782 >> round-1/brief.md   (add --body-file round-1/brief.md when the brief itself cites ids)
 
-Inputs: the PR body (--pr, read with gh), any text files (--body-file, repeatable), and ids given by hand. Read-only: it reads the ledger and prints.
+Inputs: the PR's agent record (--pr; the file <traces dir>/emitted/review/<repo>#N/pr-record.md when it exists), else the PR body (--pr, read with gh); any text files
+(--body-file, repeatable); and ids given by hand. When the record is used, the decisions the ledger links to that PR (a live decision whose `pr` is that PR) are collected too, because the record is no longer
+where `ledger pr-decisions-check` has them listed; the body path is unchanged.
+The traces dir is $AGENT_TRACES_DIR, else ~/.local/share/agent-traces. Read-only: it reads the ledger and prints.
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
   every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
   for a PR that touches `leads/<type>.*`, the ask ids in `approved_by` of `leads/<type>.json` at the PR head (when the file has the key; --pr only);
@@ -107,6 +110,19 @@ class Ledger:
             return None
 
 
+    def decisions_for_pr(self, repo, n):
+        """The ids of the live decisions the ledger links to the PR (`decisions.pr`, compared without regard to case, as GitHub does). A ledger that cannot list them is an error: a linked decision must not drop out because a call failed."""
+        env = dict(os.environ, COORDINATOR_STATE_DIR=self.state)
+        p = subprocess.run([self.bin, "list", "decisions", "--json"], env=env, capture_output=True, text=True)
+        try:
+            if p.returncode != 0:
+                raise ValueError(p.stderr.strip())
+            rows = json.loads(p.stdout)
+        except ValueError as e:
+            raise Usage("review-intent: the ledger could not list decisions (needed for the PR's linked decisions): %s" % e)
+        want = ("%s#%s" % (repo, n)).lower()
+        return sorted(r["id"] for r in rows if isinstance(r, dict) and not r.get("voided_at") and str(r.get("pr") or "").lower() == want)
+
     def follow_ups(self, n):
         """What he wrote in the Other box while the ask was open, oldest first, as (time, text). `show --json` leaves these out; `show ask N --history` prints
         each as `  follow-up <time> by <who>: <text>` (text may run over several lines) among the other lines that start with two spaces and a word."""
@@ -152,6 +168,25 @@ def pr_ref(spec):
     if not m:
         raise Usage("review-intent: --pr takes OWNER/REPO#N (or REPO#N for cartwmic/REPO), got %r" % spec)
     return "%s/%s" % (m.group(1) or "cartwmic", m.group(2)), m.group(3)
+
+
+def record_path(spec):
+    """Where the PR's agent record lives: <traces dir>/emitted/review/<repo>#N/pr-record.md, next to the review rounds (the same item name they use)."""
+    repo, n = pr_ref(spec)
+    root = os.environ.get("AGENT_TRACES_DIR") or os.path.join(os.path.expanduser("~"), ".local/share/agent-traces")
+    return os.path.join(root, "emitted", "review", "%s#%s" % (repo.split("/")[1], n), "pr-record.md")
+
+
+def pr_text(spec):
+    """(text, from_record): the PR's agent record when there is one, else its body."""
+    path = record_path(spec)
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read(), True
+        except OSError as e:
+            raise Usage("review-intent: cannot read %s: %s" % (path, e.strerror))
+    return pr_body(spec), False
 
 
 def pr_body(spec):
@@ -238,7 +273,7 @@ def render_decision(d, why):
     return "\n".join(out)
 
 
-def build(texts, asks_given, decisions_given, ledger, approvals=()):
+def build(texts, asks_given, decisions_given, ledger, approvals=(), linked=()):
     """Returns (block, errors). `texts` are the PR body and body files; each id keeps the reasons it was collected for."""
     ask_why, dec_why = {}, {}
 
@@ -249,6 +284,8 @@ def build(texts, asks_given, decisions_given, ledger, approvals=()):
         add(ask_why, n, "--ask")
     for n in decisions_given:
         add(dec_why, n, "--decision")
+    for n in linked:
+        add(dec_why, n, "the ledger links it to this PR")
     for t, ids in approvals:
         for n in ids:
             add(ask_why, n, "approved_by of the lead type %s (leads/%s.json at the PR head)" % (t, t))
@@ -331,6 +368,7 @@ def main(argv):
     try:
         o = parse(argv)
         texts = []
+        linked_pr = None
         for f in o["files"]:
             try:
                 with open(f, encoding="utf-8") as fh:
@@ -338,9 +376,14 @@ def main(argv):
             except OSError as e:
                 raise Usage("review-intent: cannot read %s: %s" % (f, e.strerror))
         if o["pr"]:
-            texts.append(pr_body(o["pr"]))
+            text, from_record = pr_text(o["pr"])
+            texts.append(text)
+            if from_record:
+                linked_pr = pr_ref(o["pr"])
         approvals = pr_approvals(o["pr"]) if o["pr"] else []
-        block, errors = build(texts, o["asks"], o["decisions"], Ledger(o["state"] or default_state_dir()), approvals)
+        ledger = Ledger(o["state"] or default_state_dir())
+        linked = ledger.decisions_for_pr(*linked_pr) if linked_pr else []
+        block, errors = build(texts, o["asks"], o["decisions"], ledger, approvals, linked)
     except Usage as e:
         print(e, file=sys.stderr)
         return 2
