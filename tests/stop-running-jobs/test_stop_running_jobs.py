@@ -237,7 +237,7 @@ class SeatFileTest(unittest.TestCase):
 
     def test_only_the_builder_seat_has_the_stop_hook_on_both_profiles(self):
         for profile in ("personal", "axon-work-computer"):
-            for seat in ("builder", "lead", "planner", "reviewer", "coordinator"):
+            for seat in ("builder", "lead", "planner", "reviewer", "scout", "coordinator"):
                 hooks = self.render(seat, profile).get("hooks")
                 if seat == "builder":
                     self.assertEqual(list(hooks), ["Stop"], (profile, seat))
