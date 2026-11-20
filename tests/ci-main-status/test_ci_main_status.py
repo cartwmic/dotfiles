@@ -1922,5 +1922,126 @@ class AnyRepo(Fixture):
             self.assertEqual(json.loads(line)["caller"], "ci-main-status", line)
 
 
+STEP_FAKE = textwrap.dedent('''\
+    #!/usr/bin/env python3
+    import os, sys
+    with open(os.environ["FAKE_STEP_LOG"], "a") as log:
+        log.write(os.path.basename(sys.argv[0]) + " " + " ".join(sys.argv[1:]) + "\\n")
+    code = int(os.environ.get("FAKE_" + os.path.basename(sys.argv[0]).upper().replace("-", "_") + "_EXIT", "0"))
+    print(("OK: " if code == 0 else "refused: ") + os.path.basename(sys.argv[0]) + " said so", file=sys.stdout if code == 0 else sys.stderr)
+    sys.exit(code)
+''')
+NO_CI_HEAD = "c" * 40
+
+
+class NoCiRepo(Fixture):
+    """A table repo marked no_ci (eval-cases: private, no CI, no required checks possible): its merge gate is the PR's
+    `agent-traces review verify` at its head plus `pr-body-check`, both run, both must exit 0."""
+
+    def setUp(self):
+        super().setUp()
+        bindir = Path(self.env["PATH"].split(os.pathsep)[0])
+        for tool in ("agent-traces", "pr-body-check"):
+            (bindir / tool).write_text(STEP_FAKE)
+            (bindir / tool).chmod(0o755)
+        self.steps = Path(self.tmp.name) / "steps.log"
+        self.env["FAKE_STEP_LOG"] = str(self.steps)
+        self.prs = {"1": {"headRefOid": NO_CI_HEAD}}
+
+    def calls(self):
+        return self.steps.read_text().splitlines() if self.steps.exists() else []
+
+    def test_both_steps_pass_exit_0_and_the_line_says_no_ci_and_names_both(self):
+        rc, out = self.status("--merge-gate", "eval-cases", "--pr", "1")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("eval-cases: no CI", out)
+        self.assertIn("review verify: OK", out)
+        self.assertIn("pr-body-check: OK", out)
+        self.assertIn(NO_CI_HEAD, out)
+        self.assertEqual(self.calls(), [f"agent-traces review verify --item eval-cases#1 --head {NO_CI_HEAD} --require-block",
+                                        "pr-body-check cartwmic/eval-cases 1"])
+
+    def test_the_owner_repo_form_is_the_same_gate(self):
+        rc, out = self.status("--merge-gate", "cartwmic/eval-cases", "--pr", "1")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("eval-cases: no CI", out)
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_a_failed_review_verify_is_1_and_names_it_and_the_body_check_still_runs(self):
+        self.env["FAKE_AGENT_TRACES_EXIT"] = "1"
+        rc, out = self.status("--merge-gate", "eval-cases", "--pr", "1")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("review verify: FAILED  exit 1", out)
+        self.assertIn("agent-traces said so", out)
+        self.assertIn("pr-body-check: OK", out)
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_a_failed_pr_body_check_is_1_and_names_it_and_review_verify_still_runs(self):
+        self.env["FAKE_PR_BODY_CHECK_EXIT"] = "2"   # any non-zero exit is a failure, and the gate's own exit is 1
+        rc, out = self.status("--merge-gate", "eval-cases", "--pr", "1")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("pr-body-check: FAILED  exit 2", out)
+        self.assertIn("review verify: OK", out)
+
+    def test_a_tool_that_cannot_start_is_1(self):
+        bindir = Path(self.env["PATH"].split(os.pathsep)[0])
+        (bindir / "agent-traces").unlink()
+        pydir = Path(self.tmp.name) / "py"   # python3 only (the fake gh needs it), so no real agent-traces can be found on PATH
+        pydir.mkdir()
+        (pydir / "python3").symlink_to(sys.executable)
+        self.env["PATH"] = f"{bindir}{os.pathsep}{pydir}"
+        rc, out = self.status("--merge-gate", "eval-cases", "--pr", "1")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("review verify: FAILED  agent-traces could not start", out)
+        self.assertIn("pr-body-check: OK", out)
+
+    def test_without_pr_it_refuses_with_the_fix_and_runs_nothing(self):
+        rc, out = self.status("--merge-gate", "eval-cases")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("--pr N", out)
+        self.assertEqual(self.calls(), [])
+
+    def test_a_pr_it_cannot_read_is_1(self):
+        rc, out = self.status("--merge-gate", "eval-cases", "--pr", "9")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR", out)
+        self.assertEqual(self.calls(), [])
+
+    def test_plain_tip_and_all_say_no_ci_and_exit_0_without_running_a_step(self):
+        for args in (["eval-cases"], ["--tip", "eval-cases"], ["cartwmic/eval-cases"]):
+            with self.subTest(args=args):
+                rc, out = self.status(*args)
+                self.assertEqual(rc, 0, out)
+                self.assertIn("eval-cases: n/a (no CI", out)
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")]}
+        for args in (["--all"], ["--all", "--merge-gate"]):
+            with self.subTest(args=args):
+                rc, out = self.status(*args)
+                self.assertIn("eval-cases: n/a (no CI", out)
+                self.assertNotIn("eval-cases: ERROR", out)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_usage_line_names_eval_cases_among_the_repos(self):
+        rc, out = self.status("--merge-gate")   # no repo: a usage error, printed on stderr
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage:", out)
+        self.assertIn("eval-cases", out)
+
+    def test_pr_with_plain_status_is_still_a_usage_error(self):
+        rc, out = self.status("eval-cases", "--pr", "1")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("usage:", out)
+
+    def test_another_repo_is_unchanged_and_runs_neither_step(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual((rc, "GREEN" in out, "no CI" in out), (0, True, False), out)
+        self.runs = {"cartwmic/loop-engine|ci.yml": [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]}
+        rc, out = self.status("--merge-gate", "loop-engine")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("loop-engine: RED", out)
+        self.assertEqual(self.calls(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
