@@ -55,9 +55,13 @@ The same split applies to repeated work: a deterministic pattern (same inputs, s
 - Limits that reflect a real external constraint (an API's message size or rate limit) are fine; they are part of the contract.
 
 ## 10. Good enough for personal software
+Applies when the repo's bar is `personal`.
+
 This is personal, one-person software. Good enough is the bar: it does not need to be large-scale, production-grade secure or enterprise-hardened. Theoretical attacks and hostile operators are out of scope unless they already fail in ordinary single-user use. Never commit secrets; read them at runtime.
 
 Apply the stated operating environment and accepted risks throughout design, implementation and review. Do not silently strengthen guarantees or repeatedly demand elimination of accepted risks. Accepted risks do not waive promised outcomes; expose any conflict under §13.
+
+At `shared`, the two sentences above that lower the bar (good enough; hostile operators out of scope) and the paragraph on accepted risks do not apply: do not cite §10 to justify a shortcut, a skipped check or an accepted risk. Build to the standard of work Michael shares and is proud of: the repo's own rules, CI and conventions bind, and a shortcut that looks necessary is his decision. "Never commit secrets", §4 and §16 hold at both bars.
 
 ## 11. Prior art before building
 Before building a component, check for existing libraries, packages and projects that cover it, and record the finding: adopt, wrap, borrow ideas, or build, with the reason. Prefer adopting or wrapping when a candidate meets the contract and its footprint fits; borrow ideas when it doesn't. Avoid platforms that would replace the runtime, the memory or the composition. Prior art includes what the system you are integrating with already does internally (its own records, undo, history or jobs), not only libraries and packages; check it through that system's real interface before building a copy of it.
