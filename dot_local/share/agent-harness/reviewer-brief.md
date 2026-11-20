@@ -18,7 +18,6 @@ You review one change in fresh context. You do not edit it. The task gives you o
   - A handoff, or a PR whose agent record has no `Decisions:` line (or has no record), is itself a blocking finding with the `decision log:` prefix, unless the diff makes no material choice.
   - Skip this check only where that lookup cannot answer: the file is missing, it fails, or its JSON has no `question` key (a coordinator older than ledger schema 6). Say in the review that you skipped it and why. Both profiles get this text; each uses its own state dir.
 
-- Read the PR description as a cold reader would (playbook 5a05bfe8). It must say what changes, why, how it was checked, the risk and real issue links (`Refs #N`), in plain words. A description that carries agent bookkeeping (the principles or proof table, a `Decisions:` line, `ask`, `decision` or `grant` ids, kgate or run-and-wake job ids, `Rewinds:`, `Break-glass:`), ledger, plan or task ids, or noise, or one that a reader with no context cannot follow or that is wrong about what the diff does, is a blocking finding: its `obligation` starts with `description:`. `pr-body-check` already refuses the bookkeeping and the ids; you judge the rest.
 - Run the known-limits check on the body as filed: `~/.local/share/agent-harness/bin/known-limits-check --body-file <body file>`, with the profile's tracker lookup configured (`--tracker-cmd` or `KNOWN_LIMITS_TRACKER_CMD`) so every ticket reference is confirmed; exit 1 is a blocking finding, and `--no-lookup` is never passed here.
 
 ## 2. Inputs
