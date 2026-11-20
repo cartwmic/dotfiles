@@ -22,12 +22,6 @@ INSTR = ROOT / "dot_local" / "share" / "agent-harness" / "canonical" / "instruct
 # Profile rule fragments, each included for one profile right after the playbook position.
 PERSONAL_RULE = (INSTR / "profile-personal.md").read_text(encoding="utf-8").rstrip("\n") + "\n\n"
 
-RISK_PARAGRAPH = """- Risk tolerance is high. This is personal, one-person software: good enough
-  is the bar. It does not need to be perfect, large-scale, production-grade
-  secure, or resilient. Nobody else is going to try to break or misuse it.
-  Theoretical attack, hostile operators, and enterprise hardening are out of
-  scope unless they already fail in ordinary single-user use.
-"""
 DOORBELL_SECTION = """
 ## Doorbell
 
@@ -91,10 +85,10 @@ class AgentsRenderTests(unittest.TestCase):
         self.assertEqual(render("axon-work-computer").count(PLAYBOOK_SECTION), 1)
         self.assertNotIn("## Axon playbook", render("personal"))
 
-    def test_the_profiles_differ_only_by_the_risk_paragraph_the_doorbell_and_the_playbook(self):
+    def test_the_profiles_differ_only_by_the_doorbell_the_playbook_and_the_profile_rules(self):
         personal, work = render("personal"), render("axon-work-computer")
         self.assertEqual(
-            personal.replace(DOORBELL_SECTION, "").replace(RISK_PARAGRAPH, "").replace(PERSONAL_RULE, "", 1),
+            personal.replace(DOORBELL_SECTION, "").replace(PERSONAL_RULE, "", 1),
             work.replace(PLAYBOOK_SECTION, "", 1).replace(WORK_RULE, "", 1),
         )
 
