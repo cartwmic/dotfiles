@@ -201,7 +201,9 @@ class Merge(unittest.TestCase):
                 message = check(text)
                 self.assertIn("merge-pr.sh", message)
                 self.assertIn("ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr>", message)
-                self.assertIn("ecd63156, 385acc43 and ccc6c94b", message)
+                self.assertIn("ecd63156, 385acc43, ccc6c94b and 5a05bfe8", message)
+                self.assertIn("agent record", message)
+                self.assertIn("pr-record path <repo>#N", message)
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
@@ -284,7 +286,9 @@ class Merge(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr>", message)
-                self.assertIn("ecd63156, 385acc43 and ccc6c94b", message)
+                self.assertIn("ecd63156, 385acc43, ccc6c94b and 5a05bfe8", message)
+                self.assertIn("agent record", message)
+                self.assertIn("pr-record path <repo>#N", message)
 
     def test_the_coordinator_is_refused_even_after_ci_main_status(self):
         for text in ["ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R cartwmic/coordinator --merge",
@@ -345,7 +349,8 @@ class PrBody(unittest.TestCase):
                 message = check(text)
                 self.assertIn("refused in agent sessions", message)
                 self.assertIn("pr-body-check --body-file F && gh pr", message)
-                self.assertIn("pass, fail or n/a", message)
+                self.assertIn("agent bookkeeping", message)
+                self.assertIn("the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)", message)
 
     def test_the_check_chained_with_the_same_file_is_allowed(self):
         c, e = self.C, self.E
