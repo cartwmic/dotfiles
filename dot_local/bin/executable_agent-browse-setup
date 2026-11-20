@@ -58,13 +58,17 @@ wait_for() {
 
 connected() { browse status --json 2>/dev/null | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("connected") is True else 1)' 2>/dev/null; }
 
-# The extension is installed when Chrome lists its service worker.
-extension_present() {
+# The extension is installed when Chrome lists its service worker, or when its folder (a version folder with a manifest) is in the agent Chrome profile:
+# an idle worker may not be listed. The profile is the one agent-chrome starts, the same path on Linux and macOS.
+PROFILE="$HOME/.local/share/agent-chrome-profile"
+extension_folder() { set -- "$PROFILE/Default/Extensions/$EXT_ID"/*/manifest.json; [ -f "$1" ]; }
+extension_worker() {
   curl -fsS --max-time 5 "http://127.0.0.1:$PORT/json/list" 2>/dev/null | python3 -c '
 import json, sys
 prefix = "chrome-extension://" + sys.argv[1] + "/"
 sys.exit(0 if any(t.get("type") == "service_worker" and t.get("url", "").startswith(prefix) for t in json.load(sys.stdin)) else 1)' "$EXT_ID" 2>/dev/null
 }
+extension_present() { extension_folder || extension_worker; }
 
 open_page() { curl -fsS --max-time 10 -X PUT "http://127.0.0.1:$PORT/json/new?$1" >/dev/null 2>&1 || die "could not open $1 in the agent Chrome (port $PORT)"; }
 
