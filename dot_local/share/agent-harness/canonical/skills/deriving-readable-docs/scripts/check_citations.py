@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Check the `path:line` citations in a derived doc: the line exists, and the cited text backs the sentence.
 
-usage: check_citations.py <doc.md> <repo> [--points points.json [--left-out left-out.txt]] [--sheet]
+usage: check_citations.py <doc.md> <repo> [--points points.json [--left-out left-out.txt]] [--max-words N] [--audit audit.md] [--sheet]
 
 A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
-read; several may share one backtick span, separated by commas or semicolons; one inside a span with other
+read; several may share one backtick span, separated by commas or semicolons (`src/a.ts:12, 40-45` is two ranges of one file); one inside a span with other
 words is read too if its path has a slash or an extension). Fenced code blocks are skipped. A URL, a clock
 time, an IPv4 address or `host.com:8080` is ignored. A whole-span `Name:5` with no dot or slash is checked as a
 file, so write a port or a key such as `status:200` without backticks.
@@ -35,6 +35,11 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
   overreach  every, each, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words" (a count in words also FAILs under overreach above)
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
+  budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
+            above the first `## ` heading and the headings and backticked names included; citations, fenced code and bare
+            list marks are not words. An assembled header (the block above the first `## ` heading with a `Counts: harvested N`
+            line) is left out, because the budget is for the sections; a section draft has no such line, so its header counts.
+            A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
 With --points (the raw harvest, points.json), two more checks run:
   counts     the doc header's numbers for harvested, left out, used, read by name only and not cited must equal
              the numbers computed from the harvest and this doc's citations. A point is used when a citation of
@@ -44,6 +49,10 @@ With --points (the raw harvest, points.json), two more checks run:
              `Counts: harvested N; left out N; used N; read by name only N; not cited N.`, for the header.
   not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
              does not cite: the entry is wrong, or it cites that test.
+  audit     with --audit FILE, FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
+            `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
+            doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
+            that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
           Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
           range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
@@ -95,6 +104,9 @@ def line_items(line, repo):
     for m in SPAN.finditer(line):
         span = m.group(1)
         parts = [p.strip() for p in re.split(r"[;,]\s*", span.strip()) if p.strip()]
+        for k in range(1, len(parts)):  # `src/a.ts:12, 40-45` is two ranges of one file: a bare range takes the path before it
+            if re.fullmatch(r"\d+(?:\s*-\s*\d+)?", parts[k]) and PART.match(parts[k - 1]):
+                parts[k] = PART.match(parts[k - 1]).group(1) + ":" + parts[k]
         matches = [PART.match(p) for p in parts]
         if parts and all(matches):
             found, strict = matches, True
@@ -229,7 +241,7 @@ def quantifiers(sent):
 def numbers_in(text):
     """The set of numbers in cited text: digits (2,000 = 2000 = 2_000) and the number words one..twenty."""
     text = re.sub(r"(?<=\d)[,_](?=\d{3}\b)", "", text)
-    found = {m.group(0) for m in NUMBER.finditer(text)}
+    found = {m.group(0) for m in NUMBER.finditer(text)} | {m.group(0).lstrip("0") or "0" for m in NUMBER.finditer(text) if m.group(0).isdigit()}  # 05 is 5
     for w in re.findall(r"[a-z]+", text.lower()):
         if w in WORDS:
             found.add(str(WORDS.index(w)))
@@ -308,6 +320,7 @@ def check_claim(c, repo, cache, test_files=None):
                 continue  # "about 6,600" is a computed figure, not a quote
             unit = TIME_UNIT.match(flat[m.end():m.end() + 12])
             ok = {tok} | {str(int(tok) * k) for k in TIME_SCALE[unit.group(1).lower()]} if unit and tok.isdigit() else {tok}
+            ok |= {tok.lstrip("0") or "0"} if tok.isdigit() else set()
             if not ok & have_nums:
                 fails.append((n, "number", "%s is not in the cited lines" % tok))
         for tok in strings_in(c["text"], repo):
@@ -423,6 +436,26 @@ def not_backed(doc_text, repo, points, cache):
     return fails
 
 
+COUNTS_LINE = re.compile(r"(?i)\bcounts:?\**\s+harvested\s+[\d,]+")  # the header line step 6 writes, bold or not
+
+
+def word_count(doc_text, repo):
+    """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
+    above the first `## ` heading, the headings and the backticked names are counted, except an assembled header: when the
+    header holds a Counts line, the whole block above the first heading is left out, because the budget is for the sections."""
+    lines = list(doc_lines(doc_text))
+    assembled = any(in_header and COUNTS_LINE.search(line) for _, line, in_header, _ in lines)
+    total = 0
+    for _, line, in_header, _ in lines:
+        if assembled and in_header:
+            continue
+        for start, end, cites, _ in reversed(line_items(line, repo)):
+            if cites:
+                line = line[:start] + " " + line[end:]
+        total += sum(1 for w in LIST_MARK.sub("", line).split() if re.search(r"\w", w))
+    return total
+
+
 def line_count(full):
     with open(full, "rb") as f:
         data = f.read()
@@ -508,18 +541,57 @@ def sheet(doc_text, repo):
                 print(note)
 
 
+AUDIT_ROW = re.compile(r'^\s*(?:[-*]\s*)?(\d+)\s*\|\s*assert:\s*(\S+?):(\d+)\s+["\u201c](.+)["\u201d]\s*\|\s*exits:\s*(\S.*?)\s*\|\s*callers:\s*(\S.*?)\s*\|\s*found:\s*(\S.*?)\s*\|\s*result:\s*(HOLDS|narrowed|cut)\b', re.I)
+
+
+def audit_rows(audit_text):
+    """The well-formed rows of an audit file, as (doc line, path, line, quoted text)."""
+    rows = []
+    for raw in audit_text.splitlines():
+        m = AUDIT_ROW.match(raw)
+        if m:
+            rows.append((int(m.group(1)), m.group(2), int(m.group(3)), m.group(4)))
+    return rows
+
+
+def audit_fails(doc_text, repo, audit_text):
+    """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line."""
+    rows, cache, fails = audit_rows(audit_text), {}, []
+    for c in claims(doc_text, repo):
+        if c.get("heading") or c["not_backed"] or not c["cites"]:
+            continue
+        ok = False
+        for n, path, line, quote in rows:
+            if n != c["line"]:
+                continue
+            for cp, lo, hi in c["cites"]:
+                if (cp == path or cp.endswith("/" + path)) and lo <= line <= hi:
+                    try:
+                        have = squash(read_lines(cache, repo, cp)[line - 1])
+                    except (OSError, IndexError):
+                        continue
+                    parts = [squash(q) for q in re.split(r"\u2026|\.\.\.", quote) if squash(q)]
+                    if parts and all(q in have for q in parts):
+                        ok = True
+        if not ok:
+            fails.append((c["line"], "audit", "no audit row for this sentence: `N | assert: path:line \"text\" | exits: .. | callers: .. | found: .. | result: ..` "
+                          "with N = this doc line, one of its own citations, and the text on that line"))
+    return fails
+
+
 def main(argv):
     args, opts = [], {}
     it = iter(argv[1:])
     for a in it:
-        if a in ("--points", "--left-out"):
+        if a in ("--points", "--left-out", "--max-words", "--audit"):
             opts[a] = next(it, None)
         elif a == "--sheet":
             opts[a] = True
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or (opts.get("--left-out") and "--points" not in opts) \
-            or any(opts.get(k) is None or (k != "--sheet" and not os.path.isfile(opts[k])) for k in opts):
+            or any(opts.get(k) is None or (k not in ("--sheet", "--max-words") and not os.path.isfile(opts[k])) for k in opts) \
+            or (opts.get("--max-words") is not None and not opts["--max-words"].isdigit()):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     doc, repo = args
@@ -537,13 +609,19 @@ def main(argv):
             with open(opts["--left-out"], encoding="utf-8") as f:
                 left_out = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     checked, bad, fails, flags, counts = check(text, repo, points, left_out or ())
+    words = word_count(text, os.path.realpath(repo))
+    if opts.get("--audit"):
+        with open(opts["--audit"], encoding="utf-8", errors="replace") as f:
+            fails = sorted(set(fails + (audit_fails(text, os.path.realpath(repo), f.read()) if not bad else [])))
+    if "--max-words" in opts and words > int(opts["--max-words"]):
+        fails = sorted(set(fails + [(1, "budget", "%d words, budget %s: drop behaviours, do not join them" % (words, opts["--max-words"]))]))
     for n, cite, reason in bad:
         print("%s:%d: %s: %s" % (doc, n, cite, reason))
     for n, kind, detail in fails:
         print("%s:%d: FAIL %s: %s" % (doc, n, kind, detail))
     for n, kind, detail in flags:
         print("%s:%d: flag %s: %s" % (doc, n, kind, detail))
-    print("checked %d citations, %d bad" % (checked, len(bad)))
+    print("checked %d citations, %d bad, %d words" % (checked, len(bad), words))
     if counts:
         print("Counts: " + "; ".join("%s %d" % (k, counts[k]) for k, _ in COUNT_KEYS) + ".")  # the line the header carries
     print("%d failed checks, %d flagged sentences (list them for the check pass)" % (len(fails), len(flags)))

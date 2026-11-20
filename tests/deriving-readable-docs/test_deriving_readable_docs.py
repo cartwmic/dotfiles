@@ -909,5 +909,184 @@ class EarlyExitsSheetTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+class RangeListTest(unittest.TestCase):
+    def test_a_bare_range_after_a_comma_is_a_second_range_of_the_same_file(self):
+        code, out = check("It reads it in the test (`src/a.rs:1, 3`).\n", REPO)
+        self.assertEqual(code, 0)
+        self.assertIn("checked 2 citations, 0 bad", out)
+        code, out = check("It reads it in the test (`src/a.rs:1, 9`).\n", REPO)
+        self.assertEqual(code, 1)
+        self.assertIn("src/a.rs:9: line out of range (file has 3 lines)", out)
+
+    def test_a_zero_padded_number_matches_the_same_number_in_the_code(self):
+        files = {"src/t.rs": "let retries = 5;\n"}
+        code, out = check("It retries 05 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAIL number", out)
+        code, out = check("It retries 06 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL number: 06 is not in the cited lines", out)
+
+    def test_a_number_without_zeros_matches_the_zero_padded_number_in_the_code(self):
+        files = {"src/t.rs": "let retries = 007;\n"}
+        code, out = check("It retries 7 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("FAIL number", out)
+        code, out = check("It retries 8 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL number: 8 is not in the cited lines", out)
+
+
+class BudgetTest(unittest.TestCase):
+    """--max-words: a section draft or a doc over its word budget FAILs, so a length limit is kept by a script."""
+    DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`). It does another thing in the test, in this case (`src/a.rs:1-3`).\n"  # 18 words
+
+    def test_the_word_count_prints_without_citations_and_without_a_budget(self):
+        code, out = check(self.DOC, REPO)
+        self.assertEqual(code, 0)
+        self.assertIn("checked 2 citations, 0 bad, 18 words", out)
+
+    def test_a_draft_over_the_budget_fails_with_the_count(self):
+        code, out = check(self.DOC, REPO, "--max-words", "17")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL budget: 18 words, budget 17", out)
+
+    def test_a_draft_at_the_budget_passes(self):
+        code, out = check(self.DOC, REPO, "--max-words", "18")
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAIL budget", out)
+
+    def test_the_header_and_headings_are_words_and_fenced_code_and_list_marks_are_not(self):
+        doc = "# Doc\n\nRepo: r, commit: abc, many words here before the first section heading.\n\n## Part\n\n```\nthree words inside\n```\n- It runs in the test (`src/a.rs:1`).\n1. It stops in the test (`src/a.rs:2`).\n"
+        code, out = check(doc, REPO, "--max-words", "23")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL budget: 24 words, budget 23", out)
+        code, out = check(doc, REPO, "--max-words", "24")
+        self.assertEqual(code, 0)
+        self.assertIn("checked 2 citations, 0 bad, 24 words", out)  # Doc, the 12 header words, Part, It runs in the test, It stops in the test
+
+    def test_a_backticked_name_that_is_not_a_citation_counts_as_a_word(self):
+        code, out = check("## Part\n\nThe `isMessageId` check runs in the test (`src/a.rs:1`).\n", REPO)
+        self.assertIn("8 words", out)
+
+    def test_a_budget_that_is_not_a_number_is_a_usage_error(self):
+        code, out = check(self.DOC, REPO, "--max-words", "lots")
+        self.assertEqual(code, 2)
+
+
+def step7_command(skill, doc, repo, budget):
+    """The argument list of the step-7 check_citations.py command in SKILL.md, with its placeholders filled in, or None when
+    step 7 has no such command with --max-words. The `> <doc>.checks.txt` redirect is cut: the test reads the printed output."""
+    step = re.search(r"^7\. \*\*Check citations\.\*\*(.*?)^8\. ", skill, re.M | re.S)
+    cmd = re.search(r"`python3 -I [^`]*?check_citations\.py ([^`]*--max-words[^`]*)`", step.group(1)) if step else None
+    if not cmd:
+        return None
+    args = cmd.group(1).split(" > ")[0]
+    for placeholder, value in (("<doc.md>", doc), ("<repo>", repo), ("<the doc's budget>", budget)):
+        args = args.replace(placeholder, value)
+    return None if "<" in args else args.split()
+
+
+class StepSevenTest(unittest.TestCase):
+    """SKILL.md step 7 runs check_citations.py with --max-words on the assembled doc. The test takes that command from SKILL.md
+    and runs it on a fixture built the way steps 2, 4 and 6 build one: each section at its budget, under a header."""
+    FILES = {"tests/test_a.py": "def test_adds():\n    assert 1 + 1 == 2\n"}
+    SECTIONS = [
+        (20, "## Adds and checks a sum\n\nThe test adds 1 and 1 and expects 2 (`tests/test_a.py:2`). It runs once in this case (`tests/test_a.py:1`).\n"),
+        (20, "## Asserts the sum result\n\nThe test asserts that 1 plus 1 is 2 (`tests/test_a.py:2`). It fails when that is not true (`tests/test_a.py:2`).\n"),
+    ]
+    HEADER = ("# Doc\n\n- Repo: r, commit: abc. Inputs: the repo's tests and code; existing docs were not read. "
+              "Hand-added points: none. Left out: none.\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n")
+
+    def test_an_assembled_doc_at_budget_passes_skill_step_7(self):
+        skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        with make_repo(self.FILES) as repo, tempfile.TemporaryDirectory() as d:
+            Path(d, "points.json").write_text(harvest(repo)[1])  # step 2
+            Path(d, "left-out.txt").write_text("")
+            for budget, text in self.SECTIONS:  # step 4: each section is drafted at its budget
+                code, out = check(text, self.FILES, "--max-words", str(budget))
+                self.assertEqual(code, 0, out)
+                self.assertIn("%d words" % budget, out)
+            doc = Path(d, "DOC.md")
+            doc.write_text(self.HEADER + "".join(text for _, text in self.SECTIONS))  # step 6
+            args = step7_command(skill, str(doc), repo, str(sum(b for b, _ in self.SECTIONS)))
+            if args is None:
+                self.fail("SKILL.md step 7 has no check_citations.py command with --max-words, so this test cannot run it: "
+                          "restore that command in step 7, or change this test to match step 7")
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), *args], cwd=d, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class AuditTest(unittest.TestCase):
+    """--audit: each sentence with citations needs its own audit row, so a one-line summary of the audit FAILs."""
+    DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`).\n\nIt does another thing in the test (`src/a.rs:1-3`).\n"
+    ROW = '%d | assert: src/a.rs:%d "%s" | exits: none listed | callers: none found | found: nothing | result: HOLDS\n'
+
+    def audited(self, audit, doc=None):
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "audit.md"
+            a.write_text(audit)
+            return check(doc or self.DOC, REPO, "--audit", str(a))
+
+    def test_a_row_for_each_sentence_passes(self):
+        code, out = self.audited(self.ROW % (3, 2, "two") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 0, out)
+
+    def test_a_summary_line_is_not_a_row(self):
+        code, out = self.audited("Sentences 3 and 5 checked: HOLDS.\n")
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+        self.assertIn(":5: FAIL audit", out)
+
+    def test_a_sentence_missing_from_the_audit_fails_alone(self):
+        code, out = self.audited(self.ROW % (3, 2, "two"))
+        self.assertEqual(code, 1)
+        self.assertNotIn(":3: FAIL audit", out)
+        self.assertIn(":5: FAIL audit", out)
+
+    def test_a_quote_that_is_not_on_the_line_fails(self):
+        code, out = self.audited(self.ROW % (3, 2, "three") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+
+    def test_an_assert_that_is_not_one_of_the_sentences_citations_fails(self):
+        code, out = self.audited(self.ROW % (3, 3, "three") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+        self.assertNotIn(":5: FAIL audit", out)
+
+    def test_two_cited_sentences_on_one_line_each_need_a_row(self):
+        doc = "## Part\n\nIt runs in the test (`src/a.rs:1`). It stops in the test (`src/a.rs:3`).\n"
+        code, out = self.audited(self.ROW % (3, 1, "one"), doc)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count("FAIL audit"), 1)
+
+    def test_a_row_without_exits_found_and_result_is_not_a_row(self):
+        code, out = self.audited('3 | assert: src/a.rs:2 "two"\n' + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+
+    def test_a_row_without_the_callers_field_is_not_a_row(self):
+        old = '%d | assert: src/a.rs:%d "%s" | exits: none listed | found: nothing | result: HOLDS\n'
+        code, out = self.audited(old % (3, 2, "two") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+        self.assertNotIn(":5: FAIL audit", out)
+
+    def test_a_cited_sentence_above_the_first_heading_needs_its_own_row(self):
+        doc = "It runs in the test (`src/a.rs:1`).\n\n## Part\n\nIt does another thing in the test (`src/a.rs:2`).\n"
+        code, out = self.audited(self.ROW % (5, 2, "two"), doc)
+        self.assertEqual(code, 1)
+        self.assertIn(":1: FAIL audit", out)
+        self.assertNotIn(":5: FAIL audit", out)
+        code, out = self.audited(self.ROW % (1, 1, "one") + self.ROW % (5, 2, "two"), doc)
+        self.assertEqual(code, 0, out)
+
+    def test_without_the_option_nothing_is_asked_for(self):
+        code, out = check(self.DOC, REPO)
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAIL audit", out)
+
+
 if __name__ == "__main__":
     unittest.main()
