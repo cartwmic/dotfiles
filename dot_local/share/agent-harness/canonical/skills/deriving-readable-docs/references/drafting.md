@@ -12,7 +12,7 @@ In this order: **code** (entry points, command and flag registrations, route tab
 
 ## Stage 0: choose (`work/choice.md`)
 
-Your budget is B words, counted as the check counts them: a word is any space-separated token with a letter, digit or underscore in it, and every such token of the draft counts, headings and backticked names included. Citations, fenced code, printed blocks and bare marks (`-`, `1.`, `##`) do not. A sentence with its citation is about 25 words, so you have about B/25 sentences. From the surfaces and code of your capability, list the behaviours a reader most needs, one line each, and keep the first B/25. Prefer a behaviour whose rule you can read end to end: the one function or command, its branches stated in one clause. Leave out a behaviour whose defining code has more branches than you can state. Do not reach the budget by joining two behaviours into one sentence or by generalising ("the command refuses bad input"): drop the behaviour.
+Your budget is B words, counted as the check counts them: a word is any space-separated token with a letter, digit or underscore in it, and every such token of the draft counts, headings and backticked names included. Citations, fenced code, printed blocks and bare marks (`-`, `1.`, `##`) do not. A sentence is about 14 words (the lab's limit arm averaged 12.8), so you have about B/14 sentences. From the surfaces and code of your capability, list the behaviours a reader most needs, one line each, and keep the first B/14. Prefer a behaviour whose rule you can read end to end: the one function or command, its branches stated in one clause. Leave out a behaviour whose defining code has more branches than you can state. Do not reach the budget by joining two behaviours into one sentence or by generalising ("the command refuses bad input"): drop the behaviour.
 
 ## Stage 1: evidence file (`work/evidence.md`)
 
@@ -31,7 +31,7 @@ Then add one line per behaviour you plan to describe, naming the rows it rests o
 ## Stage 2: draft
 
 1. Each sentence restates one or more evidence rows, with their conditions, and says no more than those rows show. Write it from the rows, not from your memory of the code.
-2. One behaviour per sentence. Name the case in the sentence: "when X, Y".
+2. One behaviour per sentence, at most 18 words, counted as the check counts them (citations are not words). Name the case in the sentence: "when X, Y". When a behaviour needs more words, split it and keep the condition in each part: "When X, Y does A. When X, Y also does B."
 3. A value from a caller, a fixture or a test goes in as an example ("in the test", "for example"), not as the rule.
 4. Copy numbers, names, flags, messages and the place a result appears (standard output, the log, the exit code) from the cited line, not from memory or a summary.
 5. A sentence that says a thing happens in the product needs a code row with its conditions, and states each one that applies: the flag, the input kind, the other caller, the case that returns earlier. What a key, file, value or event is comes from its definition and its users.
@@ -39,10 +39,10 @@ Then add one line per behaviour you plan to describe, naming the rows it rests o
 7. Words that exist only in a failure message, test title, comment or README stay out, or carry the label "(test title)", "(code comment)" or "(README)" when the code agrees.
 8. No "all", "every", "none", "only", "always", counts or full lists unless the code row defines the whole set.
 9. Cite the line that shows what the sentence names: where a limit is checked, a default is set, a command is called, not the nearby loop, signature or comment. Cite directly after the sentence the code lines it rests on, as `SKILL.md` requires.
-10. Narrow, do not stack. When a sentence would need a branch, flag, caller or exception it does not state, narrow the claim to the case you read or drop it. Do not add clause after clause ("unless A, B or C"): a sentence that needs two "unless" clauses is about the wrong case. Add an exception only when you have read it in the code and cite its line. Do not hedge ("usually", "may"), and do not pad or split one behaviour into thin sentences.
+10. Narrow, do not stack. When a sentence would need a branch, flag, caller or exception it does not state, narrow the claim to the case you read or drop it. Do not add clause after clause ("unless A, B or C"): a sentence that needs two "unless" clauses is about the wrong case. Add an exception only when you have read it in the code and cite its line. Do not hedge ("usually", "may") and do not pad.
 11. Write for a person. The sentences stay narrow, each with its own citation, but lay them out as short paragraphs or list items grouped by what the reader wants to know, not as one claim per line where that hurts reading. Do not merge two behaviours into one sentence to save space.
 
-Then load `no-ai-slop` (Skill tool) and apply it in edit mode to the draft, keeping every citation, number and name as written. Put the `Voice:` line in your report. Run `python3 -I <skill dir>/scripts/check_citations.py draft.md <repo> --max-words B` and fix every FAIL.
+Then load `no-ai-slop` (Skill tool) and apply it in edit mode to the draft, keeping every citation, number and name as written. Put the `Voice:` line in your report. Run `python3 -I <skill dir>/scripts/check_citations.py draft.md <repo> --max-words B --max-sentence-words 18` and fix every FAIL, a sentence over 18 words included.
 
 ## Stage 3: audit (`work/audit.md`)
 
@@ -77,7 +77,7 @@ Start one fresh session per writer; never one session for the whole repo. Each b
 
 - The paths: the repo (read only, at the commit), `surfaces.json` and `scout.txt`, this skill's folder, and the one folder the writer may write in (`draft.md` and `work/`).
 - The method: read this file, and `SKILL.md` for the citation form and the rules for every sentence.
-- Limits: no subagents, no security or privacy language, change nothing in the repo. Each draft runs `check_citations.py --max-words <budget> --audit <its audit file>` and fails when it is over or when a sentence has no audit row.
+- Limits: no subagents, no security or privacy language, change nothing in the repo. Each draft runs `check_citations.py --max-words <budget> --max-sentence-words 18 --audit <its audit file>` and fails when it is over, when a sentence has more than 18 words, or when a sentence has no audit row.
 
 **Section writer** (one per capability, `A4` and on). The section heading `## A<n> <capability>`; the capability and its surfaces by name; the files its code sits in (names only, no earlier text and no checker findings); its word budget B. Report: path of `draft.md`, number of sentences, the word count, the `Voice:` line, and in at most five lines what it could not cover or cut.
 

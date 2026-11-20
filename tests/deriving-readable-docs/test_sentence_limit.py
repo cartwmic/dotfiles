@@ -75,6 +75,32 @@ class SentenceLimitTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
 
+class QuotedStopTest(unittest.TestCase):
+    """A full stop inside a double-quoted message does not end the sentence: the checkers count the sentence once, so the script must too."""
+
+    def claims_line(self, doc):
+        out = check(doc)[1]  # whether the quoted text is in a cited line is another check; only the claim count is read here
+        return [l for l in out.splitlines() if "words per claim" in l][0]
+
+    def test_a_stop_inside_a_quoted_message_is_not_a_sentence_end(self):
+        line = self.claims_line('## S\n\nIt answers 400 "Unable to create. Ensure it is not there." when it fails (`src/a.rs:1`).\n')
+        self.assertTrue(line.startswith("1 claims,"), line)
+
+    def test_a_stop_after_a_closed_quote_still_ends_the_sentence(self):
+        line = self.claims_line('## S\n\nIt says "done" and stops (`src/a.rs:1`). It then exits (`src/a.rs:2`).\n')
+        self.assertTrue(line.startswith("2 claims,"), line)
+
+    def test_a_double_quote_inside_backticks_does_not_open_a_quote(self):
+        line = self.claims_line('## S\n\nIt reads the `"` character (`src/a.rs:1`). It then exits (`src/a.rs:2`).\n')
+        self.assertTrue(line.startswith("2 claims,"), line)
+
+    def test_the_lab_drafts_that_the_scorer_over_counted_by_one_or_two_now_agree_with_the_checkers(self):
+        """d5 had two quoted messages with a stop inside (script 22, checkers 20): the shape of the line that was cut."""
+        doc = ('## S\n\n- Create answers 400 "Minute level recurrence is unsupported. Please create a less frequent schedule." when `isdigit()` is false (`src/a.rs:1`).\n'
+               '- An exception becomes a 500 with "Unable to create automation. Ensure the automation does not already exist." (`src/a.rs:2`).\n')
+        self.assertTrue(self.claims_line(doc).startswith("2 claims,"))
+
+
 class DocFileOverreachTest(unittest.TestCase):
     def test_every_backed_only_by_a_readme_line_fails_unless_it_says_so(self):
         code, out = check("## S\n\nIt serves every peer (`README.md:2`).\n")

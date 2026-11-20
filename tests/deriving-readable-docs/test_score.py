@@ -131,6 +131,93 @@ class ScoreTest(unittest.TestCase):
         self.assertIn("errors: 1 out of 2 claims", txt)
 
 
+class ClaimCountTest(unittest.TestCase):
+    """The checkers' claim count is the score's; when the script counts the doc's sentences differently the score prints both and the difference."""
+
+    def score(self, checkers_claims, doc):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            Path(repo, "a.rs").write_text("x\n" * 5)
+            Path(d, "GUIDE.md").write_text(doc)
+            rep = Path(d, "reports")
+            rep.mkdir()
+            write_reports(rep, {"A.md": counts(checkers_claims, checkers_claims, 0, 0, 0)})
+            return run(str(rep), "--doc", str(Path(d, "GUIDE.md")), "--repo", repo)
+
+    DOC = "## A4 S\n\nIt reads one file (`a.rs:1`). It writes two files (`a.rs:2`). It stops (`a.rs:3`).\n"
+
+    def test_a_difference_is_printed_and_the_rate_keeps_the_checker_count(self):
+        code, out, err = self.score(2, self.DOC)
+        self.assertEqual(code, 0, err)
+        self.assertIn("claim count: checkers 2, script 3, difference +1", out)
+        self.assertIn("claims checked: 2", out)
+
+    def test_no_difference_line_when_the_counts_agree(self):
+        code, out, err = self.score(3, self.DOC)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("claim count:", out)
+
+
+def write_draft(root, name, claims, words, errors, mc, script_claims, lab):
+    """One draft's score.json and lab.json, shaped as `score.py --out` and `score.py --lab --out` write them."""
+    d = Path(root, name)
+    d.mkdir()
+    causes = {"MISSING_CONDITION": mc, "NAME": errors - mc, "COUNT": 0, "KIND": 0, "OTHER": 0, "UNTAGGED": 0}
+    Path(d, "score.json").write_text(json.dumps({"repos": [{"name": name, "claims": claims, "errors": errors, "words": words, "script_claims": script_claims,
+                                                          "causes": causes}]}))
+    Path(d, "lab.json").write_text(json.dumps(lab))
+    return str(d / "score.json"), str(d / "lab.json")
+
+
+class PoolTest(unittest.TestCase):
+    """--pool: the pooled summary of a round, so that no runner writes its own analyze script."""
+    A = dict(behaviours=14, behaviours_kept=14, condition_lines=40, condition_lines_cited=30, claims=20, words=400, conditional_words=16)
+    B = dict(behaviours=10, behaviours_kept=9, condition_lines=20, condition_lines_cited=10, claims=30, words=500, conditional_words=10)
+
+    def pool(self, *groups):
+        """groups are NAME=a,b: the group NAME pools drafts a and/or b."""
+        with tempfile.TemporaryDirectory() as root:
+            files = {"a": write_draft(root, "a", claims=18, words=410, errors=2, mc=1, script_claims=20, lab=self.A),
+                     "b": write_draft(root, "b", claims=28, words=520, errors=1, mc=1, script_claims=30, lab=self.B)}
+            args = []
+            for g in groups:
+                name, members = g.split("=")
+                args += ["%s=%s,%s" % ((name,) + files[m]) for m in members.split(",")]
+            return run("--pool", *args)
+
+    def test_a_group_is_pooled_over_its_drafts_with_the_lab_runners_columns(self):
+        code, out, err = self.pool("both=a,b")
+        self.assertEqual(code, 0, err)
+        row = [l for l in out.splitlines() if l.startswith("both")][0]
+        self.assertIn("drafts words  930 claims  46(checked) errors  3 rate 6.5%  err/1000w 3.23  MC/1000w 2.15", row)
+        self.assertIn("words/claim 18.0 (mean of drafts 18.3)", row)  # 900 words in 50 script claims; the mean of 20.0 and 16.7
+        self.assertIn("behaviours 23/24 95.8%", row)
+        self.assertIn("cond lines 40/60 66.7%", row)
+        self.assertIn("conditional w/1000w 28.9", row)
+        self.assertIn("claim count: checkers 46, script 50, difference +4", row)
+
+    def test_each_group_gets_its_own_row(self):
+        code, out, err = self.pool("one=a", "two=b")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l.split()[0] for l in out.splitlines() if l.strip()], ["one", "two"])
+        self.assertIn("errors  2 rate 11.1%", out)  # 2 of the 18 claims the checkers counted for draft a
+
+    def test_a_missing_file_or_a_score_without_words_is_an_error_naming_it(self):
+        code, out, err = run("--pool", "x=/no/such/score.json,/no/such/lab.json")
+        self.assertEqual(code, 1)
+        self.assertIn("/no/such/score.json", err)
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "score.json").write_text(json.dumps({"repos": [{"claims": 3, "errors": 0, "causes": {"MISSING_CONDITION": 0}}]}))
+            Path(d, "lab.json").write_text(json.dumps(self.A))
+            code, out, err = run("--pool", "x=%s,%s" % (Path(d, "score.json"), Path(d, "lab.json")))
+        self.assertEqual(code, 1)
+        self.assertIn("score.json", err)
+        self.assertIn("--doc", err)
+
+    def test_bad_usage_exits_2(self):
+        self.assertEqual(run("--pool")[0], 2)
+        self.assertEqual(run("--pool", "no-equals-sign")[0], 2)
+
+
 class LabTest(unittest.TestCase):
     REPO_FILES = {"src/a.ts": "\n".join("line %d" % i for i in range(1, 40)) + "\n"}
     LIST = "# behaviours\nB1 | src/a.ts:10 | src/a.ts:8, src/a.ts:12-13\nB2 | src/a.ts:30 |\nB3 | src/a.ts:35 | src/a.ts:34\n"

@@ -21,7 +21,6 @@ LABEL = re.compile(r"^\s*\(([^)]*)\)")
 TAG = re.compile(r"\[A\d+(?:\.\d+)?\]")  # a Part 1 sentence's pointer into the appendix
 SAYS_SOURCE = re.compile(r"comment|header|readme|docs?\b|documentation|stated|says|source text|prd|agents\.md|\[A\d+(?:\.\d+)?\]", re.I)
 PRINTED_BEGIN, PRINTED_END = "<!-- printed -->", "<!-- /printed -->"
-COUNTS_LINE = re.compile(r"(?i)\bcounts:?\**\s+harvested\s+[\d,]+")  # the header line the older flow wrote, bold or not
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`\"'(\[*_])")
 TAG_AFTER_STOP = re.compile(r"([.!?])((?:\s*\[A\d+(?:\.\d+)?\])+)")
 
@@ -93,16 +92,13 @@ def doc_lines(text):
 
 def claims(text, repo):
     """Yield one dict per claim: line, text (the words before the citation group), cites, label (a parenthetical
-    right after the group, such as "code comment"), uncited (words after the last group, or a whole line with none), and
-    not_backed (the claim sits under a "Not backed" heading)."""
-    section = False
+    right after the group, such as "code comment") and uncited (words after the last group, or a whole line with none)."""
     for n, line, header, heading in doc_lines(text):
         items = line_items(line, repo)
         if heading:
-            section = bool(re.match(r"#+\s.*not backed", line, re.I))
             for _, _, cites, _ in items:
                 if cites:
-                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True, "not_backed": section}
+                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True}
             continue
         groups = []  # [first_start, last_end, cites]
         for start, end, cites, _ in items:
@@ -119,10 +115,10 @@ def claims(text, repo):
             if label and not SAYS_SOURCE.search(label.group(1)):
                 label = None  # a parenthetical that is not a source label is a sentence: it is listed as uncited text
             yield {"line": n, "text": line[prev:start] if prev else LIST_MARK.sub("", line[:start]), "cites": cites, "label": label.group(1) if label else "",
-                   "uncited": "", "header": header, "not_backed": section}
+                   "uncited": "", "header": header}
             prev = end + (label.end() if label else 0)
         if not header and line[prev:].strip():
-            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header, "not_backed": section}
+            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header}
 
 
 def tags_before_stop(text):
@@ -157,22 +153,31 @@ def prose_sentences(text, repo):
             if cites:
                 line = line[:start] + " " + line[end:]
         line = LIST_MARK.sub("", line).strip()
-        parts = [line] if line.startswith("|") else SENTENCE_END.split(tags_before_stop(re.sub(r"\s+", " ", line)))
+        parts = [line] if line.startswith("|") else split_sentences(tags_before_stop(re.sub(r"\s+", " ", line)))
         out += [(n, p.strip()) for p in parts if words_of(p)]
+    return out
+
+
+def split_sentences(line):
+    """The sentences of one line of prose, cut after . ! or ? when a capital letter, digit, quote or bracket follows. A stop inside a
+    double-quoted message ("Unable to create. Ensure it is not there.") does not end the sentence: the checkers count it once, so the script does.
+    A quote inside a backtick span is code and opens nothing."""
+    out = []
+    for piece in SENTENCE_END.split(line):
+        text = SPAN.sub("", out[-1]) if out else ""
+        if out and (text.count('"') % 2 == 1 or text.count("\u201c") > text.count("\u201d")):
+            out[-1] += " " + piece
+        else:
+            out.append(piece)
     return out
 
 
 def word_count(doc_text, repo):
     """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
-    above the first `## ` heading, the headings and the backticked names are counted, except an assembled header: when the
-    header holds a Counts line, the whole block above the first heading is left out, because the budget is for the sections.
-    Printed blocks are never counted."""
-    lines = list(doc_lines(doc_text))
-    assembled = any(in_header and COUNTS_LINE.search(line) for _, line, in_header, _ in lines)
+    above the first `## ` heading, the headings and the backticked names are counted. Printed blocks (what assemble.py prints,
+    its header among them) are never counted."""
     total = 0
-    for _, line, in_header, _ in lines:
-        if assembled and in_header:
-            continue
+    for _, line, _, _ in doc_lines(doc_text):
         for start, end, cites, _ in reversed(line_items(line, repo)):
             if cites:
                 line = line[:start] + " " + line[end:]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the `path:line` citations in a derived doc: the line exists, and the cited text backs the sentence.
 
-usage: check_citations.py <doc.md> <repo> [--points points.json [--left-out left-out.txt]] [--max-words N] [--max-sentence-words N] [--audit audit.md] [--sheet]
+usage: check_citations.py <doc.md> <repo> [--max-words N] [--max-sentence-words N] [--audit audit.md] [--sheet]
 
 A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
 read; several may share one backtick span, separated by commas or semicolons (`src/a.ts:12, 40-45` is two ranges of one file); one inside a span with other
@@ -24,10 +24,8 @@ joined by commas or "and". These checks FAIL a claim, because a miss is a fact t
             not close a list: ", and the message names each problem" FAILs). Cite the code that defines
             the set, or word the sentence to the test's case ("in the test", "in this case", "the test shows",
             "the test puts" and other "the test <verb>", "for example", "such as", "at least", "e.g."), or label it
-            inferred or "from your list". A bare "the test" does not clear it. In a "Not backed" section a sentence
-            that reports the search or what the tests do ("I grepped ... and found no match", "no test asserts it", "the
-            only hits are in x.ts") is not judged here; not-backed below checks the entry. With --points a file is a test when the harvest lists it; without, when its
-            path says so (tests/, .test., _test, journey, e2e, spec, conformance ...).
+            inferred or "from your list". A bare "the test" does not clear it. A file is a test when its path says
+            so (tests/, .test., _test, journey, e2e, spec, conformance ...).
   uncited   a sentence after the doc header with no citation, source label ("(README)", "(code comment)"), or
             "inferred" / "from your list" in it, that holds a word of the overreach list below or a count of
             things in digits or words.
@@ -39,19 +37,10 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
             measured whole, with its citations taken out, so a citation in the middle does not cut it. It prints the claims (every
             sentence, bullet and table row of the prose, headings and the header excluded), their words and the words per claim on every run.
   budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
-            above the first `## ` heading and the headings and backticked names included; citations, fenced code and bare
-            list marks are not words. An assembled header (the block above the first `## ` heading with a `Counts: harvested N`
-            line) is left out, because the budget is for the sections; a section draft has no such line, so its header counts.
+            above the first `## ` heading and the headings and backticked names included; citations, fenced code, printed blocks
+            (what assemble.py prints, such as the header) and bare list marks are not words.
             A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
-With --points (the raw harvest, points.json), two more checks run:
-  counts     the doc header's numbers for harvested, left out, used, read by name only and not cited must equal
-             the numbers computed from the harvest and this doc's citations. A point is used when a citation of
-             the doc overlaps its body (its start line up to the next point of the file); read by name only when
-             every such citation is in a sentence that says inferred; left out when --left-out lists its id
-             (`P12`) or its file (a path, or a folder ending in /), one per line. It prints the computed line,
-             `Counts: harvested N; left out N; used N; read by name only N; not cited N.`, for the header.
-  not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
-             does not cite: the entry is wrong, or it cites that test.
+The last check:
   audit     with --audit FILE, FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
             `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
             doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
@@ -66,8 +55,6 @@ With --points (the raw harvest, points.json), two more checks run:
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
 sentences never change the exit code. Stdlib only.
 """
-import bisect
-import json
 import os
 import re
 import sys
@@ -75,7 +62,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
-from claims import (SAYS_SOURCE, SPAN, claims, doc_lines, line_items, prose_sentences, sentences, strip_code, word_count, words_of)  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, claims, prose_sentences, sentences, strip_code, word_count, words_of)  # noqa: E402
 
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
 
@@ -95,11 +82,7 @@ NOT_SUBJECT = {"on", "in", "of", "for", "to", "at", "by", "with", "from", "per",
 # "the test" then a verb: the explicit list, or any word ending in -s that is not a noun or "is/was/has" ("the test puts").
 TEST_VERB = r"(?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?|(?!(?:is|was|has|as|its|this|files|cases|suites|names|results|titles|paths|lines|ids|fixtures|helpers|scripts|inputs|outputs|steps|sources|tests|journeys)\b)(?![a-z]*ss\b)[a-z]+s)"
 SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\bthe (?:tests?|journeys?) " + TEST_VERB + r"\b|\bthe (?:test|journey)'s\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
-# In a "Not backed" section, a sentence that reports the search or what the tests do ("I grepped the tests for X and found
-# no match", "no test asserts it", "the only hits are in pr.ts", "the tests only check the main file") says what was
-# looked for; not_backed() checks the entry against the harvest.
-SEARCH = re.compile(r"\b(?:grepp?ed|searched|searches|search|hits?|found|finds?|none|tests?|journeys?|match)\b", re.I)
-# A test path by its name; used only when no harvest is given (--points), which decides it otherwise.
+# A test path by its name.
 # A doc file is the repo's own words, not the code that defines a set: a sentence that cites only tests or docs proves no more than they say.
 DOC_PATH = re.compile(r"\.(md|mdx|rst|txt|adoc)$|(^|/)docs?/", re.I)
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|proof|journeys?|e2e|smoke|specs?|conformance|support)(/|\.)|\.(test|spec|journey)\.|_test\.|(^|/)test_|-journey|\.bats$", re.I)
@@ -196,7 +179,7 @@ def read_lines(cache, repo, path):
     return cache[path]
 
 
-def check_claim(c, repo, cache, test_files=None):
+def check_claim(c, repo, cache):
     """Return (failures, flags) for one claim; each is a list of (doc_line, kind, detail)."""
     fails, flags = [], []
     n = c["line"]
@@ -224,8 +207,7 @@ def check_claim(c, repo, cache, test_files=None):
         says = SAYS_SOURCE.search(c["text"] + " " + c["label"])
         if not says and all(comment_only(read_lines(cache, repo, p)[lo - 1:hi], p) for p, lo, hi, _ in ranges):
             flags.append((n, "comment", "%s are only comment lines and the sentence does not say so" % ", ".join("%s:%d-%d" % r[:3] for r in ranges)))
-    # with a harvest, only its files are tests (a defining file under conformance/ or support/ is not); without one, the path name decides
-    testonly = bool(c["cites"]) and all(bool(DOC_PATH.search(p)) or ((p in test_files) if test_files is not None else bool(TEST_PATH.search(p))) for p, _, _ in c["cites"])
+    testonly = bool(c["cites"]) and all(bool(DOC_PATH.search(p)) or bool(TEST_PATH.search(p)) for p, _, _ in c["cites"])  # a test is found by its path name
     labelled = SAYS_SOURCE.search(c["label"] or "")
     for kind, kind_text in () if c["header"] else (("overreach", c["text"]), ("uncited", c["uncited"])):  # the header describes the doc
         for raw in sentences(kind_text):
@@ -238,97 +220,11 @@ def check_claim(c, repo, cache, test_files=None):
             detail = "%s | %s" % (what, raw.strip())
             flags.append((n, kind if kind == "uncited" else ("count" if count and not hits else "overreach"), detail))
             scoped = labelled or SCOPED.search(kind_text)  # a clause after a semicolon is still the case the sentence names
-            scoped = scoped or (c.get("not_backed") and SEARCH.search(sent))  # a search report in a "Not backed" section
             if kind == "uncited" and not scoped and not SAYS_SOURCE.search(raw):
                 fails.append((n, "uncited", detail))
             elif kind == "overreach" and testonly and not scoped and (quantifiers(sent) or (count and not count.group(0)[0].isdigit())):
                 fails.append((n, "overreach", detail))
     return fails, flags
-
-
-def is_left_out(point, left_out):
-    """left_out holds point ids (P12), file paths and folders (a path ending in /)."""
-    return any(point["id"] == e or point["file"] == e or (e.endswith("/") and point["file"].startswith(e)) for e in left_out)
-
-
-COUNT_KEYS = (("harvested", r"harvested"), ("left out", r"left out"), ("used", r"\bused\b"),
-              ("read by name only", r"read by name only"), ("not cited", r"not cited"))
-
-
-def point_counts(points, left_out, cited):
-    """Return {key: number} for the five header counts. A citation overlaps a point when it reaches a line of
-    its body: from its start line up to the line before the next point of the same file."""
-    starts = {}
-    for p in points:
-        starts.setdefault(p["file"], []).append(p["line"])
-    for v in starts.values():
-        v.sort()
-    used, named = set(), set()
-    for path, lo, hi, inferred in cited:
-        lines = starts.get(path)
-        if not lines:
-            continue
-        first = max(bisect.bisect_right(lines, lo) - 1, 0)  # the point that holds line lo, or the first one after it
-        for i in range(first, len(lines)):
-            if lines[i] > hi:
-                break
-            end = lines[i + 1] - 1 if i + 1 < len(lines) else float("inf")
-            if end >= lo:
-                (named if inferred else used).add((path, lines[i]))
-    live = {(p["file"], p["line"]) for p in points if not is_left_out(p, left_out)}
-    used &= live
-    named = (named & live) - used
-    return {"harvested": len(points), "left out": len(points) - len(live), "used": len(used),
-            "read by name only": len(named), "not cited": len(live) - len(used) - len(named)}
-
-
-def header_counts(doc_text, want):
-    """FAIL each header number that differs from the computed one (want), and each of the five that the header lacks."""
-    header = [(n, line) for n, line, in_header, heading in doc_lines(doc_text) if in_header and not heading]
-    fails = []
-    for key, pat in COUNT_KEYS:
-        for n, line in header:
-            m = re.search(r"(?i)" + pat + r"[^0-9\n]{0,90}?(\d[\d,]*)", line)
-            if m:
-                got = int(m.group(1).replace(",", ""))
-                if got != want[key]:
-                    fails.append((n, "counts", "header says %s %d; the harvest and this doc's citations give %d" % (key, got, want[key])))
-                break
-        else:
-            fails.append((header[0][0] if header else 1, "counts", "header has no `%s N` (the harvest and this doc's citations give %d)" % (key, want[key])))
-    return fails
-
-
-def not_backed(doc_text, repo, points, cache):
-    """FAIL a string of a "Not backed" entry that a test file of the harvest holds at a line the entry does not cite."""
-    fails, section, tests = [], False, sorted({p["file"] for p in points})
-    for n, line, _, heading in doc_lines(doc_text):
-        if heading:
-            section = bool(re.match(r"#+\s.*not backed", line, re.I))
-            continue
-        if not section:
-            continue
-        items = line_items(line, repo)
-        cites = [c for _, _, cs, _ in items for c in cs]
-        text = line
-        for start, end, cs, _ in reversed(items):  # a citation is not a string of the entry
-            if cs:
-                text = text[:start] + " " + text[end:]
-        quoted = {x or y for x, y in QUOTED.findall(strip_code(text))}
-        for tok in strings_in(text, repo):
-            # a search term the entry quotes, or a flag, message or path-like name in code font; not a bare word such as `false`
-            if len(tok) < (5 if tok in quoted else 8) or (tok not in quoted and not re.search(r"[\s\-_/.]", tok)):
-                continue
-            for path in tests:
-                try:
-                    lines = read_lines(cache, repo, path)
-                except OSError:
-                    continue
-                hit = next((i for i, l in enumerate(lines, 1) if tok in l), None)
-                if hit and not any(c[0] == path and c[1] <= hit <= c[2] for c in cites):
-                    fails.append((n, "not-backed", "`%s` is in a test file, %s:%d; cite it or drop the entry | %s" % (tok, path, hit, line.strip())))
-                    break
-    return fails
 
 
 def line_count(full):
@@ -337,16 +233,11 @@ def line_count(full):
     return len(data.decode("utf-8", errors="replace").splitlines())
 
 
-def check(doc_text, repo, points=None, left_out=()):
-    """Return (checked, bad, fails, flags, counts). bad is [(doc_line, citation, reason)]; fails and flags are
-    [(doc_line, kind, detail)]; counts is the header's five numbers (None without points or with a bad citation). Claims are only judged when all their citations are good. points is the
-    harvest (a list of dicts) and left_out its ids and paths; with them the header counts and the
-    "Not backed" strings are checked too."""
+def check(doc_text, repo):
+    """Return (checked, bad, fails, flags). bad is [(doc_line, citation, reason)]; fails and flags are
+    [(doc_line, kind, detail)]. Claims are only judged when all their citations are good."""
     repo = os.path.realpath(repo)
     checked, bad, fails, flags, cache = 0, [], [], [], {}
-    kept = [p for p in points or [] if not is_left_out(p, left_out)]
-    test_files = frozenset(p["file"] for p in kept) if points is not None else None
-    cited = []  # (path, start, end, inferred) of every citation whose claim is judged
     for c in claims(doc_text, repo):
         before = len(bad)
         for path, start, end in c["cites"]:
@@ -364,17 +255,10 @@ def check(doc_text, repo, points=None, left_out=()):
                 if end > total:
                     bad.append((c["line"], cite, "line out of range (file has %d lines)" % total))
         if len(bad) == before and not c.get("heading"):  # judge the words only when every citation under them is real
-            f, g = check_claim(c, repo, cache, test_files)
+            f, g = check_claim(c, repo, cache)
             fails += f
             flags += g
-            inferred = bool(re.search(r"\binferred\b", c["text"] + " " + c["label"], re.I))
-            cited += [(p, lo, hi, inferred) for p, lo, hi in c["cites"]]
-    counts = None
-    if points is not None and not bad:
-        counts = point_counts(points, left_out, cited)
-        fails += header_counts(doc_text, counts)
-        fails += not_backed(doc_text, repo, kept, cache)
-    return checked, bad, sorted(set(fails)), flags, counts
+    return checked, bad, sorted(set(fails)), flags
 
 
 def exits_note(cache, repo, path, lo, hi):
@@ -433,7 +317,7 @@ def audit_fails(doc_text, repo, audit_text):
     """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line."""
     rows, cache, fails = audit_rows(audit_text), {}, []
     for c in claims(doc_text, repo):
-        if c.get("heading") or c["not_backed"] or not c["cites"]:
+        if c.get("heading") or not c["cites"]:
             continue
         ok = False
         for n, path, line, quote in rows:
@@ -458,13 +342,13 @@ def main(argv):
     args, opts = [], {}
     it = iter(argv[1:])
     for a in it:
-        if a in ("--points", "--left-out", "--max-words", "--max-sentence-words", "--audit"):
+        if a in ("--max-words", "--max-sentence-words", "--audit"):
             opts[a] = next(it, None)
         elif a == "--sheet":
             opts[a] = True
         else:
             args.append(a)
-    if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or (opts.get("--left-out") and "--points" not in opts) \
+    if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) \
             or any(opts.get(k) is None or (k not in ("--sheet", "--max-words", "--max-sentence-words") and not os.path.isfile(opts[k])) for k in opts) \
             or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-sentence-words")):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
@@ -475,15 +359,7 @@ def main(argv):
     if opts.get("--sheet"):
         sheet(text, os.path.realpath(repo))
         return 0
-    points = left_out = None
-    if "--points" in opts:
-        with open(opts["--points"], encoding="utf-8") as f:
-            points = json.load(f)
-        left_out = []
-        if opts.get("--left-out"):
-            with open(opts["--left-out"], encoding="utf-8") as f:
-                left_out = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    checked, bad, fails, flags, counts = check(text, repo, points, left_out or ())
+    checked, bad, fails, flags = check(text, repo)
     words = word_count(text, os.path.realpath(repo))
     if opts.get("--audit"):
         with open(opts["--audit"], encoding="utf-8", errors="replace") as f:
@@ -504,8 +380,6 @@ def main(argv):
     print("checked %d citations, %d bad, %d words" % (checked, len(bad), words))
     claim_words = sum(len(words_of(s)) for _, s in prose)
     print("%d claims, %d words in them, %.1f words per claim" % (len(prose), claim_words, claim_words / len(prose) if prose else 0))
-    if counts:
-        print("Counts: " + "; ".join("%s %d" % (k, counts[k]) for k, _ in COUNT_KEYS) + ".")  # the line the header carries
     print("%d failed checks, %d flagged sentences (list them for the check pass)" % (len(fails), len(flags)))
     if not checked:
         print("no citations found: an uncited doc cannot be checked", file=sys.stderr)

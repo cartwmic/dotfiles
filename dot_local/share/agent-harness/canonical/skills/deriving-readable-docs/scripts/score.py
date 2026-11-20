@@ -5,6 +5,7 @@ usage:
   score.py [NAME=]REPORTS... [--doc GUIDE.md ...] [--repo DIR] [--out DIR]
   score.py --lab BEHAVIOURS.txt DRAFT.md REPO [--out DIR]
   score.py --reader GUIDE.md [--answers ANSWERS.md]
+  score.py --pool GROUP=SCORE.json,LAB.json [GROUP=SCORE.json,LAB.json ...]
 
 Score. Each REPORTS is one repo: a folder of checker reports (every .md and .txt file in it, not below it) or one report file.
 NAME= labels it (default: the folder or file name). A report ends with the line `Counts: claims checked N; HOLDS N; WRONG N;
@@ -16,11 +17,18 @@ or when its finding lines are not as many as WRONG+OVERSTATED+UNSUPPORTED. Nothi
 Prints per repo, and pooled over all repos: claims, the four verdicts, errors, the rate (errors / claims) for all, the appendix and Part 1,
 and claims by cause. With --doc (repeatable) and --repo it adds words, errors per 1,000 words and words per claim, counted as
 check_citations.py counts them. With --out DIR it also writes score.txt and score.json there.
+The rates use the checkers' claim count. When the script counts the doc's sentences differently, the output adds
+`claim count: checkers N, script M, difference +K`, so the two are never mixed up. Words per claim divides by the script's sentences.
 
 --lab. BEHAVIOURS.txt is the scoper's list, one behaviour a line: `ID | path:line | cond, cond, ...` where path:line is the primary line a
 sentence must cite and the conditions are the lines (path:line or path:start-end) a correct sentence must state; the conditions may be empty.
 Prints behaviours kept (their primary line is inside some citation of the draft), condition lines cited (inside some citation), and conditional words
 (when, if, unless, only, except, otherwise, falls back) per 1,000 words of the draft's claims. Lines starting with # are skipped.
+
+--pool. Pools the drafts of a lab or a round. Each argument is GROUP=SCORE.json,LAB.json: the score.json of one draft (from the score run with
+--doc, --repo and --out) and its lab.json (from --lab with --out). Arguments with the same GROUP are pooled; each group prints one row: words,
+claims checked, errors, rate, errors and MISSING_CONDITION per 1,000 words, words per claim (pooled, and the mean of the drafts), behaviours kept,
+condition lines cited, conditional words per 1,000, and the claim-count difference. Reads files only; it applies no pass or stop rule.
 
 --reader. Without --answers: prints the reader's brief (the five questions of references/reader-check.md and Part 1 with its tags removed,
 nothing else). With --answers: checks the reader's answers file (`## Q1` to `## Q5`, each with `> quoted sentence` lines): every quote must be a sentence
@@ -117,6 +125,10 @@ def pct(x):
     return "n/a" if x is None else "%.1f%%" % (100 * x)
 
 
+def claim_count_note(checkers, script):
+    return "claim count: checkers %d, script %d, difference %+d" % (checkers, script, script - checkers)
+
+
 def render_repo(r):
     lines = ["repo %s (%d reports: %s)" % (r["name"], len(r["reports"]), ", ".join(r["reports"])),
              "claims checked: %d" % r["claims"], "HOLDS: %d" % r["holds"], "WRONG: %d" % r["wrong"], "OVERSTATED: %d" % r["overstated"],
@@ -130,6 +142,8 @@ def render_repo(r):
         lines.append("words: %d; errors per 1,000 words: %s; script claims: %d; words per claim: %s" % (
             r["words"], "n/a" if r["errors_per_1000_words"] is None else "%.2f" % r["errors_per_1000_words"], r["script_claims"],
             "n/a" if r["words_per_claim"] is None else "%.1f" % r["words_per_claim"]))
+        if r["script_claims"] != r["claims"]:
+            lines.append(claim_count_note(r["claims"], r["script_claims"]))
     return lines
 
 
@@ -247,6 +261,61 @@ def cmd_lab(argv):
     return 0
 
 
+# --- --pool --------------------------------------------------------------------------------------------------
+def load_json(path, what):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        raise ScoreError("%s (%s): %s" % (path, what, e))
+
+
+def pool_draft(score_path, lab_path):
+    """The numbers of one draft: the checkers' side from its score.json, the script's side from its lab.json."""
+    score, lab = load_json(score_path, "score.json"), load_json(lab_path, "lab.json")
+    repos = score.get("repos") or []
+    if not repos or any("words" not in r for r in repos):
+        raise ScoreError("%s: no `words` (run the score with --doc and --repo, and --out)" % score_path)
+    try:
+        return {"words": sum(r["words"] for r in repos), "claims": sum(r["claims"] for r in repos), "errors": sum(r["errors"] for r in repos),
+                "mc": sum(r["causes"]["MISSING_CONDITION"] for r in repos), "script_claims": sum(r["script_claims"] for r in repos),
+                "beh": lab["behaviours"], "kept": lab["behaviours_kept"], "cond": lab["condition_lines"], "cond_cited": lab["condition_lines_cited"],
+                "lab_claims": lab["claims"], "lab_words": lab["words"], "condw": lab["conditional_words"]}
+    except KeyError as e:
+        raise ScoreError("%s or %s: missing %s" % (score_path, lab_path, e))
+
+
+def ratio(a, b):
+    return a / b if b else 0.0
+
+
+def render_pool(name, drafts):
+    t = {k: sum(d[k] for d in drafts) for k in drafts[0]}
+    mean_wpc = sum(ratio(d["lab_words"], d["lab_claims"]) for d in drafts) / len(drafts)
+    line = ("%-22s drafts words %4d claims %3d(checked) errors %2d rate %.1f%%  err/1000w %.2f  MC/1000w %.2f  words/claim %.1f (mean of drafts %.1f)  "
+            "behaviours %d/%d %.1f%%  cond lines %d/%d %.1f%%  conditional w/1000w %.1f" % (
+                name, t["words"], t["claims"], t["errors"], 100 * ratio(t["errors"], t["claims"]), 1000 * ratio(t["errors"], t["words"]), 1000 * ratio(t["mc"], t["words"]),
+                ratio(t["lab_words"], t["lab_claims"]), mean_wpc, t["kept"], t["beh"], 100 * ratio(t["kept"], t["beh"]), t["cond_cited"], t["cond"],
+                100 * ratio(t["cond_cited"], t["cond"]), 1000 * ratio(t["condw"], t["lab_words"])))
+    if t["script_claims"] != t["claims"]:
+        line += "  " + claim_count_note(t["claims"], t["script_claims"])
+    return line
+
+
+def cmd_pool(argv):
+    groups = {}
+    for a in argv:
+        name, eq, files = a.partition("=")
+        score_path, comma, lab_path = files.partition(",")
+        if not (name and eq and comma and score_path and lab_path):
+            raise ScoreError("usage: score.py --pool GROUP=SCORE.json,LAB.json [GROUP=SCORE.json,LAB.json ...]")
+        groups.setdefault(name, []).append(pool_draft(score_path, lab_path))
+    if not groups:
+        raise ScoreError("usage: score.py --pool GROUP=SCORE.json,LAB.json [GROUP=SCORE.json,LAB.json ...]")
+    print("\n".join(render_pool(name, drafts) for name, drafts in groups.items()))
+    return 0
+
+
 # --- --reader ------------------------------------------------------------------------------------------------
 def part1_text(guide):
     """Part 1 of a guide with its tags removed: what the reader gets."""
@@ -317,6 +386,8 @@ def main(argv):
     try:
         if argv[1:2] == ["--lab"]:
             return cmd_lab(argv[2:])
+        if argv[1:2] == ["--pool"]:
+            return cmd_pool(argv[2:])
         if argv[1:2] == ["--reader"]:
             return cmd_reader(argv[2:])
         return cmd_score(argv[1:])
