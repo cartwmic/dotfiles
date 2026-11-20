@@ -142,7 +142,7 @@ def parse_report(path, ctx=None):
         raise ScoreError("%s: HOLDS %d + WRONG %d + OVERSTATED %d + UNSUPPORTED %d is %d, not the %d claims checked" % (path, holds, wrong, over, unsup, holds + wrong + over + unsup, claims))
     rows = FINDING.findall(text)
     if len(rows) != wrong + over + unsup:
-        raise ScoreError("%s: %d finding lines (`doc line | verdict | CAUSE | ...`), but WRONG+OVERSTATED+UNSUPPORTED is %d" % (path, len(rows), wrong + over + unsup))
+        raise ScoreError("%s: %d finding lines (`claim id | verdict | CAUSE | ...`), but WRONG+OVERSTATED+UNSUPPORTED is %d" % (path, len(rows), wrong + over + unsup))
     check_rows(path, text, parse_rows(path, text), (claims, holds, wrong, over, unsup), ctx or {})
     causes = dict.fromkeys(CAUSES, 0)
     for _, cause in rows:

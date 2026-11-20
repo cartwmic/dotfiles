@@ -36,7 +36,7 @@ Then add one line per behaviour you plan to describe, naming the rows it rests o
 
 ## Stage 2: draft
 
-1. Each sentence restates one or more evidence rows, with their conditions, and says no more than those rows show. Write it from the rows, not from your memory of the code. A row's quote may hold `"` or backticks; the check matches it on every line of the cited range, so cite only the lines the quote sits on.
+1. Each sentence restates one or more evidence rows, with their conditions, and says no more than those rows show. Write it from the rows, not from your memory of the code. A row's quote may hold `"` or backticks; the check looks for the quote on one line of the cited range.
 2. One behaviour per sentence, at most 18 words, counted as the check counts them (citations are not words). Name the case in the sentence: "when X, Y". When a behaviour needs more words, split it and keep the condition in each part: "When X, Y does A. When X, Y also does B."
 3. A value from a caller, a fixture or a test goes in as an example ("in the test", "for example"), not as the rule.
 4. Copy numbers, names, flags, messages and the place a result appears (standard output, the log, the exit code) from the cited line, not from memory or a summary.

@@ -16,7 +16,7 @@ General rules:
 
 - The cited lines must show what the sentence says. A line existing is not enough.
 - The usual misses: overreach words (every, all, always, never, only, next, none, any, no X); counts ("three parts"); names and numbers; the order of steps; who does what; and negative claims. These hold only if the code you read defines the whole set or limit.
-- Check every claim in your range, not a sample. Check the flagged ones first.
+- Check every claim in your claims file, not a sample. Check the flagged ones first.
 - Do not edit the doc.
 
 Part 1 sentences have no `path:line`. Each ends with tags such as `[A4.3f9a]` that point at appendix lines by id (an id stays with its line when the line is edited). Judge a Part 1 sentence against the tagged appendix sentences and the code they cite: it must say no more than they show, and it adds no number, name, quantifier or condition of its own. A tag that points at no appendix sentence, or at one about something else, makes it UNSUPPORTED. A Part 1 sentence may say "by default" or "in the default setup" only when a tagged appendix sentence itself states a default; if none does, the sentence is OVERSTATED. A condition that a tagged appendix sentence states counts as kept if Part 1 states it in the same sentence, or in the very next sentence that carries the same tag; any further away, the sentence is OVERSTATED. A glossary entry with no tag defines an outside term and makes no claim about the repo: its row says `outside` in place of a line; if it says anything about the repo, it is UNSUPPORTED. A Part 1 sentence may leave detail out; leaving out is not an error. A sentence that is misleading because of what it leaves out is OVERSTATED.

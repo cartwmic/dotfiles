@@ -207,6 +207,38 @@ class LineNumberTest(unittest.TestCase):
         self.assertNotRegex(text, r"(?i)use `Read`, or `cat -n`")
 
 
+class FixRoundScoreTest(unittest.TestCase):
+    def test_a_fix_round_report_is_scored_against_its_own_slices_folder(self):
+        with make(REPO) as repo, tempfile.TemporaryDirectory() as d:
+            Path(d, "GUIDE.md").write_text(DOC, encoding="utf-8")
+            script("slice.py", Path(d, "GUIDE.md"), repo, "--out", Path(d, "slices"))
+            Path(d, "changed.txt").write_text("12.1\n", encoding="utf-8")
+            code, out, err = script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "changed.txt"), "--out", Path(d, "slices-fix1"),
+                                    "--record-fixed", Path(d, "fixed-ids.txt"))
+            self.assertEqual(code, 0, err)
+            Path(d, "r1").mkdir()
+            Path(d, "r1", "part1-1.md").write_text("Slice: slice-1\nread | 5.1 | HOLDS | src/cli.py:3\n" + counts(1, 1), encoding="utf-8")
+            Path(d, "r1", "slice-2.md").write_text("Slice: slice-2\nread | 11.1 | HOLDS | src/cli.py:3\nread | 12.1 | HOLDS | src/cli.py:7\n" + counts(2, 2), encoding="utf-8")
+            Path(d, "r2").mkdir()
+            Path(d, "r2", "slice-1.md").write_text("Slice: slice-1\nread | 12.1 | HOLDS | src/cli.py:7\n" + counts(1, 1), encoding="utf-8")
+            first = script("score.py", Path(d, "r1"), "--repo", repo, "--slices", Path(d, "slices"))
+            fix = script("score.py", Path(d, "r2"), "--repo", repo, "--slices", Path(d, "slices-fix1"))
+            wrong = script("score.py", Path(d, "r2"), "--repo", repo, "--slices", Path(d, "slices"))
+        self.assertEqual(first[0], 0, first[1] + first[2])
+        self.assertEqual(fix[0], 0, fix[1] + fix[2])
+        self.assertEqual(wrong[0], 1, "the first round's slice-1 holds other claims")
+
+
+class FindingCountMessageTest(unittest.TestCase):
+    def test_a_missing_finding_line_error_names_the_claim_id_form(self):
+        with make(REPO) as repo, tempfile.TemporaryDirectory() as d:
+            Path(d, "r").mkdir()
+            Path(d, "r", "slice-1.md").write_text("Slice: slice-1\nread | 1.1 | WRONG | src/cli.py:3\n" + counts(1, 0, wrong=1), encoding="utf-8")
+            code, out, err = script("score.py", Path(d, "r"), "--repo", repo)
+        self.assertEqual(code, 1)
+        self.assertIn("`claim id | verdict | CAUSE | ...`", err)
+
+
 # --- change 2 again: a form feed in a doc line does not shift the doc's line numbers --------------------------------------------
 FF_REPO = {
     "src/a.ts": "export function run(x: number) {\n  if (!x) return 1;\n  if (x > 5) throw new Error('big');\n  return doIt(x);\n}\n",
