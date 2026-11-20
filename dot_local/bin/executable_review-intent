@@ -368,7 +368,7 @@ def main(argv):
     try:
         o = parse(argv)
         texts = []
-        from_record = False
+        linked_pr = None
         for f in o["files"]:
             try:
                 with open(f, encoding="utf-8") as fh:
@@ -378,9 +378,11 @@ def main(argv):
         if o["pr"]:
             text, from_record = pr_text(o["pr"])
             texts.append(text)
+            if from_record:
+                linked_pr = pr_ref(o["pr"])
         approvals = pr_approvals(o["pr"]) if o["pr"] else []
         ledger = Ledger(o["state"] or default_state_dir())
-        linked = ledger.decisions_for_pr(*pr_ref(o["pr"])) if o["pr"] and from_record else []
+        linked = ledger.decisions_for_pr(*linked_pr) if linked_pr else []
         block, errors = build(texts, o["asks"], o["decisions"], ledger, approvals, linked)
     except Usage as e:
         print(e, file=sys.stderr)
