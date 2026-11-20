@@ -48,7 +48,7 @@ With --points (the raw harvest, points.json), two more checks run:
   not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
              does not cite: the entry is wrong, or it cites that test.
   audit     with --audit FILE, FAIL a claim (a sentence with citations) that has no audit row in FILE:
-            `N | assert: path:line "<text>" | exits: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
+            `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
             doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
             that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
@@ -532,7 +532,7 @@ def sheet(doc_text, repo):
                 print(note)
 
 
-AUDIT_ROW = re.compile(r'^\s*(?:[-*]\s*)?(\d+)\s*\|\s*assert:\s*(\S+?):(\d+)\s+["\u201c](.+)["\u201d]\s*\|\s*exits:\s*(\S.*?)\s*\|\s*found:\s*(\S.*?)\s*\|\s*result:\s*(HOLDS|narrowed|cut)\b', re.I)
+AUDIT_ROW = re.compile(r'^\s*(?:[-*]\s*)?(\d+)\s*\|\s*assert:\s*(\S+?):(\d+)\s+["\u201c](.+)["\u201d]\s*\|\s*exits:\s*(\S.*?)\s*\|\s*callers:\s*(\S.*?)\s*\|\s*found:\s*(\S.*?)\s*\|\s*result:\s*(HOLDS|narrowed|cut)\b', re.I)
 
 
 def audit_rows(audit_text):
@@ -565,7 +565,7 @@ def audit_fails(doc_text, repo, audit_text):
                     if parts and all(q in have for q in parts):
                         ok = True
         if not ok:
-            fails.append((c["line"], "audit", "no audit row for this sentence: `N | assert: path:line \"text\" | exits: .. | found: .. | result: ..` "
+            fails.append((c["line"], "audit", "no audit row for this sentence: `N | assert: path:line \"text\" | exits: .. | callers: .. | found: .. | result: ..` "
                           "with N = this doc line, one of its own citations, and the text on that line"))
     return fails
 

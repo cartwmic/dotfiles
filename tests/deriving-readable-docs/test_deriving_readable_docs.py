@@ -965,7 +965,7 @@ class BudgetTest(unittest.TestCase):
 class AuditTest(unittest.TestCase):
     """--audit: each sentence with citations needs its own audit row, so a one-line summary of the audit FAILs."""
     DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`).\n\nIt does another thing in the test (`src/a.rs:1-3`).\n"
-    ROW = '%d | assert: src/a.rs:%d "%s" | exits: none listed | found: nothing | result: HOLDS\n'
+    ROW = '%d | assert: src/a.rs:%d "%s" | exits: none listed | callers: none found | found: nothing | result: HOLDS\n'
 
     def audited(self, audit, doc=None):
         with tempfile.TemporaryDirectory() as d:
@@ -1010,6 +1010,13 @@ class AuditTest(unittest.TestCase):
         code, out = self.audited('3 | assert: src/a.rs:2 "two"\n' + self.ROW % (5, 3, "three"))
         self.assertEqual(code, 1)
         self.assertIn(":3: FAIL audit", out)
+
+    def test_a_row_without_the_callers_field_is_not_a_row(self):
+        old = '%d | assert: src/a.rs:%d "%s" | exits: none listed | found: nothing | result: HOLDS\n'
+        code, out = self.audited(old % (3, 2, "two") + self.ROW % (5, 3, "three"))
+        self.assertEqual(code, 1)
+        self.assertIn(":3: FAIL audit", out)
+        self.assertNotIn(":5: FAIL audit", out)
 
     def test_without_the_option_nothing_is_asked_for(self):
         code, out = check(self.DOC, REPO)
