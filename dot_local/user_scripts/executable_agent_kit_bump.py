@@ -73,7 +73,7 @@ PRINCIPLES = [
     ("Good enough for personal software", "pass", "Personal profile only; the install reads its registry token at run time."),
     ("Prior art before building", "n/a", "No new capability; it uses the published agent-kit package and the existing install script."),
     ("Verified from the outside", "pass", "tests/release-pins/test_agent_kit_bump.py drives the real script to the apply and the version read-back; after the merge the installed version is read back (log step verify)."),
-    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the merge runs under the standing dotfiles grant (playbook rule 7c57de5a)."),
+    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the owner's standing grant lets the script merge an agent-kit release bump once its checks pass."),
     ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/agent-kit-bump/log.jsonl."),
     ("Fast proof", "n/a", "A pin bump runs no journey; the proof is the PR's CI run."),
     ("Built to last", "pass", "The script changes only the pins; nothing it replaces is left behind."),
@@ -169,10 +169,16 @@ class Worktree:
 # --- the PR ------------------------------------------------------------------------------------
 
 
-def pr_body(version):
+def pr_body(version, head, day):
     rows = ["| %d | %s | %s | %s |" % (number, name, result, evidence) for number, (name, result, evidence) in enumerate(PRINCIPLES, 1)]
     return "\n".join([
-        "Pin `%s` to %s (package.json and package-lock.json), made by `agent_kit_bump.py %s` (playbook rule 7c57de5a)." % (PACKAGE, version, version),
+        "Pin `%s` to %s (package.json and package-lock.json), made by `agent_kit_bump.py %s`. Every agent-kit release updates this pin." % (PACKAGE, version, version),
+        "",
+        "## Proven",
+        "",
+        "Done by the script before the PR, %s, head %s: set the exact pin %s in package.json and regenerated package-lock.json "
+        "with `npm install --package-lock-only`." % (day, head, version),
+        "After the merge, not yet: the scoped apply of these two files, the install, and a read-back of the installed version.",
         "",
         "Principles (`~/.local/share/agent-harness/design-principles.md`):",
         "",
@@ -234,7 +240,8 @@ def publish(source, version, branch, log):
         git(wt.path, "commit", "-q", "-m", title, step="publish")
         git(wt.path, "push", "-q", "--force", "origin", "HEAD:refs/heads/" + branch, step="publish")
         body = Path(wt.parent) / "pr-body.md"
-        body.write_text(pr_body(version), encoding="utf-8")
+        body.write_text(pr_body(version, git(wt.path, "rev-parse", "HEAD", step="publish").stdout.strip(),
+                                datetime.now(timezone.utc).strftime("%Y-%m-%d")), encoding="utf-8")
         run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body-file", body], "publish", cwd=source)
     pr = find_pr(source, branch)
     if pr is None:

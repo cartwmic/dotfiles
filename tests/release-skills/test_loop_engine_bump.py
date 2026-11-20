@@ -122,18 +122,14 @@ def pins(version):
     return "".join('%s = { version = "%s", matching_regex = "^x-", rename_exe = "%s" }\n' % (t, version, t) for t in TOOLS)
 
 
-# A body a reader cannot use: a scratch path that is gone after the run, a "next:" step for operators, an internal rule id.
-# The commit sha in the tag line is 40 hex characters and has no "rule" before it, so it is not caught.
-RULE_ID = re.compile(r"(?i)\b(?:playbook\s+)?rule\s+[0-9a-f]{8}\b")
+def _load_body_check():
+    spec = importlib.util.spec_from_file_location("bump_pr_body", ROOT / "scripts/bump_pr_body.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def body_problems(body, *scratch):
-    """The reasons a bump PR body is not clean: empty when it is."""
-    problems = ["a scratch path: %s" % m for m in re.findall(r"/tmp/\S+", body)]
-    problems += ["a scratch path: %s" % s for s in scratch if s and s in body]
-    problems += ["a next line: %s" % m for m in re.findall(r"(?m)^\s*next:.*$", body)]
-    problems += ["a rule id: %s" % m for m in RULE_ID.findall(body)]
-    return problems
+body_problems = _load_body_check().problems  # the check shared with tests/release-pins (agent_kit_bump.py)
 
 
 def assert_clean_body(test, body, *scratch):
@@ -286,7 +282,6 @@ class BumpTests(Fixture):
         self.assertIn("| %d | %s |" % LAST_PRINCIPLE, pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
         self.assertRegex(pr["body"], r"(?m)^Decisions: none material$")  # rule ccc6c94b
         assert_clean_body(self, pr["body"], str(self.dir))
-        self.assertRegex(pr["body"], r"(?m)^## Proven$")
         sha = pr["mergeCommit"]["oid"]
         changed = self.sh("git", "--git-dir", self.origin, "diff", "--name-only", sha + "^", sha).split()
         self.assertIn("dot_config/mise/config.toml", changed)
@@ -566,9 +561,10 @@ class ReleaseBodyTests(unittest.TestCase):
     def test_the_check_names_each_thing_that_failed_dotfiles_670(self):
         old = ("made by `loop_engine_bump.py v0.60.0` (playbook rule 7c57de5a).\n" + self.IMPORT_OUTPUT)
         problems = body_problems(old)
-        self.assertEqual(sorted({p.split(":")[0] for p in problems}), ["a next line", "a rule id", "a scratch path"])
-        self.assertEqual(body_problems("the merge runs under the standing grant (rule 7c57de5a)"), ["a rule id: rule 7c57de5a"])
-        self.assertEqual(body_problems("commit e1e526b93754ec786c47a7f3a7243a6d33328e79 matches"), [])
+        self.assertEqual(sorted({p.split(":")[0] for p in problems}), ["a next line", "a rule id", "a scratch path", "no Proven section"])
+        clean = "## Proven\ncommit e1e526b93754ec786c47a7f3a7243a6d33328e79 matches\n"
+        self.assertEqual(body_problems(clean), [])
+        self.assertEqual(body_problems(clean + "the merge runs under the standing grant (rule 7c57de5a)"), ["a rule id: rule 7c57de5a"])
 
     def test_the_body_has_no_scratch_path_next_line_or_rule_id(self):
         assert_clean_body(self, self.body())
