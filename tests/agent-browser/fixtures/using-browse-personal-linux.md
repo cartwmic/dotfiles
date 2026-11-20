@@ -10,7 +10,7 @@ start another browser or tool. Personal accounts only; never the work Mac.
 
 ## Start
 1. Call the `status` tool. It lists connected browsers, pairing, tabs, and `nextStep` if something is missing. The relay starts on the first Browse call, and the extension reconnects about 1-2 seconds later. So if `status` says the browser is not connected or `paired-offline` right after that first call, wait about 5 seconds and call `status` again, up to 3 times. If no browser is connected after that: check `systemctl --user status agent-chrome`
-   (or run `agent-chrome`), then pairing (agent-harness README, "Agent browser" > "Pair Browse"). Do not ask Michael until you have tried that.
+   (or run `agent-chrome`). If `status` still shows no connected browser or no pairing (a new machine or a new agent-chrome profile), run `agent-browse-setup` in the background (it waits up to 3 minutes for the steps below, and a shell shows no output until a command ends; read its output when it ends): it starts the agent Chrome, opens the Web Store page if the extension is missing, opens the extension settings, runs `browse pair` with the code in a 0600 file (never printed) and ends with `browse status`. It prints the click or typing it cannot do (click Add to Chrome; click Pair with a code, type the code with `agent-desktop type "$(cat <the code file it names>)"`, which keeps the code out of the output, and click Connect); do those with the screen tool below, and it exits non-zero until `browse status` shows connected (agent-harness README, "Agent browser" > "Pair Browse"). Do not ask Michael until you have tried that.
 2. Open a page: `execute` with `await page.goto("https://...")`. The result starts with `tab: <id>`.
 
 ## The tab is the handle
@@ -22,7 +22,16 @@ start another browser or tool. Personal accounts only; never the work Mac.
 - `snapshot()` returns a compact outline with refs (`e12`). Act on a ref: `await ref("e12").click()`, `.fill("text")`. Prefer snapshot plus ref to guessing selectors; take a new snapshot after the page changes (`snapshot({ diff: true })`).
 - `return await page.screenshot()` to look at the page when text is not enough.
 - Browse does not clear cookies or storage and refuses other extensions' pages and `file:` URLs. A bot check or captcha is reported to you: do not retry-loop it.
+- Menu popups (a right-click or dropdown menu) are missing from `snapshot()`. A Playwright text selector still finds them: `browse click --tab 12 --selector 'text=Rename'` (the same `--selector` works in `execute` and the other tools).
 - `handoff()` and `demonstrate()` ask Michael to act. Do not use them until you have tried the 1Password extension, his Beeper and Gmail for login codes, and screen control (below).
+
+## The `browse` command line
+`browse status` shows the pairing in a shell. Its `Setup: not installed. Run browse install` and `Updates: not installed in a way that updates` lines can appear, and they are expected: this machine never runs `browse install` (it would write a self-updating copy over the pinned one) and Browse's own updates are off on purpose. Do not act on them. `Extension: connected` is the line that matters.
+A command takes the tab first, so a value after a ref is read as the tab: `browse fill e52 Hello` fails with "--tab takes integer". Pass each argument as a flag, or the whole call as JSON:
+```
+browse fill --tab 12 --ref e52 --value "Hello"
+browse fill --json '{"tab":12,"ref":"e52","value":"Hello"}'
+```
 
 ## Downloads
 Browse has no download tool. Use `agent-download`:

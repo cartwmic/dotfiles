@@ -16,8 +16,10 @@ DARWIN = sys.platform == "darwin"
 LINUX = sys.platform.startswith("linux")
 LAUNCHER = ".local/bin/agent-chrome"
 BROWSE = {"command": "/Users/test/.local/share/mise/shims/browse", "args": ["mcp"]}
-BROWSE_FILES = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/share/agent-harness/canonical/skills/using-browse/SKILL.md"]
-BROWSE_IGNORED = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/share/agent-harness/canonical/skills/using-browse", "91_browse_setup.sh"]
+BROWSE_FILES = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/bin/browse", ".local/bin/agent-browse-setup",
+                ".local/share/agent-harness/canonical/skills/using-browse/SKILL.md"]
+BROWSE_IGNORED = [".config/mise/conf.d/browse.toml", ".local/bin/agent-download", ".local/bin/browse", ".local/bin/agent-browse-setup",
+                  ".local/share/agent-harness/canonical/skills/using-browse", "91_browse_setup.sh"]
 LOGIN = ".local/bin/agent-login"   # personal only: it reads logins through the personal profile's op shim
 HARNESS_PATHS = [".local/share/browser-harness-mcp", ".local/share/browser-harness-mcp/server.py", ".local/share/pi-mcp-lazy/seed/browser-harness.json"]
 
@@ -124,7 +126,7 @@ class AgentBrowserRenderTest(unittest.TestCase):
                 self.assertIn(path, lines, path)
         with self.subTest(container=True):   # the agent host pod has no desktop: it still leaves Browse out
             lines = ignored("personal", "linux", container=True)
-            for path in BROWSE_IGNORED[:3]:
+            for path in BROWSE_IGNORED[:5]:
                 self.assertIn(path, lines, path)
 
     def test_entries_carry_no_secret_placeholder(self):

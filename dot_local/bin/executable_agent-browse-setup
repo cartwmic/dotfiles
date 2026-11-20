@@ -1,0 +1,118 @@
+#!/bin/sh
+# agent-browse-setup: connect OpenCode Browse to the agent Chrome on a new machine or a new agent-chrome profile (agent-harness README,
+# "Agent browser" > "Pair Browse"). Two steps cannot be automated: the Web Store install is a click, and pairing is a typed code.
+# This does everything around them and says exactly what is left. Exit 0 only when `browse status` shows connected.
+#   agent-browse-setup [--wait-seconds N]   N (default 180) is how long to wait for the Web Store install and again for the pairing.
+# Run it again after a failure; each run starts from what is already done (connected: it does nothing but print the status).
+# The pairing code goes to a 0600 file and is never printed: $STATE/pairing-code (the code alone), with $STATE = ${XDG_STATE_HOME:-~/.local/state}/agent-browse-setup.
+# Type it without printing it: agent-desktop type "$(cat $STATE/pairing-code)". The file exists while the helper waits and is removed on exit.
+# An agent's shell shows no output until the helper ends and the helper waits up to 3 minutes for the human steps: start it in the background.
+# Every run appends its outcome lines (UTC time, run id, seconds since start; never the code) to $STATE/agent-browse-setup.log.
+set -eu
+
+SCRIPT_NAME="agent-browse-setup"
+EXT_ID="mfnicocicmmlkpjnaffgihfjhdgjkdjg"
+STORE_URL="https://chromewebstore.google.com/detail/$EXT_ID"
+SETTINGS_URL="chrome-extension://$EXT_ID/settings.html"
+PORT="${AGENT_CHROME_PORT:-9333}"
+SETTLE="${AGENT_BROWSE_SETUP_SETTLE:-10}"   # seconds Chrome and the relay get to show a paired profile as connected (the extension reconnects 1-2 s after the first Browse call)
+WAIT=180
+case "${1:-}" in
+  "") ;;
+  --wait-seconds) WAIT="${2:-}"; case "$WAIT" in ""|*[!0-9]*) echo "usage: agent-browse-setup [--wait-seconds N]" >&2; exit 2 ;; esac; [ $# -eq 2 ] || { echo "usage: agent-browse-setup [--wait-seconds N]" >&2; exit 2; } ;;
+  *) echo "usage: agent-browse-setup [--wait-seconds N]" >&2; exit 2 ;;
+esac
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/$SCRIPT_NAME"
+CODE_FILE="$STATE/pairing-code"
+PAIR_OUT="$STATE/pair-output"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+START=$(date +%s)
+umask 077
+mkdir -p "$STATE"
+
+# One record per line: terminal plus a persisted line (UTC time, run id, seconds since start). Nothing passed here may hold the pairing code.
+log() {
+  printf '%s run=%s elapsed=%ss %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$(($(date +%s) - START))" "$1" >>"$STATE/$SCRIPT_NAME.log"
+}
+say() { echo "[$SCRIPT_NAME] $1"; log "$1"; }
+die() { echo "[$SCRIPT_NAME] ERROR: $1" >&2; log "ERROR: $1"; exit 1; }
+pair_pid=""
+cleanup() {
+  [ -z "$pair_pid" ] || kill "$pair_pid" >/dev/null 2>&1 || true
+  rm -f "$CODE_FILE" "$PAIR_OUT"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+# Polls a check five times a second for up to N seconds.
+wait_for() {
+  ticks=$(($1 * 5)); shift
+  i=0
+  until "$@"; do
+    [ "$i" -lt "$ticks" ] || return 1
+    i=$((i + 1))
+    sleep 0.2
+  done
+}
+
+connected() { browse status --json 2>/dev/null | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("connected") is True else 1)' 2>/dev/null; }
+
+# The extension is installed when Chrome lists its service worker.
+extension_present() {
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/json/list" 2>/dev/null | python3 -c '
+import json, sys
+prefix = "chrome-extension://" + sys.argv[1] + "/"
+sys.exit(0 if any(t.get("type") == "service_worker" and t.get("url", "").startswith(prefix) for t in json.load(sys.stdin)) else 1)' "$EXT_ID" 2>/dev/null
+}
+
+open_page() { curl -fsS --max-time 10 -X PUT "http://127.0.0.1:$PORT/json/new?$1" >/dev/null 2>&1 || die "could not open $1 in the agent Chrome (port $PORT)"; }
+
+say "1/4 starting the agent Chrome"
+agent-chrome || die "agent-chrome did not start Chrome (see its output above)"
+
+# `browse status` does not start the relay, and with no relay running its JSON has no `connected` key at all (a paired profile would read as unpaired).
+# A tool call starts it, as an agent's first call does: list the tabs (read-only).
+browse tabs >/dev/null 2>&1 || true
+
+# Chrome and the relay need a moment: a paired profile can read as missing or not connected for a few seconds after Chrome starts.
+if wait_for "$SETTLE" connected; then
+  say "Browse is already connected; nothing to do."
+  browse status
+  exit 0
+fi
+
+if extension_present; then
+  say "2/4 the Browse extension is installed (not paired yet)"
+else
+  say "2/4 the Browse extension is not installed: opening its Chrome Web Store page in the agent Chrome"
+  open_page "$STORE_URL"
+  say "LEFT FOR YOU (a click the helper cannot make): on that Web Store page click \"Add to Chrome\", then \"Add extension\". Waiting up to ${WAIT}s for it."
+  wait_for "$WAIT" extension_present || die "the extension did not appear within ${WAIT}s; install it from $STORE_URL in the agent Chrome (agent-chrome focus chromewebstore, then click), then run agent-browse-setup again"
+  say "the extension is installed"
+fi
+
+say "3/4 opening the extension settings page, then waiting for a pairing code to be redeemed"
+open_page "$SETTINGS_URL"
+browse pair --wait-seconds "$WAIT" >"$PAIR_OUT" 2>&1 &
+pair_pid=$!
+# The code alone, in its own file, so that it can be typed from a command substitution and never printed.
+extract_code() { sed -n 's/^Pairing code:[[:space:]]*//p' "$PAIR_OUT" | sed 's/[[:space:]]*$//' | head -n 1 >"$CODE_FILE"; [ -s "$CODE_FILE" ]; }
+wait_for 15 extract_code || die "browse pair printed no \"Pairing code:\" line within 15s; run agent-browse-setup again"
+say "LEFT FOR YOU (typing the helper cannot do), in the extension settings page of the agent Chrome:"
+say "  1. click \"Pair with a code\" (keep the default relay address)"
+say "  2. click the \"Pairing code\" field, then type the one-time code (valid 10 minutes) from its 0600 file without printing it: agent-desktop type \"\$(cat $CODE_FILE)\""
+say "  3. click \"Connect\""
+say "  To reach the page: agent-chrome focus $EXT_ID, then agent-desktop focus $( [ "$(uname -s)" = Darwin ] && echo '"Google Chrome"' || echo google-chrome ) (a Mac: also check the front app is the agent Chrome; docs: using-browse skill, \"Outside the page\")."
+pair_rc=0
+wait "$pair_pid" || pair_rc=$?
+pair_pid=""
+rm -f "$CODE_FILE" "$PAIR_OUT"
+
+say "4/4 Browse status"
+browse status || true
+if connected; then
+  say "connected."
+  exit 0
+fi
+die "Browse is not connected yet (browse pair exited $pair_rc): the code was not redeemed in time, or the settings page did not accept it. Run agent-browse-setup again."
