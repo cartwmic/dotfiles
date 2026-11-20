@@ -10,6 +10,7 @@
 # adapters/claude/secrets: {{ include "dot_local/share/agent-harness/adapters/claude/mcp-secrets.json.tmpl" | sha256sum }}
 # adapters/codex/secrets:  {{ include "dot_local/share/agent-harness/adapters/codex/mcp-secrets.json.tmpl" | sha256sum }}
 # apply-script:            {{ include "dot_local/user_scripts/executable_apply_harness_config.sh" | sha256sum }}
+# seat-file refresh:       {{ include "dot_local/user_scripts/executable_refresh_seat_files.sh" | sha256sum }}
 # pi-mcp-lazy stand-in:    {{ include "dot_local/bin/executable_pi-mcp-lazy" | sha256sum }}
 # pi-mcp-lazy list:        {{ include "dot_local/share/pi-mcp-lazy/servers.list.tmpl" | sha256sum }}
 # external skills:         {{ include ".chezmoiexternal.toml" | sha256sum }}
@@ -29,6 +30,7 @@ set -eu
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 SCRIPT="$HOME/.local/user_scripts/apply_harness_config.sh"
+REFRESH="$HOME/.local/user_scripts/refresh_seat_files.sh"
 
 if [ ! -x "$SCRIPT" ]; then
   echo "[apply_harness_config] INFO: Harness config adapter not found at $SCRIPT, skipping"
@@ -36,7 +38,10 @@ if [ ! -x "$SCRIPT" ]; then
 fi
 
 if command -v mise >/dev/null 2>&1; then
-  exec mise exec -- "$SCRIPT"
+  mise exec -- "$SCRIPT"
+else
+  "$SCRIPT"
 fi
 
-exec "$SCRIPT"
+# chezmoi wrote the seat files before this script linked the skills; render them again so a skill linked in this apply is in them.
+exec "$REFRESH"

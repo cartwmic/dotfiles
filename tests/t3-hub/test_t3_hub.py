@@ -891,6 +891,87 @@ class SeatFilesFirstApplyTest(unittest.TestCase):
                 env.close()
 
 
+class SeatFilesRefreshTest(unittest.TestCase):
+    """A skill that only arrives in this apply, and that the template cannot name from the source (a git-repo external's clone or pull: the work
+    profile's private playbook), still reaches every seat file in the same apply. chezmoi writes the files first, script 20 links the skills, and
+    refresh_seat_files.sh (run by script 20 last) renders the files again. The skill is staged where a clone puts it, after the files are written."""
+
+    def apply_and_link(self, env):
+        home = env.home
+        for d in (".claude/skills", ".claude/fleet", ".local/share/agent-harness"):
+            (home / d).mkdir(parents=True)
+        seats = [str(home / ".claude/fleet" / p.name.removesuffix(".tmpl")) for p in sorted((REPO / "dot_claude/fleet").glob("seat-*.json.tmpl"))]  # every seat file, as the helper finds them
+        env.chezmoi("apply", "--no-tty", "--exclude", "scripts,externals", *seats, str(home / ".local/share/agent-harness/canonical"))
+        skill = home / ".local/share/agent-harness/external-skills/stand-in-playbook/skills/stand-in-skill"  # <repo>/skills/<skill>, as the playbook repo has it
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: stand-in-skill\n---\n")
+        link = subprocess.run(["sh", str(REPO / "dot_local/user_scripts/executable_apply_harness_config.sh"), "skills"],
+                              capture_output=True, text=True, env=dict(os.environ, HOME=str(home)))
+        self.assertEqual(link.returncode, 0, link.stderr)
+        self.assertIn("stand-in-skill", {p.name for p in (home / ".claude/skills").iterdir()})
+        return seats
+
+    def refresh(self, env):
+        run_env = dict(os.environ, HOME=str(env.home), CHEZMOI_SOURCE_DIR=str(REPO), CHEZMOI_CONFIG_FILE=str(env.cfg), CHEZMOI_DEST_DIR=str(env.home))
+        # the config file is YAML but chezmoi infers the format from the name, which here is chezmoi.yaml
+        return subprocess.run(["sh", str(REPO / "dot_local/user_scripts/executable_refresh_seat_files.sh")], capture_output=True, text=True, env=run_env, timeout=120)
+
+    def test_the_skill_is_in_every_seat_file_and_a_second_apply_has_nothing_to_do(self):
+        for profile in ("personal", "axon-work-computer"):
+            env = Env(profile=profile, codex_active=False)
+            if profile == "axon-work-computer":
+                env.cfg.write_text(env.cfg.read_text() + "".join("  %s: %s\n" % kv for kv in WORK_DATA.items()))
+            try:
+                seats = self.apply_and_link(env)
+                # without the refresh the files are one skill short: this is the gap, so the test fails if it stops being one
+                self.assertNotEqual(env.chezmoi("status", "--no-tty", *seats), "", profile)
+                for seat in seats:
+                    self.assertNotIn("stand-in-skill", json.loads(Path(seat).read_text())["skillOverrides"], profile)
+                r = self.refresh(env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                for seat in seats:
+                    self.assertEqual(json.loads(Path(seat).read_text())["skillOverrides"].get("stand-in-skill"), "off", (profile, seat))
+                self.assertEqual(env.chezmoi("status", "--no-tty", *seats), "", profile)
+                # the next apply neither rewrites them nor stops to ask whether to overwrite a file "changed since chezmoi last wrote it"
+                before = [Path(s).read_bytes() for s in seats]
+                env.chezmoi("apply", "--no-tty", *seats)
+                self.assertEqual([Path(s).read_bytes() for s in seats], before, profile)
+                again = self.refresh(env)
+                self.assertEqual((again.returncode, again.stdout), (0, ""), profile)  # nothing to update: no output
+            finally:
+                env.close()
+
+    def test_it_refuses_to_run_outside_a_chezmoi_script(self):
+        r = subprocess.run(["sh", str(REPO / "dot_local/user_scripts/executable_refresh_seat_files.sh")], capture_output=True, text=True,
+                           env={k: v for k, v in os.environ.items() if not k.startswith("CHEZMOI")})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("CHEZMOI_SOURCE_DIR", r.stderr)
+
+    def test_script_20_refreshes_after_linking_and_not_when_linking_fails(self):
+        env = Env(codex_active=False)
+        try:
+            script = env.home / "script20.sh"
+            script.write_text(env.render("run_onchange_after_20_apply_harness_config.sh.tmpl"))
+            bin_dir, log = env.home / ".local/bin", env.home / "order.log"
+            scripts_dir = env.home / ".local/user_scripts"
+            bin_dir.mkdir(parents=True)
+            scripts_dir.mkdir(parents=True)
+            (bin_dir / "mise").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')  # `mise exec -- <cmd>` runs the command
+            for name, body in (("apply_harness_config.sh", 'echo link >> "$HOME/order.log"; [ ! -e "$HOME/fail-link" ]'), ("refresh_seat_files.sh", 'echo refresh >> "$HOME/order.log"')):
+                (scripts_dir / name).write_text("#!/bin/sh\n" + body + "\n")
+            for p in (bin_dir / "mise", *scripts_dir.iterdir()):
+                p.chmod(0o755)
+            run = lambda: subprocess.run(["sh", str(script)], capture_output=True, text=True, env=dict(os.environ, HOME=str(env.home)), timeout=30)
+            self.assertEqual(run().returncode, 0)
+            self.assertEqual(log.read_text().split(), ["link", "refresh"])
+            log.unlink()
+            (env.home / "fail-link").write_text("")
+            self.assertNotEqual(run().returncode, 0)
+            self.assertEqual(log.read_text().split(), ["link"])  # a failed link leaves the files alone and fails the script
+        finally:
+            env.close()
+
+
 class FleetFilesTest(unittest.TestCase):
     """~/.claude/fleet/*.json and ~/.claude/agents/reader.md, rendered for both desktop profiles."""
 

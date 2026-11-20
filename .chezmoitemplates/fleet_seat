@@ -7,10 +7,11 @@
   ~/.claude/skills at apply time. The first two are there because chezmoi writes this file BEFORE apply_harness_config.sh (a run_onchange_after script)
   links them into ~/.claude/skills; with only the last listing, a skill added by the same pull, or any skill on a first apply, was missing from every
   seat file until the next apply, and `chezmoi diff` kept showing it. What the last listing still supplies exists before any apply: the skills the
-  OS or the desktop installs (omarchy's, superwhisper) and hand installs. The work profile's private playbook skills are named in a private repo, so
-  they still show from the second apply.
-  skillOverrides has no wildcard. A skill that arrives some other way (the review-map external, the private playbook's skills, a hand install)
-  shows in the listing until the next apply.
+  OS or the desktop installs (omarchy's, superwhisper) and hand installs. The first two listings stay for the scoped `chezmoi apply <path>`, which runs no
+  run scripts. A skill the source cannot name (the work profile's private playbook is a git-repo external: its skills are in a private repo and arrive
+  with the clone or pull, after this file is written) reaches the file in the same apply another way: run script 20 ends by running
+  refresh_seat_files.sh, which renders every seat file again once the skills are linked (`chezmoi cat`, so no state lock), and chezmoi sees no drift.
+  skillOverrides has no wildcard. A hand-installed skill shows in the listing until the next apply.
   Keep-lists: the skills the seat called at least once between 2026-11-11 18:00Z and 2026-11-13 (tool-call counts in the token baseline),
   plus the Loop Engine and lean-change skills for builders and leads, reviewing-prs and review-plans for reviewers, using-shartifacts
   for leads and the coordinator, and correcting-repeated-mistakes for builders, leads and the coordinator (playbook
