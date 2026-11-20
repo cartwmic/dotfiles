@@ -62,8 +62,8 @@ The last checks, with --audit FILE (the writer's own pass; run on a section draf
 --show path:START-END prints those lines of a file in the repo, numbered as `cat -n` and the Read tool number them (newlines only: a form feed does not
           start a line), in the form --sheet uses. Exit 1 when the file or a line of the range is not there. A writer takes its line numbers from this.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
-          Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
-          range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
+          Under a cited range inside a function (Python, TS/JS, Go, Rust) it also lists the function's early exits above the
+          range's last line (return, throw, continue, break, process.exit, and for Go and Rust panic, log.Fatal, os.Exit, `?`, bail!), marking those inside the range: the other
           paths a sentence about the function must state or leave out. A continue or break counts when its loop
           overlaps the range. When the range starts in another function, that function's exits above the last line
           (or above its own end) are listed too, since they sit inside the range. See early_exits.py;
