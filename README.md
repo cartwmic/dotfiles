@@ -311,7 +311,7 @@ into whatever is on disk, and never collides:
 
 | Policy | Keys |
 |---|---|
-| owned, set on every apply | `defaultProvider`, `defaultModel`, `tuiMode`, `defaultTools`, `codemode`, `compaction`, and on the work profile `subagents` |
+| owned, set on every apply | `defaultProvider`, `defaultModel`, `tuiMode`, `defaultTools`, `codemode`, `compaction`, and `subagents` (personal: the default sub-agent model; work: the thinking switch only) |
 | seeded, set only while absent (a choice made in Pi is kept) | `defaultThinkingLevel`, `theme`, `hideThinkingBlock`, `lastChangelogVersion`, and each `modelThinkingLevels` entry on its own |
 | unioned (ours first, yours kept) | `packages` (an entry of ours replaces yours with the same source, so a pin bump arrives), `enabledModels` |
 | untouched | everything else, including `deviceId` and any key a newer Pi adds |

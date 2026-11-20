@@ -40,7 +40,6 @@
     "anthropic/claude-opus-5-5": "medium"
   },
   "subagents": {
-    "defaultModel": "anthropic/claude-haiku-5-5",
     "disableThinking": true
   },
 {{- end }}
