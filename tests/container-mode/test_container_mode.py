@@ -88,11 +88,11 @@ class ContainerHome(Scratch):
         status = chezmoi(self.config, self.home, "status", "--exclude=externals").stdout.split("\n")
         self.assertEqual({line.split()[-1] for line in status if line}, SCRIPTS)   # exactly the kept scripts are still to run
 
-    def test_the_four_seat_instances_exist_on_a_pod_where_t3_has_not_written_its_settings_yet(self):   # playbook 05f37568
+    def test_the_five_seat_instances_exist_on_a_pod_where_t3_has_not_written_its_settings_yet(self):   # playbook 05f37568
         instances = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
-        self.assertEqual({k for k in instances if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer"})
+        self.assertEqual({k for k in instances if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout"})
         self.assertFalse({"pi", "pi-lead"} & set(instances))   # Pi is not in the pod's tool set
-        for seat in ("lead", "builder", "planner", "reviewer"):
+        for seat in ("lead", "builder", "planner", "reviewer", "scout"):
             self.assertIn("--settings %s/.claude/fleet/seat-%s.json" % (self.home, seat), instances["seat-" + seat]["config"]["launchArgs"])
             self.assertTrue((self.home / ".claude/fleet" / ("seat-%s.json" % seat)).exists())
 

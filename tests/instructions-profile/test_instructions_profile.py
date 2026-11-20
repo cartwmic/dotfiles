@@ -31,6 +31,7 @@ SEAT_ROWS = {
         "| Reviewer | Opus 5.5 medium |",
         "| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |",
         "| Computer use | Sonnet 5.5 high |",
+        "| Scout | Haiku 5.5 xhigh |",
     ),
     "axon-work-computer": (
         "| Coordinator | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
@@ -41,6 +42,12 @@ SEAT_ROWS = {
         "| Computer use | Sonnet 5.5 high, Pi (anthropic/claude-sonnet-5-5) |",
     ),
 }
+SCOUT_LINE = "- A scout is for wide reading and searching that needs no judgment. It reports what it found and changes nothing."
+ADVISOR_LIMIT = (
+    "Advisor tool. If you have it, call it once per session, early, before you commit to an approach. This replaces the tool's own "
+    "advice to call it again before declaring done. Call it a second time only when you are stuck or changing approach. "
+    "A helper (a sub-agent started with the Agent tool) never calls it."
+)
 CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
 WORK_SEAT_BULLETS = (
     "- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
@@ -168,6 +175,25 @@ class InstructionProfileTests(unittest.TestCase):
                 self.assertNotIn("| Browser work |", text)
                 self.assertNotIn("Terra", text)
                 self.assertEqual(text.count(CLI_PROXY_LINE), 1)
+
+    def test_personal_seat_table_has_the_scout_row_and_work_does_not(self):
+        for name, template in TEMPLATES.items():
+            with self.subTest(harness=name):
+                personal = render(template, "personal")
+                self.assertEqual(personal.count("| Scout | Haiku 5.5 xhigh |"), 1)
+                self.assertEqual(personal.count(SCOUT_LINE), 1)
+                self.assertLess(personal.index("| Computer use |"), personal.index("| Scout |"))
+                self.assertLess(personal.index("| Scout |"), personal.index(SCOUT_LINE))
+                work = render(template, "axon-work-computer")
+                self.assertNotIn("Scout", work)
+
+    def test_advisor_is_a_one_call_limit_in_every_render(self):
+        for name, template in TEMPLATES.items():
+            for profile in ("personal", "axon-work-computer"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    self.assertEqual(text.count(ADVISOR_LIMIT), 1)
+                    self.assertEqual(text.count("Advisor tool."), 1)
 
     def test_work_seat_table_has_the_computer_use_row(self):
         for name, template in TEMPLATES.items():

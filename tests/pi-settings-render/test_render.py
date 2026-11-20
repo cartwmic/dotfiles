@@ -45,6 +45,15 @@ class SettingsRenderTests(unittest.TestCase):
                 self.assertIs(comp["enabled"], False)
                 self.assertNotIn("modelOverrides", comp)  # no per-model native triggers alongside the extension
 
+    def test_pi_subagent_default_model_is_haiku_on_both_profiles(self):
+        # pi-subagents docs/models.md: subagents.defaultModel is the default for every sub-agent that sets no model of its own.
+        # The model is one the profile already lists in enabledModels; work keeps its disableThinking switch.
+        personal, work = render("personal"), render("axon-work-computer")
+        self.assertEqual(personal["subagents"], {"defaultModel": "claude-compat/claude-haiku-5-5"})
+        self.assertEqual(work["subagents"], {"defaultModel": "anthropic/claude-haiku-5-5", "disableThinking": True})
+        for settings in (personal, work):
+            self.assertIn(settings["subagents"]["defaultModel"], settings["enabledModels"])
+
     def test_summary_cap_is_raised_above_the_default(self):
         for profile in ("personal", "axon-work-computer"):
             with self.subTest(profile=profile):
