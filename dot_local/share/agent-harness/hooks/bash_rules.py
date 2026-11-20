@@ -24,9 +24,10 @@
   pr-body     (personal only)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
               and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
               `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
-              `pr-body-check --body-file F && gh pr create ... --body-file F`, so bookkeeping in the description (tables, a Decisions: line,
-              ledger or job ids; it belongs in the PR's agent record, playbook 5a05bfe8) fails when the body is written, not at merge. `gh pr edit` with no body flag (title, labels, reviewers) passes. No repo is exempt: unlike the merge
-              rule, nothing else runs this check at create time.
+              `pr-body-check --body-file F && gh pr create ... --body-file F`, so bookkeeping in the description (the principles table,
+              a table in a Proven section, a Decisions: line, ledger or job ids; it belongs in the PR's agent record, playbook 5a05bfe8; a
+              Proven section as plain prose stays, playbook f5a367b5) fails when the body is written, not at merge. `gh pr edit` with no
+              body flag (title, labels, reviewers) passes. No repo is exempt: unlike the merge rule, nothing else runs this check at create time.
               The body file must also be a mktemp name, so another session cannot overwrite it (2026-11-15: a shared /tmp/pr-body.md put
               one PR's body on another): `F=$(mktemp /tmp/pr-N-body.XXXXXX)` earlier in the same command and `--body-file "$F"`, or the
               literal name mktemp made (last dot-part 6+ letters and digits with a digit or capital). A fixed name is refused for create and
@@ -113,10 +114,10 @@ MERGE_BARE = (
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 PR_BODY = (
-    "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles or proof table, a Decisions: line, "
+    "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles table or a table in the Proven section, a Decisions: line, "
     "ask/decision/grant ids, job ids, Rewinds:, Break-glass:) or a task id is otherwise found only when `gh pr merge` runs. Run "
-    "`pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both). The description keeps what changes, why, how it was checked, "
-    "risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)."
+    "`pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both). The description keeps what changes, why, how it was checked "
+    "(a Proven section as plain prose, playbook f5a367b5), risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)."
 )
 PR_BODY_VERBS = ("create", "new", "edit")  # `gh pr new` is an alias of `gh pr create`
 PR_BODY_FILE = (

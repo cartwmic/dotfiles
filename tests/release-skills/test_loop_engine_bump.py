@@ -118,6 +118,14 @@ fi
 '''
 
 
+# A scripted `pr-record path [OWNER/]REPO#N`: logs its call and prints the record path under a scratch traces dir, so a test never writes the real agent-traces.
+FAKE_PR_RECORD = r'''#!/bin/sh
+echo "pr-record $*" >> "$FAKE_CALL_LOG"
+[ "$1" = path ] || exit 2
+echo "$FAKE_TRACES_DIR/emitted/review/${2#*/}/pr-record.md"
+'''
+
+
 def pins(version):
     return "".join('%s = { version = "%s", matching_regex = "^x-", rename_exe = "%s" }\n' % (t, version, t) for t in TOOLS)
 
@@ -132,6 +140,8 @@ class BumpTests(Fixture):
         for gate in ("ci-main-status", "pr-body-check"):
             (self.bin / gate).write_text(FAKE_GATE)
             (self.bin / gate).chmod(0o755)
+        (self.bin / "pr-record").write_text(FAKE_PR_RECORD)
+        (self.bin / "pr-record").chmod(0o755)
         self.refuse = ""  # the name of a gate the next run should refuse
         self.home = self.dir / "scratch-home"
         self.origin = self.dir / "origin.git"
@@ -161,7 +171,7 @@ class BumpTests(Fixture):
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_GH_STATE": str(self.state_path),
                 "FAKE_MISE_STATE": str(self.dir / "mise.json"), "LOOP_ENGINE_BUMP_POLL_SECONDS": "0",
                 "FAKE_CALL_LOG": str(self.dir / "calls.log"), "FAKE_GH_ENV_LOG": str(self.dir / "gh-env.jsonl"),
-                "FAKE_GATE_REFUSE": self.refuse, "TMPDIR": str(self.dir), **self.git_env}
+                "FAKE_GATE_REFUSE": self.refuse, "FAKE_TRACES_DIR": str(self.dir / "traces"), "TMPDIR": str(self.dir), **self.git_env}
 
     def sh(self, *cmd, cwd=None):
         result = subprocess.run([str(c) for c in cmd], cwd=cwd, env=self.env(), capture_output=True, text=True, timeout=120)
@@ -212,6 +222,10 @@ class BumpTests(Fixture):
     def bump(self, tag="v1.0.0"):
         return subprocess.run([sys.executable, SCRIPT, tag, "--source", self.checkout], env=self.env(),
                               capture_output=True, text=True, timeout=300)
+
+    def record(self, item):
+        path = self.dir / "traces/emitted/review" / item / "pr-record.md"
+        return path.read_text(encoding="utf-8") if path.exists() else None
 
     def live(self, path):
         target = self.home / path
@@ -264,9 +278,14 @@ class BumpTests(Fixture):
         self.assertEqual(len(self.gh_calls("merge")), 1)
         pr = self.load()["prs"][0]
         self.assertEqual(pr["head"], "loop-engine-v1.0.0")
-        self.assertIn("Profiles: both.", pr["body"])
-        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
-        self.assertRegex(pr["body"], r"(?m)^Decisions: none material$")  # rule ccc6c94b
+        self.assertIn("Both profiles get the pins and skills", pr["body"])
+        # The description holds none of the bookkeeping; the agent record, at the path `pr-record path dotfiles#100` gave, holds all of it.
+        self.assertNotIn("| %d | %s |" % LAST_PRINCIPLE, pr["body"])
+        self.assertNotIn("Decisions:", pr["body"])
+        self.assertNotIn("applied to ", pr["body"])  # the import tool's scratch-dir line is not carried into the description
+        record = self.record("dotfiles#100")
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, record)  # the principles table pr-body-check reads (rule ecd63156)
+        self.assertTrue(record.endswith("\nDecisions: none material\n"))  # rule ccc6c94b
         sha = pr["mergeCommit"]["oid"]
         changed = self.sh("git", "--git-dir", self.origin, "diff", "--name-only", sha + "^", sha).split()
         self.assertIn("dot_config/mise/config.toml", changed)
@@ -447,6 +466,11 @@ class BumpTests(Fixture):
         positions = [next(i for i, line in enumerate(lines) if line.startswith(p))
                      for p in ("gh pr checks", "ci-main-status --merge-gate dotfiles --pr 100", "pr-body-check dotfiles 100", "gh pr merge")]
         self.assertEqual(positions, sorted(positions), lines)
+        # The record is asked for when the PR is made and again at the gates, before the check that reads it.
+        records = [i for i, line in enumerate(lines) if line == "pr-record path dotfiles#100"]
+        self.assertEqual(len(records), 2, lines)
+        self.assertLess(records[0], positions[0])
+        self.assertLess(records[1], positions[2])
         merge = self.gh_calls("merge")[0]
         self.assertEqual(merge[merge.index("--match-head-commit") + 1], self.origin_head())
 

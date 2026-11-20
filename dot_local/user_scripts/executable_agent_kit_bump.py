@@ -9,12 +9,14 @@ The steps, and the step a stop names (the same shape as loop_engine_bump.py):
   profile  chezmoi's profile must be personal (read with dump-config, which runs no hook)
   pr       find the PR for branch agent-kit-vX.Y.Z; an open or merged one is resumed. With --pr N use PR N instead.
   publish  fresh worktree from origin/main: set the exact pin in package.json and regenerate package-lock.json; commit, push and
-           open the PR. Nothing to do when origin/main already pins X.Y.Z.
+           open the PR, then write its agent record (`pr-record path dotfiles#N`: the principles table and the Decisions line; the
+           description carries none of them). Nothing to do when origin/main already pins X.Y.Z.
            With --pr N: PR N is read first and refused (nothing pushed or merged) if it is from a fork or changes any file other
            than the two pin files and the Loop Engine mise config and skills. Then the same two files go on the head of open PR N
            (a Loop Engine bump PR, say), committed and pushed there with no force. Nothing is committed when its head already has the pin. A merged PR N goes straight to drift.
   checks   wait for the PR's checks; a red one stops it with the PR left open
-  gates    ci-main-status --merge-gate dotfiles --pr <pr>, then pr-body-check dotfiles <pr>; either one stops the merge.
+  gates    ci-main-status --merge-gate dotfiles --pr <pr>, then pr-body-check dotfiles <pr> (which reads the agent record; one is written first
+           if the PR has none, and an existing one is never overwritten); either one stops the merge.
            --pr lets this pin-fix PR merge into a main that is red only because this pin lags (ci-main-status docstring)
   merge    gh pr merge --squash --match-head-commit <the head read before the checks>; read the merge SHA
   drift    the PR changes both pin files and, at most, the Loop Engine's pins and skills (a combined bump; loop_engine_bump.py
@@ -170,24 +172,53 @@ class Worktree:
 
 
 def pr_body(version):
+    """The PR description: what changes, why, how it was checked and the risk. The bookkeeping (principles table, Decisions line) is the agent record, record_text."""
+    return "\n".join([
+        "## What changes",
+        "",
+        "Pins `%s` to %s in `package.json` and `package-lock.json`. Made by `agent_kit_bump.py %s`." % (PACKAGE, version, version),
+        "",
+        "## Why",
+        "",
+        "Each agent-kit release moves this pin, so the installed agent-traces CLI is the released one.",
+        "",
+        "## How it was checked",
+        "",
+        "The PR's checks pass and the script's merge gates pass (the main-branch status and the PR check). After the merge the script applies only these two files, "
+        "runs the install (script 65) and reads the installed version back; it stops if that is not %s." % version,
+        "",
+        "## Risk and rollback",
+        "",
+        "Low. Both profiles get the pin; the script itself runs only on the personal profile, and `.chezmoiignore` leaves it out of the work profile. "
+        "Revert the merge and re-run the install to go back.",
+        "",
+    ])
+
+
+def record_text(version):
+    """The PR's agent record (playbook rules ecd63156 and ccc6c94b): the design-principles table and the Decisions line the merge check reads."""
     rows = ["| %d | %s | %s | %s |" % (number, name, result, evidence) for number, (name, result, evidence) in enumerate(PRINCIPLES, 1)]
     return "\n".join([
-        "Pin `%s` to %s (package.json and package-lock.json), made by `agent_kit_bump.py %s` (playbook rule 7c57de5a)." % (PACKAGE, version, version),
-        "",
         "Principles (`~/.local/share/agent-harness/design-principles.md`):",
         "",
         "| # | Principle | Result | Evidence |",
         "|---|---|---|---|",
         *rows,
         "",
-        "Profiles: both. The pins land on personal and axon-work-computer. The script runs only on personal: it refuses any other profile, "
-        "and `.chezmoiignore` leaves it out of the work profile.",
-        "",
-        "On merge the script applies only these two files, runs the install (65) and reads the installed version back.",
-        "",
         "Decisions: none material",
         "",
     ])
+
+
+def ensure_record(source, number, version, step):
+    """Write the PR's agent record unless it exists (`pr-record path` says where). Never overwrites: a resumed PR, or a PR carrying
+    another script's pins (--pr N), keeps the record it has. Returns whether it wrote one."""
+    path = Path(run(["pr-record", "path", "dotfiles#%d" % number], step, cwd=source).stdout.strip())
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record_text(version), encoding="utf-8")
+    return True
 
 
 def find_pr(source, branch):
@@ -240,6 +271,7 @@ def publish(source, version, branch, log):
     if pr is None:
         raise Stop("publish", "gh pr create succeeded but no PR is listed for %s" % branch)
     log.record("publish", "ok", "PR #%d %s" % (pr["number"], pr["url"]))
+    ensure_record(source, pr["number"], version, "publish")
     return pr
 
 
@@ -319,15 +351,18 @@ def wait_for_checks(source, pr, poll, log):
         time.sleep(poll)
 
 
-def gates(source, pr, log):
-    """The merge gates the playbook names. A red main stops the merge, and so does a PR body that fails the body check."""
+def gates(source, pr, version, log):
+    """The merge gates the playbook names. A red main stops the merge, and so does a PR whose description or agent record fails the body check.
+    The record is written first when the PR has none (a PR made before this script wrote records, or one resumed)."""
+    wrote = ensure_record(source, pr["number"], version, "gates")
     main = run(["ci-main-status", "--merge-gate", "dotfiles", "--pr", str(pr["number"])], "gates", cwd=source, check=False)
     if main.returncode != 0:
         raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, "\n".join(s for s in (main.stdout.strip(), main.stderr.strip()) if s)))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
         raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)))
-    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed" % (pr["number"], pr["number"]))
+    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed%s"
+               % (pr["number"], pr["number"], " (the agent record was missing; wrote it)" if wrote else ""))
 
 
 def merge(source, pr, log):
@@ -483,7 +518,7 @@ def bump_personal(args, dest, log):
         raise Stop("pr", "PR #%d (%s) was closed without merging: %s" % (pr["number"], pr["headRefName"], pr["url"]))
     if pr["state"] == "OPEN":
         wait_for_checks(source, pr, args.poll, log)
-        gates(source, pr, log)
+        gates(source, pr, version, log)
         pr = merge(source, pr, log)
     apply(source, dest, pr["mergeCommit"]["oid"], pr, version, log)
     return 0

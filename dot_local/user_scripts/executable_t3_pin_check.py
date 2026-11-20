@@ -24,8 +24,8 @@ With --open-prs, when the pins are behind the host, it opens one PR per repo tha
   - it decides per repo: a repo that already has an open bump PR for that version is done and gets no second one, a repo that is behind and has none gets one
     (so a run that failed half way is finished by the next run); it refuses (exit 4) only when every repo that is behind already has its PR;
   - it never downgrades: if a pin is newer than the host's T3, it says so and opens nothing.
---dry-run prints each diff and PR body and pushes and opens nothing. Each PR is made in a fresh worktree of origin/main, so a dirty checkout is not touched. The PR body carries the design-principles table and
-a Decisions line.
+--dry-run prints each diff and PR body and pushes and opens nothing. Each PR is made in a fresh worktree of origin/main, so a dirty checkout is not touched. The PR description says what changes, why, how it was checked and the risk. The design-principles table
+and the Decisions line go in each PR's agent record (`pr-record path REPO#N`, the budget-steward PR included), which the merge checks read; a dry run prints the record too.
 
 With --notify, drift (and a source that cannot be read) is also posted once a day to the coordinator inbox (source t3-pin-drift), so the coordinator sees it.
 Every run appends one JSON line to $XDG_STATE_HOME/t3-pin-check/log.jsonl (default ~/.local/state).
@@ -223,10 +223,20 @@ PRINCIPLES = [
 ]
 
 
-def principles_section(decisions):
+def record_text(decisions):
+    """A bump PR's agent record (playbook rules ecd63156 and ccc6c94b): the design-principles table and the Decisions line. The PR description carries none of it."""
     rows = ["| %d | %s | %s | %s |" % (n, name, result, evidence) for n, (name, result, evidence) in enumerate(PRINCIPLES, 1)]
     return "\n".join(["Principles (`~/.local/share/agent-harness/design-principles.md`):", "", "| # | Principle | Result | Evidence |",
                       "|---|---|---|---|", *rows, "", "Decisions: " + decisions, ""])
+
+
+def write_record(item, decisions):
+    """Write the agent record of PR `item` (`REPO#N`; `pr-record path` says where) unless it exists. Never overwrites. Returns the path."""
+    path = Path(run(["pr-record", "path", item]).stdout.strip())
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(record_text(decisions), encoding="utf-8")
+    return path
 
 
 def sub_once(text, pattern, value, what):
@@ -363,34 +373,46 @@ def sums_text(version, sums):
     return "x64 %s, arm64 %s" % (sums["x64"], sums["arm64"])
 
 
+BUMP_DECISIONS = "#3685"  # the decision that has the checker open these PRs
+
+
 def open_dotfiles_pr(source, slug, host, pin, sums, dry_run=False):
     title = "t3 pin: %s" % host
-    body = ("Moves `[t3Pin]` from %s to %s, so the agent pods run the same T3 as the host (T3 refuses a link between two versions).\n\n"
-            "The sha256s are the linux lines of the release's `SHA256SUMS` (%s). Made by `t3_pin_check.py --open-prs`; it does not merge.\n\n"
-            "Profiles: both. The pin is read by script 05 on the agent pods; hosts with no pin behave as before. The budget-steward Dockerfile "
-            "pin is bumped by a matching PR in that repo.\n\n%s"
-            % (pin["version"], host, sums_text(host, sums), principles_section("#3685")))
+    body = ("## What changes\n\nMoves `[t3Pin]` from %s to %s, so the agent pods run the same T3 as the host (T3 refuses a link between two versions). "
+            "Made by `t3_pin_check.py --open-prs`; it does not merge.\n\n"
+            "## Why\n\nThe agent pods and the host must run one T3 release. The budget-steward image pin moves in a matching PR in that repo.\n\n"
+            "## How it was checked\n\nThe sha256s are the linux lines of the release's `SHA256SUMS` (%s), not a copy by hand. The install checks the archive against them, "
+            "so the next pod start is the proof.\n\n"
+            "## Risk and rollback\n\nLow. Both profiles get the pin; script 05 reads it on the agent pods, and hosts with no pin behave as before. Revert the merge to go back.\n"
+            % (pin["version"], host, sums_text(host, sums)))
     branch = publish(source, DOTFILES_PIN_FILE, dotfiles_edit, host, sums, title, "sha256s: " + sums_text(host, sums), dry_run)
     if dry_run:
-        return "(dry run) would open dotfiles PR %r from %s\n%s" % (title, branch, body)
+        return "(dry run) would open dotfiles PR %r from %s\n%s\nand write its agent record:\n%s" % (title, branch, body, record_text(BUMP_DECISIONS))
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
         handle.write(body)
     try:
         url = run(["gh", "pr", "create", "--repo", slug, "--base", "main", "--head", branch, "--title", title, "--body-file", handle.name]).stdout.strip()
     finally:
         os.unlink(handle.name)
-    return url.splitlines()[-1]
+    url = url.splitlines()[-1]
+    write_record("%s#%s" % (slug.split("/")[1], url.rsplit("/", 1)[1]), BUMP_DECISIONS)
+    return url
 
 
 def open_steward_pr(repo, api, token, host, pin, sums, dry_run=False):
     title = "t3 pin: %s" % host
-    body = ("Moves the T3 pin in the image from %s to %s, so the pod's T3 matches the host's (T3 refuses a link between two versions).\n\n"
-            "The sha256s are the linux lines of the release's `SHA256SUMS` (%s). Made by dotfiles' `t3_pin_check.py --open-prs`; it does not merge. "
-            "A matching PR bumps `[t3Pin]` in dotfiles.\n\n%s" % (pin["version"], host, sums_text(host, sums), principles_section("#3685")))
+    body = ("## What changes\n\nMoves the T3 pin in the image from %s to %s, so the pod's T3 matches the host's (T3 refuses a link between two versions). "
+            "Made by dotfiles' `t3_pin_check.py --open-prs`; it does not merge. A matching PR bumps `[t3Pin]` in dotfiles.\n\n"
+            "## Why\n\nThe agent pods and the host must run one T3 release.\n\n"
+            "## How it was checked\n\nThe sha256s are the linux lines of the release's `SHA256SUMS` (%s), not a copy by hand. The image build checks the archive against them, "
+            "so the next image build is the proof.\n\n"
+            "## Risk and rollback\n\nLow. Revert the merge to go back.\n" % (pin["version"], host, sums_text(host, sums)))
     branch = publish(repo, STEWARD_PIN_FILE, steward_edit, host, sums, title, "sha256s: " + sums_text(host, sums), dry_run)
     if dry_run:
-        return "(dry run) would open steward PR %r from %s\n%s" % (title, branch, body)
+        return "(dry run) would open steward PR %r from %s\n%s\nand write its agent record:\n%s" % (title, branch, body, record_text(BUMP_DECISIONS))
     made = gitea_call(api, token, "POST", "/pulls", {"base": "main", "head": branch, "title": title, "body": body})
+    name = re.sub(r"\.git$", "", remote_of(repo).rstrip("/")).rsplit("/", 1)[1]  # the repo name, as the review folders and pr-record name it
+    write_record("%s#%d" % (name, made["number"]), BUMP_DECISIONS)
     return made["html_url"]
 
 

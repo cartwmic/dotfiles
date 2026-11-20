@@ -351,6 +351,8 @@ class PrBody(unittest.TestCase):
                 self.assertIn("pr-body-check --body-file F && gh pr", message)
                 self.assertIn("agent bookkeeping", message)
                 self.assertIn("the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)", message)
+                self.assertIn("a Proven section as plain prose, playbook f5a367b5", message)  # the Proven section stays; only its tables and job ids move
+                self.assertIn("a table in the Proven section", message)
 
     def test_the_check_chained_with_the_same_file_is_allowed(self):
         c, e = self.C, self.E

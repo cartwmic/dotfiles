@@ -9,10 +9,12 @@ anything. The steps, and the step a stop names:
   profile  chezmoi's profile must be personal (read with dump-config, which runs no hook)
   pr       find the PR for branch loop-engine-vX.Y.Z; an open or merged one is resumed
   import   fresh worktree from origin/main; import_release_skills.py import TAG --pins --apply; orphans stop it
-  publish  commit on loop-engine-vX.Y.Z, push, open the PR; the worktree is removed
+  publish  commit on loop-engine-vX.Y.Z, push, open the PR, then write its agent record (`pr-record path dotfiles#N`: the principles table
+           and the Decisions line; the description carries none of them); the worktree is removed
   checks   wait for the PR's checks; a red one stops it with the PR left open
   gates    ci-main-status --merge-gate dotfiles --pr N (a red main stops it, unless this pin-fix PR is what turns it green)
-           and pr-body-check dotfiles N (a bad body stops it)
+           and pr-body-check dotfiles N (a bad description or record stops it). It reads the agent record; one is written first if the PR
+           has none, and an existing one is never overwritten
   merge    squash-merge, only while the head is still the one the checks ran on; read the merge SHA
   source   fast-forward the chezmoi source checkout to the merge SHA (ff-only); if it cannot, stop before apply, so a
            later full apply cannot restore the old pins
@@ -79,11 +81,57 @@ PRINCIPLES = [
 ]
 
 
-def principles_section():
-    """The design-principles table (playbook rule ecd63156) and the Decisions line (rule ccc6c94b) that pr-body-check reads."""
+def record_text():
+    """The PR's agent record (playbook rules ecd63156 and ccc6c94b): the design-principles table and the Decisions line the merge check reads."""
     rows = ["| %d | %s | %s | %s |" % (number, name, result, evidence) for number, (name, result, evidence) in enumerate(PRINCIPLES, 1)]
     return "\n".join(["Principles (`~/.local/share/agent-harness/design-principles.md`):", "", "| # | Principle | Result | Evidence |",
                       "|---|---|---|---|", *rows, "", "Decisions: none material", ""])
+
+
+def ensure_record(source, number, step):
+    """Write the PR's agent record unless it exists (`pr-record path` says where). Never overwrites: a resumed PR keeps the record it has.
+    Returns whether it wrote one."""
+    path = Path(run(["pr-record", "path", "dotfiles#%d" % number], step, cwd=source).stdout.strip())
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record_text(), encoding="utf-8")
+    return True
+
+
+def import_report(stdout):
+    """The import tool's report for a reader: what each bundle did and the pin move. It stops before the tool's own "applied to <scratch dir>" and "next:" lines."""
+    lines = stdout.splitlines()
+    cut = next((i for i, line in enumerate(lines) if line.startswith("applied to ")), len(lines))
+    return "\n".join(lines[:cut]) + "\n"
+
+
+def pr_body(tag, report):
+    """The PR description: what changes, why, how it was checked and the risk. The bookkeeping (principles table, Decisions line) is the agent record, record_text."""
+    return "\n".join([
+        "## What changes",
+        "",
+        "Imports the %s skill bundles and moves the five Loop Engine pins (%s) to %s. Made by `loop_engine_bump.py %s`." % (tag, ", ".join(TOOLS), tag[1:], tag),
+        "",
+        "```",
+        import_report(report).rstrip("\n"),
+        "```",
+        "",
+        "## Why",
+        "",
+        "Each Loop Engine release moves these pins and the skills that ship with it, so the installed tools and skills are the released ones.",
+        "",
+        "## How it was checked",
+        "",
+        "The import tool verifies every imported file against the release's tree hashes (the report above). The PR's checks pass and the script's merge gates pass. After the merge the script "
+        "applies only the PR's own files, runs `mise install`, then verifies the changed bundles and that the active version of each tool is %s." % tag[1:],
+        "",
+        "## Risk and rollback",
+        "",
+        "Low. Both profiles get the pins and skills; the script applies them on the personal profile only, and the work Mac gets them with its own chezmoi update. "
+        "Revert the merge to go back.",
+        "",
+    ])
 
 
 class Stop(Exception):
@@ -209,17 +257,14 @@ def publish(source, tag, branch, log):
         git(wt.path, "add", "-A", step="publish")
         git(wt.path, "commit", "-q", "-m", title, step="publish")
         git(wt.path, "push", "-q", "--force", "origin", "HEAD:refs/heads/" + branch, step="publish")
-        body = ("Import of the %s skill bundles and the five Loop Engine pins (%s), made by "
-                "`loop_engine_bump.py %s` (playbook rule 7c57de5a).\n\n```\n%s```\n\n"
-                "Profiles: both. The pins and canonical skills land on personal and axon-work-computer; the script "
-                "applies them on personal only, and the work Mac gets them with its own chezmoi update.\n\n"
-                "%s" % (tag, ", ".join(TOOLS), tag, result.stdout, principles_section()))
+        body = pr_body(tag, result.stdout)
         run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body], "publish",
             cwd=source)
     pr = find_pr(source, branch)
     if pr is None:
         raise Stop("publish", "gh pr create succeeded but no PR is listed for %s" % branch)
     log.record("publish", "ok", "PR #%d %s" % (pr["number"], pr["url"]))
+    ensure_record(source, pr["number"], "publish")
     return pr
 
 
@@ -250,14 +295,17 @@ def wait_for_checks(source, pr, poll, log):
 
 
 def gates(source, pr, log):
-    """The merge gates the playbook names. A red main stops the merge, and so does a PR body that fails the body check."""
+    """The merge gates the playbook names. A red main stops the merge, and so does a PR whose description or agent record fails the body check.
+    The record is written first when the PR has none (a PR made before this script wrote records, or one resumed)."""
+    wrote = ensure_record(source, pr["number"], "gates")
     main = run(["ci-main-status", "--merge-gate", "dotfiles", "--pr", str(pr["number"])], "gates", cwd=source, check=False)
     if main.returncode != 0:
         raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, "\n".join(s for s in (main.stdout.strip(), main.stderr.strip()) if s)))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
         raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)))
-    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed" % (pr["number"], pr["number"]))
+    log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed%s"
+               % (pr["number"], pr["number"], " (the agent record was missing; wrote it)" if wrote else ""))
 
 
 def merge(source, pr, log):

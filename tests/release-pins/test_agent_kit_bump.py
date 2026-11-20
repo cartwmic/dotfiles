@@ -3,7 +3,7 @@
 Each test runs the real script against a scratch world: a bare git origin holding a small chezmoi source with the agent-kit
 pin, the 65 install template and an unrelated file; a clone of it as the source checkout; and a scratch HOME (chezmoi's
 destination, config and state) applied from that source. chezmoi and git are real. The gh, npm, ci-main-status and
-pr-body-check on PATH are scripted fakes; every call goes to one log file, so the order of checks, gates and merge can be
+pr-body-check and pr-record on PATH are scripted fakes (pr-record writes nothing: it prints a path under a scratch traces dir); every call goes to one log file, so the order of checks, gates and merge can be
 read back. Nothing here reaches GitHub, the real chezmoi source or the real home directory.
 
     python3 -m unittest discover -s tests/release-pins -v
@@ -114,6 +114,13 @@ fi
 exit 0
 '''
 
+FAKE_PR_RECORD = r'''#!/bin/sh
+# A scripted `pr-record path [OWNER/]REPO#N`: logs its call and prints the record path under a scratch traces dir, so a test never writes the real agent-traces.
+echo "pr-record $*" >> "$FAKE_CALL_LOG"
+[ "$1" = path ] || exit 2
+echo "$FAKE_TRACES_DIR/emitted/review/${2#*/}/pr-record.md"
+'''
+
 FAKE_NPM = r'''#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
@@ -138,7 +145,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.bin = self.dir / "bin"
         self.bin.mkdir()
-        for name, text in (("gh", FAKE_GH), ("npm", FAKE_NPM), ("ci-main-status", FAKE_GATE), ("pr-body-check", FAKE_GATE)):
+        for name, text in (("gh", FAKE_GH), ("npm", FAKE_NPM), ("ci-main-status", FAKE_GATE), ("pr-body-check", FAKE_GATE), ("pr-record", FAKE_PR_RECORD)):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
         self.home = self.dir / "home"
@@ -164,7 +171,7 @@ class AgentKitBumpTests(unittest.TestCase):
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_CALL_LOG": str(self.call_log),
                 "FAKE_GH_ENV_LOG": str(self.dir / "gh-env.jsonl"),
                 "FAKE_GH_STATE": str(self.gh_state), "FAKE_ORIGIN": str(self.origin), "FAKE_GATE_REFUSE": self.refuse,
-                "FAKE_NPM_INSTALLS": self.npm_installs, "NODE_AUTH_TOKEN": "fake-token",
+                "FAKE_NPM_INSTALLS": self.npm_installs, "NODE_AUTH_TOKEN": "fake-token", "FAKE_TRACES_DIR": str(self.dir / "traces"),
                 "AGENT_KIT_BUMP_POLL_SECONDS": "0", "TMPDIR": str(self.dir), **self.git_env}
 
     def sh(self, *cmd, cwd=None):
@@ -202,6 +209,10 @@ class AgentKitBumpTests(unittest.TestCase):
         target = self.home / path
         return target.read_text(encoding="utf-8") if target.is_file() else None
 
+    def record(self, item):
+        path = self.dir / "traces/emitted/review" / item / "pr-record.md"
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
     def calls(self):
         return self.call_log.read_text(encoding="utf-8").splitlines() if self.call_log.exists() else []
 
@@ -235,6 +246,15 @@ class AgentKitBumpTests(unittest.TestCase):
             self.assertIn(verb, verbs)
         self.assertEqual({(c["urgent"], c["caller"]) for c in calls}, {("1", "agent_kit_bump")})
 
+    def test_an_existing_record_is_never_overwritten(self):
+        self.world()
+        existing = self.dir / "traces/emitted/review/dotfiles#100/pr-record.md"
+        existing.parent.mkdir(parents=True)
+        existing.write_text("kept\n", encoding="utf-8")
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.record("dotfiles#100"), "kept\n")
+
     def test_happy_path_checks_then_gates_then_merge_then_only_the_pins_applied_and_installed(self):
         self.world()
         result = self.bump()
@@ -243,16 +263,22 @@ class AgentKitBumpTests(unittest.TestCase):
 
         prs = self.prs()
         self.assertEqual(len(prs), 1)
-        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, prs[0]["body"])
-        self.assertRegex(prs[0]["body"], r"(?m)^Decisions: none material$")
+        # The description holds none of the bookkeeping; the agent record, at the path `pr-record path dotfiles#100` gave, holds all of it.
+        self.assertNotIn("|", prs[0]["body"])
+        self.assertNotIn("Decisions:", prs[0]["body"])
+        record = self.record("dotfiles#100")
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, record)
+        self.assertTrue(record.endswith("\nDecisions: none material\n"))
 
         # Checks, then the two gates in order, then the squash merge, which must name the head the checks ran on.
         calls = self.calls()
         index = {name: next(i for i, c in enumerate(calls) if c.startswith(name))
-                 for name in ("gh pr checks", "ci-main-status", "pr-body-check", "gh pr merge")}
+                 for name in ("gh pr checks", "ci-main-status", "pr-record", "pr-body-check", "gh pr merge")}
         self.assertLess(index["gh pr checks"], index["ci-main-status"])
         self.assertLess(index["ci-main-status"], index["pr-body-check"])
+        self.assertLess(index["pr-record"], index["pr-body-check"])  # the record exists before the check that reads it
         self.assertLess(index["pr-body-check"], index["gh pr merge"])
+        self.assertEqual(calls[index["pr-record"]], "pr-record path dotfiles#100")
         self.assertEqual(calls[index["ci-main-status"]], "ci-main-status --merge-gate dotfiles --pr 100")
         self.assertEqual(calls[index["pr-body-check"]], "pr-body-check dotfiles 100")
         head = self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/agent-kit-v" + NEW).strip()
@@ -427,6 +453,9 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertIn("--match-head-commit " + after, [c for c in calls if c.startswith("gh pr merge")][0])
         self.assertEqual([c for c in calls if c.startswith("ci-main-status")], ["ci-main-status --merge-gate dotfiles --pr 7"])
 
+        # The PR had no record, so the gates step wrote one before the body check; the PR's description is not touched.
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, self.record("dotfiles#7"))
+
         # The kit pin is applied and installed; the Loop Engine files in the same PR are left to loop_engine_bump.py.
         self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
         self.assertEqual(json.loads((self.home / KIT_DEST / "node_modules" / PACKAGE / "package.json").read_text())["version"], NEW)
@@ -554,15 +583,26 @@ class AgentKitBumpTests(unittest.TestCase):
 
 
 class BodyTests(unittest.TestCase):
-    def test_the_generated_body_has_the_principles_table_and_a_decisions_line(self):
+    def module(self):
         spec = importlib.util.spec_from_file_location("agent_kit_bump", SCRIPT)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        body = module.pr_body(NEW)
-        rows = {int(m.group(1)) for m in re.finditer(r"^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", body, re.M)}
-        self.assertEqual(rows, set(range(1, LAST_PRINCIPLE[0] + 1)))
-        self.assertRegex(body, r"(?m)^Decisions: none material$")
+        return module
+
+    def test_the_generated_description_has_no_bookkeeping_and_says_what_why_how_and_risk(self):
+        body = self.module().pr_body(NEW)
+        self.assertNotIn("|", body)
+        self.assertNotIn("Decisions:", body)
+        for heading in ("What changes", "Why", "How it was checked", "Risk and rollback"):
+            self.assertIn("## " + heading, body)
+        self.assertIn(NEW, body)
         self.assertEqual(re.findall(r"(?<![\w-])(?:D-\d+|D\d+|MK-\d+|T\d+)(?![\w-])", body), [])
+
+    def test_the_record_has_the_principles_table_and_a_decisions_line(self):
+        record = self.module().record_text(NEW)
+        rows = {int(m.group(1)) for m in re.finditer(r"^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", record, re.M)}
+        self.assertEqual(rows, set(range(1, LAST_PRINCIPLE[0] + 1)))
+        self.assertRegex(record, r"(?m)^Decisions: none material$")
 
 
 if __name__ == "__main__":
