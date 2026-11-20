@@ -5061,6 +5061,19 @@ class QueueHomelab(unittest.TestCase):
 
 QUOTA_LAUNCH = QUEUE_LAUNCH.replace("K.QUEUE_QUIET_S", "K.QUOTA_FIRST_DELAY, K.QUOTA_MAX_DELAY = @DELAYS@\nK.QUEUE_QUIET_S")   # the quota retry, shortened too
 
+# The race admit() re-checks for under the flock: a job ahead is refused by the quota after this job's first look at the queue and before it takes the lock. With
+# FAKE_RACE_TICKET set, the stub puts that ticket into the queue at the moment the client first asks for the flock, which is exactly between the two looks.
+RACE_HOOK = ("import fcntl, os, shutil\n"
+             "_flock, _race = fcntl.flock, os.environ.get('FAKE_RACE_TICKET')\n"
+             "def flock(fd, op):\n"
+             "    global _race\n"
+             "    if _race and op & fcntl.LOCK_EX and str(getattr(fd, 'name', '')).endswith('/queue/.lock'):\n"
+             "        shutil.copy(_race, os.path.join(os.path.dirname(os.path.realpath(fd.name)), os.path.basename(_race)))\n"
+             "        _race = None\n"
+             "    return _flock(fd, op)\n"
+             "fcntl.flock = flock\n"
+             "sys.exit(")
+
 
 class QuotaHomelab(unittest.TestCase):
     """The homelab's namespace can carry a ResourceQuota. A create it refuses is waited out in the local queue, with the flock let go while the job sleeps, so a job
@@ -5072,7 +5085,7 @@ class QuotaHomelab(unittest.TestCase):
 
     def launcher(self):
         stub = self.tmp / "quota_launch.py"
-        stub.write_text((QUOTA_LAUNCH % 0).replace("@DELAYS@", "%s, %s" % getattr(self, "delays", (0.2, 0.4))))
+        stub.write_text((QUOTA_LAUNCH % 0).replace("@DELAYS@", "%s, %s" % getattr(self, "delays", (0.2, 0.4))).replace("sys.exit(", RACE_HOOK))
         return [sys.executable, str(stub), str(SCRIPT)]
 
     def full(self, used, limit=12):
@@ -5186,6 +5199,25 @@ class QuotaHomelab(unittest.TestCase):
         done = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo small-ran", env=self.full(used=4))
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertNotIn("queued", done.stdout)
+
+    def test_a_job_ahead_refused_by_the_quota_after_the_first_look_is_still_waited_behind(self):
+        # The job looks at the queue (nothing ahead), then asks for the flock. In between, a job ordered before it is refused by the quota and marks its ticket. The look
+        # under the flock must see that ticket: the cluster shows no waiting pod (cluster_full is None), so without the second look the job would create its pod ahead of it.
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        ident = K.proc_identity(holder.pid)
+        race = self.tmp / "kgate-1-1.json"   # not in the queue yet: the stub moves it in when the client first asks for the flock
+        race.write_text(json.dumps({"id": "kgate-1-1", "pid": holder.pid, "start": ident[0], "pidns": K.pid_namespace(), "t": 1.0, "quota": True,
+                                    "shape": {"cpu": 12.0, "mem": float(1 << 30), "disk": float(4 << 30), "pin": None, "priority": -100}}))   # asks more than this job: only its mark holds this job back
+        proc = self.start("--wait", "60", "--cpu", "4", "--", "sh", "-c", "echo ran-after-it", env={**self.full(used=4), "FAKE_RACE_TICKET": str(race)})
+        seen = self.read_until(proc, "queued: behind kgate-1-1, which the quota refused and was first")
+        time.sleep(1)
+        self.assertEqual((self.created(), proc.poll()), (0, None), "no pod is made ahead of the job the quota refused")
+        (self.state / "kgate" / "queue" / "kgate-1-1.json").unlink()   # the job ahead gives up its place
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+        self.assertIn("ran-after-it", out)
+        self.assertEqual(self.created(), 1)
 
     def test_a_dead_clients_quota_ticket_does_not_block_the_queue(self):
         env = self.full(used=4)
