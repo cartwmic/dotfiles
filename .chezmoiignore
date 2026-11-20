@@ -305,9 +305,11 @@ Library/**
 {{- end }}
 
 {{- if and (ne .profile "personal") (ne .profile "axon-work-computer") }}
-# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal and work, not Termux (a phone host with no Chrome to drive). The pin, the download helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
+# OpenCode Browse (docs/profiles.md; agent-harness README, "Agent browser"): personal and work, not Termux (a phone host with no Chrome to drive). The pin, the download helper, the `browse` PATH wrapper, the pairing helper, the skill that tells agents how to use it, and the script that turns its auto-update off.
 .config/mise/conf.d/browse.toml
 .local/bin/agent-download
+.local/bin/browse
+.local/bin/agent-browse-setup
 .local/share/agent-harness/canonical/skills/using-browse
 .local/share/agent-harness/canonical/skills/using-browse/**
 91_browse_setup.sh
@@ -570,6 +572,8 @@ Library/Preferences/pnpm/**
 .config/mise/conf.d/browse.toml
 .local/bin/agent-download
 .local/bin/agent-login
+.local/bin/browse
+.local/bin/agent-browse-setup
 .local/share/agent-harness/canonical/skills/using-browse
 .local/share/agent-harness/canonical/skills/using-browse/**
 .local/bin/qmd
