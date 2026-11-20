@@ -105,7 +105,7 @@ class AssembleTest(unittest.TestCase):
             setup(d, repo, **{"part1.md": None})
             code, out, err = run("assemble.py", d, repo, "--index")
         self.assertEqual(code, 0, err)
-        self.assertEqual(out.splitlines(), ["A3.1 | Notes saves short notes .", "A4.1 | The --tag option sets a tag .", "A4.2 | The --color option sets a color ."])
+        self.assertEqual(out.splitlines(), ["A3.1 | Notes saves short notes.", "A4.1 | The --tag option sets a tag.", "A4.2 | The --color option sets a color."])
 
     def test_a_prose_line_with_no_id_is_an_error_that_names_the_file_and_stamp_py(self):
         code, out, err, guide, _ = self.assemble(**{"A4.md": A4 + "A third line with no id.\n"})
@@ -126,7 +126,7 @@ class AssembleTest(unittest.TestCase):
             self.assertEqual(code, 0, out + err)
             code, out, err = run("assemble.py", d, repo, "--index")
         self.assertEqual(code, 0, err)
-        self.assertRegex(out, r"A4\.[0-9a-f]{4} \| The --tag option sets a tag \.")
+        self.assertRegex(out, r"A4\.[0-9a-f]{4} \| The --tag option sets a tag\.")
 
     def test_the_assembled_guide_passes_lint_main_and_the_tags_resolve(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
@@ -176,13 +176,14 @@ class SliceTest(unittest.TestCase):
             files = {p.name: p.read_text() for p in Path(d, "out").glob("*")} if Path(d, "out").exists() else {}
         return code, out, err, files
 
-    def test_sections_are_grouped_up_to_the_limit_and_the_last_slice_reaches_the_end(self):
+    def test_claims_are_cut_between_lines_into_near_equal_slices_and_the_last_slice_reaches_the_end(self):
         code, out, err, files = self.slices(SLICE_DOC, "--max-claims", "9")
         self.assertEqual(code, 0, err)
-        # each section holds 4 claims (the intro sits in the header, which is not a claim): 4+4 | 4+4 | 4
-        self.assertEqual(out.splitlines(), ["slice 1: lines 1-%d, 8 claims, 0 flags" % (SLICE_DOC.split("\n").index("## S3") ),
-                                            "slice 2: lines %d-%d, 8 claims, 0 flags" % (SLICE_DOC.split("\n").index("## S3") + 1, SLICE_DOC.split("\n").index("## S5")),
-                                            "slice 3: lines %d-%d, 4 claims, 0 flags" % (SLICE_DOC.split("\n").index("## S5") + 1, len(SLICE_DOC.splitlines()))])
+        # 20 claims, 4 on each line: ceil(20 / 9) = 3 slices, cut between lines; a slice starts at its first line with a claim and ends before the next one's
+        first_of = lambda n: [i for i, l in enumerate(SLICE_DOC.split("\n"), 1) if "thing %d " % n in l][0]
+        self.assertEqual(out.splitlines(), ["slice 1: lines 1-%d, 8 claims, 0 flags" % (first_of(30) - 1),
+                                            "slice 2: lines %d-%d, 8 claims, 0 flags" % (first_of(30), first_of(50) - 1),
+                                            "slice 3: lines %d-%d, 4 claims, 0 flags" % (first_of(50), len(SLICE_DOC.splitlines()))])
         self.assertEqual([s["claims"] for s in json.loads(files["slices.json"])], [8, 8, 4])
 
     def test_a_section_over_the_limit_is_a_slice_of_its_own_marked_over(self):

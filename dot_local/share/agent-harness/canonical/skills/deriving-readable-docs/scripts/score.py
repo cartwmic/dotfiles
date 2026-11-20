@@ -17,12 +17,14 @@ or when its finding lines are not as many as WRONG+OVERSTATED+UNSUPPORTED. Nothi
 The depth floor (check brief version 7). A report also holds one row for each claim it was given: `read | <claim id> | <verdict> | <path:line>`, the line the
 checker actually opened (`outside` for a glossary entry with no tag, which has no line). Exit 1 when it has no such rows (a report in the old format cannot be
 judged), a row names no path:line (a HOLDS row too), the rows are not as many as claims checked or do not add up to the Counts line, or two rows share an id.
-With --repo, a path:line must be a line of a file in the repo. With --slices DIR (the folder slice.py wrote), the report's line `Slice: slice-K` names
+With --slices, a report that read fewer than one distinct line for every three claims also prints a depth warning (it never changes the exit code); the report records the
+lines read, not the tool calls, so tool calls are not judged. With --repo, a path:line must be a line of a file in the repo. With --slices DIR (the folder slice.py wrote), the report's line `Slice: slice-K` names
 DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only.
 Prints per repo, and pooled over all repos: claims, the four verdicts, errors, the rate (errors / claims) for all, the appendix and Part 1,
 and claims by cause. With --doc (repeatable) and --repo it adds words, errors per 1,000 words and words per claim, counted as
 check_citations.py counts them. With --out DIR it also writes score.txt and score.json there.
-The rates use the checkers' claim count. When the script counts the doc's sentences differently, the output adds
+When --slices names a folder that holds fewer claims than the guide (a fix round), the words, the words per claim and the errors per 1,000 words are those of the
+re-checked sentences, not of the whole guide, so the counts compared are alike. The rates use the checkers' claim count. When the script counts the doc's sentences differently, the output adds
 `claim count: checkers N, script M, difference +K`, so the two are never mixed up. Words per claim divides by the script's sentences.
 
 --lab. BEHAVIOURS.txt is the scoper's list, one behaviour a line: `ID | path:line | cond, cond, ...` where path:line is the primary line a
@@ -143,12 +145,18 @@ def parse_report(path, ctx=None):
     rows = FINDING.findall(text)
     if len(rows) != wrong + over + unsup:
         raise ScoreError("%s: %d finding lines (`claim id | verdict | CAUSE | ...`), but WRONG+OVERSTATED+UNSUPPORTED is %d" % (path, len(rows), wrong + over + unsup))
-    check_rows(path, text, parse_rows(path, text), (claims, holds, wrong, over, unsup), ctx or {})
+    read_rows = parse_rows(path, text)
+    check_rows(path, text, read_rows, (claims, holds, wrong, over, unsup), ctx or {})
     causes = dict.fromkeys(CAUSES, 0)
     for _, cause in rows:
         causes[cause or "UNTAGGED"] += 1
+    distinct = {ev for _, _, ev in read_rows if ev != "outside"}
+    warnings = []
+    if (ctx or {}).get("slices") and claims and len(distinct) * 3 < claims:
+        warnings.append("depth: %s read %d distinct lines for %d claims, below one in three" % (os.path.basename(path), len(distinct), claims))
+    name = SLICE_LINE.search(text)
     return {"file": os.path.basename(path), "part1": os.path.basename(path).lower().startswith("part1"), "claims": claims, "holds": holds,
-            "wrong": wrong, "overstated": over, "unsupported": unsup, "causes": causes}
+            "wrong": wrong, "overstated": over, "unsupported": unsup, "causes": causes, "warnings": warnings, "slice": name.group(1) if name else None}
 
 
 def report_files(spec):
@@ -175,10 +183,27 @@ def totals(reports):
     return t
 
 
+def slice_claims(slices):
+    """The number of claims the slices folder holds (the sum of slices.json), or None when it has no slices.json."""
+    path = os.path.join(slices, "slices.json")
+    return sum(s["claims"] for s in json.loads(read(path))) if os.path.isfile(path) else None
+
+
+def slice_sentences(slices, reports):
+    """The sentences of the claims files that the reports name (`Slice: slice-K`), tags taken out: the claims a round re-checked."""
+    out = []
+    for r in reports:
+        path = os.path.join(slices, "%s.claims.txt" % r["slice"]) if r["slice"] else ""
+        if os.path.isfile(path):
+            out += [TAG.sub(" ", l.split("|", 2)[2]).strip() for l in read(path).splitlines() if l.count("|") >= 2]
+    return out
+
+
 def score_repo(name, specs, docs, repo, slices=None):
     reports = [parse_report(f, {"repo": os.path.realpath(repo) if repo else None, "slices": slices}) for s in specs for f in report_files(s)]
     out = totals(reports)
     out["name"] = name
+    out["warnings"] = [w for r in reports for w in r["warnings"]]
     out["reports"] = [r["file"] for r in reports]
     out["appendix"] = totals([r for r in reports if not r["part1"]])
     out["part1"] = totals([r for r in reports if r["part1"]])
@@ -186,6 +211,11 @@ def score_repo(name, specs, docs, repo, slices=None):
         repo = os.path.realpath(repo)
         out["words"] = sum(word_count(read(d), repo) for d in docs)
         prose = [s for d in docs for _, s in prose_sentences(read(d), repo)]
+        rechecked = slice_sentences(slices, reports) if slices and slice_claims(slices) not in (None, len(prose)) else None
+        if rechecked is not None:  # a fix round re-checks some sentences: compare them with their own words, not with the whole guide's
+            out["fix_round"] = (len(rechecked), len(prose))
+            out["words"] = sum(len(words_of(x)) for x in rechecked)
+            prose = rechecked
         claim_words = sum(len(words_of(s)) for s in prose)
         out["script_claims"] = len(prose)
         out["words_per_claim"] = claim_words / len(prose) if prose else None
@@ -214,8 +244,12 @@ def render_repo(r):
         lines.append("words: %d; errors per 1,000 words: %s; script claims: %d; words per claim: %s" % (
             r["words"], "n/a" if r["errors_per_1000_words"] is None else "%.2f" % r["errors_per_1000_words"], r["script_claims"],
             "n/a" if r["words_per_claim"] is None else "%.1f" % r["words_per_claim"]))
+        if "fix_round" in r:
+            lines.append("fix round: %d of the guide's %d claims were re-checked; the words and the words per claim are those of the re-checked sentences" % r["fix_round"])
         if r["script_claims"] != r["claims"]:
             lines.append(claim_count_note(r["claims"], r["script_claims"]))
+    for w in r.get("warnings", []):
+        lines.append("warning %s (the report records the lines read, not the tool calls: those are not judged)" % w)
     return lines
 
 

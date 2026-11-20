@@ -82,6 +82,7 @@ class AuditFilesTest(unittest.TestCase):
                 Path(d, "guards.md").write_text(guards)
             if evidence is not None:
                 Path(d, "evidence.md").write_text(evidence)
+            Path(d, "choice.md").write_text("- the behaviours kept\n")
             Path(d, "doc.md").write_text(doc)
             r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), str(Path(d, "doc.md")), self.repo.name, "--audit", str(Path(d, "audit.md")), *extra],
                                capture_output=True, text=True)

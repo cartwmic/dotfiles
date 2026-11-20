@@ -12,7 +12,8 @@ A continue or break counts when its loop opens before `upto` and closes at or af
 that ends before the first cited line does not change the path to it, one that overlaps the cited lines does.
 check_citations.py asks a cited range this way (`first` its first line, `upto` its last), so a range that starts in
 one function and runs into another also gets the first function's exits inside it, marked there. A `return` inside a nested callback or inner function is not an exit of the
-function and is left out. Each exit prints with its line, its source and, when the exit line does not show it, the `if`,
+function and is left out. The line that declares an inner function (`async send(a) {`, `const f = () => {`, a nested `def`) belongs to that function, so the exits of the
+function around it (a constructor's or factory's throws) are listed under a line of that function's own body, and not under every method. Each exit prints with its line, its source and, when the exit line does not show it, the `if`,
 `else` or `catch` line it sits under (a Python exit in an `else:` says "in the else of" that `if`).
 
 Python files are read with the `ast` module. TS/JS files (.ts .tsx .js .jsx .mjs .cjs .mts .cts) are read with a
@@ -197,7 +198,7 @@ def js_blocks_and_events(src):
         if stmt is None and t not in (",", ")"):
             stmt = line
         if t == "{":
-            b = {"kind": classify(head), "open": line, "close": float("inf"), "head": stmt, "outer": (head, stmt)}
+            b = {"kind": classify(head), "open": line, "close": float("inf"), "head": stmt, "outer": (head, stmt), "decl": head.count("(") <= head.count(")")}
             blocks.append(b)
             stack.append(b)
             head, stmt = [], None
@@ -242,6 +243,11 @@ def js_exits(src, line, upto, first):
     if not funcs:
         return None
     fn = max(funcs, key=lambda b: b["open"])
+    # the line that declares an inner function (`async send(a) {`, `const f = () => {`) belongs to that function, not to the one around it: the outer
+    # function's exits are listed under a line of its own body, once
+    declared = [b for b in blocks if b["kind"] == "func" and b["decl"] and b["open"] == line <= b["close"] and b["open"] > fn["open"]]
+    if declared:
+        fn = max(declared, key=lambda b: b["head"] if b["head"] is not None else 0)
     out = []
     for e in events:
         if e["func"] is not fn or e["line"] >= upto:
@@ -282,6 +288,9 @@ def py_exits(src, line, upto, first):
     if not funcs:
         return None
     fn = max(funcs, key=lambda n: n.lineno)
+    declared = [n for n in ast.walk(tree) if isinstance(n, FUNCS) and n.lineno == line and n.lineno > fn.lineno]  # a nested def line belongs to that function
+    if declared:
+        fn = declared[0]
     out = []
 
     def visit(node, chain):

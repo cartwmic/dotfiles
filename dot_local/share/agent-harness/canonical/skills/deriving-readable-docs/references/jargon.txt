@@ -1,8 +1,8 @@
 # Words a reader with no engineering background may not know. One a line, whole words or phrases, any case.
-# lint_main.py counts each hit in Part 1 and fails above 4 per 1,000 words. Edit the list, not the script.
+# lint_main.py counts each hit in Part 1 (the word, or with -s, -es, -ed, -d or -ing) and fails above 4 per 1,000 words. Edit the list, not the script.
+# A term leaves the list when readers did not flag it in a Part 1 that held it (round 3: cli, json, http and https left; sqlite and cron were flagged and stay).
 api
 sdk
-cli
 daemon
 middleware
 endpoint
@@ -55,15 +55,12 @@ environment variable
 pid
 cron
 yaml
-json
 toml
 sqlite
 orm
 rpc
 tcp
 udp
-http
-https
 ssh
 tls
 oauth

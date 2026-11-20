@@ -229,7 +229,7 @@ def appendix_lines(text, repo):
         if sec is None or header or line.lstrip().startswith("|") or n not in by_line:
             continue
         body = " ".join(by_line[n])
-        out.append({"line": n, "section": sec, "ids": [t.strip("[]") for t in TAG.findall(raw[n - 1])], "text": re.sub(r"\s+", " ", TAG.sub("", body)).strip(),
+        out.append({"line": n, "section": sec, "ids": [t.strip("[]") for t in TAG.findall(raw[n - 1])], "text": re.sub(r"\s+([.,;:!?])(?=\s|$)", r"\1", re.sub(r"([.!?])\s*[,;]+(?=\s|$)", r"\1", re.sub(r"\s+", " ", TAG.sub("", body)))).strip(),
                     "cited": any(cites for _, _, cites, _ in line_items(raw[n - 1], repo))})
     return out
 

@@ -861,6 +861,7 @@ class AuditTest(unittest.TestCase):
             a.write_text(audit)
             (Path(d) / "guards.md").write_text("# no guards: the cited file is not code the exits are read from\n")
             (Path(d) / "evidence.md").write_text(self.EVIDENCE)
+            (Path(d) / "choice.md").write_text("- the behaviours kept\n")
             return check(doc or self.DOC, REPO, "--audit", str(a))
 
     def test_a_row_for_each_sentence_passes(self):

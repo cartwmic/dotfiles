@@ -128,11 +128,11 @@ class SliceTest(unittest.TestCase):
             got = {p.name: p.read_text() for p in Path(d, "out").glob("*")} if Path(d, "out").exists() else {}
         return code, out, err, got
 
-    def test_a_slice_never_holds_more_than_60_claims_even_inside_one_section(self):
+    def test_a_slice_never_holds_more_than_60_claims_and_a_section_is_cut_into_equal_ones(self):
         code, out, err, files = self.slices(big_doc(150))
         self.assertEqual(code, 0, err)
         sizes = [s["claims"] for s in json.loads(files["slices.json"])]
-        self.assertEqual((sum(sizes), max(sizes)), (150, 60))
+        self.assertEqual((sum(sizes), max(sizes)), (150, 50))
 
     def test_a_limit_above_60_is_a_usage_error(self):
         self.assertEqual(self.slices(big_doc(5), "--max-claims", "61")[0], 2)
@@ -213,8 +213,7 @@ class FixRoundScoreTest(unittest.TestCase):
             Path(d, "GUIDE.md").write_text(DOC, encoding="utf-8")
             script("slice.py", Path(d, "GUIDE.md"), repo, "--out", Path(d, "slices"))
             Path(d, "changed.txt").write_text("12.1\n", encoding="utf-8")
-            code, out, err = script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "changed.txt"), "--out", Path(d, "slices-fix1"),
-                                    "--record-fixed", Path(d, "fixed-ids.txt"))
+            code, out, err = script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "changed.txt"), "--out", Path(d, "slices-fix1"))
             self.assertEqual(code, 0, err)
             Path(d, "r1").mkdir()
             Path(d, "r1", "part1-1.md").write_text("Slice: slice-1\nread | 5.1 | HOLDS | src/cli.py:3\n" + counts(1, 1), encoding="utf-8")
@@ -286,7 +285,7 @@ class FormFeedDocTest(unittest.TestCase):
         evidence = '`src/a.ts:4` | "return doIt(x);" | called with a number\n'
         doc = "## A4 Running\f\n\nIt calls doIt with the number. `src/a.ts:4` [A4.aaaa]\n"
         with make(FF_REPO) as repo, tempfile.TemporaryDirectory() as d:
-            for name, text in (("audit.md", audit), ("guards.md", guards), ("evidence.md", evidence), ("doc.md", doc)):
+            for name, text in (("audit.md", audit), ("guards.md", guards), ("evidence.md", evidence), ("doc.md", doc), ("choice.md", "- the behaviours kept, one line each\n")):
                 Path(d, name).write_text(text, encoding="utf-8")
             code, out, err = script("check_citations.py", Path(d, "doc.md"), repo, "--audit", Path(d, "audit.md"))
         self.assertEqual(code, 0, out + err)
@@ -336,7 +335,7 @@ class UsageTest(unittest.TestCase):
         audit = '3 | assert: src/cli.py:2 "limit = 5" | exits: none listed | callers: none found | found: nothing | result: HOLDS\n'
         repo_files = {"src/cli.py": "def run():\n    limit = 5  # the cap\n    stop()  # then stop\n"}
         with make(repo_files) as repo, tempfile.TemporaryDirectory() as d:
-            for name, text in (("audit.md", audit), ("guards.md", "# guards\n"), ("evidence.md", evidence), ("doc.md", doc)):
+            for name, text in (("audit.md", audit), ("guards.md", "# guards\n"), ("evidence.md", evidence), ("doc.md", doc), ("choice.md", "- the behaviours kept, one line each\n")):
                 Path(d, name).write_text(text, encoding="utf-8")
             code, out, err = script("check_citations.py", Path(d, "doc.md"), repo, "--audit", Path(d, "audit.md"))
         self.assertNotIn("no evidence row", out + err)
@@ -402,6 +401,7 @@ class EvidenceRowTest(unittest.TestCase):
             Path(d, "doc.md").write_text(doc)
             Path(d, "audit.md").write_text(audit)
             Path(d, "guards.md").write_text("# guards\n")
+            Path(d, "choice.md").write_text("- the behaviours kept\n")
             Path(d, "evidence.md").write_text(evidence)
             code, out, err = script("check_citations.py", Path(d, "doc.md"), repo, "--audit", Path(d, "audit.md"))
         return [l for l in out.splitlines() if "FAIL evidence" in l]
@@ -575,7 +575,9 @@ class FixedSentenceTest(unittest.TestCase):
         with make(REPO) as repo, tempfile.TemporaryDirectory() as d:
             Path(d, "GUIDE.md").write_text(DOC)
             Path(d, "ids.txt").write_text("5\n12\n")
-            code, out, err = script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "ids.txt"), "--out", Path(d, "o"), "--record-fixed", Path(d, "fixed-ids.txt"))
+            (Path(d) / "rep").mkdir()
+            Path(d, "rep", "r.md").write_text("read | 5.1 | HOLDS | src/cli.py:3\nread | 12.1 | HOLDS | src/cli.py:7\n")
+            code, out, err = script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "ids.txt"), "--out", Path(d, "o"), "--reports", Path(d, "rep"), "--record-fixed", Path(d, "fixed-ids.txt"))
             text = Path(d, "fixed-ids.txt").read_text()
         self.assertEqual(code, 0, err)
         self.assertEqual(text, "A4.0001 | It saves notes.\n")
@@ -585,7 +587,9 @@ class FixedSentenceTest(unittest.TestCase):
             Path(d, "ids.txt").write_text("5\n")
             Path(d, "fixed-ids.txt").write_text("A4.0001 | An older text.\n")
             Path(d, "GUIDE.md").write_text(DOC)
-            script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "ids.txt"), "--out", Path(d, "o"), "--record-fixed", Path(d, "fixed-ids.txt"))
+            (Path(d) / "rep").mkdir()
+            Path(d, "rep", "r.md").write_text("read | 5.1 | HOLDS | src/cli.py:3\n")
+            script("slice.py", Path(d, "GUIDE.md"), repo, "--ids", Path(d, "ids.txt"), "--out", Path(d, "o"), "--reports", Path(d, "rep"), "--record-fixed", Path(d, "fixed-ids.txt"))
             self.assertEqual(Path(d, "fixed-ids.txt").read_text(), "A4.0001 | It saves notes.\n")
 
     def lint_fixed(self, fixed, part1):

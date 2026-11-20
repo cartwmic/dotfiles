@@ -42,20 +42,23 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
             (what assemble.py prints, such as the header) and bare list marks are not words.
             A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
 The last checks, with --audit FILE (the writer's own pass; run on a section draft, not on the whole guide):
-  audit     FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
+  audit     FAIL when FILE is missing (the FAIL names the path), and FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
             `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
             doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
-            that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited.
+            that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited. The quote runs to the quote mark
+            before ` | exits:`, so a line that holds ` | ` is copied as it is.
+  choice    FAIL when choice.md (beside FILE) is missing or empty: stage 0 of references/drafting.md lists the behaviours kept there.
   guards    FAIL when the condition sheet is missing or a guard on it is unmarked. The sheet is the output of --guards, saved as guards.md beside FILE (or
             --guards-file): one row `guard | path:line | kind | source | covered:` for each early exit above a cited line (the exits --sheet lists). Each row ends
             `covered: <id>` (the id of a draft line that cites the same file and states the condition) or `covered: not relevant: <reason of three words or more>`.
             A guard the sheet leaves out, or an id the draft does not carry, fails. A file the exits cannot be read from has no rows: read the function by hand.
   evidence  FAIL when the evidence file (evidence.md beside FILE, or --evidence-file) is missing or a cited range has no row in it: a row is
             `path:line "the line, copied"` (or `path:START-END "..."`) with a line inside the range and the whole quoted text on that line (on one line of
-            the row's range), so each cited line was opened and read. The text runs to the last quote mark of its cell, so a line with `"` or backticks
-            in it is copied whole; a row that agrees with its line only as far as an inner quote fails.
+            the row's range), so each cited line was opened and read. The quote closes at the first quote mark followed by ` | ` or the end of the row, so a
+            line that holds ` | ` (a type union, an `||`) or a quote mark is copied whole with no escape. The one gap: a line that itself holds a quote mark and then
+            ` | ` ends the quote there.
   uncited   FAIL a sentence with no citation unless it says "inferred" or "from your list": a README label alone is not a citation.
---guards prints the condition sheet to save and mark (see guards above); the checks above are skipped.
+--guards prints the condition sheet to save and mark (see guards above), each source line as written (`||` stays `||`); the checks above are skipped.
 --show path:START-END prints those lines of a file in the repo, numbered as `cat -n` and the Read tool number them (newlines only: a form feed does not
           start a line), in the form --sheet uses. Exit 1 when the file or a line of the range is not there. A writer takes its line numbers from this.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
@@ -319,7 +322,7 @@ def guards(doc_text, repo):
                 continue
             for f, _ in found:
                 for e in (f.get("exits", []) if f and not f.get("unreadable") else []):
-                    out.setdefault((path, e["line"]), (e["kind"], lines[e["line"] - 1].strip().replace("|", "/"), c["line"]))
+                    out.setdefault((path, e["line"]), (e["kind"], lines[e["line"] - 1].strip(), c["line"]))
     return out
 
 
@@ -374,22 +377,32 @@ def guard_fails(doc_text, repo, sheet_text, where):
     return fails
 
 
+def quote_close(row, start):
+    """Where the quote that opens just before `start` closes: the first quote mark followed by optional spaces and then ` | ` or the end of the row, so a line that holds
+    ` | ` (a type union, an `||`) or quote marks is copied whole and needs no escape. A row with no such quote mark ends its quote at the last one before its next ` | `. None when
+    the row has no closing quote. The one gap: a code line that itself holds a quote mark and then ` | ` ends the quote there, and the row is read as far as that."""
+    marks = list(CLOSE_QUOTE.finditer(row, start))
+    for m in marks:
+        if re.match(r"\s*(?:\||$)", row[m.end():]):
+            return m.start()
+    end = row.find(" | ", start)
+    cell = [m for m in marks if end < 0 or m.start() < end]
+    return cell[-1].start() if cell else None
+
+
 def evidence_rows(evidence_text):
-    """[(path, first, last, [parts])] for each row of an evidence file: its citation, then the text it quotes. The quote opens at the first quote mark after the
-    citation and closes at the last one of the cell (a cell ends at the next ` | `), so a line that holds quote marks is copied whole. Parts are the text
-    around its ellipses (`...` or the ellipsis character), each squashed."""
+    """[(path, first, last, [parts])] for each row of an evidence file: its citation, then the text it quotes (see quote_close for where the quote ends).
+    Parts are the text around its ellipses (`...` or the ellipsis character), each squashed."""
     rows = []
     for l in evidence_text.split("\n"):
         m = EVIDENCE_CITE.search(l)
         opener = OPEN_QUOTE.search(l, m.end() + (l[m.end():m.end() + 1] == "`")) if m else None  # the backtick that closes the citation is not a quote
         if not opener:
             continue
-        end = l.find(" | ", opener.end())
-        cell = l[opener.end():end if end >= 0 else len(l)]
-        closers = list(CLOSE_QUOTE.finditer(cell))
-        if not closers:
+        closer = quote_close(l, opener.end())
+        if closer is None:
             continue
-        parts = [squash(q) for q in re.split(r"\u2026|\.\.\.", cell[:closers[-1].start()]) if squash(q)]
+        parts = [squash(q) for q in re.split(r"\u2026|\.\.\.", l[opener.end():closer]) if squash(q)]
         if parts:
             rows.append((m.group(1), int(m.group(2)), int(m.group(3) or m.group(2)), parts))
     return rows
@@ -464,8 +477,11 @@ def audit_rows(audit_text):
     return rows
 
 
-def audit_fails(doc_text, repo, audit_text):
-    """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line."""
+def audit_fails(doc_text, repo, audit_text, where):
+    """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line. The audit file at `where` is
+    missing (audit_text None): one FAIL that names the path."""
+    if audit_text is None:
+        return [(1, "audit", "no audit file at %s: write one row for each sentence (stage 3 of references/drafting.md)" % where)]
     rows, cache, fails = audit_rows(audit_text), {}, []
     for c in claims(doc_text, repo):
         if c.get("heading") or not c["cites"]:
@@ -524,7 +540,7 @@ def main(argv):
     if "--show" in opts and opts["--show"] and len(opts) == 1 and len(args) == 1 and os.path.isdir(args[0]):
         return show(os.path.realpath(args[0]), opts["--show"])
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or "--show" in opts \
-            or any(opts.get(k) is None or (k in ("--audit",) and not os.path.isfile(opts[k])) for k in opts) \
+            or any(opts.get(k) is None for k in opts) \
             or (("--guards-file" in opts or "--evidence-file" in opts) and "--audit" not in opts) \
             or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-sentence-words")):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
@@ -542,9 +558,15 @@ def main(argv):
     words = word_count(text, os.path.realpath(repo))
     if opts.get("--audit"):
         real = os.path.realpath(repo)
-        with open(opts["--audit"], encoding="utf-8", errors="replace") as f:
-            extra = audit_fails(text, real, f.read()) if not bad else []
         folder = os.path.dirname(os.path.abspath(opts["--audit"]))
+        extra = []
+        if not bad:
+            audit_body = open(opts["--audit"], encoding="utf-8", errors="replace").read() if os.path.isfile(opts["--audit"]) else None
+            extra += audit_fails(text, real, audit_body, opts["--audit"])
+            choice = os.path.join(folder, "choice.md")
+            choice_body = open(choice, encoding="utf-8", errors="replace").read() if os.path.isfile(choice) else None
+            if not (choice_body or "").strip():
+                extra.append((1, "choice", "no choice file at %s: stage 0 of references/drafting.md lists the behaviours kept, one line each" % choice))
         for key, name, check_files in (("--guards-file", "guards.md", guard_fails), ("--evidence-file", "evidence.md", evidence_fails)):
             where = opts.get(key) or os.path.join(folder, name)
             body = open(where, encoding="utf-8", errors="replace").read() if os.path.isfile(where) else None

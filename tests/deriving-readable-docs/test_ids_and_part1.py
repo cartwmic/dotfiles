@@ -47,10 +47,12 @@ It stops after 5 notes in one day. `src/cli.py:7` [A4.b2]
 """
 
 
-def lint(guide, *extra, surfaces=SURFACES):
+def lint(guide, *extra, surfaces=SURFACES, files=None):
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "src").mkdir()
         (Path(d) / "src/cli.py").write_text("x\n" * 10)
+        for rel, text in (files or {}).items():
+            Path(d, rel).write_text(text)
         Path(d, "GUIDE.md").write_text(guide)
         Path(d, "surfaces.json").write_text(json.dumps(surfaces))
         r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "lint_main.py"), str(Path(d, "GUIDE.md")), d, "--surfaces", str(Path(d, "surfaces.json")), *extra],
@@ -216,10 +218,10 @@ class LabelTest(unittest.TestCase):
 
     def test_a_file_named_in_the_label_counts(self):
         guide = self.guide("CONTRACT.md says it stops after 5 notes. `CONTRACT.md:3`", "It stops after 5 notes a day.")
-        code, out = lint(guide)
+        code, out = lint(guide, files={"CONTRACT.md": "x\n" * 5})  # a repo file: its name is a source
         self.assertIn("FAIL label:", out)
         guide = self.guide("CONTRACT.md says it stops after 5 notes. `CONTRACT.md:3`", "CONTRACT.md says it stops after 5 notes a day.")
-        self.assertEqual(lint(guide)[0], 0)
+        self.assertEqual(lint(guide, files={"CONTRACT.md": "x\n" * 5})[0], 0)
 
     def test_a_code_comment_label_in_brackets_after_the_citation_counts(self):
         guide = self.guide("It stops after 5 notes (code comment). `src/cli.py:7`", "It stops after 5 notes a day.")

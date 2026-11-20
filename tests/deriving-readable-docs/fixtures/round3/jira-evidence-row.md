@@ -1,0 +1,1 @@
+| 37 | `src/board/trackers/jira.ts:39` | "partOf<JiraSection | undefined>(parts, 'jira')?.grantsWrite === true" | loadConfig configRefusal | grantsWrite true -> refusal text | yes | jira section present |

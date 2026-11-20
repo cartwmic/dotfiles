@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """Cut a doc into slices of at most 60 claims and build each slice's claim list and flag list for a fresh checker.
 
-usage: slice.py <doc.md> <repo> [--max-claims N] [--out DIR] [--ids FILE [--record-fixed FILE]]
+usage: slice.py <doc.md> <repo> [--max-claims N] [--out DIR] [--ids FILE [--reports DIR --record-fixed FILE]]
 
 A claim is a sentence, bullet or table row of the prose (headings, the header, fenced code and printed blocks are not): the count the check prints.
-Each claim has an id `N.k`: doc line N, sentence k of that line. A slice is whole sections: the lines from one heading to the line before the heading that
-starts the next slice. The heading `Part 2` always starts a new slice, so Part 1 is never mixed with the appendix. A section that does not fit is cut
-between lines. N is at most 60 (the default): a slice never holds more, except one line that holds more claims alone, which is marked `over`.
+Each claim has an id `N.k`: doc line N, sentence k of that line. Part 1 and the appendix are cut apart (the heading `Part 2` starts a slice). Each part goes into
+ceil(claims / 60) slices of near-equal size, cut between lines, so 69 claims make two slices of 35 and 34, not 60 and 9. A line is never split: a slice differs
+from the others by up to the claims of one line, and a line that holds more claims than the limit alone is marked `over`. N is at most 60 (the default).
 Runs check_citations.py on the doc to get its flagged sentences, and gives each slice those flags whose doc line is inside it.
 Prints one line a slice: `slice K: lines A-B, C claims, F flags`. With --out DIR it writes, for each slice, slice-K.flags.txt and slice-K.claims.txt
 (one claim a line: `N.k | claim | the sentence, with its tags`; the kind is `outside` for a glossary entry with no tag, which defines an outside term and has
 no line to read), and slices.json (`[{n, first_line, last_line, claims, flags, over, part1}]`). The checker brief takes the claims file and the flag list.
 --ids FILE re-checks only the sentences it lists, one id a line or separated by commas or spaces (a # starts a comment): a doc line `N`, a claim id `N.k`,
-or an id of an appendix line (`A4.3f9a`). The slices then hold those claims only, cut at 60 and apart for Part 1 and the appendix. An id that is
+or an id of an appendix line (`A4.3f9a`). The slices then hold those claims only, cut the same way and apart for Part 1 and the appendix. An id that is
 nowhere in the doc is an error (exit 1).
---record-fixed FILE (with --ids) writes the Part 1 sentences of that list to FILE as `tags | sentence`, one row for each set of tags, replacing the row with
-the same tags. lint_main.py --fixed FILE then warns when a later fix reworded one of them. Exit 2 on bad usage. Stdlib only.
+--record-fixed FILE (with --ids and --reports DIR) is run once the fix round's checkers have reported: DIR holds their reports. It writes the Part 1 sentences of the
+list to FILE as `tags | sentence`, one row for each set of tags, replacing the row with the same tags. A sentence its report marks HOLDS is recorded as it stands;
+any other verdict, or no row, records `tags | cut`. lint_main.py --fixed FILE then warns when a later fix reworded a recorded sentence, and skips a `cut` row. Exit 2 on bad
+usage. Stdlib only.
 """
 import json
 import os
@@ -36,65 +38,55 @@ class SliceError(Exception):
     pass
 
 
-def sections(text, per_line):
-    """[(first_line, claims, hard, lines)] for each block that starts at a heading (the first block starts at line 1). hard marks the block that starts at the
-    heading `Part 2`. lines is {doc line: claims} for the lines of the block that hold claims."""
-    lines = split_lines(text)
-    starts = [1] + [n for n, _, _, heading in doc_lines(text) if heading and n != 1]
-    bounds = starts + [len(lines) + 1]
-    out = []
-    for i in range(len(starts)):
-        held = {n: c for n, c in per_line.items() if bounds[i] <= n < bounds[i + 1]}
-        out.append((bounds[i], sum(held.values()), bool(re.match(r"#+\s+Part 2\b", lines[bounds[i] - 1])), held))
-    return out
-
-
-def split_section(first, held, limit):
-    """[(first_line, claims)] for a section of more claims than the limit: cut between lines, each piece as full as the limit allows."""
-    pieces, cur, start = [], 0, first
-    for n in sorted(held):
-        if cur and cur + held[n] > limit:
-            pieces.append((start, cur))
-            cur, start = 0, n
-        cur += held[n]
-    pieces.append((start, cur))
+def balance(weights, limit):
+    """Cut an ordered list of (key, weight) into pieces of near-equal weight: ceil(total/limit) of them, each close to the share of what is left, never above the limit
+    (an item heavier than the limit stands alone). Items are never split, so a piece can differ from the others by up to the weight of one item."""
+    total = sum(w for _, w in weights)
+    count = max(1, -(-total // limit))
+    pieces, cur, weight, left = [], [], 0, total
+    for key, w in weights:
+        target = -(-left // max(1, count - len(pieces)))
+        closer = abs(weight + w - target) > abs(weight - target)  # adding this item leaves the piece further from its share
+        if cur and (weight + w > limit or (len(pieces) < count - 1 and weight + w > target and closer)):
+            pieces.append(cur)
+            left -= weight
+            cur, weight = [], 0
+        cur.append(key)
+        weight += w
+    pieces.append(cur)
     return pieces
 
 
-def cut(secs, total_lines, limit):
-    units = []
-    for first, claims, hard, held in secs:
-        if claims > limit and len(held) > 1:
-            units += [(f, c, hard and k == 0) for k, (f, c) in enumerate(split_section(first, held, limit))]
-        else:
-            units.append((first, claims, hard))
-    slices, cur = [], None
-    for first, claims, hard in units:
-        if cur and not hard and cur["claims"] + claims <= limit:
-            cur["claims"] += claims
-            continue
-        if cur:
-            slices.append(cur)
-        cur = {"first_line": first, "claims": claims}
-    if cur:
-        slices.append(cur)
-    for i, s in enumerate(slices):
-        s["n"] = i + 1
-        s["last_line"] = slices[i + 1]["first_line"] - 1 if i + 1 < len(slices) else total_lines
-        s["over"] = s["claims"] > limit
+def cut(text, per_line, limit):
+    """Slices of the claims of a doc, by doc line: Part 1 and the appendix are cut apart (the heading `Part 2` starts a slice), and each part goes into ceil(claims/limit)
+    slices of near-equal size, cut between lines. A line that holds more claims than the limit alone is marked `over`."""
+    lines = split_lines(text)
+    end = len(lines) + 1
+    p2 = next((n for n, l in enumerate(lines, 1) if re.match(r"#+\s+Part 2\b", l)), None)
+    slices = []
+    for first, after in ((1, p2), (p2, end)) if p2 and p2 > 1 else ((1, end),):
+        held = [(n, c) for n, c in sorted(per_line.items()) if first <= n < after]
+        for k, piece in enumerate(balance(held, limit) if held else []):
+            slices.append({"first_line": first if k == 0 else piece[0], "claims": sum(per_line[n] for n in piece)})
+    slices = slices or [{"first_line": 1, "claims": 0}]
+    for i, sl in enumerate(slices):
+        sl["n"] = i + 1
+        sl["last_line"] = slices[i + 1]["first_line"] - 1 if i + 1 < len(slices) else len(lines)
+        sl["over"] = sl["claims"] > limit
     return slices
 
 
 def cut_ids(chosen, part1_range, limit):
-    """Slices of the chosen claims [(id, line, sentence, kind)] only: Part 1 first, then the rest, each cut at the limit."""
+    """Slices of the chosen claims [(id, line, sentence, kind)] only: Part 1 first, then the rest, each part in ceil(claims/limit) slices of near-equal size."""
     slices = []
     inside = [c for c in chosen if part1_range[0] <= c[1] < part1_range[1]]
     for group in (inside, [c for c in chosen if c not in inside]):
-        for i in range(0, len(group), limit):
-            part = group[i:i + limit]
-            slices.append({"first_line": part[0][1], "last_line": part[-1][1], "claims": len(part), "over": False, "ids": [c[0] for c in part]})
-    for i, s in enumerate(slices):
-        s["n"] = i + 1
+        by_id = {c[0]: c for c in group}
+        for piece in balance([(c[0], 1) for c in group], limit) if group else []:
+            part = [by_id[i] for i in piece]
+            slices.append({"first_line": part[0][1], "last_line": part[-1][1], "claims": len(part), "over": False, "ids": piece})
+    for i, sl in enumerate(slices):
+        sl["n"] = i + 1
     return slices
 
 
@@ -143,8 +135,23 @@ def read_ids(path, claims, text, repo):
     return [c for c in claims if c[0] in chosen]
 
 
-def record_fixed(path, chosen, part1_range):
-    """Write the Part 1 claims of `chosen` to the fixed-ids file: `tags | sentence`, replacing the row that has the same tags."""
+READ_ROW = re.compile(r"^\s*(?:[-*]\s*)?read\s*\|\s*(\d+\.\d+)\s*\|\s*(\w+)\s*\|", re.M | re.I)
+
+
+def read_verdicts(folder):
+    """{claim id: VERDICT} from the `read | N.k | VERDICT | path:line` rows of every .md and .txt report in the folder."""
+    out = {}
+    for name in sorted(os.listdir(folder)):
+        if name.endswith((".md", ".txt")) and os.path.isfile(os.path.join(folder, name)):
+            with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as f:
+                out.update((m.group(1), m.group(2).upper()) for m in READ_ROW.finditer(f.read()))
+    return out
+
+
+def record_fixed(path, chosen, part1_range, verdicts):
+    """Write the Part 1 claims of `chosen` to the fixed-ids file, one row `tags | sentence` for each set of tags, replacing the row with the same tags. A sentence the
+    re-check says HOLDS is recorded as it stands; any other verdict (or no row) records `tags | cut`, because the lead cuts or narrows it next and lint_main.py must not
+    warn about that."""
     rows = {}
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
@@ -152,16 +159,16 @@ def record_fixed(path, chosen, part1_range):
                 tags, bar, sentence = l.partition("|")
                 if bar and tags.strip():
                     rows[" ".join(sorted(tags.split()))] = sentence.strip()
-    for _, n, sentence, kind in chosen:
+    for cid, n, sentence, kind in chosen:
         tags = sorted(t.strip("[]") for t in TAG.findall(sentence))
         if kind == "claim" and tags and part1_range[0] <= n < part1_range[1]:
-            rows[" ".join(tags)] = re.sub(r"\s+", " ", TAG.sub("", sentence)).strip()
+            rows[" ".join(tags)] = re.sub(r"\s+", " ", TAG.sub("", sentence)).strip() if verdicts.get(cid) == "HOLDS" else "cut"
     with open(path, "w", encoding="utf-8") as f:
         f.write("".join("%s | %s\n" % kv for kv in rows.items()))
 
 
 def main(argv):
-    args, limit, out, ids, fixed, it = [], MAX_CLAIMS, None, None, None, iter(argv[1:])
+    args, limit, out, ids, fixed, reports, it = [], MAX_CLAIMS, None, None, None, None, iter(argv[1:])
     for a in it:
         if a == "--max-claims":
             v = next(it, "")
@@ -172,10 +179,13 @@ def main(argv):
             ids = next(it, None)
         elif a == "--record-fixed":
             fixed = next(it, None)
+        elif a == "--reports":
+            reports = next(it, None)
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or limit is None or (out is not None and not out) \
-            or (ids is not None and not os.path.isfile(ids)) or (fixed is not None and (not fixed or ids is None)):
+            or (ids is not None and not os.path.isfile(ids)) or (fixed is not None and (not fixed or ids is None or not reports)) \
+            or (reports is not None and (not os.path.isdir(reports) or fixed is None)):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     doc, repo = args[0], os.path.realpath(args[1])
@@ -195,7 +205,7 @@ def main(argv):
         per_line = {}
         for c in claims:
             per_line[c[1]] = per_line.get(c[1], 0) + 1
-        slices = cut(sections(text, per_line), len(split_lines(text)), limit)
+        slices = cut(text, per_line, limit)
     flags = flags_of(doc, repo)
     for s in slices:
         mine = [c for c in chosen if s["first_line"] <= c[1] <= s["last_line"] and (s.get("ids") is None or c[0] in s["ids"])]
@@ -214,7 +224,7 @@ def main(argv):
         with open(os.path.join(out, "slices.json"), "w", encoding="utf-8") as f:
             json.dump([{k: v for k, v in s.items() if k not in ("flag_lines", "claim_lines", "ids")} for s in slices], f, indent=2)
     if fixed:
-        record_fixed(fixed, chosen, p1)
+        record_fixed(fixed, chosen, p1, read_verdicts(reports))
     return 0
 
 

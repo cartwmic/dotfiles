@@ -12,15 +12,16 @@ Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `do
                     the tagged appendix sentence itself states a default. The very next sentence with the same tag may carry the condition.
                     In the appendix line, `without` and `otherwise` count only where they open a clause (at its start or after , ; : ( or a dash), and a
                     word inside quotation marks or a backticked name is not the sentence's own condition
-  label             a sentence whose tagged appendix line says its source (README, a file such as CONTRACT.md, a code comment, help text) must say a source too
+  label             a sentence whose tagged appendix line says its source (README, a file such as CONTRACT.md, a code comment, help text) must say a source too. A `.md`,
+                    `.rst` or `.txt` name is a source only when the repo holds a file of that name (a file the product writes, such as notes.md, is not)
   how-to-start      Part 1 needs a `## How to start` section with at least one sentence, and each sentence must rest on a cited appendix line
   glossary          an optional `## Glossary` at the end, each entry `term: definition`, any number. An entry with no tag defines a term from outside the
                     repo and makes no claim about it: it holds no backticked name and no --flag. An entry about the repo carries a tag like any sentence
-  fixed             with --fixed (the file `slice.py --record-fixed` writes), a warning when a Part 1 sentence a checker already fixed was reworded
+  fixed             with --fixed (the file `slice.py --record-fixed` writes), a warning when a Part 1 sentence a checker already fixed was reworded; a row recorded as `cut` is skipped
   citation          a `path:line` in Part 1 fails: the code belongs in the appendix
   backticks         more than 8 distinct backticked names fails, and so does one that is not a surface name (a row of surfaces.json, or its first word)
   flags             more than 3 `--flag` tokens fails
-  jargon            more than 4 hits per 1,000 words of references/jargon.txt fails
+  jargon            more than 4 hits per 1,000 words of references/jargon.txt fails; a term counts with a common ending (-s, -es, -ed, -d, -ing), once for each span
   appendix-match    a number, a "quoted" string or a backticked name in a sentence must also be in one of the appendix sentences its tags name
 Stdlib only. Exit 2 on a usage error.
 """
@@ -42,6 +43,10 @@ BY_DEFAULT = re.compile(r"(?<![\w-])(?:by default|in the default setup)(?![\w-])
 A_DEFAULT = re.compile(r"(?<![\w-])defaults?(?:ed|s)?(?![\w-])", re.I)
 # A source an appendix sentence names for itself: the README, a file such as CONTRACT.md, a code comment, help text, a test title, the docs.
 SOURCE_LABEL = re.compile(r"(?<![\w-])(?:README|[\w-]+\.(?:md|rst|txt)|code comments?|help text|test titles?|docs|documentation)(?![\w-])", re.I)
+CUT = "cut"  # the sentence slot of a fixed-ids row for a sentence that did not hold on its re-check
+FILE_LABEL = re.compile(r"^[\w-]+\.(?:md|rst|txt)$", re.I)  # a source named by a file; it counts only when the repo holds a file of that name
+SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
+_REPO_NAMES = {}
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NUMBER = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\w])")
 FLAG = re.compile(r"(?<![\w-])--[a-z][\w-]*")
@@ -49,6 +54,24 @@ FLAG = re.compile(r"(?<![\w-])--[a-z][\w-]*")
 
 def squash(text):
     return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def repo_file_names(repo):
+    """The names and relative paths of the files of a repo (cached): what a `*.md` source label is checked against."""
+    if repo not in _REPO_NAMES:
+        found = set()
+        for root, dirs, files in os.walk(repo):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for f in files:
+                found.update((f.lower(), os.path.relpath(os.path.join(root, f), repo).lower()))
+        _REPO_NAMES[repo] = found
+    return _REPO_NAMES[repo]
+
+
+def source_labels(text, repo):
+    """The sources a text names: README, a code comment, help text, a test title, the docs, or a `NAME.md`-style file that is in the repo. A file name that is not in the
+    repo (a file the product writes, such as notes.md) is not a source."""
+    return [m.group(0) for m in SOURCE_LABEL.finditer(text) if not FILE_LABEL.match(m.group(0)) or m.group(0).lower() in repo_file_names(repo)]
 
 
 def surface_names(rows):
@@ -83,13 +106,24 @@ def read_fixed(path):
     with open(path, encoding="utf-8") as f:
         for l in f:
             tags, bar, sentence = l.partition("|")
-            if bar and tags.strip():
+            if bar and tags.strip() and sentence.strip() != CUT:  # a sentence recorded as cut may be reworded or gone
                 out[" ".join(sorted(tags.split()))] = sentence.strip()
     return out
 
 
+def jargon_pattern(terms):
+    """One pattern for the whole list: each term whole, or with a common ending on its last word (-s, -es, -ed, -d, -ing; a final e drops before -ing), longest term first so a
+    span is counted once ("endpoints" is one hit, not two)."""
+    alts = []
+    for t in sorted({t.lower() for t in terms}, key=len, reverse=True):
+        stem = re.escape(t)
+        alts.append(stem + r"(?:s|es|ed|d|ing)?" + (r"|" + re.escape(t[:-1]) + "ing" if t.endswith("e") else ""))
+    return re.compile(r"(?<![\w-])(?:" + "|".join(alts) + r")(?![\w-])", re.I) if alts else None
+
+
 def jargon_hits(text, terms):
-    return sum(len(re.findall(r"(?<![\w-])" + re.escape(t) + r"(?![\w-])", text, re.I)) for t in terms)
+    pattern = jargon_pattern(terms)
+    return len(pattern.findall(text)) if pattern else 0
 
 
 def section_lines(part1):
@@ -163,8 +197,8 @@ def lint(guide, repo, rows, terms, fixed=None):
             carried = t in TAG.findall(nxt) and names_condition(TAG.sub(" ", nxt), text)  # the very next sentence with the same tag carries it
             if words and not names_condition(bare, text) and not carried:
                 fails.append((n, "condition", "%s holds %s and the sentence names no condition: state it (\"by default\" counts only when the line states a default) | %s" % (t, ", ".join("\"%s\"" % w for w in words), s)))
-            labels = sorted({m.group(0) for m in SOURCE_LABEL.finditer(text)})
-            if labels and not SOURCE_LABEL.search(bare):
+            labels = sorted(set(source_labels(text, repo)))
+            if labels and not source_labels(bare, repo):
                 fails.append((n, "label", "%s says its source (%s) and the sentence drops it | %s" % (t, ", ".join(labels), s)))
         have, have_sq = " ".join(backed), squash(" ".join(backed))
         nums = {x.replace(",", "") for x in NUMBER.findall(have.replace(",", ""))} | set(NUMBER.findall(have))

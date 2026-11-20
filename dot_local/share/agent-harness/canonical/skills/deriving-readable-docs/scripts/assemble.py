@@ -18,7 +18,7 @@ read it as claims or count it as words.
   A2        a surface of kind command, flag, route, event or env is named in tests when its name (first word, at least 3 characters) is in the text of a test file of
             points.json; the ones never named are listed
 --clean also writes the guide without tags and printed markers, next to -o as GUIDE.clean.md.
---index prints every appendix line as `A4.3f9a | sentences` (the id the line carries) and writes nothing: it is what the front writer tags from.
+--index prints every appendix line as `A4.3f9a | sentences` (the id the line carries, citations taken out with the space before a stop or comma) and writes nothing: it is what the front writer tags from.
 Exit 1 when a part is missing or misnumbered, a prose line has no id or an id is on two lines, or a not-read path does not exist; 2 on bad usage. Stdlib only.
 """
 import datetime
