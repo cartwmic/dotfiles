@@ -51,6 +51,8 @@ Judge each finding against the change's stated intent and scope. A problem outsi
 
 Data loss, corruption or a broken promised outcome in what the change touches or promises always blocks, however narrow the trigger.
 
+A PR description that is hard for a reader with no context to digest, wrong about what the diff does or how it was checked, or carries ledger, plan or task ids (other than the `Decisions:` line), agent bookkeeping or noise is a blocking finding (playbook 5a05bfe8). Its obligation is that rule, and its consequence is that a reader of the PR is misled or cannot follow it.
+
 Everything else is a **note**. A note needs no extra round and no disposition; it goes to the residuals. Preferences, wishes and style are notes. Name machinery that could be removed while the required behaviour stays; that is a note unless it breaks a principle. A pass on principle 4 or 11 cites its evidence.
 
 Do not add a privacy or security requirement the intent does not have. Default to YAGNI. A guarantee the owner required in his words quoted in the Owner intent block is part of the intent, not an added requirement: it is in scope. A quoted guarantee that the change does not keep, or that the restated intent leaves out, is a blocking finding. Its `obligation` quotes the ask (with its number), and its `consequence` says what the owner was promised that he would not get.
