@@ -21,6 +21,9 @@ SCRIPT = ROOT / "dot_local/bin/executable_review-intent"
 FAKE_LEDGER = """#!/usr/bin/env python3
 import json, os, sys
 db = json.load(open(os.path.join(os.environ["COORDINATOR_STATE_DIR"], "db.json")))
+if sys.argv[1] == "list":
+    print(json.dumps(list(db.get(sys.argv[2], {}).values())))  # `ledger list decisions --json`
+    sys.exit(0)
 _, kind, key, *flags = sys.argv[1:]
 row = db.get(kind + "s", {}).get(key)
 if row is None:
@@ -102,7 +105,7 @@ class ReviewIntent(unittest.TestCase):
             f = self.dir / "body.md"
             f.write_text(text, encoding="utf-8")
             argv += ["--body-file", str(f)]
-        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir))
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"))
         return subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
 
     def put_pr(self, *, files, contents, body="", head="abc123", fail=None):
@@ -201,6 +204,60 @@ class ReviewIntent(unittest.TestCase):
                          workstreams=[{"name": "W%d" % i, "why": why}])
                 got = sorted(int(x) for x in self.marker(self.run_script("ask #%d" % (500 + i)).stdout)[0].split(",") if int(x) != 500 + i)
                 self.assertEqual(got, want)
+
+    def put_record(self, item, text):
+        f = self.dir / "traces/emitted/review" / item / "pr-record.md"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+
+    def test_with_a_pr_record_its_ids_are_read_and_the_body_is_not(self):
+        self.put(asks=[ask(7), ask(8)], decisions=[decision(40, ask_id=7), decision(41)])
+        self.put_pr(files=[], contents={}, body="Does a thing. ask #8\n\nDecisions: #41")
+        self.put_record("coordinator#900", "| ecd63156 | pass |\nask #7\nDecisions: #40\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#900")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("7", "40"))
+        self.assertNotIn("Decision #41", r.stdout)
+
+    def test_a_record_belongs_to_its_own_pr_only(self):
+        self.put(asks=[ask(7), ask(8)])
+        self.put_pr(files=[], contents={}, body="ask #8")
+        self.put_record("coordinator#901", "ask #7")
+        self.assertEqual(self.marker(self.run_script(None, "--pr", "cartwmic/coordinator#902").stdout)[0], "8")
+
+    def test_the_body_is_read_when_the_pr_has_no_record(self):
+        self.put(asks=[ask(8)], decisions=[decision(41)])
+        self.put_pr(files=[], contents={}, body="ask #8\n\nDecisions: #41")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#903")
+        self.assertEqual((r.returncode, self.marker(r.stdout)[:2]), (0, ("8", "41")), r.stderr)
+
+    def test_without_a_record_the_ledger_linked_decisions_are_not_added(self):
+        self.put(asks=[ask(8)], decisions=[decision(60, pr="cartwmic/coordinator#906")])
+        self.put_pr(files=[], contents={}, body="ask #8")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#906")
+        self.assertEqual((r.returncode, self.marker(r.stdout)[:2]), (0, ("8", "none")), r.stderr)
+
+    def test_a_ledger_that_cannot_list_decisions_is_an_error_when_the_record_is_used(self):
+        self.put(asks=[ask(7)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("coordinator#907", "ask #7")
+        (self.dir / "pane-bin/ledger").write_text(FAKE_LEDGER.replace('if sys.argv[1] == "list":', 'if sys.argv[1] == "list":\n    print("boom", file=sys.stderr); sys.exit(1)\nif False:'), encoding="utf-8")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#907")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("could not list decisions", r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_decisions_the_ledger_links_to_the_pr_come_with_their_asks(self):
+        self.put(asks=[ask(7, answer="exactly this")], decisions=[
+            decision(50, ask_id=7, pr="cartwmic/coordinator#904"), decision(51, pr="cartwmic/coordinator#905"),
+            decision(52, pr="cartwmic/coordinator#904", voided_at="T2"), decision(53, pr="Cartwmic/Coordinator#904")])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("coordinator#904", "Decisions: none material\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#904")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("7", "50,53"))
+        self.assertIn("Cited because: the ledger links it to this PR", r.stdout)
+        self.assertIn("> exactly this", r.stdout)
 
     LEADS = '{"name":"retro","approved_by":[1109,1233]}'
 
