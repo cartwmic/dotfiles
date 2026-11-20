@@ -160,7 +160,8 @@ class CheckUntestedHunks(unittest.TestCase):
         base = self.pr({CODE: TOOL_FIXED, TEST: broken + NEW_LABEL}, first={CODE: TOOL, TEST: broken})
         code, out = self.run_check(base)
         self.assertEqual(code, 0, out)
-        self.assertIn("fail before anything was undone", out)
+        self.assertIn("fail in %s (FAIL: test_" % TEST, out)
+        self.assertIn("before anything was undone", out)
 
     def test_tests_that_all_skip_are_not_checked(self):
         skipping = HEADER + "    @unittest.skip('needs a thing this runner lacks')\n    def test_it(self):\n        self.assertTrue(tool.counts(1, 5, 3))\n\n"

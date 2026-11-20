@@ -110,7 +110,7 @@ def tests_naming(commit, path):
 
 
 def run_tests(root, files):
-    """(passed, ran): whether every file's unittest run passed, and how many tests ran and did not skip, summed."""
+    """(failed, ran): the first test file whose unittest run failed (None when all passed), and how many tests ran and did not skip, summed."""
     ran = 0
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     for name in files:
@@ -127,8 +127,9 @@ def run_tests(root, files):
         skipped = re.search(r"skipped=(\d+)", done.stderr)
         ran += int(total.group(1)) - int(skipped.group(1) if skipped else 0) if total else 0
         if done.returncode != 0:
-            return False, ran
-    return True, ran
+            first = re.search(r"^((?:FAIL|ERROR): \S+)", stderr, re.MULTILINE)
+            return name + (" (" + first.group(1) + ")" if first else ""), ran
+    return None, ran
 
 
 class Checkout:
@@ -150,7 +151,7 @@ def survives(commit, path, hunk, files, parent, lock):
     try:
         target = Path(copy.root) / path
         target.write_text(undo(target.read_text(), *hunk))
-        return run_tests(copy.root, files)[0]
+        return run_tests(copy.root, files)[0] is None
     except Hang:
         return False
     finally:
@@ -230,15 +231,15 @@ def main(argv):
             with lock:
                 base = Checkout(head, parent)
             try:
-                passed, ran = run_tests(base.root, files)
+                failed_file, ran = run_tests(base.root, files)
             except Hang as hang:
                 print("NOT CHECKED %s: %s ran longer than %d s before anything was undone" % (path, hang, TIMEOUT))
                 continue
             finally:
                 with lock:
                     base.close()
-            if not passed or ran == 0:
-                print("NOT CHECKED %s: its tests %s before anything was undone (%s)" % (path, "fail" if not passed else "all skip", ", ".join(files)))
+            if failed_file or ran == 0:
+                print("NOT CHECKED %s: its tests %s before anything was undone (%s)" % (path, "fail in " + failed_file if failed_file else "all skip", ", ".join(files)))
                 continue
             for hunk in found_hunks:
                 jobs.append((path, hunk, files, pool.submit(survives, head, path, hunk, files, parent, lock)))
