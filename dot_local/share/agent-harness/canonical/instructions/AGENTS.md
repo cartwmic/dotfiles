@@ -29,7 +29,7 @@ Once I open a one-way door, it stays open for that work, including for any subag
 
 ## The bar
 
-Every repo is held to one of two bars. `personal`: my own project; good enough is the standard and design-principles.md §10 applies. `shared`: work I share with other people and want to be proud of; §10 does not apply. The plan follows from the bar.
+Every repo is held to one of two bars. `personal`: my own project; good enough is the standard and design-principles.md §10 applies; the lead approves a Loop Engine run's intent itself and starts the run, without my sign-off. `shared`: work I share with other people and want to be proud of; §10 does not apply; I sign off a Loop Engine run's intent before it starts. The plan follows from the bar.
 
 Before you change or review anything in a repo, find its bar:
 1. A brief's `Bar:` line for that repo gives it (`Bar: StoryCraftTW/storycraft = shared`). It covers only the repo it names. Use it.

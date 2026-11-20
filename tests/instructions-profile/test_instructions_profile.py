@@ -90,6 +90,11 @@ WORK_NO_ROW_LINE = (
     "On this machine, never add a row for an employer repo to dotfiles (that would put its name in a public repo): "
     "after Michael answers, the answer holds for the session."
 )
+BAR_LOOP_ENGINE = (
+    "the lead approves a Loop Engine run's intent itself and starts the run, without my sign-off. "
+    "`shared`: work I share with other people and want to be proud of; §10 does not apply; "
+    "I sign off a Loop Engine run's intent before it starts."
+)
 BAR_TABLE_HEADING = "## Bar table"
 BAR_ROWS = {
     "personal": (
@@ -201,6 +206,7 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(text.count(BAR_HEADING), 1)
                     self.assertEqual(text.count(BAR_QUESTION), 1)
                     self.assertEqual(text.count(BAR_HOLD_SHARED), 1)
+                    self.assertEqual(text.count(BAR_LOOP_ENGINE), 1)
                     self.assertEqual(text.count(BAR_STATEMENT), 1)
                     self.assertEqual(text.count(WORK_NO_ROW_LINE), int(profile == "axon-work-computer"))
                     self.assertEqual(text.count(BAR_TABLE_HEADING), 1)
