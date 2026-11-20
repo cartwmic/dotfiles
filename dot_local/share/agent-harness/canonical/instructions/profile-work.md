@@ -29,3 +29,5 @@ First match wins.
 | Remote | Bar |
 |---|---|
 | `{{ .workGitHost }}/*`, `github.com/axon-*` | shared |
+
+On this machine, never add a row for an employer repo to dotfiles (that would put its name in a public repo): after Michael answers, the answer holds for the session.

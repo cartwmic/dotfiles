@@ -84,6 +84,12 @@ BAR_QUESTION = (
     "What is the bar for <repo>? Personal (my own project, good enough) or shared "
     "(work I share and want to be proud of)?"
 )
+BAR_HOLD_SHARED = "Until it is answered, hold the work to `shared` and do not cite §10."
+BAR_STATEMENT = 'Say the bar in one line before your first change or review in the repo ("Bar: StoryCraftTW/storycraft = shared"), so I can correct it.'
+WORK_NO_ROW_LINE = (
+    "On this machine, never add a row for an employer repo to dotfiles (that would put its name in a public repo): "
+    "after Michael answers, the answer holds for the session."
+)
 BAR_TABLE_HEADING = "## Bar table"
 BAR_ROWS = {
     "personal": (
@@ -194,6 +200,9 @@ class InstructionProfileTests(unittest.TestCase):
                     text = render(template, profile)
                     self.assertEqual(text.count(BAR_HEADING), 1)
                     self.assertEqual(text.count(BAR_QUESTION), 1)
+                    self.assertEqual(text.count(BAR_HOLD_SHARED), 1)
+                    self.assertEqual(text.count(BAR_STATEMENT), 1)
+                    self.assertEqual(text.count(WORK_NO_ROW_LINE), int(profile == "axon-work-computer"))
                     self.assertEqual(text.count(BAR_TABLE_HEADING), 1)
                     self.assertLess(text.index(BAR_HEADING), text.index(BAR_TABLE_HEADING))
                     for row in BAR_ROWS[profile]:
