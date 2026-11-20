@@ -5,6 +5,7 @@ answers `agent get` from files the test writes (one file per live pane, holding 
 and records each `agent prompt` it accepts. A fake `t3` does the same for `thread send` (argv and stdin). Everything is checked from outside: the launcher's output and exit code, the
 prompts herdr received, and the job log, read back as the replay of each job.
 """
+import fcntl
 import importlib.machinery
 import importlib.util
 import json
@@ -963,6 +964,26 @@ class RunAndWake(unittest.TestCase):
         """`--wait` run from the session the T3 jobs were started in (the owner)."""
         return subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.t3_env()}, cwd=self.root, text=True, capture_output=True, timeout=timeout)
 
+    def wait_until_blocked(self, job, timeout=20):
+        """Returns once a `--wait` process holds the job's wait lock, the state the watcher reads as "the session already has the result". Release a held job only after this:
+        a fixed sleep lets a loaded runner end the job before its waiter has started, and then the wake goes out and no `skip` is written."""
+        lock = self.state / f"run-and-wake/jobs/{job}.wait"
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                fd = os.open(lock, os.O_RDONLY)
+            except OSError:
+                fd = None
+            if fd is not None:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return  # held: the waiter is blocked on the job
+                finally:
+                    os.close(fd)
+            time.sleep(0.05)
+        self.fail(f"no --wait took the wait lock of job {job}")
+
     def final_records(self, job, event, timeout=20):
         """The job's records once one of `event` is in the log."""
         end = time.monotonic() + timeout
@@ -1189,7 +1210,7 @@ class RunAndWake(unittest.TestCase):
         stranger = {**self.env, "HERDR_PANE_ID": "w9:p9", "PI_SESSION_FILE": "/sessions/other.jsonl"}
         mine = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=self.env, cwd=self.root, text=True, stdout=subprocess.PIPE)
         other = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=stranger, cwd=self.root, text=True, stdout=subprocess.PIPE)
-        time.sleep(0.5)
+        self.wait_until_blocked(job)  # the owner's wait must hold its lock before the job ends, or the pane wake goes out
         release.write_text("")
         mine.communicate(timeout=10)
         other.communicate(timeout=10)
