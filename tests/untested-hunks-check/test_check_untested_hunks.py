@@ -1,7 +1,8 @@
 """Black-box tests for scripts/check-untested-hunks.py (the check for a fix whose changed lines no test depends on, dotfiles#641).
 
 Each test builds a scratch git repo with a script and its unittest file, commits a change, and runs the real script over the pull request.
-The budget and SIGTERM tests use fake slow tests (SLOW_SECONDS) against a budget of 1-2 s, so the file runs in seconds.
+The budget and SIGTERM tests use fake slow tests (SLOW_SECONDS) that outlast the budget. A budget test's fast path gets a 10 s budget,
+so it does not depend on how fast the machine is; the file runs in about half a minute.
 
     python3 -m unittest discover -s tests/untested-hunks-check
 """
@@ -35,8 +36,10 @@ TESTS_FOR_BOTH = HEADER + INSIDE + NEW_LABEL + EDGE
 
 # The budget and SIGTERM tests. PACE is the switch: the fake slow test sleeps only while PACE is 'slow', so one hunk (the one that sets
 # PACE back to 'slow' when undone) is slow and the others are quick. The hunks sit on lines 2 (label) and 5 (PACE), so the quick one
-# is checked first, even with one worker.
-SLOW_SECONDS = 10
+# is checked first, even with one worker. The budget covers the unchanged run and the quick hunk, which took 0.6-0.7 s with 8 suites
+# looping on this machine and 1.1-2.0 s with 16 (whole test runs, so upper bounds). The budget is 10 s and the slow test sleeps 60 s,
+# so the slow run is still in flight when the budget ends.
+SLOW_SECONDS = 60
 PACED_BASE = "def label(kind):\n    return kind\n\n\nPACE = 'slow'\n"
 PACED_FIXED = "def label(kind):\n    return 'exit: ' + kind\n\n\nPACE = 'fast'\n"
 PACE_ONLY_FIXED = "def label(kind):\n    return kind\n\n\nPACE = 'fast'\n"
@@ -333,7 +336,7 @@ class CheckUntestedHunks(unittest.TestCase):
         base = self.commit({CODE: PACED_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
         self.commit({CODE: PACED_FIXED}, "fix")
         started = time.monotonic()
-        code, out = self.run_check(base, budget="2")
+        code, out = self.run_check(base, budget="10")
         self.assertLess(time.monotonic() - started, SLOW_SECONDS - 2, out)
         self.assertEqual(code, 1, out)  # the label hunk is a FAIL, printed before the budget ends
         self.assertIn("FAIL untested change: scripts/tool.py changes at line 2", out)
@@ -355,7 +358,7 @@ class CheckUntestedHunks(unittest.TestCase):
         base = self.commit({CODE: PACED_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
         self.commit({CODE: PACE_ONLY_FIXED, TEST: OWN_PACE_IS_FAST}, "fix")
         started = time.monotonic()
-        code, out = self.run_check(base, budget="2")
+        code, out = self.run_check(base, budget="10")
         self.assertLess(time.monotonic() - started, SLOW_SECONDS - 2, out)
         self.assertEqual(code, 0, out)  # the PACE hunk is caught by the own file, so the slow file never runs
         self.assertNotIn("NOT CHECKED", out)
