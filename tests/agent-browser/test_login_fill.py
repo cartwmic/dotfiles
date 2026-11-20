@@ -31,9 +31,12 @@ PAGE = b"""<!doctype html><title>login</title>
 <script>
 const q = new URLSearchParams(location.search), t = q.get('t');
 const post = (path, body) => fetch(path, {method: 'POST', body: JSON.stringify(body)});
+/* a typed value is recorded synchronously, inside the input event: Input.insertText returns only after the handler has, so when agent-login
+   returns the server already holds the record (a fetch here left the record in flight when the test read it: issue 637) */
+const record = (body) => { const x = new XMLHttpRequest(); x.open('POST', '/value', false); x.send(JSON.stringify(body)); };
 for (const el of document.querySelectorAll('input')) el.addEventListener('input', () => { if (el.id === 'trunc') el.value = el.value.slice(0, 3);
   /* hop keeps 3 characters and moves focus on */ if (el.id === 'hop') { el.value = el.value.slice(0, 3); document.getElementById('keep').focus(); }
-  post('/value', {t, host: location.hostname, id: el.id, value: el.value}); });
+  record({t, host: location.hostname, id: el.id, value: el.value}); });
 if (q.get('focus')) document.getElementById(q.get('focus')).focus();
 post('/loaded', {t, host: location.hostname});
 if (q.has('poll')) setInterval(async () => { const r = await (await fetch('/swap?t=' + t)).json(); if (r.to) location.href = r.to; }, 50);
@@ -91,7 +94,7 @@ if os.environ.get("GITHUB_ACTIONS") and skip_reason():
 class LoginFillTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.events, cls.swaps, cls.lock = [], {}, threading.Lock()
+        cls.events, cls.swaps, cls.lock, cls.record_delay = [], {}, threading.Lock(), 0
         outer = cls
 
         class H(BaseHTTPRequestHandler):
@@ -118,6 +121,8 @@ class LoginFillTest(unittest.TestCase):
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))))
+                if self.path == "/value":
+                    time.sleep(outer.record_delay)   # a slow runner: the report of a typed value reaches the server late
                 with outer.lock:
                     outer.events.append({"ev": self.path[1:], **body})
                 self.reply(status=204)
@@ -247,6 +252,13 @@ class LoginFillTest(unittest.TestCase):
                 r = self.login(field, token, [item("main", "Main", "https://localhost/")])
                 self.assertEqual((r.returncode, r.stdout.strip()), (0, "typed %s for Main on localhost" % field), r.stderr)
                 self.assertEqual(self.typed(token)[-1], (focus, expected))
+
+    def test_what_was_typed_is_on_record_when_the_script_returns_however_slow_the_record_is(self):   # issue 637: the report used to race the test's read
+        type(self).record_delay = 0.5
+        self.addCleanup(setattr, type(self), "record_delay", 0)
+        token = self.page(focus="pw")
+        r = self.login("password", token, [item("main", "Main", "https://localhost/")])
+        self.assertEqual((r.returncode, self.typed(token)), (0, [("pw", SECRET)]), r.stderr)
 
     def test_a_password_is_refused_into_an_input_that_is_not_a_password_field(self):
         token = self.page(focus="other")
