@@ -19,7 +19,7 @@ General rules:
 - Check every claim in your range, not a sample. Check the flagged ones first.
 - Do not edit the doc.
 
-Part 1 sentences have no `path:line`. Each ends with tags such as `[A4.3f9a]` that point at appendix lines by id (an id stays with its line when the line is edited). Judge a Part 1 sentence against the tagged appendix sentences and the code they cite: it must say no more than they show, and it adds no number, name, quantifier or condition of its own. A tag that points at no appendix sentence, or at one about something else, makes it UNSUPPORTED. A Part 1 sentence may leave detail out; leaving out is not an error. A sentence that is misleading because of what it leaves out is OVERSTATED.
+Part 1 sentences have no `path:line`. Each ends with tags such as `[A4.3f9a]` that point at appendix lines by id (an id stays with its line when the line is edited). Judge a Part 1 sentence against the tagged appendix sentences and the code they cite: it must say no more than they show, and it adds no number, name, quantifier or condition of its own. A tag that points at no appendix sentence, or at one about something else, makes it UNSUPPORTED. A Part 1 sentence may say "by default" or "in the default setup" only when a tagged line, or the code it cites, shows a default; if it shows none, the sentence is OVERSTATED. A Part 1 sentence may leave detail out; leaving out is not an error. A sentence that is misleading because of what it leaves out is OVERSTATED.
 
 Checks every claim of these kinds must pass. Do them in addition to reading the cited lines:
 

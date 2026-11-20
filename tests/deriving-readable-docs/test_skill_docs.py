@@ -158,6 +158,16 @@ class RoundTwoTest(unittest.TestCase):
         self.assertRegex(CHECK_BRIEF, r"version 6")
         self.assertNotRegex(CHECK_BRIEF, r"version 5")
 
+    def test_a_glossary_entry_is_tagged_like_any_other_part_1_sentence(self):
+        self.assertRegex(DRAFTING, r"(?i)glossary[^\n]*each[^\n]*tag")
+
+    def test_words_defined_in_the_text_come_off_the_unknown_list_before_the_lint(self):
+        self.assertRegex(READER, r"(?i)defined[^.\n]*(text|where it is first used)[^.\n]*(remove|off|leave out|take)")
+
+    def test_the_check_brief_says_how_to_judge_by_default_in_part_1(self):
+        self.assertRegex(CHECK_BRIEF, r"(?i)by default")
+        self.assertRegex(CHECK_BRIEF, r"(?i)by default[^.\n]*(default|shows)")
+
 
 if __name__ == "__main__":
     unittest.main()

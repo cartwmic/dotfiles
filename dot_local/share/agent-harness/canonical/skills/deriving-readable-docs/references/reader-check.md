@@ -14,7 +14,7 @@ Start a fresh Opus session with the output of `python3 -I <skill dir>/scripts/sc
 4. What does it need installed, read, or configured, and what does it write or keep?
 5. Name one thing it does not do, or one case where it stops or says no.
 
-The reader also lists every word or phrase it did not understand, under `## Unknown words`, one a line. Save that list to a file and run `python3 -I <skill dir>/scripts/lint_main.py GUIDE.md <repo> --unknown unknown.txt`: it fails a word that has no entry in the guide's `## Glossary` (at most 15 entries, `term: definition`, at the end of Part 1).
+The reader also lists every word or phrase it did not understand, under `## Unknown words`, one a line. A word Part 1 already defined where it is first used (in the text) is taken off the list first. Save the rest to a file and run `python3 -I <skill dir>/scripts/lint_main.py GUIDE.md <repo> --unknown unknown.txt`: it fails a word that has no entry in the guide's `## Glossary` (at most 15 entries, `term: definition`, at the end of Part 1).
 
 ## Quote check (script)
 
