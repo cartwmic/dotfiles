@@ -388,6 +388,7 @@ priority_class = "kgate-first"                   # homelab only, optional: "kgat
 local_hostnames = ["db"]                         # kubectl clusters only: names that resolve to 127.0.0.1 in the pod
 workers_per_cpu = 2                              # optional, whole number, default 1: VITEST_MAX_WORKERS and CI_PAR_JOBS are the pod's CPUs times this (see "Pod environment")
 scratch_tmpfs = "256Mi"                          # optional: a memory-backed folder of this size, TMPDIR points at it (see "Pod environment"); counts toward the memory limit
+tmp_tmpfs = "2Gi"                                # optional: /tmp itself is a memory-backed folder of this size (see "Pod environment"); counts toward the memory limit
 prefer_nodes = false                             # optional: leave the G14 preference out (default true); no profile sets it today
 
 [tools]                                          # exact versions; checked in the pod before CMD
@@ -425,15 +426,17 @@ Every pod starts CMD with these variables set, so no repo has to remember them (
 
 | Variable | Value | Why |
 |---|---|---|
-| `NODE_COMPILE_CACHE` | `/tmp/kgate-node-cache` | Every Node process in the job shares one compile cache; only the first start pays. The cache is keyed on file content, so it cannot go stale. |
-| `PYTHONPYCACHEPREFIX` | `/tmp/kgate-pycache` | The same for Python bytecode, written outside the checkout (so a test run leaves the tree clean). |
+| `NODE_COMPILE_CACHE` | `/var/tmp/kgate-node-cache` | Every Node process in the job shares one compile cache; only the first start pays. The cache is keyed on file content, so it cannot go stale. |
+| `PYTHONPYCACHEPREFIX` | `/var/tmp/kgate-pycache` | The same for Python bytecode, written outside the checkout (so a test run leaves the tree clean). |
 | `KGATE_CPUS` | the pod's CPUs | The number `CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS` and `MAKEFLAGS` already use: the CPU request on the homelab, the CPU limit on a kubectl cluster. A pod sees the node's CPUs, not its own, so a tool that reads the machine oversizes its pool. |
 | `VITEST_MAX_WORKERS`, `CI_PAR_JOBS` | `KGATE_CPUS` times the profile's `workers_per_cpu` (default 1) | Worker pools sized from the pod. Raise `workers_per_cpu` only where a measured run shows it pays. |
 | `TMPDIR` | `/kgate-scratch` | Only with `scratch_tmpfs` (below). |
 
-A profile secret with one of these names wins (kgate leaves that variable out). A CMD that sets one itself wins too, since CMD starts after the pod's environment is in place: `kgate -- sh -c 'VITEST_MAX_WORKERS=2 npm test'`. The compile caches live in `/tmp` on the pod's disk on purpose: they are large and should not take memory.
+A profile secret with one of these names wins (kgate leaves that variable out). A CMD that sets one itself wins too, since CMD starts after the pod's environment is in place: `kgate -- sh -c 'VITEST_MAX_WORKERS=2 npm test'`. The compile caches live in `/var/tmp` on the pod's disk on purpose: they are large and should not take memory, and `/var/tmp` is not `/tmp`, which `tmp_tmpfs` (below) can put in memory.
 
 **`scratch_tmpfs = "256Mi"`.** kgate mounts a memory-backed folder (`emptyDir` with `medium: Memory` and that `sizeLimit`) at `/kgate-scratch` and sets `TMPDIR` to it. A suite that makes and removes many small files and folders runs faster there than on the pod's overlay disk. No key, no mount and no `TMPDIR`. **The size counts toward the pod's memory limit:** the files sit in memory the container's cgroup is charged for, so a full folder uses `memory_limit` that the job's own processes then do not have. Size the profile's `memory` and `memory_limit` to include it (job peak plus the scratch you expect to use; kgate refuses a `scratch_tmpfs` that is not smaller than `memory_limit`). Too much scratch fails the job as out of memory, not silently. A write past the folder's size fails with "no space left on device"; size the key from one measured run, the way memory is sized. Tests about real disk behaviour (sync, renames across file systems) should name a disk path themselves.
+
+**`tmp_tmpfs = "2Gi"`.** The same memory-backed folder, mounted at `/tmp` itself and with no `TMPDIR` set, for a suite that names `/tmp` in its code (a literal path, not `$TMPDIR`) and so ignores `scratch_tmpfs`. A suite that makes SQLite files commits each write with an `fsync`, and on a pod's disk that waits on the node's filesystem journal (`jbd2_log_wait_commit`); in memory the wait is gone. The compile caches are in `/var/tmp` for this reason: they stay on disk. The size counts toward the memory limit the same as `scratch_tmpfs`, and the two keys together must stay below `memory_limit` (kgate refuses a profile where they do not). A write past the size fails with "no space left on device"; size it from one measured run, the peak `/tmp` use plus margin. Everything a job writes under `/tmp` is in memory and is gone with the pod, and the shipped tree is not affected: on the homelab it lands at the worktree's own path, so a worktree itself under `/tmp` would be in the mount. It works the same on the homelab and on a kubectl cluster.
 
 ## Cached npm install
 
