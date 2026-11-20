@@ -366,11 +366,17 @@ class BumpTests(Fixture):
         self.assertEqual(self.gh_calls("merge"), [])
         self.assert_nothing_applied()
         self.load()
+        self.assertIsNotNone(self.record("dotfiles#100"))  # publish wrote it before the checks ran
+        (self.dir / "traces/emitted/review/dotfiles#100/pr-record.md").unlink()  # a PR made before this script wrote records
         self.state["checks"] = [[{"name": "tests", "bucket": "pass"}, {"name": "mise-tests", "bucket": "pass"}]]
         self.save()
         again = self.bump()
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn("resuming PR #100 (OPEN)", again.stdout)
+        # The gates step wrote the missing record and said so in its log line.
+        self.assertIsNotNone(self.record("dotfiles#100"))
+        gates = [line for line in self.log_lines() if line["step"] == "gates"][-1]
+        self.assertTrue(gates["detail"].endswith("passed (the agent record was missing; wrote it)"), gates["detail"])
         self.assertEqual(len(self.gh_calls("create")), 1)
         self.assertEqual(self.live(".config/mise/config.toml"), 'gh = "latest"\n' + pins("1.0.0"))
 
@@ -471,6 +477,8 @@ class BumpTests(Fixture):
         self.assertEqual(len(records), 2, lines)
         self.assertLess(records[0], positions[0])
         self.assertLess(records[1], positions[2])
+        gates = next(line for line in self.log_lines() if line["step"] == "gates")
+        self.assertTrue(gates["detail"].endswith(" passed"), gates["detail"])  # gates found the record and wrote nothing
         merge = self.gh_calls("merge")[0]
         self.assertEqual(merge[merge.index("--match-head-commit") + 1], self.origin_head())
 

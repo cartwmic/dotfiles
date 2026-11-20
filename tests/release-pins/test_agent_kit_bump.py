@@ -277,6 +277,9 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertLess(index["gh pr checks"], index["ci-main-status"])
         self.assertLess(index["ci-main-status"], index["pr-body-check"])
         self.assertLess(index["pr-record"], index["pr-body-check"])  # the record exists before the check that reads it
+        self.assertLess(index["pr-record"], index["gh pr checks"])  # publish wrote it, right after the PR was made
+        gates = next(line for line in self.log_lines() if line["step"] == "gates")
+        self.assertTrue(gates["detail"].endswith(" passed"), gates["detail"])  # gates found the record and wrote nothing
         self.assertLess(index["pr-body-check"], index["gh pr merge"])
         self.assertEqual(calls[index["pr-record"]], "pr-record path dotfiles#100")
         self.assertEqual(calls[index["ci-main-status"]], "ci-main-status --merge-gate dotfiles --pr 100")
@@ -322,11 +325,18 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assert_nothing_applied()
         self.assertEqual(self.prs()[0]["state"], "OPEN")
 
+        self.assertIsNotNone(self.record("dotfiles#100"))  # publish wrote it before the checks ran
+        (self.dir / "traces/emitted/review/dotfiles#100/pr-record.md").unlink()  # a PR made before this script wrote records
+
         self.gh_state.write_text(json.dumps({"prs": self.prs(), "checks": [[{"name": "tests", "bucket": "pass"}]]}), encoding="utf-8")
         again = self.bump()
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn("resuming PR #100 (OPEN)", again.stdout)
         self.assertEqual(len([c for c in self.calls() if c.startswith("gh pr merge")]), 1)
+        # The gates step wrote the missing record, said so in its log line, and the merge check then read it.
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, self.record("dotfiles#100"))
+        gates = [line for line in self.log_lines() if line["step"] == "gates"][-1]
+        self.assertTrue(gates["detail"].endswith("passed (the agent record was missing; wrote it)"), gates["detail"])
 
     def refused_gate(self, gate):
         self.world()
@@ -596,6 +606,8 @@ class BodyTests(unittest.TestCase):
         for heading in ("What changes", "Why", "How it was checked", "Risk and rollback"):
             self.assertIn("## " + heading, body)
         self.assertIn(NEW, body)
+        self.assertNotIn("playbook rule", body)
+        self.assertNotIn("Profiles: both", body)
         self.assertEqual(re.findall(r"(?<![\w-])(?:D-\d+|D\d+|MK-\d+|T\d+)(?![\w-])", body), [])
 
     def test_the_record_has_the_principles_table_and_a_decisions_line(self):
@@ -603,6 +615,9 @@ class BodyTests(unittest.TestCase):
         rows = {int(m.group(1)) for m in re.finditer(r"^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", record, re.M)}
         self.assertEqual(rows, set(range(1, LAST_PRINCIPLE[0] + 1)))
         self.assertRegex(record, r"(?m)^Decisions: none material$")
+        # Nothing else is in the record: the heading, the table and the Decisions line.
+        stray = [line for line in record.splitlines() if line and not line.startswith(("Principles (", "|", "Decisions: "))]
+        self.assertEqual(stray, [])
 
 
 if __name__ == "__main__":
