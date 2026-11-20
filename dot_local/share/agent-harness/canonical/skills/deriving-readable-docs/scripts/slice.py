@@ -4,7 +4,7 @@
 usage: slice.py <doc.md> <repo> [--max-claims N] [--out DIR]
 
 A claim is a sentence, bullet or table row of the prose (headings, the header, fenced code and printed blocks are not): the count the check prints.
-A slice is whole sections: the lines from one heading to the line before the heading that starts the next slice. A section of more than N claims is a slice of its own and is
+A slice is whole sections: the lines from one heading to the line before the heading that starts the next slice. The heading `Part 2` always starts a new slice. A section of more than N claims is a slice of its own and is
 marked `over`. Runs check_citations.py on the doc to get its flagged sentences, and gives each slice those flags whose doc line is inside it.
 Prints one line a slice: `slice K: lines A-B, C claims, F flags`. With --out DIR it writes slice-K.flags.txt for each slice and slices.json
 (`[{n, first_line, last_line, claims, flags, over}]`); the checker brief takes the line range and the flag list. Exit 2 on bad usage. Stdlib only.
@@ -23,20 +23,22 @@ FLAG = re.compile(r"^.*?:(\d+): flag ")
 
 
 def sections(text, repo):
-    """[(first_line, claims)] for each block that starts at a heading (the first block starts at line 1)."""
+    """[(first_line, claims, hard)] for each block that starts at a heading (the first block starts at line 1). hard marks the block that
+    starts at the heading `Part 2`: Part 1 is judged and scored apart from the appendix, so no slice holds both."""
     per_line = {}
     for n, _ in prose_sentences(text, repo):
         per_line[n] = per_line.get(n, 0) + 1
+    lines = text.splitlines()
     starts = [1] + [n for n, _, _, heading in doc_lines(text) if heading and n != 1]
-    total = len(text.splitlines())
-    bounds = starts + [total + 1]
-    return [(bounds[i], sum(c for n, c in per_line.items() if bounds[i] <= n < bounds[i + 1])) for i in range(len(starts))]
+    bounds = starts + [len(lines) + 1]
+    return [(bounds[i], sum(c for n, c in per_line.items() if bounds[i] <= n < bounds[i + 1]), bool(re.match(r"#+\s+Part 2\b", lines[bounds[i] - 1])))
+            for i in range(len(starts))]
 
 
 def cut(secs, total_lines, limit):
     slices, cur = [], None
-    for first, claims in secs:
-        if cur and cur["claims"] + claims <= limit:
+    for first, claims, hard in secs:
+        if cur and not hard and cur["claims"] + claims <= limit:
             cur["claims"] += claims
             continue
         if cur:

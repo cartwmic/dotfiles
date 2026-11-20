@@ -177,6 +177,14 @@ class SliceTest(unittest.TestCase):
         self.assertIn("flag overreach: all", files["slice-3.flags.txt"])
         self.assertEqual(files["slice-2.flags.txt"], "")
 
+    def test_part_1_and_the_appendix_are_never_one_slice(self):
+        """The checkers' Part 1 report is scored apart from the appendix, so no slice may hold claims of both."""
+        doc = ("# Part 1: In plain English\n\n## What it is\n\nIt reads files. [A4.1]\n\n# Part 2: Appendix\n\n## A4 Reading\n\nIt reads files `src/cli.py:2`.\n")
+        code, out, err, files = self.slices(doc)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines(), ["slice 1: lines 1-%d, 1 claims, 0 flags" % (doc.split("\n").index("# Part 2: Appendix") ),
+                                            "slice 2: lines %d-%d, 1 claims, 0 flags" % (doc.split("\n").index("# Part 2: Appendix") + 1, len(doc.splitlines()))])
+
     def test_bad_usage_exits_2(self):
         self.assertEqual(run("slice.py")[0], 2)
         self.assertEqual(self.slices(SLICE_DOC, "--max-claims", "zero")[0], 2)
