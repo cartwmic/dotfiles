@@ -366,8 +366,8 @@ class OpenPrs(Case):
 
     def test_a_dry_run_prints_the_record_and_writes_none(self):
         r = self.run_check("--open-prs", "--dry-run")
-        self.assertIn("| 16 | Built to last |", r.stdout)
-        self.assertIn("Decisions: #3685", r.stdout)
+        self.assertEqual(r.stdout.count("| 16 | Built to last |"), 2)  # one record for the steward PR and one for the dotfiles PR
+        self.assertEqual(r.stdout.count("Decisions: #3685"), 2)
         self.assertFalse((self.dir / "traces").exists())
 
     def test_the_bump_is_never_merged_and_main_does_not_move(self):
