@@ -292,7 +292,9 @@ class Merge(unittest.TestCase):
                      "ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 --repo=cartwmic/coordinator.git",
                      "ci-main-status --merge-gate coordinator && pr-body-check coordinator 440 && gh pr merge 440 -R https://github.com/cartwmic/coordinator"]:
             with self.subTest(text=text):
-                self.assertIn("merge-pr.sh", check(text))
+                message = check(text)
+                self.assertIn("~/git/coordinator/scripts/merge-pr.sh", message)
+                self.assertNotIn("coordinator-workspace/bin", message)
 
     def test_the_directory_decides_when_there_is_no_repo_flag(self):
         origins = {"/repos/coord": "git@github.com:cartwmic/coordinator.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git",
@@ -317,7 +319,7 @@ class Merge(unittest.TestCase):
             self.assertIsNone(bash_rules.origin_of(tmp))
 
     def test_the_gated_paths_are_not_gh_commands_the_hook_sees(self):
-        for text in ["~/.local/share/coordinator-workspace/bin/merge-pr.sh 440",
+        for text in ["~/git/coordinator/scripts/merge-pr.sh 440",
                      "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr --merge",
                      "loop_engine_bump.py v0.49.1", "agent_kit_bump.py v1.4.0", "gh pr view 12", "gh pr list", "echo gh pr merge 12",
                      "git merge main"]:

@@ -73,7 +73,7 @@ from collections import namedtuple
 from refuse_pattern_kill import ASSIGN, SHELLS, WRAPPERS, Scan, _base, _command_words, shell_script, unwrap
 
 HOMELAB = "kubernetes-admin@kubernetes"
-MERGE_PR = "~/.local/share/coordinator-workspace/bin/merge-pr.sh"
+MERGE_PR = "~/git/coordinator/scripts/merge-pr.sh"
 COORDINATOR = re.compile(r"cartwmic/coordinator(?:\.git)?(?![\w-])")
 KUBE_CONTEXT_FLAG = {"kubectl": "--context", "k9s": "--context", "helm": "--kube-context"}
 # docker: the options before the subcommand that take a value (`docker -H host run`), the same for `compose` (`compose -f f.yml up`), and
