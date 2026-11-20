@@ -612,6 +612,9 @@ def fake_delete(fake, pods):
         return 1
     with open(os.path.join(fake, "deleted-pods"), "a") as f:
         f.write("\n".join(x[4:] for x in named) + "\n")
+    for x in named:   # a pod that is gone no longer counts toward the fake's quota (FAKE_QUOTA_HOLD)
+        if os.path.exists(os.path.join(fake, "quota-held", x[4:])):
+            os.unlink(os.path.join(fake, "quota-held", x[4:]))
     return 0
 '''
 
@@ -667,6 +670,9 @@ if a[:2] == ["create", "-f"]:
         limit = int(os.environ["FAKE_QUOTA_CPU"])
         used_file = os.path.join(fake, "quota-full")
         used = int(open(used_file).read()) if os.path.exists(used_file) else 0
+        held = os.path.join(fake, "quota-held")   # FAKE_QUOTA_HOLD: the pods made here count toward the quota until they are deleted, as on a real cluster
+        if os.environ.get("FAKE_QUOTA_HOLD") and os.path.isdir(held):
+            used += sum(int(open(os.path.join(held, n)).read()) for n in os.listdir(held))
         os.makedirs(os.path.join(fake, "secrets"), exist_ok=True)
         failed = False
         for item in manifest["items"]:
@@ -686,6 +692,9 @@ if a[:2] == ["create", "-f"]:
                                  % (name, asked, used, limit)); failed = True
             else:
                 log({"created": name})
+                if os.environ.get("FAKE_QUOTA_HOLD"):
+                    os.makedirs(held, exist_ok=True)
+                    open(os.path.join(held, name), "w").write(str(asked))
         sys.exit(1 if failed else 0)
     if os.environ.get("FAKE_CREATE_PENDING"):   # the cluster is full: the pod just created is listed as waiting for room, for the jobs that look next
         pod = manifest["items"][-1]
@@ -5099,22 +5108,111 @@ class QuotaHomelab(unittest.TestCase):
         self.assertEqual((rec["exit"], rec["ran"], rec["cleanup"]), (0, True, True))
         self.assertGreater(rec["quota_wait_s"], 0.5)
 
-    def test_a_job_that_fits_is_not_blocked_while_another_waits_for_quota(self):
-        self.delays = (60, 60)   # the first job sleeps a minute between its tries: holding the flock that long would stop the second from being placed
-        env = self.full(used=4)   # 8 of the 12 are free: the first job asks 12, the second 4
-        first = self.start("--cpu", "12", "--", "sh", "-c", "echo first-ran", env=env)
-        end = time.time() + 30
-        while not any("manifest" in c for c in self.calls()) and time.time() < end:   # the first job's create has been refused
-            time.sleep(0.1)
-        second = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo second-ran", env=env)
+    def refused_job(self, env, *args, wait="60"):
+        """A job the quota refuses (it asks more than is free), started and waiting in the queue: the process, its ticket and what it said so far."""
+        proc = self.start("--wait", wait, "--cpu", "12", *args, "--", "sh", "-c", "echo large-ran", env=env)
+        said = self.read_until(proc, "queued: waiting for quota")
+        (path,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        return proc, path, said
+
+    def created_cpus(self):
+        """The CPU of each pod the fake cluster accepted, in the order it accepted them."""
+        asked = {}
+        for c in self.calls():
+            for item in c.get("manifest", {}).get("items", []):
+                if item["kind"] == "Pod":
+                    asked[item["metadata"]["name"]] = int(item["spec"]["containers"][0]["resources"]["requests"]["cpu"])
+        return [asked[c["created"]] for c in self.calls() if "created" in c]
+
+    def test_a_job_ordered_ahead_is_placed_while_another_sleeps_for_quota(self):
+        self.delays = (60, 60)   # the first job sleeps a minute between its tries: holding the flock that long would stop the job ahead of it from being placed
+        env = self.full(used=4)   # 8 of the 12 are free: the first job asks 12
+        first, _, said = self.refused_job(env)
+        second = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo second-ran", env={**env, "KGATE_PRIORITY_CLASS": "kgate-first"})   # a higher priority: ordered before the first
         self.assertEqual(second.returncode, 0, second.stdout)
         self.assertIn("second-ran", second.stdout)
         self.assertNotIn("another job is being placed", second.stdout)
+        self.assertNotIn("queued", second.stdout)
         self.assertIsNone(first.poll(), "the first is still waiting")
         self.assertEqual(self.created(), 1)
         first.send_signal(signal.SIGTERM)
-        out, _ = first.communicate(timeout=30)
-        self.assertIn("queued: waiting for quota", out)
+        first.communicate(timeout=30)
+        self.assertIn("queued: waiting for quota", said)
+
+    def test_a_job_the_quota_refused_keeps_its_place_and_runs_before_later_jobs_that_fit(self):
+        # 4 of the 12 CPU are in use elsewhere. The large job (12) is refused; three small jobs (4) arrive after it and would each fit. They wait behind it.
+        env = {**self.full(used=4), "FAKE_QUOTA_HOLD": "1"}
+        large, ticket, _ = self.refused_job(env)
+        small = [self.start("--wait", "60", "--cpu", "4", "--", "sh", "-c", "echo small-ran", env=env) for _ in range(3)]
+        seen = [self.read_until(p, "queued: behind %s, which the quota refused and was first" % ticket.stem) for p in small]
+        self.assertEqual((self.created(), [p.poll() for p in small]), (0, [None] * 3), "no later job takes the quota the large job waits for")
+        self.room()   # the other 4 CPU are freed: the large job fits at its next try
+        outs = [seen[i] + p.communicate(timeout=60)[0] for i, p in enumerate(small)]
+        large_out, _ = large.communicate(timeout=60)
+        self.assertEqual((large.returncode, [p.returncode for p in small]), (0, [0, 0, 0]), large_out + "".join(outs))
+        self.assertIn("large-ran", large_out)
+        self.assertTrue(all("small-ran" in o for o in outs))
+        self.assertEqual(self.created_cpus()[0], 12, "the large job's pod is the first one the cluster accepted")
+        self.assertEqual(sorted(self.created_cpus()), [4, 4, 4, 12])
+
+    def test_a_large_job_is_not_starved_by_a_stream_of_small_jobs_that_fit(self):
+        # quota 12 CPU. One small job (4) is running. The large job (12) is refused, and small jobs keep arriving every 0.5 s, each running 1.5 s, so the quota is never
+        # empty for the large job to take it. Without a place in line it waits out its whole --wait (69) while the small ones run.
+        env = {**self.full(used=0), "FAKE_QUOTA_HOLD": "1"}
+        job = ("--wait", "60", "--cpu", "4", "--", "sh", "-c", "sleep 1.5; echo small-ran")
+        stream = [self.start(*job, env=env)]
+        self.read_until(stream[0], "pod running")
+        large = self.start("--wait", "5", "--cpu", "12", "--", "sh", "-c", "echo large-ran", env=env)
+        self.read_until(large, "queued: waiting for quota")
+        for _ in range(12):
+            time.sleep(0.5)
+            stream.append(self.start(*job, env=env))
+        large_out, _ = large.communicate(timeout=60)
+        outs = [p.communicate(timeout=90)[0] for p in stream]
+        self.assertEqual(large.returncode, 0, "the large job timed out while %d small jobs ran:\n%s" % (sum("small-ran" in o for o in outs), large_out))
+        self.assertIn("large-ran", large_out)
+        self.assertEqual([p.returncode for p in stream], [0] * 13, "".join(outs))
+        self.assertEqual(self.created_cpus()[:2], [4, 12], "after the small job that was already running, the large job's pod is the next one the cluster accepted")
+
+    def test_a_small_job_does_not_wait_behind_a_job_the_quota_has_not_refused(self):
+        # no refusal, no mark: a large job ahead that has not been refused yet is not a reason to wait (the older rule: only a job that asks no more holds one back)
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        queue = self.state / "kgate" / "queue"
+        queue.mkdir(parents=True)
+        ident = K.proc_identity(holder.pid)
+        (queue / "kgate-1-1.json").write_text(json.dumps({"id": "kgate-1-1", "pid": holder.pid, "start": ident[0], "pidns": K.pid_namespace(), "t": 1.0,
+                                                          "shape": {"cpu": 12.0, "mem": float(1 << 30), "disk": float(4 << 30), "pin": None, "priority": -100}}))
+        done = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo small-ran", env=self.full(used=4))
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout)
+
+    def test_a_dead_clients_quota_ticket_does_not_block_the_queue(self):
+        env = self.full(used=4)
+        large, ticket, _ = self.refused_job(env)
+        large.kill()   # no cleanup: the ticket is left behind, marked
+        large.wait()
+        self.assertTrue(ticket.exists(), "the killed client could not remove its ticket")
+        done = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo small-ran", env=env)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("small-ran", done.stdout)
+        self.assertFalse(ticket.exists(), "the dead client's ticket is cleared")
+
+    def test_a_job_that_gives_up_leaves_its_place(self):
+        env = self.full(used=4)
+        done = self.kgate("--wait", "2", "--cpu", "12", "--", "true", env=env)
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertEqual(list((self.state / "kgate" / "queue").glob("kgate-*.json")), [])
+        after = self.kgate("--wait", "20", "--cpu", "4", "--", "sh", "-c", "echo small-ran", env=env)
+        self.assertEqual(after.returncode, 0, after.stdout)
+
+    def test_a_job_held_behind_a_refused_one_ends_at_its_wait_and_says_the_quota_is_why(self):
+        env = self.full(used=4)
+        large, _, _ = self.refused_job(env)
+        done = self.kgate("--wait", "2", "--cpu", "4", "--", "true", env=env)
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within 2s: Unschedulable \(queued, behind kgate-[^,]+, which the quota refused and was first\)$")
+        self.assertEqual(self.created(), 0)
 
     def test_a_request_above_the_quotas_own_limit_fails_at_once(self):
         done = self.kgate("--wait", "600", "--cpu", "16", "--", "true", env={"FAKE_QUOTA_CPU": "12"})
