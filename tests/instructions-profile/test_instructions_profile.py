@@ -85,7 +85,7 @@ BAR_QUESTION = (
     "(work I share and want to be proud of)?"
 )
 BAR_HOLD_SHARED = "Until it is answered, hold the work to `shared` and do not cite §10."
-BAR_STATEMENT = 'Say the bar in one line before your first change or review in the repo ("Bar: StoryCraftTW/storycraft = shared"), so I can correct it.'
+BAR_STATEMENT = 'Say the bar in one line before your first plan, change or review in the repo ("Bar: StoryCraftTW/storycraft = shared"), so I can correct it.'
 WORK_NO_ROW_LINE = (
     "On this machine, never add a row for an employer repo to dotfiles (that would put its name in a public repo): "
     "after Michael answers, the answer holds for the session."
