@@ -2,8 +2,9 @@
 # Browse setup (both desktop profiles; .chezmoiignore leaves it out in container mode and on Termux). Runs when the pin changes.
 #   1. Turns Browse's automatic updates off. The relay would otherwise check hourly and run `npm install -g`, which fights the mise pin.
 #      The mode is saved in Browse's state folder and survives a relay restart (agent-harness README, "Agent browser").
-#   2. Removes ~/.local/bin/browse. `browse install` writes a second, self-updating binary there; it sits ahead of the mise shim and
-#      defeats the pin. Pairing needs only `browse pair`, so nothing here runs `browse install`.
+#   2. Leaves ~/.local/bin/browse alone. That path is chezmoi's own wrapper around the mise shim (dot_local/bin/executable_browse), which puts
+#      `browse` on the PATH of a non-interactive shell. `browse install` would overwrite it with a second, self-updating binary that defeats the
+#      pin; nothing here runs it (pairing needs only `browse pair`), and the next `chezmoi apply` offers to write the wrapper back (README, "Agent browser").
 #   3. Removes what browser-harness left on this machine (neither profile uses it any more; .chezmoiignore stops deploying these, and a
 #      .chezmoiremove entry would lose to that ignore): the MCP server folder, its pi-mcp-lazy seed and state copy.
 # pin: {{ include "dot_config/mise/conf.d/browse.toml" | sha256sum }}
@@ -19,11 +20,6 @@ fi
 
 "$shim" update --mode off
 log INFO "Browse automatic updates: off ($("$shim" --version))"
-
-if [ -e "$HOME/.local/bin/browse" ]; then
-  rm -f "$HOME/.local/bin/browse"
-  log INFO "removed ~/.local/bin/browse (a self-updating copy from \`browse install\`; the mise shim is the one install)"
-fi
 
 for leftover in "$HOME/.local/share/browser-harness-mcp" "$HOME/.local/share/pi-mcp-lazy/seed/browser-harness.json" "$HOME/.local/state/pi-mcp-lazy/browser-harness.json"; do
   if [ -e "$leftover" ]; then

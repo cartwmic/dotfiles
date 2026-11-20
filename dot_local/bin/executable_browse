@@ -1,0 +1,22 @@
+#!/bin/sh
+# browse: OpenCode Browse from anywhere ~/.local/bin is on PATH (agent-harness README, "Agent browser" > "browse on PATH").
+#
+# mise installs Browse (dot_config/mise/conf.d/browse.toml, pinned) into a versioned directory that only an activated interactive shell
+# puts on PATH. An agent's `bash -c` has the PATH of whatever started it. On personal Linux that is t3code.service, whose drop-in puts the mise
+# shims on PATH; on a Mac nothing does, so a non-interactive shell there had no `browse` (the work Mac, 2026-11-19), though `~/.local/bin`
+# is on PATH in every zsh (~/.zshenv). This one file reaches them all. Same fix as `qmd` (docs/qmd.md).
+# In a shell where the shims or the install directory come before ~/.local/bin, this wrapper is not used.
+#
+# It runs the mise shim, which picks the pinned version. It is not the self-updating binary that `browse install` writes to this path
+# (do not run that; the README says why). A shim that cannot find browse in the toolset would search PATH and could land here again;
+# BROWSE_PATH_WRAPPER stops that loop.
+if [ -n "${BROWSE_PATH_WRAPPER:-}" ]; then
+    echo "browse: mise did not resolve browse (run mise install; see the agent-harness README, \"Agent browser\")" >&2
+    exit 127
+fi
+shim=${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/browse
+if [ ! -x "$shim" ]; then
+    echo "browse: $shim not found (run mise install; see the agent-harness README, \"Agent browser\")" >&2
+    exit 127
+fi
+BROWSE_PATH_WRAPPER=1 exec "$shim" "$@"

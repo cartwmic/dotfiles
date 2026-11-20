@@ -1,6 +1,6 @@
 """run_onchange_after_91_browse_setup.sh, on both profiles: the real script (rendered by real chezmoi) against a scratch HOME with a fake `browse` shim.
-It must turn Browse's auto-update off, delete the self-updating ~/.local/bin/browse that `browse install` writes (it would shadow the pin),
-remove what browser-harness left, and leave everything else alone."""
+It must turn Browse's auto-update off, remove what browser-harness left, and leave everything else alone, including ~/.local/bin/browse (the
+chezmoi-managed PATH wrapper around the mise shim; test_wrapper.py)."""
 import os
 import subprocess
 import tempfile
@@ -59,13 +59,12 @@ class SetupCases:   # every case runs for each profile below
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.log.read_text().splitlines()[0], "update --mode off")
 
-    def test_the_self_updating_copy_from_browse_install_is_deleted(self):
+    def test_the_browse_wrapper_in_local_bin_is_left_alone(self):   # chezmoi owns it; deleting it would take `browse` off the PATH of non-interactive shells
         self.shim()
-        copy = self.put(".local/bin/browse")
+        wrapper = self.put(".local/bin/browse", "#!/bin/sh\nexec shim\n")
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertFalse(copy.exists())
-        self.assertIn("removed ~/.local/bin/browse", r.stdout)
+        self.assertEqual(wrapper.read_text(), "#!/bin/sh\nexec shim\n")
 
     def test_browser_harness_leftovers_go_and_nothing_else(self):
         self.shim()
