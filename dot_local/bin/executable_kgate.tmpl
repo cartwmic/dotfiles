@@ -2120,7 +2120,7 @@ class Job:
     def try_create(self, manifests):
         """One create call. None: the pod was made. The whole quota message (from `exceeded quota:`) when the namespace's ResourceQuota refused it: nothing was made, so
         the caller waits and creates again. Any other refusal raises. On the homelab the List holds the job's Secrets ahead of the pod, and they are in when the quota
-        refuses the pod, so they are deleted here: a second create would otherwise fail on them (AlreadyExists) even if the quota had room."""
+        refuses the pod: admit() deletes them before it sleeps, because a second create would otherwise fail on them (AlreadyExists) even if the quota had room."""
         self.create_tried = self.pod_left = True
         done = self.cluster.run(["create", "-f", "-"], stdin=json.dumps(manifests).encode())
         if done.returncode == 0:
@@ -2128,10 +2128,6 @@ class Job:
         err = done.stderr.decode(errors="replace").strip()
         if not QUOTA_REFUSAL.search(err):
             raise Unavailable("could not create the pod: " + err)
-        if self.cluster.kind != "kubectl":
-            gone, _ = delete_until_gone(self.cluster, self.pod)
-            if gone.returncode != 0:
-                raise Unavailable("could not remove the Secrets of the create the quota refused: " + gone.stderr.decode(errors="replace").strip())
         return " ".join(err[err.index("exceeded quota:"):].split())
 
     def create_pod(self, manifests, deadline):
@@ -2196,6 +2192,10 @@ class Job:
                                     why, pause = quota.refused(refused)   # the flock is let go below, before the sleep
                             finally:
                                 fcntl.flock(lock, fcntl.LOCK_UN)
+                    if pause:   # the quota refused the pod: take out the Secrets that went in ahead of it. Outside the flock, because a failed delete is retried for a while.
+                        gone, _ = delete_until_gone(self.cluster, self.pod)
+                        if gone.returncode != 0:
+                            raise Unavailable("could not remove the Secrets of the create the quota refused: " + gone.stderr.decode(errors="replace").strip())
                     t_wait = t_wait or time.time()
                     local = why.startswith(("behind ", "another job"))   # a neighbour on this machine is being placed: usually seconds, and the cluster has room
                     if why != last and why != "another job is being placed" and (not local or time.time() - t_wait >= QUEUE_QUIET_S or noted):
@@ -2204,7 +2204,7 @@ class Job:
                     if noted:
                         self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
                     if time.time() >= deadline:
-                        raise quota.timeout() if pause else Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
+                        raise quota.timeout() if pause or (last or "").startswith("waiting for quota") else Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
                     time.sleep(max(0, min(pause or (QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S), deadline - time.time())))
             finally:
                 forget(ticket)
