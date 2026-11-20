@@ -5,6 +5,7 @@ Each test builds a scratch git repo with a script and its unittest file, commits
     python3 -m unittest discover -s tests/untested-hunks-check
 """
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -51,8 +52,9 @@ class CheckUntestedHunks(unittest.TestCase):
         self.git("commit", "-q", "-m", message)
         return self.git("rev-parse", "HEAD")
 
-    def run_check(self, base, head="HEAD"):
-        done = subprocess.run([sys.executable, str(SCRIPT), base, head], cwd=self.repo, capture_output=True, text=True)
+    def run_check(self, base, head="HEAD", timeout="600"):
+        done = subprocess.run([sys.executable, str(SCRIPT), base, head], cwd=self.repo, capture_output=True, text=True,
+                              env=dict(os.environ, UNTESTED_HUNKS_TIMEOUT=timeout))
         return done.returncode, done.stdout + done.stderr
 
     def pr(self, second, message="fix the finding", first=None):
@@ -188,25 +190,88 @@ class CheckUntestedHunks(unittest.TestCase):
         self.commit({CODE: new, TEST: tests}, "extra")
         self.assertEqual(self.run_check(base)[0], 0)
 
-    def test_a_python_script_without_py_is_read_and_found_by_its_name_without_chezmoi_prefixes(self):
-        script = "dot_local/bin/executable_tool"
-        loads = (
+    def source_named_test(self, script):
+        """A unittest file that names the script only by its source path (no bare script word anywhere): loads it by that path."""
+        return (
             "import importlib.util\nimport unittest\nfrom importlib.machinery import SourceFileLoader\nfrom pathlib import Path\n\n"
-            "loader = SourceFileLoader('tool', str(Path(__file__).resolve().parents[2] / '%s'))\n"
-            "tool = importlib.util.module_from_spec(importlib.util.spec_from_loader('tool', loader))\nloader.exec_module(tool)\n\n\n"
-            "class ToolTest(unittest.TestCase):\n" % script
+            "loader = SourceFileLoader('m', str(Path(__file__).resolve().parents[2] / '%s'))\n"
+            "mod = importlib.util.module_from_spec(importlib.util.spec_from_loader('m', loader))\nloader.exec_module(mod)\n\n\n"
+            "class ModTest(unittest.TestCase):\n    def test_a_line_inside_the_loop_counts(self):\n        self.assertTrue(mod.counts(1, 5, 3))\n" % script
         )
-        base = self.commit({script: "#!/usr/bin/env python3\n" + TOOL, TEST: loads + INSIDE}, "base")
+
+    def assert_found_by_source_path(self, script):
+        base = self.commit({script: "#!/usr/bin/env python3\n" + TOOL, TEST: self.source_named_test(script)}, "base")
         self.commit({script: "#!/usr/bin/env python3\n" + TOOL.replace("start < line", "start <= line")}, "fix")
         code, out = self.run_check(base)
+        self.assertNotIn("NOT CHECKED", out)
         self.assertEqual(code, 1, out)
         self.assertIn(script + " changes at line 3", out)
         self.assertIn(TEST, out)
+
+    def test_a_script_with_a_chezmoi_name_is_found_by_the_name_a_test_gives_its_source_file(self):
+        self.assert_found_by_source_path("dot_local/bin/executable_gadget")
+
+    def test_a_template_source_name_is_found_too(self):
+        self.assert_found_by_source_path("dot_local/bin/executable_gadget.tmpl")
+
+    def test_a_py_source_name_with_underscores_is_found(self):
+        self.assert_found_by_source_path("dot_local/user_scripts/executable_import_gadget_parts.py")
+
+    def test_a_longer_name_that_only_contains_the_script_name_is_not_a_match(self):
+        script = "scripts/gadget.py"
+        longer = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_it(self):\n        self.assertTrue('gadget_helper and my-gadget and executable_gadgets')\n"
+        base = self.commit({script: TOOL, TEST: longer}, "base")
+        self.commit({script: TOOL.replace("start < line", "start <= line")}, "fix")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("no test file names it", out)
 
     def test_a_shell_script_is_not_read(self):
         base = self.commit({"scripts/run.sh": "#!/bin/sh\necho a\n", TEST: TESTS}, "base")
         self.commit({"scripts/run.sh": "#!/bin/sh\necho b\n"}, "fix")
         self.assertEqual(self.run_check(base)[0], 0)
+
+    def test_a_declaration_excuses_only_the_hunks_its_commit_holds(self):
+        two = TOOL + "\n\ndef later(x):\n    return x\n"
+        base = self.commit({CODE: two, TEST: TESTS + "    def test_later(self):\n        self.assertEqual(tool.later(1), 1)\n\n"}, "base")
+        self.commit({CODE: two.replace("start < line", "start <= line")}, "refactor\n\nUntested-change: scripts/tool.py: the rule is the same for every input")
+        self.assertEqual(self.run_check(base)[0], 0)
+        self.commit({CODE: two.replace("start < line", "start <= line").replace("return x", "return x + 0")}, "a later hunk")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("DECLARED untested change: scripts/tool.py line 2", out)
+        self.assertIn("FAIL untested change: scripts/tool.py changes at line 10", out)
+
+    def test_a_declaration_on_a_side_branch_merged_into_the_pull_request_is_not_read(self):
+        base = self.commit({CODE: TOOL, TEST: TESTS}, "base")
+        self.git("checkout", "-q", "-b", "side")
+        self.commit({CODE: TOOL_FIXED, TEST: TESTS_FOR_LABEL}, "side change\n\nUntested-change: scripts/tool.py: said on a branch the pull request merged")
+        self.git("checkout", "-q", "main")
+        self.git("checkout", "-q", "-b", "pr")
+        self.commit({"pr.txt": "pr\n"}, "pr's own commit")
+        self.git("merge", "-q", "--no-edit", "side")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("DECLARED", out)
+
+    def test_a_hang_before_anything_is_undone_is_not_checked(self):
+        hangs = HEADER + "    def test_it(self):\n        import time\n        time.sleep(60)\n\n"
+        base = self.pr({CODE: TOOL_FIXED}, first={CODE: TOOL, TEST: hangs})
+        code, out = self.run_check(base, timeout="2")
+        self.assertEqual(code, 0, out)
+        self.assertIn("NOT CHECKED scripts/tool.py: ", out)
+        self.assertIn("ran longer than 2 s before anything was undone", out)
+
+    def test_a_hang_that_undoing_a_hunk_brings_back_counts_as_caught(self):
+        looping = "def wait(n):\n    while n:\n        pass\n    return n\n"
+        tests = HEADER + "    def test_wait(self):\n        self.assertEqual(tool.wait(0), 0)\n\n"
+        fixed = "def wait(n):\n    return n\n"
+        base = self.commit({CODE: looping, TEST: tests}, "base")
+        self.commit({CODE: fixed, TEST: tests + "    def test_wait_one(self):\n        self.assertEqual(tool.wait(1), 1)\n\n"}, "stop looping")
+        code, out = self.run_check(base, timeout="3")
+        self.assertEqual(code, 0, out)  # undone, wait(1) never returns: the new test notices (as a timeout)
+        self.assertNotIn("NOT CHECKED", out)
+        self.assertNotIn("FAIL", out)
 
     def test_a_base_that_does_not_resolve_fails_closed(self):
         self.commit({CODE: TOOL}, "base")

@@ -13,16 +13,18 @@ still pass, no test depends on the hunk, and the check fails. A hunk that change
 syntax tree is the same with or without it. It judges the pull request as it stands, so a later commit that adds the test clears an
 earlier commit's hunk.
 
-A hunk that no test can see on purpose (a refactor, a rename) is declared in the message of any commit of the pull request, in any
-paragraph, with the script's path (or its file name) before the reason:
+A hunk that no test can see on purpose (a refactor, a rename) is declared in the message of a commit of the pull request (first
+parents only), in any paragraph, with the script's path (or its file name) before the reason:
 
     Untested-change: <path of the script>: <why no test can see it, in one line>
 
-A declared script's hunks pass and are printed, so the CI log and the reviewer see each one.
+The declaration excuses the hunks that commit already holds, not later changes to the script: a later hunk needs its own line. A
+declared hunk passes and is printed, so the CI log and the reviewer see each one.
 
 A Python script is a .py file or a file whose first line is a python shebang. Tests are chosen by name: the test files (test_*.py,
-*_test.py) that mention the script's file name, without ".py" and without chezmoi's executable_ / dot_ prefixes, as a whole word.
-A script that no test mentions, or whose tests fail or all skip before anything is undone, prints NOT CHECKED and never fails;
+*_test.py) that mention the script's file name as a whole word, with or without chezmoi's source prefixes and without ".tmpl" or ".py"
+(`kgate` or `executable_kgate.tmpl`).
+A script that no test mentions, or whose tests fail, all skip or hang (see TIMEOUT) before anything is undone, prints NOT CHECKED and never fails;
 those are other mistakes. Only Python is read, and only unittest-style files (python3 -m unittest). Hunks that depend on each other
 (a changed signature and its callers) count as seen when undoing one breaks the tests; the check names a hunk only when the tests
 pass without it.
@@ -33,6 +35,7 @@ import ast
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -44,6 +47,13 @@ from commit_range import git, hunks, is_test_file
 
 TRAILER = "Untested-change"
 WORKERS = min(8, os.cpu_count() or 2)
+# One test file's run. A hang is an outside limit, not a judgement: undoing a hunk may bring one back (that counts as caught: the tests
+# noticed); a hang before anything is undone prints NOT CHECKED. A suite slower than this (tests/heavy-gate) is not checked either.
+TIMEOUT = int(os.environ.get("UNTESTED_HUNKS_TIMEOUT", "600"))
+
+
+class Hang(Exception):
+    pass
 
 
 def strip_docstrings(tree):
@@ -70,9 +80,18 @@ def undo(text, removed, added, start, count):
     return "".join(lines[:first] + [line + "\n" for line in removed] + lines[first + count:])
 
 
+PREFIX = r"(?:(?:executable|private|readonly|dot)_)"
+
+
 def script_name(path):
-    """What tests call a script: its file name without ".py" and without chezmoi's source prefixes (executable_review-intent: review-intent)."""
-    return re.sub(r"^(?:(?:executable|private|readonly|dot)_)+", "", Path(path).name).removesuffix(".py")
+    """What tests call a script: its file name without chezmoi's source prefixes, ".tmpl" and ".py" (executable_kgate.tmpl: kgate)."""
+    return re.sub(r"^" + PREFIX + "+", "", Path(path).name).removesuffix(".tmpl").removesuffix(".py")
+
+
+def name_pattern(path):
+    """Matches the script's name as a whole word, with or without its chezmoi source prefixes (`kgate`, `executable_kgate.tmpl`), and
+    not inside a longer name (`my-kgate`, `kgate_helper`)."""
+    return re.compile(r"(?<![A-Za-z0-9_-])" + PREFIX + "*" + re.escape(script_name(path)) + r"(?![A-Za-z0-9_-])")
 
 
 def is_python(path, text):
@@ -81,8 +100,7 @@ def is_python(path, text):
 
 def tests_naming(commit, path):
     """The test files of the commit's tree that mention the script by name."""
-    stem = script_name(path)
-    pattern = re.compile(r"\b" + re.escape(stem) + r"\b")
+    pattern = name_pattern(path)
     found = []
     for name in git("ls-tree", "-r", "--name-only", commit).splitlines():
         if name.endswith(".py") and is_test_file(name) and re.match(r"(test_.*|.*_test)\.py$", Path(name).name):
@@ -96,8 +114,15 @@ def run_tests(root, files):
     ran = 0
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     for name in files:
-        done = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(Path(name).parent), "-p", Path(name).name],
-                              cwd=root, capture_output=True, text=True, env=env)
+        proc = subprocess.Popen([sys.executable, "-m", "unittest", "discover", "-s", str(Path(name).parent), "-p", Path(name).name],
+                                cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, start_new_session=True)
+        try:
+            _, stderr = proc.communicate(timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)  # the whole group: a test may have started children
+            proc.communicate()
+            raise Hang(name)
+        done = subprocess.CompletedProcess(proc.args, proc.returncode, "", stderr)
         total = re.search(r"^Ran (\d+) tests?", done.stderr, re.MULTILINE)
         skipped = re.search(r"skipped=(\d+)", done.stderr)
         ran += int(total.group(1)) - int(skipped.group(1) if skipped else 0) if total else 0
@@ -119,13 +144,15 @@ class Checkout:
 
 
 def survives(commit, path, hunk, files, parent, lock):
-    """True when the tests still pass with this one hunk undone in a fresh copy of the tree."""
+    """True when the tests still pass with this one hunk undone in a fresh copy of the tree. A hang counts as caught."""
     with lock:
         copy = Checkout(commit, parent)
     try:
         target = Path(copy.root) / path
         target.write_text(undo(target.read_text(), *hunk))
         return run_tests(copy.root, files)[0]
+    except Hang:
+        return False
     finally:
         with lock:
             copy.close()
@@ -153,16 +180,27 @@ def code_hunks(merge_base, head):
 
 
 def declarations(merge_base, head):
-    """[(script, reason)] from every `Untested-change: <script>: <why>` line in the messages of merge_base..head."""
+    """[(script, reason, commit)] from every `Untested-change: <script>: <why>` line in the messages of the pull request's own commits
+    (first parents only: a main merged in brings no declarations)."""
     found = []
-    for message in git("log", "--format=%B%x00", merge_base + ".." + head).split("\0"):
+    for entry in git("log", "--first-parent", "--format=%H%x01%B%x00", merge_base + ".." + head).split("\0"):
+        commit, _, message = entry.strip().partition("\x01")
         for m in re.finditer(r"^" + TRAILER + r":\s*(\S+?):\s*(\S.*)$", message, re.MULTILINE | re.IGNORECASE):
-            found.append((m.group(1), m.group(2).strip()))
+            found.append((m.group(1), m.group(2).strip(), commit))
     return found
 
 
-def declared_reason(path, found):
-    return "; ".join(why for script, why in found if path == script or path.endswith("/" + script))
+def declared_reason(path, hunk, found, merge_base):
+    """The reasons that excuse this hunk: from declarations naming the script, in a commit whose own change already holds the same hunk.
+    A later change to the script is a different hunk and needs its own declaration."""
+    removed, added = hunk[0], hunk[1]
+    reasons = []
+    for script, why, commit in found:
+        if path == script or path.endswith("/" + script):
+            seen = [(r, a) for p, r, a, _start, _count in hunks(git("diff", "-U0", "--no-renames", "--no-color", merge_base, commit)) if p == path]
+            if (removed, added) in seen:
+                reasons.append(why)
+    return "; ".join(reasons)
 
 
 def main(argv):
@@ -193,6 +231,9 @@ def main(argv):
                 base = Checkout(head, parent)
             try:
                 passed, ran = run_tests(base.root, files)
+            except Hang as hang:
+                print("NOT CHECKED %s: %s ran longer than %d s before anything was undone" % (path, hang, TIMEOUT))
+                continue
             finally:
                 with lock:
                     base.close()
@@ -206,7 +247,7 @@ def main(argv):
             if not future.result():
                 continue
             where = "after line %d" % start if count == 0 else "line %d" % start if count == 1 else "lines %d-%d" % (start, start + count - 1)
-            reason = declared_reason(path, found)
+            reason = declared_reason(path, (removed, added), found, merge_base)
             if reason:
                 print("DECLARED untested change: %s %s: %s" % (path, where, reason))
                 continue

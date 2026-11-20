@@ -67,6 +67,7 @@ jobs:
       # whatever they did, so a red here never hides a red suite (and the reverse). PRs only, like the step above.
       - name: "Untested hunks: fail when the pull request changes a script and no test depends on a changed hunk (scripts/check-untested-hunks.py)"
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        timeout-minutes: 30 # each test file's run also stops after 10 minutes (UNTESTED_HUNKS_TIMEOUT)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

@@ -285,7 +285,7 @@ Done means all of the following that apply:
   pull request after the suites) undoes each changed hunk of a Python script in a copy of the pull request's head and runs the
   test files that name the script; a hunk whose undoing leaves them all passing fails the check, until some commit of the pull request
   adds a test that depends on it. A hunk no test can see (a refactor, a rename) is declared in a commit message of the pull request:
-  `Untested-change: <script path>: <why no test can see it>`. Add the test for the rule you rewrote, not only for the case the finding named.
+  `Untested-change: <script path>: <why no test can see it>`; it excuses the hunks that commit already holds, so a later change to the script needs its own line. Add the test for the rule you rewrote, not only for the case the finding named.
 - A real `chezmoi apply` ran only with explicit user approval (on `personal`,
   ledger grant 32 is that approval for a merged PR's own targets). If verification
   requires materializing and approval is absent, name that check as pending.
