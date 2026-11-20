@@ -523,9 +523,9 @@ class ApplyPathTest(unittest.TestCase):
             settled["providerInstances"][i]["environment"] = [{"name": "CLAUDE_CODE_FIZZY_GROVE", "sensitive": False, "value": "1"}]  # tests/t3-hub covers it
         settled["idleCompaction"] = "beforeCacheExpires"
         settled["worktreesDirectory"] = "/Volumes/Workshop/macbook/t3-worktrees" if sys.platform == "darwin" else "%s/t3-worktrees" % self.home
-        # the five seat-* instances are there too (tests/t3-hub covers them); everything else is byte for byte what the hub-off script leaves
+        # the six seat-* instances are there too (tests/t3-hub covers them); everything else is byte for byte what the hub-off script leaves
         no_seats = json.loads(baseline[".t3/userdata/settings.json"])
-        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-computer") + (("pi", "pi-lead", "seat-homelab-chat") if sys.platform == "linux" else ()):
+        for sid in ("seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout", "seat-computer") + (("pi", "pi-lead", "seat-homelab-chat") if sys.platform == "linux" else ()):
             self.assertIn(sid, no_seats["providerInstances"])  # pi, pi-lead and seat-homelab-chat are the Linux-only instances
             del no_seats["providerInstances"][sid]
         self.assertEqual(json.dumps(no_seats, indent=2, ensure_ascii=False), json.dumps(settled, indent=2, ensure_ascii=False))

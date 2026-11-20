@@ -75,7 +75,7 @@ PRINCIPLES = [
     ("Good enough for personal software", "pass", "Personal profile only; the install reads its registry token at run time."),
     ("Prior art before building", "n/a", "No new capability; it uses the published agent-kit package and the existing install script."),
     ("Verified from the outside", "pass", "tests/release-pins/test_agent_kit_bump.py drives the real script to the apply and the version read-back; after the merge the installed version is read back (log step verify)."),
-    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the merge runs under the standing dotfiles grant (playbook rule 7c57de5a)."),
+    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the owner's standing grant lets the script merge an agent-kit release bump once its checks pass."),
     ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/agent-kit-bump/log.jsonl."),
     ("Fast proof", "n/a", "A pin bump runs no journey; the proof is the PR's CI run."),
     ("Built to last", "pass", "The script changes only the pins; nothing it replaces is left behind."),
@@ -171,8 +171,8 @@ class Worktree:
 # --- the PR ------------------------------------------------------------------------------------
 
 
-def pr_body(version):
-    """The PR description: what changes, why, how it was checked and the risk. The bookkeeping (principles table, Decisions line) is the agent record, record_text."""
+def pr_body(version, head, day):
+    """The PR description: what changes, why, how it was checked, what was proven and the risk. The bookkeeping (principles table, Decisions line) is the agent record, record_text."""
     return "\n".join([
         "## What changes",
         "",
@@ -184,8 +184,14 @@ def pr_body(version):
         "",
         "## How it was checked",
         "",
-        "The PR's checks pass and the script's merge gates pass (the main-branch status and the PR check). After the merge the script applies only these two files, "
-        "runs the install (script 65) and reads the installed version back; it stops if that is not %s." % version,
+        "The PR's checks and the script's merge gates (the main-branch status and the description and record check) must pass before the script merges. "
+        "What ran, and what is left for after the merge, is under Proven.",
+        "",
+        "## Proven",
+        "",
+        "Before the PR, %s, head %s, the script set the exact pin %s in `package.json` and regenerated `package-lock.json` with `npm install --package-lock-only`." % (day, head, version),
+        "",
+        "Not yet run, after the merge: the scoped apply of these two files, the install (script 65) and a read-back that the installed version is %s; the script stops if it is not." % version,
         "",
         "## Risk and rollback",
         "",
@@ -265,7 +271,8 @@ def publish(source, version, branch, log):
         git(wt.path, "commit", "-q", "-m", title, step="publish")
         git(wt.path, "push", "-q", "--force", "origin", "HEAD:refs/heads/" + branch, step="publish")
         body = Path(wt.parent) / "pr-body.md"
-        body.write_text(pr_body(version), encoding="utf-8")
+        body.write_text(pr_body(version, git(wt.path, "rev-parse", "HEAD", step="publish").stdout.strip(),
+                                datetime.now(timezone.utc).strftime("%Y-%m-%d")), encoding="utf-8")
         run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body-file", body], "publish", cwd=source)
     pr = find_pr(source, branch)
     if pr is None:

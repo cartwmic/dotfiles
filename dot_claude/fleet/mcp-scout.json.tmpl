@@ -1,0 +1,2 @@
+{{- /* The scout seat's MCP servers: none. A scout reads and searches; T3 still adds its own t3-code server, which the seat file denies. The instance starts Claude with --strict-mcp-config --mcp-config this file. */ -}}
+{{- dict "mcpServers" (dict) | toPrettyJson }}

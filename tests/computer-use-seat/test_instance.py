@@ -90,7 +90,8 @@ class SeatComputerInstanceTest(unittest.TestCase):
             want, _ = h.settings("linux")
             names = {e["name"] for e in want["seat-computer"]["environment"]}
             self.assertFalse({n for n in names if n.startswith("ANTHROPIC_")}, names)
-            self.assertEqual({e["name"] for e in want["seat-planner"]["environment"]} - {"CLAUDE_CODE_DISABLE_ADVISOR_TOOL"}, names - {"CLAUDE_CODE_DISABLE_ADVISOR_TOOL"})
+            # the planner also sets the helper model (CLAUDE_CODE_SUBAGENT_MODEL); the computer seat does not
+            self.assertEqual({e["name"] for e in want["seat-planner"]["environment"]} - {"CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "CLAUDE_CODE_SUBAGENT_MODEL"}, names - {"CLAUDE_CODE_DISABLE_ADVISOR_TOOL"})
             self.assertEqual(want["seat-computer"]["driver"], want["seat-planner"]["driver"])
         finally:
             h.close()
@@ -101,7 +102,7 @@ class SeatComputerInstanceTest(unittest.TestCase):
             want, owned = h.settings("linux")
             self.assertNotIn("seat-computer", want)
             self.assertNotIn("seat-computer", owned)
-            self.assertEqual({k for k in want if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer"})
+            self.assertEqual({k for k in want if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout"})
         finally:
             h.close()
 

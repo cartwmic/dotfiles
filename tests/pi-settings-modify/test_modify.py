@@ -66,7 +66,8 @@ class ModifyScript(unittest.TestCase):
                 self.assertEqual((s["theme"], s["hideThinkingBlock"]), ("dark", False))
                 self.assertIn("https://github.com/cartwmic/pi-sub", s["packages"])
                 self.assertEqual(profile == "personal", any(isinstance(p, dict) and p["source"] == PINNED for p in s["packages"]))
-                self.assertEqual(profile == "axon-work-computer", "subagents" in s)
+                # sub-agents default to Haiku 5.5 on personal and to the work builder's model on work (which also keeps its thinking switch)
+                self.assertEqual(s["subagents"], {"defaultModel": "claude-compat/claude-haiku-5-5"} if profile == "personal" else {"defaultModel": "work-glm/test-model", "disableThinking": True})
                 if profile == "axon-work-computer":
                     self.assertIn("work-glm/test-model", s["enabledModels"])
                     self.assertEqual(s["modelThinkingLevels"], {"anthropic/claude-opus-5-5": "medium"})

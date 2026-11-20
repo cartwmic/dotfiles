@@ -18,10 +18,12 @@ Each agent seat has a model. This is a rule, not a mechanism: there is no launch
 | Reviewer | Opus 5.5 medium |
 | Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |
 | Computer use | Sonnet 5.5 high |
+| Scout | Haiku 5.5 xhigh |
 
 - Every brief's first line names the seat and the model.
 - The builder executes a plan. Haiku 5.5 xhigh builds small mechanical work. Sonnet 5.5 high builds anything long or ambiguous, and takes over on any failure. Opus plans and reviews; it does not build.
 - Computer use runs through my cli proxy, like the other seats.
+- A scout is for wide reading and searching that needs no judgment. It reports what it found and changes nothing.
 - Sessions I open myself are not covered by this table. Their default is set separately.
 - No OpenAI models for now.
 - If you are unsure of a model ID for a harness, use the human names above. Agents read this table; nothing parses it.

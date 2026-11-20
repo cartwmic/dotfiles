@@ -33,6 +33,10 @@ def load(name, file):
     return module
 
 
+_spec = importlib.util.spec_from_file_location("bump_pr_body", ROOT / "scripts/bump_pr_body.py")
+_check = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_check)
+BODY_PROBLEMS = _check.problems
 AGENT_KIT = load("agent_kit_bump", "executable_agent_kit_bump.py")
 LOOP_ENGINE = load("loop_engine_bump", "executable_loop_engine_bump.py")
 T3_PIN = load("t3_pin_check", "executable_t3_pin_check.py")
@@ -42,10 +46,14 @@ OLD_LOOP_ENGINE = (FIXTURES / "loop-engine-bump-654-body.md").read_text(encoding
 LOOP_ENGINE_REPORT = re.search(r"```\n(.*?)```", OLD_LOOP_ENGINE, re.S).group(1)
 
 
+HEAD = "1cb71c062018f0786f7d858436a47b1b98946d73"  # a real-looking 40-hex head: the Proven section names it, and the checker must not take it for a job id
+DAY = "2026-11-20"
+
+
 def new_descriptions():
     return {
-        "agent-kit 0.67.1": AGENT_KIT.pr_body("0.67.1"),
-        "Loop Engine v0.58.0": LOOP_ENGINE.pr_body("v0.58.0", LOOP_ENGINE_REPORT),
+        "agent-kit 0.67.1": AGENT_KIT.pr_body("0.67.1", HEAD, DAY),
+        "Loop Engine v0.58.0": LOOP_ENGINE.pr_body("v0.58.0", LOOP_ENGINE_REPORT, HEAD, DAY),
     }
 
 
@@ -61,8 +69,12 @@ class Structure(unittest.TestCase):
             self.assertNotIn("|", outside_fences, name)
             self.assertNotIn("Decisions:", body, name)
             self.assertNotRegex(body, r"(?i)\b(?:ask|decision|grant)s?\s+#\d+|rule [0-9a-f]{8}\b|\bPrinciples\b", name)
-            for heading in ("What changes", "Why", "How it was checked", "Risk and rollback"):
+            for heading in ("What changes", "Why", "How it was checked", "Proven", "Risk and rollback"):
                 self.assertIn("## " + heading, body, name)
+            self.assertEqual(BODY_PROBLEMS(body), [], name)  # the check tests/release-pins and tests/release-skills share
+            proven = body.split("## Proven\n", 1)[1].split("\n## ", 1)[0]
+            self.assertIn(HEAD, proven, name)
+            self.assertIn(DAY, proven, name)
 
     def test_the_loop_engine_description_keeps_the_import_report_and_drops_the_scratch_paths(self):
         body = new_descriptions()["Loop Engine v0.58.0"]

@@ -17,7 +17,7 @@ Subagents. Prefer to use subagents. In a session I open myself that is not a sea
 
 Reading files. Leads and the coordinator do not read files to find or understand something: in Claude Code they ask the `reader` helper and get the answer; in another harness they use its cheapest read-only helper, or read directly if it has none. Builders read the files they edit and reviewers the diffs they judge.
 
-Advisor tool. If you have it, call it once, early, before you commit to an approach. This replaces the tool's own advice to call it again before declaring done: call it a second time only when you are stuck or changing approach.
+Advisor tool. If you have it, call it once per session, early, before you commit to an approach. This replaces the tool's own advice to call it again before declaring done. Call it a second time only when you are stuck or changing approach. A helper (a sub-agent started with the Agent tool) never calls it.
 
 Waiting. Wait for CI with `gh run watch <id> --exit-status --interval 60` (the default 3 s poll costs ~3,300 API calls an hour) and for long jobs with `run-and-wake`. Never poll by hand in a loop.
 

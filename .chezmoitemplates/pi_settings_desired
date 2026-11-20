@@ -18,6 +18,9 @@
 {{- if eq .profile "personal" }}
   "defaultProvider": "claude-compat",
   "defaultModel": "claude-opus-5-5",
+  "subagents": {
+    "defaultModel": "claude-compat/claude-haiku-5-5"
+  },
 {{- else }}
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-5-5",
@@ -37,6 +40,7 @@
     "anthropic/claude-opus-5-5": "medium"
   },
   "subagents": {
+    "defaultModel": "work-glm/{{ .workGlmModelId }}",
     "disableThinking": true
   },
 {{- end }}

@@ -73,8 +73,8 @@ PRINCIPLES = [
     ("Fix the cause; no arbitrary caps or unrequested defense in depth", "n/a", "No cap, threshold or extra guard is added."),
     ("Good enough for personal software", "pass", "Personal profile only for the apply; the work Mac takes the merged pins with its own chezmoi update."),
     ("Prior art before building", "n/a", "No new capability; the bundles come from the Loop Engine release."),
-    ("Verified from the outside", "pass", "The verify step runs verify-deployed on the changed bundles and reads the active mise versions back (log step verify)."),
-    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the merge runs under the standing dotfiles grant (playbook rule 7c57de5a)."),
+    ("Verified from the outside", "pass", "Before the merge the script compared every skill file with the release tag (the PR description's Proven section); after it, it runs verify-deployed on the changed bundles and reads the active mise versions back."),
+    ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the owner's standing grant lets the script merge a Loop Engine release bump once its checks pass."),
     ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/loop-engine-bump/log.jsonl."),
     ("Fast proof", "n/a", "The import runs no journey; the proof is the PR's CI run."),
     ("Built to last", "pass", "The script replaces the pins and shipped skills in place; nothing old is left behind."),
@@ -106,15 +106,19 @@ def import_report(stdout):
     return "\n".join(lines[:cut]) + "\n"
 
 
-def pr_body(tag, report):
-    """The PR description: what changes, why, how it was checked and the risk. The bookkeeping (principles table, Decisions line) is the agent record, record_text."""
+def pr_body(tag, report, head, day):
+    """The PR description: what changes, why, how it was checked, what was proven and the risk. The bookkeeping (principles table, Decisions line)
+    is the agent record, record_text. The report is cut at the import tool's own "applied to" line (import_report). Proven is prose with no job ids
+    or tables (the deployed pr-body-check refuses both): the tag and pins lines the import printed are quoted inline."""
+    lines = import_report(report).splitlines()
+    checked = [line for line in lines if line.startswith(("tag ", "pins:"))]
     return "\n".join([
         "## What changes",
         "",
-        "Imports the %s skill bundles and moves the five Loop Engine pins (%s) to %s. Made by `loop_engine_bump.py %s`." % (tag, ", ".join(TOOLS), tag[1:], tag),
+        "Imports the %s skill bundles and moves the five Loop Engine pins (%s) to %s. Made by `loop_engine_bump.py %s`. Every Loop Engine release updates the dotfiles pins and skills." % (tag, ", ".join(TOOLS), tag[1:], tag),
         "",
         "```",
-        import_report(report).rstrip("\n"),
+        "\n".join(lines),
         "```",
         "",
         "## Why",
@@ -123,8 +127,13 @@ def pr_body(tag, report):
         "",
         "## How it was checked",
         "",
-        "The import tool verifies every imported file against the release's tree hashes (the report above). The PR's checks pass and the script's merge gates pass. After the merge the script "
-        "applies only the PR's own files, runs `mise install`, then verifies the changed bundles and that the active version of each tool is %s." % tag[1:],
+        "The PR's checks and the script's merge gates (the main-branch status and the description and record check) must pass before the script merges. What ran, and what is left for after the merge, is under Proven.",
+        "",
+        "## Proven",
+        "",
+        "Before the PR, %s, head %s, the import tool compared every imported file with the release's tree hashes and moved the pins. It reported %s." % (day, head, " and ".join("`%s`" % line for line in checked) or "nothing it could quote"),
+        "",
+        "Not yet run, after the merge: the scoped apply of the PR's own files on the personal computer, `mise install`, and `import_release_skills.py verify-deployed` on the changed bundles with a read-back that the active version of each tool is %s." % tag[1:],
         "",
         "## Risk and rollback",
         "",
@@ -257,7 +266,8 @@ def publish(source, tag, branch, log):
         git(wt.path, "add", "-A", step="publish")
         git(wt.path, "commit", "-q", "-m", title, step="publish")
         git(wt.path, "push", "-q", "--force", "origin", "HEAD:refs/heads/" + branch, step="publish")
-        body = pr_body(tag, result.stdout)
+        body = pr_body(tag, result.stdout, git(wt.path, "rev-parse", "HEAD", step="publish").stdout.strip(),
+                       datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body], "publish",
             cwd=source)
     pr = find_pr(source, branch)
