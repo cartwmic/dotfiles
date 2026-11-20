@@ -35,9 +35,9 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
   overreach  every, each, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words" (a count in words also FAILs under overreach above)
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
-  budget    with --max-words N, FAIL when the doc holds more than N words. The words are those of the sections
-            (everything after the header's first `## ` heading; a section draft has no header), not the citations.
-            A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
+  budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
+            above the first `## ` heading and the headings and backticked names included; citations, fenced code and bare
+            list marks are not words. A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
 With --points (the raw harvest, points.json), two more checks run:
   counts     the doc header's numbers for harvested, left out, used, read by name only and not cited must equal
              the numbers computed from the harvest and this doc's citations. A point is used when a citation of
@@ -47,7 +47,7 @@ With --points (the raw harvest, points.json), two more checks run:
              `Counts: harvested N; left out N; used N; read by name only N; not cited N.`, for the header.
   not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
              does not cite: the entry is wrong, or it cites that test.
-  audit     with --audit FILE, FAIL a claim (a sentence with citations) that has no audit row in FILE:
+  audit     with --audit FILE, FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
             `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
             doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
             that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited.
@@ -435,11 +435,10 @@ def not_backed(doc_text, repo, points, cache):
 
 
 def word_count(doc_text, repo):
-    """Words of the doc's sections: citations, fenced code and the header are left out; a bare mark ("-", "1.") is not a word."""
+    """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
+    above the first `## ` heading, the headings and the backticked names are counted."""
     total = 0
-    for _, line, header, _ in doc_lines(doc_text):
-        if header:
-            continue
+    for _, line, _, _ in doc_lines(doc_text):
         for start, end, cites, _ in reversed(line_items(line, repo)):
             if cites:
                 line = line[:start] + " " + line[end:]
@@ -549,7 +548,7 @@ def audit_fails(doc_text, repo, audit_text):
     """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line."""
     rows, cache, fails = audit_rows(audit_text), {}, []
     for c in claims(doc_text, repo):
-        if c.get("heading") or c["header"] or c["not_backed"] or not c["cites"]:
+        if c.get("heading") or c["not_backed"] or not c["cites"]:
             continue
         ok = False
         for n, path, line, quote in rows:

@@ -927,6 +927,15 @@ class RangeListTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("FAIL number: 06 is not in the cited lines", out)
 
+    def test_a_number_without_zeros_matches_the_zero_padded_number_in_the_code(self):
+        files = {"src/t.rs": "let retries = 007;\n"}
+        code, out = check("It retries 7 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("FAIL number", out)
+        code, out = check("It retries 8 times, in the test (`src/t.rs:1`).\n", files)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL number: 8 is not in the cited lines", out)
+
 
 class BudgetTest(unittest.TestCase):
     """--max-words: a section draft or a doc over its word budget FAILs, so a length limit is kept by a script."""
@@ -947,11 +956,14 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("FAIL budget", out)
 
-    def test_the_header_fenced_code_and_list_marks_are_not_words(self):
+    def test_the_header_and_headings_are_words_and_fenced_code_and_list_marks_are_not(self):
         doc = "# Doc\n\nRepo: r, commit: abc, many words here before the first section heading.\n\n## Part\n\n```\nthree words inside\n```\n- It runs in the test (`src/a.rs:1`).\n1. It stops in the test (`src/a.rs:2`).\n"
-        code, out = check(doc, REPO, "--max-words", "11")
+        code, out = check(doc, REPO, "--max-words", "23")
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL budget: 24 words, budget 23", out)
+        code, out = check(doc, REPO, "--max-words", "24")
         self.assertEqual(code, 0)
-        self.assertIn("checked 2 citations, 0 bad, 11 words", out)  # Part, It runs in the test, It stops in the test
+        self.assertIn("checked 2 citations, 0 bad, 24 words", out)  # Doc, the 12 header words, Part, It runs in the test, It stops in the test
 
     def test_a_backticked_name_that_is_not_a_citation_counts_as_a_word(self):
         code, out = check("## Part\n\nThe `isMessageId` check runs in the test (`src/a.rs:1`).\n", REPO)
@@ -1017,6 +1029,15 @@ class AuditTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(":3: FAIL audit", out)
         self.assertNotIn(":5: FAIL audit", out)
+
+    def test_a_cited_sentence_above_the_first_heading_needs_its_own_row(self):
+        doc = "It runs in the test (`src/a.rs:1`).\n\n## Part\n\nIt does another thing in the test (`src/a.rs:2`).\n"
+        code, out = self.audited(self.ROW % (5, 2, "two"), doc)
+        self.assertEqual(code, 1)
+        self.assertIn(":1: FAIL audit", out)
+        self.assertNotIn(":5: FAIL audit", out)
+        code, out = self.audited(self.ROW % (1, 1, "one") + self.ROW % (5, 2, "two"), doc)
+        self.assertEqual(code, 0, out)
 
     def test_without_the_option_nothing_is_asked_for(self):
         code, out = check(self.DOC, REPO)
