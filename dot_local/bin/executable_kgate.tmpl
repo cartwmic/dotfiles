@@ -32,7 +32,7 @@ Contract
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
   after --sched-wait SECONDS (default 1800, env KGATE_SCHED_WAIT; homelab only): the pod is deleted and CMD never ran. An evicted homelab pod is 69 with the reason `evicted: <the kubelet's message>`, read from the pod's status before it is deleted. kgate NEVER runs CMD on this Mac and never
   reruns a job that started, except once on a kubectl cluster when the cluster evicted the pod (confirmed from the pod's status or the events). A CMD that itself exits 69 looks the same by code; the record's `reason` tells them apart.
-  When the homelab has no room, a job waits in a local queue (`kgate: queued: ...`, counted in --wait) instead of making a pod that would sit Unschedulable until 75; a lost pod's reason ends with `pod end reason: ...`. See docs/kgate.md.
+  When the homelab has no room, or its namespace's ResourceQuota refuses the pod, a job waits in a local queue (`kgate: queued: ...`, counted in --wait) instead of making a pod that would sit Unschedulable until 75; a lost pod's reason ends with `pod end reason: ...`. See docs/kgate.md.
 {{ if eq .profile "personal" -}}
 - 1Password reads (profile secrets and the pull token) call `op` by name. When `op` is the op shim and a Connect token is set, the shim sends them to the homelab Connect server; otherwise they use the service-account token: OP_SERVICE_ACCOUNT_TOKEN, else
   ~/.config/agent-harness/op-service-token. Without a service-account token the job exits 69 before `op` runs, whatever the Connect token; `op` never reaches the desktop app.
@@ -735,6 +735,34 @@ def quota_impossible(msg):
         if asked is not None and cap is not None and asked > cap:
             return True
     return False
+
+
+class QuotaWait:
+    """One pod's wait while the namespace quota refuses its create: the retry delay (QUOTA_FIRST_DELAY, doubling to QUOTA_MAX_DELAY), the text that says why, and the
+    record's quota_wait_s (added to what an earlier pod of the same job already waited). The kubectl cluster's create loop and the homelab's queue loop both use it."""
+
+    def __init__(self, job):
+        self.job, self.delay, self.since, self.msg = job, QUOTA_FIRST_DELAY, None, ""
+        self.base = job.rec.get("quota_wait_s") or 0
+
+    def refused(self, full):
+        """One refusal. `full`: the whole message, from `exceeded quota:`. Returns (what to say about the wait, seconds to wait before the next create). Raises when
+        waiting can never help."""
+        self.msg = full[:300]   # parsed whole; only what is printed and recorded is cut
+        if quota_impossible(full):
+            raise Unavailable("request exceeds the namespace quota: " + self.msg)
+        self.since = self.since or time.time()
+        self.job.rec["quota_wait_s"] = round(self.base + time.time() - self.since, 1)
+        pause, self.delay = self.delay, min(self.delay * 2, QUOTA_MAX_DELAY)
+        return "waiting for quota: " + self.msg, pause
+
+    def made(self):
+        """The create went through: close the record."""
+        if self.since:
+            self.job.rec["quota_wait_s"] = round(self.base + time.time() - self.since, 1)
+
+    def timeout(self):
+        return Unavailable("quota not available within %ds: %s" % (self.job.o.wait, self.msg))
 
 
 def new_password():
@@ -2090,38 +2118,39 @@ class Job:
         if stale:
             self.cluster.run(["delete", "secret", *stale, "--ignore-not-found", "--wait=false"])
 
-    def create_pod(self, manifests, deadline):
-        """Create the pod. On a kubectl cluster a ResourceQuota refusal is waited out (backoff) until the deadline; any other refusal is fatal."""
-        body = json.dumps(manifests).encode()
+    def try_create(self, manifests):
+        """One create call. None: the pod was made. The whole quota message (from `exceeded quota:`) when the namespace's ResourceQuota refused it: nothing was made, so
+        the caller waits and creates again. Any other refusal raises. On the homelab the List holds the job's Secrets ahead of the pod, and they are in when the quota
+        refuses the pod: admit() deletes them before it sleeps, because a second create would otherwise fail on them (AlreadyExists) even if the quota had room."""
         self.create_tried = self.pod_left = True
-        delay, waited_from, last_msg = QUOTA_FIRST_DELAY, None, None
-        base = self.rec.get("quota_wait_s") or 0
+        done = self.cluster.run(["create", "-f", "-"], stdin=json.dumps(manifests).encode())
+        if done.returncode == 0:
+            return None
+        err = done.stderr.decode(errors="replace").strip()
+        if not QUOTA_REFUSAL.search(err):
+            raise Unavailable("could not create the pod: " + err)
+        return " ".join(err[err.index("exceeded quota:"):].split())
+
+    def create_pod(self, manifests, deadline):
+        """Create the pod on a kubectl cluster. A ResourceQuota refusal is waited out (backoff) until the deadline; any other refusal is fatal.
+        The homelab does not come here: admit() waits in its queue, so the wait never holds the lock the other clients need."""
+        quota, said = QuotaWait(self), None
         while True:
-            done = self.cluster.run(["create", "-f", "-"], stdin=body)
-            if done.returncode == 0:
+            refused = self.try_create(manifests)
+            if refused is None:
                 break
-            err = done.stderr.decode(errors="replace").strip()
-            if self.cluster.kind != "kubectl" or not QUOTA_REFUSAL.search(err):
-                raise Unavailable("could not create the pod: " + err)
             # The shared namespace quota is full (other jobs hold it). Nothing was created, so create again until the --wait deadline.
-            full = " ".join(err[err.index("exceeded quota:"):].split())   # parsed whole; only what is printed and recorded is cut
-            msg = full[:300]
-            if quota_impossible(full):
-                raise Unavailable("request exceeds the namespace quota: " + msg)
-            waited_from = waited_from or time.time()
-            self.rec["quota_wait_s"] = round(base + time.time() - waited_from, 1)
-            if full != last_msg:
-                self.note("waiting for quota: " + msg)
-                last_msg = full
+            why, pause = quota.refused(refused)
+            if why != said:
+                self.note(why)
+                said = why
             if time.time() >= deadline:
-                raise Unavailable("quota not available within %ds: %s" % (self.o.wait, msg))
-            time.sleep(max(0, min(delay, deadline - time.time())))
-            delay = min(delay * 2, QUOTA_MAX_DELAY)
-        if waited_from:
-            self.rec["quota_wait_s"] = round(base + time.time() - waited_from, 1)
+                raise quota.timeout()
+            time.sleep(max(0, min(pause, deadline - time.time())))
+        quota.made()
 
     def place(self, manifests, deadline):
-        """Create the pod. The homelab first waits in the local queue while the cluster has no room (see admit()); a kubectl cluster has its own autoscaler and quota wait."""
+        """Create the pod. The homelab first waits in the local queue while the cluster has no room or the namespace quota refuses the pod (see admit()); a kubectl cluster has its own autoscaler and quota wait."""
         if self.cluster.kind == "kubectl":
             self.create_pod(manifests, deadline)
         else:
@@ -2133,7 +2162,9 @@ class Job:
         asks no more than this one, and is at least as urgent (blocks()), means there is none, and the job waits here, in the local queue, and says so.
         Two things order the clients on this machine: a ticket in <state>/queue/ (a ticket ahead that blocks this job holds it back, so the kgate-main run is
         not made to wait behind PR gates), and one flock around "look, create, wait for the scheduler's answer", so two clients never both see room that only one
-        of them gets. A job that cannot read the waiting pods creates its pod as before. The wait counts against --wait."""
+        of them gets. A job that cannot read the waiting pods creates its pod as before. The wait counts against --wait.
+        A create the namespace's ResourceQuota refuses is a wait too: the job releases the flock, says "queued: waiting for quota: ...", sleeps with the quota backoff
+        and tries again, so a job that fits (it asks less than this one) is not held up by the sleep. It ends at --wait like the kubectl cluster's quota wait."""
         mine = pod_shape(next(i for i in manifests["items"] if i["kind"] == "Pod"))
         queue = os.path.join(self.state, "queue")
         os.makedirs(queue, exist_ok=True)
@@ -2141,10 +2172,11 @@ class Job:
         ident = proc_identity(os.getpid())
         write_json_atomic(ticket, {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": deadline, "shape": mine})
         t_wait, last, noted = None, None, False
+        quota = QuotaWait(self)
         with open(os.path.join(queue, ".lock"), "a") as lock:
             try:
                 while True:
-                    why = self.queued_behind(queue, mine)
+                    why, pause = self.queued_behind(queue, mine), None
                     if not why:
                         try:
                             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2154,11 +2186,17 @@ class Job:
                             try:
                                 why = self.cluster_full(mine)
                                 if not why:
-                                    self.create_pod(manifests, deadline)
-                                    self.settle()
-                                    break
+                                    refused = self.try_create(manifests)
+                                    if refused is None:
+                                        self.settle()
+                                        break
+                                    why, pause = quota.refused(refused)   # the flock is let go below, before the sleep
                             finally:
                                 fcntl.flock(lock, fcntl.LOCK_UN)
+                    if pause:   # the quota refused the pod: take out the Secrets that went in ahead of it. Outside the flock, because a failed delete is retried for a while.
+                        gone, _ = delete_until_gone(self.cluster, self.pod)
+                        if gone.returncode != 0:
+                            raise Unavailable("could not remove the Secrets of the create the quota refused: " + gone.stderr.decode(errors="replace").strip())
                     t_wait = t_wait or time.time()
                     local = why.startswith(("behind ", "another job"))   # a neighbour on this machine is being placed: usually seconds, and the cluster has room
                     if why != last and why != "another job is being placed" and (not local or time.time() - t_wait >= QUEUE_QUIET_S or noted):
@@ -2167,10 +2205,11 @@ class Job:
                     if noted:
                         self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
                     if time.time() >= deadline:
-                        raise Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
-                    time.sleep(max(0, min(QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S, deadline - time.time())))
+                        raise quota.timeout() if pause or (last or "").startswith("waiting for quota") else Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
+                    time.sleep(max(0, min(pause or (QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S), deadline - time.time())))
             finally:
                 forget(ticket)
+        quota.made()
         if noted:
             self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
             self.note("left the queue after %.0fs; creating the pod" % self.rec["queue_wait_s"])
