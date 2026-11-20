@@ -1,6 +1,6 @@
-"""The mise bootstrap script gives `mise install` a GitHub token when none is set, and only that call.
+"""The mise bootstrap script gives every mise call a GitHub token when none is set.
 
-mise reads GITHUB_TOKEN and ignores GH_TOKEN, so an unauthenticated `mise install` can hit GitHub's 60-an-hour limit. The real script is
+mise reads GITHUB_TOKEN and ignores GH_TOKEN, so an unauthenticated mise call (the setup task, `mise install`, the bootstrap task) can hit GitHub's 60-an-hour limit. The real script is
 rendered with chezmoi (both profiles) and run with a fake mise and gh first on PATH in a throwaway HOME. The fake mise logs the GITHUB_TOKEN
 each call sees; the fake gh answers `auth token`. Run: python3 -m unittest discover -s tests/mise
 """
@@ -16,7 +16,7 @@ SCRIPT = REPO / "run_onchange_after_10_mise_bootstrap.sh.tmpl"
 FAKE_MISE = """#!/bin/sh
 case "$1" in
   --version) echo "2026.12.0 linux-x64 (2026-12-01)" ;;
-  *) echo "mise $* GITHUB_TOKEN=${GITHUB_TOKEN:-<unset>}" >> "$FAKE_LOG" ;;
+  *) echo "mise $* GITHUB_TOKEN=${GITHUB_TOKEN-<unset>}" >> "$FAKE_LOG" ;;
 esac
 """
 FAKE_GH = """#!/bin/sh
@@ -53,30 +53,32 @@ class MiseGithubTokenTest(unittest.TestCase):
                 self.assertNotIn(secret, r.stdout + r.stderr)
             return {line.split(" GITHUB_TOKEN=")[0]: line.split(" GITHUB_TOKEN=")[1] for line in log.read_text().splitlines() if " GITHUB_TOKEN=" in line}, log.read_text()
 
-    def test_gh_token_is_used_for_mise_install_only_when_nothing_is_set(self):
+    def test_gh_token_reaches_every_mise_call_when_nothing_is_set(self):
         for profile in ("personal", "axon-work-computer"):
             with self.subTest(profile=profile):
                 seen, _ = self.run_script(profile)
+                self.assertEqual(seen["mise run setup-ubuntu-essentials"], "gh-secret")
                 self.assertEqual(seen["mise install"], "gh-secret")
-                self.assertEqual(seen["mise run bootstrap"], "<unset>")
+                self.assertEqual(seen["mise run bootstrap"], "gh-secret")
+                self.assertEqual(set(seen.values()), {"gh-secret"})
 
     def test_gh_token_env_var_is_used_without_asking_gh(self):
         seen, log = self.run_script(env_extra={"GH_TOKEN": "env-gh-secret"})
-        self.assertEqual(seen["mise install"], "env-gh-secret")
+        self.assertEqual(set(seen.values()), {"env-gh-secret"})
         self.assertNotIn("gh auth token", log)
 
     def test_an_existing_github_token_is_left_alone(self):
         seen, log = self.run_script(env_extra={"GITHUB_TOKEN": "env-github-secret", "GH_TOKEN": "env-gh-secret"})
-        self.assertEqual(seen["mise install"], "env-github-secret")
+        self.assertEqual(set(seen.values()), {"env-github-secret"})
         self.assertNotIn("gh auth token", log)
 
-    def test_without_gh_or_a_token_mise_install_runs_unauthenticated(self):
+    def test_without_gh_or_a_token_every_mise_call_runs_unauthenticated(self):
         seen, _ = self.run_script(gh=False)
-        self.assertEqual(seen["mise install"], "<unset>")
+        self.assertEqual(set(seen.values()), {"<unset>"})
 
     def test_gh_signed_out_does_not_fail_the_script(self):
         seen, _ = self.run_script(env_extra={"FAKE_GH_TOKEN": ""})
-        self.assertEqual(seen["mise install"], "<unset>")
+        self.assertEqual(set(seen.values()), {"<unset>"})
 
 
 if __name__ == "__main__":

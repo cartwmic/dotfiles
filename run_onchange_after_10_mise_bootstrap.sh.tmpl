@@ -48,6 +48,20 @@ if ! command -v mise >/dev/null 2>&1; then
   fi
 fi
 
+# mise reads GITHUB_TOKEN and ignores GH_TOKEN. Without a token its GitHub release lookups share the 60-requests-an-hour anonymous limit, and a
+# rate-limit error stops a run. Export one for every mise call below and for the tasks they start: GH_TOKEN, else `gh auth token`. With neither,
+# the script runs unauthenticated, as before. The token is never printed.
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+  gh_token="${GH_TOKEN:-}"
+  if [ -z "$gh_token" ] && command -v gh >/dev/null 2>&1; then
+    gh_token="$(gh auth token -h github.com 2>/dev/null || true)"
+  fi
+  if [ -n "$gh_token" ]; then
+    export GITHUB_TOKEN="$gh_token"
+    log_info "using a GitHub token from GH_TOKEN or gh for mise"
+  fi
+fi
+
 # mise must be recent enough to install the tools in its config. 2026.3.9 looked for a pnpm asset named pnpm-macos-arm64 and failed the pnpm install;
 # 2026.11.8 is the version that worked, so it is the floor. Nothing runs when mise is already at or above it.
 MISE_MIN="2026.11.8"
@@ -100,26 +114,8 @@ mise run setup-ubuntu-essentials
 
 log_info "Installing tools from mise config..."
 
-# mise reads GITHUB_TOKEN and ignores GH_TOKEN. Without either, its GitHub release lookups share the 60-requests-an-hour anonymous limit and
-# `mise install` can stop on a rate-limit error. Give that one call a token when none is set: GH_TOKEN, else `gh auth token`. With neither, run as is.
-mise_install() {
-  token=""
-  if [ -z "${GITHUB_TOKEN:-}" ]; then
-    token="${GH_TOKEN:-}"
-    if [ -z "$token" ] && command -v gh >/dev/null 2>&1; then
-      token="$(gh auth token 2>/dev/null || true)"
-    fi
-  fi
-  if [ -n "$token" ]; then
-    log_info "using a GitHub token from GH_TOKEN or gh for mise install"
-    GITHUB_TOKEN="$token" mise install
-  else
-    mise install
-  fi
-}
-
 # Install all tools defined in [tools] section
-mise_install
+mise install
 
 log_info "Running mise bootstrap tasks..."
 
