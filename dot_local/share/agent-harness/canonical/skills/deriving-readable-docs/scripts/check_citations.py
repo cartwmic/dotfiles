@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the `path:line` citations in a derived doc: the line exists, and the cited text backs the sentence.
 
-usage: check_citations.py <doc.md> <repo> [--points points.json [--left-out left-out.txt]] [--max-words N] [--audit audit.md] [--sheet]
+usage: check_citations.py <doc.md> <repo> [--points points.json [--left-out left-out.txt]] [--max-words N] [--max-sentence-words N] [--audit audit.md] [--sheet]
 
 A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
 read; several may share one backtick span, separated by commas or semicolons (`src/a.ts:12, 40-45` is two ranges of one file); one inside a span with other
@@ -18,7 +18,7 @@ joined by commas or "and". These checks FAIL a claim, because a miss is a fact t
   string    every `backticked` or "double-quoted" string in the claim (a repo path that exists is exempt) must
             appear there. A one-word string must appear as written; a longer one needs each of its words.
   overreach a sentence with one of the words every, each, all, always, never, only, or a count in words ("three
-            parts": two..twelve, dozen), whose citations are all test or journey files. A test proves the cases it
+            parts": two..twelve, dozen), whose citations are all test, journey or doc files (README, docs/, *.md). A test proves the cases it
             runs, not a set. Not these: a word inside a hyphenated one ("read-only"), "each other", and "each" that
             spreads over a listed set ("A and B each", "once each", "one commit each"; an "and" after a comma does
             not close a list: ", and the message names each problem" FAILs). Cite the code that defines
@@ -35,6 +35,9 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
   overreach  every, each, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words" (a count in words also FAILs under overreach above)
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
+  sentence-length  with --max-sentence-words N, FAIL each sentence of more than N words. A sentence is cut after . ! or ? and is
+            measured whole, with its citations taken out, so a citation in the middle does not cut it. It prints the claims (every
+            sentence, bullet and table row of the prose, headings and the header excluded), their words and the words per claim on every run.
   budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
             above the first `## ` heading and the headings and backticked names included; citations, fenced code and bare
             list marks are not words. An assembled header (the block above the first `## ` heading with a `Counts: harvested N`
@@ -72,110 +75,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, claims, doc_lines, line_items, prose_sentences, sentences, strip_code, word_count, words_of)  # noqa: E402
 
-SPAN = re.compile(r"`([^`\n]+)`")
-PART = re.compile(r"^([^\s:`]+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$")
-# A citation-shaped token inside a span that also holds other words, such as `see src/a.rs:2`.
-EMBEDDED = re.compile(r"(?<![\w/.:@+-])([\w.@+/-]+)\s*:\s*(\d+)(?:-(\d+))?")
-HOST_SUFFIXES = {"com", "org", "net", "io", "dev", "app", "internal", "local", "lan", "home"}
-IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
-
-
-def is_path(repo, path, strict):
-    """Should this token be checked as a file citation? Skip clock times, hosts and ports. A whole-span
-    token such as `Makefile:5` is checked even with no dot or slash, so a missing file is reported."""
-    if os.path.exists(os.path.join(repo, path)):
-        return True
-    if path == "localhost" or IPV4.match(path):
-        return False
-    if "/" in path:
-        return True
-    ext = path.rsplit(".", 1)
-    if len(ext) == 2:
-        return ext[1].lower() not in HOST_SUFFIXES
-    return strict and path[0].isalpha()
-
-
-def line_items(line, repo):
-    """Return the backtick spans of one doc line as (start, end, cites, text); cites is [(path, start, end)],
-    empty for a span that is not a citation."""
-    items = []
-    for m in SPAN.finditer(line):
-        span = m.group(1)
-        parts = [p.strip() for p in re.split(r"[;,]\s*", span.strip()) if p.strip()]
-        for k in range(1, len(parts)):  # `src/a.ts:12, 40-45` is two ranges of one file: a bare range takes the path before it
-            if re.fullmatch(r"\d+(?:\s*-\s*\d+)?", parts[k]) and PART.match(parts[k - 1]):
-                parts[k] = PART.match(parts[k - 1]).group(1) + ":" + parts[k]
-        matches = [PART.match(p) for p in parts]
-        if parts and all(matches):
-            found, strict = matches, True
-        else:
-            found, strict = list(EMBEDDED.finditer(span)), False
-        cites = []
-        for c in found:
-            if is_path(repo, c.group(1), strict):
-                lo = int(c.group(2))
-                cites.append((c.group(1), lo, int(c.group(3)) if c.group(3) else lo))
-        items.append((m.start(), m.end(), cites, span))
-    return items
-
-
-def doc_lines(text):
-    """Yield (doc_line_no, line, in_header, is_heading) for each line outside fenced code blocks. A heading's
-    citations are checked, but its words are not judged as a claim.
-    The header is everything before the first `## ` heading (a doc with none has no header)."""
-    fenced, header = False, any(l.startswith("## ") for l in text.splitlines())
-    for n, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
-        if line.startswith("## "):
-            header = False
-        if not line.strip():
-            continue
-        yield n, line, header, line.startswith("#")
-
-
-LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-JOIN = re.compile(r"^(?:[\s,;&]|and)*$")
-LABEL = re.compile(r"^\s*\(([^)]*)\)")
-
-
-def claims(text, repo):
-    """Yield one dict per claim: line, text (the words before the citation group), cites, label (a parenthetical
-    right after the group, such as "code comment"), uncited (words after the last group, or a whole line with none), and
-    not_backed (the claim sits under a "Not backed" heading)."""
-    section = False
-    for n, line, header, heading in doc_lines(text):
-        items = line_items(line, repo)
-        if heading:
-            section = bool(re.match(r"#+\s.*not backed", line, re.I))
-            for _, _, cites, _ in items:
-                if cites:
-                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True, "not_backed": section}
-            continue
-        groups = []  # [first_start, last_end, cites]
-        for start, end, cites, _ in items:
-            if not cites:
-                continue
-            if groups and JOIN.match(line[groups[-1][1]:start]):
-                groups[-1][1] = end
-                groups[-1][2].extend(cites)
-            else:
-                groups.append([start, end, list(cites)])
-        prev = 0
-        for start, end, cites in groups:
-            label = LABEL.match(line[end:])
-            if label and not SAYS_SOURCE.search(label.group(1)):
-                label = None  # a parenthetical that is not a source label is a sentence: it is listed as uncited text
-            yield {"line": n, "text": line[prev:start] if prev else LIST_MARK.sub("", line[:start]), "cites": cites, "label": label.group(1) if label else "",
-                   "uncited": "", "header": header, "not_backed": section}
-            prev = end + (label.end() if label else 0)
-        if not header and line[prev:].strip():
-            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header, "not_backed": section}
 
 
 # --- text that a script can compare ---------------------------------------------------------------------------
@@ -198,13 +100,14 @@ SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\b
 # looked for; not_backed() checks the entry against the harvest.
 SEARCH = re.compile(r"\b(?:grepp?ed|searched|searches|search|hits?|found|finds?|none|tests?|journeys?|match)\b", re.I)
 # A test path by its name; used only when no harvest is given (--points), which decides it otherwise.
+# A doc file is the repo's own words, not the code that defines a set: a sentence that cites only tests or docs proves no more than they say.
+DOC_PATH = re.compile(r"\.(md|mdx|rst|txt|adoc)$|(^|/)docs?/", re.I)
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|proof|journeys?|e2e|smoke|specs?|conformance|support)(/|\.)|\.(test|spec|journey)\.|_test\.|(^|/)test_|-journey|\.bats$", re.I)
 # A count of things: "three parts", "6 words". Not a time ("45 minutes") or a bare status code ("409 and").
 COUNT = re.compile(r"(?<![\w.])(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|\d+)\s+(?!(?:is|was|has|does|as|this|its|his|yes)\b)(?:[a-z-]+\s+)?(?!(?:seconds?|minutes?|hours?|days?|weeks?|bytes?|times?|chars?|characters?)\b)[a-z-]+s\b", re.I)
 TIME_SCALE = {"second": (1000,), "minute": (60, 60000), "hour": (60, 3600, 3600000), "day": (24, 86400, 86400000)}
 TIME_UNIT = re.compile(r"^[\s-]*(second|minute|hour|day)s?\b", re.I)
 APPROX = re.compile(r"(about|around|roughly|nearly|~)\s*$", re.I)
-SAYS_SOURCE = re.compile(r"comment|header|readme|docs?\b|documentation|stated|says|source text|prd|agents\.md", re.I)
 COMMENT_START = {
     "//": {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs", ".go", ".java", ".kt", ".c", ".h", ".cc", ".cpp", ".cs", ".swift", ".scala"},
     "#": {".py", ".sh", ".bash", ".zsh", ".rb", ".yml", ".yaml", ".toml", ".ex", ".exs", ".bats", ".tmpl"},
@@ -286,14 +189,6 @@ def comment_only(lines, path):
     return bool(body) and all(l.startswith(marks) for l in body)
 
 
-def sentences(text):
-    return [s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()]
-
-
-def strip_code(text):
-    return SPAN.sub(" ", text)
-
-
 def read_lines(cache, repo, path):
     if path not in cache:
         with open(os.path.join(repo, path), "rb") as f:
@@ -330,7 +225,7 @@ def check_claim(c, repo, cache, test_files=None):
         if not says and all(comment_only(read_lines(cache, repo, p)[lo - 1:hi], p) for p, lo, hi, _ in ranges):
             flags.append((n, "comment", "%s are only comment lines and the sentence does not say so" % ", ".join("%s:%d-%d" % r[:3] for r in ranges)))
     # with a harvest, only its files are tests (a defining file under conformance/ or support/ is not); without one, the path name decides
-    testonly = bool(c["cites"]) and all((p in test_files) if test_files is not None else bool(TEST_PATH.search(p)) for p, _, _ in c["cites"])
+    testonly = bool(c["cites"]) and all(bool(DOC_PATH.search(p)) or ((p in test_files) if test_files is not None else bool(TEST_PATH.search(p))) for p, _, _ in c["cites"])
     labelled = SAYS_SOURCE.search(c["label"] or "")
     for kind, kind_text in () if c["header"] else (("overreach", c["text"]), ("uncited", c["uncited"])):  # the header describes the doc
         for raw in sentences(kind_text):
@@ -434,26 +329,6 @@ def not_backed(doc_text, repo, points, cache):
                     fails.append((n, "not-backed", "`%s` is in a test file, %s:%d; cite it or drop the entry | %s" % (tok, path, hit, line.strip())))
                     break
     return fails
-
-
-COUNTS_LINE = re.compile(r"(?i)\bcounts:?\**\s+harvested\s+[\d,]+")  # the header line step 6 writes, bold or not
-
-
-def word_count(doc_text, repo):
-    """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
-    above the first `## ` heading, the headings and the backticked names are counted, except an assembled header: when the
-    header holds a Counts line, the whole block above the first heading is left out, because the budget is for the sections."""
-    lines = list(doc_lines(doc_text))
-    assembled = any(in_header and COUNTS_LINE.search(line) for _, line, in_header, _ in lines)
-    total = 0
-    for _, line, in_header, _ in lines:
-        if assembled and in_header:
-            continue
-        for start, end, cites, _ in reversed(line_items(line, repo)):
-            if cites:
-                line = line[:start] + " " + line[end:]
-        total += sum(1 for w in LIST_MARK.sub("", line).split() if re.search(r"\w", w))
-    return total
 
 
 def line_count(full):
@@ -583,15 +458,15 @@ def main(argv):
     args, opts = [], {}
     it = iter(argv[1:])
     for a in it:
-        if a in ("--points", "--left-out", "--max-words", "--audit"):
+        if a in ("--points", "--left-out", "--max-words", "--max-sentence-words", "--audit"):
             opts[a] = next(it, None)
         elif a == "--sheet":
             opts[a] = True
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or (opts.get("--left-out") and "--points" not in opts) \
-            or any(opts.get(k) is None or (k not in ("--sheet", "--max-words") and not os.path.isfile(opts[k])) for k in opts) \
-            or (opts.get("--max-words") is not None and not opts["--max-words"].isdigit()):
+            or any(opts.get(k) is None or (k not in ("--sheet", "--max-words", "--max-sentence-words") and not os.path.isfile(opts[k])) for k in opts) \
+            or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-sentence-words")):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     doc, repo = args
@@ -615,6 +490,11 @@ def main(argv):
             fails = sorted(set(fails + (audit_fails(text, os.path.realpath(repo), f.read()) if not bad else [])))
     if "--max-words" in opts and words > int(opts["--max-words"]):
         fails = sorted(set(fails + [(1, "budget", "%d words, budget %s: drop behaviours, do not join them" % (words, opts["--max-words"]))]))
+    prose = prose_sentences(text, os.path.realpath(repo))
+    if "--max-sentence-words" in opts:
+        limit = int(opts["--max-sentence-words"])
+        fails = sorted(set(fails + [(n, "sentence-length", "%d words, limit %d: split it and keep the condition in each part | %s" % (len(words_of(s)), limit, s))
+                                    for n, s in prose if len(words_of(s)) > limit]))
     for n, cite, reason in bad:
         print("%s:%d: %s: %s" % (doc, n, cite, reason))
     for n, kind, detail in fails:
@@ -622,6 +502,8 @@ def main(argv):
     for n, kind, detail in flags:
         print("%s:%d: flag %s: %s" % (doc, n, kind, detail))
     print("checked %d citations, %d bad, %d words" % (checked, len(bad), words))
+    claim_words = sum(len(words_of(s)) for _, s in prose)
+    print("%d claims, %d words in them, %.1f words per claim" % (len(prose), claim_words, claim_words / len(prose) if prose else 0))
     if counts:
         print("Counts: " + "; ".join("%s %d" % (k, counts[k]) for k, _ in COUNT_KEYS) + ".")  # the line the header carries
     print("%d failed checks, %d flagged sentences (list them for the check pass)" % (len(fails), len(flags)))
