@@ -947,27 +947,92 @@ class SeatFilesRefreshTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("CHEZMOI_SOURCE_DIR", r.stderr)
 
-    def test_script_20_refreshes_after_linking_and_not_when_linking_fails(self):
+    def test_script_21_links_then_refreshes_stays_quiet_and_stops_when_linking_fails(self):
         env = Env(codex_active=False)
         try:
-            script = env.home / "script20.sh"
-            script.write_text(env.render("run_onchange_after_20_apply_harness_config.sh.tmpl"))
-            bin_dir, log = env.home / ".local/bin", env.home / "order.log"
-            scripts_dir = env.home / ".local/user_scripts"
-            bin_dir.mkdir(parents=True)
+            script = REPO / "run_after_21_link_skills_and_refresh_seat_files.sh"
+            scripts_dir, log = env.home / ".local/user_scripts", env.home / "order.log"
             scripts_dir.mkdir(parents=True)
-            (bin_dir / "mise").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')  # `mise exec -- <cmd>` runs the command
-            for name, body in (("apply_harness_config.sh", 'echo link >> "$HOME/order.log"; [ ! -e "$HOME/fail-link" ]'), ("refresh_seat_files.sh", 'echo refresh >> "$HOME/order.log"')):
+            # stand-ins for the two scripts it runs: the link step logs its argument, prints a line only when asked, and fails when asked
+            for name, body in (("apply_harness_config.sh", 'echo "link $1" >> "$HOME/order.log"; echo "[apply_harness_config] Linking canonical skills (skills only; MCP settings untouched)"; '
+                                '[ ! -e "$HOME/new-link" ] || echo "[apply_harness_config] Linked skill: x"; [ ! -e "$HOME/fail-link" ]'),
+                               ("refresh_seat_files.sh", 'echo refresh >> "$HOME/order.log"')):
                 (scripts_dir / name).write_text("#!/bin/sh\n" + body + "\n")
-            for p in (bin_dir / "mise", *scripts_dir.iterdir()):
-                p.chmod(0o755)
+                (scripts_dir / name).chmod(0o755)
             run = lambda: subprocess.run(["sh", str(script)], capture_output=True, text=True, env=dict(os.environ, HOME=str(env.home)), timeout=30)
-            self.assertEqual(run().returncode, 0)
-            self.assertEqual(log.read_text().split(), ["link", "refresh"])
+            r = run()
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))  # nothing changed: nothing printed
+            self.assertEqual(log.read_text().split(), ["link", "skills", "refresh"])
+            log.unlink()
+            (env.home / "new-link").write_text("")
+            self.assertEqual(run().stdout, "[apply_harness_config] Linked skill: x\n")  # what it linked is shown
             log.unlink()
             (env.home / "fail-link").write_text("")
-            self.assertNotEqual(run().returncode, 0)
-            self.assertEqual(log.read_text().split(), ["link"])  # a failed link leaves the files alone and fails the script
+            r = run()
+            self.assertNotEqual(r.returncode, 0)
+            self.assertEqual(log.read_text().split(), ["link", "skills"])  # a failed link leaves the files alone and fails the script
+            self.assertIn("Linked skill: x", r.stderr)
+        finally:
+            env.close()
+
+    def test_a_skill_that_arrives_by_a_later_pull_reaches_the_seat_files_in_that_apply(self):
+        """The work Mac already has the playbook clone, so a new playbook skill arrives by a pull, which changes no input of script 20.
+        A real chezmoi apply of a pruned copy of this source (the files that matter here, plus script 21 and the real link script, and the
+        git-repo external only: no network) against a real local git repo that gains a skill between two applies."""
+        env = Env(profile="axon-work-computer", codex_active=False)
+        try:
+            tmp = env.home.parent
+            git = lambda *a, cwd=None: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=cwd, check=True, capture_output=True, text=True)
+            upstream, bare = tmp / "upstream", tmp / "playbook.git"
+            upstream.mkdir()
+            git("init", "-q", cwd=upstream)
+            add_skill = lambda name: ((upstream / "skills" / name).mkdir(parents=True, exist_ok=True), (upstream / "skills" / name / "SKILL.md").write_text("---\nname: %s\n---\n" % name),
+                                      git("add", "-A", cwd=upstream), git("commit", "-qm", name, cwd=upstream))
+            add_skill("playbook-one")
+            git("clone", "-q", "--bare", str(upstream), str(bare))
+            env.cfg.write_text(env.cfg.read_text() + "".join("  %s: %s\n" % kv for kv in WORK_DATA.items()) + "  axonPlaybook:\n    repo: file://%s\n" % bare)
+            src = tmp / "src"
+            for rel in (".chezmoidata.toml", ".chezmoiignore", ".chezmoitemplates", "dot_claude/fleet", "dot_local/share/agent-harness",
+                        "dot_local/user_scripts/executable_apply_harness_config.sh", "dot_local/user_scripts/executable_refresh_seat_files.sh",
+                        "run_after_21_link_skills_and_refresh_seat_files.sh"):
+                dest = src / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                (shutil.copytree if (REPO / rel).is_dir() else shutil.copy2)(REPO / rel, dest)
+            externals = (REPO / ".chezmoiexternal.toml").read_text()
+            (src / ".chezmoiexternal.toml").write_text(externals[externals.index("# Private Axon"):])  # the git-repo external; the archive one needs the network
+            seats = [env.home / ".claude/fleet" / p.name.removesuffix(".tmpl") for p in sorted((src / "dot_claude/fleet").glob("seat-*.json.tmpl"))]
+            self.assertEqual(len(seats), len(KEEP) + 1)  # the seats plus homelab-chat
+
+            def chez(*args):
+                r = subprocess.run(["chezmoi", "--source", str(src), "--config", str(env.cfg), "--config-format", "yaml", "--destination", str(env.home),
+                                    "--cache", str(tmp / "cache"), *args], capture_output=True, text=True, env=dict(os.environ, HOME=str(env.home)), cwd=str(tmp), timeout=120)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                return r.stdout + r.stderr
+
+            def apply(*extra):  # chezmoi stats a parent that is missing in an empty home: make the parents first
+                for d in {os.path.dirname(p) for p in chez("managed", "--path-style=absolute").split()}:
+                    os.makedirs(d, exist_ok=True)
+                return chez("apply", "--no-tty", "--include", "files,externals,scripts", *extra)
+
+            def skill_everywhere(name):
+                self.assertTrue((env.home / ".claude/skills" / name).is_symlink(), name)
+                for seat in seats:
+                    self.assertEqual(json.loads(seat.read_text())["skillOverrides"].get(name), "off", (name, seat.name))
+                self.assertEqual(chez("status", "--include=files", *map(str, seats)), "", name)
+
+            apply()
+            skill_everywhere("playbook-one")  # a first clone
+            add_skill("playbook-two")
+            git("push", "-q", str(bare), "HEAD:master", cwd=upstream)
+            out = apply("--refresh-externals=always")
+            self.assertTrue((env.home / ".local/share/agent-harness/external-skills/axon-agents-playbook/skills/playbook-two/SKILL.md").is_file())  # the pull happened
+            skill_everywhere("playbook-two")  # in the same apply, and script 20 (not in this copy) did not run
+            self.assertIn("[refresh_seat_files] Updated", out)
+            before = [s.read_bytes() for s in seats]
+            quiet = apply("--refresh-externals=always")
+            self.assertEqual([s.read_bytes() for s in seats], before)
+            self.assertNotIn("[refresh_seat_files]", quiet)
+            self.assertNotIn("Linked skill", quiet)
         finally:
             env.close()
 

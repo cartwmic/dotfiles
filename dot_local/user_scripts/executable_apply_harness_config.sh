@@ -195,7 +195,6 @@ _link_skills_from() {
     if [ -L "$dest_path" ]; then
       current_target=$(readlink "$dest_path")
       if [ "$current_target" = "$skill_dir" ]; then
-        log "Skill already linked: $dest_path"
         continue
       fi
       # Only replace if existing link points into the same source tree
