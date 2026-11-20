@@ -78,7 +78,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
-from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, split_lines, strip_code, word_count, words_of)  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, split_lines, strip_code, untagged_glossary_lines, word_count, words_of)  # noqa: E402
 
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
 
@@ -254,6 +254,7 @@ def check(doc_text, repo):
     [(doc_line, kind, detail)]. Claims are only judged when all their citations are good."""
     repo = os.path.realpath(repo)
     checked, bad, fails, flags, cache = 0, [], [], [], {}
+    outside = untagged_glossary_lines(doc_text)  # an outside-term glossary entry makes no claim about the repo: lint_main.py and the checkers leave it alone too
     for c in claims(doc_text, repo):
         before = len(bad)
         for path, start, end in c["cites"]:
@@ -270,7 +271,7 @@ def check(doc_text, repo):
                 total = line_count(full)
                 if end > total:
                     bad.append((c["line"], cite, "line out of range (file has %d lines)" % total))
-        if len(bad) == before and not c.get("heading"):  # judge the words only when every citation under them is real
+        if len(bad) == before and not c.get("heading") and c["line"] not in outside:  # judge the words only when every citation under them is real
             f, g = check_claim(c, repo, cache)
             fails += f
             flags += g

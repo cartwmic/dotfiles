@@ -293,7 +293,7 @@ class SliceBalanceTest(unittest.TestCase):
 
 
 # --- defect 3: --record-fixed -------------------------------------------------------------------------------------------------------------
-GUIDE_COND = ("# Part 1: In plain English\n\n## What it is\n\nNotes lets you save short notes from the terminal. [A3.0001]\n\n## How to start\n\nYou run `notes add` to save one. [A4.0001]\n\n"
+GUIDE_COND = ("# Part 1: In plain English\n\n## What it is\n\nNotes lets you save short notes from the terminal. [A3.0001]\nWho it is for: anyone who takes notes in a terminal. [A3.0001]\n\n## How to start\n\nYou run `notes add` to save one. [A4.0001]\n\n"
               "## What you can do\n\n%s\n\n# Part 2: Appendix\n\n## A3 The product as a whole\n\nNotes saves short notes from the terminal. `src/cli.py:1` [A3.0001]\n\n"
               "## A4 Adding notes\n\nThe `notes add` command saves a note. `src/cli.py:3` [A4.0001]\n%s\n")
 

@@ -4,7 +4,7 @@
 usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--fixed fixed-ids.txt]
 
 Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `doc:line: FAIL kind: detail` (or `warn`), then a count; exit 1 on any FAIL.
-  part1-words       over 1,000 words warns, over 1,200 fails (headings and backticked names count; citations, printed blocks and tags do not)
+  part1-words       over 1,000 words fails, at any step, fix rounds included (headings and backticked names count; citations, printed blocks and tags do not)
   sentence-length   a sentence of more than 18 words fails, and so does an average above 14
   heading-depth     a heading deeper than two levels (###) fails
   tag               every sentence ends in a tag such as [A4.3f9a] and every tag must name an appendix line (the id that line carries at its end)
@@ -14,13 +14,16 @@ Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `do
                     word inside quotation marks or a backticked name is not the sentence's own condition
   label             a sentence whose tagged appendix line says its source (README, a file such as CONTRACT.md, a code comment, help text) must say a source too. A `.md`,
                     `.rst` or `.txt` name is a source only when the repo holds a file of that name (a file the product writes, such as notes.md, is not)
+  absolute          a Part 1 sentence that uses any, anything, every, all, only, always, never, nothing, none or unless fails unless at least one tagged appendix sentence
+                    uses the same word (a whole word; a word inside quotation marks or a backticked name does not count on either side)
+  who-for           Part 1 states who uses the product: a `Who it is for` line or section, each sentence tagged to an appendix line (which may say the repo does not say)
   how-to-start      Part 1 needs a `## How to start` section with at least one sentence, and each sentence must rest on a cited appendix line
   glossary          an optional `## Glossary` at the end, each entry `term: definition`, any number. An entry with no tag defines a term from outside the
                     repo and makes no claim about it: it holds no backticked name and no --flag. An entry about the repo carries a tag like any sentence
   fixed             with --fixed (the file `slice.py --record-fixed` writes), a warning when a Part 1 sentence a checker already fixed was reworded; a row recorded as `cut` is skipped
   citation          a `path:line` in Part 1 fails: the code belongs in the appendix
   backticks         more than 8 distinct backticked names fails, and so does one that is not a surface name (a row of surfaces.json, or its first word)
-  flags             more than 3 `--flag` tokens fails
+  flags             more than 3 distinct `--flag` tokens fails (the same flag twice is one)
   jargon            more than 4 hits per 1,000 words of references/jargon.txt fails; a term counts with a common ending (-s, -es, -ed, -d, -ing), once for each span
   appendix-match    a number, a "quoted" string or a backticked name in a sentence must also be in one of the appendix sentences its tags name
 Stdlib only. Exit 2 on a usage error.
@@ -34,13 +37,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I lea
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import SPAN, TAG, appendix_index, doc_lines, line_items, part1_slice, prose_sentences, strip_code, word_count, words_of  # noqa: E402
 
-WORDS_WARN, WORDS_FAIL, SENTENCE_MAX, SENTENCE_AVG, NAMES_MAX, FLAGS_MAX, JARGON_PER_1000 = 1000, 1200, 18, 14, 8, 3, 4
+WORDS_MAX, SENTENCE_MAX, SENTENCE_AVG, NAMES_MAX, FLAGS_MAX, JARGON_PER_1000 = 1000, 18, 14, 8, 3, 4
 # The words that make an appendix sentence conditional, and let a Part 1 sentence say so: one list, used on both sides.
 CONDITION = re.compile(r"(?<![\w-])(?:if|unless|only|when|whenever|except|until|without|otherwise|while|once|other than|as long as|apart from)(?![\w-])", re.I)
 CLAUSE_ONLY = {"without", "otherwise"}  # in an appendix sentence these count only where they open a clause
 CLAUSE_START = re.compile(r"(?:^|[.!?,;:(\u2014\u2013])\s*$")
 BY_DEFAULT = re.compile(r"(?<![\w-])(?:by default|in the default setup)(?![\w-])", re.I)
 A_DEFAULT = re.compile(r"(?<![\w-])defaults?(?:ed|s)?(?![\w-])", re.I)
+# Words that say "the whole set" or "no exception": a Part 1 sentence may use one only when a tagged appendix sentence does.
+ABSOLUTE = re.compile(r"(?<![\w-])(?:any|anything|every|all|only|always|never|nothing|none|unless)(?![\w-])", re.I)
+WHO_FOR = re.compile(r"^\W*who it is for\b", re.I)
 # A source an appendix sentence names for itself: the README, a file such as CONTRACT.md, a code comment, help text, a test title, the docs.
 SOURCE_LABEL = re.compile(r"(?<![\w-])(?:README|[\w-]+\.(?:md|rst|txt)|code comments?|help text|test titles?|docs|documentation)(?![\w-])", re.I)
 CUT = "cut"  # the sentence slot of a fixed-ids row for a sentence that did not hold on its re-check
@@ -81,6 +87,12 @@ def surface_names(rows):
         names.update(r["name"].split())
         names.update(p for p in re.split(r"[/\s]+", r["name"]) if p)
     return names
+
+
+def absolute_words(text):
+    """The absolute words (ABSOLUTE) a sentence uses, lowercase. A word inside quotation marks or a backticked name is not the sentence's own."""
+    plain = re.sub(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d', " ", SPAN.sub(" ", TAG.sub(" ", text)))
+    return {m.group(0).lower() for m in ABSOLUTE.finditer(plain)}
 
 
 def appendix_conditions(text):
@@ -141,10 +153,8 @@ def lint(guide, repo, rows, terms, fixed=None):
         return [(1, "part1", "no heading `Part 1`")], warns
     index = appendix_index(guide, repo)
     words = word_count(part1, repo)
-    if words > WORDS_FAIL:
-        fails.append((1, "part1-words", "%d words, hard limit %d" % (words, WORDS_FAIL)))
-    elif words > WORDS_WARN:
-        warns.append((1, "part1-words", "%d words, budget %d" % (words, WORDS_WARN)))
+    if words > WORDS_MAX:
+        fails.append((1, "part1-words", "%d words, limit %d at every step: shorten or merge sentences a fix narrowed first; never cut How to start or the who-it-is-for sentence" % (words, WORDS_MAX)))
     sents = prose_sentences(part1, repo)
     sections = section_lines(part1)
     gloss = next((v for k, v in sections.items() if k.startswith("glossary")), None)
@@ -171,7 +181,7 @@ def lint(guide, repo, rows, terms, fixed=None):
         fails.append((1, "backticks", "%d distinct backticked names, limit %d" % (len(names), NAMES_MAX)))
     for name in sorted(names - ok_names):
         fails.append((1, "backticks", "`%s` is not a surface name (surfaces.json)" % name))
-    flag_count = len(FLAG.findall("\n".join(text_lines)))
+    flag_count = len(set(FLAG.findall("\n".join(text_lines))))
     if flag_count > FLAGS_MAX:
         fails.append((1, "flags", "%d --flag tokens, limit %d" % (flag_count, FLAGS_MAX)))
     prose_text = "\n".join(strip_code(l) for l in text_lines)
@@ -200,6 +210,10 @@ def lint(guide, repo, rows, terms, fixed=None):
             labels = sorted(set(source_labels(text, repo)))
             if labels and not source_labels(bare, repo):
                 fails.append((n, "label", "%s says its source (%s) and the sentence drops it | %s" % (t, ", ".join(labels), s)))
+        stretched = sorted(absolute_words(bare) - set().union(*(absolute_words(b) for b in backed)))
+        if stretched:
+            fails.append((n, "absolute", "%s: no tagged appendix sentence uses %s, so Part 1 says more than it shows: drop the word or state the case | %s" % (
+                ", ".join(stretched), "it" if len(stretched) == 1 else "them", s)))
         have, have_sq = " ".join(backed), squash(" ".join(backed))
         nums = {x.replace(",", "") for x in NUMBER.findall(have.replace(",", ""))} | set(NUMBER.findall(have))
         for num in NUMBER.findall(strip_code(bare)):
@@ -213,6 +227,8 @@ def lint(guide, repo, rows, terms, fixed=None):
     steps = [(n, t) for n, t in sents if start and start[0] <= n <= start[1]]
     if not steps:
         fails.append((1, "how-to-start", "Part 1 needs a `## How to start` section with the first install or run step, each step a sentence"))
+    if not any(WHO_FOR.match(TAG.sub(" ", t)) for _, t in sents) and not next((v for k, v in sections.items() if k.startswith("who it is for") and any(v[0] <= n <= v[1] for n, _ in sents)), None):
+        fails.append((1, "who-for", "Part 1 needs a `Who it is for` line or section: who uses the product (README or docs), or a tagged sentence that says the repo does not say"))
     for n, t in steps:
         for tag in TAG.findall(t):
             if tag.strip("[]") in index and not index[tag.strip("[]")][2]:

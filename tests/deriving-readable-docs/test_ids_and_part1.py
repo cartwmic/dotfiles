@@ -23,6 +23,7 @@ GUIDE = """# Part 1: In plain English
 ## What it is
 
 Notes lets you save short notes from the terminal. [A3.a1]
+Who it is for: anyone who takes notes in a terminal. [A3.a1]
 
 ## How to start
 
@@ -197,7 +198,7 @@ class ConditionTest(unittest.TestCase):
     def test_the_words_of_a_condition_are_listed_in_one_place(self):
         src = (SCRIPTS / "lint_main.py").read_text().split('"""', 2)[2]
         self.assertEqual(len(re.findall(r"^CONDITION = ", src, re.M)), 1)
-        self.assertEqual([l for l in src.splitlines() if "unless" in l and not l.startswith("CONDITION")], [])
+        self.assertEqual([l for l in src.splitlines() if "unless" in l and not l.startswith(("CONDITION", "ABSOLUTE"))], [])
 
 
 class LabelTest(unittest.TestCase):

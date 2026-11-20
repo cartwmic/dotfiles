@@ -16,6 +16,7 @@ GUIDE = """# Part 1: In plain English
 ## What it is
 
 Notes lets you save short notes from the terminal. [A3.1]
+Who it is for: anyone who takes notes in a terminal. [A3.1]
 
 ## How to start
 
@@ -132,17 +133,15 @@ class LintMainTest(unittest.TestCase):
     def test_a_number_in_a_different_appendix_sentence_than_the_tagged_one_fails(self):
         self.fails(GUIDE.replace("in one day. [A4.2]\n\n# Part 2", "in one day. [A4.1]\n\n# Part 2"), "appendix-match")
 
-    def test_part_1_over_1000_words_warns_and_over_1200_fails(self):
-        filler = "\n".join("Notes lets you %s. [A3.1]" % sentence(8) for _ in range(95))
-        guide = GUIDE.replace("## What you can do", filler + "\n\n## What you can do")
-        code, out = lint(guide)
-        self.assertEqual(code, 0, out)
-        self.assertIn("warn part1-words: 1", out)
-        guide = GUIDE.replace("## What you can do", "\n".join("Notes lets you %s. [A3.1]" % sentence(8) for _ in range(125)) + "\n\n## What you can do")
-        code, out = lint(guide)
-        self.assertEqual(code, 1, out)
+    def test_part_1_over_1000_words_fails_at_any_step_and_1000_passes(self):
+        filler = lambda n: "\n".join("Notes lets you %s. [A3.1]" % sentence(8) for _ in range(n))
+        self.assertEqual(lint(GUIDE.replace("## What you can do", filler(95) + "\n\n## What you can do"))[0], 1)  # over 1,000
+        out = lint(GUIDE.replace("## What you can do", filler(95) + "\n\n## What you can do"))[1]
         self.assertIn("FAIL part1-words:", out)
-        self.assertIn("hard limit 1200", out)
+        self.assertIn("limit 1000", out)
+        self.assertIn("never cut How to start", out)
+        self.assertNotIn("warn part1-words", out)
+        self.assertEqual(lint(GUIDE.replace("## What you can do", filler(85) + "\n\n## What you can do"))[0], 0)  # under it
 
     def test_a_guide_without_a_part_1_heading_fails(self):
         self.assertEqual(lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))[0], 1)

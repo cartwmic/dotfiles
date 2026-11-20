@@ -247,5 +247,153 @@ class EarlyExitsDocsSayGoAndRustTest(unittest.TestCase):
         self.assertNotIn("(Python and TS/JS)", (SKILL_DIR / "scripts/check_citations.py").read_text())
 
 
+# --- lint_main.py: absolute words, who it is for, distinct flags, the glossary ----------------------------------------------
+SURFACES = [{"kind": "command", "name": "notes add", "file": "src/cli.py", "line": 3}, {"kind": "flag", "name": "--tag <name>", "file": "src/cli.py", "line": 5}]
+CLI = "notes\n\ncommand notes add\n\nflag --tag\n\nlimit 5 notes in one day\n" + "x\n" * 4
+TEMPLATE = """# Part 1: In plain English
+
+## What it is
+
+Notes lets you save short notes from the terminal. [A3.a1]
+%(who)s
+
+## How to start
+
+Run `notes add` to save your first note. [A4.b1]
+
+## What you can do
+
+%(part1)s
+
+%(extra)s
+# Part 2: Appendix
+
+## A3 The product as a whole
+
+Notes saves short notes from the terminal. `src/cli.py:1` [A3.a1]
+
+## A4 Adding notes
+
+The `notes add` command saves a note. `src/cli.py:3` [A4.b1]
+%(appendix)s `src/cli.py:7` [A4.b2]
+"""
+
+
+def guide(part1, appendix, who="Who it is for: anyone who takes notes in a terminal. [A3.a1]", extra=""):
+    return TEMPLATE % {"part1": part1 + " [A4.b2]" if part1 else "", "appendix": appendix, "who": who, "extra": extra}
+
+
+def lint(text, *extra):
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "src").mkdir()
+        (Path(d) / "src/cli.py").write_text(CLI)
+        Path(d, "GUIDE.md").write_text(text)
+        Path(d, "surfaces.json").write_text(json.dumps(SURFACES))
+        code, out, _ = script("lint_main.py", Path(d, "GUIDE.md"), d, "--surfaces", Path(d, "surfaces.json"), *extra)
+    return code, out
+
+
+class AbsoluteWordsTest(unittest.TestCase):
+    def absolute(self, part1, appendix):
+        code, out = lint(guide(part1, appendix))
+        return code, [l for l in out.splitlines() if "FAIL absolute" in l], out
+
+    def test_ntfy_firebase_only_is_not_in_the_tagged_line_so_it_fails(self):
+        """ntfy round 1, line 80: the Part 1 sentence says only, the tagged appendix line does not (the check found it overstated)."""
+        code, rows, out = self.absolute("The server sends to Firebase only when a Firebase client exists and Firebase is on for that message.",
+                                        "`dispatch` sends to Firebase in a goroutine when a Firebase client exists and `opts.firebase` is true.")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("only", rows[0])
+
+    def test_ntfy_all_users_and_uptime_kuma_any_method_fail_the_same_way(self):
+        _, rows, out = self.absolute("The command sets a rule, and everyone stands for all users.", "`ntfy access` sets a rule, and `everyone` stands for `*`.")
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("all:", rows[0])
+        _, rows, out = self.absolute("Another program can report in by calling the push address with any HTTP method.", "`/api/push/:pushToken` answers every HTTP method.")
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("any:", rows[0])
+
+    def test_the_word_passes_when_a_tagged_appendix_sentence_uses_it(self):
+        """ntfy round 1, line 53: the tagged appendix line itself says anything, so this gate cannot fail it (the appendix line is a checker's finding)."""
+        code, rows, out = self.absolute("An admin user can do anything.", "`Authorize` lets an admin user do anything.")
+        self.assertEqual(rows, [], out)
+
+    def test_the_word_must_match_whole_so_anything_is_not_any_and_unless_is_not_if(self):
+        _, rows, out = self.absolute("An admin user can do anything.", "An admin user can do any listed action.")
+        self.assertEqual(len(rows), 1, out)
+        _, rows, out = self.absolute("It saves a note unless the day is full.", "It saves a note if the day is not full.")
+        self.assertEqual(len(rows), 1, out)
+
+    def test_a_word_the_appendix_holds_only_inside_quotes_or_a_name_does_not_count(self):
+        _, rows, out = self.absolute("It never saves an empty note.", 'It prints "never" in the log when the note is empty.')
+        self.assertEqual(len(rows), 1, out)
+
+    def test_every_listed_word_fails_when_the_appendix_lacks_it(self):
+        for word in ("any", "anything", "every", "all", "only", "always", "never", "nothing", "none", "unless"):
+            _, rows, out = self.absolute("It %s saves a note on the first day." % word, "It saves a note on the first day.")
+            self.assertEqual(len(rows), 1, (word, out))
+
+    def test_an_untagged_glossary_entry_for_an_outside_term_is_not_judged(self):
+        text = guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.",
+                     extra="## Glossary\n\nPub-sub: a pattern where every subscriber gets all the messages.\n")
+        code, out = lint(text)
+        self.assertEqual(code, 0, out)
+
+
+class WhoItIsForTest(unittest.TestCase):
+    def test_a_guide_with_no_who_it_is_for_line_or_section_fails(self):
+        code, out = lint(guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.", who=""))
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL who-for:", out)
+
+    def test_a_line_that_says_the_repo_does_not_say_passes_when_it_is_tagged(self):
+        code, out = lint(guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.", who="Who it is for: the README does not say. [A3.a1]"))
+        self.assertEqual(code, 0, out)
+
+    def test_a_who_it_is_for_section_passes(self):
+        text = guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.", who="").replace(
+            "## How to start", "## Who it is for\n\nAnyone who takes notes in a terminal. [A3.a1]\n\n## How to start")
+        code, out = lint(text)
+        self.assertEqual(code, 0, out)
+
+    def test_the_line_still_needs_a_tag_like_any_sentence(self):
+        code, out = lint(guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.", who="Who it is for: anyone who takes notes."))
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL tag:", out)
+
+
+class DistinctFlagsTest(unittest.TestCase):
+    def test_the_same_flag_four_times_is_one_flag_and_four_different_flags_fail(self):
+        base = ("Use --tag to tag a note, then --tag again, --tag a third time and --tag a fourth.", "It stops after 5 notes in one day.")
+        code, out = lint(guide(*base))
+        self.assertEqual(code, 0, out)
+        code, out = lint(guide("Use --tag, --color, --due and --pin to set four options on a note.", base[1]))
+        self.assertEqual(code, 1, out)
+        self.assertIn("4 --flag tokens, limit 3", out)
+
+
+class GlossaryInCheckCitationsTest(unittest.TestCase):
+    def test_an_untagged_outside_term_entry_with_every_or_all_is_not_an_uncited_claim(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "src").mkdir()
+            (Path(d) / "src/cli.py").write_text(CLI)
+            doc = guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.",
+                        extra="## Glossary\n\nPub-sub: a pattern where every subscriber gets all the messages.\n")
+            Path(d, "GUIDE.md").write_text(doc)
+            code, out, _ = script("check_citations.py", Path(d, "GUIDE.md"), d)
+        self.assertNotIn("Pub-sub", out)  # not a failure and not a flag for the checkers: it says nothing about the repo
+        self.assertEqual(code, 0, out)
+
+    def test_a_tagged_glossary_entry_with_an_overreach_word_is_still_judged(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "src").mkdir()
+            (Path(d) / "src/cli.py").write_text(CLI)
+            doc = guide("You keep up to 5 notes in one day.", "It stops after 5 notes in one day.", extra="## Glossary\n\nStore: every note goes here. [A3.a1]\n")
+            Path(d, "GUIDE.md").write_text(doc)
+            code, out, _ = script("check_citations.py", Path(d, "GUIDE.md"), d)
+        self.assertIn("flag uncited: every | Store: every note goes here", out)
+
+
 if __name__ == "__main__":
     unittest.main()

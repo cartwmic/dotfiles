@@ -21,7 +21,7 @@ SURFACES = [
     {"kind": "command", "name": "add", "file": "src/cli.py", "line": 5},
 ]
 POINTS = [{"id": "P1", "name": "test_tag", "kind": "test", "file": "tests/test_cli.py", "line": 1, "framework": "pytest", "context": ""}]
-PART1 = "## What it is\n\nNotes saves short notes. [A3.1]\nYou tag a note with an option. [A4.1]\n"
+PART1 = "## What it is\n\nNotes saves short notes. [A3.1]\nWho it is for: anyone who takes notes. [A3.1]\nYou tag a note with an option. [A4.1]\n"
 A3 = "## A3 The product as a whole\n\nNotes saves short notes `README.md:1`. [A3.1]\n"
 A4 = "## A4 Tagging\n\nThe --tag option sets a tag `src/cli.py:2`. [A4.1]\nThe --color option sets a color `src/cli.py:3`. [A4.2]\n"
 
@@ -98,7 +98,7 @@ class AssembleTest(unittest.TestCase):
         self.assertIn("[A3.1]", guide)
         self.assertNotIn("[A", clean)
         self.assertNotIn("printed", clean)
-        self.assertIn("Notes saves short notes.\nYou tag a note", clean)
+        self.assertIn("Notes saves short notes.\nWho it is for: anyone who takes notes.\nYou tag a note", clean)
 
     def test_index_lists_each_appendix_sentence_under_its_tag_and_needs_no_part_1(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
@@ -130,7 +130,7 @@ class AssembleTest(unittest.TestCase):
 
     def test_the_assembled_guide_passes_lint_main_and_the_tags_resolve(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
-            setup(d, repo, **{"part1.md": "## What it is\n\nNotes saves short notes. [A3.1]\n\n## How to start\n\nYou set a tag with an option. [A4.1]\n"})
+            setup(d, repo, **{"part1.md": "## What it is\n\nNotes saves short notes. [A3.1]\nWho it is for: anyone who takes notes. [A3.1]\n\n## How to start\n\nYou set a tag with an option. [A4.1]\n"})
             run("assemble.py", d, repo, "--date", "2026-11-20")
             code, out, err = run("lint_main.py", str(Path(d, "GUIDE.md")), repo, "--surfaces", str(Path(d, "surfaces.json")))
         self.assertEqual(code, 0, out + err)

@@ -481,6 +481,7 @@ GUIDE_COND = """# Part 1: In plain English
 ## What it is
 
 Notes lets you save short notes from the terminal. [A3.0001]
+Who it is for: anyone who takes notes in a terminal. [A3.0001]
 
 ## How to start
 
