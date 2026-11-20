@@ -122,6 +122,20 @@ def pins(version):
     return "".join('%s = { version = "%s", matching_regex = "^x-", rename_exe = "%s" }\n' % (t, version, t) for t in TOOLS)
 
 
+def _load_body_check():
+    spec = importlib.util.spec_from_file_location("bump_pr_body", ROOT / "scripts/bump_pr_body.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+body_problems = _load_body_check().problems  # the check shared with tests/release-pins (agent_kit_bump.py)
+
+
+def assert_clean_body(test, body, *scratch):
+    test.assertEqual(body_problems(body, *scratch), [], "the PR body carries script bookkeeping")
+
+
 @unittest.skipUnless(shutil.which("chezmoi") and shutil.which("git"), "needs chezmoi and git")
 class BumpTests(Fixture):
     def setUp(self):
@@ -267,6 +281,7 @@ class BumpTests(Fixture):
         self.assertIn("Profiles: both.", pr["body"])
         self.assertIn("| %d | %s |" % LAST_PRINCIPLE, pr["body"])  # the principles table pr-body-check reads (rule ecd63156)
         self.assertRegex(pr["body"], r"(?m)^Decisions: none material$")  # rule ccc6c94b
+        assert_clean_body(self, pr["body"], str(self.dir))
         sha = pr["mergeCommit"]["oid"]
         changed = self.sh("git", "--git-dir", self.origin, "diff", "--name-only", sha + "^", sha).split()
         self.assertIn("dot_config/mise/config.toml", changed)
@@ -522,6 +537,60 @@ class BumpTests(Fixture):
 
 
 @unittest.skipUnless(shutil.which("chezmoi") and shutil.which("git"), "needs chezmoi and git")
+class ReleaseBodyTests(unittest.TestCase):
+    """The PR body the script writes, on the import output of dotfiles#670 (v0.60.0), whose body failed review on these lines."""
+
+    IMPORT_OUTPUT = (
+        "tag v0.60.0 of cartwmic/loop-engine = commit e1e526b93754ec786c47a7f3a7243a6d33328e79; 6 bundles, 29 files, every file matches its tree hash\n"
+        "coordinating-loop-engine           +0 added  ~1 changed  -0 orphan  =0 same\n"
+        "    change  coordinating-loop-engine/SKILL.md\n"
+        "pins: 0.59.0 -> 0.60.0 (dot_config/mise/config.toml)\n"
+        "applied to /tmp/loop-engine-bump-lm34crxi/wt\n"
+        "next: review git diff; chezmoi --source /tmp/loop-engine-bump-lm34crxi/wt apply --dry-run --verbose ~/.local/share/agent-harness/canonical/skills ~/.config/mise/config.toml,\n"
+        "      get approval, apply those targets, then run: import_release_skills.py verify-deployed --source /tmp/loop-engine-bump-lm34crxi/wt\n")
+    HEAD = "1cb71c062018f0786f7d858436a47b1b98946d73"
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("loop_engine_bump_under_test", SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def body(self):
+        return self.module.release_body("v0.60.0", self.IMPORT_OUTPUT, self.HEAD, "2026-11-20")
+
+    def test_the_check_names_each_thing_that_failed_dotfiles_670(self):
+        old = ("made by `loop_engine_bump.py v0.60.0` (playbook rule 7c57de5a).\n" + self.IMPORT_OUTPUT)
+        problems = body_problems(old)
+        self.assertEqual(sorted({p.split(":")[0] for p in problems}), ["a next line", "a rule id", "a scratch path", "no Proven section"])
+        clean = "## Proven\ncommit e1e526b93754ec786c47a7f3a7243a6d33328e79 matches\n"
+        self.assertEqual(body_problems(clean), [])
+        self.assertEqual(body_problems(clean + "the merge runs under the standing grant (rule 7c57de5a)"), ["a rule id: rule 7c57de5a"])
+
+    def test_the_body_has_no_scratch_path_next_line_or_rule_id(self):
+        assert_clean_body(self, self.body())
+
+    def test_the_body_keeps_the_bundle_summary_and_drops_the_operator_steps(self):
+        body = self.body()
+        self.assertIn("coordinating-loop-engine           +0 added  ~1 changed", body)
+        self.assertIn("    change  coordinating-loop-engine/SKILL.md", body)
+        self.assertNotIn("get approval", body)
+        self.assertNotIn("applied to", body)
+
+    def test_the_proven_section_names_what_the_script_checked(self):
+        proven = self.body().split("## Proven\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("tag v0.60.0 of cartwmic/loop-engine = commit e1e526b9", proven)
+        self.assertIn("every file matches its tree hash", proven)
+        self.assertIn("pins: 0.59.0 -> 0.60.0 (dot_config/mise/config.toml)", proven)
+        self.assertIn("2026-11-20", proven)
+        self.assertIn(self.HEAD, proven)
+
+    def test_a_body_still_passes_the_principles_and_decisions_checks_inputs(self):
+        body = self.body()
+        self.assertIn("| %d | %s |" % LAST_PRINCIPLE, body)
+        self.assertRegex(body, r"(?m)^Decisions: none material$")
+        self.assertIn("Profiles: both.", body)
+
+
 class PrTargetsTests(unittest.TestCase):
     """pr_targets on a merge commit with the files of dotfiles#573: the Loop Engine bump and the agent-kit pin in one PR."""
 
