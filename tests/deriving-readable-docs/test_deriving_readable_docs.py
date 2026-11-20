@@ -974,6 +974,49 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+def step7_command(skill, doc, repo, budget):
+    """The argument list of the step-7 check_citations.py command in SKILL.md, with its placeholders filled in, or None when
+    step 7 has no such command with --max-words. The `> <doc>.checks.txt` redirect is cut: the test reads the printed output."""
+    step = re.search(r"^7\. \*\*Check citations\.\*\*(.*?)^8\. ", skill, re.M | re.S)
+    cmd = re.search(r"`python3 -I [^`]*?check_citations\.py ([^`]*--max-words[^`]*)`", step.group(1)) if step else None
+    if not cmd:
+        return None
+    args = cmd.group(1).split(" > ")[0]
+    for placeholder, value in (("<doc.md>", doc), ("<repo>", repo), ("<the doc's budget>", budget)):
+        args = args.replace(placeholder, value)
+    return None if "<" in args else args.split()
+
+
+class StepSevenTest(unittest.TestCase):
+    """SKILL.md step 7 runs check_citations.py with --max-words on the assembled doc. The test takes that command from SKILL.md
+    and runs it on a fixture built the way steps 2, 4 and 6 build one: each section at its budget, under a header."""
+    FILES = {"tests/test_a.py": "def test_adds():\n    assert 1 + 1 == 2\n"}
+    SECTIONS = [
+        (20, "## Adds and checks a sum\n\nThe test adds 1 and 1 and expects 2 (`tests/test_a.py:2`). It runs once in this case (`tests/test_a.py:1`).\n"),
+        (20, "## Asserts the sum result\n\nThe test asserts that 1 plus 1 is 2 (`tests/test_a.py:2`). It fails when that is not true (`tests/test_a.py:2`).\n"),
+    ]
+    HEADER = ("# Doc\n\n- Repo: r, commit: abc. Inputs: the repo's tests and code; existing docs were not read. "
+              "Hand-added points: none. Left out: none.\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n")
+
+    def test_an_assembled_doc_at_budget_passes_skill_step_7(self):
+        skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        with make_repo(self.FILES) as repo, tempfile.TemporaryDirectory() as d:
+            Path(d, "points.json").write_text(harvest(repo)[1])  # step 2
+            Path(d, "left-out.txt").write_text("")
+            for budget, text in self.SECTIONS:  # step 4: each section is drafted at its budget
+                code, out = check(text, self.FILES, "--max-words", str(budget))
+                self.assertEqual(code, 0, out)
+                self.assertIn("%d words" % budget, out)
+            doc = Path(d, "DOC.md")
+            doc.write_text(self.HEADER + "".join(text for _, text in self.SECTIONS))  # step 6
+            args = step7_command(skill, str(doc), repo, str(sum(b for b, _ in self.SECTIONS)))
+            if args is None:
+                self.fail("SKILL.md step 7 has no check_citations.py command with --max-words, so this test cannot run it: "
+                          "restore that command in step 7, or change this test to match step 7")
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), *args], cwd=d, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 class AuditTest(unittest.TestCase):
     """--audit: each sentence with citations needs its own audit row, so a one-line summary of the audit FAILs."""
     DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`).\n\nIt does another thing in the test (`src/a.rs:1-3`).\n"

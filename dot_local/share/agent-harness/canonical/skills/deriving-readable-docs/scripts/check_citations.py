@@ -37,7 +37,9 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
   budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
             above the first `## ` heading and the headings and backticked names included; citations, fenced code and bare
-            list marks are not words. A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
+            list marks are not words. An assembled header (the block above the first `## ` heading with a `Counts: harvested N`
+            line) is left out, because the budget is for the sections; a section draft has no such line, so its header counts.
+            A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
 With --points (the raw harvest, points.json), two more checks run:
   counts     the doc header's numbers for harvested, left out, used, read by name only and not cited must equal
              the numbers computed from the harvest and this doc's citations. A point is used when a citation of
@@ -434,11 +436,19 @@ def not_backed(doc_text, repo, points, cache):
     return fails
 
 
+COUNTS_LINE = re.compile(r"(?i)\bcounts:?\**\s+harvested\s+[\d,]+")  # the header line step 6 writes, bold or not
+
+
 def word_count(doc_text, repo):
     """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
-    above the first `## ` heading, the headings and the backticked names are counted."""
+    above the first `## ` heading, the headings and the backticked names are counted, except an assembled header: when the
+    header holds a Counts line, the whole block above the first heading is left out, because the budget is for the sections."""
+    lines = list(doc_lines(doc_text))
+    assembled = any(in_header and COUNTS_LINE.search(line) for _, line, in_header, _ in lines)
     total = 0
-    for _, line, _, _ in doc_lines(doc_text):
+    for _, line, in_header, _ in lines:
+        if assembled and in_header:
+            continue
         for start, end, cites, _ in reversed(line_items(line, repo)):
             if cites:
                 line = line[:start] + " " + line[end:]
