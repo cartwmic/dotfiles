@@ -40,11 +40,13 @@ Find every problem in one pass. Do not hold findings back for a later round.
 
 ## 5. The bar
 
+In this file, "the bar" is the blocking test below; "the repo's bar" is `personal` or `shared`.
+
 A finding is **blocking** only when it has all four:
 
 - **obligation**: the intent criterion or constraint you can quote, the principle section, or the repo rule it breaks.
 - **evidence**: a file:line, or a run and its result.
-- **consequence**: what a user would hit in ordinary single-user use.
+- **consequence**: what someone would hit in ordinary use: at `personal`, ordinary single-user use; at `shared`, ordinary use by the repo's users and by the next person who changes it.
 - **component**: the part of the system it is in (a module, command or feature), in your own words.
 
 Judge each finding against the change's stated intent and scope. A problem outside it, especially one that existed before the change, is a note that starts "for a follow-up:". It never blocks.
@@ -54,6 +56,8 @@ Data loss, corruption or a broken promised outcome in what the change touches or
 A PR description that is hard for a reader with no context to digest, wrong about what the diff does or how it was checked, or carries ledger, plan or task ids, agent bookkeeping or noise is a blocking finding (playbook 5a05bfe8). A "Proven" section written as plain prose stays in the description (playbook f5a367b5); a table in it, and any job id, belong in the agent record. The obligation of this finding is that rule, and its consequence is that a reader of the PR is misled or cannot follow it.
 
 Everything else is a **note**. A note needs no extra round and no disposition; it goes to the residuals. Preferences, wishes and style are notes. Name machinery that could be removed while the required behaviour stays; that is a note unless it breaks a principle. A pass on principle 4 or 11 cites its evidence.
+
+The task names the repo's bar, `personal` or `shared` (this is not the blocking test above). If it does not, find it in the bar table in your user instructions; with no row, say so in REVIEW.md. At `shared`, a shortcut justified by §10 is judged like any other change, and a break of the repo's own written rules is an obligation you can quote. The line below about privacy and security stays at both.
 
 Do not add a privacy or security requirement the intent does not have. Default to YAGNI. A guarantee the owner required in his words quoted in the Owner intent block is part of the intent, not an added requirement: it is in scope. A quoted guarantee that the change does not keep, or that the restated intent leaves out, is a blocking finding. Its `obligation` quotes the ask (with its number), and its `consequence` says what the owner was promised that he would not get.
 

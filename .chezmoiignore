@@ -107,6 +107,7 @@ utils.sh
 00_install_mise.sh
 10_mise_bootstrap.sh
 20_apply_harness_config.sh
+21_link_skills_and_refresh_seat_files.sh
 90_codex_hook_trust.sh
 99_report_pi_patch_failures.sh
 30_apply_pi_patches.sh
