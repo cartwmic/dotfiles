@@ -46,6 +46,7 @@ elif args[:2] == ["pr", "create"]:
     if os.path.exists(os.path.join(os.path.dirname(prs), "gh-fail")):
         print("gh: HTTP 401: Bad credentials", file=sys.stderr)
         sys.exit(1)
+    open(os.path.join(os.path.dirname(prs), "gh-body.md"), "w").write(open(args[args.index("--body-file") + 1]).read())  # the description it was given
     current = json.load(open(prs)) if os.path.exists(prs) else []
     number = 100 + len(current)
     current.append({"number": number, "url": "https://github.com/cartwmic/dotfiles/pull/%d" % number, "title": args[args.index("--title") + 1],
@@ -55,6 +56,13 @@ elif args[:2] == ["pr", "create"]:
 else:
     print("unexpected gh call: " + " ".join(args), file=sys.stderr)
     sys.exit(9)
+"""
+
+
+# A scripted `pr-record path [OWNER/]REPO#N`: the record path under a scratch traces dir, so a test never writes the real agent-traces.
+FAKE_PR_RECORD = """#!/bin/sh
+[ "$1" = path ] || exit 2
+echo "$FAKE_TRACES_DIR/emitted/review/${2#*/}/pr-record.md"
 """
 
 
@@ -97,7 +105,7 @@ class FakeGitea(BaseHTTPRequestHandler):
         self.created.append(body)
         url = "https://gitea.example.test/cartwmic/budget-steward/pulls/%d" % (70 + len(self.created))
         self.open_prs.append({"html_url": url, "title": body["title"], "head": {"ref": body["head"]}})
-        self._send({"html_url": url})
+        self._send({"html_url": url, "number": 70 + len(self.created)})
 
 
 class Inbox(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
@@ -128,10 +136,11 @@ class Case(unittest.TestCase):
             "HOME": str(self.dir / "home"), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_TERMINAL_PROMPT": "0",
             "XDG_STATE_HOME": str(self.dir / "state"), "FAKE_GH_LOG": str(self.dir / "gh.log"), "FAKE_GH_PRS": str(self.dir / "gh-prs.json"),
             "T3_PIN_CHECK_STEWARD_API": "http://127.0.0.1:%d" % self.gitea.server_port,
-            "T3_PIN_CHECK_RELEASE_BASE": (self.dir / "release").as_uri(),
+            "T3_PIN_CHECK_RELEASE_BASE": (self.dir / "release").as_uri(), "FAKE_TRACES_DIR": str(self.dir / "traces"),
         }
         self.set_host(self.host)
         write_exec(self.dir / "bin/gh", FAKE_GH)
+        write_exec(self.dir / "bin/pr-record", FAKE_PR_RECORD)
         (self.dir / "gh.log").write_text("")
         self.dotfiles = self.make_repo("dotfiles", GITHUB_URL, {".chezmoidata.toml": (HERE / "chezmoidata.fixture.toml").read_text()},
                                        lambda t: self.retoml(t, self.dotfiles_pin))
@@ -186,6 +195,9 @@ class Case(unittest.TestCase):
         args = ["python3", str(SCRIPT), "--dotfiles-source", str(self.dotfiles), "--steward-repo", str(self.steward),
                 "--coordinator-state", str(state or self.dir / "no-coordinator"), *flags]
         return subprocess.run(args, capture_output=True, text=True, env=self.env, timeout=120)
+
+    def gh_create_body(self):
+        return (self.dir / "gh-body.md").read_text()
 
     def gh_calls(self):
         return (self.dir / "gh.log").read_text().splitlines()
@@ -327,12 +339,36 @@ class OpenPrs(Case):
         self.assertEqual(self.branches("dotfiles.git"), ["main"])
         self.assertEqual(self.branches("steward.git"), ["main"])
 
-    def test_the_pr_bodies_carry_the_principles_table_and_a_decisions_line(self):
+    def record(self, item):
+        path = self.dir / "traces/emitted/review" / item / "pr-record.md"
+        return path.read_text() if path.exists() else None
+
+    def test_the_bookkeeping_is_in_each_prs_agent_record_and_not_in_its_description(self):
         self.run_check("--open-prs")
-        body = FakeGitea.created[0]["body"]
-        self.assertEqual(body.count("| pass |") + body.count("| n/a |") + body.count("| fail |"), 16)
-        self.assertIn("\nDecisions: ", body)
-        self.assertIn("SHA256SUMS", body)
+        steward_body = FakeGitea.created[0]["body"]
+        for body in (steward_body, self.gh_create_body()):
+            self.assertIn("SHA256SUMS", body)
+            self.assertNotIn("|", body)           # no table
+            self.assertNotIn("Decisions:", body)
+            self.assertNotIn("#3685", body)
+        for item in ("dotfiles#100", "budget-steward#71"):  # the dotfiles PR as gh numbers it, the steward PR as Gitea does
+            record = self.record(item)
+            self.assertIsNotNone(record, item)
+            self.assertEqual(record.count("| pass |") + record.count("| n/a |") + record.count("| fail |"), 16)
+            self.assertTrue(record.endswith("\nDecisions: #3685\n"))
+
+    def test_an_existing_record_is_never_overwritten(self):
+        existing = self.dir / "traces/emitted/review/dotfiles#100/pr-record.md"
+        existing.parent.mkdir(parents=True)
+        existing.write_text("kept\n")
+        self.run_check("--open-prs")
+        self.assertEqual(existing.read_text(), "kept\n")
+
+    def test_a_dry_run_prints_the_record_and_writes_none(self):
+        r = self.run_check("--open-prs", "--dry-run")
+        self.assertEqual(r.stdout.count("| 16 | Built to last |"), 2)  # one record for the steward PR and one for the dotfiles PR
+        self.assertEqual(r.stdout.count("Decisions: #3685"), 2)
+        self.assertFalse((self.dir / "traces").exists())
 
     def test_the_bump_is_never_merged_and_main_does_not_move(self):
         self.run_check("--open-prs")

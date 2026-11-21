@@ -1,0 +1,14 @@
+#!/bin/sh
+# pr-record path REPO#N | pr-record import REPO#N [--body-file F]: a PR's agent record (the file that holds the bookkeeping its description may not
+# carry: principles table, proof table, `Decisions:` line, job ids, `Rewinds:`, `Break-glass:`, the route run; playbook 5a05bfe8). `path` prints where
+# the record lives; `import` copies the bookkeeping lines out of a description that still has them. Exit 0 done, 1 the record exists or there is
+# nothing to copy, 2 bad arguments or gh failed. Runs the script in the deployed coordinator checkout. Personal profile only (docs/profiles.md).
+# The gh call is made by pr-record.ts, started below, so it inherits these. It is a merge-chain read: GH_URGENT=1 keeps the gh budget guard from
+# refusing it, and GH_CALLER names this command in the gh wrapper's log.
+export GH_URGENT=1 GH_CALLER=pr-record
+script="$HOME/git/coordinator/scripts/pr-record.ts"
+if [ ! -f "$script" ]; then
+  echo "pr-record: $script is missing: pull ~/git/coordinator (the command ships there) and run again" >&2
+  exit 2
+fi
+exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"
