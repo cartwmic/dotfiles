@@ -41,11 +41,14 @@ it cannot know which PR is merging, so pass --pr N. Without --merge-gate (plain 
 --all it prints one "n/a (no CI ...)" line and exits 0, like homelab: it never changes the exit of the other repos.
 One more no-CI repo is one more REPOS row ({"github": "owner/repo", "no_ci": True}) and its ORDER entry.
 
-The coordinator's full name, cartwmic/coordinator, is its table entry: it gets the journal verdict, the same as the short
-name, including --pr and --tip. Its main state is the journal, and the any-repo path below has no journal to read (the repo has
-no required checks), so it could only refuse. Every other table repo's full name (cartwmic/dotfiles, ...) keeps the any-repo path.
+Every table repo's full name (the "github" field of its row: cartwmic/dotfiles, cartwmic/coordinator, StoryCraftTW/storycraft, ...,
+matched without regard to case) is its table entry: it gets the same verdict as the short name, including --merge-gate, --pr,
+--tip and plain status. So `--merge-gate cartwmic/dotfiles` and `--merge-gate dotfiles` read the same CI run and say the same
+thing. (Once the full name took the any-repo path below and read only GitHub's required checks; dotfiles requires only "tests", so
+a red run on another job, mise-tests, passed the gate: dotfiles#689 merged into a red main.) The coordinator and eval-cases
+have no required checks to read, so for them the any-repo path could only refuse.
 
-Any other GitHub repo, named OWNER/REPO (a name with a slash; the table's short names stay above): the exact set
+Any other GitHub repo, named OWNER/REPO (a name with a slash that is not a table repo's full name): the exact set
 of checks GitHub requires to merge into the default branch, from two sources both always read. Classic branch
 protection comes from the branch itself (GET repos/.../branches/{b}, read access is enough; it carries
 protection.enabled and its required_status_checks to a non-admin, and the classic /protection endpoints —
@@ -952,8 +955,8 @@ def main(argv):
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
-    by_slug = {v["github"].lower(): k for k, v in REPOS.items() if v and (v.get("journal") or v.get("no_ci"))}
-    argv = [by_slug.get(a.lower(), a) for a in argv]   # the journal and no-CI repos' OWNER/REPO is their table entry: the any-repo path has no required checks to read for them
+    by_slug = {v["github"].lower(): k for k, v in REPOS.items() if v}
+    argv = [by_slug.get(a.lower(), a) for a in argv]   # every table repo's OWNER/REPO is its table entry: the any-repo path reads only GitHub's required checks, a weaker gate than the table's whole-run read
     pr = None
     if "--pr" in argv:
         k = argv.index("--pr")
