@@ -767,6 +767,107 @@ apply_pi() {
   log "Updated Pi MCP config: $pi_mcp_json"
 }
 
+# Cursor: every canonical MCP server, except the names in canonical/mcp/cursor-exclude.txt, goes into ~/.cursor/mcp.json in
+# Cursor's own form: a remote server is {"url", "headers"}, a local one {"command", "args", "env"}, and an environment
+# variable read at run time is ${env:NAME} (the canonical ${NAME} and ${NAME:-} become that). Secrets resolve as they do for Claude
+# (the claude adapter's 1Password references are reused, so a secret added for Claude reaches Cursor with no second list), and a
+# server whose secret is unavailable is left out. Servers this script wrote on an earlier apply and that are no longer rendered
+# are pruned (the record is generated/cursor/mcp-managed.json); entries it never wrote, and every other key, are kept. A file
+# that is not a JSON object is left as it is. Nothing prints a URL or key.
+merge_cursor_mcp() {
+  harness_json="$1"
+  target_json="$2"
+  managed_json="$3"
+  exclude_file="$4"
+
+  python3 - "$harness_json" "$target_json" "$managed_json" "$exclude_file" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+harness_path, target_path, managed_path, exclude_path = (pathlib.Path(a) for a in sys.argv[1:5])
+
+def say(msg):
+    print(f"[apply_harness_config] {msg}")
+
+excluded = set()
+if exclude_path.exists():
+    for line in exclude_path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            excluded.add(line)
+
+env_ref = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-)?\}")
+
+def cursor_syntax(value):
+    if isinstance(value, str):
+        return env_ref.sub(lambda m: "${env:" + m.group(1) + "}", value)
+    if isinstance(value, list):
+        return [cursor_syntax(v) for v in value]
+    if isinstance(value, dict):
+        return {k: cursor_syntax(v) for k, v in value.items()}
+    return value
+
+def cursor_entry(cfg):
+    if "command" in cfg:
+        entry = {"command": cfg["command"]}
+        for key in ("args", "env"):
+            if cfg.get(key):
+                entry[key] = cfg[key]
+        return cursor_syntax(entry)
+    entry = {"url": cfg["url"]}
+    if cfg.get("headers"):
+        entry["headers"] = cfg["headers"]
+    return cursor_syntax(entry)
+
+rendered = json.loads(harness_path.read_text()).get("mcpServers", {})
+add = {name: cursor_entry(cfg) for name, cfg in rendered.items()
+       if name not in excluded and isinstance(cfg, dict) and ("command" in cfg or "url" in cfg)}
+
+existing = {}
+if target_path.exists() and target_path.read_text().strip():
+    try:
+        existing = json.loads(target_path.read_text())
+    except ValueError:
+        existing = None
+    if not isinstance(existing, dict) or not isinstance(existing.get("mcpServers", {}), dict):
+        say(f"Cursor: {target_path} is not a JSON object with an mcpServers object; left as it is")
+        sys.exit(0)
+
+previous = set()
+if managed_path.exists():
+    try:
+        previous = set(json.loads(managed_path.read_text()))
+    except (ValueError, TypeError):
+        pass  # unreadable record: prune nothing
+
+old_servers = existing.get("mcpServers", {})
+stale = sorted(n for n in previous if n in old_servers and n not in add)
+kept = {n: c for n, c in old_servers.items() if n not in stale}
+result = {**existing, "mcpServers": {**kept, **add}}
+if result != existing:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(json.dumps(result, indent=2) + "\n")
+    say("Updated Cursor MCP config: " + ", ".join(sorted(add)))
+    for name in stale:
+        say(f"Pruned Cursor MCP server no longer in canonical: {name}")
+managed_path.parent.mkdir(parents=True, exist_ok=True)
+managed_path.write_text(json.dumps(sorted(add)) + "\n")
+PY
+}
+
+# Cursor reads skills from ~/.agents/skills and ~/.cursor/skills at user level (and ~/.claude/skills and ~/.codex/skills when its
+# third-party setting is on; checked in cursor-agent 2026.11.19's bundle). The canonical skills are linked into ~/.agents/skills
+# (apply_agents_shared), so Cursor gets them there with no copy of its own: a second link in ~/.cursor/skills would list each twice.
+apply_cursor() {
+  log "Applying Cursor adapters"
+  apply_agents_shared
+  resolved_mcp="$GENERATED_ROOT/cursor/mcp-resolved.json"
+  render_harness_mcp_json "claude" "$resolved_mcp"
+  merge_cursor_mcp "$resolved_mcp" "$HOME/.cursor/mcp.json" "$GENERATED_ROOT/cursor/mcp-managed.json" "$CANONICAL_ROOT/mcp/cursor-exclude.txt"
+}
+
 apply_agents_shared() {
   log "Applying shared ~/.agents/skills"
   link_skill_dirs "$HOME/.agents/skills"
@@ -786,6 +887,7 @@ apply_all() {
   apply_claude
   apply_codex
   apply_pi
+  apply_cursor
 }
 
 main() {
@@ -808,6 +910,9 @@ main() {
             ;;
           pi)
             apply_pi
+            ;;
+          cursor)
+            apply_cursor
             ;;
           skills)
             apply_skill_links

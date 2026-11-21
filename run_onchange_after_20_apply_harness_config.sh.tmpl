@@ -9,6 +9,7 @@
 # adapters/pi/secrets:     {{ include "dot_local/share/agent-harness/adapters/pi/mcp-secrets.json.tmpl" | sha256sum }}
 # adapters/claude/secrets: {{ include "dot_local/share/agent-harness/adapters/claude/mcp-secrets.json.tmpl" | sha256sum }}
 # adapters/codex/secrets:  {{ include "dot_local/share/agent-harness/adapters/codex/mcp-secrets.json.tmpl" | sha256sum }}
+# cursor exclusions:      {{ include "dot_local/share/agent-harness/canonical/mcp/cursor-exclude.txt" | sha256sum }}
 # apply-script:            {{ include "dot_local/user_scripts/executable_apply_harness_config.sh" | sha256sum }}
 # pi-mcp-lazy stand-in:    {{ include "dot_local/bin/executable_pi-mcp-lazy" | sha256sum }}
 # pi-mcp-lazy list:        {{ include "dot_local/share/pi-mcp-lazy/servers.list.tmpl" | sha256sum }}

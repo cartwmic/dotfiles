@@ -1,10 +1,10 @@
-"""Both desktop profiles deploy the Cursor server file, the Cursor hook file (which carries the Shell guard entry) and the guard adapter,
+"""Both desktop profiles deploy the Cursor hook file (which carries the Shell guard entry) and the guard adapter,
 so none of them has a row in docs/profiles.md. Same `chezmoi managed` run as test_coverage.py."""
 import unittest
 
 from test_coverage import PROFILES, managed
 
-CURSOR = (".cursor/mcp.json", ".cursor/hooks.json", ".cursor/hooks/shell_guard.py")
+CURSOR = (".cursor/hooks.json", ".cursor/hooks/shell_guard.py")
 
 
 class CursorPaths(unittest.TestCase):
