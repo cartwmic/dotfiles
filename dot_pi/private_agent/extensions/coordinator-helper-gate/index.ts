@@ -65,10 +65,9 @@ export function loadsCoordinatorSession(argv: readonly string[]): boolean {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Adds one line to <state>/t3-hook/helper-gate.log, the coordinator's own record of a gate that could not run. Never throws, and never makes a state directory. */
+/** Adds one line to <state>/t3-hook/helper-gate.log, the coordinator's own record of a gate that could not run. Never throws. The caller has checked that the state directory exists, so this never makes one. */
 function logSkip(stateDir: string, call: HelperCall, why: string): void {
 	try {
-		if (!existsSync(stateDir)) return;
 		const input = isObject(call.input) ? call.input : {};
 		const file = join(stateDir, "t3-hook", "helper-gate.log");
 		mkdirSync(dirname(file), { recursive: true });
