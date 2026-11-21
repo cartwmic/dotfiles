@@ -4,8 +4,10 @@ The decision (`prune_plan`) is called directly. The real script also runs as a p
 XDG_STATE_HOME (old, young, running, logged, journal-cited and PR-cited jobs, and things that are not job folders), with a fake `gh`
 first on PATH: nothing reaches GitHub, and the folder is checked from outside before and after.
 """
+import contextlib
 import datetime
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -14,6 +16,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_kgate as T  # noqa: E402
@@ -132,9 +135,13 @@ class Process(unittest.TestCase):
                 j.write(json.dumps({"tip": "a" * 40, "verdict": "pass", "receipts": {"cluster": str(receipt)}}) + "\n")
             j.write(json.dumps({"tip": "b" * 40, "verdict": "flake", "issue": 1}) + "\n")  # a flake ruling names no receipts
 
-    def prune(self, *args, **env):
+    def environment(self, **env):
         e = dict(os.environ, XDG_STATE_HOME=str(self.xdg), PATH="%s:%s" % (self.bin, os.environ["PATH"]), FAKE_GH_REPOS=self.repos, FAKE_GH_PRS=json.dumps(self.prs))
         e.update(env)
+        return e
+
+    def prune(self, *args, **env):
+        e = self.environment(**env)
         return subprocess.run([sys.executable, str(SCRIPT), "prune", *args], capture_output=True, text=True, env=e, timeout=60)
 
     def present(self):
@@ -210,6 +217,42 @@ class Process(unittest.TestCase):
         self.assertIn("1 lines that do not parse", self.refused("garbled log").stderr)
         (self.state / "log.jsonl").unlink()
         self.assertIn("is missing", self.refused("no log").stderr)
+
+    def test_a_running_jobs_folder_that_cannot_be_read_deletes_nothing(self):
+        # active/ is there but is not a folder that can be listed: it is not the same as no active/ at all, which means nothing is running
+        subprocess.run(["rm", "-rf", str(self.state / "active")], check=True)
+        (self.state / "active").write_text("not a folder")
+        r = self.refused("active/ unreadable")
+        self.assertIn("running jobs (%s/active)" % self.state, r.stderr)
+
+    def test_a_folder_that_cannot_be_removed_is_a_failure_and_the_rest_still_go(self):
+        # Run in this process, with the removal failing for one folder: a read-only folder would not fail for root
+        stuck = self.state / (self.ids["old"] + ".out")
+        real = K.shutil.rmtree
+
+        def rmtree(path, *a, **kw):
+            if Path(path) == stuck:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path, *a, **kw)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, self.environment()), mock.patch.object(K.shutil, "rmtree", rmtree), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = K.prune_main(["--delete"])
+        self.assertEqual(code, 69, out.getvalue() + err.getvalue())
+        self.assertIn("kgate prune: could not remove %s.out: " % self.ids["old"], err.getvalue())
+        self.assertEqual(self.present(), {"old", "running", "logged", "cited", "pr", "young"})   # "other" went, "old" stayed
+        self.assertIn("deleted 1 folders", out.getvalue())
+        rec = json.loads((self.state / "prune.jsonl").read_text())
+        self.assertEqual((rec["deleted"], rec["planned"]), (1, 2))
+
+    def test_a_run_record_that_cannot_be_written_is_one_line_and_exit_69(self):
+        (self.state / "prune.jsonl").mkdir()   # opening it for append fails, whoever runs this
+        r = self.prune("--delete")
+        self.assertEqual(r.returncode, 69, r.stdout + r.stderr)
+        self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "young"})   # the folders went before the record was written
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(len(r.stderr.splitlines()), 1, r.stderr)
+        self.assertIn(str(self.state / "prune.jsonl"), r.stderr)
 
     def test_a_bad_flag_is_a_usage_error(self):
         r = self.prune("--force")
