@@ -45,10 +45,12 @@ subprocess.Popen([os.path.join(bundle, "Contents/MacOS/fake-chrome")] + args[arg
 CHROME_ASN, PREV_ASN, PREV_PID = "ASN:0xdeadbeef:chrome", "ASN:0x0000face:prev", "424242"
 
 
-def fake_lsappinfo(same_bundle=False, prev_quits=False):
+def fake_lsappinfo(same_bundle=False, prev_quits=False, setfront_works=True):
     """front is the agent Chrome once the marker exists (it "self-activated"), or always the previous app.
     same_bundle: the previous app answers with the agent Chrome's own bundle id (the user's own Chrome).
-    prev_quits: the recorded app's ASN resolves to no pid once the agent Chrome is up (it quit)."""
+    prev_quits: the recorded app's ASN resolves to no pid once the agent Chrome is up (it quit).
+    setfront_works: setfront to the previous app gives the front back (the marker goes). When False it behaves as on a
+    GitHub macOS runner: it prints "ERROR #-54 permErr", exits 0 and changes nothing."""
     prev_bundle = "local.fake-chrome" if same_bundle else "com.prev.app"
     return """#!%s
 import json, os, sys
@@ -58,6 +60,12 @@ chrome_asn, prev_asn, prev_pid = "%s", "%s", "%s"
 steal = os.path.exists(os.environ["FAKE_FRONT_MARKER"])
 if args == ["front"]:
     print(chrome_asn if steal else prev_asn)
+elif args[:1] == ["setfront"]:
+    if %r:
+        if os.path.exists(os.environ["FAKE_FRONT_MARKER"]):
+            os.remove(os.environ["FAKE_FRONT_MARKER"])
+    else:
+        print("ERROR #-54 permErr")
 elif args[:3] == ["info", "-only", "pid"]:
     if args[3] == chrome_asn:
         print(open(os.environ["FAKE_CHROME_PID"]).read().strip())
@@ -68,7 +76,14 @@ elif args[:3] == ["info", "-only", "bundleid"]:
         print('"CFBundleIdentifier"="local.fake-chrome"')
     elif args[3] == prev_asn:
         print('"CFBundleIdentifier"="%s"')
-""" % (sys.executable, CHROME_ASN, PREV_ASN, PREV_PID, prev_quits, prev_bundle)
+""" % (sys.executable, CHROME_ASN, PREV_ASN, PREV_PID, setfront_works, prev_quits, prev_bundle)
+
+FAKE_OSASCRIPT = """#!%s
+import json, os, sys
+open(os.environ["FAKE_ARGV"] + ".osascript", "a").write(json.dumps(sys.argv[1:]) + "\\n")
+if os.environ.get("FAKE_OSASCRIPT_WORKS") and os.path.exists(os.environ["FAKE_FRONT_MARKER"]):
+    os.remove(os.environ["FAKE_FRONT_MARKER"])   # NSRunningApplication activate: the previous app is front again
+""" % sys.executable
 
 BROKEN_LSAPPINFO = "#!/bin/sh\nexit 127\n"   # stands in for a missing or failing lsappinfo
 
@@ -107,12 +122,12 @@ class FocusHandback(unittest.TestCase):
         exe.chmod(0o755)
 
     def install(self, lsappinfo):
-        for name, body in (("open", FAKE_OPEN), ("lsappinfo", lsappinfo)):
+        for name, body in (("open", FAKE_OPEN), ("lsappinfo", lsappinfo), ("osascript", FAKE_OSASCRIPT)):
             tool = self.bin / name
             tool.write_text(body)
             tool.chmod(0o755)
 
-    def run_script(self, self_activate=True):
+    def run_script(self, self_activate=True, osascript_works=False):
         env = {"PATH": str(self.bin) + os.pathsep + os.environ["PATH"], "HOME": str(self.home),
                "AGENT_CHROME_APP": str(self.bundle), "AGENT_CHROME_OS": "Darwin",
                "AGENT_CHROME_PORT": str(self.port), "AGENT_CHROME_WAIT": "10",
@@ -120,6 +135,8 @@ class FocusHandback(unittest.TestCase):
                "FAKE_FRONT_MARKER": str(self.marker), "FAKE_CHROME_PID": str(self.chrome_pid)}
         if self_activate:
             env["FAKE_SELF_ACTIVATE"] = "1"
+        if osascript_works:
+            env["FAKE_OSASCRIPT_WORKS"] = "1"
         return subprocess.run(["sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
 
     def open_calls(self):
@@ -128,6 +145,10 @@ class FocusHandback(unittest.TestCase):
 
     def lsappinfo_calls(self):
         path = Path(str(self.argv) + ".lsappinfo")
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def osascript_calls(self):
+        path = Path(str(self.argv) + ".osascript")
         return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
 
     def setfront_calls(self):
@@ -148,8 +169,31 @@ class FocusHandback(unittest.TestCase):
         self.assertEqual(calls[0][:4], ["-g", "-n", "-a", str(self.bundle)])   # the launch went through open -g -n
         self.assertEqual(len(calls), 1)                                        # the launch only: no open -b
         self.assertEqual(self.setfront_calls(), [["setfront", PREV_ASN]])      # one hand-back, to the recorded instance
+        self.assertEqual(self.osascript_calls(), [])                           # setfront took, so nothing else is tried
         self.assertEqual(self.lsappinfo_calls()[0], ["front"])                 # the front was recorded before the launch
         self.assertIn("handed it back", self.record()[-1])
+
+    def test_a_setfront_that_exits_0_and_changes_nothing_falls_back_to_activating_the_recorded_pid(self):
+        """On a GitHub macOS runner lsappinfo setfront prints permErr, exits 0 and leaves the front alone. The
+        launcher judges by the front, not the exit code, so it activates the recorded instance by pid
+        (NSRunningApplication through osascript JXA) and logs the hand-back as done only when the front moved."""
+        self.install(fake_lsappinfo(setfront_works=False))
+        r = self.run_script(osascript_works=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.setfront_calls(), [["setfront", PREV_ASN]])
+        calls = self.osascript_calls()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:2], ["-l", "JavaScript"])
+        self.assertIn("runningApplicationWithProcessIdentifier(%s)" % PREV_PID, calls[0][-1])   # the instance, not a bundle
+        self.assertIn("NSRunningApplication handed it back", self.record()[-1])
+        self.assertEqual(len(self.open_calls()), 1)     # the launch only: no open -b
+
+    def test_a_hand_back_that_no_call_achieves_is_logged_as_an_error_and_the_launch_still_succeeds(self):
+        self.install(fake_lsappinfo(setfront_works=False))
+        r = self.run_script()      # the fake osascript does nothing either
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.osascript_calls()), 1)
+        self.assertIn("ERROR: the agent Chrome took the front at launch; could not hand it back", self.record()[-1])
 
     def test_same_bundle_front_and_no_steal_means_no_handback(self):
         """The user's own Chrome (same bundle id as the agent Chrome) is front and the agent Chrome never

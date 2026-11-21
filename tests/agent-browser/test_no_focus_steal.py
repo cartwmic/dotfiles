@@ -7,8 +7,8 @@ CDP (Target.createTarget with background:true) to a local HTTP server. A sampler
 app every ~50 ms from before the launch until after the last step, so a steal that comes and goes (the
 launcher hands the front back within seconds) is still caught: the journey fails on any change and reports
 when it happened and how long it lasted. It skips off macOS, without Chrome, or when AGENT_CHROME_APP points
-at the fake (/nonexistent), like the other journeys. On a GitHub Actions runner only the "front never changes"
-test is skipped (setfront changes nothing there); the launch and hand-back-attempt tests still run.
+at the fake (/nonexistent), like the other journeys. On a GitHub Actions runner the "front never changes" test asks
+only that the front is back where it started (Chrome takes the front early there, and the launcher hands it back).
 
 Set AGENT_CHROME_LAUNCHER to run this same journey against another launcher script.
 """
@@ -36,8 +36,9 @@ from front_sampler import FrontSampler
 SCRIPT = Path(__file__).resolve().parents[2] / "dot_local/bin/executable_agent-chrome"
 LAUNCHER = Path(os.environ.get("AGENT_CHROME_LAUNCHER") or SCRIPT)  # override: run the journey against another launcher
 CHROME_APP = os.environ.get("AGENT_CHROME_APP") or "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-# True on a GitHub Actions runner. The runner is not a desktop: `open` starts Chrome stopped and never returns, and
-# `lsappinfo setfront` returns 0 and changes nothing (dotfiles#695), so the front-app assertion cannot be judged there.
+# True on a GitHub Actions runner. The runner is not a desktop: `open` starts Chrome stopped and never returns (this test
+# resumes it), and `lsappinfo setfront` prints permErr, returns 0 and changes nothing (dotfiles#695; the launcher falls
+# back to NSRunningApplication). Chrome takes the front early there, so "never changes" is relaxed to "comes back".
 ON_RUNNER = os.environ.get("GITHUB_ACTIONS") == "true"
 PAGE = b"<!doctype html><title>focus-test</title><h1>ok</h1>"
 
@@ -237,11 +238,15 @@ class NoFocusSteal(unittest.TestCase):
         log = (Path(self.scratch) / "state/agent-chrome/agent-chrome.log").read_text()
         self.assertIn("took the front at launch", log, self.launch_report())
 
-    @unittest.skipIf(ON_RUNNER, "GitHub runner: lsappinfo setfront returns 0 and changes nothing there, so a hand-back "
-                                "cannot work; proven on a real Mac instead (dotfiles#695)")
     def test_the_frontmost_app_never_changes_across_launch_and_background_tabs(self):
+        step = "the journey (steps at %s)" % ", ".join("%s +%.1fs" % (name, at) for name, at in self.marks)
         try:
-            self.sampler.assert_unchanged("the journey (steps at %s)" % ", ".join(
-                "%s +%.1fs" % (name, at) for name, at in self.marks))
+            if ON_RUNNER:
+                # On a GitHub runner the agent Chrome takes the front early (measured: 1.7 s into the run, away for
+                # 2.5 s, until the launcher's hand-back once the port answers). A change of the front is therefore
+                # expected there; what must hold is that the hand-back put it back.
+                self.sampler.assert_returned(step)
+            else:
+                self.sampler.assert_unchanged(step)
         except AssertionError as err:
             raise AssertionError("%s\n%s" % (err, self.launch_report())) from None   # the launcher's log says whether it handed the front back
