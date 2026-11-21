@@ -208,7 +208,7 @@ class Login(unittest.TestCase):
         env = dict(os.environ, HOME=str(self.home), STUB_LOG=str(self.log), STUB_PID=str(self.pidfile), STUB_AUTH=str(self.auth),
                    PATH=str(self.bin) + os.pathsep + os.environ["PATH"])
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "--workspace", str(self.work)], env=env, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.PIPE, text=True)
         self.addCleanup(proc.kill)
         deadline = time.time() + 30
         while not self.pidfile.exists() and time.time() < deadline:
@@ -217,8 +217,9 @@ class Login(unittest.TestCase):
         time.sleep(0.2)  # the stub writes its pid, then sleeps
         pid = int(self.pidfile.read_text())
         proc.send_signal(signal.SIGINT)
-        proc.wait(timeout=30)
-        self.assertNotEqual(proc.returncode, 0)
+        err = proc.communicate(timeout=30)[1]
+        self.assertEqual(proc.returncode, 130)
+        self.assertNotIn("Traceback", err)
         deadline = time.time() + 10
         while time.time() < deadline:
             try:
