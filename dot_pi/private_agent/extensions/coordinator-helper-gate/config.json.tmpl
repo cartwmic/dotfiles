@@ -1,0 +1,10 @@
+{{- /* Where the coordinator checkout and its state directory are, as the Claude hook install finds them (dot_claude/modify_settings.json.tmpl).
+personal: instance_repo "coordinator", state ~/.local/share/coordinator. axon-work-computer: instance_repo "coordinator" (~/coordinator-work), state ~/.local/share/coordinator-work.
+agentHost.removeCoordinatorHook (the coordinator runs elsewhere) turns the gate off here as it takes the hook out of Claude's settings. */ -}}
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") -}}
+{{- $state := printf "%s/.local/share/coordinator" .chezmoi.homeDir -}}
+{{- if eq .profile "axon-work-computer" -}}
+{{-   $state = printf "%s/.local/share/coordinator-work" .chezmoi.homeDir -}}
+{{- end -}}
+{{- $enabled := not (includeTemplate "agent_host_config" . | fromJson).removeCoordinatorHook -}}
+{{ dict "enabled" $enabled "coordinatorRepo" $repo "stateDir" $state | toPrettyJson }}
