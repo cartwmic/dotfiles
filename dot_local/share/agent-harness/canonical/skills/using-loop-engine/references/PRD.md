@@ -357,7 +357,7 @@ The proposed recovery surface contains ten primary operations. Exact CLI spellin
 | `append` | Add a context record |
 | `event` | Request workflow progress |
 | `history` | Inspect semantic run history |
-| `terminate` | Explicitly close an active run |
+| `terminate` | Explicitly close an active run; takes an optional reason (`terminate RUN [REASON]`) |
 | `invoke` | Preview or start a bound work-slot worker |
 | `amend-binding` | Owner-attested future execution correction |
 | `cancel-invocation` | Stop and verify cleanup of current invocation-owned work |
@@ -383,6 +383,8 @@ There is no creation/admission check in v0.1.
 Incomplete, ambiguous, or improvable work belongs in the workflow's initial state rather than a special pre-run evaluation phase.
 
 If the initial state is final, the run is created final.
+
+A start with a run id that already exists in the catalog is `rejected` (exit code 10) with the code `run-already-exists` and a message that names the id; the existing run is not changed.
 
 When object initial input contains `work_slot_bindings`, the engine freezes the initial map from slot ID to `{command, args, context_filter?}`. An optional filter is `{command,args}`. Ordered owner-attested amendments derive effective future bindings without rewriting this initial map. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. Start does not parse `fan-out` or `run-plan-graph` argv. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
 
@@ -473,7 +475,7 @@ Context-only appends do not invalidate an in-flight evaluation. Its original req
 
 `history` returns the ordered semantic history of the run.
 
-It exists for understanding progression, prior review decisions, context additions, termination, and work-slot invocation started/status-changed actions. Overlay `overrun` is not a history action.
+It exists for understanding progression, prior review decisions, context additions, termination (with its optional reason), and work-slot invocation started/status-changed actions. Overlay `overrun` is not a history action.
 
 It is not required for normal continuation and is not an operational trace.
 
@@ -493,7 +495,7 @@ durable artifact location when the run has one
 
 ### 6.7 Terminate
 
-`terminate` requires a current `show` observation and quiescent invocation-owned work, then closes an active run without provider evaluation and records one termination history entry. Live work, including overrun or pending cleanup, rejects termination without changing lifecycle or semantic history; wait or cancel and verify cleanup before terminating. An unobserved termination is also rejected.
+`terminate` requires a current `show` observation and quiescent invocation-owned work, then closes an active run without provider evaluation and records one termination history entry. `terminate RUN [REASON]` takes an optional reason, stored as given on that history entry (`{"kind":"terminated","reason":"..."}`); without one the entry is `{"kind":"terminated"}`. `show` displays the reason as `termination_reason` in every view and as a `terminated:` line in the default text view, and omits it when none was given. Live work, including overrun or pending cleanup, rejects termination without changing lifecycle or semantic history; wait or cancel and verify cleanup before terminating. An unobserved termination is also rejected.
 
 Final and terminated runs cannot be terminated again.
 
@@ -991,7 +993,7 @@ active run's stored states, transitions, work-slot catalog, or instructions.
 - Status: live
 - Coverage: e2e/journey
 
-### LE-15: Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history.
+### LE-15: Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history. `terminate` takes an optional reason, stored on its history entry and shown by `show`.
 - Status: live
 - Coverage: e2e/journey
 
@@ -2271,7 +2273,7 @@ Known limits: the gate trusts the recorded old runs as it trusts the current one
 - Status: live
 - Coverage: e2e/journey
 
-The lean-change skill's Parallel builders recipe is driver procedure. The driver gives each independent step its own git worktree, outside the repository, and launches one builder per step at the same time. A builder edits only files in its worktree, never commits, merges or calls `loop-engine`, and runs no full build, full test suite, journey or heavy-gate job: it runs only its step's focused tests, or none. The driver lands each finished step in plan order with `git merge --no-ff`; on a conflict it aborts the merge, which leaves the repository as it was, and then resolves the conflict itself or builds the step again on the landed tree. After the last independent step lands, the driver runs the full build and test gates once in the repository, fixes their findings there, does the wire-up step if there is one, and then requests `ready`. Removing a step worktree or branch is deleting, so the driver removes them only where the repository's own rules let it; otherwise it leaves the landed ones in place and reports them. The recipe's clean-up block also refuses a worktree whose `git status --porcelain --ignored` lists anything, ignored files included, and prints `not clean: <step>`. The provider and the engine create, merge and remove no worktree and never see the steps; verify, the old-vs-new check (LE-210), the intent check (LE-209) and the review (LE-207) are unchanged and judge the merged tree. Which steps are independent is the driver's judgment, written in the plan's prose; the plan schema does not change. The lean-change journey's parallel scenario runs the recipe's shell blocks as written.
+The lean-change skill's Parallel builders recipe is driver procedure. The driver gives each independent step its own git worktree, outside the repository, and launches one builder per step at the same time. A builder edits only files in its worktree, never commits, merges or calls `loop-engine`, and runs no full build, full test suite, journey or any other heavy job: it runs only its step's focused tests, or none. The driver lands each finished step in plan order with `git merge --no-ff`; on a conflict it aborts the merge, which leaves the repository as it was, and then resolves the conflict itself or builds the step again on the landed tree. After the last independent step lands, the driver runs the full build and test gates once in the repository, fixes their findings there, does the wire-up step if there is one, and then requests `ready`. Removing a step worktree or branch is deleting, so the driver removes them only where the repository's own rules let it; otherwise it leaves the landed ones in place and reports them. The recipe's clean-up block also refuses a worktree whose `git status --porcelain --ignored` lists anything, ignored files included, and prints `not clean: <step>`. The provider and the engine create, merge and remove no worktree and never see the steps; verify, the old-vs-new check (LE-210), the intent check (LE-209) and the review (LE-207) are unchanged and judge the merged tree. Which steps are independent is the driver's judgment, written in the plan's prose; the plan schema does not change. The lean-change journey's parallel scenario runs the recipe's shell blocks as written.
 
 Known limits: bugs that a full gate would catch inside one step are found only after the join, and the evidence that driver models follow the recipe comes from a small fixture (three steps of about a minute each), not from long builds.
 
@@ -2296,3 +2298,9 @@ Known limits: AR's own page loads fonts and syntax colouring from CDNs; that is 
 - Coverage: e2e/journey
 
 A lean-change profile with a review declares `admit` (LE-188), so `append` of a `review` or `intent-check` record that fails its record-local checks is refused before storage with the fix named: no record, no history, the provider's message returned. The record-local checks are the shape, `findings_schema`, fresh context, one noted answer per known question, well-formed findings, and a failed answer having a finding for its question; the gate at `reviewed` and `intent-ready` runs the same function and still adds the checks that need the run (a reviewer other than the intent author, the current intent, dispositions, verification). `lean-change review-check [--kind review|intent-check]` (default `review`) reads one record on stdin and prints `ok` or exits 1 with that message; both packets tell the reviewer to run it before returning. A `reviewer` given as a plain string is read as an agent of that name. Every other record kind is admitted unread; a profile without a review declares no `admit`; a run started before this keeps its frozen workflow and is not refused at append. The checks are `scripts/lean-change-journey.py` (the notes-only scenario appends a six-answer review and a plain-string reviewer) and the unit tests of `lean-change-provider`.
+
+### LE-214: `terminate` takes an optional reason, stored on its history entry and shown by `show`
+- Status: live
+- Coverage: e2e/journey
+
+`terminate RUN [REASON]` takes the reason as an optional second argument. It is stored as given on the termination history entry (`{"kind":"terminated","reason":"..."}`); without a reason the entry stays `{"kind":"terminated"}` and runs terminated before this existed still load. `show` displays it as `termination_reason` in the default, `--view status` and `--view full` JSON and as a `terminated:` line in the default text view, and omits it when none was given. A third argument is still refused. The catalog schema does not change. The checks are the five `terminate_reason` central tests, which drive the real binary. LE-15 carries this behavior in its title as well: its title was extended in the change that added it, and Bookends reads a changed title as a new identity, so the title stays as it is.
