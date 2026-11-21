@@ -90,11 +90,23 @@ class ContainerHome(Scratch):
 
     def test_the_five_seat_instances_exist_on_a_pod_where_t3_has_not_written_its_settings_yet(self):   # playbook 05f37568
         instances = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]
-        self.assertEqual({k for k in instances if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout"})
+        self.assertEqual({k for k in instances if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout", "seat-homelab-chat"})
         self.assertFalse({"pi", "pi-lead"} & set(instances))   # Pi is not in the pod's tool set
         for seat in ("lead", "builder", "planner", "reviewer", "scout"):
             self.assertIn("--settings %s/.claude/fleet/seat-%s.json" % (self.home, seat), instances["seat-" + seat]["config"]["launchArgs"])
             self.assertTrue((self.home / ".claude/fleet" / ("seat-%s.json" % seat)).exists())
+
+    def test_the_homelab_chat_seat_instance_is_on_the_pod_with_its_settings_file_mcp_file_and_hook(self):   # dotfiles#719: the pod's T3 hosts the #homelab lead
+        instance = json.loads((self.home / ".t3/userdata/settings.json").read_text())["providerInstances"]["seat-homelab-chat"]
+        fleet = self.home / ".claude/fleet"
+        self.assertEqual((instance["driver"], instance["enabled"]), ("claudeAgent", True))
+        self.assertEqual(instance["config"]["launchArgs"], "--settings %s/seat-homelab-chat.json --strict-mcp-config --mcp-config %s/mcp-homelab-chat.json" % (fleet, fleet))
+        self.assertEqual(sorted(json.loads((fleet / "mcp-homelab-chat.json").read_text())["mcpServers"]), ["hindsight"])
+        hook = self.home / ".local/share/agent-harness/hooks/homelab_chat_allowlist.py"
+        self.assertTrue(hook.exists(), "the hook script the settings file names is in the pod's home")
+        groups = json.loads((fleet / "seat-homelab-chat.json").read_text())["hooks"]["PreToolUse"]
+        self.assertEqual([g["matcher"] for g in groups], ["*"])
+        self.assertIn(str(hook), groups[0]["hooks"][0]["command"])
 
     def test_linked_environments_is_on_in_a_fresh_pods_t3_settings_with_no_script_run(self):   # a peer's `t3 environment link` fails while it is off
         self.assertIs(json.loads((self.home / ".t3/userdata/settings.json").read_text())["linkedEnvironmentsEnabled"], True)
