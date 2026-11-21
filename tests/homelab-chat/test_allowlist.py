@@ -12,8 +12,11 @@ from pathlib import Path
 
 HOOK = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/hooks/homelab_chat_allowlist.py"
 BOT = "~/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
-BOT_ABS = "/home/cartwmic/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
-COORDINATOR = "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56"
+BOT_ABS = "/home/agent/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"  # the agent-host pod: HOME is /home/agent
+BOT_OMARCHY = "/home/cartwmic/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"  # omarchy: HOME is /home/cartwmic
+BOT_TMP = "/tmp/x/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
+COORDINATOR = "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56"  # the omarchy coordinator thread
+COORDINATOR_POD = "mcp:c9a80a51-19d4-475c-99bb-117660fc88de"  # the coordinator on the pod
 MULTILINE = "Done: added it.\nPrice was $5 \\o/ & more; (ok) > fine"  # a chat reply: newline, $, backslash, & ; ( ) >
 
 
@@ -31,17 +34,19 @@ class HookCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.log = Path(self._tmp.name) / "state" / "hook.jsonl"
 
-    def run_hook(self, stdin, log=None):
-        r = subprocess.run([sys.executable, "-I", str(HOOK)], input=stdin if isinstance(stdin, str) else json.dumps(stdin), capture_output=True, text=True, timeout=30,
-                           env=dict(os.environ, HOMELAB_CHAT_HOOK_LOG=str(log or self.log)))
+    def run_hook(self, stdin, log=None, home=None):
+        env = dict(os.environ, HOMELAB_CHAT_HOOK_LOG=str(log or self.log))
+        if home:
+            env["HOME"] = home  # the hook reads the real home directory from HOME
+        r = subprocess.run([sys.executable, "-I", str(HOOK)], input=stdin if isinstance(stdin, str) else json.dumps(stdin), capture_output=True, text=True, timeout=30, env=env)
         return r.returncode, r.stderr
 
-    def allowed(self, payload):
-        rc, err = self.run_hook(payload)
+    def allowed(self, payload, home=None):
+        rc, err = self.run_hook(payload, home=home)
         self.assertEqual(rc, 0, (payload, err))
 
-    def denied(self, payload, why=None):
-        rc, err = self.run_hook(payload)
+    def denied(self, payload, why=None, home=None):
+        rc, err = self.run_hook(payload, home=home)
         self.assertEqual(rc, 2, payload)
         self.assertIn("homelab-chat tool list: denied.", err, "a denial comes from the hook and states its reason (not from python failing to find the script)")
         if why:
@@ -58,7 +63,14 @@ class BashTest(HookCase):
         for path in (BOT, BOT_ABS):
             for verb in verbs:
                 with self.subTest(path=path, verb=verb):
-                    self.allowed(bash("python3 %s %s" % (path, verb)))
+                    self.allowed(bash("python3 %s %s" % (path, verb)), home="/home/agent")
+
+    def test_the_absolute_path_is_under_the_real_home_directory(self):
+        self.allowed(bash("python3 %s queue" % BOT_ABS), home="/home/agent")
+        self.allowed(bash("python3 %s queue" % BOT_OMARCHY), home="/home/cartwmic")
+        self.denied(bash("python3 %s queue" % BOT_OMARCHY), home="/home/agent")  # no literal /home/cartwmic on the pod
+        self.denied(bash("python3 %s queue" % BOT_TMP), home="/home/agent")
+        self.denied(bash("python3 %s queue" % BOT_TMP), home="/home/cartwmic")
 
     def test_readarr_kindle_to_passes_unquoted(self):
         self.allowed(bash("python3 %s readarr kindle --book-id 3474 --to reader@kindle.com" % BOT))
@@ -166,7 +178,8 @@ class OtherToolsTest(HookCase):
         send = "mcp__t3-code__t3_thread_send"
         self.allowed(call(send, threadId=COORDINATOR, message="m"))
         self.allowed(call(send, threadId=COORDINATOR, message="m", mode="steer", clientRequestId="c"))
-        for args in ({"threadId": "mcp:launch:other", "message": "m"}, {"threadId": COORDINATOR + "x", "message": "m"}, {"message": "m"}, {"threadId": None, "message": "m"}, {"threadId": [COORDINATOR], "message": "m"},
+        self.allowed(call(send, threadId=COORDINATOR_POD, message="m"))
+        for args in ({"threadId": "mcp:launch:other", "message": "m"}, {"threadId": COORDINATOR + "x", "message": "m"}, {"threadId": COORDINATOR_POD + "x", "message": "m"}, {"message": "m"}, {"threadId": None, "message": "m"}, {"threadId": [COORDINATOR], "message": "m"},
                      {"threadId": COORDINATOR, "message": "m", "environmentId": "other-machine"},
                      {"threadId": COORDINATOR, "message": "m", "mode": "restart"}, {"threadId": COORDINATOR, "message": "m", "freshContext": True}):
             with self.subTest(args=args):

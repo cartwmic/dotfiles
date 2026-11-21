@@ -25,7 +25,8 @@ HERE = Path(__file__).resolve().parent
 GOLDEN = json.loads((HERE / "homelab_chat_allowed.golden.json").read_text())
 ALLOWED, SEEN = GOLDEN["allowed"], GOLDEN["seen"]
 SEND = ALLOWED["t3_thread_send"]["tool"]
-COORDINATOR = ALLOWED["t3_thread_send"]["threads"][0]
+THREADS = ALLOWED["t3_thread_send"]["threads"]
+COORDINATOR = THREADS[0]
 BOT = "~/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
 DENIAL_SET = {
     "kubectl delete pod x": hub.bash_call("kubectl delete pod x"),
@@ -81,7 +82,7 @@ class Seat:
         return self.which_allowed([(c, hub.bash_call(c)) for c in SEEN["bash_commands"]])
 
     def allowed_threads(self):
-        probes = [COORDINATOR, "mcp:launch:someone-else", "", COORDINATOR + "x"]
+        probes = THREADS + ["mcp:launch:someone-else", ""] + [t + "x" for t in THREADS]
         return self.which_allowed([(t, {"tool_name": SEND, "tool_input": {"threadId": t, "message": "m"}}) for t in probes])
 
     def allowed_bot_verbs(self):
@@ -174,7 +175,7 @@ class StandingTest(unittest.TestCase):
         for name, old, new, expect in (
                 ("a tool", 'SIMPLE_TOOLS = ("WebSearch",', 'SIMPLE_TOOLS = ("Read", "WebSearch",', "tools: allowed but not in the golden list: ['Read']"),
                 ("a bot verb", '    "queue": None,', '    "queue": None,\n    "board": ("add",),', "bot verbs: allowed but not in the golden list: ['board add']"),
-                ("a thread", 'COORDINATOR_THREADS = ("mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56",)', 'COORDINATOR_THREADS = ("mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56", "mcp:launch:someone-else")',
+                ("a thread", 'COORDINATOR_THREADS = (', 'COORDINATOR_THREADS = ("mcp:launch:someone-else", ',
                  "t3_thread_send threads: allowed but not in the golden list: ['mcp:launch:someone-else']"),
                 ("a post flag", 'POST_FLAGS = ("--key", "--text")', 'POST_FLAGS = ("--key", "--text", "--buttons")', "post flags: allowed ['--buttons', '--key', '--text']"),
                 ("an action", '"kube": ("get",', '"kube": ("delete", "get",', "bot verbs: allowed but not in the golden list: ['kube delete']"),
