@@ -1,0 +1,15 @@
+#!/bin/sh
+# intent-review-check REPO PR: the review-record merge rule (scripts/intent-review-check.ts in the coordinator checkout). It passes a PR
+# only when a review round passed on its head, the PR is exempt, or its agent record declares a break-glass. Exit 0 pass, 1 refused (the output
+# names the reason and the fix), 2 bad arguments or the check could not read the PR or the ledger.
+# Loop Engine's release-after-merge step calls it at its merge step. The coordinator's own merge path runs the script directly, and
+# pr-body-check runs the same rule in its merge form. Personal profile only, like pr-body-check (docs/profiles.md).
+# The gh calls are made by intent-review-check.ts, started below, so they inherit these. They are merge-chain reads: GH_URGENT=1 keeps the
+# gh budget guard from refusing them, and GH_CALLER names this check in the gh wrapper's log.
+export GH_URGENT=1 GH_CALLER=intent-review-check
+script="$HOME/git/coordinator/scripts/intent-review-check.ts"
+if [ ! -f "$script" ]; then
+  echo "intent-review-check: $script is missing: pull ~/git/coordinator (the check ships there) and run again" >&2
+  exit 2
+fi
+exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"
