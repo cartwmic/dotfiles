@@ -9,9 +9,9 @@ import { delimiter, join } from 'node:path';
 import { ShxError } from '../core/domain.mjs';
 
 const SCALE = 2; // device pixel ratio of the picture: sharp enough to read on a phone
-const FRAME_WAIT_MS = 15000;
 
-const renderFailed = (message) => new ShxError('render_failed', message);
+// A page whose renderer died is worth one more try in a new Chromium; the use case reads `retryable`. Any other failure is final.
+const renderFailed = (message, retryable = false) => new ShxError('render_failed', message, retryable);
 
 function isExecutable(p) {
   try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; }
@@ -104,7 +104,7 @@ const call = (fn, ...args) => `${fn}(${args.map((a) => JSON.stringify(a)).join('
  * own address in the same tab at that size. The frame is what a person draws on, and its size is the size the stroke
  * recorded; loading it alone gives the page that exact viewport, without the bar /view puts above it.
  */
-export async function open({ chromium, url, width, height, timeoutMs = 60000 }) {
+export async function open({ chromium, url, width, height, timeoutMs = Number(process.env.SHX_RENDER_TIMEOUT_MS) || 60000 }) {
   const profile = mkdtempSync(join(tmpdir(), 'shx-chromium-'));
   const child = spawn(chromium, [
     '--headless', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
@@ -143,9 +143,30 @@ export async function open({ chromium, url, width, height, timeoutMs = 60000 }) 
   });
   child.stdio[3].on('error', () => {});
 
+  // The one limit covers every step, so a timeout has to say which step it was in: where the time went is what tells a slow
+  // machine from a step that never finished (dotfiles#702: one run timed out and the message could not say where).
+  // A wrong id or version leaves the frame empty for good, so that wait ends sooner than the whole render, but it is a share of the
+  // render's limit, not a limit of its own: a loaded machine slows /view's own request to the server as much as anything else.
+  const frameWaitMs = Math.round(timeoutMs / 2);
+  const startedAt = Date.now();
+  const steps = []; // [name, ms into the render at which it began]
+  const step = (name) => { steps.push([name, Date.now() - startedAt]); };
+  const stuckReport = () => {
+    const now = Date.now() - startedAt;
+    const parts = steps.map(([name, at], i) => `${name} ${(((steps[i + 1] ? steps[i + 1][1] : now) - at) / 1000).toFixed(1)}s`);
+    const last = steps.length ? steps[steps.length - 1][0] : 'start';
+    const tail = stderrTail.trim() ? `; Chromium said: ${stderrTail.trim().slice(-300)}` : '';
+    return `stuck at "${last}" (${parts.join(', ')})${tail}`;
+  };
+  step('starting Chromium and opening a tab');
+  // A tab whose renderer dies (a memory kill on a loaded machine) never answers again, so waiting out the limit would only
+  // delay the same failure: say so at once.
+  listeners.add((msg) => {
+    if (msg.method === 'Inspector.targetCrashed' && msg.sessionId === sessionId) fail(renderFailed(`the page crashed while rendering ${url}: ${stuckReport()}`, true));
+  });
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(renderFailed(`timed out after ${timeoutMs / 1000}s rendering ${url}`)), timeoutMs);
+    timer = setTimeout(() => reject(renderFailed(`timed out after ${timeoutMs / 1000}s rendering ${url}: ${stuckReport()}`)), timeoutMs);
   });
   timeout.catch(() => {});
   const guard = (p) => Promise.race([p, failed, timeout]);
@@ -192,16 +213,23 @@ export async function open({ chromium, url, width, height, timeoutMs = 60000 }) 
   try {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     ({ sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }));
+    step('enabling the page');
+    await send('Inspector.enable');
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: SCALE, mobile: false });
+    step('loading the /view page');
     await navigate(url);
+    step('waiting for the frame address');
     const frameSrc = await guard(Promise.race([
       evaluate(FRAME_SRC),
-      new Promise((_, reject) => setTimeout(() => reject(renderFailed(`${url} did not load an artifact into its frame (wrong id or version?)`)), FRAME_WAIT_MS).unref()),
+      new Promise((_, reject) => setTimeout(() => reject(renderFailed(`${url} did not load an artifact into its frame (wrong id or version?)`)), frameWaitMs).unref()),
     ]));
+    step('loading the frame');
     await navigate(frameSrc);
+    step('waiting for fonts and two painted frames');
     const doc = await evaluate(SETTLE);
+    step('page ready (measuring, drawing, shooting)');
 
     return {
       doc,
