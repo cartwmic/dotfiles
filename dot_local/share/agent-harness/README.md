@@ -95,6 +95,7 @@ Guidelines:
 - Prefer the smallest portable shape that works across harnesses.
 - Do not put `op://...` references or other secret manager details in the canonical file.
 - Use harness adapter metadata for secrets or harness-only behavior.
+- Cursor gets the new server with no step of its own (see [Cursor](#cursor)); a secret goes in the claude adapter's list, which Cursor reuses. Name a server in `canonical/mcp/cursor-exclude.txt` only if it cannot run in Cursor.
 
 Example stdio server:
 
@@ -157,7 +158,18 @@ time (the apply installs the entry whether or not the variable is set):
 | Claude Code | Stores the header with the `${T3CODE_THREAD_ID:-}` text (single-quoted in `setup-mcp.sh`) and expands it itself at session start. Unset gives an empty header. Checked with a real session: `tests/shx/test_thread_header.py LiveClaude`. |
 | Codex | `env_http_headers = { "X-Thread" = "T3CODE_THREAD_ID" }`; Codex sends nothing when the variable is unset. |
 | Pi | The header becomes the command value `!printf %s "${T3CODE_THREAD_ID:-none}"`, which Pi runs when the session connects, with the session's environment. Pi fails a server whose header resolves to nothing, so an unset variable sends `none`. |
-| Cursor | `dot_cursor/modify_mcp.json.tmpl` writes `${env:T3CODE_THREAD_ID}`, Cursor's own syntax for an environment variable, and Cursor fills it in from its environment. It sets only `hindsight` and `shartifacts` (the two the Claude fleet seats get, from `.chezmoitemplates/fleet_mcp_servers`) in `~/.cursor/mcp.json`, with just `url` and `headers`. Every other server and key in the file is kept; a file that is not a JSON object is left as it is, with a warning. Test: `tests/cursor/test_mcp.py`. |
+| Cursor | `apply_harness_config.sh cursor` (part of `all`) writes `${env:T3CODE_THREAD_ID}`, Cursor's own syntax for an environment variable, and Cursor fills it in from its environment. See [Cursor](#cursor) below. |
+
+## Cursor
+
+Cursor is a first-class harness: what the canonical files hold reaches it on both desktop profiles, with no step of its own.
+
+- **MCP servers.** `apply_harness_config.sh cursor` (run by `all`, so by the apply after any canonical change) writes every server in `canonical/mcp/servers.json.tmpl` into `~/.cursor/mcp.json`, in Cursor's form: a remote server is `url` and `headers`, a local one `command`, `args` and `env`, and an environment variable read at run time is `${env:NAME}`. Secrets resolve the way they do for Claude (the claude adapter's 1Password references are reused, so a secret added for Claude reaches Cursor with no second list); a server whose secret is unavailable is left out, and the rest are written. Entries the script wrote earlier that are no longer canonical are pruned (`generated/cursor/mcp-managed.json`); entries it never wrote, and every other key, are kept; a file that is not a JSON object is left as it is. `jira` on the work profile is one of them, with the same 1Password reference as the other harnesses.
+- **Exclusions.** A server that cannot run in Cursor is named, with its reason, in `canonical/mcp/cursor-exclude.txt`. It is empty today.
+- **Skills.** Cursor reads `~/.agents/skills` and `~/.cursor/skills` at user level (and `~/.claude/skills` and `~/.codex/skills` only with its third-party setting on; read from the cursor-agent 2026.11.19 bundle). The canonical skills are linked into `~/.agents/skills`, so Cursor has them there; a second link in `~/.cursor/skills` would list each twice.
+- **Test.** `tests/cursor/test_parity.py` renders both profiles, runs the real apply step in a scratch HOME and fails when a canonical server is missing from the Cursor file (and not excluded) or a canonical skill is missing from the folders Cursor reads. It runs in the Linux CI (`scripts/ci-linux.sh`, `tests/cursor`). `tests/cursor/test_apply_cursor.py` covers the merge.
+- **Instructions.** `dot_cursor/rules/agent-harness.mdc.tmpl` deploys `~/.cursor/rules/agent-harness.mdc`, an always-apply user-level rule (Cursor loads `~/.cursor/rules/*.mdc` for every workspace; read from the cursor-agent 2026.11.19 bundle) that carries the canonical instructions: `AGENTS.md`, the Hindsight guide, and per profile its own file (the work profile also the Axon playbook section), the same set as the Codex block. So the profile's seat table and bar table reach Cursor. The coordinator's own per-workspace `.cursor/rules/coordinator-seat.mdc` is separate and not touched. `test_parity.py` fails when a canonical instruction file's text is missing from the rule, and when a new file appears in `canonical/instructions` that the test does not place.
+- Hooks (`~/.cursor/hooks.json`) are separate: see the Shell guard below.
 
 ## Pattern-kill guard
 
