@@ -441,17 +441,17 @@ class SkillTextTest(unittest.TestCase):
     SKILL_TEXT = (SKILL / "SKILL.md").read_text()
     FIX_FILE = SKILL / "references/fix-rounds.md"
 
-    def test_step_9_names_who_fixes_and_who_cuts(self):
-        step = self.SKILL_TEXT.split("9. **Check every claim.**")[1].split("10. **Score.**")[0]
+    def test_step_10_names_who_fixes_and_who_narrows(self):
+        step = self.SKILL_TEXT.split("10. **Check every claim.**")[1].split("11. **Score.**")[0]
         self.assertRegex(step, r"the lead fixes appendix findings")
-        self.assertRegex(step, r"the lead then cuts or narrows what still fails")
+        self.assertRegex(step, r"the lead then narrows what still fails")
         self.assertRegex(step, r"missing condition also goes to its tagged appendix line")
 
     def test_fix_rounds_reruns_check_citations_before_slice_ids(self):
         fix = self.FIX_FILE.read_text()
         self.assertLess(fix.index("check_citations.py"), fix.index("--ids changed.txt --out"))
         self.assertRegex(fix, r"in the same round")
-        self.assertRegex(fix, r"After fix round 2 the lead cuts, or narrows to what the code shows, each sentence that still fails, a Part 1 sentence included")
+        self.assertRegex(fix, r"After fix round 2 the lead narrows each sentence that still fails by the repair rule below, a Part 1 sentence included")
 
     def test_step_5_lists_choice_md_among_the_files_the_audit_wants(self):
         step = self.SKILL_TEXT.split("5. **Frame and section writers.**")[1].split("6. **Part 1.**")[0]

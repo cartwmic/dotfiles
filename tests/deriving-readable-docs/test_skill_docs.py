@@ -9,7 +9,8 @@ SKILL = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 DRAFTING = (SKILL_DIR / "references/drafting.md").read_text(encoding="utf-8")
 READER = (SKILL_DIR / "references/reader-check.md").read_text(encoding="utf-8")
 CHECK_BRIEF = (SKILL_DIR / "references/check-brief.md").read_text(encoding="utf-8")
-CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py", "final_recheck.py")
+COVERAGE = (SKILL_DIR / "references/coverage.md").read_text(encoding="utf-8")
+CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py", "final_recheck.py", "coverage.py")
 
 
 def frontmatter(text):
@@ -37,7 +38,7 @@ class SkillShapeTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?i)tests?[^.\n]*optional|optional[^.\n]*tests?")
 
     def test_it_stays_near_the_length_the_design_set(self):
-        self.assertLess(len(SKILL.split()), 1550)  # 1,400 before the final re-check step; 1,517 with the two tables
+        self.assertLess(len(SKILL.split()), 1720)  # 1,400 before the final re-check step; 1,517 with the two tables; 1,691 with the coverage steps
 
 
 class EveryStepIsAScriptCallTest(unittest.TestCase):
@@ -51,7 +52,7 @@ class EveryStepIsAScriptCallTest(unittest.TestCase):
 
     def test_every_flag_in_a_command_is_one_its_script_has(self):
         seen = 0
-        for cmd in re.findall(r"`(python3 -I [^`]+)`", SKILL + READER + DRAFTING + CHECK_BRIEF):
+        for cmd in re.findall(r"`(python3 -I [^`]+)`", SKILL + READER + DRAFTING + CHECK_BRIEF + COVERAGE):
             script = re.search(r"scripts/(\w+\.py)", cmd)
             self.assertIsNotNone(script, cmd)
             source = (SKILL_DIR / "scripts" / script.group(1)).read_text(encoding="utf-8")
@@ -121,8 +122,8 @@ class RoundTwoTest(unittest.TestCase):
         self.assertRegex(self.step(5), r"stamp\.py")
         self.assertRegex(DRAFTING, r"stamp\.py")
 
-    def test_step_9_stops_after_two_fix_rounds_and_cuts_or_narrows(self):
-        step = self.step(9)
+    def test_step_10_stops_after_two_fix_rounds_and_cuts_or_narrows(self):
+        step = self.step(10)
         self.assertRegex(step, r"at most 2 fix rounds")
         self.assertRegex(step, r"(?i)cut|narrow")
         self.assertRegex(step, r"(?i)split[^.]*(rather|not)[^.]*checker")

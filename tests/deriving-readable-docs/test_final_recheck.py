@@ -276,14 +276,21 @@ class SkillWordsTest(unittest.TestCase):
         self.assertNotRegex(FIX_ROUNDS, r"the lead makes every cut, a Part 1 sentence included")
 
     def test_the_reader_fix_goes_through_the_same_closing_step(self):
-        self.assertRegex(SKILL.split("**Reader check.**")[1].split("\n")[0], r"step 12 checks its edits")
+        self.assertRegex(SKILL.split("**Reader check.**")[1].split("\n")[0], r"step 15 checks its edits")
         self.assertRegex(READER.split("## One fix round")[1], r"(?i)final re-check")
 
-    def test_fix_rounds_md_says_the_lead_cuts_are_checked_by_the_final_re_check(self):
-        self.assertRegex(FIX_ROUNDS.split("## Part 1 over")[0], r"(?i)until the final re-check below")
+    def test_fix_rounds_md_says_the_step_13_repairs_are_checked_by_the_final_re_check(self):
+        self.assertRegex(FIX_ROUNDS.split("## Part 1 over")[0], r"(?i)nothing re-checks the step 13 repairs until step 15")
 
-    def test_there_is_no_full_final_check_of_the_whole_guide(self):
-        self.assertNotRegex(SKILL + FIX_ROUNDS, r"(?i)check the whole guide again|every claim again|full final check")
+    def test_the_whole_guide_is_checked_in_step_13_and_the_closing_step_checks_only_what_changed_since(self):
+        """The recall climb made the whole-guide check a repair step (13); the closing step (15) is still not a second pass over the guide."""
+        step13 = SKILL.split("13. **Full check.**")[1].split("\n")[0]
+        self.assertIn("slices-full", step13)
+        self.assertIn("GUIDE.full.cut.md", step13)
+        step15 = SKILL.split("**Final re-check.**")[1].split("\n")[0]
+        self.assertNotIn("slices-full", step15)
+        self.assertIn("--was GUIDE.full.cut.md", step15)
+        self.assertRegex(FIX_ROUNDS.split("## Final re-check")[1], r"(?i)is not a second pass over the guide")
 
 
 if __name__ == "__main__":
