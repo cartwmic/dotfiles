@@ -255,6 +255,7 @@ class CutThatLeavesPart1FailingTest(unittest.TestCase):
             w.write("dropped.txt", "%d.1\n" % sentence)
             code, out, err = script("drop", w.p("GUIDE.md"), w.dir, "--ids", w.p("dropped.txt"), "--clean")
             self.assertEqual(code, 0, err)
+            self.assertRegex(out, r"1 claims named, .*: wrote ")  # a drop names its claims, it does not say a checker checked them
             dropped = (w.dir / "GUIDE.md").read_text()
             self.assertNotIn("You can keep 5 notes", dropped)
             self.assertEqual(lint(dropped, w.dir), [])

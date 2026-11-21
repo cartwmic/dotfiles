@@ -200,13 +200,14 @@ class StampGuideTest(Fixture):
         self.assertIn("comes before the first `## A<n>` heading", r.stdout)
 
     def test_with_guide_only_the_new_appendix_line_gets_an_id_and_everything_else_is_byte_for_byte(self):
-        self.write("GUIDE.md", self.NEW)
+        untagged = swap(self.NEW, "## What it is\n\n", "## What it is\n\nA plain sentence with no tag.\n")  # Part 1 prose with no id is left alone too
+        self.write("GUIDE.md", untagged)
         r = self.stamp("--guide")
         self.assertEqual(r.returncode, 0, r.stdout)
         after = Path(self.path("GUIDE.md")).read_text()
         added = re.search(r"A note with no title is skipped\. `src/app\.py:36` \[A4\.[0-9a-f]{4}\]\n", after)
         self.assertIsNotNone(added, after)
-        self.assertEqual(after.replace(added.group(0), "A note with no title is skipped. `src/app.py:36`\n"), self.NEW)
+        self.assertEqual(after.replace(added.group(0), "A note with no title is skipped. `src/app.py:36`\n"), untagged)
 
     def test_a_guide_with_every_line_stamped_is_left_alone(self):
         self.write("GUIDE.md", OLD)
