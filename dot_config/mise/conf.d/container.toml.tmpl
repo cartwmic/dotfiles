@@ -1,6 +1,7 @@
 {{- /* The lean mise config for container mode (docs/container-mode.md). .chezmoiignore leaves out config.toml in container mode and deploys this instead, so `mise ls --missing`
 lists only the tools the pod uses. It is computed from config.toml: the pins stay in one place, and a bump there reaches the pod. A name in $lean that config.toml no longer has fails the render. */ -}}
-{{- $lean := list "node" "python" "gh" "jq" "chezmoi" "loop-engine" "lean-change" -}}
+{{- /* bookends-check (coordinator merges and main runs), policy-document (the AGENTS.md route) and research are the Loop Engine tools the pod needs beside loop-engine and lean-change. */ -}}
+{{- $lean := list "node" "python" "gh" "jq" "chezmoi" "loop-engine" "lean-change" "bookends-check" "policy-document" "research" -}}
 {{- $tasks := list "install-claude" -}}
 {{- $full := include "dot_config/mise/config.toml" | fromToml -}}
 {{- $tools := dict -}}
