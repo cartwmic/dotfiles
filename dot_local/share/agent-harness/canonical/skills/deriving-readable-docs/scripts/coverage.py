@@ -34,6 +34,10 @@ KINDS = ("purpose", "run", "setting", "limit", "failure", "flow", "interface")
 STATES = ("COVERED", "PARTIAL", "MISSING")
 FACT_ROW = re.compile(r"^(F\d+)\s*\|\s*(core|detail)\s*\|\s*(%s)\s*\|\s*(.+?)\s*\|\s*([^\s|]+:\d+(?:-\d+)?)\s*$" % "|".join(KINDS))
 GRADE_ROW = re.compile(r"^(F\d+)\s*\|\s*(COVERED|PARTIAL|MISSING)\s*\|\s*(.*?)\s*$")
+OPEN_QUOTES, CLOSE_QUOTES = '"\u201c', '"\u201d'
+# A citation span: a backticked `path:line` or `path:start-end`; a run of them split by commas or semicolons is one.
+_ONE = r"`[^`\n]*[\w/.@+-]:\d+[^`\n]*`"
+CITATION_SPAN = re.compile(_ONE + r"(?:\s*[,;]\s*" + _ONE + r")*")
 CITE = re.compile(r"^(.+):(\d+)(?:-(\d+))?$")
 LABEL = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -83,17 +87,28 @@ def read_grades(path, facts):
             raise CoverageError("%s:%d: %s is not in the facts file" % (path, n, fid))
         if fid in out:
             raise CoverageError("%s:%d: %s has two rows" % (path, n, fid))
-        out[fid] = (state, quote.strip().strip('"\u201c\u201d').strip())
+        out[fid] = (state, quote_of(quote))
     missing = [f[0] for f in facts if f[0] not in out]
     if missing:
         raise CoverageError("%s has no row for: %s (the grader skipped them: run it again)" % (path, ", ".join(missing)))
     return out
 
 
+def quote_of(cell):
+    """The quote of a grade row's last cell: the text between its first quote mark and its last (a note after the closing mark, `(value differs)`, is not part of it);
+    a cell with no quote marks is taken whole."""
+    cell = cell.strip()
+    if cell and cell[0] in OPEN_QUOTES:
+        close = max(cell.rfind(q) for q in CLOSE_QUOTES)
+        if close > 0:
+            return cell[1:close].strip()
+    return cell
+
+
 def squash(text):
-    """A text as a quote is compared: tags, backticks, quotation marks and spacing out, lower case."""
-    text = TAG.sub(" ", text).replace("`", " ").replace('"', " ").replace("“", " ").replace("”", " ")
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """A text as a quote is compared: tags, citations, backticks, quotation marks and spacing out, no space before a mark of punctuation, lower case."""
+    text = CITATION_SPAN.sub(" ", TAG.sub(" ", text)).replace("`", " ").replace('"', " ").replace("\u201c", " ").replace("\u201d", " ")
+    return re.sub(r"\s+([.,;:!?])", r"\1", re.sub(r"\s+", " ", text)).strip().lower()
 
 
 def verify(grades, guide):
@@ -114,14 +129,16 @@ def verify(grades, guide):
 
 
 def sections(guide, repo):
-    """{file: {section number: lines citing it}} of the appendix, to suggest where a fact belongs."""
+    """{file: {section number: lines citing it}} of the appendix, to suggest where a fact belongs. A line counts for the section file its id names (`A4.3f9a` is A4's),
+    not the section it sits in: assemble.py gathers the table rows of every file into sections of their own that have no file."""
     lines, raw = appendix_lines(guide, repo), guide.split("\n")
     by_file = {}
     for l in lines:
+        home = l["ids"][0].split(".")[0][1:] if l["ids"] else l["section"]
         for _, _, cites, _ in line_items(raw[l["line"] - 1], repo):
             for path, _, _ in cites:
                 by_file.setdefault(path, {})
-                by_file[path][l["section"]] = by_file[path].get(l["section"], 0) + 1
+                by_file[path][home] = by_file[path].get(home, 0) + 1
     return by_file
 
 
@@ -151,9 +168,10 @@ def todo_text(label, rec):
     todo = [r for r in rec["rows"] if r["state"] != "COVERED"]
     out = ["# Coverage to-do (%s): %d of %d facts to add" % (label, len(todo), rec["facts"]), "",
            "Add each fact to the appendix as one cited sentence on its own line (`references/drafting.md`): the value, default, limit, unit and failure result the code has.",
-           "A PARTIAL fact keeps its line and gains what it lacks. Then run stamp.py on the section file and check_citations.py on it.", ""]
+           "A PARTIAL fact keeps its line and gains what it lacks. The writer drafts the new and changed lines in `cov-A<n>.md` and audits that file (`references/coverage.md`).", ""]
     for sec in sorted({r["section"] for r in todo}, key=lambda s: int(s[1:])):
         out.append("## %s" % sec)
+        out.append("Files: " + ", ".join(sorted({CITE.match(r["cite"]).group(1) for r in todo if r["section"] == sec})))
         for r in (r for r in todo if r["section"] == sec):
             has = r["why"] or ("guide has: \"%s\"" % r["quote"] if r["state"] == "PARTIAL" else "guide has no line for it")
             out.append("- %s %s %s | %s | code: `%s` | %s" % (r["id"], r["state"], "core" if r["core"] else "detail", r["fact"], r["cite"], has))

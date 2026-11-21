@@ -38,7 +38,7 @@ class SkillShapeTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?i)tests?[^.\n]*optional|optional[^.\n]*tests?")
 
     def test_it_stays_near_the_length_the_design_set(self):
-        self.assertLess(len(SKILL.split()), 1720)  # 1,400 before the final re-check step; 1,517 with the two tables; 1,691 with the coverage steps
+        self.assertLess(len(SKILL.split()), 1760)  # 1,400 before the final re-check step; 1,517 with the two tables; 1,723 with the coverage steps
 
 
 class EveryStepIsAScriptCallTest(unittest.TestCase):

@@ -178,6 +178,25 @@ class VerifyTest(Work):
         self.assertEqual(got["F1"][0], "MISSING")
         self.assertIn("no quote", got["F1"][3])
 
+    def test_a_note_after_the_closing_quote_is_not_part_of_the_quote(self):
+        """The grader brief allows `"line" (the value differs: 60 seconds)`: the row keeps its PARTIAL grade and its quote."""
+        got = self.graded(GRADES.replace('"The sync interval is set in the settings."', '"The sync interval is set in the settings." (the value differs: 60 seconds)'))
+        self.assertEqual((got["F2"][0], got["F2"][1], got["F2"][3]), ("PARTIAL", "The sync interval is set in the settings.", ""))
+
+    def test_a_quote_that_holds_quote_marks_of_its_own_keeps_them_up_to_the_last_mark(self):
+        guide = GUIDE.replace("The sync interval is set in the settings.", 'The setting "interval" is set in the settings.')
+        got = self.graded(GRADES.replace('"The sync interval is set in the settings."', '"The setting "interval" is set in the settings." (no value)'), guide)
+        self.assertEqual(got["F2"][0], "PARTIAL")
+
+    def test_a_quote_that_leaves_out_a_citation_in_the_middle_of_the_line_matches(self):
+        guide = GUIDE.replace("A refused connection is retried 3 times. `src/net.py:7` [A4.cccc]", "A refused connection `src/net.py:7`, `src/app.py:2-4` is retried 3 times. [A4.cccc]")
+        got = self.graded(GRADES, guide)
+        self.assertEqual(got["F4"][0], "COVERED")
+        got = self.graded(GRADES.replace('"A refused connection is retried 3 times."', '"A refused connection, and it is retried 3 times."'), guide.replace("`src/net.py:7`, `src/app.py:2-4` is", "`src/net.py:7`, and it is"))
+        self.assertEqual(got["F4"][0], "COVERED")
+        got = self.graded(GRADES.replace('"A refused connection is retried 3 times."', '"A refused connection `src/net.py:7`, `src/app.py:2-4` is retried 3 times."'), guide)
+        self.assertEqual(got["F4"][0], "COVERED")
+
     def test_a_quote_that_is_only_in_part_2_is_not_part_1(self):
         got = self.graded(GRADES.replace("It syncs your notes to a server.", "The tool syncs notes to a server."))
         self.assertEqual(got["F1"][2], "appendix")
@@ -220,6 +239,31 @@ class BuildTest(Work):
         self.assertEqual(coverage.suggest("src/app.py:30", coverage.sections(guide, self.repo)), "A4")
 
 
+class GatheredTablesTest(Work):
+    """assemble.py puts the table rows of every section file into sections of their own, numbered after the last file: they have no A<n>.md to edit."""
+    GUIDE = GUIDE + """
+## A5 Defaults and limits
+
+| Setting or behaviour | Value | Unit | Cited |
+|---|---|---|---|
+| sync interval | 30 | seconds | `src/net.py:5` [A4.dd01] |
+| retry count | 3 | times | `src/net.py:7` [A4.dd02] |
+| note size | 1 | MB | `src/net.py:9` [A3.dd03] |
+"""
+
+    def test_a_fact_goes_to_the_file_its_nearest_rows_came_from_not_to_the_gathered_section(self):
+        by_file = coverage.sections(self.GUIDE, self.repo)
+        self.assertEqual(by_file["src/net.py"], {"4": 3, "3": 1})
+        self.assertEqual(coverage.suggest("src/net.py:11", by_file), "A4")
+        self.assertNotIn("5", by_file["src/net.py"])
+
+    def test_the_to_do_never_names_a_section_that_has_no_file(self):
+        facts = coverage.read_facts(self.path("facts.txt"), self.repo)
+        self.write("grades.md", GRADES)
+        rec = coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), self.GUIDE, self.repo)
+        self.assertEqual({r["section"] for r in rec["rows"]} - {"A3", "A4"}, set())
+
+
 class TodoTest(Work):
     def todo(self, grades=GRADES):
         self.write("grades.md", grades)
@@ -254,6 +298,11 @@ class TodoTest(Work):
     def test_with_every_core_fact_covered_part_1_says_none(self):
         text = self.todo(GRADES.replace('F2 | PARTIAL | "The sync interval is set in the settings."', 'F2 | COVERED | "The sync interval is set in the settings."').replace("F5 | MISSING | -", 'F5 | COVERED | "It syncs your notes to a server."'))
         self.assertIn("none: every core fact is covered", text)
+
+    def test_each_section_lists_the_files_its_facts_cite_for_the_writers_brief(self):
+        text = self.todo()
+        self.assertRegex(text, r"## A3\nFiles: src/app\.py\n- F2")
+        self.assertIn("`cov-A<n>.md`", text)
 
     def test_the_rows_are_grouped_under_their_section_in_order(self):
         text = self.todo()

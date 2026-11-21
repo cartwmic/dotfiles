@@ -20,14 +20,14 @@ New files: `scripts/coverage.py`, `references/coverage.md`, `references/coverage
 
 | Claim | Evidence | Kind |
 |---|---|---|
-| The skill's tests pass | `python3 -I -m unittest discover -s tests/deriving-readable-docs -p 'test_*.py'`: 539 tests before, 585 after (46 new, all in `test_coverage.py`), OK | ran |
-| `coverage.py` turns a grade file into a to-do and a record | dry run on a hand-made repo, facts and grades: `first: 5 facts, covered 1, partial 1, missing 3: 20.0% covered ...`, `BELOW 98%` exit 1, to-do grouped by section with the core facts and Part 1 room, `coverage.md` row; a rerun of the same label was refused | ran |
-| The new tests can fail | three breaks of `coverage.py` (skip quote check, allow a label twice, count PARTIAL as covered) each failed the tests (3, 1 and 3 failures); script restored | ran |
-| A real bug was caught by a test | a cite to line 41 of a 40-line file passed (trailing newline counted as a line); fixed with `claims.split_lines` | ran |
+| The skill's tests pass | `python3 -I -m unittest discover -s tests/deriving-readable-docs -p 'test_*.py'`: 539 tests before, 591 after (52 new, all in `test_coverage.py`), OK | ran |
+| `coverage.py` turns a grade file into a to-do and a record | dry run on a hand-made repo, facts and grades (one grade row with a note after the quote): `first: 5 facts, covered 1, partial 1, missing 3: 20.0% covered ...`, `BELOW 98%` exit 1, to-do grouped by section with a `Files:` line, the core facts and Part 1 room, `coverage.md` row; a rerun of the same label was refused | ran |
+| The new tests can fail | six breaks of `coverage.py` (skip the quote check, allow a label twice, count PARTIAL as covered, parse a grade note into the quote, key sections by heading, keep citations in a quote) each failed the tests; script restored | ran |
+| Bugs found by driving the script with brief-shaped input | a cite to line 41 of a 40-line file passed (trailing newline counted as a line); a grade row with a note after the quote lost its quote; a fact could be sent to a gathered table section that has no file; a quote that left out a mid-line citation did not match. All fixed, each with a test | ran |
 | The lister, grader and writer sessions work as written | not run: the briefs and the steps were read and tested for wiring only. A real climb run is the first proof | assumed |
 | The Part 1 guard holds on a real guide | not run on a real guide; `coverage.py` reports Part 1 words by `lint_main`'s own count (test asserts the two agree) and the existing `lint_main.py` gate is unchanged | tested, not driven |
 
-Tests are not in `kgate.toml` (it lists the heavy-gate and workstream-rank suites) and GitHub CI does not run them, so they ran locally (about 30 s). This is not a `heavy-gate` job.
+The tests ran locally (about 30 s): `kgate.toml` lists only the heavy-gate and workstream-rank suites. GitHub CI's `tests` job (`scripts/ci-linux.sh`) runs `tests/deriving-readable-docs` on a pull request, but no PR is open, so there is no CI receipt yet. This is not a `heavy-gate` job.
 
 ### Design principles
 
@@ -47,7 +47,7 @@ Tests are not in `kgate.toml` (it lists the heavy-gate and workstream-rank suite
 | 12 Verified from the outside | partial | script driven through its CLI end to end and mutation-checked; the LLM sessions were not run (see Proof) |
 | 13 Intent tensions | pass | the goal "keep Part 1 plain and short while recall rises" is handled by the core-only Part 1 rule, the word room figure and the drop-first rule; the budget conflict is logged |
 | 14 Logs that replay | n/a | no acting component; the record (`coverage-<label>.json`, `coverage.md`) lists each grade |
-| 15 Fast proof | pass | 46 new tests run in under 1 s; the suite takes about 30 s |
+| 15 Fast proof | pass | 52 new tests run in under 1 s; the suite takes about 30 s |
 | 16 Built to last | pass | the old "no full final check" test was rewritten, not bypassed; steps renumbered so lists render; every doc that named a step number was updated |
 
 ### Harness note (playbook 096ec3a0)

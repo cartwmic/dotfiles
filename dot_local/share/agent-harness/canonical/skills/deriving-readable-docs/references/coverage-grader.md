@@ -11,10 +11,12 @@ For each fact, search the whole guide (Part 1, the appendix and its tables) and 
 
 A fact several lines together state, none alone, is PARTIAL. A line that gives a different value from the fact is PARTIAL, and say so after the quote.
 
-Quote the guide: for COVERED and PARTIAL, copy one line of the guide that carries the fact, word for word, from where it starts to where it ends. You may leave out its `[A4.3f9a]` tag and its backticked citation. A script finds your quote in the guide, so a quote you reworded or merged from two lines counts as MISSING. For MISSING write `-`.
+Quote the guide: for COVERED and PARTIAL, copy one line of the guide that carries the fact, word for word, from where it starts to where it ends. You may leave out its `[A4.3f9a]` tag and its backticked citation. A script finds your quote in the guide, so a quote you reworded or merged from two lines counts as MISSING (a citation or tag you leave out may sit in the middle of the line). For MISSING write `-`.
 
 Output: one row for every fact, in order, and nothing else but blank lines:
 
 `F<n> | COVERED, PARTIAL or MISSING | "the guide line"`
+
+A note goes after the closing quote mark, in parentheses, with no quote mark in it: `F2 | PARTIAL | "the guide line" (the value differs: 60 seconds)`. The script takes the text between the first and the last quote mark of the row as your quote.
 
 Do not mark a fact COVERED because the guide covers the topic in general. The test is whether a newcomer who reads that line learns the fact.
