@@ -1,14 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-/** pi-subagents' helper tool. Every other tool passes through untouched. */
-export const HELPER_TOOL = "subagent";
-
-const NODE_FLAGS = ["--experimental-strip-types", "--disable-warning=ExperimentalWarning"];
-const HOOK_TIMEOUT_MS = 30_000;
 
 /** What config.json (rendered per profile from config.json.tmpl) says: where the coordinator checkout and its state directory are. */
 export interface GateConfig {
@@ -28,17 +21,15 @@ export interface HelperCall {
 	model: string | undefined;
 }
 
-/** Starts the hook for one call: its stdout, or `failure` when it could not run. */
-export type RunHook = (hook: string, stdin: string, env: NodeJS.ProcessEnv) => { stdout: string; failure?: string };
+/** The coordinator's `helperGateReason` (src/coordinator-session/helper-gate.ts): the reason to block the call, or undefined to let it run. */
+export type HelperGate = (call: HelperCall, env: NodeJS.ProcessEnv, stateDir: string) => string | undefined;
 
-/** The node that starts the hook: Pi's own when it is a node, else the one on PATH. */
-const nodeCommand = (): string => (/^node(\.exe)?$/.test(basename(process.execPath)) ? process.execPath : "node");
+/** Loads the coordinator's gate from its file, or undefined when the file does not hold one. Throws when the file cannot be loaded. */
+export type LoadGate = (file: string) => Promise<HelperGate | undefined>;
 
-export const runHook: RunHook = (hook, stdin, env) => {
-	const run = spawnSync(nodeCommand(), [...NODE_FLAGS, hook, "--pi"], { input: stdin, env, encoding: "utf8", timeout: HOOK_TIMEOUT_MS });
-	if (run.error !== undefined) return { stdout: "", failure: run.error.message };
-	if (run.status !== 0) return { stdout: "", failure: `exit ${run.status ?? run.signal}: ${run.stderr.trim().split("\n")[0] ?? ""}` };
-	return { stdout: run.stdout };
+export const loadGate: LoadGate = async (file) => {
+	const loaded = (await import(pathToFileURL(file).href)) as { helperGateReason?: unknown };
+	return typeof loaded.helperGateReason === "function" ? (loaded.helperGateReason as HelperGate) : undefined;
 };
 
 /** The config beside the extension, or undefined when it is missing or unreadable. */
@@ -63,46 +54,24 @@ export function loadsCoordinatorSession(argv: readonly string[]): boolean {
 	});
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** Adds one line to <state>/t3-hook/helper-gate.log, the coordinator's own record of a gate that could not run. Never throws. The caller has checked that the state directory exists, so this never makes one. */
-function logSkip(stateDir: string, call: HelperCall, why: string): void {
-	try {
-		const input = isObject(call.input) ? call.input : {};
-		const file = join(stateDir, "t3-hook", "helper-gate.log");
-		mkdirSync(dirname(file), { recursive: true });
-		appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), session: call.sessionId, call: call.toolCallId, kind: input.agent ?? null, model: input.model ?? null, what: `skipped: the gate could not run (${why})` })}\n`);
-	} catch {
-		/* the gate fails open */
-	}
-}
-
 /**
- * The reason to block the call, or undefined to let it run. Never throws. The decision is the coordinator's (`hook.ts --pi`): this holds no model list, seat table or rule text.
- * It lets the call through, quietly, when the config is missing or off, the checkout or its state directory is not there, the process is the coordinator's own session,
- * or the hook cannot run or answers with something unreadable (the last two add a line to the coordinator's helper-gate log).
+ * The reason to block the call, or undefined to let it run. Never throws. The decision, and the work of asking the hook, is the coordinator's own `helperGateReason`
+ * (src/coordinator-session/helper-gate.ts in the configured checkout), loaded when first needed: this holds no model list, seat table, rule text or hook launcher.
+ * It lets the call through, quietly, when the config is missing or off, the checkout, its helper-gate.ts or its state directory is not there, the process is the coordinator's
+ * own session, or the file cannot be loaded. Past that point the coordinator's code fails open and logs for itself.
  */
-export function gateReason(call: HelperCall, options: { config: GateConfig | undefined; env: NodeJS.ProcessEnv; argv: readonly string[]; run?: RunHook }): string | undefined {
-	if (call.toolName !== HELPER_TOOL) return undefined;
+export async function gateReason(call: HelperCall, options: { config: GateConfig | undefined; env: NodeJS.ProcessEnv; argv: readonly string[]; load?: LoadGate }): Promise<string | undefined> {
 	const { config, env } = options;
 	if (config === undefined || config.enabled === false || !config.coordinatorRepo) return undefined;
 	if (loadsCoordinatorSession(options.argv)) return undefined;
-	const hook = join(config.coordinatorRepo, "src", "t3-hook", "hook.ts");
+	const file = join(config.coordinatorRepo, "src", "coordinator-session", "helper-gate.ts");
 	const stateDir = env.COORDINATOR_STATE_DIR || config.stateDir;
-	if (!stateDir || !existsSync(hook) || !existsSync(stateDir)) return undefined;
-	const skipped = (why: string): undefined => {
-		logSkip(stateDir, call, why);
-		return undefined;
-	};
+	if (!stateDir || !existsSync(file) || !existsSync(stateDir)) return undefined;
 	try {
-		const stdin = JSON.stringify({ session_id: call.sessionId, tool_use_id: call.toolCallId, cwd: call.cwd, session_model: call.model, tool_input: call.input });
-		const answered = (options.run ?? runHook)(hook, stdin, { ...env, COORDINATOR_STATE_DIR: stateDir });
-		if (answered.failure !== undefined) return skipped(answered.failure);
-		if (answered.stdout.trim() === "") return undefined;
-		const answer = JSON.parse(answered.stdout) as { block?: unknown; reason?: unknown };
-		return answer.block === true && typeof answer.reason === "string" ? answer.reason : skipped("its answer was not a refusal it could read");
-	} catch (error) {
-		return skipped((error as Error).message.split("\n")[0] ?? "error");
+		const gate = await (options.load ?? loadGate)(file);
+		return gate?.(call, env, stateDir);
+	} catch {
+		return undefined;
 	}
 }
 
@@ -112,9 +81,9 @@ interface PiContext { cwd: string; sessionManager: { getSessionId(): string }; m
 
 /** The `tool_call` handler: blocks a refused `subagent` call with the coordinator's reason. */
 export const toolCallHandler =
-	(options: { config: GateConfig | undefined; env: NodeJS.ProcessEnv; argv: readonly string[]; run?: RunHook }) =>
+	(options: { config: GateConfig | undefined; env: NodeJS.ProcessEnv; argv: readonly string[]; load?: LoadGate }) =>
 	async (event: PiToolCall, ctx: PiContext) => {
-		const reason = gateReason(
+		const reason = await gateReason(
 			{ toolName: event.toolName, toolCallId: event.toolCallId, input: event.input, cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined },
 			options,
 		);
