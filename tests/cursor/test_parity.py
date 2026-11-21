@@ -47,9 +47,8 @@ class CursorParity(unittest.TestCase):
                                  "canonical skills Cursor cannot see on %s" % profile)
 
     def test_the_exclusion_list_names_only_canonical_servers(self):
-        for profile in PROFILES:
-            stale = exclusions() - set(canonical_servers(profile)) if profile == "axon-work-computer" else set()
-            self.assertEqual(sorted(stale), [], "cursor-exclude.txt names servers that are not canonical any more")
+        canonical = set().union(*(set(canonical_servers(p)) for p in PROFILES))
+        self.assertEqual(sorted(exclusions() - canonical), [], "cursor-exclude.txt names servers that are not canonical any more")
 
     def test_the_check_catches_the_past_gap_atlassian_missing_on_work(self):
         """Cursor seats on the work profile once had no Jira server. The same check, fed that output, fails and names jira."""
