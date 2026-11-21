@@ -151,6 +151,8 @@ class NoFocusSteal(unittest.TestCase):
                        AGENT_CHROME_PROFILE=cls.scratch + "/profile",
                        AGENT_CHROME_WAIT="30",
                        XDG_STATE_HOME=cls.scratch + "/state")
+        # The tests below mean the default launch form (b); a form set in the caller's shell would change what the launcher does.
+        cls.env.pop("AGENT_CHROME_LAUNCH_FORM", None)
         cls.cdp = "http://127.0.0.1:%s" % cls.port
         try:
             # runner only: on a real desktop nothing is stopped, and the launcher must not carry this

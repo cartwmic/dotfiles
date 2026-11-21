@@ -5,9 +5,10 @@ name: CI
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 #
-# Every PR runs `tests` (the fast check) and `release-pins`. Main runs (push, and workflow_dispatch to start an untested main
-# by hand) run `tests`, `release-pins` and `mise-tests`. `~/.local/bin/ci-main-status` (source: dot_local/bin/executable_ci-main-status)
-# reads the main runs.
+# Every run (pull request, push to main, and workflow_dispatch to start an untested main by hand) runs `tests`, `release-pins` and
+# `mise-tests`. The macOS job has no path filter: a path list goes stale, and a filtered required check hangs as "expected".
+# Branch protection requires `tests` only, so a red `mise-tests` shows on the PR but does not block its merge by itself.
+# `~/.local/bin/ci-main-status` (source: dot_local/bin/executable_ci-main-status) reads the main runs.
 
 on:
   pull_request:
@@ -106,7 +107,6 @@ jobs:
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.
   mise-tests:
-    if: github.event_name != 'pull_request'
     # Pinned: since 2026-11-04 ~15:00Z GitHub assigns no runner to macos-latest (macos-26-arm64) or macos-26;
     # jobs queue unassigned and are cancelled. macos-15 still gets runners (probe PR #170). Move back to
     # macos-latest once its jobs are placed again.
