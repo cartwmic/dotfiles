@@ -83,6 +83,11 @@ class Structure(unittest.TestCase):
         self.assertNotIn("applied to /tmp/", body)
         self.assertNotIn("next: review git diff", body)
 
+    def test_the_loop_engine_record_points_at_a_proven_section_the_description_has(self):
+        row = next(line for line in LOOP_ENGINE.record_text().splitlines() if line.startswith("| 12 |"))
+        self.assertIn("the PR description's Proven section", row)
+        self.assertIn("\n## Proven\n", new_descriptions()["Loop Engine v0.58.0"])
+
     def test_the_record_holds_what_the_description_no_longer_does(self):
         for text in (AGENT_KIT.record_text("0.67.1"), LOOP_ENGINE.record_text(), T3_PIN.record_text("#3685")):
             rows = re.findall(r"(?m)^\| (\d+) \| .+ \| (?:pass|fail|n/a) \| .+ \|$", text)
