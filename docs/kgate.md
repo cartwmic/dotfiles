@@ -281,9 +281,9 @@ A folder is deleted when it is older than 3 days (`PRUNE_AGE_DAYS`; the age is t
 
 It never touches `log.jsonl`, `active/`, the `<id>.log` files, `merged-*.out`, `split-*`, the queue and run files, or anything else: a candidate is a real directory directly under the state folder named exactly `kgate-<digits>-<digits>.out`.
 
-**It fails closed.** Every source is read before anything is decided. If one cannot be read (`gh` fails or is missing, a line of `log.jsonl` or of the journal does not parse, a journal receipt file is missing, `log.jsonl` is missing), it prints `kgate prune: refused, nothing deleted: <the source and why>` and exits 69, dry run or not.
+**It fails closed.** Every source is read before anything is decided. If one cannot be read (`gh` fails or is missing, a line of `log.jsonl` or of the journal does not parse, a journal receipt file is missing, `log.jsonl` is missing, `active/` is there but cannot be listed; no `active/` at all means nothing is running), it prints `kgate prune: refused, nothing deleted: <the source and why>` and exits 69, dry run or not.
 
-The byte count is disk blocks (`st_blocks`), what `du` reports and what deleting frees, not file sizes. A `--delete` run appends one line (time, folders, bytes, kept counts) to `<state>/prune.jsonl`; `log.jsonl` is the job log and is not written. Exit 0 when every planned folder went (or in a dry run), 69 when a source was refused or a folder could not be removed, 64 for a bad command line. Tests: `tests/kgate/test_prune.py`.
+The byte count is disk blocks (`st_blocks`), what `du` reports and what deleting frees, not file sizes. A `--delete` run appends one line (time, folders, bytes, kept counts) to `<state>/prune.jsonl`; `log.jsonl` is the job log and is not written. Exit 0 when every planned folder went (or in a dry run), 69 when a source was refused, a folder could not be removed (the others still go, and the run is recorded), or `prune.jsonl` could not be written after the deletes (one line on stderr names the file), 64 for a bad command line. Tests: `tests/kgate/test_prune.py`.
 
 ## A second cluster, reached through kubectl
 

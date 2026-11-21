@@ -5264,7 +5264,7 @@ class QuotaHomelab(unittest.TestCase):
 
     def test_the_quota_wait_is_never_longer_than_the_queue_wait_it_is_counted_in(self):
         # The pod's Secrets are deleted after the refusal. That delete takes 2 s here; the quota's clock starts at the refusal, so the queue's must too: quota_wait_s is
-        # counted inside queue_wait_s (docs/kgate.md, "The record").
+        # counted inside queue_wait_s (docs/kgate.md, "Record").
         done = self.kgate("--wait", "4", "--cpu", "4", "--", "true", env={**self.full(used=12), "FAKE_DELETE_SLOW": "2"})
         self.assertEqual(done.returncode, 69, done.stdout)
         rec = self.records()[-1]
