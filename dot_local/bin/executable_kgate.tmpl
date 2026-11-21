@@ -10,6 +10,7 @@ heavy-gate's command line (`--wait SECONDS -- CMD`) plus the profile and a few o
     kgate cancel --list                       the jobs that are running now
     kgate cluster-setup NAME --from-context CTX   write a one-context kubeconfig and a cluster-file skeleton (once, for a profile with cluster = "NAME")
     kgate report [--days N] [--repo NAME] [--all] [--json]   read-only: per repo and command, the job log's runs, times, cores, memory and jobs that did not run
+    kgate prune [--delete]                    retention for <state>/kgate-<epoch>-<pid>.out/: a dry run unless --delete (docs/kgate.md, "Prune")
 
 `cancel` is the only supported way to stop a job: it signals that job's one client and nothing else. Never pkill.
 
@@ -2762,6 +2763,7 @@ USAGE_TEXT = "usage: kgate [--profile FILE] [--wait SECONDS] [--cpu N] [--mem SI
              "       kgate cancel --list                      the jobs running now\n" \
              "       kgate cluster-setup NAME --from-context CTX [--namespace NS]   write a one-context kubeconfig and a cluster-file skeleton (profiles with cluster = NAME)\n" \
              "       kgate report [--days N] [--repo NAME] [--all] [--json]   read-only summary of the job log, per repo and command (docs/kgate.md)\n" \
+             "       kgate prune [--delete]   dry run by default: the job output folders it would remove, a total and the bytes it would free (docs/kgate.md, \"Prune\")\n" \
              "cpu (--cpu or the profile) is rounded up to whole 4-cpu slots on the homelab (1-3 -> 4, 6 -> 8); the client prints a line when it does.\n" \
              "exit: CMD's code; 64 bad command line; 69 could not run on the cluster (kgate never runs CMD on this Mac); 75 pod still Unschedulable after --sched-wait (default 1800 s, env KGATE_SCHED_WAIT). See docs/kgate.md."
 
@@ -3168,6 +3170,211 @@ def report_main(argv):
     return 0
 
 
+# ---------------------------------------------------------------- kgate prune
+# Retention for <state>/kgate-<epoch>-<pid>.out/ (docs/kgate.md, "Prune"). prune_plan is the decision and does no I/O; the prune_read_* functions read one source
+# each and raise PruneRefused when they cannot, so a source that cannot be read deletes nothing (a dry run refuses the same way).
+PRUNE_AGE_DAYS = 3   # a job folder younger than this is never touched
+PRUNE_LOG_DAYS = 7   # a job with a log.jsonl record this recent is kept
+PRUNE_DIR = re.compile(r"kgate-(\d+)-\d+\.out")
+PRUNE_JOB_ID = re.compile(r"kgate-\d+-\d+")
+PRUNE_KEEP = (("running", "running (active/ entry)"), ("logged", "log.jsonl record in the last %d days" % PRUNE_LOG_DAYS),
+              ("journal", "cited by the main-run journal"), ("pr", "cited in an open PR body"))
+
+
+class PruneRefused(Exception):
+    """A source of citations could not be read: nothing is deleted."""
+
+
+def prune_plan(folders, now, running, logged, journal, prs):
+    """(delete, kept, young): `folders` are job-folder ids (`kgate-<epoch>-<pid>`); the epoch in the id is when the job started. `kept` maps each reason in
+    PRUNE_KEEP to the ids kept for it (the first reason that applies); `young` counts the folders under PRUNE_AGE_DAYS."""
+    cutoff = now.timestamp() - PRUNE_AGE_DAYS * 86400
+    sources = {"running": running, "logged": logged, "journal": journal, "pr": prs}
+    delete, kept, young = [], {key: [] for key, _ in PRUNE_KEEP}, 0
+    for fid in sorted(folders):
+        if int(fid.split("-")[1]) >= cutoff:
+            young += 1
+            continue
+        why = next((key for key, _ in PRUNE_KEEP if fid in sources[key]), None)
+        (kept[why] if why else delete).append(fid)
+    return delete, kept, young
+
+
+def prune_folders(state):
+    """The ids of the job output folders directly under `state`: real directories named kgate-<epoch>-<pid>.out. Nothing else is a candidate."""
+    out = []
+    with os.scandir(state) as it:
+        for e in it:
+            m = PRUNE_DIR.fullmatch(e.name)
+            if m and e.is_dir(follow_symlinks=False):
+                out.append(e.name[:-len(".out")])
+    return out
+
+
+def prune_read_running(state):
+    try:
+        return {n[:-len(".json")] for n in os.listdir(os.path.join(state, "active")) if n.endswith(".json")}
+    except FileNotFoundError:
+        return set()
+    except OSError as e:
+        raise PruneRefused("running jobs (%s/active): %s" % (state, e))
+
+
+def prune_read_logged(state, now):
+    """(ids, repos, lines): the jobs with a record in the last PRUNE_LOG_DAYS, every `repo` the log names, and how many lines it has."""
+    path = os.path.join(state, "log.jsonl")
+    if not os.path.exists(path):
+        raise PruneRefused("job log %s is missing" % path)
+    try:
+        records, bad = read_job_log(path)
+    except OSError as e:
+        raise PruneRefused("job log %s: %s" % (path, e))
+    if bad:
+        raise PruneRefused("job log %s has %d lines that do not parse; one of them could be a recent job" % (path, bad))
+    since = now - datetime.timedelta(days=PRUNE_LOG_DAYS)
+    ids, repos = set(), set()
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        when = report_when(rec)
+        if isinstance(rec.get("id"), str) and (when is None or when >= since):  # a record with no readable start counts as recent
+            ids.add(rec["id"])
+        if isinstance(rec.get("repo"), str):
+            repos.add(rec["repo"])
+    return ids, repos, len(records)
+
+
+def prune_read_journal(path):
+    """(ids, lines): the job ids named in the receipt files of each line of the coordinator's main-run journal. No journal at all (a machine that runs no
+    main run) is no citations; a journal that is there but cannot be read in full is a refusal."""
+    if not os.path.exists(path):
+        return None, 0
+    ids, lines = set(), 0
+    try:
+        with open(path) as f:
+            for n, line in enumerate(f, 1):
+                if not line.strip():
+                    continue
+                lines += 1
+                try:
+                    receipts = json.loads(line).get("receipts") or {}
+                    files = list(receipts.values())
+                except (ValueError, AttributeError):
+                    raise PruneRefused("journal %s line %d does not parse" % (path, n))
+                for rf in files:
+                    try:
+                        with open(rf, errors="replace") as r:
+                            ids.update(PRUNE_JOB_ID.findall(r.read()))
+                    except (OSError, TypeError) as e:
+                        raise PruneRefused("journal %s line %d: receipt file %s: %s" % (path, n, rf, e))
+    except OSError as e:
+        raise PruneRefused("journal %s: %s" % (path, e))
+    return ids, lines
+
+
+def prune_gh(*args):
+    try:
+        done = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise PruneRefused("open PR bodies: gh %s: %s" % (" ".join(args[:3]), e))
+    if done.returncode != 0:
+        raise PruneRefused("open PR bodies: gh %s failed: %s" % (" ".join(args[:3]), (done.stderr.strip().splitlines() or ["no message"])[0]))
+    return done.stdout
+
+
+def prune_read_prs(repo_names):
+    """(ids, repos, prs, unscanned): the job ids in the bodies of the open PRs of every GitHub repo whose name is one the job log records as `repo`.
+    `repo` is a bare name (the last part of the origin URL), so it is matched against the repos `gh` can list; a name with no such repo (a scratch folder, a repo on
+    another host) is returned in `unscanned`."""
+    visible = [l for l in prune_gh("api", "user/repos", "--paginate", "--jq", ".[].full_name").split() if "/" in l]
+    by_name = {}
+    for full in visible:
+        by_name.setdefault(full.split("/", 1)[1], []).append(full)
+    wanted = sorted(n for n in set(repo_names) if n in by_name)
+    unscanned = sorted(n for n in set(repo_names) if n not in by_name)
+    ids, repos, prs = set(), 0, 0
+    for name in wanted:
+        for full in by_name[name]:
+            repos += 1
+            try:
+                listing = json.loads(prune_gh("pr", "list", "-R", full, "--state", "open", "--limit", "1000", "--json", "number,body"))
+            except ValueError:
+                raise PruneRefused("open PR bodies: gh pr list -R %s printed something that is not JSON" % full)
+            for pr in listing:
+                prs += 1
+                ids.update(PRUNE_JOB_ID.findall(pr.get("body") or ""))
+    return ids, repos, prs, unscanned
+
+
+def prune_size(path):
+    """Bytes on disk (allocated blocks) under `path`, links not followed."""
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(path):
+        for name in dirnames + filenames:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_blocks * 512
+            except OSError:
+                pass
+    return total + os.lstat(path).st_blocks * 512
+
+
+def prune_human(n):
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return "%d B" % n if unit == "B" else "%.1f %s" % (n, unit)
+        n /= 1024
+
+
+def prune_main(argv):
+    p = _Quiet(prog="kgate prune", add_help=False, allow_abbrev=False)
+    p.add_argument("--delete", action="store_true")
+    try:
+        o = p.parse_args(argv)
+    except SystemExit as err:
+        print(err.code if isinstance(err.code, str) else USAGE_TEXT, file=sys.stderr)
+        return USAGE
+    state = state_dir()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    journal_path = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "coordinator-ci", "main-journeys.jsonl")
+    try:
+        folders = prune_folders(state)
+        running = prune_read_running(state)
+        logged, names, log_lines = prune_read_logged(state, now)
+        journal, journal_lines = prune_read_journal(journal_path)
+        pr_ids, pr_repos, pr_count, unscanned = prune_read_prs(names)
+    except (PruneRefused, OSError) as e:
+        print("kgate prune: refused, nothing deleted: %s" % e, file=sys.stderr)
+        return UNAVAILABLE
+    delete, kept, young = prune_plan(folders, now, running, logged, journal or set(), pr_ids)
+    sizes = {fid: prune_size(os.path.join(state, fid + ".out")) for fid in delete}
+    freed = sum(sizes.values())
+    print("kgate prune%s: job folders in %s" % ("" if o.delete else " (dry run, pass --delete to remove)", state))
+    print("sources: %d running; log.jsonl %d lines, %d jobs in the last %d days; journal %s; open PRs: %d in %d repos, %d job ids"
+          % (len(running), log_lines, len(logged), PRUNE_LOG_DAYS,
+             "not present" if journal is None else "%s: %d lines, %d job ids" % (journal_path, journal_lines, len(journal)), pr_count, pr_repos, len(pr_ids)))
+    if unscanned:
+        print("PRs not scanned (no GitHub repo of that name that gh lists): %s" % ", ".join(unscanned))
+    done = 0
+    for fid in delete:
+        print("%s %s.out  %s" % ("deleting" if o.delete else "would delete", fid, prune_human(sizes[fid])))
+        if o.delete:
+            try:
+                shutil.rmtree(os.path.join(state, fid + ".out"))
+                done += 1
+            except OSError as e:
+                print("kgate prune: could not remove %s.out: %s" % (fid, e), file=sys.stderr)
+    kept_text = ", ".join("%s %d" % (label, len(kept[key])) for key, label in PRUNE_KEEP)
+    print("%s %d folders, %s (disk blocks) %s; kept %d older than %d days (%s); %d younger left alone"
+          % ("deleted" if o.delete else "would delete", done if o.delete else len(delete), prune_human(freed), "freed" if o.delete else "would be freed",
+             sum(len(v) for v in kept.values()), PRUNE_AGE_DAYS, kept_text, young))
+    if o.delete:
+        with open(os.path.join(state, "prune.jsonl"), "a") as f:   # a run's own record; log.jsonl is the job log and is never written here
+            f.write(json.dumps({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "deleted": done, "planned": len(delete), "bytes": freed, "young": young,
+                                "kept": {k: len(v) for k, v in kept.items()}}) + "\n")
+        return 0 if done == len(delete) else UNAVAILABLE
+    return 0
+
+
 def main(argv):
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__.strip())
@@ -3180,6 +3387,8 @@ def main(argv):
         return cluster_setup(argv[1:])
     if argv[:1] == ["report"]:
         return report_main(argv[1:])
+    if argv[:1] == ["prune"]:
+        return prune_main(argv[1:])
     try:
         opts = parse_args(argv)
     except SystemExit as e:
