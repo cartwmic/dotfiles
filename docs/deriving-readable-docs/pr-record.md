@@ -65,20 +65,21 @@ Why: two real runs showed recall rising but first-pass precision falling from ab
 | 1 | Condition audit for every coverage line and every Part 1 sentence a coverage step adds; an edited line is re-audited whole | `references/coverage.md`, step 8 of `SKILL.md` |
 | 2 | A PARTIAL fact is routed to the section file and line id that hold its quote (a Part 1 quote, to the appendix line it is tagged with) and is edited in place; a MISSING fact is placed next to the nearest line citing the same file | `scripts/coverage.py`, `references/coverage.md` |
 | 3 | The to-do is ranked (core, then MISSING before PARTIAL, then fact number) and cut to the word room at 25 words a fact; the rest go in a "Did not fit" list in the to-do and in `coverage.md`; `--budget` is required; the lister is capped at 100 facts, refused by the script | `scripts/coverage.py`, `references/coverage-lister.md` |
-| 4 | Step 15 repairs before it cuts: `final_recheck.py repair` splits failing claims into fix (MISSING_CONDITION, NAME, COUNT) and cut; `cut --except` cuts only the unrepairable first; the rest are fixed once in place and re-checked once; `drop` removes a Part 1 sentence that still fails `lint_main` and refuses the Who it is for sentence and the last How to start step; the shipped guide must pass `lint_main` | `scripts/final_recheck.py`, `references/fix-rounds.md`, step 15 |
+| 4 | Step 15 repairs before it cuts: `final_recheck.py repair` splits failing claims into fix (MISSING_CONDITION, NAME, COUNT) and cut; `cut --except --held-out` cuts only the unrepairable first and records what the checkers passed; the rest are fixed once in place, then `changed --skip` lists every claim no checker passed as it stands (an unedited repairable claim included), which is re-checked once and cut if it still fails; `drop` removes a Part 1 sentence that still fails `lint_main` and refuses the Who it is for sentence and the last How to start step; the shipped guide must pass `lint_main` | `scripts/final_recheck.py`, `references/fix-rounds.md`, step 15 |
 | 5 | Sessions named by the seat table (scout, writers/lister, checkers/graders/reader) | `SKILL.md`, `drafting.md`, each brief |
 | 6 | Exact report row for a table header, `read \| N.k \| HOLDS \| outside`; check brief is now version 10 | `references/check-brief.md`, `scripts/score.py` message |
 
-New tests: `test_coverage_fit.py` (23, items 2 and 3), `test_repair_not_cut.py` (20, item 4), `test_seats_and_audit_docs.py` (11, items 1, 5, 6).
+New tests: `test_coverage_fit.py` (23, items 2 and 3), `test_repair_not_cut.py` (23, item 4), `test_seats_and_audit_docs.py` (11, items 1, 5, 6).
 
 ### Proof
 
 | Claim | Evidence | Kind |
 |---|---|---|
-| The skill's tests pass | `python3 -I -m unittest discover -s tests/deriving-readable-docs -p 'test_*.py'`: 591 tests before, 645 after (54 new), OK | ran |
-| The new tests fail on the old head | the three new files, with the updated `test_coverage.py` and `test_final_recheck.py` they import, copied into a `git worktree` of `ea31adcf` and run: `test_coverage_fit` FAILED (failures=3, errors=20, mostly `build()` has no budget argument), `test_repair_not_cut` FAILED (failures=17 of 20; the other 3 are the lint fixture and refusals that old code also gives), `test_seats_and_audit_docs` FAILED (failures=11 of 11). Worktree removed after | ran |
+| The skill's tests pass | `python3 -I -m unittest discover -s tests/deriving-readable-docs -p 'test_*.py'`: 591 tests before, 648 after (57 new), OK | ran |
+| The new tests fail on the old head | the three new files, with the updated `test_coverage.py` and `test_final_recheck.py` they import, copied into a `git worktree` of `ea31adcf` and run: `test_coverage_fit` FAILED (failures=3, errors=20, mostly `build()` has no budget argument), `test_repair_not_cut` (the first 20 tests of it) FAILED (failures=17 of 20; the other 3 are the lint fixture and refusals that old code also gives), `test_seats_and_audit_docs` FAILED (failures=11 of 11). Worktree removed after | ran |
 | `coverage.py` routes PARTIAL rows and cuts the to-do to the room | dry run on a hand-made repo, facts, grades and guide, `--budget 107` (the guide had 75 words): `first: 7 facts, covered 2, partial 2, missing 3: ...; to-do 1 facts, 4 did not fit (room 32 words)`. The to-do listed F5 (core MISSING) as `add next to A4.cccc (cites src/app.py:20)`; F2, F3, F7, F6 went under `## Did not fit` and into `coverage.md`. With `--budget 7000`: F2 `edit line A4.bbbb in place`, F6 `edit line A4.cccc in place` (the lines that hold their quotes, not the section that cites the file most), F3 `add next to A4.eeee ... a table row`, F7 `add after the last prose line of its section (no line of it cites this file)`. A later label's row still landed inside the table | ran |
-| The cut-then-lint failure is rebuilt and cleared | `test_repair_not_cut`: a Part 1 sentence with an "unless" that only a cut appendix line carried passes `lint_main` before the cut, fails it (`absolute`) after, and passes after `final_recheck.py drop`; the repair, in-place fix, re-check, cut order is run end to end on a fixture guide | ran |
+| The new tests catch the behaviour, not just the signature | three breaks in a scratch copy, each restored after: PARTIAL routed by file instead of by line failed 6 tests of `test_coverage_fit`; `rank` by plain fact number failed 5; `cut` ignoring `--except` failed 4 of `test_repair_not_cut` | ran |
+| The cut-then-lint failure is rebuilt and cleared | `test_repair_not_cut`: a Part 1 sentence with an "unless" that only a cut appendix line carried passes `lint_main` before the cut, fails it (`absolute`) after, and passes after `final_recheck.py drop`; the repair, in-place fix, re-check, cut order is run end to end on a fixture guide, including a repairable claim the lead never edits (listed again by `changed --skip`, cut when its re-check fails) and a held claim (not listed again) | ran |
 | A bare `N` in the brief's header-row line would not be read | `score.parse_rows` accepts only `N.k`; the new row is `read \| N.k \| HOLDS \| outside` (logged as a choice) | ran |
 | The lister, grader, writer and checker sessions follow the new text, and precision returns to 97% | not run: no LLM session was started in this job. The next climb run is the first proof. The Part 1 audit rows (`work/part1-audit.md`) have no script check | assumed |
 
@@ -102,13 +103,15 @@ The tests ran locally (about 32 s). GitHub CI would run the same folder on a PR;
 | 12 Verified from the outside | partial | scripts driven through their CLIs on hand-made input; the LLM sessions were not run (see Proof) |
 | 13 Intent tensions | pass | precision (fewer, audited coverage lines, repair before cut) against recall (PARTIAL edits, core first) is handled by ranking and the audit, not by dropping the recall pass |
 | 14 Logs that replay | pass | `coverage-<label>.json` now records the room, the estimate, each row's route and whether it was listed |
-| 15 Fast proof | pass | the 54 new tests run in about 3 s |
-| 16 Built to last | pass | old tests asserting the replaced wording were rewritten, not removed; `SKILL.md` stays under its length test (1,757 words of 1,760) by moving detail to references |
+| 15 Fast proof | pass | the 57 new tests run in about 4 s |
+| 16 Built to last | pass | old tests asserting the replaced wording were rewritten, not removed; `SKILL.md` stays under its length test (1,759 words of 1,760) by moving detail to references |
 
 ### Choices a lead should know
 
 - `--budget` is required (no 7,000 default): it halves under 30k lines.
-- Step 15 cuts the unrepairable claims first, then fixes the repairable ones in place on GUIDE.md (never through `assemble.py`), re-checks once, and cuts what still fails.
+- Step 15 cuts the unrepairable claims first, then fixes the repairable ones in place on GUIDE.md (never through `assemble.py`), re-lists by content (`cut --held-out`, `changed --skip`) so a claim nobody edited is still re-checked, and cuts what still fails.
+- A Part 1 sentence that fails `lint_main` after the cuts gets one narrowing fix, then a drop; `drop` refuses the Who it is for sentence and the last How to start step.
+- Coverage placement: the old rule (a prose line before the section's first `###` block, a changed line keeping the id) is replaced by next-to-the-nearest-line and edit-in-place.
 - The check brief's header-row line uses `N.k`, not the brief's literal `N`, because `score.py` reads only `N.k`. The check brief is version 10 (log entry: no verdict rule changed).
 - The condition audit for coverage lines is wired through the existing `check_citations.py --audit` command and the written rules; Part 1 additions get a hand-written audit file with no script check.
 
@@ -116,4 +119,4 @@ The tests ran locally (about 32 s). GitHub CI would run the same folder on a PR;
 
 The skill is canonical and is linked into Claude Code, Cursor and Pi by the existing skill link step; nothing here is Claude-only.
 
-Decisions: #5158 #5159 #5160 #5161
+Decisions: #5158 #5159 #5160 #5161 #5162 #5163

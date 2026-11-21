@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The closing step: re-check what changed after the last checker report, repair what can be repaired once, and cut what does not hold.
 
-usage: final_recheck.py changed GUIDE.md <repo> --was OLD.md [--out changed.txt]
+usage: final_recheck.py changed GUIDE.md <repo> --was OLD.md [--skip held.txt] [--out changed.txt]
        final_recheck.py repair GUIDE.md <repo> --ids changed.txt --reports DIR [--out repair.txt]
-       final_recheck.py cut GUIDE.md <repo> --ids changed.txt --reports DIR [--except repair.txt] [-o OUT.md] [--clean]
+       final_recheck.py cut GUIDE.md <repo> --ids changed.txt --reports DIR [--except repair.txt] [--held-out held.txt] [-o OUT.md] [--clean]
        final_recheck.py drop GUIDE.md <repo> --ids dropped.txt [-o OUT.md] [--clean]
 
 changed  lists the claims that differ from OLD.md, the guide as the last checker saw it (the same test as slice.py --was: a changed sentence, tag or cited line, or a
@@ -17,11 +17,15 @@ cut      reads the verdicts of the fresh checker's reports in DIR (`read | N.k |
          GUIDE.md in place); --clean also writes the guide without tags next to it. A claim of the ids file with no row in the reports is an error (exit 1): the checker
          skipped it, so run it again. A Part 1 line with a citation, or an appendix line with two claims, is refused for the same reason.
 --except FILE (with cut) leaves the claims it names uncut: the ones being repaired. They still need a report row.
+--held-out FILE (with cut) writes the content of every checked claim whose verdict is HOLDS (its sentence, tags and cited lines, not its number), and `changed --skip FILE` leaves those out of a
+         later list. The later list then holds every claim still different from OLD.md that no checker passed as it stands: a repaired claim, and a claim that was left to be repaired and never edited,
+         which is re-checked and cut when it still fails.
 drop     cuts the claims the ids file names without a report, with the same tag clean-up as cut, for a Part 1 sentence that still fails lint_main.py after its one fix. It refuses (exit 1,
          nothing written) the `Who it is for` sentence and the last sentence of How to start: those are fixed, never dropped.
 Cutting the guide in place is the last edit: do not run assemble.py again afterwards, it would bring the cut text back from the section files.
 Exit 2 on bad usage. Stdlib only.
 """
+import json
 import os
 import re
 import sys
@@ -32,7 +36,7 @@ from assemble import clean, clean_path  # noqa: E402
 from claims import LIST_MARK, TAG, claim_ids, line_items, split_lines, split_sentences, tags_before_stop, words_of  # noqa: E402
 from lint_main import WHO_FOR, section_lines  # noqa: E402
 from score import FINDING  # noqa: E402
-from slice import SliceError, changed_since, part1_lines, read_ids, read_verdicts  # noqa: E402
+from slice import SliceError, changed_since, part1_lines, read_ids, read_verdicts, signatures  # noqa: E402
 
 REPAIRABLE = ("MISSING_CONDITION", "NAME", "COUNT")  # the causes a fix can remove: the sentence lacks a condition, or has a wrong name, value or count
 
@@ -46,10 +50,28 @@ def read(path):
         return f.read()
 
 
-def changed(text, old_text, repo):
+def changed(text, old_text, repo, held=frozenset()):
     claims = claim_ids(text, repo)
     ids = changed_since(old_text, claims, text, repo)
-    return [c for c in claims if c[0] in ids]
+    sigs = dict(zip([c[0] for c in claims], signatures(text, claims, repo)))
+    return [c for c in claims if c[0] in ids and sigs[c[0]] not in held]
+
+
+def held_rows(text, repo, chosen, verdicts):
+    """The content of each chosen claim whose verdict is HOLDS, as JSON lines of [sentence, [tags], [[path, first, last]]]: a claim as `changed --skip` knows it, by what it says."""
+    claims = claim_ids(text, repo)
+    sigs = dict(zip([c[0] for c in claims], signatures(text, claims, repo)))
+    return "".join(json.dumps([sigs[c[0]][0], list(sigs[c[0]][1]), [list(x) for x in sigs[c[0]][2]]]) + "\n" for c in chosen if verdicts.get(c[0]) == "HOLDS")
+
+
+def read_held(path):
+    """The set of signatures a held-out file holds, as `signatures` makes them."""
+    out = set()
+    for line in read(path).splitlines():
+        if line.strip():
+            sentence, tags, cites = json.loads(line)
+            out.add((sentence, tuple(tags), tuple(tuple(c) for c in cites)))
+    return out
 
 
 def part1_pieces(line):
@@ -201,7 +223,7 @@ def main(argv):
     if len(argv) < 2 or argv[1] not in ("changed", "repair", "cut", "drop"):
         return usage()
     mode = argv[1]
-    names = {"changed": ("--was", "--out"), "repair": ("--ids", "--reports", "--out"), "cut": ("--ids", "--reports", "--except", "-o"), "drop": ("--ids", "-o")}[mode]
+    names = {"changed": ("--was", "--out", "--skip"), "repair": ("--ids", "--reports", "--out"), "cut": ("--ids", "--reports", "--except", "--held-out", "-o"), "drop": ("--ids", "-o")}[mode]
     parsed = options(argv[2:], names)
     if parsed is None or len(parsed[1]) != 2:
         return usage()
@@ -210,11 +232,11 @@ def main(argv):
     need = {"changed": ("--was",), "repair": ("--ids", "--reports"), "cut": ("--ids", "--reports"), "drop": ("--ids",)}[mode]
     if not os.path.isfile(doc) or not os.path.isdir(repo) or any(k not in opts for k in need) or ("--clean" in opts and mode in ("changed", "repair")):
         return usage()
-    if any(not os.path.isfile(opts[k]) for k in ("--was", "--ids", "--except") if k in opts) or ("--reports" in opts and not os.path.isdir(opts["--reports"])):
+    if any(not os.path.isfile(opts[k]) for k in ("--was", "--ids", "--except", "--skip") if k in opts) or ("--reports" in opts and not os.path.isdir(opts["--reports"])):
         return usage()
     text = read(doc)
     if mode == "changed":
-        rows = changed(text, read(opts["--was"]), repo)
+        rows = changed(text, read(opts["--was"]), repo, read_held(opts["--skip"]) if "--skip" in opts else frozenset())
         for c in rows:
             print("%s | %s" % (c[0], c[2]))
         print("%d claims changed since %s" % (len(rows), opts["--was"]) if rows else "nothing changed since %s: no final check needed" % opts["--was"])
@@ -242,7 +264,11 @@ def main(argv):
             new, rows = cut_text(text, repo, chosen, dict.fromkeys((c[0] for c in chosen), "DROPPED"))
         else:
             keep = {c[0] for c in read_ids(opts["--except"], claims, text, repo)} if "--except" in opts else set()
-            new, rows = cut_text(text, repo, chosen, read_verdicts(opts["--reports"]), keep)
+            verdicts = read_verdicts(opts["--reports"])
+            new, rows = cut_text(text, repo, chosen, verdicts, keep)
+            if "--held-out" in opts:
+                with open(opts["--held-out"], "w", encoding="utf-8") as f:
+                    f.write(held_rows(text, repo, chosen, verdicts))
     except (SliceError, CutError) as e:
         print(e, file=sys.stderr)
         return 1

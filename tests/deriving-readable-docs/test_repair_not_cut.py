@@ -127,32 +127,40 @@ class CutExceptTest(unittest.TestCase):
 
 
 class FixThenRecheckThenCutTest(unittest.TestCase):
-    """The step 15 order on a guide: cut what cannot be repaired, fix the rest once in place, re-check them, cut only what the re-check still fails."""
+    """The step 15 order on a guide: cut what cannot be repaired, fix the rest once in place, re-check every claim still unchecked, cut what the re-check still fails."""
+
+    BASELINE = GUIDE.replace("It saves a note.", "It saves a note quickly.").replace("It stops after 5 notes.", "It stops after 4 notes.").replace("It lists notes. `", "It prints notes. `")
 
     def first_pass(self, w):
-        a, c = line_of(GUIDE, "It stops after 5"), line_of(GUIDE, "It lists notes. `")
+        """Steps 1 to 4: the claims changed since the baseline are checked (saves holds, stops lacks a condition, lists is a KIND error), then cut with --except and --held-out."""
+        w.write("GUIDE.full.cut.md", self.BASELINE)
         w.write("GUIDE.md", GUIDE)
-        w.write("ids.txt", "%d.1\n%d.1\n" % (a, c))
-        w.write("rep/slice-1.md", "Slice: slice-1\nread | %d.1 | OVERSTATED | src/cli.py:7\nread | %d.1 | WRONG | src/cli.py:3\n"
-                                  "%d.1 | OVERSTATED | MISSING_CONDITION | stops | the code has a flag | add it\n%d.1 | WRONG | KIND | lists | a script step | cut\n" % (a, c, a, c))
-        script("repair", w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--out", w.p("repair.txt"))
-        code, _, err = script("cut", w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--except", w.p("repair.txt"), "--clean")
+        code, out, err = script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("GUIDE.full.cut.md"), "--out", w.p("changed.txt"))
         self.assertEqual(code, 0, err)
-        return a
+        ids = (w.dir / "changed.txt").read_text().split()
+        saves, stops, lists = ("%d.1" % line_of(GUIDE, n) for n in ("It saves a note.", "It stops after 5", "It lists notes. `"))
+        for need in (saves, stops, lists):
+            self.assertIn(need, ids)
+        verdict = {stops: "OVERSTATED | MISSING_CONDITION", lists: "WRONG | KIND"}
+        rows = "".join("read | %s | %s | src/cli.py:3\n" % (i, verdict.get(i, "HOLDS | x").split(" | ")[0] if i in verdict else "HOLDS") for i in ids)
+        finds = "".join("%s | %s | words | the code | fix\n" % (i, v) for i, v in verdict.items())
+        w.write("rep/slice-1.md", "Slice: slice-1\n" + rows.replace(" | x", "") + finds)
+        code, out, err = script("repair", w.p("GUIDE.md"), w.dir, "--ids", w.p("changed.txt"), "--reports", w.p("rep"), "--out", w.p("repair.txt"))
+        self.assertEqual((code, (w.dir / "repair.txt").read_text().split()), (0, [stops]), err)
+        code, out, err = script("cut", w.p("GUIDE.md"), w.dir, "--ids", w.p("changed.txt"), "--reports", w.p("rep"), "--except", w.p("repair.txt"), "--held-out", w.p("held.txt"), "--clean")
+        self.assertEqual(code, 0, err)
 
-    def recheck(self, w, fixed_text, verdict):
-        """Edit the line in place, list what changed against the post-cut copy, check it once and cut with the re-check's verdict."""
-        cut1 = (w.dir / "GUIDE.md").read_text()
-        w.write("GUIDE.cut1.md", cut1)
-        w.write("GUIDE.md", cut1.replace("It stops after 5 notes.", fixed_text))
-        code, out, err = script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("GUIDE.cut1.md"), "--out", w.p("changed2.txt"))
+    def second_list(self, w):
+        code, out, err = script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("GUIDE.full.cut.md"), "--skip", w.p("held.txt"), "--out", w.p("changed2.txt"))
         self.assertEqual(code, 0, err)
-        ids = (w.dir / "changed2.txt").read_text().split()
+        return (w.dir / "changed2.txt").read_text().split()
+
+    def recheck(self, w, ids, verdict):
         (w.dir / "rep2").mkdir(exist_ok=True)
         w.write("rep2/slice-1.md", "Slice: slice-1\n" + "".join("read | %s | %s | src/cli.py:7\n" % (i, verdict) for i in ids))
         code, out, err = script("cut", w.p("GUIDE.md"), w.dir, "--ids", w.p("changed2.txt"), "--reports", w.p("rep2"), "--clean")
         self.assertEqual(code, 0, err)
-        return ids, out, (w.dir / "GUIDE.md").read_text()
+        return out, (w.dir / "GUIDE.md").read_text()
 
     def test_the_unrepairable_claim_is_cut_first_and_the_repairable_one_survives_for_its_fix(self):
         with Work() as w:
@@ -161,11 +169,31 @@ class FixThenRecheckThenCutTest(unittest.TestCase):
             self.assertNotIn("It lists notes. `", after)
             self.assertIn("It stops after 5 notes.", after)
 
+    def test_a_claim_that_held_is_not_listed_again_and_the_one_to_repair_is(self):
+        with Work() as w:
+            self.first_pass(w)
+            now = (w.dir / "GUIDE.md").read_text()
+            ids = self.second_list(w)
+            listed = [c.split(" | ", 1)[1] if " | " in c else c for c in ids]
+            self.assertIn("%d.1" % line_of(now, "It stops after 5"), ids)
+            self.assertNotIn("%d.1" % line_of(now, "It saves a note."), ids)
+
+    def test_a_repairable_claim_the_lead_never_edited_is_re_checked_and_cut_when_it_still_fails(self):
+        """Left as it was, it still differs from the full check and no checker passed it as it stands, so it is listed again and cut on a failing re-check."""
+        with Work() as w:
+            self.first_pass(w)
+            ids = self.second_list(w)
+            _, after = self.recheck(w, ids, "OVERSTATED")
+            self.assertNotIn("It stops after 5 notes", after)
+            self.assertNotIn("It stops after 5 notes", (w.dir / "GUIDE.clean.md").read_text())
+
     def test_a_fix_that_the_re_check_passes_stays_and_the_clean_copy_carries_it(self):
         with Work() as w:
             self.first_pass(w)
-            ids, out, after = self.recheck(w, "It stops after 5 notes unless the flag is set.", "HOLDS")
-            self.assertEqual(len(ids), 1)
+            w.write("GUIDE.md", (w.dir / "GUIDE.md").read_text().replace("It stops after 5 notes.", "It stops after 5 notes unless the flag is set."))
+            ids = self.second_list(w)
+            self.assertTrue(ids)
+            out, after = self.recheck(w, ids, "HOLDS")
             self.assertIn("all HOLD, nothing cut", out)
             self.assertIn("It stops after 5 notes unless the flag is set.", after)
             clean = (w.dir / "GUIDE.clean.md").read_text()
@@ -175,10 +203,16 @@ class FixThenRecheckThenCutTest(unittest.TestCase):
     def test_a_fix_that_the_re_check_still_fails_is_cut_then(self):
         with Work() as w:
             self.first_pass(w)
-            _, out, after = self.recheck(w, "It stops after 5 notes unless the flag is set.", "OVERSTATED")
+            w.write("GUIDE.md", (w.dir / "GUIDE.md").read_text().replace("It stops after 5 notes.", "It stops after 5 notes unless the flag is set."))
+            out, after = self.recheck(w, self.second_list(w), "OVERSTATED")
             self.assertIn("cut | ", out)
             self.assertNotIn("It stops after 5 notes", after)
-            self.assertNotIn("It stops after 5 notes", (w.dir / "GUIDE.clean.md").read_text())
+
+    def test_held_out_and_skip_need_real_files(self):
+        with Work() as w:
+            w.write("GUIDE.md", GUIDE)
+            w.write("OLD.md", GUIDE)
+            self.assertEqual(script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("OLD.md"), "--skip", w.p("nope.txt"))[0], 2)
 
 
 class CutThatLeavesPart1FailingTest(unittest.TestCase):
@@ -264,8 +298,10 @@ class SkillWiringTest(unittest.TestCase):
         for word in ("repair", "one fix", "re-check", "lint_main.py", "drop"):
             self.assertIn(word, step)
         text = FIX_ROUNDS.split("## Final re-check")[1]
-        order = [text.index(w) for w in ("final_recheck.py changed", "final_recheck.py repair", "cut GUIDE.md", "--except", "final_recheck.py changed", "final_recheck.py drop")]
-        self.assertEqual(order[0], min(order))
+        order = [text.index(w) for w in ("final_recheck.py changed", "final_recheck.py repair", "cut GUIDE.md", "--except", "--held-out", "--skip", "final_recheck.py drop")]
+        self.assertEqual(order, sorted(order))
+        self.assertRegex(text, r"(?i)every claim the `--except` list kept is re-checked or cut, edited or not")
+        self.assertRegex(text, r"(?is)one narrowing fix.*`lint_main\.py` runs again.*dropped whole")
         self.assertRegex(text, r"(?i)must pass `lint_main\.py`")
         self.assertRegex(text, r"(?i)one fix and one re-check before it may be cut")
 

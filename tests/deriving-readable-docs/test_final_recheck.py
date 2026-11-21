@@ -270,7 +270,7 @@ class SkillWordsTest(unittest.TestCase):
         self.assertEqual(steps, sorted(steps))
         self.assertRegex(text, r"(?i)nothing changed, stop")
         self.assertRegex(text, r"(?i)is not a second pass over the guide")
-        self.assertRegex(text, r"(?i)nothing is rewritten after step 7")
+        self.assertRegex(text, r"(?i)nothing else is rewritten after step 7")
 
     def test_the_old_wording_that_left_the_lead_cuts_unchecked_is_gone(self):
         self.assertNotRegex(SKILL, r"the lead makes every cut after that")
