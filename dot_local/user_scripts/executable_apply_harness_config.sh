@@ -483,14 +483,15 @@ PY
 # tables are replaced, or dropped when no longer rendered. An old block with no such line (written
 # before it existed) owns only what is rendered now, so older leftovers move out once. The result
 # must parse as TOML (checked when tomllib exists, Python 3.11+), or the file is left as it was and
-# this exits non-zero. Same code on the personal and work profiles.
+# this exits non-zero. The file holds resolved values such as an API key, so it is written owner-only (0600), as the other
+# generated MCP files are. Same code on the personal and work profiles.
 merge_codex_config() {
   block_file="$1"
   config_file="$HOME/.codex/config.toml"
 
   mkdir -p "$HOME/.codex"
 
-  python3 - "$block_file" "$config_file" <<'PY'
+  python_private "$block_file" "$config_file" <<'PY'
 import pathlib
 import re
 import sys
@@ -581,7 +582,10 @@ else:
         sys.exit(f"[apply_harness_config] ERROR: merged Codex config does not parse ({exc}); {config_path} left unchanged")
 
 if new_content != content:
-    config_path.write_text(new_content)
+    write_private(config_path, new_content)
+elif config_path.exists() and (config_path.stat().st_mode & 0o777) != 0o600:
+    # Already current, so nothing is rewritten; a file left world-readable by an earlier apply is still narrowed.
+    config_path.chmod(0o600)
 PY
 }
 
