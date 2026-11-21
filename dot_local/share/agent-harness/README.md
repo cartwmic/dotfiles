@@ -145,8 +145,8 @@ configuration or 1Password adapter metadata. In a running Pi session, use
 
 Cursor keeps each MCP sign-in per folder, so a sign-in made from `~` does not reach T3 Cursor children, which start in
 another folder. `cursor-mcp-login` signs in for the folder those children use, one server at a time with a timeout, and
-prints which servers are signed in (`--check` only prints). Servers that send their own headers are skipped unless you pass
-`--all`, and `--workspace DIR` picks another folder.
+prints each server's state as `cursor-agent mcp list` reports it there (`--check` only prints). By default it signs in the
+servers that list as `requires_authentication`; `--workspace DIR` picks another folder.
 Test: `tests/cursor/test_mcp_login.py`.
 
 The `shartifacts` entry is Michael's page server (`https://shartifacts.internal.cartwmic.com/mcp`, Streamable
