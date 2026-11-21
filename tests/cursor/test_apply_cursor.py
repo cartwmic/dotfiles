@@ -229,6 +229,34 @@ class ApplyCursor(unittest.TestCase):
                 b.run("all")
                 assert_generated_modes(self, b)
 
+    def test_the_codex_config_is_only_readable_by_its_owner_new_or_existing(self):
+        # It holds the resolved MCP block, such as the context7 key. Pin the umask as the test above does.
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+        for profile in PROFILES:
+            with self.subTest(profile=profile, case="new file"):
+                a = Apply(self, profile)
+                a.run("codex")
+                self.assertEqual(stat.S_IMODE((a.home / ".codex/config.toml").stat().st_mode), 0o600)
+            with self.subTest(profile=profile, case="existing 0644 file whose content changes"):
+                b = Apply(self, profile)
+                config = b.home / ".codex/config.toml"
+                config.parent.mkdir(parents=True)
+                config.write_text('model = "x"\n')
+                config.chmod(0o644)
+                b.run("codex")
+                self.assertIn("# BEGIN CHEZMOI AGENT HARNESS MCP", config.read_text())
+                self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+            with self.subTest(profile=profile, case="existing 0644 file whose content is already current"):
+                c = Apply(self, profile)
+                config = c.home / ".codex/config.toml"
+                c.run("codex")
+                config.chmod(0o644)
+                once = config.read_bytes()
+                c.run("codex")  # nothing is rewritten, but the mode is still set
+                self.assertEqual(config.read_bytes(), once)
+                self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+
 
 if __name__ == "__main__":
     unittest.main()
