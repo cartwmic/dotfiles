@@ -280,7 +280,8 @@ OPEN_PID=""
 if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ]; then
   # shellcheck disable=SC2086  # OPEN_FLAGS and NO_STARTUP_WINDOW are word-split on purpose
   # open runs in the background: its return is not the readiness signal (the port is), and on the GitHub
-  # macOS runner it never returns although Chrome is up. Its own output goes to chrome.log so it cannot hold
+  # macOS runner it never returns (open leaves Chrome stopped there; the test resumes it with SIGCONT, which is
+  # the runner-only half of the fix and is not done here). Its own output goes to chrome.log so it cannot hold
   # this script's stdout open.
   open $OPEN_FLAGS -a "$BUNDLE" --stdout "$STATE/chrome.log" --stderr "$STATE/chrome.log" --args \
     --remote-debugging-port="$PORT" \

@@ -159,7 +159,7 @@ class NoFocusSteal(unittest.TestCase):
             if r.returncode != 0:
                 raise AssertionError("agent-chrome did not start: " + (r.stdout + r.stderr).strip())
             cls.drive()
-        except BaseException as err:
+        except Exception as err:
             # unittest skips tearDownClass when setUpClass raises: stop the sampler and Chrome here, and put the
             # launcher's own logs in the failure so a CI run explains itself.
             report = cls.launch_report()
@@ -182,6 +182,9 @@ class NoFocusSteal(unittest.TestCase):
         cls.http = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=cls.http.serve_forever, daemon=True).start()
         cls.base = "http://127.0.0.1:%d/" % cls.http.server_address[1]
+        # Evidence that the launch itself made the first window (form b creates it over CDP), taken before the first
+        # createTarget below: after that the tab count says nothing about the launcher.
+        cls.tabs_after_launch = len(tabs(cls.cdp))
         cls.marks = [("launch done", cls.sampler_age())]
         cdp_call(cls.cdp, "Target.createTarget", {"url": cls.base + "?page=one", "background": True})
         cls.marks.append(("first background tab", cls.sampler_age()))
@@ -215,7 +218,11 @@ class NoFocusSteal(unittest.TestCase):
         shutil.rmtree(cls.scratch, ignore_errors=True)
 
     def test_launch_creates_the_first_window_and_background_tabs_reach_the_agent_chrome(self):
-        self.assertGreaterEqual(len(tabs(self.cdp)), 1)  # default form b creates the first window over CDP
+        # default form b creates the first window over CDP; the launcher exits 0 even when that step fails, so check both
+        # its own log and the tab count taken right after the launch (before the journey made any tab of its own)
+        log = (Path(self.scratch) / "state/agent-chrome/agent-chrome.log").read_text()
+        self.assertIn("created the first window over CDP", log, self.launch_report())
+        self.assertGreaterEqual(self.tabs_after_launch, 1, self.launch_report())
         urls = [t["url"] for t in tabs(self.cdp)]
         self.assertIn(self.base + "?page=one", urls)  # the driving really reached the agent Chrome
         self.assertIn(self.base + "?page=two", urls)
@@ -224,7 +231,7 @@ class NoFocusSteal(unittest.TestCase):
         """If the agent Chrome took the front at all, the launcher must have tried to give it back (it logs the attempt).
         Runs everywhere, the runner included: it checks the launcher, not whether macOS honoured the request."""
         if not self.sampler.excursions():
-            return  # nothing to hand back
+            self.skipTest("the agent Chrome never took the front, so there was nothing to hand back")  # the log shows which case ran
         log = (Path(self.scratch) / "state/agent-chrome/agent-chrome.log").read_text()
         self.assertIn("took the front at launch", log, self.launch_report())
 

@@ -60,7 +60,7 @@ class FrontSamplerUnit(unittest.TestCase):
         self.assertIsNotNone(e["end"])   # it came back
         duration = e["end"] - e["start"]
         self.assertGreaterEqual(duration, 0.2)   # the sampler saw it away for at least this long
-        self.assertLess(duration, 1.5)   # a 0.4 s blip; the macOS runner is slow enough to read it as 0.68 s
+        self.assertLess(duration, 1.0)   # a 0.4 s blip; the macOS runner read it as 0.68 s, so 1.0 s keeps margin
         # and it is reported, with when it happened and how long it lasted
         message = sampler.describe()
         self.assertIn("Fake App " + B, message)
