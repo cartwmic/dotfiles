@@ -46,6 +46,7 @@ python3 scripts/ci-par.py \
   tests/pi-settings-render \
   tests/release-skills \
   tests/pr-body-check \
+  tests/intent-review-check \
   tests/review-intent \
   tests/known-limits-check \
   tests/mcp-ticket-lookup \

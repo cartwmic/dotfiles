@@ -378,6 +378,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/bin/pr-body-check
 # pr-record runs the coordinator checkout's script that prints and fills a PR's agent record (playbook 5a05bfe8; docs/profiles.md).
 .local/bin/pr-record
+# intent-review-check runs the coordinator checkout's script for the review-record merge rule (docs/profiles.md).
+.local/bin/intent-review-check
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).
 .local/bin/coordinator
 # kgate-split serves a work queue from this host's LAN address to pods on the personal homelab cluster: personal only (docs/profiles.md).
