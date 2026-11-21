@@ -34,12 +34,12 @@ SEAT_ROWS = {
         "| Scout | Haiku 5.5 xhigh |",
     ),
     "axon-work-computer": (
-        "| Coordinator | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
+        "| Coordinator | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
         "| Lead | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
         "| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Computer use | Sonnet 5.5 high, Pi (anthropic/claude-sonnet-5-5) |",
+        "| Computer use | Sonnet 5.5 high, Cursor (claude-sonnet-5-5) |",
     ),
 }
 SCOUT_LINE = "- A scout is for wide reading and searching that needs no judgment. It reports what it found and changes nothing."
@@ -50,9 +50,9 @@ ADVISOR_LIMIT = (
 )
 CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
 WORK_SEAT_BULLETS = (
-    "- Coordinator, leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
-    "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Computer use runs on Pi with "
-    "`--provider anthropic --model claude-sonnet-5-5` at high thinking.",
+    "- Coordinator uses Cursor (`gemini-4-neon`, `medium` effort). Leads and reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
+    "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Computer use uses Cursor "
+    "(`claude-sonnet-5-5`, `high` effort).",
 )
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
@@ -204,7 +204,6 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(text.count(row), 1)
                 self.assertNotIn("| Browser work |", text)
                 self.assertNotIn("| Browser use |", text)
-                self.assertNotIn("Cursor", text)
                 self.assertNotIn(CLI_PROXY_LINE, text)
                 self.assertNotIn("127.0.0.1:9333", text)   # the tool rule lives in the using-computer skill
                 for bullet in WORK_SEAT_BULLETS:
