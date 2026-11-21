@@ -36,6 +36,22 @@ ensure_parent() {
   mkdir -p "$(dirname "$1")"
 }
 
+# The one owner-only writer. Every generated file that can hold a resolved value goes through it, and so do the Pi and Cursor
+# MCP files: a new file is created with the given mode (0600, or 0700 for the executable Claude script), and an existing
+# one is narrowed to it. Use it as: python_private FILE... <<'PY' ... PY, the Python on stdin; sys.argv[1:] are the arguments.
+WRITE_PRIVATE_PY='import os, sys
+def write_private(path, text, mode=0o600):
+    # The file can hold a resolved value such as an API key, so only its owner may read it.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), mode)
+        f.write(text)
+'
+python_private() {
+  python3 -c "$WRITE_PRIVATE_PY
+exec(sys.stdin.read())" "$@"
+}
+
 resolve_secret() {
   secret_ref="$1"
 
@@ -78,7 +94,7 @@ render_harness_mcp_json() {
     secrets_file=""
   fi
 
-  python3 - "$MCP_FILE" "$secrets_file" "$out_file" <<'PY'
+  python_private "$MCP_FILE" "$secrets_file" "$out_file" <<'PY'
 import json
 import pathlib
 import sys
@@ -87,7 +103,7 @@ mcp_file = pathlib.Path(sys.argv[1])
 out_file = pathlib.Path(sys.argv[3])
 
 canonical = json.loads(mcp_file.read_text())
-out_file.write_text(json.dumps(canonical, indent=2) + "\n")
+write_private(out_file, json.dumps(canonical, indent=2) + "\n")
 PY
 
   if [ -n "$secrets_file" ]; then
@@ -123,7 +139,7 @@ HEREDOC_END
   # depend on env vars being set at session start. If a managed substitution
   # remains unresolved, omit only the affected server.
   if [ "${AGENT_HARNESS_INLINE_SECRETS:-1}" = "1" ]; then
-    python3 - "$out_file" "$secrets_file" <<'PY'
+    python_private "$out_file" "$secrets_file" <<'PY'
 import json
 import os
 import pathlib
@@ -167,7 +183,7 @@ for name in list(servers):
         print(f"[apply_harness_config] Skipping {name}: required substitution unavailable")
         del servers[name]
 
-out.write_text(json.dumps(resolved, indent=2) + "\n")
+write_private(out, json.dumps(resolved, indent=2) + "\n")
 PY
   fi
 }
@@ -264,7 +280,7 @@ render_claude_mcp_commands() {
   require_file "$mcp_json"
   ensure_parent "$out_file"
 
-  python3 - "$mcp_json" "$out_file" <<'PY'
+  python_private "$mcp_json" "$out_file" <<'PY'
 import json
 import pathlib
 import re
@@ -372,8 +388,7 @@ for name in RETIRED:
     if name not in servers:
         lines.append(f"if \"${{CLAUDE_BIN:-claude}}\" mcp remove -s user {json.dumps(name)} >/dev/null 2>&1; then log {json.dumps(name + ': retired, removed')}; fi")
 
-out_file.write_text("\n".join(lines) + "\n")
-out_file.chmod(0o755)
+write_private(out_file, "\n".join(lines) + "\n", 0o700)
 PY
 }
 
@@ -400,7 +415,7 @@ render_codex_mcp_block() {
   require_file "$mcp_json"
   ensure_parent "$out_file"
 
-  python3 - "$mcp_json" "$out_file" <<'PY'
+  python_private "$mcp_json" "$out_file" <<'PY'
 import json
 import pathlib
 import sys
@@ -457,7 +472,7 @@ for name, cfg in servers.items():
         lines.append("")
 
 lines.append("# END CHEZMOI AGENT HARNESS MCP")
-out_file.write_text("\n".join(lines) + "\n")
+write_private(out_file, "\n".join(lines) + "\n")
 PY
 }
 
@@ -611,7 +626,7 @@ wrap_lazy_servers() {
   fi
 
   lazy_done=$(mktemp)
-  python3 - "$resolved_json" "$lazy_list" "$lazy_bin" "$lazy_idle" "$lazy_harness" "$LAZY_REFRESHED" "$lazy_done" <<'PY'
+  python_private "$resolved_json" "$lazy_list" "$lazy_bin" "$lazy_idle" "$lazy_harness" "$LAZY_REFRESHED" "$lazy_done" <<'PY'
 import json
 import os
 import pathlib
@@ -685,7 +700,7 @@ for name, name_idle in entries:
     wrapped.update({k: v for k, v in cfg.items() if k not in ("command", "args")})
     servers[name] = wrapped
 
-pathlib.Path(path).write_text(json.dumps(data, indent=2) + "\n")
+write_private(path, json.dumps(data, indent=2) + "\n")
 pathlib.Path(done_file).write_text(" ".join(refreshed_now))
 PY
   LAZY_REFRESHED="$LAZY_REFRESHED$(cat "$lazy_done") "
@@ -700,9 +715,8 @@ merge_pi_mcp() {
   target_json="$2"
   managed_json="$3"
 
-  python3 - "$harness_json" "$target_json" "$managed_json" <<'PY'
+  python_private "$harness_json" "$target_json" "$managed_json" <<'PY'
 import json
-import os
 import pathlib
 import re
 import sys
@@ -710,13 +724,6 @@ import sys
 harness_path = pathlib.Path(sys.argv[1])
 target_path = pathlib.Path(sys.argv[2])
 managed_path = pathlib.Path(sys.argv[3])
-
-def write_private(path, text):
-    # The file can hold an API key, so only its owner may read it: a new file is created 0600, and an existing one is narrowed.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        os.fchmod(f.fileno(), 0o600)
-        f.write(text)
 
 # Harness-managed before the managed-names record existed, since removed from canonical.
 RETIRED = {"furi", "automation-mcp"}
@@ -789,9 +796,8 @@ merge_cursor_mcp() {
   managed_json="$3"
   exclude_file="$4"
 
-  python3 - "$harness_json" "$target_json" "$managed_json" "$exclude_file" <<'PY'
+  python_private "$harness_json" "$target_json" "$managed_json" "$exclude_file" <<'PY'
 import json
-import os
 import pathlib
 import re
 import sys
@@ -800,13 +806,6 @@ harness_path, target_path, managed_path, exclude_path = (pathlib.Path(a) for a i
 
 def say(msg):
     print(f"[apply_harness_config] {msg}")
-
-def write_private(path, text):
-    # The file can hold an API key, so only its owner may read it: a new file is created 0600, and an existing one is narrowed.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        os.fchmod(f.fileno(), 0o600)
-        f.write(text)
 
 excluded = set()
 if exclude_path.exists():

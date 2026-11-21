@@ -81,8 +81,8 @@ class Apply:
             self.env["OP_SERVICE_ACCOUNT_TOKEN"] = "ops_fake-token-for-tests-only"
         self.mcp = self.home / ".cursor/mcp.json"
 
-    def run(self):
-        r = subprocess.run(["sh", str(self.script), "cursor"], env=self.env, capture_output=True, text=True, timeout=120)
+    def run(self, harness="cursor"):
+        r = subprocess.run(["sh", str(self.script), harness], env=self.env, capture_output=True, text=True, timeout=120)
         assert r.returncode == 0, r.stderr
         return r
 
