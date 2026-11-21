@@ -1,5 +1,5 @@
 #!/bin/sh
-# Start the dedicated Chrome that the agent browser tool (Browse) drives on both profiles (docs: agent-harness README, "Agent browser").
+# Start the dedicated Chrome that the agent browser tools drive: Browse on the personal profile, browser-harness on the work Mac (docs: agent-harness README, "Agent browser").
 # Own profile directory, remote debugging on 127.0.0.1:9333. Does nothing if that port already answers.
 # Every run appends its outcome to ${XDG_STATE_HOME:-~/.local/state}/agent-chrome/agent-chrome.log; Chrome's own output goes to chrome.log.
 #   agent-chrome              start Chrome in the background and wait for the port (hand use).
@@ -27,7 +27,7 @@ else
 fi
 APP="${AGENT_CHROME_APP:-$DEFAULT_APP}"
 PORT="${AGENT_CHROME_PORT:-9333}"
-PROFILE="${AGENT_CHROME_PROFILE:-$HOME/.local/share/agent-chrome-profile}"   # override: tests run a scratch profile
+PROFILE="$HOME/.local/share/agent-chrome-profile"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-chrome"
 WAIT="${AGENT_CHROME_WAIT:-20}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -44,108 +44,6 @@ log() {
 }
 
 up() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; }
-
-# Hand the front back to the app instance that was frontmost before the launch, if the agent Chrome took
-# it: even under open -g -n, Chrome activates itself in-process when its first window shows (chromium
-# issue 40246767), so open alone does not keep the front. The user's own Chrome and the agent Chrome are
-# both com.google.Chrome, so the front is told apart by instance, never by bundle id: the agent Chrome's
-# pid (pgrep on the profile flag, the same handle --stop uses) against the front app's pid (lsappinfo
-# info -only pid). The hand-back is lsappinfo setfront on the recorded ASN — an instance; open -b can
-# only name a bundle, which could raise the wrong Chrome. If the recorded app has quit (its ASN now
-# resolves to another pid, or to nothing), the hand-back is skipped and logged: no relaunch. Watches
-# AGENT_CHROME_FOCUS_WAIT seconds (default 5) and hands back at most once. A failure here must never
-# fail the launch, so the caller ignores the outcome.
-hand_front_back() {
-  [ -n "$PREV_ASN" ] || return 0
-  focus_wait=${AGENT_CHROME_FOCUS_WAIT:-5}
-  i=0
-  while [ "$i" -lt $((focus_wait * 4)) ]; do
-    front=$(lsappinfo front 2>/dev/null) || front=""
-    if [ -n "$front" ] && [ -n "$CHROME_PID" ]; then
-      front_pid=$(lsappinfo info -only pid "$front" 2>/dev/null | tr -dc '0-9')
-      if [ -n "$front_pid" ] && [ "$front_pid" = "$CHROME_PID" ]; then
-        prev_pid_now=$(lsappinfo info -only pid "$PREV_ASN" 2>/dev/null | tr -dc '0-9')
-        if [ -n "$prev_pid_now" ] && [ "$prev_pid_now" = "$PREV_PID" ]; then
-          if lsappinfo setfront "$PREV_ASN" >/dev/null 2>&1; then
-            log INFO "the agent Chrome took the front at launch; handed it back to the app that was front before (pid $PREV_PID)"
-          else
-            log ERROR "the agent Chrome took the front at launch; could not hand it back to $PREV_ASN"
-          fi
-        else
-          log INFO "the agent Chrome took the front at launch; the app that was front before has quit, so the front stays with the agent Chrome"
-        fi
-        return 0
-      fi
-    fi
-    i=$((i + 1))
-    sleep 0.25
-  done
-}
-
-# Forms b and c launch Chrome with --no-startup-window, so no window exists after the start; the first one
-# is created over CDP with Target.createTarget and background:true, which must not raise it (a /json/new
-# or a foreground create would). DevTools has no HTTP route for a background target, so this speaks the
-# WebSocket protocol by hand. Best effort: a failure is logged as one clean line, never fails the
-# launch and never prints a Python traceback.
-create_first_window_background() {
-  python3 - "$PORT" <<'CDP_PY'
-import base64, json, os, socket, struct, sys, urllib.request
-
-def fail(message):
-    sys.exit("create the first window over CDP: " + message)
-
-try:
-    port = int(sys.argv[1])
-    ver = json.load(urllib.request.urlopen("http://127.0.0.1:%d/json/version" % port, timeout=5))
-    ws = ver.get("webSocketDebuggerUrl")
-    if not ws or not ws.startswith("ws://"):
-        fail("no ws:// webSocketDebuggerUrl in /json/version")
-    hostport, _, path = ws[5:].partition("/")
-    host, _, sport = hostport.partition(":")
-    sock = socket.create_connection((host, int(sport or 80)), timeout=10)
-    key = base64.b64encode(os.urandom(16)).decode()
-    request = ("GET /%s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-               "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n") % (path, hostport, key)
-    sock.sendall(request.encode())
-    head = b""
-    while b"\r\n\r\n" not in head:
-        chunk = sock.recv(4096)
-        if not chunk:
-            fail("websocket connection closed during the handshake")
-        head += chunk
-    status = head.split(b"\r\n", 1)[0].split()
-    if len(status) < 2 or status[1] != b"101":
-        fail("websocket handshake refused: " + head.split(b"\r\n", 1)[0].decode("ascii", "replace"))
-
-    def recv_exact(n):
-        data = b""
-        while len(data) < n:
-            chunk = sock.recv(n - len(data))
-            if not chunk:
-                fail("websocket connection closed before the reply")
-            data += chunk
-        return data
-
-    call = json.dumps({"id": 1, "method": "Target.createTarget",
-                       "params": {"url": "about:blank", "background": True}}).encode()
-    mask = os.urandom(4)
-    header = struct.pack("!BB", 0x81, 0x80 | (126 if len(call) > 125 else len(call)))
-    if len(call) > 125:
-        header += struct.pack("!H", len(call))
-    sock.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(call)))
-    frame = recv_exact(2)
-    length = frame[1] & 0x7F
-    if length == 126:
-        length = struct.unpack("!H", recv_exact(2))[0]
-    elif length == 127:
-        fail("websocket reply frame too large")
-    reply = json.loads(recv_exact(length))
-    if reply.get("id") != 1 or "error" in reply or "result" not in reply:
-        fail("Target.createTarget failed: " + json.dumps(reply))
-except Exception as err:
-    fail("%s: %s" % (type(err).__name__, err))
-CDP_PY
-}
 
 # focus: list the page targets on the debug port, pick the one page whose URL contains PART, and activate it (a plain HTTP call; no WebSocket).
 if [ "$MODE" = focus ]; then
@@ -230,94 +128,25 @@ if [ "$MODE" = --foreground ]; then
     about:blank >"$STATE/chrome.log" 2>&1
 fi
 log INFO "starting Chrome on port $PORT, profile $PROFILE"
-# macOS: exec'ing or nohup-ing the Chrome binary directly makes the app frontmost and steals the user's focus.
-# open -g asks LaunchServices not to activate, but that alone does not keep Chrome in the background: when its
-# first window shows, Chrome activates itself in-process (chromium issue 40246767). AGENT_CHROME_LAUNCH_FORM
-# selects the launch form (default b, proven on macOS to never change the frontmost app):
-#   b      open -g -n with --no-startup-window, the first window created over CDP in the background (default)
-#   plain  open -g -n (the hand-back is the only guard)
-#   a      open -g -j -n (hidden launch: -j asks LaunchServices not to show a window)
-#   c      a and b together
-# The hand-back (hand_front_back) stays on as a fallback for every form. -n starts a new instance, so the
-# user's own Chrome does not matter. open's pid is not Chrome's, so the pid comes from pgrep on the profile
-# flag once the port answers (the same handle --stop uses). A non-.app AGENT_CHROME_APP (a bare binary, the
-# tests' fake) keeps the direct exec: open can only launch a bundle. Linux keeps the exec.
-LAUNCH_FORM="${AGENT_CHROME_LAUNCH_FORM:-b}"
-case "$LAUNCH_FORM" in
-  plain|a|b|c) ;;
-  *) log ERROR "AGENT_CHROME_LAUNCH_FORM='$LAUNCH_FORM' is not one of plain|a|b|c"; exit 2 ;;
-esac
-OPEN_FLAGS="-g -n"
-NO_STARTUP_WINDOW=""
-case "$LAUNCH_FORM" in
-  a|c) OPEN_FLAGS="-g -j -n" ;;
-esac
-case "$LAUNCH_FORM" in
-  b|c) NO_STARTUP_WINDOW="--no-startup-window" ;;
-esac
-BUNDLE=""
-case "$APP" in
-  *.app) BUNDLE="$APP" ;;
-  *.app/*) BUNDLE="${APP%%.app/*}.app" ;;
-esac
-# Record who is front now as an instance (ASN and pid), so hand_front_back can spot the agent Chrome
-# taking the front and give the front back to that instance. Linux is not covered: under Wayland a
-# client cannot activate itself (the compositor owns focus), so the macOS self-activation does not
-# exist there.
-PREV_ASN=""
-PREV_PID=""
-if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ]; then
-  PREV_ASN=$(lsappinfo front 2>/dev/null) || PREV_ASN=""
-  if [ -n "$PREV_ASN" ]; then
-    PREV_PID=$(lsappinfo info -only pid "$PREV_ASN" 2>/dev/null | tr -dc '0-9')
-  fi
-  if [ -z "$PREV_ASN" ] || [ -z "$PREV_PID" ]; then
-    log INFO "could not record the frontmost app (lsappinfo); Chrome may take the front and keep it"
-  fi
-fi
-pid=""
-if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ]; then
-  # shellcheck disable=SC2086  # OPEN_FLAGS and NO_STARTUP_WINDOW are word-split on purpose
-  open $OPEN_FLAGS -a "$BUNDLE" --stdout "$STATE/chrome.log" --stderr "$STATE/chrome.log" --args \
-    --remote-debugging-port="$PORT" \
-    --user-data-dir="$PROFILE" \
-    --no-first-run \
-    --no-default-browser-check \
-    --disable-search-engine-choice-screen \
-    $NO_STARTUP_WINDOW \
-    "$@" \
-    about:blank || { log ERROR "open could not launch $BUNDLE"; exit 1; }
-else
-  nohup "$APP" \
-    --remote-debugging-port="$PORT" \
-    --user-data-dir="$PROFILE" \
-    --no-first-run \
-    --no-default-browser-check \
-    --disable-search-engine-choice-screen \
-    "$@" \
-    about:blank >"$STATE/chrome.log" 2>&1 &
-  pid=$!
-fi
+nohup "$APP" \
+  --remote-debugging-port="$PORT" \
+  --user-data-dir="$PROFILE" \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-search-engine-choice-screen \
+  "$@" \
+  about:blank >"$STATE/chrome.log" 2>&1 &
+pid=$!
 
 i=0
 while [ "$i" -lt "$WAIT" ]; do
   if up; then
-    [ -n "$pid" ] || pid=$(pgrep -f -- "--user-data-dir=$PROFILE" | head -n 1)
-    CHROME_PID="$pid"
-    if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ] && [ -n "$NO_STARTUP_WINDOW" ]; then
-      if cdp_err=$(create_first_window_background 2>&1); then
-        log INFO "created the first window over CDP in the background (launch form $LAUNCH_FORM)"
-      else
-        log ERROR "could not create the first window over CDP (launch form $LAUNCH_FORM): ${cdp_err:-no error given}; Chrome is up but has no window yet"
-      fi
-    fi
-    log INFO "Chrome started (pid ${pid:-unknown}), answering on port $PORT"
-    hand_front_back
+    log INFO "Chrome started (pid $pid), answering on port $PORT"
     exit 0
   fi
   i=$((i + 1))
   sleep 1
 done
 
-log ERROR "Chrome (pid ${pid:-unknown}) did not answer on port $PORT within ${WAIT}s (see $STATE/chrome.log)"
+log ERROR "Chrome (pid $pid) did not answer on port $PORT within ${WAIT}s (see $STATE/chrome.log)"
 exit 1
