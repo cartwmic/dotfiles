@@ -81,15 +81,23 @@ def run_login(agent, workspace, name, timeout):
     """Run one login in its own process group, so a timeout takes its helper processes with it. Returns a status word."""
     print("== " + name, flush=True)
     child = subprocess.Popen([agent, "mcp", "login", name, "--workspace", workspace], start_new_session=True)
-    try:
-        code = child.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
+
+    def stop():
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except OSError:
             pass
         child.wait()
+
+    try:
+        code = child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop()
         return "TIMED OUT after %ss" % timeout
+    except BaseException:
+        # Ctrl-C does not reach a login in its own session; stop it here so it does not keep the callback port
+        stop()
+        raise
     return "" if code == 0 else "FAILED (exit %s)" % code
 
 
@@ -101,6 +109,8 @@ def main(argv=None):
     parser.add_argument("--all", action="store_true", help="every url server, including ones that send their own headers")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds per server (default %d)" % DEFAULT_TIMEOUT)
     args = parser.parse_args(argv)
+    if args.timeout < 1:
+        parser.error("--timeout must be at least 1 second")
 
     workspace = os.path.abspath(os.path.expanduser(args.workspace)) if args.workspace else default_workspace()
     mcp_path, servers = url_servers()

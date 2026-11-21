@@ -10,9 +10,11 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -37,6 +39,8 @@ if name.startswith("hang-"):
 if name.startswith("bad-"):
     print("stub: login failed for " + name)
     sys.exit(1)
+if name.startswith("quiet-"):  # exits 0 and saves nothing
+    sys.exit(0)
 path = os.environ["STUB_AUTH"]
 try:
     data = json.load(open(path))
@@ -44,6 +48,8 @@ except (OSError, ValueError):
     data = {}
 data[name] = {"clientInfo": {"client_secret": "%s"}, "tokens": {"access_token": "%s"}}
 json.dump(data, open(path, "w"))
+if name.startswith("late-"):  # saves tokens, then fails
+    sys.exit(1)
 """ % (CLIENT_SECRET, SECRET)
 
 
@@ -75,10 +81,14 @@ class Slug(unittest.TestCase):
         for path, want in cases.items():
             self.assertEqual(self.mod.slug(path), want, path)
 
-    def test_long_folder_is_not_shortened(self):
+    def test_long_folder_is_not_shortened_or_hashed(self):
+        # cursor-agent has a second path function that cuts paths over 91 characters and adds a hash; the MCP files do not use it
         long_path = "/Users/mcartwright/.local/share/coordinator-work-workspace"
-        self.assertGreater(len(os.path.join("/Users/mcartwright/.cursor/projects", self.mod.slug(long_path))), 91)
-        self.assertEqual(self.mod.slug(long_path), "Users-mcartwright-local-share-coordinator-work-workspace")
+        with unittest.mock.patch.dict(os.environ, {"HOME": "/Users/mcartwright"}):
+            os.environ.pop("CURSOR_DATA_DIR", None)
+            got = self.mod.auth_file(long_path)
+        self.assertGreater(len(got), 91)
+        self.assertEqual(got, "/Users/mcartwright/.cursor/projects/Users-mcartwright-local-share-coordinator-work-workspace/mcp-auth.json")
 
     def test_auth_file_under_cursor_projects(self):
         os.environ.pop("CURSOR_DATA_DIR", None)
@@ -184,6 +194,47 @@ class Login(unittest.TestCase):
         self.assertIn("-> bad-a: FAILED (exit 1)", out.stdout)
         self.assertEqual([line.split()[2] for line in self.logins()], ["bad-a", "good-b"])
         self.assertEqual(self.states(out.stdout), {"bad-a": "not signed in", "good-b": "signed in"})
+
+    def test_tokens_not_exit_code_decide_signed_in(self):
+        self.servers(**{"quiet-a": None, "late-b": None})
+        out = self.run_script()
+        self.assertIn("-> quiet-a: finished, but no tokens were saved", out.stdout)
+        self.assertIn("-> late-b: signed in", out.stdout)
+        self.assertEqual(self.states(out.stdout), {"quiet-a": "not signed in", "late-b": "signed in"})
+        self.assertEqual(out.returncode, 1)
+
+    def test_ctrl_c_stops_the_login(self):
+        self.servers(**{"hang-a": None, "ok-b": None})
+        env = dict(os.environ, HOME=str(self.home), STUB_LOG=str(self.log), STUB_PID=str(self.pidfile), STUB_AUTH=str(self.auth),
+                   PATH=str(self.bin) + os.pathsep + os.environ["PATH"])
+        proc = subprocess.Popen([sys.executable, str(SCRIPT), "--workspace", str(self.work)], env=env, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.kill)
+        deadline = time.time() + 30
+        while not self.pidfile.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.pidfile.exists(), "the stub login never started")
+        time.sleep(0.2)  # the stub writes its pid, then sleeps
+        pid = int(self.pidfile.read_text())
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=30)
+        self.assertNotEqual(proc.returncode, 0)
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        with self.assertRaises(ProcessLookupError):  # no login left holding the OAuth callback port
+            os.kill(pid, 0)
+        self.assertEqual([line.split()[2] for line in self.logins()], ["hang-a"])  # and no later server was started
+
+    def test_timeout_must_be_positive(self):
+        self.servers(**{"good-a": None})
+        out = self.run_script("--timeout", "0")
+        self.assertEqual(out.returncode, 2)
+        self.assertEqual(self.logins(), [])
 
     def test_check_runs_no_login(self):
         self.servers(**{"good-a": None, "good-b": None})
