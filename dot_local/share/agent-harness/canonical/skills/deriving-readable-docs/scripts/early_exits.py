@@ -7,17 +7,22 @@ A sentence about what a function does is true on the path the writer followed an
 earlier `return`, `throw`, `continue` or `break` skips the cited line. For a line inside a function this lists,
 from the function's first line down to (not including) that line, each statement that leaves the function or the
 loop around the line: return, throw / raise, continue and break (only when the loop also holds the line),
-process.exit / sys.exit. With `upto` the list stops before `upto` instead, still in the function that holds `line`.
+process.exit / sys.exit; for Go also panic, log.Fatal and os.Exit; for Rust `?`, bail!, ensure!, panic! (and unreachable!, todo!, unimplemented!) and process::exit. With `upto` the list stops before `upto` instead, still in the function that holds `line`.
 A continue or break counts when its loop opens before `upto` and closes at or after `first` (default `line`): a loop
 that ends before the first cited line does not change the path to it, one that overlaps the cited lines does.
 check_citations.py asks a cited range this way (`first` its first line, `upto` its last), so a range that starts in
 one function and runs into another also gets the first function's exits inside it, marked there. A `return` inside a nested callback or inner function is not an exit of the
-function and is left out. Each exit prints with its line, its source and, when the exit line does not show it, the `if`,
+function and is left out. The line that declares an inner function (`async send(a) {`, `const f = () => {`, a nested `def`) belongs to that function, so the exits of the
+function around it (a constructor's or factory's throws) are listed under a line of that function's own body, and not under every method. Each exit prints with its line, its source and, when the exit line does not show it, the `if`,
 `else` or `catch` line it sits under (a Python exit in an `else:` says "in the else of" that `if`).
 
 Python files are read with the `ast` module. TS/JS files (.ts .tsx .js .jsx .mjs .cjs .mts .cts) are read with a
 small scanner, not a parser: strings, template literals, regex literals and comments are skipped, and each `{`
-is classed as a function body, loop, switch, condition or plain block from the words before it. Braces that do not
+is classed as a function body, loop, switch, condition or plain block from the words before it. Go (.go) and Rust (.rs) files are read with the same kind of scanner:
+strings (Go raw strings, Rust raw strings and nested block comments too), chars, lifetimes and comments are skipped, and each `{` is classed from the words before it.
+Go ends a statement at a newline as the language does; a `case` clause and a Rust match arm or closure that has no braces is a block that ends where its expression does,
+so the guard of an exit in a `case` or an arm is that clause. A `return` or `?` inside a closure or function literal is not an exit of the function around it;
+panic, log.Fatal, os.Exit and process::exit end the program from anywhere, so they are. A Rust `?` that is a bound (`T: ?Sized`) is not an exit. Braces that do not
 balance (a stray `}` too), or a Python syntax error, print "exits not listed" instead of a guess. Other file types print
 nothing. Known gaps: text in JSX that reads `return` or `throw` is listed as an exit; an exit is a statement, so a
 condition that skips code without leaving (an `if/else if` chain, a ternary, a flag test) is not listed.
@@ -197,7 +202,7 @@ def js_blocks_and_events(src):
         if stmt is None and t not in (",", ")"):
             stmt = line
         if t == "{":
-            b = {"kind": classify(head), "open": line, "close": float("inf"), "head": stmt, "outer": (head, stmt)}
+            b = {"kind": classify(head), "open": line, "close": float("inf"), "head": stmt, "outer": (head, stmt), "decl": head.count("(") <= head.count(")")}
             blocks.append(b)
             stack.append(b)
             head, stmt = [], None
@@ -235,6 +240,11 @@ def js_blocks_and_events(src):
 
 def js_exits(src, line, upto, first):
     blocks, events, balanced = js_blocks_and_events(src)
+    return block_exits(blocks, events, balanced, line, upto, first)
+
+
+def block_exits(blocks, events, balanced, line, upto, first):
+    """The exits of the function that holds `line`, from the blocks and exit events a brace scanner found (TS/JS, Go, Rust). None when the line is in no function."""
     if not balanced:
         return {"unreadable": True}
     encl = [b for b in blocks if b["open"] < line <= b["close"]]
@@ -242,6 +252,11 @@ def js_exits(src, line, upto, first):
     if not funcs:
         return None
     fn = max(funcs, key=lambda b: b["open"])
+    # the line that declares an inner function (`async send(a) {`, `const f = () => {`) belongs to that function, not to the one around it: the outer
+    # function's exits are listed under a line of its own body, once
+    declared = [b for b in blocks if b["kind"] == "func" and b["decl"] and b["open"] == line <= b["close"] and b["open"] > fn["open"]]
+    if declared:
+        fn = max(declared, key=lambda b: b["head"] if b["head"] is not None else 0)
     out = []
     for e in events:
         if e["func"] is not fn or e["line"] >= upto:
@@ -257,6 +272,334 @@ def js_exits(src, line, upto, first):
             guard = e["cond"]["head"]
         out.append({"line": e["line"], "kind": e["kind"], "guard": guard})
     return {"fn_line": fn["head"], "fn_end": fn["close"], "exits": out}
+
+
+# --- Go and Rust ----------------------------------------------------------------------------------------------
+GO_EXT = {".go"}
+RS_EXT = {".rs"}
+GO_STOP = {"break", "continue", "fallthrough", "return"}  # a newline after these ends a Go statement; after any other keyword it does not
+GO_KEYWORDS = {"if", "else", "for", "func", "switch", "select", "go", "defer", "case", "default", "var", "const", "type", "range", "struct", "interface", "map", "chan",
+               "package", "import", "goto"}
+RS_KEYWORDS = {"if", "else", "while", "for", "loop", "match", "fn", "unsafe", "impl", "trait", "mod", "struct", "enum", "union", "async"}
+RS_STRING = re.compile(r"(?:[bc]?r(#*)\"|[bc]\")")  # r"..", r#".."#, b"..", br#".."#, c".."
+NUM = re.compile(r"\d\w*(?:\.\d\w*)?")
+GO_TWO = {":=", "<-", "++", "--", "&&", "||"}
+RS_TWO = {"::", "->", "=>", "||", "&&", "|="}
+# `process.exit` and its kin: these end the program from wherever they sit, so one inside a closure still leaves the function around it.
+PROCESS_EXITS = {"panic", "log.Fatal", "os.Exit", "process::exit"}
+RS_PANICS = {"panic", "unreachable", "todo", "unimplemented"}
+RS_RETURNS = {"bail": "bail!", "ensure": "ensure!"}  # anyhow macros that return an Err from the function (or closure) around them
+
+
+def skip_string(src, i, multiline):
+    """End of the quoted string that starts at i (an escaped quote does not end it); it ends at a newline too unless multiline (Go's "..." and '.', not Rust's)."""
+    q, j = src[i], i + 1
+    while j < len(src) and src[j] != q and (multiline or src[j] != "\n"):
+        j += 2 if src[j] == "\\" else 1
+    return min(j + 1, len(src))
+
+
+def block_comment_end(src, i, nested):
+    depth, j = 1, i + 2
+    while j < len(src) and depth:
+        if nested and src.startswith("/*", j):
+            depth, j = depth + 1, j + 2
+        elif src.startswith("*/", j):
+            depth, j = depth - 1, j + 2
+        else:
+            j += 1
+    return j
+
+
+def rust_quote(src, i):
+    """(end, token) for the `'` at i: a char literal ('a', '{', '\\n') is one placeholder; a lifetime or label ('a, 'outer) is one name."""
+    if src.startswith("\\", i + 1):
+        j = src.find("'", i + 3)
+        return (len(src) if j < 0 else j + 1), "<str>"
+    if i + 2 < len(src) and src[i + 2] == "'":
+        return i + 3, "<str>"
+    m = IDENT.match(src, i + 1)
+    return (m.end(), "'" + m.group(0)) if m else (i + 1, "'")
+
+
+def brace_tokens(src, lang):
+    """[(text, line)] for Go ("go") or Rust ("rs"): names, numbers and punctuation; a string or char is one placeholder token; comments are skipped (Rust's nest).
+    A string that spans lines carries the line it ends on."""
+    toks, i, line, n, go = [], 0, 1, len(src), lang == "go"
+    while i < n:
+        c = src[i]
+        if c == "\n":
+            line, i = line + 1, i + 1
+        elif c in " \t\r":
+            i += 1
+        elif src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = block_comment_end(src, i, not go)
+            line += src.count("\n", i, j)
+            i = j
+        elif go and c == "`":
+            j = src.find("`", i + 1)
+            j = n if j < 0 else j + 1
+            line += src.count("\n", i, j)
+            toks.append(("<str>", line))
+            i = j
+        elif c == '"' or (go and c == "'"):
+            j = skip_string(src, i, not go)
+            line += src.count("\n", i, j)
+            toks.append(("<str>", line))
+            i = j
+        elif not go and c == "'":
+            i, tok = rust_quote(src, i)
+            toks.append((tok, line))
+        elif not go and (m := RS_STRING.match(src, i)):
+            if m.group(1) is None:  # b".." and c"..": an escaped string
+                j = skip_string(src, m.end() - 1, True)
+            else:  # a raw string ends at a quote followed by as many # as it opened with
+                end = src.find('"' + m.group(1), m.end())
+                j = n if end < 0 else end + 1 + len(m.group(1))
+            line += src.count("\n", i, j)
+            toks.append(("<str>", line))
+            i = j
+        else:
+            m = IDENT.match(src, i) or NUM.match(src, i)
+            if m:
+                toks.append((m.group(0), line))
+                i = m.end()
+            else:
+                two = src[i:i + 2]
+                tok = two if two in (GO_TWO if go else RS_TWO) else c
+                toks.append((tok, line))
+                i += len(tok)
+    if not go:  # an attribute (#[..], #![..]) is not part of the statement under it
+        out, k = [], 0
+        while k < len(toks):
+            nxt = 2 if toks[k][0] == "#" and k + 2 < len(toks) and toks[k + 1][0] == "!" else 1
+            if toks[k][0] == "#" and k + nxt < len(toks) and toks[k + nxt][0] == "[":
+                depth, k = 0, k + nxt
+                while k < len(toks):
+                    depth += (toks[k][0] == "[") - (toks[k][0] == "]")
+                    k += 1
+                    if depth == 0:
+                        break
+                continue
+            out.append(toks[k])
+            k += 1
+        toks = out
+    return toks
+
+
+def tail_after_open(head):
+    """The tokens of a statement head after its last unmatched `(` or `[`: what a call's argument is, on its own."""
+    depth = 0
+    for k in range(len(head) - 1, -1, -1):
+        depth += (head[k] in (")", "]")) - (head[k] in ("(", "["))
+        if depth < 0:
+            return head[k + 1:]
+    return head
+
+
+def go_literal(tail):
+    """True when a `func` head is a function literal (`func(a int) {`, `x := func() {`), false for `func name(` and `func (r T) name(`."""
+    if tail[0] != "func":
+        return True
+    if len(tail) < 2 or tail[1] != "(":
+        return False
+    depth = 0
+    for k in range(1, len(tail)):
+        depth += (tail[k] == "(") - (tail[k] == ")")
+        if depth == 0:
+            return not (k + 1 < len(tail) and IDENT.fullmatch(tail[k + 1]))
+    return True
+
+
+def classify_go(head):
+    """(kind, closure) of a `{` from its statement head: cond, else, loop, switch, func (closure: a literal), obj (a composite literal or type body) or block."""
+    tail = tail_after_open(head)
+    if not tail:
+        return "block", False
+    first = tail[0]
+    if first == "if" or (first == "else" and tail[1:2] == ["if"]):
+        return "cond", False
+    if first == "else":
+        return "else", False
+    if first == "for":
+        return "loop", False
+    if first in ("switch", "select"):
+        return "switch", False
+    if "func" in tail:
+        return "func", go_literal(tail[tail.index("func"):] if first != "func" else tail)
+    return "obj", False
+
+
+def classify_rust(head):
+    """(kind, closure) of a `{` from its statement head: cond (an if or a match arm), else, loop, switch (a match), func (closure: an async block), obj (a struct literal
+    or type body) or block (an impl, trait, mod, unsafe or bare block)."""
+    if head and head[-1] == "=>":
+        return "cond", False
+    tail = tail_after_open(head)
+    if "=>" in tail:
+        tail = tail[len(tail) - tail[::-1].index("=>"):]
+    if not tail:
+        return "block", False
+    if "fn" in tail:
+        return "func", False
+    if {"impl", "trait", "mod"} & set(tail):
+        return "block", False
+    if {"struct", "enum", "union"} & set(tail):
+        return "obj", False
+    words = [t for t in tail if t in RS_KEYWORDS]
+    last = words[-1] if words else None
+    if last == "for":
+        return ("loop" if "in" in tail else "block"), False
+    return {"if": ("cond", False), "while": ("loop", False), "loop": ("loop", False), "match": ("switch", False), "else": ("else", False), "unsafe": ("block", False),
+            "async": ("func", True)}.get(last, ("obj", False))
+
+
+# The tokens that can sit just before a closure's opening `|` (after an operand a `|` is the binary operator).
+RS_CLOSURE_AFTER = {"(", ",", "=", "=>", "{", ";", "[", ":", "move", "async", "return", "&&", "||", ")?"}
+
+
+def in_switch(stack):
+    """True when the next statement is a clause of a Go switch or select: the top of the stack is that block, or the `case` clause before it."""
+    top = stack[-1] if stack else None
+    return bool(top) and ((top["block"] or {}).get("case") or (top["delim"] == "{" and top["block"]["kind"] == "switch"))
+
+
+def brace_blocks_and_events(src, lang):
+    """Return (blocks, events, balanced) for Go (lang "go") or Rust ("rs"), shaped as js_blocks_and_events returns them. A block: dict(kind, open, close, head, decl,
+    closure). A Go `case` clause, a Rust match arm that has no braces and a Rust closure that has none are blocks too: each ends where its expression does."""
+    go = lang == "go"
+    toks = brace_tokens(src, lang)
+    blocks, stack, events = [], [], []  # stack: {"delim": "{", "(", "[" or None, "block": dict}
+    head, stmt, stray, closure = [], None, False, None  # closure: None, "params", or "after" (the closing | was read)
+
+    def new_block(kind, line, closure_flag=False, decl=False, head_line=None, delim="{"):
+        b = {"kind": kind, "open": line, "close": float("inf"), "head": head_line if head_line is not None else line, "decl": decl, "closure": closure_flag}
+        blocks.append(b)
+        stack.append({"delim": delim, "block": b})
+        return b
+
+    def end_pseudo(line, keep_cases):
+        while stack and stack[-1]["delim"] is None and not (keep_cases and stack[-1]["block"].get("case")):
+            stack.pop()["block"]["close"] = line
+
+    def unmatched():
+        return head.count("(") + head.count("[") > head.count(")") + head.count("]")
+
+    for i, (t, line) in enumerate(toks):
+        prev = toks[i - 1][0] if i else None
+        nxt = toks[i + 1][0] if i + 1 < len(toks) else None
+        if go and i and toks[i - 1][1] < line and not unmatched():  # Go ends a statement at a newline after a name, a value or a closing mark
+            p = toks[i - 1][0]
+            if p in (")", "]", "}", "++", "--", "<str>") or p in GO_STOP or (IDENT.fullmatch(p) and p not in GO_KEYWORDS) or p[0].isdigit():
+                head, stmt = [], None
+        if closure == "after" and t != "->" and t != "{":
+            new_block("func", line, True, False, stmt, None)  # a closure whose body is an expression ends at the next `,` or `;` or closing mark
+            closure = None
+        if stmt is None:
+            stmt = line
+        if t == "{":
+            if closure:
+                kind, is_closure, closure = "func", True, None
+            else:
+                kind, is_closure = (classify_go if go else classify_rust)(head)
+            b = new_block(kind, line, is_closure, kind == "func" and head.count("(") <= head.count(")"), stmt)
+            b["outer"] = (head, stmt)
+            head, stmt = [], None
+        elif t == "}":
+            end_pseudo(line, False)
+            top = stack.pop() if stack and stack[-1]["delim"] == "{" else None
+            stray = stray or top is None
+            if top:
+                top["block"]["close"] = line
+            if top and top["block"]["kind"] == "obj":
+                head, stmt = top["block"]["outer"]  # a literal or a type body is part of the statement around it
+                head.append("<obj>")
+            else:
+                head, stmt = [], None
+        elif t in ("(", "["):
+            stack.append({"delim": t, "block": None})
+            head.append(t)
+        elif t in (")", "]"):
+            end_pseudo(line, False)
+            top = stack.pop() if stack and stack[-1]["delim"] == {")": "(", "]": "["}[t] else None
+            stray = stray or top is None
+            head.append(t)
+        elif t == ";":
+            end_pseudo(line, True)
+            if go and head and head[0] in ("if", "for", "switch") and head.count("{") == 0:
+                head.append(t)  # `if err := f(); err != nil {`: the header goes on
+            else:
+                head, stmt = [], None
+        elif t == ",":
+            if closure != "params":
+                end_pseudo(line, True)
+                if stack and stack[-1]["delim"] == "{" and stack[-1]["block"]["kind"] in ("switch", "obj"):
+                    head, stmt = [], None
+                    continue
+            head.append(t)
+        elif go and t == ":" and not unmatched() and head and (head[0] in ("case", "default") or (len(head) == 1 and IDENT.fullmatch(head[0]))):
+            head, stmt = [], None  # `case x:`, `default:` and a label or a key end their head
+        elif go and t in ("case", "default") and not head and in_switch(stack):
+            end_pseudo(line, False)
+            new_block("cond", line, False, False, line, None)["case"] = True
+            head.append(t)
+        elif not go and t == "=>":
+            if stack and stack[-1]["delim"] == "{" and nxt != "{":
+                new_block("cond", line, False, False, stmt, None)  # a match arm with no braces ends at its `,` or the `}` of the match
+            head.append(t)
+        elif not go and t in ("|", "||") and closure is None and (prev is None or prev in RS_CLOSURE_AFTER) \
+                and not (prev in ("{", ",") and stack and stack[-1]["delim"] == "{" and stack[-1]["block"]["kind"] == "switch"):
+            closure = "after" if t == "||" else "params"
+            head.append(t)
+        elif closure == "params":
+            if t == "|":
+                closure = "after"
+            head.append(t)
+        elif closure == "after":  # `->` and then a return type, up to the `{` of the body
+            head.append(t)
+        else:
+            kind, proc = None, False
+            if t == "return" and prev != ".":
+                kind = "return"
+            elif t in ("continue", "break") and nxt != ":":
+                kind = t
+            elif go and t == "panic" and nxt == "(" and prev != ".":
+                kind, proc = "panic", True
+            elif go and prev == "." and t in ("Fatal", "Fatalf", "Fatalln"):
+                kind, proc = "log.Fatal", True
+            elif go and prev == "." and t in ("Panic", "Panicf", "Panicln"):
+                kind, proc = "panic", True
+            elif go and prev == "." and t == "Exit" and i > 1 and toks[i - 2][0] == "os":
+                kind, proc = "os.Exit", True
+            elif not go and nxt == "!" and t in RS_PANICS and prev not in (".", "::"):
+                kind, proc = "panic", True
+            elif not go and nxt == "!" and t in RS_RETURNS:
+                kind = RS_RETURNS[t]
+            elif not go and t == "exit" and prev == "::" and i > 1 and toks[i - 2][0] == "process":
+                kind, proc = "process::exit", True
+            elif not go and t == "?" and not (nxt and IDENT.fullmatch(nxt) and prev in (":", "+", "<", ",", "(")):  # `T: ?Sized` is a bound, not the try operator
+                kind = "?"
+            if kind:
+                real = [e["block"] for e in reversed(stack) if e["block"] and e["block"]["kind"] == "func"]
+                func = next((b for b in real if not (proc and b["closure"])), None) if proc else (real[0] if real else None)
+                loops = ("loop",) if (kind == "continue" or not go) else ("loop", "switch")
+                brk = next((e["block"] for e in reversed(stack) if e["block"] and e["block"]["kind"] in loops), None) if kind in ("continue", "break") else None
+                cond = next((e["block"] for e in reversed(stack) if e["block"] and e["block"]["kind"] in ("cond", "else")), None)
+                if not (events and events[-1]["line"] == line and events[-1]["kind"] == kind and events[-1]["func"] is func):
+                    events.append({"kind": kind, "line": line, "stmt": line, "func": func, "brk": brk, "cond": cond})
+            head.append(t)
+    for e in stack:
+        if e["delim"] is None:
+            e["block"]["close"] = toks[-1][1] if toks else 1
+    return blocks, events, not any(e["delim"] for e in stack) and not stray
+
+
+def brace_exits(text, lang, line, upto, first):
+    blocks, events, balanced = brace_blocks_and_events(text, lang)
+    return block_exits(blocks, events, balanced, line, upto, first)
 
 
 # --- Python ---------------------------------------------------------------------------------------------------
@@ -282,6 +625,9 @@ def py_exits(src, line, upto, first):
     if not funcs:
         return None
     fn = max(funcs, key=lambda n: n.lineno)
+    declared = [n for n in ast.walk(tree) if isinstance(n, FUNCS) and n.lineno == line and n.lineno > fn.lineno]  # a nested def line belongs to that function
+    if declared:
+        fn = declared[0]
     out = []
 
     def visit(node, chain):
@@ -318,6 +664,8 @@ def early_exits(text, ext, line, upto=None, first=None):
         return py_exits(text, line, upto, first)
     if ext in JS_EXT:
         return js_exits(text, line, upto, first)
+    if ext in GO_EXT or ext in RS_EXT:
+        return brace_exits(text, "go" if ext in GO_EXT else "rs", line, upto, first)
     return None
 
 

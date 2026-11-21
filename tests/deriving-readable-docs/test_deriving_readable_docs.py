@@ -152,21 +152,6 @@ def check(doc, files, *extra):
     return r.returncode, r.stdout
 
 
-def check_counted(doc, files, left_out=None):
-    """check() with the harvest of the repo as --points, as the skill runs it (step 2 then step 7)."""
-    with make_repo(files) as repo, tempfile.TemporaryDirectory() as d:
-        pts = Path(d) / "points.json"
-        pts.write_text(harvest(repo)[1])
-        extra = ["--points", str(pts)]
-        if left_out is not None:
-            (Path(d) / "left-out.txt").write_text(left_out)
-            extra += ["--left-out", str(Path(d) / "left-out.txt")]
-        docp = Path(d) / "DOC.md"
-        docp.write_text(doc)
-        r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), str(docp), repo, *extra], capture_output=True, text=True)
-    return r.returncode, r.stdout
-
-
 REPO = {"src/a.rs": "one\ntwo\nthree\n", "Makefile": "all:\n\ttrue\n"}
 
 
@@ -462,15 +447,6 @@ class OverreachFailTest(unittest.TestCase):
             self.assertIn("flag overreach", out)
         self.assertEqual(check("- Every peer is listed. `src/inbox/http.ts:1`\n", PEERS_FILES)[0], 0)  # source code can define the set
 
-    def test_a_test_path_is_found_by_name_or_by_the_harvest(self):
-        files = {"Pay.Tests/PayTests.cs": "public class PayTests {\n  [Fact]\n  public void Charges() {}\n}\n", "src/x.cs": "class X {}\n"}
-        doc = "- It always charges. `Pay.Tests/PayTests.cs:3`\n"
-        self.assertEqual(check(doc, files)[0], 0)  # not a test by its name
-        counts = "# D\n\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n## P\n\n"
-        code, out = check_counted(counts + doc, files)  # the harvest knows it is one
-        self.assertEqual(code, 1, out)
-        self.assertIn("FAIL overreach: always", out)
-
 
 class OverreachWordFormTest(unittest.TestCase):
     """A test-only sentence that holds an overreach word only inside another word, or in a phrase that claims no set."""
@@ -531,143 +507,6 @@ class OverreachWordFormTest(unittest.TestCase):
             code, out = check("- %s `src/inbox/http.peers.test.ts:2-4`\n" % sentence, PEERS_FILES)
             self.assertEqual(code, 1, sentence + out)
             self.assertIn("FAIL overreach: each", out)
-
-
-class HarvestDecidesTestFilesTest(unittest.TestCase):
-    FILES = {"conformance/server.ts": "export const server = () => 'ok';\n", "src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n"}
-    HEAD = "# Doc\n\n- Counts: harvested 1; left out 0; used 0; read by name only 0; not cited 1.\n\n## Part\n\n"
-
-    def test_a_file_under_conformance_is_defining_code_when_the_harvest_does_not_list_it(self):
-        doc = "- The server always answers ok. `conformance/server.ts:1`\n"
-        self.assertEqual(check(doc, self.FILES)[0], 1)  # no harvest: the folder name says test
-        code, out = check_counted(self.HEAD + doc, self.FILES)
-        self.assertEqual(code, 0, out)  # with the harvest, it is code
-
-
-def counted_doc(counts, body):
-    return "# Doc\n\n- Repo: r.\n- Counts: %s.\n\n## Part\n\n%s" % (counts, body)
-
-
-COUNT_FILES = {
-    "src/a.test.ts": "it('one', () => {\n  expect(1).toBe(1);\n});\nit('two', () => {\n  expect(2).toBe(2);\n});\nit('three', () => {\n  expect(3).toBe(3);\n});\n",
-    "src/b.test.ts": "it('four', () => {\n  expect(4).toBe(4);\n});\n",
-    "evals/c.test.ts": "it('five', () => {\n  expect(5).toBe(5);\n});\n",
-}
-
-
-class HeaderCountsTest(unittest.TestCase):
-    def counts(self, line, body="- It checks 2. `src/a.test.ts:1-6`\n- Four is checked. `src/b.test.ts:2`\n", left_out="evals/\n"):
-        return check_counted(counted_doc(line, body), COUNT_FILES, left_out)
-
-    def test_right_numbers_pass(self):
-        code, out = self.counts("harvested 5; left out 1; used 3; read by name only 0; not cited 1")
-        self.assertEqual(code, 0, out)
-
-    def test_agent_kit_spec_5_used_590_a_range_that_spans_two_points_counts_both(self):
-        code, out = self.counts("harvested 5; left out 1; used 2; read by name only 0; not cited 2")
-        self.assertEqual(code, 1, out)
-        self.assertIn("header says used 2; the harvest and this doc's citations give 3", out)
-        self.assertIn("header says not cited 2; the harvest and this doc's citations give 1", out)
-
-    def test_left_out_by_id_by_file_and_by_folder(self):
-        for left_out in ("P1\n", "evals/c.test.ts\n", "evals/\n"):
-            self.assertEqual(self.counts("harvested 5; left out 1; used 3; read by name only 0; not cited 1", left_out=left_out)[0], 0, left_out)
-        code, out = self.counts("harvested 5; left out 0; used 3; read by name only 0; not cited 2", left_out="")
-        self.assertEqual(code, 0, out)
-
-    def test_a_point_cited_only_in_a_sentence_that_says_inferred_is_read_by_name_only(self):
-        body = "- It checks 2. `src/a.test.ts:1-6`\n- Inferred: four is checked. `src/b.test.ts:2`\n"
-        self.assertEqual(self.counts("harvested 5; left out 1; used 2; read by name only 1; not cited 1", body)[0], 0)
-        self.assertEqual(self.counts("harvested 5; left out 1; used 3; read by name only 0; not cited 1", body)[0], 1)
-
-    def test_a_header_without_one_of_the_five_counts_fails_and_names_the_value(self):
-        code, out = self.counts("harvested 5; left out 1; used 3; not cited 1")
-        self.assertEqual(code, 1)
-        self.assertIn("header has no `read by name only N` (the harvest and this doc's citations give 0)", out)
-
-    def test_thousands_separators_and_words_between_key_and_number_are_read(self):
-        files = {"src/a.test.ts": "".join("it('t%d', () => {\n  expect(1).toBe(1);\n});\n" % i for i in range(1200))}
-        doc = counted_doc("Points harvested: 1,200. Left out: 0. Points used in this document, body read and cited as proven: 1. "
-                          "Points read by name only: 0. Points not cited, with no claim made: 1,199", "- It checks one. `src/a.test.ts:1-3`\n")
-        code, out = check_counted(doc, files)
-        self.assertEqual(code, 0, out)
-
-    def test_counts_are_not_checked_without_points(self):
-        self.assertEqual(check(counted_doc("harvested 99", "- It checks 2. `src/a.test.ts:1-6`\n"), COUNT_FILES)[0], 0)
-
-    def test_left_out_without_points_is_a_usage_error(self):
-        self.assertEqual(check("- It runs. `a.ts:1`\n", {"a.ts": "x\n"}, "--left-out", "x.txt")[0], 2)
-
-
-NOT_BACKED = (
-    "# Doc\n\n- Counts: harvested 2; left out 0; used 1; read by name only 0; not cited 1.\n\n## Part\n\n- It runs. `src/a.test.ts:1-3`\n\n"
-    "## Not backed by any validation point\n\n%s\n"
-)
-NOT_BACKED_FILES = {
-    "src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n",
-    "scripts/publish.test.mjs": "it('publishes', () => {\n  // builds images/hub/Dockerfile and pushes it\n  expect(push).toBeCalled();\n});\n",
-    "images/hub/Dockerfile": "FROM node\n",
-}
-
-
-class CountsLineTest(unittest.TestCase):
-    def test_the_computed_counts_line_is_printed_with_points_and_pastes_into_the_header(self):
-        body = "- It checks 2. `src/a.test.ts:1-6`\n- Four is checked. `src/b.test.ts:2`\n"
-        code, out = check_counted(counted_doc("harvested 0", body), COUNT_FILES, "evals/\n")
-        self.assertEqual(code, 1)
-        line = "Counts: harvested 5; left out 1; used 3; read by name only 0; not cited 1."
-        self.assertIn(line, out.splitlines())
-        code, out = check_counted(counted_doc(line[len("Counts: "):-1], body), COUNT_FILES, "evals/\n")
-        self.assertEqual(code, 0, out)  # the line as printed is the header the check accepts
-
-    def test_no_counts_line_without_points(self):
-        self.assertNotIn("Counts:", check("- It runs. `a.ts:1`\n", {"a.ts": "x\n"})[1])
-
-
-class NotBackedTest(unittest.TestCase):
-    def test_coordinator_prd_60_a_searched_name_that_a_test_file_holds_fails(self):
-        entry = '- The hub image is built from `images/hub/Dockerfile`. I searched the test files for "Dockerfile" and found no match.'
-        code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
-        self.assertEqual(code, 1, out)
-        self.assertIn("FAIL not-backed: `Dockerfile` is in a test file, scripts/publish.test.mjs:2; cite it or drop the entry", out)
-
-    def test_citing_the_line_that_holds_it_passes(self):
-        entry = '- The hub image is built from `images/hub/Dockerfile`. A comment in a publish test names "Dockerfile" without asserting it. `scripts/publish.test.mjs:2`'
-        doc = (NOT_BACKED % entry).replace("used 1; read by name only 0; not cited 1", "used 2; read by name only 0; not cited 0")
-        code, out = check_counted(doc, NOT_BACKED_FILES)
-        self.assertEqual(code, 0, out)
-
-    def test_a_name_no_test_holds_a_bare_word_and_text_outside_the_section_are_not_checked(self):
-        for entry in ('- The hub image starts from `FROM node`. `images/hub/Dockerfile:1`', '- The hub image is `FROM`. `images/hub/Dockerfile:1`', '- The hub builds. I searched for "Dockerfile".'):
-            doc = NOT_BACKED % entry
-            if "Dockerfile" in entry:
-                doc = doc.replace("## Not backed by any validation point", "## Other notes")
-            self.assertEqual(check_counted(doc, NOT_BACKED_FILES)[0], 0, entry)
-
-    def test_a_search_sentence_in_a_not_backed_section_is_not_an_overreach_or_uncited_fail(self):
-        for entry in ('- The hub image is built from `images/hub/Dockerfile:1`. I grepped the test files for `FROM` and found no match.',
-                      '- The hub image is built from `images/hub/Dockerfile:1`. I searched the test files for `FROM`; none of them has it.',
-                      '- The hub image is built from `images/hub/Dockerfile:1`. No test asserts it; the only hits are in the Dockerfile.'):
-            code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
-            self.assertEqual(code, 0, entry + out)
-
-    def test_a_claim_in_a_not_backed_section_that_is_no_search_report_still_fails(self):
-        entry = '- The hub image always retries three times. I grepped the test files for `retry` and found no match.'
-        code, out = check_counted(NOT_BACKED % entry, NOT_BACKED_FILES)
-        self.assertEqual(code, 1, out)
-        self.assertIn("FAIL uncited: always", out)
-
-    def test_the_same_sentence_outside_a_not_backed_section_still_fails(self):
-        doc = "# Doc\n\n## Part\n\n- It runs. `src/a.test.ts:1-3`\n- I grepped the test files for `FROM` and found no match.\n"
-        code, out = check(doc, {"src/a.test.ts": "it('runs', () => {\n  expect(1).toBe(1);\n});\n"})
-        self.assertEqual(code, 1, out)
-        self.assertIn("FAIL uncited: no", out)
-
-    def test_a_file_the_writer_left_out_is_not_a_test_file(self):
-        entry = '- The hub image is built from `images/hub/Dockerfile`. I searched the test files for "Dockerfile" and found no match.'
-        self.assertEqual(check_counted(NOT_BACKED % entry, NOT_BACKED_FILES, left_out="scripts/\n")[0], 1)  # the count in the header is now wrong, nothing else
-        code, out = check_counted((NOT_BACKED % entry).replace("harvested 2; left out 0; used 1; read by name only 0; not cited 1", "harvested 2; left out 1; used 1; read by name only 0; not cited 0"), NOT_BACKED_FILES, left_out="scripts/\n")
-        self.assertEqual(code, 0, out)
 
 
 class SheetTest(unittest.TestCase):
@@ -937,6 +776,39 @@ class RangeListTest(unittest.TestCase):
         self.assertIn("FAIL number: 8 is not in the cited lines", out)
 
 
+class HarvestCountBlockRemovedTest(unittest.TestCase):
+    """The harvest counts moved to assemble.py (the header and A2 evidence it prints), so the check no longer takes the harvest."""
+
+    def test_the_script_does_not_document_or_read_points_or_left_out(self):
+        text = (SCRIPTS / "check_citations.py").read_text(encoding="utf-8")
+        for word in ("--points", "--left-out", "harvest"):
+            self.assertNotIn(word, text)
+
+    def test_points_and_left_out_are_usage_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            pts = Path(d, "points.json")
+            pts.write_text("[]")
+            self.assertEqual(check("## P\n\nIt runs `a.ts:1`.\n", {"a.ts": "x\n"}, "--points", str(pts))[0], 2)
+            self.assertEqual(check("## P\n\nIt runs `a.ts:1`.\n", {"a.ts": "x\n"}, "--left-out", str(pts))[0], 2)
+
+    def test_a_counts_line_in_a_header_is_words_like_any_other(self):
+        """The old assembled header was left out of the budget because of its `Counts: harvested` line; assemble.py prints its header in a printed block now."""
+        doc = "# Doc\n\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n## P\n\nIt runs `a.ts:1`.\n"
+        code, out = check(doc, {"a.ts": "x\n"})
+        self.assertIn("checked 1 citations, 0 bad, 20 words", out)
+
+    def test_a_not_backed_heading_no_longer_excuses_a_search_report(self):
+        doc = "# Doc\n\n## Part\n\nIt runs. `a.ts:1`\n\n## Not backed\n\n- I grepped the test files for `FROM` and found no match.\n"
+        code, out = check(doc, {"a.ts": "x\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL uncited: no", out)
+
+    def test_a_test_path_is_a_test_by_its_name_alone(self):
+        files = {"Pay.Tests/PayTests.cs": "public class PayTests {\n  [Fact]\n  public void Charges() {}\n}\n", "src/pay_test.go": "package pay\n\nfunc TestPay() {}\n"}
+        self.assertEqual(check("- It always charges. `Pay.Tests/PayTests.cs:3`\n", files)[0], 0)
+        self.assertEqual(check("- It always charges. `src/pay_test.go:3`\n", files)[0], 1)
+
+
 class BudgetTest(unittest.TestCase):
     """--max-words: a section draft or a doc over its word budget FAILs, so a length limit is kept by a script."""
     DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`). It does another thing in the test, in this case (`src/a.rs:1-3`).\n"  # 18 words
@@ -974,58 +846,22 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
-def step7_command(skill, doc, repo, budget):
-    """The argument list of the step-7 check_citations.py command in SKILL.md, with its placeholders filled in, or None when
-    step 7 has no such command with --max-words. The `> <doc>.checks.txt` redirect is cut: the test reads the printed output."""
-    step = re.search(r"^7\. \*\*Check citations\.\*\*(.*?)^8\. ", skill, re.M | re.S)
-    cmd = re.search(r"`python3 -I [^`]*?check_citations\.py ([^`]*--max-words[^`]*)`", step.group(1)) if step else None
-    if not cmd:
-        return None
-    args = cmd.group(1).split(" > ")[0]
-    for placeholder, value in (("<doc.md>", doc), ("<repo>", repo), ("<the doc's budget>", budget)):
-        args = args.replace(placeholder, value)
-    return None if "<" in args else args.split()
-
-
-class StepSevenTest(unittest.TestCase):
-    """SKILL.md step 7 runs check_citations.py with --max-words on the assembled doc. The test takes that command from SKILL.md
-    and runs it on a fixture built the way steps 2, 4 and 6 build one: each section at its budget, under a header."""
-    FILES = {"tests/test_a.py": "def test_adds():\n    assert 1 + 1 == 2\n"}
-    SECTIONS = [
-        (20, "## Adds and checks a sum\n\nThe test adds 1 and 1 and expects 2 (`tests/test_a.py:2`). It runs once in this case (`tests/test_a.py:1`).\n"),
-        (20, "## Asserts the sum result\n\nThe test asserts that 1 plus 1 is 2 (`tests/test_a.py:2`). It fails when that is not true (`tests/test_a.py:2`).\n"),
-    ]
-    HEADER = ("# Doc\n\n- Repo: r, commit: abc. Inputs: the repo's tests and code; existing docs were not read. "
-              "Hand-added points: none. Left out: none.\n- Counts: harvested 1; left out 0; used 1; read by name only 0; not cited 0.\n\n")
-
-    def test_an_assembled_doc_at_budget_passes_skill_step_7(self):
-        skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
-        with make_repo(self.FILES) as repo, tempfile.TemporaryDirectory() as d:
-            Path(d, "points.json").write_text(harvest(repo)[1])  # step 2
-            Path(d, "left-out.txt").write_text("")
-            for budget, text in self.SECTIONS:  # step 4: each section is drafted at its budget
-                code, out = check(text, self.FILES, "--max-words", str(budget))
-                self.assertEqual(code, 0, out)
-                self.assertIn("%d words" % budget, out)
-            doc = Path(d, "DOC.md")
-            doc.write_text(self.HEADER + "".join(text for _, text in self.SECTIONS))  # step 6
-            args = step7_command(skill, str(doc), repo, str(sum(b for b, _ in self.SECTIONS)))
-            if args is None:
-                self.fail("SKILL.md step 7 has no check_citations.py command with --max-words, so this test cannot run it: "
-                          "restore that command in step 7, or change this test to match step 7")
-            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "check_citations.py"), *args], cwd=d, capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-
 class AuditTest(unittest.TestCase):
     """--audit: each sentence with citations needs its own audit row, so a one-line summary of the audit FAILs."""
     DOC = "## Part\n\nIt does a thing in the test (`src/a.rs:2`).\n\nIt does another thing in the test (`src/a.rs:1-3`).\n"
     ROW = '%d | assert: src/a.rs:%d "%s" | exits: none listed | callers: none found | found: nothing | result: HOLDS\n'
 
+    # The condition sheet and the evidence file the audit also asks for (test_guards_audit.py tests those): here they are complete, so these tests
+    # are about the audit rows alone.
+    EVIDENCE = 'src/a.rs:1 "one"\nsrc/a.rs:2 "two"\nsrc/a.rs:3 "three"\n'
+
     def audited(self, audit, doc=None):
         with tempfile.TemporaryDirectory() as d:
             a = Path(d) / "audit.md"
             a.write_text(audit)
+            (Path(d) / "guards.md").write_text("# no guards: the cited file is not code the exits are read from\n")
+            (Path(d) / "evidence.md").write_text(self.EVIDENCE)
+            (Path(d) / "choice.md").write_text("- the behaviours kept\n")
             return check(doc or self.DOC, REPO, "--audit", str(a))
 
     def test_a_row_for_each_sentence_passes(self):

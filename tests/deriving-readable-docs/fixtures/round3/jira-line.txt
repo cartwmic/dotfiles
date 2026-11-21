@@ -1,0 +1,1 @@
+    partOf<JiraSection | undefined>(parts, 'jira')?.grantsWrite === true

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Check the `path:line` citations in a derived doc: the line exists, and the cited text backs the sentence.
 
-usage: check_citations.py <doc.md> <repo> [--points points.json [--left-out left-out.txt]] [--max-words N] [--audit audit.md] [--sheet]
+usage: check_citations.py <doc.md> <repo> [--max-words N] [--max-sentence-words N] [--audit audit.md [--guards-file F] [--evidence-file F]] [--sheet | --guards]
+       check_citations.py --show path:START-END <repo>
 
 A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
 read; several may share one backtick span, separated by commas or semicolons (`src/a.ts:12, 40-45` is two ranges of one file); one inside a span with other
@@ -18,16 +19,14 @@ joined by commas or "and". These checks FAIL a claim, because a miss is a fact t
   string    every `backticked` or "double-quoted" string in the claim (a repo path that exists is exempt) must
             appear there. A one-word string must appear as written; a longer one needs each of its words.
   overreach a sentence with one of the words every, each, all, always, never, only, or a count in words ("three
-            parts": two..twelve, dozen), whose citations are all test or journey files. A test proves the cases it
+            parts": two..twelve, dozen), whose citations are all test, journey or doc files (README, docs/, *.md). A test proves the cases it
             runs, not a set. Not these: a word inside a hyphenated one ("read-only"), "each other", and "each" that
             spreads over a listed set ("A and B each", "once each", "one commit each"; an "and" after a comma does
             not close a list: ", and the message names each problem" FAILs). Cite the code that defines
             the set, or word the sentence to the test's case ("in the test", "in this case", "the test shows",
             "the test puts" and other "the test <verb>", "for example", "such as", "at least", "e.g."), or label it
-            inferred or "from your list". A bare "the test" does not clear it. In a "Not backed" section a sentence
-            that reports the search or what the tests do ("I grepped ... and found no match", "no test asserts it", "the
-            only hits are in x.ts") is not judged here; not-backed below checks the entry. With --points a file is a test when the harvest lists it; without, when its
-            path says so (tests/, .test., _test, journey, e2e, spec, conformance ...).
+            inferred or "from your list". A bare "the test" does not clear it. A file is a test when its path says
+            so (tests/, .test., _test, journey, e2e, spec, conformance ...).
   uncited   a sentence after the doc header with no citation, source label ("(README)", "(code comment)"), or
             "inferred" / "from your list" in it, that holds a word of the overreach list below or a count of
             things in digits or words.
@@ -35,36 +34,43 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
   overreach  every, each, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words" (a count in words also FAILs under overreach above)
   comment    every cited range is comment lines, and the sentence does not say it is from a comment, header or doc
+  sentence-length  with --max-sentence-words N, FAIL each sentence of more than N words. A sentence is cut after . ! or ? and is
+            measured whole, with its citations taken out, so a citation in the middle does not cut it. It prints the claims (every
+            sentence, bullet and table row of the prose, headings and the header excluded), their words and the words per claim on every run.
   budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
-            above the first `## ` heading and the headings and backticked names included; citations, fenced code and bare
-            list marks are not words. An assembled header (the block above the first `## ` heading with a `Counts: harvested N`
-            line) is left out, because the budget is for the sections; a section draft has no such line, so its header counts.
+            above the first `## ` heading and the headings and backticked names included; citations, fenced code, printed blocks
+            (what assemble.py prints, such as the header) and bare list marks are not words.
             A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
-With --points (the raw harvest, points.json), two more checks run:
-  counts     the doc header's numbers for harvested, left out, used, read by name only and not cited must equal
-             the numbers computed from the harvest and this doc's citations. A point is used when a citation of
-             the doc overlaps its body (its start line up to the next point of the file); read by name only when
-             every such citation is in a sentence that says inferred; left out when --left-out lists its id
-             (`P12`) or its file (a path, or a folder ending in /), one per line. It prints the computed line,
-             `Counts: harvested N; left out N; used N; read by name only N; not cited N.`, for the header.
-  not-backed a string in a "Not backed" section that a test file of the harvest also contains, at a line the entry
-             does not cite: the entry is wrong, or it cites that test.
-  audit     with --audit FILE, FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
+The last checks, with --audit FILE (the writer's own pass; run on a section draft, not on the whole guide):
+  audit     FAIL when FILE is missing (the FAIL names the path), and FAIL a claim (a sentence with citations, above the first `## ` heading too) that has no audit row in FILE:
             `N | assert: path:line "<text>" | exits: ... | callers: ... | found: ... | result: HOLDS|narrowed to "..."|cut`, where N is the
             doc line (as --sheet prints it), path:line is one of the claim's own citations and the quoted text is on
-            that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited.
+            that line. A summary ("1, 4-6 HOLDS") is not a row. A claim on a line that is not in the audit has not been audited. The quote runs to the quote mark
+            before ` | exits:`, so a line that holds ` | ` is copied as it is.
+  choice    FAIL when choice.md (beside FILE) is missing or empty: stage 0 of references/drafting.md lists the behaviours kept there.
+  guards    FAIL when the condition sheet is missing or a guard on it is unmarked. The sheet is the output of --guards, saved as guards.md beside FILE (or
+            --guards-file): one row `guard | path:line | kind | source | covered:` for each early exit above a cited line (the exits --sheet lists). Each row ends
+            `covered: <id>` (the id of a draft line that cites the same file and states the condition) or `covered: not relevant: <reason of three words or more>`.
+            A guard the sheet leaves out, or an id the draft does not carry, fails. A file the exits cannot be read from has no rows: read the function by hand.
+  evidence  FAIL when the evidence file (evidence.md beside FILE, or --evidence-file) is missing or a cited range has no row in it: a row is
+            `path:line "the line, copied"` (or `path:START-END "..."`) with a line inside the range and the whole quoted text on that line (on one line of
+            the row's range), so each cited line was opened and read. The quote closes at the first quote mark followed by ` | ` or the end of the row, so a
+            line that holds ` | ` (a type union, an `||`) or a quote mark is copied whole with no escape. The one gap: a line that itself holds a quote mark and then
+            ` | ` ends the quote there.
+  uncited   FAIL a sentence with no citation unless it says "inferred" or "from your list": a README label alone is not a citation.
+--guards prints the condition sheet to save and mark (see guards above), each source line as written (`||` stays `||`); the checks above are skipped.
+--show path:START-END prints those lines of a file in the repo, numbered as `cat -n` and the Read tool number them (newlines only: a form feed does not
+          start a line), in the form --sheet uses. Exit 1 when the file or a line of the range is not there. A writer takes its line numbers from this.
 --sheet prints every claim with the cited lines under it (the self-check read), and the checks above are skipped.
-          Under a cited range inside a function (Python, TS/JS) it also lists the function's early exits above the
-          range's last line (return, throw, continue, break, process.exit), marking those inside the range: the other
+          Under a cited range inside a function (Python, TS/JS, Go, Rust) it also lists the function's early exits above the
+          range's last line (return, throw, continue, break, process.exit, and for Go and Rust panic, log.Fatal, os.Exit, `?`, bail!), marking those inside the range: the other
           paths a sentence about the function must state or leave out. A continue or break counts when its loop
           overlaps the range. When the range starts in another function, that function's exits above the last line
           (or above its own end) are listed too, since they sit inside the range. See early_exits.py;
           "no early exits" and "not listed" print differently.
 Exit 0: all good. 1: a bad citation or a failed claim. 2: usage error, or no citations at all. Listed
-sentences never change the exit code. Stdlib only.
+sentences never change the exit code. The last lines count the failed checks by name, as `2 failed checks (number 1, string 1)`. Stdlib only.
 """
-import bisect
-import json
 import os
 import re
 import sys
@@ -72,110 +78,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, split_lines, strip_code, untagged_glossary_lines, word_count, words_of)  # noqa: E402
 
-SPAN = re.compile(r"`([^`\n]+)`")
-PART = re.compile(r"^([^\s:`]+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$")
-# A citation-shaped token inside a span that also holds other words, such as `see src/a.rs:2`.
-EMBEDDED = re.compile(r"(?<![\w/.:@+-])([\w.@+/-]+)\s*:\s*(\d+)(?:-(\d+))?")
-HOST_SUFFIXES = {"com", "org", "net", "io", "dev", "app", "internal", "local", "lan", "home"}
-IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
-
-
-def is_path(repo, path, strict):
-    """Should this token be checked as a file citation? Skip clock times, hosts and ports. A whole-span
-    token such as `Makefile:5` is checked even with no dot or slash, so a missing file is reported."""
-    if os.path.exists(os.path.join(repo, path)):
-        return True
-    if path == "localhost" or IPV4.match(path):
-        return False
-    if "/" in path:
-        return True
-    ext = path.rsplit(".", 1)
-    if len(ext) == 2:
-        return ext[1].lower() not in HOST_SUFFIXES
-    return strict and path[0].isalpha()
-
-
-def line_items(line, repo):
-    """Return the backtick spans of one doc line as (start, end, cites, text); cites is [(path, start, end)],
-    empty for a span that is not a citation."""
-    items = []
-    for m in SPAN.finditer(line):
-        span = m.group(1)
-        parts = [p.strip() for p in re.split(r"[;,]\s*", span.strip()) if p.strip()]
-        for k in range(1, len(parts)):  # `src/a.ts:12, 40-45` is two ranges of one file: a bare range takes the path before it
-            if re.fullmatch(r"\d+(?:\s*-\s*\d+)?", parts[k]) and PART.match(parts[k - 1]):
-                parts[k] = PART.match(parts[k - 1]).group(1) + ":" + parts[k]
-        matches = [PART.match(p) for p in parts]
-        if parts and all(matches):
-            found, strict = matches, True
-        else:
-            found, strict = list(EMBEDDED.finditer(span)), False
-        cites = []
-        for c in found:
-            if is_path(repo, c.group(1), strict):
-                lo = int(c.group(2))
-                cites.append((c.group(1), lo, int(c.group(3)) if c.group(3) else lo))
-        items.append((m.start(), m.end(), cites, span))
-    return items
-
-
-def doc_lines(text):
-    """Yield (doc_line_no, line, in_header, is_heading) for each line outside fenced code blocks. A heading's
-    citations are checked, but its words are not judged as a claim.
-    The header is everything before the first `## ` heading (a doc with none has no header)."""
-    fenced, header = False, any(l.startswith("## ") for l in text.splitlines())
-    for n, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
-        if line.startswith("## "):
-            header = False
-        if not line.strip():
-            continue
-        yield n, line, header, line.startswith("#")
-
-
-LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-JOIN = re.compile(r"^(?:[\s,;&]|and)*$")
-LABEL = re.compile(r"^\s*\(([^)]*)\)")
-
-
-def claims(text, repo):
-    """Yield one dict per claim: line, text (the words before the citation group), cites, label (a parenthetical
-    right after the group, such as "code comment"), uncited (words after the last group, or a whole line with none), and
-    not_backed (the claim sits under a "Not backed" heading)."""
-    section = False
-    for n, line, header, heading in doc_lines(text):
-        items = line_items(line, repo)
-        if heading:
-            section = bool(re.match(r"#+\s.*not backed", line, re.I))
-            for _, _, cites, _ in items:
-                if cites:
-                    yield {"line": n, "text": "", "cites": cites, "label": "", "uncited": "", "header": header, "heading": True, "not_backed": section}
-            continue
-        groups = []  # [first_start, last_end, cites]
-        for start, end, cites, _ in items:
-            if not cites:
-                continue
-            if groups and JOIN.match(line[groups[-1][1]:start]):
-                groups[-1][1] = end
-                groups[-1][2].extend(cites)
-            else:
-                groups.append([start, end, list(cites)])
-        prev = 0
-        for start, end, cites in groups:
-            label = LABEL.match(line[end:])
-            if label and not SAYS_SOURCE.search(label.group(1)):
-                label = None  # a parenthetical that is not a source label is a sentence: it is listed as uncited text
-            yield {"line": n, "text": line[prev:start] if prev else LIST_MARK.sub("", line[:start]), "cites": cites, "label": label.group(1) if label else "",
-                   "uncited": "", "header": header, "not_backed": section}
-            prev = end + (label.end() if label else 0)
-        if not header and line[prev:].strip():
-            yield {"line": n, "text": "", "cites": [], "label": "", "uncited": line[prev:], "header": header, "not_backed": section}
 
 
 # --- text that a script can compare ---------------------------------------------------------------------------
@@ -193,18 +98,15 @@ NOT_SUBJECT = {"on", "in", "of", "for", "to", "at", "by", "with", "from", "per",
 # "the test" then a verb: the explicit list, or any word ending in -s that is not a noun or "is/was/has" ("the test puts").
 TEST_VERB = r"(?:shows?|runs?|uses?|feeds?|sends?|asserts?|checks?|compares?|(?!(?:is|was|has|as|its|this|files|cases|suites|names|results|titles|paths|lines|ids|fixtures|helpers|scripts|inputs|outputs|steps|sources|tests|journeys)\b)(?![a-z]*ss\b)[a-z]+s)"
 SCOPED = re.compile(r"\bin (?:the|this) (?:tests?|journeys?|fixtures?|case)\b|\bthe (?:tests?|journeys?) " + TEST_VERB + r"\b|\bthe (?:test|journey)'s\b|\bfor example\b|\bsuch as\b|\bat least\b|\be\.g\.|\binferred\b|\bfrom your list\b", re.I)
-# In a "Not backed" section, a sentence that reports the search or what the tests do ("I grepped the tests for X and found
-# no match", "no test asserts it", "the only hits are in pr.ts", "the tests only check the main file") says what was
-# looked for; not_backed() checks the entry against the harvest.
-SEARCH = re.compile(r"\b(?:grepp?ed|searched|searches|search|hits?|found|finds?|none|tests?|journeys?|match)\b", re.I)
-# A test path by its name; used only when no harvest is given (--points), which decides it otherwise.
+# A test path by its name.
+# A doc file is the repo's own words, not the code that defines a set: a sentence that cites only tests or docs proves no more than they say.
+DOC_PATH = re.compile(r"\.(md|mdx|rst|txt|adoc)$|(^|/)docs?/", re.I)
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|proof|journeys?|e2e|smoke|specs?|conformance|support)(/|\.)|\.(test|spec|journey)\.|_test\.|(^|/)test_|-journey|\.bats$", re.I)
 # A count of things: "three parts", "6 words". Not a time ("45 minutes") or a bare status code ("409 and").
 COUNT = re.compile(r"(?<![\w.])(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|\d+)\s+(?!(?:is|was|has|does|as|this|its|his|yes)\b)(?:[a-z-]+\s+)?(?!(?:seconds?|minutes?|hours?|days?|weeks?|bytes?|times?|chars?|characters?)\b)[a-z-]+s\b", re.I)
 TIME_SCALE = {"second": (1000,), "minute": (60, 60000), "hour": (60, 3600, 3600000), "day": (24, 86400, 86400000)}
 TIME_UNIT = re.compile(r"^[\s-]*(second|minute|hour|day)s?\b", re.I)
 APPROX = re.compile(r"(about|around|roughly|nearly|~)\s*$", re.I)
-SAYS_SOURCE = re.compile(r"comment|header|readme|docs?\b|documentation|stated|says|source text|prd|agents\.md", re.I)
 COMMENT_START = {
     "//": {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs", ".go", ".java", ".kt", ".c", ".h", ".cc", ".cpp", ".cs", ".swift", ".scala"},
     "#": {".py", ".sh", ".bash", ".zsh", ".rb", ".yml", ".yaml", ".toml", ".ex", ".exs", ".bats", ".tmpl"},
@@ -286,22 +188,14 @@ def comment_only(lines, path):
     return bool(body) and all(l.startswith(marks) for l in body)
 
 
-def sentences(text):
-    return [s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()]
-
-
-def strip_code(text):
-    return SPAN.sub(" ", text)
-
-
 def read_lines(cache, repo, path):
     if path not in cache:
         with open(os.path.join(repo, path), "rb") as f:
-            cache[path] = f.read().decode("utf-8", errors="replace").splitlines()
+            cache[path] = split_lines(f.read().decode("utf-8", errors="replace"))
     return cache[path]
 
 
-def check_claim(c, repo, cache, test_files=None):
+def check_claim(c, repo, cache):
     """Return (failures, flags) for one claim; each is a list of (doc_line, kind, detail)."""
     fails, flags = [], []
     n = c["line"]
@@ -329,8 +223,7 @@ def check_claim(c, repo, cache, test_files=None):
         says = SAYS_SOURCE.search(c["text"] + " " + c["label"])
         if not says and all(comment_only(read_lines(cache, repo, p)[lo - 1:hi], p) for p, lo, hi, _ in ranges):
             flags.append((n, "comment", "%s are only comment lines and the sentence does not say so" % ", ".join("%s:%d-%d" % r[:3] for r in ranges)))
-    # with a harvest, only its files are tests (a defining file under conformance/ or support/ is not); without one, the path name decides
-    testonly = bool(c["cites"]) and all((p in test_files) if test_files is not None else bool(TEST_PATH.search(p)) for p, _, _ in c["cites"])
+    testonly = bool(c["cites"]) and all(bool(DOC_PATH.search(p)) or bool(TEST_PATH.search(p)) for p, _, _ in c["cites"])  # a test is found by its path name
     labelled = SAYS_SOURCE.search(c["label"] or "")
     for kind, kind_text in () if c["header"] else (("overreach", c["text"]), ("uncited", c["uncited"])):  # the header describes the doc
         for raw in sentences(kind_text):
@@ -343,135 +236,25 @@ def check_claim(c, repo, cache, test_files=None):
             detail = "%s | %s" % (what, raw.strip())
             flags.append((n, kind if kind == "uncited" else ("count" if count and not hits else "overreach"), detail))
             scoped = labelled or SCOPED.search(kind_text)  # a clause after a semicolon is still the case the sentence names
-            scoped = scoped or (c.get("not_backed") and SEARCH.search(sent))  # a search report in a "Not backed" section
-            if kind == "uncited" and not scoped and not SAYS_SOURCE.search(raw):
+            if kind == "uncited" and not scoped and not says_source(raw, c.get("part1", False)):
                 fails.append((n, "uncited", detail))
             elif kind == "overreach" and testonly and not scoped and (quantifiers(sent) or (count and not count.group(0)[0].isdigit())):
                 fails.append((n, "overreach", detail))
     return fails, flags
 
 
-def is_left_out(point, left_out):
-    """left_out holds point ids (P12), file paths and folders (a path ending in /)."""
-    return any(point["id"] == e or point["file"] == e or (e.endswith("/") and point["file"].startswith(e)) for e in left_out)
-
-
-COUNT_KEYS = (("harvested", r"harvested"), ("left out", r"left out"), ("used", r"\bused\b"),
-              ("read by name only", r"read by name only"), ("not cited", r"not cited"))
-
-
-def point_counts(points, left_out, cited):
-    """Return {key: number} for the five header counts. A citation overlaps a point when it reaches a line of
-    its body: from its start line up to the line before the next point of the same file."""
-    starts = {}
-    for p in points:
-        starts.setdefault(p["file"], []).append(p["line"])
-    for v in starts.values():
-        v.sort()
-    used, named = set(), set()
-    for path, lo, hi, inferred in cited:
-        lines = starts.get(path)
-        if not lines:
-            continue
-        first = max(bisect.bisect_right(lines, lo) - 1, 0)  # the point that holds line lo, or the first one after it
-        for i in range(first, len(lines)):
-            if lines[i] > hi:
-                break
-            end = lines[i + 1] - 1 if i + 1 < len(lines) else float("inf")
-            if end >= lo:
-                (named if inferred else used).add((path, lines[i]))
-    live = {(p["file"], p["line"]) for p in points if not is_left_out(p, left_out)}
-    used &= live
-    named = (named & live) - used
-    return {"harvested": len(points), "left out": len(points) - len(live), "used": len(used),
-            "read by name only": len(named), "not cited": len(live) - len(used) - len(named)}
-
-
-def header_counts(doc_text, want):
-    """FAIL each header number that differs from the computed one (want), and each of the five that the header lacks."""
-    header = [(n, line) for n, line, in_header, heading in doc_lines(doc_text) if in_header and not heading]
-    fails = []
-    for key, pat in COUNT_KEYS:
-        for n, line in header:
-            m = re.search(r"(?i)" + pat + r"[^0-9\n]{0,90}?(\d[\d,]*)", line)
-            if m:
-                got = int(m.group(1).replace(",", ""))
-                if got != want[key]:
-                    fails.append((n, "counts", "header says %s %d; the harvest and this doc's citations give %d" % (key, got, want[key])))
-                break
-        else:
-            fails.append((header[0][0] if header else 1, "counts", "header has no `%s N` (the harvest and this doc's citations give %d)" % (key, want[key])))
-    return fails
-
-
-def not_backed(doc_text, repo, points, cache):
-    """FAIL a string of a "Not backed" entry that a test file of the harvest holds at a line the entry does not cite."""
-    fails, section, tests = [], False, sorted({p["file"] for p in points})
-    for n, line, _, heading in doc_lines(doc_text):
-        if heading:
-            section = bool(re.match(r"#+\s.*not backed", line, re.I))
-            continue
-        if not section:
-            continue
-        items = line_items(line, repo)
-        cites = [c for _, _, cs, _ in items for c in cs]
-        text = line
-        for start, end, cs, _ in reversed(items):  # a citation is not a string of the entry
-            if cs:
-                text = text[:start] + " " + text[end:]
-        quoted = {x or y for x, y in QUOTED.findall(strip_code(text))}
-        for tok in strings_in(text, repo):
-            # a search term the entry quotes, or a flag, message or path-like name in code font; not a bare word such as `false`
-            if len(tok) < (5 if tok in quoted else 8) or (tok not in quoted and not re.search(r"[\s\-_/.]", tok)):
-                continue
-            for path in tests:
-                try:
-                    lines = read_lines(cache, repo, path)
-                except OSError:
-                    continue
-                hit = next((i for i, l in enumerate(lines, 1) if tok in l), None)
-                if hit and not any(c[0] == path and c[1] <= hit <= c[2] for c in cites):
-                    fails.append((n, "not-backed", "`%s` is in a test file, %s:%d; cite it or drop the entry | %s" % (tok, path, hit, line.strip())))
-                    break
-    return fails
-
-
-COUNTS_LINE = re.compile(r"(?i)\bcounts:?\**\s+harvested\s+[\d,]+")  # the header line step 6 writes, bold or not
-
-
-def word_count(doc_text, repo):
-    """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
-    above the first `## ` heading, the headings and the backticked names are counted, except an assembled header: when the
-    header holds a Counts line, the whole block above the first heading is left out, because the budget is for the sections."""
-    lines = list(doc_lines(doc_text))
-    assembled = any(in_header and COUNTS_LINE.search(line) for _, line, in_header, _ in lines)
-    total = 0
-    for _, line, in_header, _ in lines:
-        if assembled and in_header:
-            continue
-        for start, end, cites, _ in reversed(line_items(line, repo)):
-            if cites:
-                line = line[:start] + " " + line[end:]
-        total += sum(1 for w in LIST_MARK.sub("", line).split() if re.search(r"\w", w))
-    return total
-
-
 def line_count(full):
     with open(full, "rb") as f:
         data = f.read()
-    return len(data.decode("utf-8", errors="replace").splitlines())
+    return len(split_lines(data.decode("utf-8", errors="replace")))
 
 
-def check(doc_text, repo, points=None, left_out=()):
-    """Return (checked, bad, fails, flags, counts). bad is [(doc_line, citation, reason)]; fails and flags are
-    [(doc_line, kind, detail)]; counts is the header's five numbers (None without points or with a bad citation). Claims are only judged when all their citations are good. points is the
-    harvest (a list of dicts) and left_out its ids and paths; with them the header counts and the
-    "Not backed" strings are checked too."""
+def check(doc_text, repo):
+    """Return (checked, bad, fails, flags). bad is [(doc_line, citation, reason)]; fails and flags are
+    [(doc_line, kind, detail)]. Claims are only judged when all their citations are good."""
     repo = os.path.realpath(repo)
     checked, bad, fails, flags, cache = 0, [], [], [], {}
-    kept = [p for p in points or [] if not is_left_out(p, left_out)]
-    test_files = frozenset(p["file"] for p in kept) if points is not None else None
-    cited = []  # (path, start, end, inferred) of every citation whose claim is judged
+    outside = untagged_glossary_lines(doc_text)  # an outside-term glossary entry makes no claim about the repo: lint_main.py and the checkers leave it alone too
     for c in claims(doc_text, repo):
         before = len(bad)
         for path, start, end in c["cites"]:
@@ -488,18 +271,24 @@ def check(doc_text, repo, points=None, left_out=()):
                 total = line_count(full)
                 if end > total:
                     bad.append((c["line"], cite, "line out of range (file has %d lines)" % total))
-        if len(bad) == before and not c.get("heading"):  # judge the words only when every citation under them is real
-            f, g = check_claim(c, repo, cache, test_files)
+        if len(bad) == before and not c.get("heading") and c["line"] not in outside:  # judge the words only when every citation under them is real
+            f, g = check_claim(c, repo, cache)
             fails += f
             flags += g
-            inferred = bool(re.search(r"\binferred\b", c["text"] + " " + c["label"], re.I))
-            cited += [(p, lo, hi, inferred) for p, lo, hi in c["cites"]]
-    counts = None
-    if points is not None and not bad:
-        counts = point_counts(points, left_out, cited)
-        fails += header_counts(doc_text, counts)
-        fails += not_backed(doc_text, repo, kept, cache)
-    return checked, bad, sorted(set(fails)), flags, counts
+    return checked, bad, sorted(set(fails)), flags
+
+
+def exit_sets(cache, repo, path, lo, hi):
+    """[(found, cut)] for a cited range: the function that holds its last line, and, when the range starts in another function, that function too
+    (its exits above its own end sit inside the range). found is what early_exits.early_exits returns; cut is the line the exits are listed above."""
+    lines = read_lines(cache, repo, path)
+    text, ext = "\n".join(lines), os.path.splitext(path)[1]
+    found = [(early_exits.early_exits(text, ext, hi, first=lo), hi)]
+    if lo != hi:
+        first_fn = early_exits.early_exits(text, ext, lo, upto=hi)
+        if first_fn and not first_fn.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or first_fn["fn_line"] != found[0][0]["fn_line"]):
+            found.insert(0, (first_fn, min(hi, first_fn["fn_end"])))  # its exits cannot skip lines past its own end
+    return lines, found
 
 
 def exits_note(cache, repo, path, lo, hi):
@@ -507,17 +296,152 @@ def exits_note(cache, repo, path, lo, hi):
     the range starts in another function, that function's exits above its last line, or above its own end if that comes
     first, too (they sit inside the range). A continue or break counts when its loop overlaps the range. None when there is nothing to say."""
     try:
-        lines = read_lines(cache, repo, path)
-        text, ext = "\n".join(lines), os.path.splitext(path)[1]
-        found = [(early_exits.early_exits(text, ext, hi, first=lo), hi)]
-        if lo != hi:
-            first_fn = early_exits.early_exits(text, ext, lo, upto=hi)
-            if first_fn and not first_fn.get("unreadable") and (not found[0][0] or found[0][0].get("unreadable") or first_fn["fn_line"] != found[0][0]["fn_line"]):
-                found.insert(0, (first_fn, min(hi, first_fn["fn_end"])))  # its exits cannot skip lines past its own end
+        lines, found = exit_sets(cache, repo, path, lo, hi)
         notes = [early_exits.render(f, lines, cut, lo) for f, cut in found]
         return "\n".join(n for n in notes if n) or None
     except (OSError, RecursionError):
         return None
+
+
+GUARD_HEAD = ("# guards: each early exit above a cited line (return, throw, continue, break, exit). Save this as guards.md beside the audit.\n"
+              "# End every row with `covered: <id>` (an id of a draft line that cites the same file and states the condition) or `covered: not relevant: <reason>`.")
+GUARD_ROW = re.compile(r"^\s*guard\s*\|\s*([^\s|]+?):(\d+)\s*\|(.*)\|\s*covered:(.*)$")
+EVIDENCE_CITE = re.compile(r"([\w./@+-]+):(\d+)(?:-(\d+))?")
+OPEN_QUOTE, CLOSE_QUOTE = re.compile(r"[\"\u201c`]"), re.compile(r"[\"\u201d`]")
+
+
+def guards(doc_text, repo):
+    """{(path, line): (kind, source text, doc_line)}: each early exit above a cited range, with the first doc line that cites it."""
+    cache, out = {}, {}
+    for c in claims(doc_text, repo):
+        if c.get("heading") or not c["cites"]:
+            continue
+        for path, lo, hi in c["cites"]:
+            try:
+                lines, found = exit_sets(cache, repo, path, lo, hi)
+            except (OSError, RecursionError):
+                continue
+            for f, _ in found:
+                for e in (f.get("exits", []) if f and not f.get("unreadable") else []):
+                    out.setdefault((path, e["line"]), (e["kind"], lines[e["line"] - 1].strip(), c["line"]))
+    return out
+
+
+def print_guards(doc_text, repo):
+    print(GUARD_HEAD)
+    for (path, line), (kind, text, _) in sorted(guards(doc_text, repo).items()):
+        print("guard | %s:%d | %s | %s | covered:" % (path, line, kind, text[:110]))
+
+
+def ids_citing(doc_text, repo):
+    """{id: {cited paths}} for each id of a line of the doc that holds citations."""
+    out, raw = {}, split_lines(doc_text)
+    for n, line, _, heading in doc_lines(doc_text):
+        if heading:
+            continue
+        paths = {p for _, _, cites, _ in line_items(raw[n - 1], repo) for p, _, _ in cites}
+        for t in TAG.findall(raw[n - 1]):
+            out.setdefault(t.strip("[]"), set()).update(paths)
+    return out
+
+
+def guard_fails(doc_text, repo, sheet_text, where):
+    """[(doc_line, "guards", detail)]: the sheet at `where` is missing (sheet_text None), or a guard is not on it, not marked, or marked with a reason
+    that is too short or an id the draft does not carry for that file."""
+    if sheet_text is None:
+        return [(1, "guards", "no condition sheet at %s: run --guards, save the output there and mark every guard" % where)]
+    marks = {}
+    for raw in sheet_text.splitlines():
+        m = GUARD_ROW.match(raw)
+        if m:
+            marks[(m.group(1), int(m.group(2)))] = m.group(4).strip()
+    known, fails = ids_citing(doc_text, repo), []
+    for (path, line), (kind, text, n) in sorted(guards(doc_text, repo).items()):
+        where_ = "%s:%d" % (path, line)
+        mark = next((v for (p, l), v in marks.items() if l == line and (p == path or p.endswith("/" + path) or path.endswith("/" + p))), None)
+        if mark is None:
+            fails.append((n, "guards", "guard %s (%s) is not in the sheet: run --guards again and mark it" % (where_, kind)))
+        elif not mark:
+            fails.append((n, "guards", "guard %s (%s) is unmarked: end its row with `covered: <id>` or `covered: not relevant: <reason>`" % (where_, kind)))
+        elif mark.lower().startswith("not relevant"):
+            if len(words_of(mark.split(":", 1)[1] if ":" in mark else "")) < 3:
+                fails.append((n, "guards", "guard %s says `not relevant` with no reason of three words or more" % where_))
+        else:
+            ids = re.findall(r"A\d+\.\w+", mark)
+            if not ids:
+                fails.append((n, "guards", "guard %s is marked with neither an id nor `not relevant: <reason>`" % where_))
+            for i in ids:
+                if i not in known:
+                    fails.append((n, "guards", "guard %s is covered by %s, which no line of the draft carries" % (where_, i)))
+                elif not any(p == path or p.endswith("/" + path) or path.endswith("/" + p) for p in known[i]):
+                    fails.append((n, "guards", "guard %s is covered by %s, which does not cite %s" % (where_, i, path)))
+    return fails
+
+
+def quote_close(row, start):
+    """Where the quote that opens just before `start` closes: the first quote mark followed by optional spaces and then ` | ` or the end of the row, so a line that holds
+    ` | ` (a type union, an `||`) or quote marks is copied whole and needs no escape. A row with no such quote mark ends its quote at the last one before its next ` | `. None when
+    the row has no closing quote. The one gap: a code line that itself holds a quote mark and then ` | ` ends the quote there, and the row is read as far as that."""
+    marks = list(CLOSE_QUOTE.finditer(row, start))
+    for m in marks:
+        if re.match(r"\s*(?:\||$)", row[m.end():]):
+            return m.start()
+    end = row.find(" | ", start)
+    cell = [m for m in marks if end < 0 or m.start() < end]
+    return cell[-1].start() if cell else None
+
+
+def evidence_rows(evidence_text):
+    """[(path, first, last, [parts])] for each row of an evidence file: its citation, then the text it quotes (see quote_close for where the quote ends).
+    Parts are the text around its ellipses (`...` or the ellipsis character), each squashed."""
+    rows = []
+    for l in evidence_text.split("\n"):
+        m = EVIDENCE_CITE.search(l)
+        opener = OPEN_QUOTE.search(l, m.end() + (l[m.end():m.end() + 1] == "`")) if m else None  # the backtick that closes the citation is not a quote
+        if not opener:
+            continue
+        closer = quote_close(l, opener.end())
+        if closer is None:
+            continue
+        parts = [squash(q) for q in re.split(r"\u2026|\.\.\.", l[opener.end():closer]) if squash(q)]
+        if parts:
+            rows.append((m.group(1), int(m.group(2)), int(m.group(3) or m.group(2)), parts))
+    return rows
+
+
+def evidence_fails(doc_text, repo, evidence_text, where):
+    """[(doc_line, "evidence", detail)]: the evidence file is missing, or a cited range has no row that overlaps it and whose whole quoted text is on a line of the row's range."""
+    if evidence_text is None:
+        return [(1, "evidence", "no evidence file at %s: write one row `path:line \"the line, copied\"` for each cited range" % where)]
+    rows = evidence_rows(evidence_text)
+    cache, fails = {}, []
+    for c in claims(doc_text, repo):
+        if c.get("heading"):
+            continue
+        for path, lo, hi in c["cites"]:
+            ok = False
+            for p, first, last, parts in rows:
+                if (p == path or p.endswith("/" + path) or path.endswith("/" + p)) and first <= hi and lo <= last:
+                    try:
+                        have = [squash(l) for l in read_lines(cache, repo, path)[first - 1:last]]
+                    except OSError:
+                        continue
+                    ok = ok or any(all(q in line for q in parts) for line in have)
+            if not ok:
+                fails.append((c["line"], "evidence", "no evidence row for %s:%d%s: copy the line you read, as `path:line \"text\"`" % (path, lo, "-%d" % hi if hi != lo else "")))
+    return fails
+
+
+def uncited_fails(doc_text, repo):
+    """[(doc_line, "uncited", detail)]: a sentence of a draft with no citation that does not say "inferred" or "from your list"."""
+    out = []
+    for c in claims(doc_text, repo):
+        if c.get("heading") or c["header"] or c.get("part1") or not c["uncited"].strip():
+            continue
+        for raw in sentences(c["uncited"]):
+            if words_of(raw) and not re.search(r"\binferred\b|\bfrom your list\b", raw, re.I):
+                out.append((c["line"], "uncited", "no citation and no \"inferred\" label: cite the line that shows it, or label it inferred | %s" % raw.strip()))
+    return out
 
 
 def sheet(doc_text, repo):
@@ -554,11 +478,14 @@ def audit_rows(audit_text):
     return rows
 
 
-def audit_fails(doc_text, repo, audit_text):
-    """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line."""
+def audit_fails(doc_text, repo, audit_text, where):
+    """[(doc_line, "audit", detail)] for each claim with no row that names one of its own citations and quotes the text on that line. The audit file at `where` is
+    missing (audit_text None): one FAIL that names the path."""
+    if audit_text is None:
+        return [(1, "audit", "no audit file at %s: write one row for each sentence (stage 3 of references/drafting.md)" % where)]
     rows, cache, fails = audit_rows(audit_text), {}, []
     for c in claims(doc_text, repo):
-        if c.get("heading") or c["not_backed"] or not c["cites"]:
+        if c.get("heading") or not c["cites"]:
             continue
         ok = False
         for n, path, line, quote in rows:
@@ -579,19 +506,44 @@ def audit_fails(doc_text, repo, audit_text):
     return fails
 
 
+def show(repo, spec):
+    """Print `spec` (path:START-END) as --sheet prints a cited range. 0, or 1 when the file or a line of the range is not there."""
+    m = re.fullmatch(r"(.+?):(\d+)(?:-(\d+))?", spec)
+    if not m:
+        print("%s: not path:START-END" % spec)
+        return 1
+    path, lo = m.group(1), int(m.group(2))
+    hi = int(m.group(3) or lo)
+    full = os.path.realpath(os.path.join(repo, path))
+    if not (full.startswith(repo + os.sep) and os.path.isfile(full)):
+        print("%s: no such file in the repo" % path)
+        return 1
+    lines = read_lines({}, repo, path)
+    if lo < 1 or hi < lo or hi > len(lines):
+        print("%s:%d-%d: line out of range (file has %d lines)" % (path, lo, hi, len(lines)))
+        return 1
+    print("-- %s:%d-%d" % (path, lo, hi))
+    for i, text in enumerate(lines[lo - 1:hi], lo):
+        print("%6d  %s" % (i, text))
+    return 0
+
+
 def main(argv):
     args, opts = [], {}
     it = iter(argv[1:])
     for a in it:
-        if a in ("--points", "--left-out", "--max-words", "--audit"):
+        if a in ("--max-words", "--max-sentence-words", "--audit", "--guards-file", "--evidence-file", "--show"):
             opts[a] = next(it, None)
-        elif a == "--sheet":
+        elif a in ("--sheet", "--guards"):
             opts[a] = True
         else:
             args.append(a)
-    if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or (opts.get("--left-out") and "--points" not in opts) \
-            or any(opts.get(k) is None or (k not in ("--sheet", "--max-words") and not os.path.isfile(opts[k])) for k in opts) \
-            or (opts.get("--max-words") is not None and not opts["--max-words"].isdigit()):
+    if "--show" in opts and opts["--show"] and len(opts) == 1 and len(args) == 1 and os.path.isdir(args[0]):
+        return show(os.path.realpath(args[0]), opts["--show"])
+    if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or "--show" in opts \
+            or any(opts.get(k) is None for k in opts) \
+            or (("--guards-file" in opts or "--evidence-file" in opts) and "--audit" not in opts) \
+            or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-sentence-words")):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     doc, repo = args
@@ -600,21 +552,36 @@ def main(argv):
     if opts.get("--sheet"):
         sheet(text, os.path.realpath(repo))
         return 0
-    points = left_out = None
-    if "--points" in opts:
-        with open(opts["--points"], encoding="utf-8") as f:
-            points = json.load(f)
-        left_out = []
-        if opts.get("--left-out"):
-            with open(opts["--left-out"], encoding="utf-8") as f:
-                left_out = [l.strip() for l in f if l.strip() and not l.startswith("#")]
-    checked, bad, fails, flags, counts = check(text, repo, points, left_out or ())
+    if opts.get("--guards"):
+        print_guards(text, os.path.realpath(repo))
+        return 0
+    checked, bad, fails, flags = check(text, repo)
     words = word_count(text, os.path.realpath(repo))
     if opts.get("--audit"):
-        with open(opts["--audit"], encoding="utf-8", errors="replace") as f:
-            fails = sorted(set(fails + (audit_fails(text, os.path.realpath(repo), f.read()) if not bad else [])))
+        real = os.path.realpath(repo)
+        folder = os.path.dirname(os.path.abspath(opts["--audit"]))
+        extra = []
+        if not bad:
+            audit_body = open(opts["--audit"], encoding="utf-8", errors="replace").read() if os.path.isfile(opts["--audit"]) else None
+            extra += audit_fails(text, real, audit_body, opts["--audit"])
+            choice = os.path.join(folder, "choice.md")
+            choice_body = open(choice, encoding="utf-8", errors="replace").read() if os.path.isfile(choice) else None
+            if not (choice_body or "").strip():
+                extra.append((1, "choice", "no choice file at %s: stage 0 of references/drafting.md lists the behaviours kept, one line each" % choice))
+        for key, name, check_files in (("--guards-file", "guards.md", guard_fails), ("--evidence-file", "evidence.md", evidence_fails)):
+            where = opts.get(key) or os.path.join(folder, name)
+            body = open(where, encoding="utf-8", errors="replace").read() if os.path.isfile(where) else None
+            extra += check_files(text, real, body, where) if not bad else []
+        extra += uncited_fails(text, real) if not bad else []
+        have = {(n, k) for n, k, _ in fails}
+        fails = sorted(set(fails + [e for e in extra if (e[0], e[1]) not in have or e[1] not in ("uncited",)]))
     if "--max-words" in opts and words > int(opts["--max-words"]):
         fails = sorted(set(fails + [(1, "budget", "%d words, budget %s: drop behaviours, do not join them" % (words, opts["--max-words"]))]))
+    prose = prose_sentences(text, os.path.realpath(repo))
+    if "--max-sentence-words" in opts:
+        limit = int(opts["--max-sentence-words"])
+        fails = sorted(set(fails + [(n, "sentence-length", "%d words, limit %d: split it and keep the condition in each part | %s" % (len(words_of(s)), limit, s))
+                                    for n, s in prose if len(words_of(s)) > limit]))
     for n, cite, reason in bad:
         print("%s:%d: %s: %s" % (doc, n, cite, reason))
     for n, kind, detail in fails:
@@ -622,9 +589,14 @@ def main(argv):
     for n, kind, detail in flags:
         print("%s:%d: flag %s: %s" % (doc, n, kind, detail))
     print("checked %d citations, %d bad, %d words" % (checked, len(bad), words))
-    if counts:
-        print("Counts: " + "; ".join("%s %d" % (k, counts[k]) for k, _ in COUNT_KEYS) + ".")  # the line the header carries
-    print("%d failed checks, %d flagged sentences (list them for the check pass)" % (len(fails), len(flags)))
+    claim_words = sum(len(words_of(s)) for _, s in prose)
+    print("%d claims, %d words in them, %.1f words per claim" % (len(prose), claim_words, claim_words / len(prose) if prose else 0))
+    names = {}
+    for _, kind, _ in fails:
+        names[kind] = names.get(kind, 0) + 1
+    if bad:
+        names["citation"] = len(bad)
+    print("%d failed checks%s, %d flagged sentences (list them for the check pass)" % (len(fails) + len(bad), " (%s)" % ", ".join("%s %d" % kv for kv in sorted(names.items())) if names else "", len(flags)))
     if not checked:
         print("no citations found: an uncited doc cannot be checked", file=sys.stderr)
         return 2

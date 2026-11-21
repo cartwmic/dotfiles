@@ -1,0 +1,67 @@
+# Words a reader with no engineering background may not know. One a line, whole words or phrases, any case.
+# lint_main.py counts each hit in Part 1 (the word, or with -s, -es, -ed, -d or -ing) and fails above 4 per 1,000 words. Edit the list, not the script.
+# A term leaves the list when readers did not flag it in a Part 1 that held it (round 3: cli, json, http and https left; sqlite and cron were flagged and stay).
+api
+sdk
+daemon
+middleware
+endpoint
+endpoints
+payload
+schema
+serialize
+serialization
+deserialize
+webhook
+websocket
+handler
+callback
+async
+asynchronous
+concurrency
+mutex
+thread
+pipeline
+orchestration
+runtime
+namespace
+repository
+regex
+regular expression
+hash
+checksum
+cache
+idempotent
+instantiate
+refactor
+dependency
+dependencies
+abstraction
+binary
+compile
+kernel
+protocol
+socket
+proxy
+container
+docker
+kubernetes
+daemonize
+stdin
+stdout
+stderr
+env var
+environment variable
+pid
+cron
+yaml
+toml
+sqlite
+orm
+rpc
+tcp
+udp
+ssh
+tls
+oauth
+jwt
