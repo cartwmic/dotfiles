@@ -2195,6 +2195,7 @@ class Job:
                                         self.settle()
                                         break
                                     why, pause = quota.refused(refused)   # the flock is let go below, before the sleep
+                                    t_wait = t_wait or quota.since   # the queue wait starts no later than the quota wait it counts, whatever the delete below takes
                                     entry["quota"] = True   # the job keeps its place: while this ticket is there, no job ordered after it is placed (queued_behind)
                                     write_json_atomic(ticket, entry)
                             finally:

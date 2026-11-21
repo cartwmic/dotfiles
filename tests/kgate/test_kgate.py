@@ -5262,6 +5262,15 @@ class QuotaHomelab(unittest.TestCase):
         self.assertIn("quota_wait_s", rec)
         self.assertEqual((self.created(), rec["ran"], rec["cleanup"], self.secrets()), (0, False, True, []))
 
+    def test_the_quota_wait_is_never_longer_than_the_queue_wait_it_is_counted_in(self):
+        # The pod's Secrets are deleted after the refusal. That delete takes 2 s here; the quota's clock starts at the refusal, so the queue's must too: quota_wait_s is
+        # counted inside queue_wait_s (docs/kgate.md, "The record").
+        done = self.kgate("--wait", "4", "--cpu", "4", "--", "true", env={**self.full(used=12), "FAKE_DELETE_SLOW": "2"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        rec = self.records()[-1]
+        self.assertGreater(rec["quota_wait_s"], 2, rec)   # the delete's 2 s are part of the wait for quota
+        self.assertLessEqual(rec["quota_wait_s"], rec["queue_wait_s"], rec)
+
     def test_any_other_refusal_stays_fatal_even_when_it_says_exceeded_quota(self):
         for text in ("Error from server (Forbidden): pods is forbidden: violates PodSecurity",
                      "error: the webhook said exceeded quota: please stop"):
