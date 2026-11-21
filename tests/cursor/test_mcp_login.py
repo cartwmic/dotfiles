@@ -97,7 +97,7 @@ class Login(unittest.TestCase):
         return [line.split()[2] for line in self.calls() if line.startswith("mcp login")]
 
     def table(self, out):
-        rows = out.split("SERVER", 1)[1].splitlines()[1:]
+        rows = out.split("SERVER", 1)[1].split("\n\n")[0].splitlines()[1:]  # the table ends at the first blank line
         return {line.split()[0]: " ".join(line.split()[1:]) for line in rows if line.strip()}
 
     def test_only_servers_needing_sign_in_are_picked(self):
@@ -166,6 +166,24 @@ class Login(unittest.TestCase):
         self.assertEqual(self.calls(), ["mcp list --workspace " + str(self.work)])  # one read, no login
         self.assertEqual(self.table(out.stdout), {"good-a": "requires_authentication", "ready-b": "ready"})
         self.assertEqual(out.returncode, 1)
+
+    def test_restart_line_only_after_a_sign_in(self):
+        restart = "T3 must be restarted before its Cursor sessions see the new sign-ins."
+        self.servers(**{"good-a": "requires_authentication", "bad-b": "requires_authentication"})
+        self.assertIn(restart, self.run_script().stdout)  # good-a signed in, bad-b did not
+        self.servers(**{"bad-a": "requires_authentication", "quiet-b": "requires_authentication"})
+        self.assertNotIn(restart, self.run_script().stdout)  # nothing signed in
+        self.servers(**{"ready-a": "ready"})
+        self.assertNotIn(restart, self.run_script().stdout)  # nothing to do
+        self.assertNotIn(restart, self.run_script("ready-a").stdout)  # named, but already ready
+        self.servers(**{"good-a": "requires_authentication"})
+        self.assertNotIn(restart, self.run_script("--check").stdout)
+
+    def test_check_says_the_table_is_the_file_on_disk(self):
+        self.servers(**{"good-a": "requires_authentication"})
+        out = self.run_script("--check")
+        self.assertIn("The table shows what is on disk. T3's Cursor sessions see it only after T3 restarts.", out.stdout)
+        self.assertNotIn("on disk", self.run_script().stdout)
 
     def test_exit_codes(self):
         self.servers(**{"ready-a": "ready", "err-b": "Error: Connection failed", "good-c": "requires_authentication"})

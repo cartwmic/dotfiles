@@ -9,7 +9,8 @@ in that folder gets: ready, requires_authentication, or an error text.
     cursor-mcp-login [--workspace DIR] [--check] [--timeout SECONDS] [SERVER...]
 
 By default it signs in every server that lists as requires_authentication. SERVER names take only those servers.
---check signs in nothing: it prints the table and exits. Exit 1: a server that was named or picked is not ready at the end.
+--check signs in nothing: it prints the table and exits. The table is what is on disk: T3 runs Cursor sessions in a long-running
+process that reads the sign-ins once, so it sees a new sign-in only after T3 restarts. This command never restarts anything. Exit 1: a server that was named or picked is not ready at the end.
 Exit 2: it could not run (cursor-agent missing, `mcp list` failed or timed out, a named server is not listed).
 """
 import argparse
@@ -111,6 +112,7 @@ def main(argv=None):
     else:
         picked = [name for name, state in states.items() if state == NEEDS_LOGIN]
 
+    before = states
     if not args.check:
         if not picked:
             print("nothing to sign in")
@@ -127,6 +129,10 @@ def main(argv=None):
     print("%-*s  %s" % (width, "SERVER", "STATE"))
     for name, state in states.items():
         print("%-*s  %s" % (width, name, state))
+    if args.check:
+        print("\nThe table shows what is on disk. T3's Cursor sessions see it only after T3 restarts.")
+    elif any(before.get(name) != READY and states.get(name) == READY for name in picked):
+        print("\nT3 must be restarted before its Cursor sessions see the new sign-ins.")
     return 1 if any(states.get(name) != READY for name in picked) else 0
 
 
