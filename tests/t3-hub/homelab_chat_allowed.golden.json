@@ -12,7 +12,8 @@
   "t3_thread_send": {
    "tool": "mcp__t3-code__t3_thread_send",
    "threads": [
-    "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56"
+    "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56",
+    "mcp:c9a80a51-19d4-475c-99bb-117660fc88de"
    ]
   },
   "bot_verbs": [
