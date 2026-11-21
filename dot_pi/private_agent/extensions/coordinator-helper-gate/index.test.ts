@@ -1,23 +1,31 @@
 // Run: node --experimental-strip-types --disable-warning=ExperimentalWarning --test dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts
-// The coordinator checkout is a scratch directory holding a stub hook.ts; the real one is never started here.
+// The coordinator checkout is a scratch directory holding a stub src/coordinator-session/helper-gate.ts; the real one is never loaded here.
+// What the real helper-gate.ts does with the hook (spawn it, fail open, log) is the coordinator's own and is tested in that repo.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import extension, { type GateConfig, type HelperCall, gateReason, loadConfig, loadsCoordinatorSession, toolCallHandler } from "./index.ts";
 
-// The stub reads the call on stdin and records it with the environment it was given. STUB_MODE picks the answer.
-const STUB_HOOK = `
-import { appendFileSync, readFileSync } from "node:fs";
-const stdin = readFileSync(0, "utf8");
-appendFileSync(process.env.STUB_RECORD, JSON.stringify({ argv: process.argv.slice(2), stdin: JSON.parse(stdin), state: process.env.COORDINATOR_STATE_DIR ?? null, t3: process.env.T3CODE_THREAD_ID ?? null }) + "\\n");
-const mode = process.env.STUB_MODE ?? "allow";
-if (mode === "block") process.stdout.write(JSON.stringify({ block: true, reason: "refused by the stub: declare a seat" }));
-if (mode === "no-block") process.stdout.write(JSON.stringify({ block: false }));
-if (mode === "garbage") process.stdout.write("not json at all");
-if (mode === "fail") { process.stderr.write("stub broke\\n"); process.exit(3); }
+// The stub has the shape of the coordinator's helperGateReason: (call, env, stateDir) => reason | undefined. It records what it was given.
+// The mode comes from env.STUB_MODE: "block" refuses, "allow" says nothing, "throw" throws. Like the real one, it answers nothing for a tool other than subagent.
+const STUB_GATE = `
+import { appendFileSync } from "node:fs";
+export function helperGateReason(call, env, stateDir) {
+	appendFileSync(env.STUB_RECORD, JSON.stringify({ call, state: stateDir, t3: env.T3CODE_THREAD_ID ?? null }) + "\\n");
+	if (call.toolName !== "subagent") return undefined;
+	if (env.STUB_MODE === "throw") throw new Error("stub gate broke");
+	return env.STUB_MODE === "block" ? "refused by the stub: declare a seat" : undefined;
+}
 `;
+
+/** A directory under the temp dir that is removed when the test ends, whether it passed or failed. */
+const scratch = (t: TestContext, prefix: string): string => {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	return dir;
+};
 
 interface Rig {
 	root: string;
@@ -26,19 +34,17 @@ interface Rig {
 	record: string;
 	config: GateConfig;
 	env: NodeJS.ProcessEnv;
-	recorded: () => { argv: string[]; stdin: Record<string, unknown>; state: string | null; t3: string | null }[];
-	logLines: () => string[];
+	recorded: () => { call: HelperCall; state: string; t3: string | null }[];
 }
 
-const rig = (mode: string, env: NodeJS.ProcessEnv = {}): Rig => {
-	const root = mkdtempSync(join(tmpdir(), "chg-"));
+const rig = (t: TestContext, mode: string, env: NodeJS.ProcessEnv = {}, gateSource: string = STUB_GATE): Rig => {
+	const root = scratch(t, "chg-");
 	const repo = join(root, "coordinator");
 	const state = join(root, "state");
-	mkdirSync(join(repo, "src", "t3-hook"), { recursive: true });
+	mkdirSync(join(repo, "src", "coordinator-session"), { recursive: true });
 	mkdirSync(state, { recursive: true });
-	writeFileSync(join(repo, "src", "t3-hook", "hook.ts"), STUB_HOOK);
+	writeFileSync(join(repo, "src", "coordinator-session", "helper-gate.ts"), gateSource);
 	const record = join(root, "record.jsonl");
-	const log = join(state, "t3-hook", "helper-gate.log");
 	return {
 		root,
 		repo,
@@ -47,7 +53,6 @@ const rig = (mode: string, env: NodeJS.ProcessEnv = {}): Rig => {
 		config: { enabled: true, coordinatorRepo: repo, stateDir: state },
 		env: { PATH: process.env.PATH, STUB_RECORD: record, STUB_MODE: mode, ...env },
 		recorded: () => (existsSync(record) ? readFileSync(record, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []),
-		logLines: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []),
 	};
 };
 
@@ -55,45 +60,39 @@ const call = (over: Partial<HelperCall> = {}): HelperCall => ({ toolName: "subag
 const gate = (r: Rig, over: Partial<HelperCall> = {}, extra: { argv?: string[]; config?: GateConfig | undefined } = {}) =>
 	gateReason(call(over), { config: "config" in extra ? extra.config : r.config, env: r.env, argv: extra.argv ?? ["node", "pi"] });
 
-test("a refusal from the hook is the block reason; the hook gets the call, the cwd and the session's model, and the state directory", () => {
-	const r = rig("block");
-	assert.equal(gate(r), "refused by the stub: declare a seat");
-	const [seen] = r.recorded();
-	assert.deepEqual(seen?.argv, ["--pi"]);
-	assert.deepEqual(seen?.stdin, { session_id: "sess-1", tool_use_id: "call-1", cwd: "/work/here", session_model: "anthropic/claude-opus-5-5", tool_input: { agent: "worker", task: "do it" } });
+test("a refusal from the coordinator's gate is the block reason; it gets the call, the cwd, the session's model and the state directory", async (t) => {
+	const r = rig(t, "block");
+	assert.equal(await gate(r), "refused by the stub: declare a seat");
+	assert.deepEqual(r.recorded(), [{ call: call(), state: r.state, t3: null }]);
+});
+
+test("a gate that says nothing lets the call through", async (t) => {
+	const r = rig(t, "allow");
+	assert.equal(await gate(r), undefined);
 	assert.equal(r.recorded().length, 1);
 });
 
-test("a hook that says nothing lets the call through", () => {
-	const r = rig("allow");
-	assert.equal(gate(r), undefined);
-	assert.equal(r.recorded().length, 1);
-	assert.deepEqual(r.logLines(), []);
+test("a tool other than subagent is passed to the gate, which lets it through", async (t) => {
+	const r = rig(t, "block");
+	assert.equal(await gate(r, { toolName: "bash", input: { command: "ls" } }), undefined);
 });
 
-test("only the subagent tool is asked about", () => {
-	const r = rig("block");
-	assert.equal(gate(r, { toolName: "bash", input: { command: "ls" } }), undefined);
-	assert.equal(gate(r, { toolName: "read" }), undefined);
-	assert.deepEqual(r.recorded(), []);
-});
-
-test("scope: the state directory is the environment's when set, else the config's; no T3 variable is needed, and one does not change the answer", () => {
-	const plain = rig("block");
-	assert.equal(gate(plain), "refused by the stub: declare a seat");
+test("scope: the state directory is the environment's when set, else the config's; no T3 variable is needed, and one does not change the answer", async (t) => {
+	const plain = rig(t, "block");
+	assert.equal(await gate(plain), "refused by the stub: declare a seat");
 	assert.equal(plain.recorded()[0]?.state, plain.state, "a session with no COORDINATOR_STATE_DIR (plain pi) gets the config's directory");
 	assert.equal(plain.recorded()[0]?.t3, null, "and there is no T3CODE_THREAD_ID in it, so none is required");
 
-	const lead = rig("block");
+	const lead = rig(t, "block");
 	const leadState = join(lead.root, "lead-state");
 	mkdirSync(leadState);
 	lead.env = { ...lead.env, COORDINATOR_STATE_DIR: leadState, T3CODE_THREAD_ID: "thread-9" };
-	assert.equal(gate(lead), "refused by the stub: declare a seat");
+	assert.equal(await gate(lead), "refused by the stub: declare a seat");
 	assert.equal(lead.recorded()[0]?.state, leadState, "pi-lead's own COORDINATOR_STATE_DIR wins");
 	assert.equal(lead.recorded()[0]?.t3, "thread-9");
 });
 
-test("stands down in the coordinator's own session (its -e argument), and only there", () => {
+test("stands down in the coordinator's own session (its -e argument), and only there", async (t) => {
 	const session = "/home/u/git/coordinator/src/coordinator-session/index.ts";
 	assert.equal(loadsCoordinatorSession(["node", "pi", "--model", "m", "-e", session]), true);
 	assert.equal(loadsCoordinatorSession(["node", "pi", "--extension", session]), true);
@@ -103,56 +102,45 @@ test("stands down in the coordinator's own session (its -e argument), and only t
 	assert.equal(loadsCoordinatorSession(["node", "pi", session]), false, "a path that is not the value of -e does not count");
 	assert.equal(loadsCoordinatorSession(["node", "pi", "--mode", "rpc", "--extension", "/t3/cache/t3-mcp.ts"]), false, "T3's own extension argument is not the coordinator's");
 
-	const r = rig("block");
-	assert.equal(gate(r, {}, { argv: ["node", "pi", "-e", session] }), undefined);
-	assert.deepEqual(r.recorded(), [], "the hook is not run a second time");
-	assert.equal(gate(r, {}, { argv: ["node", "pi", "--mode", "rpc", "--extension", "/t3/cache/t3-mcp.ts"] }), "refused by the stub: declare a seat", "a T3 session still gets the gate");
+	const r = rig(t, "block");
+	assert.equal(await gate(r, {}, { argv: ["node", "pi", "-e", session] }), undefined);
+	assert.deepEqual(r.recorded(), [], "the gate is not asked a second time");
+	assert.equal(await gate(r, {}, { argv: ["node", "pi", "--mode", "rpc", "--extension", "/t3/cache/t3-mcp.ts"] }), "refused by the stub: declare a seat", "a T3 session still gets the gate");
 });
 
-test("fails open and quietly where the coordinator is not set up", () => {
-	const r = rig("block");
-	assert.equal(gate(r, {}, { config: undefined }), undefined, "no config");
-	assert.equal(gate(r, {}, { config: { ...r.config, enabled: false } }), undefined, "switched off in the config");
-	assert.equal(gate(r, {}, { config: { stateDir: r.state } }), undefined, "no checkout named");
-	assert.equal(gate(r, {}, { config: { ...r.config, coordinatorRepo: join(r.root, "nowhere") } }), undefined, "no checkout on disk");
+test("fails open and quietly where the coordinator is not set up", async (t) => {
+	const r = rig(t, "block");
+	assert.equal(await gate(r, {}, { config: undefined }), undefined, "no config");
+	assert.equal(await gate(r, {}, { config: { ...r.config, enabled: false } }), undefined, "switched off in the config");
+	assert.equal(await gate(r, {}, { config: { stateDir: r.state } }), undefined, "no checkout named");
+	assert.equal(await gate(r, {}, { config: { ...r.config, coordinatorRepo: join(r.root, "nowhere") } }), undefined, "no checkout on disk");
 	mkdirSync(join(r.root, "src-less"));
-	assert.equal(gate(r, {}, { config: { ...r.config, coordinatorRepo: join(r.root, "src-less") } }), undefined, "a checkout with no hook.ts");
-	const noState = rig("block");
-	assert.equal(gate(noState, {}, { config: { ...noState.config, stateDir: join(noState.root, "no-state") } }), undefined, "no state directory");
+	assert.equal(await gate(r, {}, { config: { ...r.config, coordinatorRepo: join(r.root, "src-less") } }), undefined, "a checkout with no helper-gate.ts (an old one)");
+	const noState = rig(t, "block");
+	assert.equal(await gate(noState, {}, { config: { ...noState.config, stateDir: join(noState.root, "no-state") } }), undefined, "no state directory");
 	assert.equal(existsSync(join(noState.root, "no-state")), false, "and none is made");
-	assert.deepEqual([...r.recorded(), ...noState.recorded()], [], "the hook never ran in any of these");
+	assert.deepEqual([...r.recorded(), ...noState.recorded()], [], "the gate never ran in any of these");
 });
 
-test("fails open on a hook that fails, answers nothing readable or cannot start, and adds one line to the coordinator's helper-gate log", () => {
-	for (const mode of ["fail", "garbage", "no-block"]) {
-		const r = rig(mode);
-		assert.equal(gate(r), undefined, mode);
-		const lines = r.logLines();
-		assert.equal(lines.length, 1, mode);
-		const entry = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
-		assert.deepEqual(Object.keys(entry).sort(), ["at", "call", "kind", "model", "session", "what"]);
-		assert.equal(entry.session, "sess-1");
-		assert.equal(entry.call, "call-1");
-		assert.equal(entry.kind, "worker");
-		assert.match(String(entry.what), /^skipped: the gate could not run \(/);
-	}
+test("fails open on a gate file that cannot be loaded, holds no helperGateReason, or throws", async (t) => {
+	assert.equal(await gate(rig(t, "block", {}, "export const x = (")), undefined, "a file that does not parse");
+	assert.equal(await gate(rig(t, "block", {}, 'throw new Error("at load");')), undefined, "a file that throws when loaded");
+	assert.equal(await gate(rig(t, "block", {}, "export const other = 1;")), undefined, "a file with no helperGateReason");
+	assert.equal(await gate(rig(t, "throw")), undefined, "a gate that throws");
+	const r = rig(t, "block");
+	assert.equal(await gateReason(call(), { config: r.config, env: r.env, argv: ["node", "pi"], load: async () => { throw new Error("no loader"); } }), undefined, "a loader that rejects");
 });
 
-test("a spawn error and a hook that throws allow the call and are logged", () => {
-	const r = rig("allow");
-	const options = { config: r.config, env: r.env, argv: ["node", "pi"] };
-	assert.equal(gateReason(call(), { ...options, run: () => ({ stdout: "", failure: "spawn node ENOENT" }) }), undefined);
-	assert.equal(gateReason(call(), { ...options, run: () => ({ stdout: "", failure: "spawnSync node ETIMEDOUT" }) }), undefined);
-	assert.equal(gateReason(call(), { ...options, run: () => { throw new Error("boom\nsecond line"); } }), undefined);
-	assert.deepEqual(r.logLines().map((line) => (JSON.parse(line) as { what: string }).what), [
-		"skipped: the gate could not run (spawn node ENOENT)",
-		"skipped: the gate could not run (spawnSync node ETIMEDOUT)",
-		"skipped: the gate could not run (boom)",
-	]);
+test("the gate file is loaded from the configured checkout, not from anywhere else", async (t) => {
+	const r = rig(t, "block");
+	const loaded: string[] = [];
+	const reason = await gateReason(call(), { config: r.config, env: r.env, argv: ["node", "pi"], load: async (file) => { loaded.push(file); return () => "from the loader"; } });
+	assert.equal(reason, "from the loader");
+	assert.deepEqual(loaded, [join(r.repo, "src", "coordinator-session", "helper-gate.ts")]);
 });
 
-test("loadConfig reads the rendered file and gives undefined for a missing, broken or non-object one", () => {
-	const dir = mkdtempSync(join(tmpdir(), "chg-cfg-"));
+test("loadConfig reads the rendered file and gives undefined for a missing, broken or non-object one", (t) => {
+	const dir = scratch(t, "chg-cfg-");
 	const write = (text: string): string => {
 		const file = join(dir, `c${Math.random()}.json`);
 		writeFileSync(file, text);
@@ -163,14 +151,14 @@ test("loadConfig reads the rendered file and gives undefined for a missing, brok
 	assert.equal(loadConfig(join(dir, "missing.json")), undefined);
 });
 
-test("the handler gives the hook the session's id, cwd and model, and blocks with its reason", async () => {
-	const r = rig("block");
+test("the handler gives the gate the session's id, cwd and model, and blocks with its reason", async (t) => {
+	const r = rig(t, "block");
 	const handler = toolCallHandler({ config: r.config, env: r.env, argv: ["node", "pi"] });
 	const ctx = { cwd: "/w", sessionManager: { getSessionId: () => "s-7" }, model: { provider: "p", id: "m" } };
 	assert.deepEqual(await handler({ toolName: "subagent", toolCallId: "c-7", input: { agent: "worker" } }, ctx), { block: true, reason: "refused by the stub: declare a seat" });
-	assert.deepEqual(r.recorded()[0]?.stdin, { session_id: "s-7", tool_use_id: "c-7", cwd: "/w", session_model: "p/m", tool_input: { agent: "worker" } });
+	assert.deepEqual(r.recorded()[0]?.call, { toolName: "subagent", toolCallId: "c-7", input: { agent: "worker" }, cwd: "/w", sessionId: "s-7", model: "p/m" });
 	assert.equal(await handler({ toolName: "read", toolCallId: "c-8", input: {} }, ctx), undefined);
-	const quiet = rig("allow");
+	const quiet = rig(t, "allow");
 	assert.equal(await toolCallHandler({ config: quiet.config, env: quiet.env, argv: ["node", "pi"] })({ toolName: "subagent", toolCallId: "c", input: {} }, { cwd: "/w", sessionManager: { getSessionId: () => "s" } }), undefined);
 });
 
