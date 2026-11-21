@@ -34,7 +34,10 @@
    "sonarr episode-search",
    "sonarr episodes",
    "sonarr lookup",
-   "sonarr monitor"
+   "sonarr monitor",
+   "yamtrack add",
+   "yamtrack lookup",
+   "yamtrack status"
   ],
   "post": {
    "lead": "HomelabChat",
@@ -165,7 +168,10 @@
    "sonarr monitor",
    "sonarr rolling",
    "tracker get",
-   "tracker list"
+   "tracker list",
+   "yamtrack add",
+   "yamtrack lookup",
+   "yamtrack status"
   ],
   "bash_commands": [
    "kubectl get pods",

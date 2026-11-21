@@ -44,6 +44,7 @@ BOT_VERBS = {
     "download": ("status",),
     "jellyfin": ("search",),
     "kube": ("get", "describe", "logs", "top", "events"),
+    "yamtrack": ("lookup", "add", "status"),
 }
 LEAD = "HomelabChat"
 POST_FLAGS = ("--key", "--text")
