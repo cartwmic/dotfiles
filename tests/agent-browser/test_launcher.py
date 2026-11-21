@@ -76,6 +76,11 @@ subprocess.Popen([os.path.join(bundle, "Contents/MacOS/fake-chrome")] + args[arg
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 """ % sys.executable
 
+# open as it behaves on the GitHub macOS runner: Chrome starts, but open itself never returns (dotfiles#695).
+FAKE_OPEN_NEVER_RETURNS = FAKE_OPEN + "import time\ntime.sleep(60)\n"
+# open that fails without starting anything.
+FAKE_OPEN_FAILS = "#!/bin/sh\necho 'open: no such application' >&2\nexit 1\n"
+
 
 def free_port():
     import socket
@@ -220,11 +225,11 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("--ozone-platform=wayland", self.calls()[0])
         self.assertEqual(self.env_seen(), [{"WAYLAND_DISPLAY": None}])
 
-    def install_fake_open(self):
+    def install_fake_open(self, body=FAKE_OPEN):
         self.bin = self.root / "bin"
         self.bin.mkdir(exist_ok=True)
         tool = self.bin / "open"
-        tool.write_text(FAKE_OPEN)
+        tool.write_text(body)
         tool.chmod(0o755)
         return self.bin
 
@@ -313,6 +318,30 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(self.open_calls()[0][:5], ["-g", "-j", "-n", "-a", str(bundle)])
         self.assertIn("--no-startup-window", json.loads(argv_log.read_text()))
         self.assertEqual(len(self.cdp_calls(exe)), 1)
+
+    def test_an_open_that_never_returns_does_not_hold_the_launch(self):
+        """Chrome answers on the port while open is still running (the GitHub macOS runner): the launcher exits 0 at
+        once, with open's output kept off its own stdout, and stops the leftover open. Runs on Linux too (fake open)."""
+        bundle, exe, argv_log = self.bundle()
+        bin_dir = self.install_fake_open(FAKE_OPEN_NEVER_RETURNS)
+        started = time.monotonic()
+        r = self.run_script(bundle, bin_dir=bin_dir)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertTrue(any("open had not returned" in l for l in self.record()), self.record())
+        started_line = [l for l in self.record() if "INFO: Chrome started" in l]
+        self.assertTrue(started_line, self.record())
+        # open's argv carries the profile flag too: the pid the launcher records (and hands the front back by) is Chrome's, not open's
+        pid = started_line[0].split("(pid ")[1].split(")")[0]
+        command = subprocess.run(["ps", "-p", pid, "-o", "command="], capture_output=True, text=True).stdout
+        self.assertIn("fake-chrome", command)
+
+    def test_an_open_that_fails_fails_the_launch_and_says_so(self):
+        bundle, exe, argv_log = self.bundle()
+        bin_dir = self.install_fake_open(FAKE_OPEN_FAILS)
+        r = self.run_script(bundle, bin_dir=bin_dir, wait="10")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("open could not launch", r.stderr)
 
     def test_launch_form_rejects_an_unknown_value(self):
         r = self.run_script(self.fake(), AGENT_CHROME_LAUNCH_FORM="d")

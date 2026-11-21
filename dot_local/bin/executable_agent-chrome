@@ -276,8 +276,12 @@ if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ]; then
   fi
 fi
 pid=""
+OPEN_PID=""
 if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ]; then
   # shellcheck disable=SC2086  # OPEN_FLAGS and NO_STARTUP_WINDOW are word-split on purpose
+  # open runs in the background: its return is not the readiness signal (the port is), and on the GitHub
+  # macOS runner it never returns although Chrome is up. Its own output goes to chrome.log so it cannot hold
+  # this script's stdout open.
   open $OPEN_FLAGS -a "$BUNDLE" --stdout "$STATE/chrome.log" --stderr "$STATE/chrome.log" --args \
     --remote-debugging-port="$PORT" \
     --user-data-dir="$PROFILE" \
@@ -286,7 +290,8 @@ if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ]; then
     --disable-search-engine-choice-screen \
     $NO_STARTUP_WINDOW \
     "$@" \
-    about:blank || { log ERROR "open could not launch $BUNDLE"; exit 1; }
+    about:blank </dev/null >>"$STATE/chrome.log" 2>&1 &
+  OPEN_PID=$!
 else
   nohup "$APP" \
     --remote-debugging-port="$PORT" \
@@ -299,10 +304,29 @@ else
   pid=$!
 fi
 
+# open is done with once Chrome answers (or has failed): a leftover open is stopped; Chrome does not depend on it.
+finish_open() {
+  [ -n "$OPEN_PID" ] || return 0
+  if kill -0 "$OPEN_PID" 2>/dev/null; then
+    kill "$OPEN_PID" 2>/dev/null || true
+    log INFO "open had not returned by the time Chrome answered; stopped it (Chrome keeps running)"
+  fi
+  wait "$OPEN_PID" 2>/dev/null || true
+}
+
 i=0
 while [ "$i" -lt "$WAIT" ]; do
+  if [ -n "$OPEN_PID" ] && ! kill -0 "$OPEN_PID" 2>/dev/null; then
+    # open has returned: a failure is final, success means Chrome is on its way
+    if ! wait "$OPEN_PID"; then
+      log ERROR "open could not launch $BUNDLE (see $STATE/chrome.log)"
+      exit 1
+    fi
+    OPEN_PID=""
+  fi
   if up; then
-    [ -n "$pid" ] || pid=$(pgrep -f -- "--user-data-dir=$PROFILE" | head -n 1)
+    # open carries the profile flag in its own argv too, and may still be running: never take its pid for Chrome's.
+    [ -n "$pid" ] || pid=$(pgrep -f -- "--user-data-dir=$PROFILE" | grep -vx "${OPEN_PID:-0}" | head -n 1)
     CHROME_PID="$pid"
     if [ "$OS" = Darwin ] && [ -n "$BUNDLE" ] && [ -n "$NO_STARTUP_WINDOW" ]; then
       if cdp_err=$(create_first_window_background 2>&1); then
@@ -313,11 +337,13 @@ while [ "$i" -lt "$WAIT" ]; do
     fi
     log INFO "Chrome started (pid ${pid:-unknown}), answering on port $PORT"
     hand_front_back
+    finish_open
     exit 0
   fi
   i=$((i + 1))
   sleep 1
 done
 
+finish_open
 log ERROR "Chrome (pid ${pid:-unknown}) did not answer on port $PORT within ${WAIT}s (see $STATE/chrome.log)"
 exit 1
