@@ -1,4 +1,4 @@
-Seat: grader, Opus. You did not write the guide or the fact list.
+Seat: reviewer (skill checker), Opus 5.5 medium (the grader). You did not write the guide or the fact list.
 Grader brief, version 1.
 
 Mark each fact of a list against a guide. Inputs: `facts.txt` (rows `F<n> | core or detail | kind | the fact | path:line`), the guide (`GUIDE.md`) and the repo. You grade whether the guide says the fact, not whether the guide is right: another check judges that. Open a fact's cited lines when its wording is not clear to you.

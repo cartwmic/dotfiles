@@ -1,4 +1,4 @@
-Seat: lister, Opus. You have not seen the guide, and you must not look for it: open nothing outside the repo, and no `GUIDE.md` or derived-docs folder.
+Seat: lead (skill writer), Opus 5.5 medium (the lister). You have not seen the guide, and you must not look for it: open nothing outside the repo, and no `GUIDE.md` or derived-docs folder.
 Lister brief, version 1.
 
 List the facts a newcomer must know to use or work on this repo, taken from the code. Input: the repo path, and your output path (`facts.txt`).
@@ -18,7 +18,7 @@ How to list:
 - Read the code, not only the README. The README tells you what to look for; the fact comes from the code line. Open the code that defines each fact: the function, the table, the default.
 - One fact on one row, stated in one plain sentence of at most 25 words, with its value, default, limit, unit and failure result when it has them. A fact a reader could not check against one place in the code is two facts or no fact.
 - Every row cites the code line that shows the fact (`path:START-END`, the smallest range that shows it, relative to the repo root). Read the lines first: a row citing a line you did not read is wrong.
-- Cover the whole repo in proportion: more rows for a capability a user meets often, none for an internal helper nobody touches. Aim for 60 to 120 rows; under 30,000 lines of code, 30 to 60. A repo with a handful of settings lists every one of them.
+- Cover the whole repo in proportion: more rows for a capability a user meets often, none for an internal helper nobody touches. Write at most 100 rows (the script refuses more): aim for 60 to 100; under 30,000 lines of code, 30 to 60. When you have more, keep the ones a newcomer needs most. A repo with a handful of settings lists every one of them.
 - Mark a fact `core` when a newcomer reading only the first page must have it: what the product is for, how to install and start it, its main flows and its main interfaces. At most 20 rows are `core`; the rest are `detail`.
 - Add no security, privacy or threat topic of your own.
 

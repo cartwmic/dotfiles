@@ -4,7 +4,7 @@ It runs on the shipped guide: the one left after the last fix round (decision #4
 
 ## Reader
 
-Start a fresh Opus session with the output of `python3 -I <skill dir>/scripts/score.py --reader GUIDE.md`: the instructions, the five questions below and Part 1 with its tags removed. Nothing else: no repo, no appendix, no tools that read the web or the disk. It writes `answers.md`.
+Start a fresh session (`Seat: reviewer (skill checker), Opus 5.5 medium`) with the output of `python3 -I <skill dir>/scripts/score.py --reader GUIDE.md`: the instructions, the five questions below and Part 1 with its tags removed. Nothing else: no repo, no appendix, no tools that read the web or the disk. It writes `answers.md`.
 
 ## Questions
 
@@ -22,7 +22,7 @@ The reader also lists every word or phrase it did not understand, under `## Unkn
 
 ## Grader
 
-A fresh Opus session gets `answers.md` and the repo (at the commit), not the reader's reasoning. For each of the five answers it reads the code and marks CORRECT, PARTIAL, WRONG or NOT IN TEXT. NOT IN TEXT means Part 1 does not say it: that is a readability failure, not a wrong claim. It reports one line per answer: `Q1 | CORRECT | why, with a path:line`.
+A fresh session (the same seat) gets `answers.md` and the repo (at the commit), not the reader's reasoning. For each of the five answers it reads the code and marks CORRECT, PARTIAL, WRONG or NOT IN TEXT. NOT IN TEXT means Part 1 does not say it: that is a readability failure, not a wrong claim. It reports one line per answer: `Q1 | CORRECT | why, with a path:line`.
 
 ## Pass bar
 
@@ -30,7 +30,7 @@ A fresh Opus session gets `answers.md` and the repo (at the commit), not the rea
 
 ## One fix round
 
-If the bar is missed, a fresh Opus front-writer session fixes Part 1 once (adds the missing answer or defines a word), without rewording a sentence in `fixed-ids.txt` (`lint_main.py --fixed fixed-ids.txt` warns when it does). The guide is linted again (`lint_main.py`), and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round. The sentences the fix changed are checked in the final re-check (`fix-rounds.md`), with the lead's cuts; a cut there can change Part 1 after the reader saw it, so say so in the report.
+If the bar is missed, a fresh front-writer session (`Seat: lead (skill writer), Opus 5.5 medium`) fixes Part 1 once (adds the missing answer or defines a word), without rewording a sentence in `fixed-ids.txt` (`lint_main.py --fixed fixed-ids.txt` warns when it does). The guide is linted again (`lint_main.py`), and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round. The sentences the fix changed are checked in the final re-check (`fix-rounds.md`), with the lead's cuts; a cut there can change Part 1 after the reader saw it, so say so in the report.
 
 ## Limit
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn the coverage grades of a guide into a to-do list for the writers, and record the coverage.
 
-usage: coverage.py <facts.txt> <grades.md> <GUIDE.md> <repo> --label NAME --work DIR [--min PERCENT]
+usage: coverage.py <facts.txt> <grades.md> <GUIDE.md> <repo> --label NAME --work DIR --budget WORDS [--words-per-fact N] [--min PERCENT]
        coverage.py --facts <facts.txt> <repo>
 
 facts.txt   the lister's must-know facts, one a line: `F<n> | core|detail | kind | the fact | path:line` (a range `path:START-END` is fine). The cited line is where the code shows it.
@@ -10,14 +10,19 @@ grades.md   the grader's rows, one for each fact: `F<n> | COVERED|PARTIAL|MISSIN
 GUIDE.md    the guide the grader saw. A COVERED or PARTIAL quote that is not in it (tags, backticks and spacing aside) counts as MISSING, and the to-do says so.
 --label     first (after round-1 assembly), repair (the shipped draft, after the fix rounds) or final (after the final re-check); any name of letters, digits and dashes.
             A label already recorded in DIR is refused: the earlier record is never overwritten.
+--budget    the whole-guide word budget of step 4 of SKILL.md (7,000, or 3,500 under 30k lines). The room for the to-do is that budget less the words the guide has now, counted as
+            `check_citations.py --max-words` counts them.
+--words-per-fact  the words one to-do row is estimated to cost (default 25). The to-do lists as many rows as the room holds at that figure, in this order: core facts first,
+            then MISSING before PARTIAL, then fact number. The rest go in `coverage.md` under `## Did not fit (<label>)` and at the end of the to-do: no writer works them.
 --min       exit 1 when COVERED facts are fewer than this percent of all facts (the files are written first).
 
---facts     only checks the lister's file (every row well formed, every cited line in the repo, no repeated id) and prints the counts: run it before any grader starts.
+--facts     only checks the lister's file (every row well formed, every cited line in the repo, no repeated id, at most 100 facts) and prints the counts: run it before any grader starts.
 
 Writes to DIR: `coverage-<label>.json` (counts, rates, each fact's grade), `coverage-<label>.todo.md` (what to add) and one row in `coverage.md` (every label, side by side).
-The to-do lists each PARTIAL or MISSING fact under the appendix section whose citations name the same file (else A3), then the core ones again as Part 1 candidates with the words
-left under the Part 1 cap. Prints one line: label, counts, COVERED percent, Part 1 words.
-Exit 1 when a file is malformed (a fact with no row or two rows, a row for no fact, a fact citing a line the repo lacks, a label already recorded) or --min is not met; 2 on bad usage.
+A PARTIAL fact is routed to the guide line that holds its quote (`edit line A4.3f9a`): the section file and line id to edit in place. A Part 1 quote is routed to the appendix line its tag
+points at. A MISSING fact goes under the appendix section whose citations name the same file (else A3), with the nearest line of that section that cites the file (`add next to A4.3f9a`).
+The core facts that fit are listed again as Part 1 candidates with the words left under the Part 1 cap. Prints one line: label, counts, COVERED percent, Part 1 words.
+Exit 1 when a file is malformed (a fact with no row or two rows, a row for no fact, a fact citing a line the repo lacks, more than 100 facts, a label already recorded) or --min is not met; 2 on bad usage.
 Stdlib only.
 """
 import json
@@ -30,6 +35,8 @@ sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycac
 from claims import TAG, appendix_lines, line_items, part1_slice, split_lines, word_count  # noqa: E402
 from lint_main import WORDS_MAX  # noqa: E402
 
+MAX_FACTS = 100  # the lister's cap: a longer list is more than a guide's word room holds
+WORDS_PER_FACT = 25  # the words one to-do row is estimated to cost when no --words-per-fact is given
 KINDS = ("purpose", "run", "setting", "limit", "failure", "flow", "interface")
 STATES = ("COVERED", "PARTIAL", "MISSING")
 FACT_ROW = re.compile(r"^(F\d+)\s*\|\s*(core|detail)\s*\|\s*(%s)\s*\|\s*(.+?)\s*\|\s*([^\s|]+:\d+(?:-\d+)?)\s*$" % "|".join(KINDS))
@@ -72,6 +79,8 @@ def read_facts(path, repo):
         out.append((fid, core == "core", kind, fact, cite))
     if not out:
         raise CoverageError("%s holds no fact" % path)
+    if len(out) > MAX_FACTS:
+        raise CoverageError("%s holds %d facts, over the cap of %d: send it back to the lister to keep the %d that matter most (core first)" % (path, len(out), MAX_FACTS, MAX_FACTS))
     return out
 
 
@@ -148,39 +157,135 @@ def suggest(cite, by_file):
     return "A" + (min(counts, key=lambda s: (-counts[s], int(s))) if counts else "3")
 
 
-def build(facts, grades, guide, repo):
+def guide_lines(guide, repo):
+    """[{id, ids, home, squashed, cites, row, line}] for each appendix line of the guide: its first id, the section its id names (the file that holds it), its text as a quote is compared,
+    the (path, lo, hi) it cites, whether it is a table row, and its doc line."""
+    raw, out = guide.split("\n"), []
+    for l in appendix_lines(guide, repo):
+        text = raw[l["line"] - 1]
+        cites = [c for _, _, cs, _ in line_items(text, repo) for c in cs]
+        out.append({"id": l["ids"][0] if l["ids"] else None, "ids": l["ids"], "home": l["ids"][0].split(".")[0][1:] if l["ids"] else l["section"], "squashed": squash(text),
+                    "cites": cites, "row": text.lstrip().startswith("|"), "line": l["line"]})
+    return out
+
+
+def distance(cites, path, lo, hi):
+    """How far the nearest range of `cites` in `path` lies from lines lo-hi (0 when they overlap); None when none is in that file."""
+    near = [max(0, a - hi, lo - b) for p, a, b in cites if p == path]
+    return min(near) if near else None
+
+
+def route_partial(row, lines, guide, repo):
+    """(section number, line id, how) for a PARTIAL row: the line to edit in place. The guide line that holds the quote (the one citing the fact's file when several do); a quote of Part 1
+    goes to the appendix line the sentence is tagged with. How: "edit", "edit via Part 1", or "guess" when no one line holds the quote."""
+    path = CITE.match(row["cite"]).group(1)
+    q = squash(row["quote"])
+    by_id = {i: l for l in lines for i in l["ids"]}
+    holders = [l for l in lines if q and q in l["squashed"] and l["id"]]
+    holders.sort(key=lambda l: (distance(l["cites"], path, 0, 10 ** 9) is None, l["line"]))
+    if holders:
+        return holders[0]["home"], holders[0]["id"], "edit"
+    if row["where"] == "part1":
+        for n, text in enumerate(part1_slice(guide).split("\n")):
+            if q and q in squash(text):
+                tags = [t.strip("[]") for t in TAG.findall(text) if t.strip("[]") in by_id]
+                tags.sort(key=lambda t: distance(by_id[t]["cites"], path, 0, 10 ** 9) is None)
+                if tags:
+                    return by_id[tags[0]]["home"], tags[0], "edit via Part 1"
+    return None, None, "guess"
+
+
+def route_missing(row, lines, section):
+    """The nearest line of `section` (by the lines of the fact's file it cites) to add the new line next to: (id, cite text, is a table row), or None when no line of it cites the file."""
+    c = CITE.match(row["cite"])
+    path, lo, hi = c.group(1), int(c.group(2)), int(c.group(3) or c.group(2))
+    best = None
+    for l in lines:
+        if l["home"] != section[1:] or not l["id"]:
+            continue
+        d = distance(l["cites"], path, lo, hi)
+        if d is not None and (best is None or d < best[0]):
+            best = (d, l)
+    if not best:
+        return None
+    l = best[1]
+    near = min((c for c in l["cites"] if c[0] == path), key=lambda c: max(0, c[1] - hi, lo - c[2]))
+    return l["id"], "%s:%d%s" % (near[0], near[1], "-%d" % near[2] if near[2] != near[1] else ""), l["row"]
+
+
+def rank(rows):
+    """The to-do order: core first, then MISSING before PARTIAL, then fact number."""
+    return sorted((r for r in rows if r["state"] != "COVERED"), key=lambda r: (not r["core"], r["state"] != "MISSING", int(r["id"][1:])))
+
+
+def build(facts, grades, guide, repo, budget, words_per_fact=WORDS_PER_FACT):
     checked = verify(grades, guide)
-    by_file = sections(guide, repo)
+    by_file, lines = sections(guide, repo), guide_lines(guide, repo)
     rows = []
     for fid, core, kind, fact, cite in facts:
         state, quote, where, why = checked[fid]
-        rows.append({"id": fid, "core": core, "kind": kind, "fact": fact, "cite": cite, "state": state, "quote": quote, "where": where, "why": why, "section": suggest(cite, by_file)})
+        r = {"id": fid, "core": core, "kind": kind, "fact": fact, "cite": cite, "state": state, "quote": quote, "where": where, "why": why, "section": suggest(cite, by_file),
+             "line_id": None, "route": "", "near": None}
+        if state == "PARTIAL":
+            sec, lid, how = route_partial(r, lines, guide, repo)
+            r["route"], r["line_id"] = how, lid
+            if lid:
+                r["section"] = "A" + sec
+        elif state == "MISSING":
+            r["route"] = "add"
+            near = route_missing(r, lines, r["section"])
+            r["near"] = list(near) if near else None
+        rows.append(r)
     counts = {s: sum(1 for r in rows if r["state"] == s) for s in STATES}
     total = len(rows)
-    words = word_count(part1_slice(guide), repo)
+    words, guide_words = word_count(part1_slice(guide), repo), word_count(guide, repo)
+    room = budget - guide_words
+    fit = max(0, room // words_per_fact)
+    order = rank(rows)
+    listed = {r["id"] for r in order[:fit]}
+    for r in rows:
+        r["listed"] = r["id"] in listed
     return {"facts": total, **{s.lower(): counts[s] for s in STATES},
             "covered_percent": round(100.0 * counts["COVERED"] / total, 1), "covered_or_partial_percent": round(100.0 * (counts["COVERED"] + counts["PARTIAL"]) / total, 1),
             "core": sum(1 for r in rows if r["core"]), "core_covered": sum(1 for r in rows if r["core"] and r["state"] == "COVERED"),
-            "part1_words": words, "part1_room": WORDS_MAX - words, "rows": rows}
+            "part1_words": words, "part1_room": WORDS_MAX - words,
+            "guide_words": guide_words, "budget": budget, "room": room, "words_per_fact": words_per_fact, "fit": fit,
+            "todo": [r["id"] for r in order[:fit]], "did_not_fit": [r["id"] for r in order[fit:]], "rows": rows}
+
+
+def row_line(r):
+    has = r["why"] or ("guide has: \"%s\"" % r["quote"] if r["state"] == "PARTIAL" else "guide has no line for it")
+    out = "- %s %s %s | %s | code: `%s` | %s" % (r["id"], r["state"], "core" if r["core"] else "detail", r["fact"], r["cite"], has)
+    if r["state"] == "PARTIAL":
+        if r["route"] == "guess":
+            return out + " | edit the line that says it (no one line holds the quote: the section is a guess)"
+        return out + " | edit line %s in place%s" % (r["line_id"], " (the Part 1 sentence is tagged to it)" if r["route"] == "edit via Part 1" else "")
+    if r["near"]:
+        return out + " | add next to %s (cites `%s`)%s" % (r["near"][0], r["near"][1], ": a table row, so add a row of its table" if r["near"][2] else "")
+    return out + " | add after the last prose line of its section (no line of it cites this file)"
 
 
 def todo_text(label, rec):
-    todo = [r for r in rec["rows"] if r["state"] != "COVERED"]
-    out = ["# Coverage to-do (%s): %d of %d facts to add" % (label, len(todo), rec["facts"]), "",
-           "Add each fact to the appendix as one cited sentence on its own line (`references/drafting.md`): the value, default, limit, unit and failure result the code has.",
-           "A PARTIAL fact keeps its line and gains what it lacks. The writer drafts the new and changed lines in `cov-A<n>.md` and audits that file (`references/coverage.md`).", ""]
+    rows = {r["id"]: r for r in rec["rows"]}
+    todo = [rows[i] for i in rec["todo"]]
+    left = [rows[i] for i in rec["did_not_fit"]]
+    out = ["# Coverage to-do (%s): %d of %d facts to work, %d did not fit" % (label, len(todo), rec["facts"], len(left)), "",
+           "Room: %d words left of the %d-word budget (the guide has %d), at %d words a fact: %d facts listed, ranked core first, then MISSING before PARTIAL." % (
+               rec["room"], rec["budget"], rec["guide_words"], rec["words_per_fact"], rec["fit"]),
+           "A PARTIAL fact is an edit: change the line it names in place, keeping its id, and say what it lacked. A MISSING fact is a new cited sentence on its own line, placed next to the line it names",
+           "(`references/drafting.md`): the value, default, limit, unit and failure result the code has. The writer drafts the new and changed lines in `cov-A<n>.md` and audits that file (`references/coverage.md`).", ""]
     for sec in sorted({r["section"] for r in todo}, key=lambda s: int(s[1:])):
         out.append("## %s" % sec)
         out.append("Files: " + ", ".join(sorted({CITE.match(r["cite"]).group(1) for r in todo if r["section"] == sec})))
-        for r in (r for r in todo if r["section"] == sec):
-            has = r["why"] or ("guide has: \"%s\"" % r["quote"] if r["state"] == "PARTIAL" else "guide has no line for it")
-            out.append("- %s %s %s | %s | code: `%s` | %s" % (r["id"], r["state"], "core" if r["core"] else "detail", r["fact"], r["cite"], has))
+        out += [row_line(r) for r in todo if r["section"] == sec]
         out.append("")
     core = [r for r in todo if r["core"]]
     out += ["## Part 1 (core facts)", "",
-            "Part 1 holds %d of %d words: room %d. Add one plain sentence of at most 18 words for a core fact below, tagged to its new appendix line, while room lasts and `lint_main.py` passes;" % (rec["part1_words"], WORDS_MAX, rec["part1_room"]),
+            "Part 1 holds %d of %d words: room %d. Add one plain sentence of at most 18 words for a core fact below, tagged to its new or edited appendix line, while room lasts and `lint_main.py` passes;" % (rec["part1_words"], WORDS_MAX, rec["part1_room"]),
             "a fact that does not fit stays in the appendix only. Never cut How to start or the Who it is for sentence.", ""]
-    out += ["- %s | %s" % (r["id"], r["fact"]) for r in core] or ["- none: every core fact is covered"]
+    out += ["- %s | %s" % (r["id"], r["fact"]) for r in core] or ["- none: no core fact is left to add"]
+    if left:
+        out += ["", "## Did not fit (no writer works these)", ""] + ["- %s %s %s | %s | code: `%s`" % (r["id"], r["state"], "core" if r["core"] else "detail", r["fact"], r["cite"]) for r in left]
     return "\n".join(out) + "\n"
 
 
@@ -190,6 +295,20 @@ HEAD = ["| label | facts | covered | partial | missing | covered % | covered or 
 def log_row(label, rec):
     return "| %s | %d | %d | %d | %d | %s | %s | %d of %d | %d |" % (label, rec["facts"], rec["covered"], rec["partial"], rec["missing"], rec["covered_percent"],
                                                                  rec["covered_or_partial_percent"], rec["core_covered"], rec["core"], rec["part1_words"])
+
+
+def log_text(old, label, rec):
+    """coverage.md with this label's row at the end of the table (the table is the lines that start with `|`) and, when facts did not fit, its list after what is there."""
+    lines = old.rstrip("\n").split("\n") if old and old.strip() else list(HEAD)
+    k = 0
+    while k < len(lines) and lines[k].startswith("|"):
+        k += 1
+    rows = {r["id"]: r for r in rec["rows"]}
+    out = lines[:k] + [log_row(label, rec)] + lines[k:]
+    if rec["did_not_fit"]:
+        out += ["", "## Did not fit (%s)" % label, "", "Room %d words at %d a fact: %d facts listed, %d did not fit." % (rec["room"], rec["words_per_fact"], len(rec["todo"]), len(rec["did_not_fit"])), ""]
+        out += ["- %s %s %s | %s | code: `%s`" % (i, rows[i]["state"], "core" if rows[i]["core"] else "detail", rows[i]["fact"], rows[i]["cite"]) for i in rec["did_not_fit"]]
+    return "\n".join(out) + "\n"
 
 
 def record(work, label, rec):
@@ -202,9 +321,9 @@ def record(work, label, rec):
     with open(paths[1], "w", encoding="utf-8") as f:
         f.write(todo_text(label, rec))
     log = os.path.join(work, "coverage.md")
-    lines = read(log).rstrip("\n").split("\n") if os.path.isfile(log) else HEAD
+    text = log_text(read(log) if os.path.isfile(log) else "", label, rec)  # read before open() empties the file
     with open(log, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines + [log_row(label, rec)]) + "\n")
+        f.write(text)
 
 
 def main(argv):
@@ -222,27 +341,28 @@ def main(argv):
         return 0
     args, opts, it = [], {}, iter(argv[1:])
     for a in it:
-        if a in ("--label", "--work", "--min"):
+        if a in ("--label", "--work", "--min", "--budget", "--words-per-fact"):
             opts[a] = next(it, None)
         else:
             args.append(a)
     low = opts.get("--min")
     bad_min = low is not None and not re.fullmatch(r"\d+(?:\.\d+)?", low)
     if len(args) != 4 or not all(os.path.isfile(a) for a in args[:3]) or not os.path.isdir(args[3]) or not LABEL.match(opts.get("--label") or "") \
-            or not opts.get("--work") or not os.path.isdir(opts["--work"]) or bad_min:
+            or not opts.get("--work") or not os.path.isdir(opts["--work"]) or bad_min \
+            or not re.fullmatch(r"[1-9]\d*", opts.get("--budget") or "") or not re.fullmatch(r"[1-9]\d*", opts.get("--words-per-fact") or str(WORDS_PER_FACT)):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     facts_path, grades_path, guide_path, repo = args[0], args[1], args[2], os.path.realpath(args[3])
     try:
         facts = read_facts(facts_path, repo)
-        rec = build(facts, read_grades(grades_path, facts), read(guide_path), repo)
+        rec = build(facts, read_grades(grades_path, facts), read(guide_path), repo, int(opts["--budget"]), int(opts.get("--words-per-fact") or WORDS_PER_FACT))
         record(opts["--work"], opts["--label"], rec)
     except CoverageError as e:
         print(e, file=sys.stderr)
         return 1
-    print("%s: %d facts, covered %d, partial %d, missing %d: %s%% covered, %s%% covered or partial; core %d of %d covered; Part 1 %d of %d words" % (
+    print("%s: %d facts, covered %d, partial %d, missing %d: %s%% covered, %s%% covered or partial; core %d of %d covered; Part 1 %d of %d words; to-do %d facts, %d did not fit (room %d words)" % (
         opts["--label"], rec["facts"], rec["covered"], rec["partial"], rec["missing"], rec["covered_percent"], rec["covered_or_partial_percent"],
-        rec["core_covered"], rec["core"], rec["part1_words"], WORDS_MAX))
+        rec["core_covered"], rec["core"], rec["part1_words"], WORDS_MAX, len(rec["todo"]), len(rec["did_not_fit"]), rec["room"]))
     if low is not None and rec["covered_percent"] < float(low):
         print("BELOW %s%%: %d facts are still not covered (coverage-%s.todo.md)" % (low, rec["partial"] + rec["missing"], opts["--label"]))
         return 1

@@ -560,9 +560,9 @@ class BatchSixDocsTest(unittest.TestCase):
     def test_writers_write_evidence_and_audit_files_by_hand(self):
         self.assertRegex(self.ref("drafting.md"), r"(?i)no script generates or fills")
 
-    def test_the_check_brief_is_version_9_and_counts_the_next_sentence_in_the_appendix(self):
+    def test_the_check_brief_is_version_10_and_counts_the_next_sentence_in_the_appendix(self):
         text = self.ref("check-brief.md")
-        self.assertIn("version 9", text)
+        self.assertIn("version 10", text)
         self.assertRegex(text, r"(?i)appendix claim: a condition[^\n]*very next appendix line in the same section")
         self.assertRegex(text, r"(?i)log: v8")
 

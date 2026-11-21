@@ -47,6 +47,7 @@ The sync interval is set in the settings. `src/app.py:10` [A4.bbbb]
 
 A refused connection is retried 3 times. `src/net.py:7` [A4.cccc]
 """
+BUDGET = 7000
 GRADES = """F1 | COVERED | "It syncs your notes to a server."
 F2 | PARTIAL | "The sync interval is set in the settings."
 F3 | MISSING | -
@@ -77,7 +78,7 @@ class Work(unittest.TestCase):
 
     def run_cli(self, *args, label="first"):
         r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "coverage.py"), self.path("facts.txt"), self.path("grades.md"), self.path("GUIDE.md"), self.repo,
-                            "--label", label, "--work", self.work, *args], capture_output=True, text=True)
+                            "--label", label, "--work", self.work, *(("--budget", str(BUDGET)) if "--budget" not in args else ()), *args], capture_output=True, text=True)
         return r
 
 
@@ -206,7 +207,7 @@ class BuildTest(Work):
     def rec(self, grades=GRADES, guide=GUIDE):
         self.write("grades.md", grades)
         facts = coverage.read_facts(self.path("facts.txt"), self.repo)
-        return coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), guide, self.repo)
+        return coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), guide, self.repo, BUDGET)
 
     def test_counts_rates_and_core_counts(self):
         rec = self.rec()
@@ -260,7 +261,7 @@ class GatheredTablesTest(Work):
     def test_the_to_do_never_names_a_section_that_has_no_file(self):
         facts = coverage.read_facts(self.path("facts.txt"), self.repo)
         self.write("grades.md", GRADES)
-        rec = coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), self.GUIDE, self.repo)
+        rec = coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), self.GUIDE, self.repo, BUDGET)
         self.assertEqual({r["section"] for r in rec["rows"]} - {"A3", "A4"}, set())
 
 
@@ -268,12 +269,12 @@ class TodoTest(Work):
     def todo(self, grades=GRADES):
         self.write("grades.md", grades)
         facts = coverage.read_facts(self.path("facts.txt"), self.repo)
-        rec = coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), GUIDE, self.repo)
+        rec = coverage.build(facts, coverage.read_grades(self.path("grades.md"), facts), GUIDE, self.repo, BUDGET)
         return coverage.todo_text("first", rec)
 
     def test_it_lists_each_partial_and_missing_fact_and_no_covered_one(self):
         text = self.todo()
-        self.assertIn("3 of 5 facts to add", text)
+        self.assertIn("3 of 5 facts to work", text)
         for fid in ("F2 PARTIAL", "F3 MISSING", "F5 MISSING"):
             self.assertIn(fid, text)
         self.assertNotIn("F1 COVERED", text)
@@ -297,11 +298,12 @@ class TodoTest(Work):
 
     def test_with_every_core_fact_covered_part_1_says_none(self):
         text = self.todo(GRADES.replace('F2 | PARTIAL | "The sync interval is set in the settings."', 'F2 | COVERED | "The sync interval is set in the settings."').replace("F5 | MISSING | -", 'F5 | COVERED | "It syncs your notes to a server."'))
-        self.assertIn("none: every core fact is covered", text)
+        self.assertIn("none: no core fact is left to add", text)
 
     def test_each_section_lists_the_files_its_facts_cite_for_the_writers_brief(self):
         text = self.todo()
-        self.assertRegex(text, r"## A3\nFiles: src/app\.py\n- F2")
+        self.assertRegex(text, r"## A3\nFiles: src/app\.py\n- F5")
+        self.assertRegex(text, r"## A4\nFiles: src/app\.py\n- F2")
         self.assertIn("`cov-A<n>.md`", text)
 
     def test_the_rows_are_grouped_under_their_section_in_order(self):
@@ -381,7 +383,7 @@ class SkillWiringTest(unittest.TestCase):
         self.assertLess(SKILL.index("7. **Assemble and gate.**"), SKILL.index("8. **Coverage (first).**"))
         self.assertLess(SKILL.index("8. **Coverage (first).**"), SKILL.index("10. **Check every claim.**"))
         step = self.step(8)
-        for word in ("fresh Opus lister", "fresh Opus grader", "coverage.py", "--label first", "to-do", "assemble.py"):
+        for word in ("fresh lister", "fresh grader", "coverage.py", "--label first", "--budget", "to-do", "assemble.py"):
             self.assertIn(word, step)
 
     def test_repair_regrades_the_same_facts_then_checks_the_whole_guide_then_the_closing_step_checks_the_rest(self):
@@ -406,12 +408,12 @@ class SkillWiringTest(unittest.TestCase):
         self.assertRegex(self.step(4), r"1,000 words are left for the coverage additions")
 
     def test_every_session_the_pass_starts_names_its_model_in_the_skill_and_the_briefs(self):
-        self.assertIn("Seat: lister, Opus", LISTER)
-        self.assertIn("Seat: grader, Opus", GRADER)
-        self.assertIn("fresh Opus lister", COVERAGE)
-        self.assertIn("fresh Opus grader", COVERAGE)
-        self.assertIn("fresh Opus writer", COVERAGE)
-        self.assertIn("fresh Opus front writer", COVERAGE)
+        self.assertIn("Seat: lead (skill writer), Opus 5.5 medium", LISTER)
+        self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium", GRADER)
+        self.assertIn("fresh lister session (`Seat: lead (skill writer), Opus 5.5 medium`)", COVERAGE)
+        self.assertIn("fresh grader session (`Seat: reviewer (skill checker), Opus 5.5 medium`)", COVERAGE)
+        self.assertIn("One fresh writer for each section", COVERAGE)
+        self.assertIn("fresh front writer (`Seat: lead (skill writer), Opus 5.5 medium`)", COVERAGE)
 
     def test_the_lister_sees_the_repo_and_not_the_guide(self):
         self.assertRegex(LISTER, r"(?i)you have not seen the guide")

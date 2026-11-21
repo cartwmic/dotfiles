@@ -151,14 +151,14 @@ class RoundTwoTest(unittest.TestCase):
 
     def test_the_reader_is_opus_and_gets_one_fix_round(self):
         reader = READER.split("## Reader", 1)[1].split("##", 1)[0]
-        self.assertIn("Opus", reader)
+        self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium", reader)
         self.assertNotIn("Sonnet", reader)
         self.assertRegex(READER, r"(?i)one (reader )?fix round")
 
     def test_the_check_brief_tells_checkers_a_value_set_on_the_cited_line_holds_for_count(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)set on the cited line")
-        self.assertRegex(CHECK_BRIEF, r"version 9")
-        self.assertNotRegex(CHECK_BRIEF, r"version [567]\b")
+        self.assertRegex(CHECK_BRIEF, r"version 10")
+        self.assertNotRegex(CHECK_BRIEF, r"version [5679]\b")
 
     def test_a_glossary_entry_is_tagged_like_any_other_part_1_sentence(self):
         self.assertRegex(DRAFTING, r"(?i)glossary[^\n]*each[^\n]*tag")
@@ -167,13 +167,19 @@ class RoundTwoTest(unittest.TestCase):
         self.assertRegex(READER, r"(?i)do not list a word the text defines")
 
     def test_every_session_the_skill_starts_names_its_model(self):
-        self.assertIn("scout session (Sonnet)", SKILL)
-        self.assertIn("fresh Opus session per writer", SKILL)
-        self.assertIn("Opus front writer", SKILL)
-        self.assertIn("Opus checker session", SKILL)
-        self.assertIn("fresh Opus reader", SKILL)
-        self.assertIn("fresh Opus grader", SKILL)
-        self.assertIn("Seat: checker, Opus", CHECK_BRIEF)
+        self.assertIn("Scout: `Seat: scout, Haiku 5.5 xhigh`", SKILL)
+        self.assertIn("`Seat: lead (skill writer), Opus 5.5 medium`", SKILL)
+        self.assertIn("`Seat: reviewer (skill checker), Opus 5.5 medium`", SKILL)
+        self.assertIn("scout session", SKILL)
+        self.assertIn("fresh session per writer", SKILL)
+        self.assertIn("separate front writer", SKILL)
+        self.assertIn("fresh checker session", SKILL)
+        self.assertIn("fresh reader", SKILL)
+        self.assertIn("fresh grader", SKILL)
+        self.assertNotRegex(SKILL, r"(?i)\b(?:fresh|separate) Opus\b|Sonnet")
+        self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium", CHECK_BRIEF)
+        self.assertIn("Seat: lead (skill writer), Opus 5.5 medium", DRAFTING)
+        self.assertIn("Seat: scout, Haiku 5.5 xhigh", DRAFTING)
         self.assertNotIn("the model the caller's table gives", DRAFTING + SKILL)
         self.assertNotIn("the model your seat table gives", CHECK_BRIEF)
 
@@ -184,7 +190,7 @@ class RoundTwoTest(unittest.TestCase):
         self.assertIn("no-ai-slop", front)
 
     def test_step_9_has_the_lead_use_a_front_writer_session_for_part_1_and_a_list_of_ids(self):
-        self.assertRegex(SKILL, r"(?i)Part 1 finding is fixed by a fresh Opus front-writer session")
+        self.assertRegex(SKILL, r"(?i)Part 1 finding is fixed by a fresh front-writer session")
         self.assertIn("--ids", SKILL)
         self.assertIn("--record-fixed", SKILL)
         self.assertIn("--fixed", SKILL)

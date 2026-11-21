@@ -260,16 +260,17 @@ class SkillWordsTest(unittest.TestCase):
         step = SKILL.split("**Final re-check.**")[1].split("\n")[0]
         self.assertIn("final_recheck.py", step)
         self.assertIn("--was", step)
-        self.assertRegex(step, r"(?i)no rewrite, no further round")
+        self.assertRegex(step, r"(?i)one fix and one re-check before it may be cut")
+        self.assertRegex(step, r"(?i)do not run `assemble\.py` again after a cut")
         self.assertIn("assemble.py", step)
 
     def test_fix_rounds_md_spells_out_the_closing_step_in_order(self):
         text = FIX_ROUNDS.split("## Final re-check")[1]
-        steps = [text.index(w) for w in ("final_recheck.py changed", "slice.py GUIDE.md", "fresh Opus checker", "score.py", "final_recheck.py cut", "check_citations.py", "lint_main.py")]
+        steps = [text.index(w) for w in ("final_recheck.py changed", "slice.py GUIDE.md", "fresh checker", "score.py", "final_recheck.py cut", "check_citations.py", "lint_main.py")]
         self.assertEqual(steps, sorted(steps))
         self.assertRegex(text, r"(?i)nothing changed, stop")
         self.assertRegex(text, r"(?i)is not a second pass over the guide")
-        self.assertRegex(text, r"(?i)nothing is reworded, and there is no further round")
+        self.assertRegex(text, r"(?i)nothing is rewritten after step 7")
 
     def test_the_old_wording_that_left_the_lead_cuts_unchecked_is_gone(self):
         self.assertNotRegex(SKILL, r"the lead makes every cut after that")

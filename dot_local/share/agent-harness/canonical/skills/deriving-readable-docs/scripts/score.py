@@ -15,7 +15,7 @@ OVERSTATED N; UNSUPPORTED N.` (references/check-brief.md) and has one finding li
 Exit 1, naming the file, when a report has no Counts line or two, when HOLDS+WRONG+OVERSTATED+UNSUPPORTED is not claims checked,
 or when its finding lines are not as many as WRONG+OVERSTATED+UNSUPPORTED. Nothing found for a repo is an error too.
 The depth floor (check brief version 8). A report also holds one row for each claim it was given: `read | <claim id> | <verdict> | <path:line>`, the line the
-checker actually opened (`outside` for a glossary entry with no tag, which has no line). Exit 1 when it has no such rows (a report in the old format cannot be
+checker actually opened (`outside` for a glossary entry with no tag or a table header row, which has no line). Exit 1 when it has no such rows (a report in the old format cannot be
 judged), a row names no path:line (a HOLDS row too), the rows are not as many as claims checked or do not add up to the Counts line, or two rows share an id.
 With --slices, a report that read fewer than one distinct line for every three claims also prints a depth warning (it never changes the exit code); the report records the
 lines read, not the tool calls, so tool calls are not judged. With --repo, a path:line must be a line of a file in the repo. With --slices DIR (the folder slice.py wrote), the report's line `Slice: slice-K` names
@@ -130,7 +130,7 @@ def check_rows(path, text, rows, counts, ctx):
                              "%s: rows for claims that are not in its slice: %s" % (path, ", ".join(extra[:8])))
         for cid, _, ev in rows:
             if (given[cid] == "outside") != (ev == "outside"):
-                raise ScoreError("%s: row %s: `outside` is for an untagged glossary entry only, and such an entry takes `outside`, not a line" % (path, cid))
+                raise ScoreError("%s: row %s: `outside` is for an untagged glossary entry or a table header row only, and such a row takes `read | N.k | HOLDS | outside`, not a line" % (path, cid))
 
 
 def parse_report(path, ctx=None):
