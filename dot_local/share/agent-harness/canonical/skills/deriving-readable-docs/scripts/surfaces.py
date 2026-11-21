@@ -73,7 +73,7 @@ PATTERNS = [
     ("command", r"\.rs$", r"#\[command\(([^)]*)\)\]", 1),
     ("env", r"\.rs$", r"env::var(?:_os)?\(\"(\w+)\"", 1),
     ("route", r"\.rs$", r"#\[(?:\w+::)*(?:get|post|put|delete|patch|head|options)\(\s*\"([^\"]+)\"", 1),
-    ("route", r"\.rs$", r"#\[(?:\w+::)*route\(\s*(?:[A-Z]+,\s*path\s*=\s*)?\"([^\"]+)\"", 1),
+    ("route", r"\.rs$", r"#\[(?:\w+::)*route\(\s*(?:[A-Z]+,\s*(?:path|uri)\s*=\s*)?\"([^\"]+)\"", 1),
     # JS, TS
     ("command", JS, r"\.command\(\s*[\"']([^\"']+)", 1),
     ("flag", JS, r"\.(?:option|requiredOption)\(\s*[\"']([^\"']+)", 1),

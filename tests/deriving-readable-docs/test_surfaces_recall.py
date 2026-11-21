@@ -1,5 +1,6 @@
-"""surfaces.py on the forms a recall check found it could not see. Every snippet is copied from a real repo (named at its entry):
-vaultwarden, ntfy, lapce, uptime-kuma. A row must still be a real line of the repo.
+"""surfaces.py on the forms a recall check found it could not see. Each pattern's main case is copied from the real repo that showed the gap (named at its
+entry): vaultwarden, ntfy, lapce, uptime-kuma. Variants (other verbs, `uri =`, `timeout: 48`) and noise guards (`cachePath`, `webSiteDir`, a theme file,
+a plain `defaults` object) are added, not copied. A row must still be a real line of the repo.
 Run: python3 -I tests/deriving-readable-docs/test_surfaces_recall.py"""
 import json
 import subprocess
@@ -14,7 +15,7 @@ FILES = {
     # vaultwarden src/api/web.rs, src/api/notifications.rs; plus a call-style `get(` that is not an attribute
     "src/api/web.rs": '// We use DbConn here to let the alive healthcheck also verify the database connection.\n#[get("/alive")]\nfn alive(_conn: DbConn) -> Json<String> {\n    now()\n}\n\n'
                       '#[post("/hub?<data..>", data = "<body>")]\nfn hub() {}\n#[delete("/x")]\nfn x() {}\n#[put("/y")]\nfn y() {}\n#[head("/z")]\nfn z() {}\n'
-                      '#[route(GET, path = "/ping")]\nfn p() {}\nlet r = get("/not-an-attribute");\n',
+                      '#[route(GET, path = "/ping")]\nfn p() {}\n#[route(POST, uri = "/pong")]\nfn q() {}\nlet r = get("/not-an-attribute");\n',
     # ntfy server/server.go: the paths are constants, and the handler tests `r.URL.Path == apiHealthPath`
     "server/server.go": 'var (\n\taccountPath                                          = "/account"\n\tmatrixPushPath                                       = "/_matrix/push/v1/notify"\n'
                         '\tapiHealthPath                                        = "/v1/health"\n\tapiReadyPath                                         = "/v1/ready"\n\tcachePath                                            = "/var/cache/ntfy"\n\twebSiteDir                                           = "/site"\n)\n\n'
@@ -108,7 +109,8 @@ class RecallFormsTest(unittest.TestCase):
         self.has("route", "/x", "src/api/web.rs", "#[delete(")
         self.has("route", "/y", "src/api/web.rs", "#[put(")
         self.has("route", "/z", "src/api/web.rs", "#[head(")
-        self.has("route", "/ping", "src/api/web.rs", "#[route(")
+        self.has("route", "/ping", "src/api/web.rs", "#[route(GET")
+        self.has("route", "/pong", "src/api/web.rs", "#[route(POST")
 
     def test_a_rust_call_that_is_not_an_attribute_is_not_a_route(self):
         self.assertNotIn("/not-an-attribute", self.names("route"))
