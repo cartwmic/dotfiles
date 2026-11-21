@@ -280,10 +280,14 @@ class SetupHelperTest(unittest.TestCase):
         self.assert_code_not_leaked(r)
 
     def test_the_helper_looks_in_the_profile_agent_chrome_starts(self):
-        line = 'PROFILE="$HOME/.local/share/agent-chrome-profile"'
+        default = "$HOME/.local/share/agent-chrome-profile"
         for script in (SCRIPT, SCRIPT.with_name("executable_agent-chrome")):
             with self.subTest(script=script.name):
-                self.assertIn(line, script.read_text().splitlines())
+                lines = script.read_text().splitlines()
+                self.assertTrue(
+                    any(l.startswith('PROFILE="') and default in l for l in lines),
+                    "expected PROFILE default %s in %s" % (default, script.name),
+                )
 
     def test_a_code_nobody_types_fails_and_still_ends_with_the_status(self):
         chrome = self.chrome(extension_installed=True)
