@@ -19,6 +19,52 @@ from cursor_apply import PROFILES, Apply, canonical_servers, dummy  # noqa: E402
 FOREIGN = {"command": "npx", "args": ["x"], "env": {"A": "${env:A}"}}
 JIRA_REF = "op://developer/jira - mcp url/credential"
 CONTEXT7_REF = "op://developer/context7 - api key/credential"
+SECRET = "resolved-test-value-0600"
+# Generated files that can hold a resolved value, with the mode each must have (the script is executable, so 0700).
+RESOLVED = {
+    "claude/mcp-resolved.json": 0o600,
+    "claude/setup-mcp.sh": 0o700,
+    "codex/mcp-resolved.json": 0o600,
+    "codex/mcp.toml": 0o600,
+    "cursor/mcp-resolved.json": 0o600,
+    "pi/mcp-resolved.json": 0o600,
+}
+# Generated files that hold only server names, so nothing resolved: their mode is left as it is.
+NAMES_ONLY = ("cursor/mcp-managed.json", "pi/mcp-managed.json")
+
+
+def secret_apply(test, profile):
+    """A scratch apply for `profile` whose canonical input has a server that reads ${TEST_SECRET} in its env and in a header."""
+    a = Apply(test, profile)
+    (a.tmp / "canonical/mcp/servers.json").write_text(json.dumps({"mcpServers": {
+        "local": {"command": "example-server", "args": ["--stdio"], "env": {"TOKEN": "${TEST_SECRET}"}},
+        "remote": {"url": "https://remote.example.test/mcp", "headers": {"Authorization": "Bearer ${TEST_SECRET}"}},
+    }}))
+    a.env["TEST_SECRET"] = SECRET
+    a.env["AGENT_HARNESS_APPLY_CLAUDE_MCP"] = "0"  # the Claude script is written, not run
+    return a
+
+
+def plant_old_generated_files(a):
+    """Generated files an earlier apply left world-readable (the script 0755), with stale content."""
+    for rel in list(RESOLVED) + list(NAMES_ONLY):
+        path = a.tmp / "generated" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("stale\n")
+        path.chmod(0o755 if rel.endswith(".sh") else 0o644)
+
+
+def assert_generated_modes(test, a):
+    """Every generated file is there. The resolved ones are owner-only and hold the value; the names-only ones hold no value."""
+    generated = a.tmp / "generated"
+    found = {p.relative_to(generated).as_posix() for p in generated.rglob("*") if p.is_file()}
+    test.assertEqual(found, set(RESOLVED) | set(NAMES_ONLY))
+    for rel, mode in RESOLVED.items():
+        path = generated / rel
+        test.assertEqual(stat.S_IMODE(path.stat().st_mode), mode, rel)
+        test.assertIn(SECRET, path.read_text(), rel)
+    for rel in NAMES_ONLY:
+        test.assertNotIn(SECRET, (generated / rel).read_text(), rel)
 
 
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi needed")
@@ -167,6 +213,21 @@ class ApplyCursor(unittest.TestCase):
         pi_mcp = a.home / ".pi/agent/mcp.json"
         self.assertIn("context7", json.loads(pi_mcp.read_text())["mcpServers"])
         self.assertEqual(stat.S_IMODE(pi_mcp.stat().st_mode), 0o600)
+
+    def test_generated_files_that_can_hold_a_resolved_value_are_owner_only(self):
+        # Pin the umask: a runner with a tighter umask would pass even without the fix.
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+        for profile in PROFILES:
+            with self.subTest(profile=profile, case="new files"):
+                a = secret_apply(self, profile)
+                a.run("all")
+                assert_generated_modes(self, a)
+            with self.subTest(profile=profile, case="existing files left world-readable"):
+                b = secret_apply(self, profile)
+                plant_old_generated_files(b)
+                b.run("all")
+                assert_generated_modes(self, b)
 
 
 if __name__ == "__main__":
