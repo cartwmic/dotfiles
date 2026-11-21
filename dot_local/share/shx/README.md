@@ -53,6 +53,8 @@ Every outcome prints one JSON object on stdout.
 
 `SHX_NO_SANDBOX=1` starts Chromium with `--no-sandbox`, for a machine whose kernel does not allow its sandbox (the tests set it on a hosted CI runner).
 
+One render, from starting Chromium to the last read of the page, must end within 60 s (`SHX_RENDER_TIMEOUT_MS` changes it). When it does not, the `render_failed` message names the step it was in, how long each step took, and what Chromium printed on stderr. The wait for `/view` to load an artifact into its frame is half of that limit. A page whose renderer dies fails at once with `the page crashed ...`, and the run starts a new Chromium and tries once more before it reports the failure.
+
 Without `--out` the PNG is `${XDG_STATE_HOME:-~/.local/state}/shx/images/note-<artifact>-<comment>-v<N>.png`.
 
 ## Log

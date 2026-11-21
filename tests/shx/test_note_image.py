@@ -9,10 +9,12 @@ tests skip. Run: python3 -I tests/shx/test_note_image.py
 import json
 import os
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -92,6 +94,7 @@ class Fixture(ThreadingHTTPServer):
     def __init__(self, latest=2, comments=COMMENTS):
         super().__init__(("127.0.0.1", 0), Handler)
         self.latest, self.comments, self.requests, self.matches = latest, comments, [], []
+        self.spin = None  # n -> bool: whether the n-th request for the artifact's page (1-based) keeps its thread busy once loaded on its own, never painting again
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     @property
@@ -119,7 +122,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(view_page(), "text/html")
         if parts[0] == "preview" and len(parts) == 2:
             version = int(parse_qs(url.query).get("version", [self.server.latest])[0])
-            return self.send(page(version), "text/html")
+            html = page(version)
+            if self.server.spin and self.server.spin(len([r for r in self.server.requests if r.startswith("/preview/")])):
+                html = html.replace("</body>", "<script>if (top === self) addEventListener('load', () => setTimeout(() => { for (;;); }, 0));</script></body>")
+            return self.send(html, "text/html")
         if parts[:2] == ["api", "artifacts"] and parts[2:3] == [ARTIFACT]:
             if len(parts) == 3:
                 return self.send(json.dumps({"revisions": [{}] * self.server.latest}), "application/json")
@@ -189,6 +195,25 @@ def count_colors(path, *colors, tolerance=6):
                 if abs(r - cr) <= tolerance and abs(g - cg) <= tolerance and abs(b - cb) <= tolerance:
                     counts[k] += 1
     return counts
+
+
+def descendants(root):
+    """Every process below `root` (Linux: read from /proc)."""
+    children = {}
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                with open("/proc/%s/stat" % name) as f:
+                    ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(ppid, []).append(int(name))
+    found, todo = [], [root]
+    while todo:
+        for pid in children.get(todo.pop(), []):
+            found.append(pid)
+            todo.append(pid)
+    return found
 
 
 class ShxTestCase(unittest.TestCase):
@@ -354,6 +379,71 @@ class CheckTest(ShxTestCase):
         self.assertEqual(out["results"], [{"id": "same", "found": True}, {"id": "reworded", "found": False},
                                           {"id": "retagged", "found": False}, {"id": "older", "found": True},
                                           {"id": "emoji-same", "found": True}])
+
+    def test_a_render_that_stalls_names_the_step_it_stalled_in(self):
+        # The artifact's page loads and then never paints again, so the render waits for its frames until the limit (dotfiles#702).
+        server = self.serve()
+        server.spin = lambda n: True
+        out = self.shx("check", server.base, ARTIFACT, env={"SHX_RENDER_TIMEOUT_MS": "4000"}, code=3)
+        self.assertEqual(out["code"], "render_failed")
+        self.assertIn("timed out after 4s rendering", out["message"])
+        self.assertIn('stuck at "waiting for fonts and two painted frames"', out["message"])
+        self.assertIn("loading the /view page ", out["message"])  # the steps before it are listed with their times
+
+    def render_with_renderers_killed(self, server, kills):
+        """Runs `check` and, each time the page has been asked for and is spinning, kills the tab's renderer, `kills` times.
+        Returns the one JSON object it printed and how long it took after the last kill."""
+        e = dict(os.environ, XDG_STATE_HOME=self.state.name, SHX_RENDER_TIMEOUT_MS="25000")
+        e.pop("SHARTIFACTS_URL", None)
+        if os.environ.get("GITHUB_ACTIONS"):
+            e["SHX_NO_SANDBOX"] = "1"
+        run = subprocess.Popen([CMD, "check", server.base, ARTIFACT], stdout=subprocess.PIPE, text=True, env=e)
+        self.addCleanup(run.kill)
+        for kill in range(1, kills + 1):
+            for _ in range(200):  # each try asks /view's frame once and the page itself once: two requests for the page
+                if len([r for r in server.requests if r.startswith("/preview/")]) >= 2 * kill:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("the render never asked for the page again")
+            time.sleep(1.5)  # the page has loaded and is spinning
+            killed = 0
+            for pid in descendants(run.pid):
+                try:
+                    with open("/proc/%d/cmdline" % pid, "rb") as f:
+                        is_renderer = b"--type=renderer" in f.read()  # Chromium rewrites its title: one string, not a NUL-separated list
+                except OSError:
+                    continue
+                if is_renderer:
+                    os.kill(pid, signal.SIGKILL)
+                    killed += 1
+            self.assertTrue(killed, "no renderer process was found to kill")
+        started = time.monotonic()
+        out = json.loads(run.communicate(timeout=60)[0])
+        return out, time.monotonic() - started
+
+    @unittest.skipUnless(os.path.isdir("/proc/self"), "finds the renderer through /proc")
+    def test_a_page_that_crashes_is_tried_once_more_in_a_new_browser(self):
+        # The page's renderer dies while the render waits for it to paint: the first Chromium is gone, the second one is fine.
+        # Before dotfiles#702's fix the run waited out its whole 60 s limit and then said only that it had timed out.
+        server = self.serve()
+        server.spin = lambda n: n == 2  # the first try only
+        out, _ = self.render_with_renderers_killed(server, kills=1)
+        self.assertEqual(out["ok"], True, out)
+        self.assertEqual(out["results"], [{"id": "s1", "found": True}, {"id": "s2", "found": True}, {"id": "s3", "found": False},
+                                          {"id": "p1", "found": False}, {"id": "q1", "found": True}, {"id": "q2", "found": False}])
+        self.assertEqual(len(server.matches), 1, "the match report is posted once")
+        self.assertEqual(len([r for r in server.requests if r.startswith("/view/")]), 2, "a second browser asked for the page")
+
+    @unittest.skipUnless(os.path.isdir("/proc/self"), "finds the renderer through /proc")
+    def test_a_page_that_crashes_twice_fails_at_once_and_says_so(self):
+        server = self.serve()
+        server.spin = lambda n: True
+        out, waited = self.render_with_renderers_killed(server, kills=2)
+        self.assertLess(waited, 15, out)  # not the 25 s limit the run was given
+        self.assertEqual(out["code"], "render_failed")
+        self.assertIn("the page crashed", out["message"])
+        self.assertIn('stuck at "waiting for fonts and two painted frames"', out["message"])
 
     def test_only_text_less_drawings_post_nothing_and_start_no_browser(self):
         st = stroke("#ff00ff", "#bar", {"x": 8, "y": 60, "w": 300, "h": 20})

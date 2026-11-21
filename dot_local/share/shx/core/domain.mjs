@@ -12,7 +12,8 @@ export const DEFAULT_PAD = 24;
 export const CHECK_VIEWPORT = { w: 390, h: 844 };
 
 export class ShxError extends Error {
-  constructor(code, message) { super(message); this.code = code; }
+  /** `retryable`: the failure was the browser's, not the page's or the request's, so one more try may well succeed. */
+  constructor(code, message, retryable = false) { super(message); this.code = code; this.retryable = retryable; }
 }
 
 const badInput = (message) => new ShxError('bad_input', message);

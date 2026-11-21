@@ -18,6 +18,25 @@ import {
 
 const viewUrl = (base, artifact, version) => `${base}/view/${encodeURIComponent(artifact)}?version=${version}`;
 
+/**
+ * Opens the page, runs `work` on it and closes it. A page that crashes (its renderer is killed, as on a machine short of memory)
+ * gets one more try in a new browser; every other failure ends the run.
+ */
+async function withPage(ports, opening, work) {
+  for (let attempt = 1; ; attempt++) {
+    let page = null;
+    try {
+      page = await ports.browser.open(opening);
+      return await work(page);
+    } catch (e) {
+      if (!(e instanceof ShxError && e.retryable) || attempt >= 2) throw e;
+      ports.warn(`[shx-note-image] WARN: ${e.message}; trying once more`);
+    } finally {
+      if (page) await page.close();
+    }
+  }
+}
+
 async function noteImage(req, ports, ctx) {
   ctx.artifact = req.artifact;
   const stroke = readStroke(await ports.api.comments(req.base, req.artifact), req.comment);
@@ -25,8 +44,8 @@ async function noteImage(req, ports, ctx) {
   ctx.version = version;
   ctx.viewport = stroke.viewport;
   const chromium = ports.browser.locate();
-  const page = await ports.browser.open({ chromium, url: viewUrl(req.base, req.artifact, version), width: stroke.viewport.w, height: stroke.viewport.h });
-  try {
+  const opening = { chromium, url: viewUrl(req.base, req.artifact, version), width: stroke.viewport.w, height: stroke.viewport.h };
+  return withPage(ports, opening, async (page) => {
     // The stroke is stored as offsets from its anchor element, so it follows the element when the page moved it.
     const found = stroke.anchor ? await page.anchorBox(stroke.anchor) : null;
     const origin = found ?? stroke.box;
@@ -36,9 +55,7 @@ async function noteImage(req, ports, ctx) {
     const path = await ports.files.save({ path: req.out, name: `note-${req.artifact}-${req.comment}-v${version}.png` }, shot.png);
     ctx.out = path;
     return { ok: true, path, width: shot.width, height: shot.height, anchor_found: found !== null, version };
-  } finally {
-    await page.close();
-  }
+  });
 }
 
 async function check(req, ports, ctx) {
@@ -49,13 +66,8 @@ async function check(req, ports, ctx) {
   const items = checkItems(await ports.api.comments(req.base, req.artifact));
   if (items.length === 0) return { ok: true, version, results: [] };
   const chromium = ports.browser.locate();
-  const page = await ports.browser.open({ chromium, url: viewUrl(req.base, req.artifact, version), width: CHECK_VIEWPORT.w, height: CHECK_VIEWPORT.h });
-  let results;
-  try {
-    results = await page.find(items);
-  } finally {
-    await page.close();
-  }
+  const opening = { chromium, url: viewUrl(req.base, req.artifact, version), width: CHECK_VIEWPORT.w, height: CHECK_VIEWPORT.h };
+  const results = await withPage(ports, opening, (page) => page.find(items));
   await ports.api.postMatches(req.base, req.artifact, { version, results });
   return { ok: true, version, results };
 }
