@@ -170,6 +170,10 @@ def commit(path, msg):
     return git(path, "rev-parse", "HEAD")
 
 
+REPOS_GITHUB = {"dotfiles": "cartwmic/dotfiles", "loop-engine": "cartwmic/loop-engine", "agent-kit": "cartwmic/agent-kit",
+                "alert-steward": "cartwmic/alert-steward", "storycraft": "StoryCraftTW/storycraft", "retro": "cartwmic/retro"}
+
+
 def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None, branch="main"):
     """One gh run list row. Newer runs have a larger age. A rerun keeps its created time; its started time
     (started_age, default age) is when the latest attempt started."""
@@ -663,6 +667,43 @@ class MergeGateFlag(Fixture):
         self.assertEqual(self.status("--merge-gate", "cartwmic/coordinator"), (rc, out))
         self.assertEqual(self.status("--merge-gate", "CartWmic/Coordinator"), (rc, out))
         self.assertEqual(self.status("--tip", "cartwmic/coordinator"), self.status("--tip", "coordinator"))
+
+    def test_dotfiles_full_name_reads_the_whole_run_and_is_red_when_a_non_required_job_failed(self):
+        # The real state of dotfiles main at 8a47043 (2026-11-21): the run failed on job mise-tests while the job
+        # GitHub requires, "tests", passed. `--merge-gate cartwmic/dotfiles` once took the any-repo path, read only
+        # "tests" and said GREEN; dotfiles#689 merged into that red main.
+        self.dotfiles_runs([run(44873557728, self.c3, "failure")])
+        self.jobs = {"44873557728": [{"name": "tests", "conclusion": "success", "steps": []},
+                                     {"name": "mise-tests", "conclusion": "failure", "steps": []}]}
+        # GitHub's own view, were the any-repo path taken: the one required check, "tests", passed on the tip.
+        self.extra_repos = {"cartwmic/dotfiles": str(self.src)}
+        self.protection = {"cartwmic/dotfiles": {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
+        self.branch_protection = {"cartwmic/dotfiles": {"protected": True, "protection": {"enabled": True, "required_status_checks": {
+            "checks": [{"context": "tests", "app_id": 1}], "contexts": ["tests"]}}}}
+        self.branch_rules = {"cartwmic/dotfiles": []}
+        self.check_runs = {"cartwmic/dotfiles": {self.c3: [{"id": 1, "name": "tests", "status": "completed", "conclusion": "success",
+                                                            "started_at": "2026-11-21T06:00:00Z", "completed_at": "2026-11-21T06:01:00Z"}]}}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("dotfiles: RED  run 44873557728 failed on " + self.c3[:7], out)
+        self.assertEqual(self.status("--merge-gate", "cartwmic/dotfiles"), (rc, out))
+        self.assertNotIn("required checks passed", out)
+
+    def test_every_table_repos_full_name_is_its_table_entry(self):
+        # --merge-gate, plain status, --tip and --pr give the same answer for the full name as for the short name,
+        # for every table repo that has a GitHub workflow, in any letter case.
+        wf = {"dotfiles": "ci.yml", "loop-engine": "ci.yml", "agent-kit": "unit.yml", "alert-steward": "image.yml",
+              "storycraft": "ci.yml", "retro": "unit.yml"}
+        for short, workflow in wf.items():
+            github = REPOS_GITHUB[short]
+            for verdict in ("success", "failure"):
+                self.runs = {f"{github}|{workflow}": [run(1, self.c3, verdict)]}
+                for args in (["--merge-gate"], [], ["--tip"], ["--merge-gate", "--pr", "7"]):
+                    with self.subTest(repo=short, verdict=verdict, args=args):
+                        want = self.status(*args, short)
+                        self.assertEqual(self.status(*args, github), want)
+                        self.assertEqual(self.status(*args, github.upper()), want)
+                        self.assertIn("run 1 " + ("passed" if verdict == "success" else "failed"), want[1])
 
     def test_with_tip_is_a_usage_error(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
@@ -1902,18 +1943,35 @@ class AnyRepo(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("usage:", out)
 
-    def test_a_table_repo_by_full_name_uses_this_path(self):
-        self.extra_repos = {"cartwmic/dotfiles": str(self.src)}
-        self.protection = {"cartwmic/dotfiles": {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
-        self.branch_protection = {"cartwmic/dotfiles": {"protected": True,
-                                                        "protection": {"enabled": True, "required_status_checks": {
-                                                            "checks": [{"context": "tests", "app_id": 1}],
-                                                            "contexts": ["tests"]}}}}
-        self.branch_rules = {"cartwmic/dotfiles": []}
-        self.check_runs = {"cartwmic/dotfiles": {self.c3: [self.check_row("tests")]}}
+    def test_a_table_repo_by_full_name_does_not_use_this_path(self):
+        # A table repo's full name is its table entry (the whole CI run), not a required-checks read: see
+        # GithubStateTable.test_dotfiles_full_name_reads_the_whole_run_and_is_red_when_a_non_required_job_failed.
+        self.set_tip_checks()
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "failure")]}
         rc, out = self.status("cartwmic/dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("dotfiles: RED  run 1 failed", out)
+        self.assertNotIn("required check", out)
+
+    def test_a_non_table_owner_repo_still_takes_the_required_checks_path_beside_a_red_table_repo(self):
+        # dotfiles' whole-run read must not leak to any other OWNER/REPO: its required checks pass, so it is GREEN
+        # even though a table repo's run is red, and the calls are the required-checks reads, not run list.
+        self.set_tip_checks()
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "failure")]}
+        rc, out = self.status("--merge-gate", self.any_repo)
         self.assertEqual(rc, 0, out)
-        self.assertIn(f"cartwmic/dotfiles: GREEN  all 1 required checks passed on main tip {self.c3[:7]}: tests", out)
+        self.assertIn(f"{self.any_repo}: GREEN  all 2 required checks passed on main tip {self.c3[:7]}", out)
+        self.assertFalse(any(c.startswith("run list") for c in self.log.read_text().splitlines()))
+        for lookalike in ("cartwmic/dotfiles-fork", "other-org/dotfiles"):   # a name that only resembles a table repo's
+            self.extra_repos = {lookalike: str(self.src)}
+            self.protection = {lookalike: {"contexts": ["tests"], "checks": [{"context": "tests", "app_id": 1}]}}
+            self.branch_protection = {lookalike: {"protected": True, "protection": {"enabled": True, "required_status_checks": {
+                "checks": [{"context": "tests", "app_id": 1}], "contexts": ["tests"]}}}}
+            self.branch_rules = {lookalike: []}
+            self.check_runs = {lookalike: {self.c3: [self.check_row("tests")]}}
+            rc, out = self.status("--merge-gate", lookalike)
+            self.assertEqual(rc, 0, out)
+            self.assertIn(f"{lookalike}: GREEN  all 1 required checks passed on main tip {self.c3[:7]}: tests", out)
 
     def test_gh_caller_is_set_on_every_call(self):
         self.set_tip_checks()
