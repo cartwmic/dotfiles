@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""cursor-mcp-login: sign in to Cursor MCP servers for the folder T3 Cursor children start in, then show who is signed in.
+
+cursor-agent keeps each MCP sign-in per folder, in ~/.cursor/projects/<slug of the folder>/mcp-auth.json, and has no shared
+fallback. A sign-in made from ~ does not reach a child that starts in another folder. This signs in for the right folder,
+one server at a time with a timeout, so one stuck server does not stop the rest.
+
+    cursor-mcp-login [--workspace DIR] [--check] [--all] [--timeout SECONDS] [SERVER...]
+
+By default it signs in every url server in ~/.cursor/mcp.json that has no tokens yet in that folder, leaving out servers
+that send their own headers (they sign in with a key, not OAuth). --all takes every url server. SERVER names take only those.
+--check signs in nothing: it prints the table and exits. It exits 1 if any listed server is not signed in.
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+
+DEFAULT_TIMEOUT = 300
+
+
+def data_dir():
+    # cursor-agent: CURSOR_DATA_DIR if set and not blank, else ~/.cursor
+    value = os.environ.get("CURSOR_DATA_DIR", "")
+    return value if value.strip() else os.path.join(os.path.expanduser("~"), ".cursor")
+
+
+def slug(path):
+    # cursor-agent (workspace-paths.js): every run of non-alphanumerics becomes one "-", then leading and trailing "-" go
+    return re.sub(r"-+", "-", re.sub(r"[^a-zA-Z0-9]", "-", path)).strip("-")
+
+
+def project_root(path):
+    # cursor-agent (utils/git.ts): walk up to the nearest folder holding .git, never testing the filesystem root; else the folder
+    current = path
+    root = os.path.splitdrive(path)[0] + os.sep
+    while True:
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current or parent == root:
+            return path
+        current = parent
+
+
+def auth_file(workspace):
+    return os.path.join(data_dir(), "projects", slug(project_root(workspace)), "mcp-auth.json")
+
+
+def default_workspace():
+    base = os.path.join(os.path.expanduser("~"), ".local", "share")
+    work = os.path.join(base, "coordinator-work-workspace")
+    return work if os.path.isdir(work) else os.path.join(base, "coordinator-workspace")
+
+
+def url_servers():
+    path = os.path.join(os.path.expanduser("~"), ".cursor", "mcp.json")
+    try:
+        with open(path) as handle:
+            servers = json.load(handle).get("mcpServers", {})
+    except (OSError, ValueError):
+        return path, None
+    return path, {name: spec for name, spec in servers.items() if isinstance(spec, dict) and spec.get("url")}
+
+
+def signed_in(workspace, name):
+    # Reads only whether a non-empty tokens entry exists; never returns or prints its content
+    try:
+        with open(auth_file(workspace)) as handle:
+            entry = json.load(handle).get(name)
+    except (OSError, ValueError):
+        return False
+    return isinstance(entry, dict) and bool(entry.get("tokens"))
+
+
+def run_login(agent, workspace, name, timeout):
+    """Run one login in its own process group, so a timeout takes its helper processes with it. Returns a status word."""
+    print("== " + name, flush=True)
+    child = subprocess.Popen([agent, "mcp", "login", name, "--workspace", workspace], start_new_session=True)
+
+    def stop():
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.wait()
+
+    try:
+        code = child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop()
+        return "TIMED OUT after %ss" % timeout
+    except BaseException:
+        # Ctrl-C does not reach a login in its own session; stop it here so it does not keep the callback port
+        stop()
+        raise
+    return "" if code == 0 else "FAILED (exit %s)" % code
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="cursor-mcp-login", description="Sign in to Cursor MCP servers for one folder.")
+    parser.add_argument("servers", nargs="*", metavar="SERVER", help="only these servers (default: url servers not signed in)")
+    parser.add_argument("--workspace", help="folder to sign in for (default: the folder T3 Cursor children start in)")
+    parser.add_argument("--check", action="store_true", help="read-only: print the table, sign in nothing")
+    parser.add_argument("--all", action="store_true", help="every url server, including ones that send their own headers")
+    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds per server (default %d)" % DEFAULT_TIMEOUT)
+    args = parser.parse_args(argv)
+    if args.timeout < 1:
+        parser.error("--timeout must be at least 1 second")
+
+    workspace = os.path.abspath(os.path.expanduser(args.workspace)) if args.workspace else default_workspace()
+    mcp_path, servers = url_servers()
+    if servers is None:
+        print("cursor-mcp-login: cannot read %s" % mcp_path, file=sys.stderr)
+        return 2
+    if args.servers:
+        missing = [name for name in args.servers if name not in servers]
+        if missing:
+            print("cursor-mcp-login: not a url server in %s: %s" % (mcp_path, ", ".join(missing)), file=sys.stderr)
+            return 2
+        listed = list(args.servers)
+    elif args.all:
+        listed = sorted(servers)
+    else:
+        listed = sorted(name for name, spec in servers.items() if not spec.get("headers"))
+
+    print("folder: " + workspace)
+    print("file:   " + auth_file(workspace))
+
+    if not args.check:
+        agent = shutil.which("cursor-agent")
+        if agent is None:
+            print("cursor-mcp-login: cursor-agent is not on PATH", file=sys.stderr)
+            return 2
+        todo = listed if args.servers else [name for name in listed if not signed_in(workspace, name)]
+        if not todo:
+            print("nothing to sign in")
+        for name in todo:
+            problem = run_login(agent, workspace, name, args.timeout)
+            # The tokens, not the exit code, say whether it worked
+            if signed_in(workspace, name):
+                print("-> %s: signed in" % name, flush=True)
+            else:
+                print("-> %s: %s" % (name, problem or "finished, but no tokens were saved"), flush=True)
+
+    width = max([len(name) for name in listed] + [6])
+    print()
+    print("%-*s  %s" % (width, "SERVER", "STATE"))
+    missing_count = 0
+    for name in listed:
+        ok = signed_in(workspace, name)
+        missing_count += 0 if ok else 1
+        print("%-*s  %s" % (width, name, "signed in" if ok else "not signed in"))
+    return 1 if missing_count else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\ncursor-mcp-login: interrupted; the running login was stopped", file=sys.stderr)
+        sys.exit(130)

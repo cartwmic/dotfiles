@@ -134,6 +134,7 @@ After editing the canonical MCP file:
    - Claude: `claude mcp list`
    - Codex: `codex mcp list`
    - Pi: `pi mcp list`, then `/mcp` in a fresh Pi session
+   - Cursor: `cursor-mcp-login --check` (sign-ins are per folder; see below)
 
 TickTick uses the official server at `https://mcp.ticktick.com` in the personal
 and work desktop profiles. Sign in separately on each machine and in each
@@ -141,6 +142,12 @@ harness: `pi mcp login ticktick`, `codex mcp login ticktick`, or Claude's `/mcp`
 menu. Credentials stay in the harness's local OAuth store, not in canonical
 configuration or 1Password adapter metadata. In a running Pi session, use
 `/reload` after applying, then `/mcp login ticktick`.
+
+Cursor keeps each MCP sign-in per folder, so a sign-in made from `~` does not reach T3 Cursor children, which start in
+another folder. `cursor-mcp-login` signs in for the folder those children use, one server at a time with a timeout, and
+prints which servers are signed in (`--check` only prints). Servers that send their own headers are skipped unless you pass
+`--all`, and `--workspace DIR` picks another folder.
+Test: `tests/cursor/test_mcp_login.py`.
 
 The `shartifacts` entry is Michael's page server (`https://shartifacts.internal.cartwmic.com/mcp`, Streamable
 HTTP, no sign-in). It is on both desktop profiles, like TickTick and Hindsight: Michael asked for the work profile too
