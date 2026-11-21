@@ -694,7 +694,7 @@ PY
 
 # Merge the rendered servers into Pi's mcp.json. Names this script wrote on an earlier apply
 # (recorded in $3, plus the retired names below that predate that record) and that are no longer
-# rendered are pruned; entries it never wrote are kept.
+# rendered are pruned; entries it never wrote are kept. The file is written owner-only (0600).
 merge_pi_mcp() {
   harness_json="$1"
   target_json="$2"
@@ -702,6 +702,7 @@ merge_pi_mcp() {
 
   python3 - "$harness_json" "$target_json" "$managed_json" <<'PY'
 import json
+import os
 import pathlib
 import re
 import sys
@@ -709,6 +710,13 @@ import sys
 harness_path = pathlib.Path(sys.argv[1])
 target_path = pathlib.Path(sys.argv[2])
 managed_path = pathlib.Path(sys.argv[3])
+
+def write_private(path, text):
+    # The file can hold an API key, so only its owner may read it: a new file is created 0600, and an existing one is narrowed.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(text)
 
 # Harness-managed before the managed-names record existed, since removed from canonical.
 RETIRED = {"furi", "automation-mcp"}
@@ -746,7 +754,7 @@ kept = {n: c for n, c in existing_servers.items() if n not in stale}
 merged_servers = {**kept, **harness_servers}
 result = {**existing, "mcpServers": merged_servers}
 
-target_path.write_text(json.dumps(result, indent=2) + "\n")
+write_private(target_path, json.dumps(result, indent=2) + "\n")
 managed_path.parent.mkdir(parents=True, exist_ok=True)
 managed_path.write_text(json.dumps(sorted(harness_servers)) + "\n")
 for name in stale:
@@ -773,7 +781,8 @@ apply_pi() {
 # (the claude adapter's 1Password references are reused, so a secret added for Claude reaches Cursor with no second list), and a
 # server whose secret is unavailable is left out. Servers this script wrote on an earlier apply and that are no longer rendered
 # are pruned (the record is generated/cursor/mcp-managed.json); entries it never wrote, and every other key, are kept. A file
-# that is not a JSON object is left as it is. Nothing prints a URL or key.
+# that is not a JSON object is left as it is. The file is kept 0600 (owner only), whether this run rewrites it or finds it current.
+# Nothing prints a URL or key.
 merge_cursor_mcp() {
   harness_json="$1"
   target_json="$2"
@@ -782,6 +791,7 @@ merge_cursor_mcp() {
 
   python3 - "$harness_json" "$target_json" "$managed_json" "$exclude_file" <<'PY'
 import json
+import os
 import pathlib
 import re
 import sys
@@ -790,6 +800,13 @@ harness_path, target_path, managed_path, exclude_path = (pathlib.Path(a) for a i
 
 def say(msg):
     print(f"[apply_harness_config] {msg}")
+
+def write_private(path, text):
+    # The file can hold an API key, so only its owner may read it: a new file is created 0600, and an existing one is narrowed.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(text)
 
 excluded = set()
 if exclude_path.exists():
@@ -848,10 +865,13 @@ kept = {n: c for n, c in old_servers.items() if n not in stale}
 result = {**existing, "mcpServers": {**kept, **add}}
 if result != existing:
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(json.dumps(result, indent=2) + "\n")
+    write_private(target_path, json.dumps(result, indent=2) + "\n")
     say("Updated Cursor MCP config: " + ", ".join(sorted(add)))
     for name in stale:
         say(f"Pruned Cursor MCP server no longer in canonical: {name}")
+elif target_path.exists() and (target_path.stat().st_mode & 0o777) != 0o600:
+    # Already current, so nothing is rewritten; a file left world-readable by an earlier apply is still narrowed.
+    target_path.chmod(0o600)
 managed_path.parent.mkdir(parents=True, exist_ok=True)
 managed_path.write_text(json.dumps(sorted(add)) + "\n")
 PY
