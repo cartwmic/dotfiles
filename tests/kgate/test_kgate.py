@@ -797,6 +797,28 @@ while True:
 '''
 
 
+def stub_launcher(tmp, name, text):
+    """The command that runs the client through a stub script. A test calls launcher() again for each client it starts, and a client that has just started is still reading
+    the stub: writing the file in place truncates it first, and a client that reads it then runs an empty script, exits 0 and prints nothing. The new text goes to
+    another name and is renamed over the stub, so a reader has all of the old text or all of the new."""
+    stub = tmp / name
+    new = tmp / (name + ".new")
+    new.write_text(text)
+    os.replace(new, stub)
+    return [sys.executable, str(stub), str(SCRIPT)]
+
+
+class StubLauncher(unittest.TestCase):
+    def test_a_client_that_has_the_stub_open_reads_all_of_its_text_while_the_next_launch_writes_it_again(self):
+        tmp = Path(tempfile.mkdtemp(prefix="kt-stub-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        command = stub_launcher(tmp, "s.py", "print('first')\n" * 1000)
+        with open(command[1]) as reading:   # a client that has started and has not read the stub yet
+            stub_launcher(tmp, "s.py", "print('second')\n")
+            self.assertEqual(reading.read(), "print('first')\n" * 1000)
+        self.assertEqual(Path(command[1]).read_text(), "print('second')\n", "the next client runs the new text")
+
+
 class Black(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="kt-")).resolve()
@@ -1945,14 +1967,13 @@ class Black(unittest.TestCase):
 
     def test_a_delete_that_hangs_is_cut_off_and_does_not_fail_the_new_job(self):
         self.dead_entry("kgate-1700000003-333", "20261107T000000Z-cccccc")
-        stub = self.tmp / "short_launch.py"
-        stub.write_text("import importlib.machinery, importlib.util, sys\n"
-                        "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
-                        "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
-                        "loader.exec_module(K)\n"
-                        "K.CLEANUP_ATTEMPT_S = 1\n"
-                        "sys.exit(K.main(sys.argv[2:]))\n")
-        self.launcher = lambda: [sys.executable, str(stub), str(SCRIPT)]
+        command = stub_launcher(self.tmp, "short_launch.py", "import importlib.machinery, importlib.util, sys\n"
+                                "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                                "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                                "loader.exec_module(K)\n"
+                                "K.CLEANUP_ATTEMPT_S = 1\n"
+                                "sys.exit(K.main(sys.argv[2:]))\n")
+        self.launcher = lambda: command
         done = self.kgate("--", "true", env={"FAKE_DELETE_HANG": "1"})
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("could not end kgate-1700000003-333", done.stdout)
@@ -3437,15 +3458,13 @@ class KubectlBlack(unittest.TestCase):
 
     def launcher(self):
         # The script runs through a stub that shortens two waits (quota retry, cache grace) so the tests do not sleep.
-        stub = self.tmp / "kcl_launch.py"
-        stub.write_text("import importlib.machinery, importlib.util, sys\n"
-                        "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
-                        "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
-                        "loader.exec_module(K)\n"
-                        "K.QUOTA_FIRST_DELAY = 0.2\n"
-                        "K.CACHE_BUSY_S = 0.6\n"
-                        "sys.exit(K.main(sys.argv[2:]))\n")
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "kcl_launch.py", "import importlib.machinery, importlib.util, sys\n"
+                             "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
+                             "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
+                             "loader.exec_module(K)\n"
+                             "K.QUOTA_FIRST_DELAY = 0.2\n"
+                             "K.CACHE_BUSY_S = 0.6\n"
+                             "sys.exit(K.main(sys.argv[2:]))\n")
 
     def setUp(self):
         Black.setUp(self)
@@ -4748,9 +4767,7 @@ class GiveUpDeletesThePod:
     on the delete, as etcd did on 2026-11-16: the pod must end up deleted, and the record says whether the delete was confirmed. Run for both cluster kinds."""
 
     def launcher(self):
-        stub = self.tmp / "orphan_launch.py"
-        stub.write_text(ORPHAN_LAUNCH)
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "orphan_launch.py", ORPHAN_LAUNCH)
 
     def deleted(self):
         path = self.fake / "deleted-pods"
@@ -4844,9 +4861,7 @@ class QueueHomelab(unittest.TestCase):
         locals()[_name] = getattr(Black, _name)
 
     def launcher(self):
-        stub = self.tmp / "queue_launch.py"
-        stub.write_text(QUEUE_LAUNCH % getattr(self, "quiet", 0))
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "queue_launch.py", QUEUE_LAUNCH % getattr(self, "quiet", 0))
 
     def waiting(self, name="other", cpu="2", memory="1Gi", disk="4Gi", cls="kgate", pin=None, message="0/7 nodes are available: 7 Insufficient cpu."):
         required = [{"key": "kubernetes.io/hostname", "operator": "In", "values": [pin]}] if pin else [{"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]}]
@@ -5084,9 +5099,7 @@ class QuotaHomelab(unittest.TestCase):
         locals()[_name] = getattr(QueueHomelab, _name)
 
     def launcher(self):
-        stub = self.tmp / "quota_launch.py"
-        stub.write_text((QUOTA_LAUNCH % 0).replace("@DELAYS@", "%s, %s" % getattr(self, "delays", (0.2, 0.4))).replace("sys.exit(", RACE_HOOK))
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "quota_launch.py", (QUOTA_LAUNCH % 0).replace("@DELAYS@", "%s, %s" % getattr(self, "delays", (0.2, 0.4))).replace("sys.exit(", RACE_HOOK))
 
     def full(self, used, limit=12):
         (self.fake / "quota-full").write_text(str(used))
@@ -5333,9 +5346,7 @@ class LeftBehindProcess:
     returns with CMD's exit code soon after the end line and the pod is deleted. Run for both cluster kinds."""
 
     def launcher(self):
-        stub = self.tmp / "orphan_stream_launch.py"
-        stub.write_text(ORPHAN_STREAM_LAUNCH)
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "orphan_stream_launch.py", ORPHAN_STREAM_LAUNCH)
 
     def run_orphan(self, command):
         started = time.time()
@@ -5399,9 +5410,7 @@ class InterruptDeletesThePod:
     entry went with it. Run for both cluster kinds."""
 
     def launcher(self):
-        stub = self.tmp / "orphan_launch.py"
-        stub.write_text(ORPHAN_LAUNCH)
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "orphan_launch.py", ORPHAN_LAUNCH)
 
     def deleted(self):
         path = self.fake / "deleted-pods"
@@ -5543,9 +5552,7 @@ class SshMux:
     job waiting for a pod used to open a new ssh every 2 s, so 2026-11-16's queued jobs died with exit 69), and closes it on every way out of the job."""
 
     def launcher(self):
-        stub = self.tmp / "orphan_launch.py"
-        stub.write_text(ORPHAN_LAUNCH)
-        return [sys.executable, str(stub), str(SCRIPT)]
+        return stub_launcher(self.tmp, "orphan_launch.py", ORPHAN_LAUNCH)
 
     def ssh_calls(self):
         path = self.fake / "ssh-argv.jsonl"
