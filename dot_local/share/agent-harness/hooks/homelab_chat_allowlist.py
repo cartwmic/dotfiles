@@ -14,7 +14,7 @@ Allowed:
   Bash    one command and nothing else, in one of two forms:
             [HOMELAB_BOT_EVENT_ID=<digits>] python3 <homelab_bot.py> <verb ...>      verbs: BOT_VERBS below
             [COORDINATOR_EVENT_ID=<token>] coordinator lead post HomelabChat [--key K] [--text T]   (--key=K / --text=T also)
-          <homelab_bot.py> is the absolute path or the literal ~/git/... form.
+          <homelab_bot.py> is the literal ~/git/... form, or the same path under the real home directory ($HOME: /home/agent on the pod, /home/cartwmic on omarchy).
           The command is read as zsh reads it (zsh runs the Bash tool): outside single quotes `$`, a backtick, a backslash and a newline are refused; outside
           any quotes only letters, digits and `_ . / : + % , = - @` are accepted (and a leading `~`), so `; | & < > ( ) { } * ? [ ] ! # ^` and command substitution cannot occur; inside single quotes
           every character but the closing quote is literal and passes (a multi-line chat text with `$` in it); inside double quotes `; | & < >` pass, `$`, backtick, backslash and newline do not.
@@ -30,11 +30,11 @@ import shlex
 import sys
 import time
 
-COORDINATOR_THREADS = ("mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56",)
+COORDINATOR_THREADS = ("mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56", "mcp:c9a80a51-19d4-475c-99bb-117660fc88de")  # omarchy's coordinator, then the agent-host pod's
 SEND_TOOL = "mcp__t3-code__t3_thread_send"
 SIMPLE_TOOLS = ("WebSearch", "WebFetch", "ToolSearch", "mcp__hindsight__recall", "mcp__hindsight__reflect", "mcp__hindsight__retain")
 BOT_SCRIPT = "git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
-BOT_PATHS = ("~/" + BOT_SCRIPT, "/home/cartwmic/" + BOT_SCRIPT)
+BOT_PATHS = ("~/" + BOT_SCRIPT, os.path.join(os.path.expanduser("~"), BOT_SCRIPT))  # the absolute form under HOME, read when the hook runs
 # verb words -> the actions allowed after them (None: the verb has no action word). Anything not here is refused: board add, tracker, files, sonarr rolling, arr preferences.
 BOT_VERBS = {
     "sonarr": ("lookup", "add", "monitor", "episodes", "episode-search"),
