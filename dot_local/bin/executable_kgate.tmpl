@@ -2195,6 +2195,7 @@ class Job:
                                         self.settle()
                                         break
                                     why, pause = quota.refused(refused)   # the flock is let go below, before the sleep
+                                    t_wait = t_wait or quota.since   # the queue wait starts no later than the quota wait it counts, whatever the delete below takes
                                     entry["quota"] = True   # the job keeps its place: while this ticket is there, no job ordered after it is placed (queued_behind)
                                     write_json_atomic(ticket, entry)
                             finally:
@@ -3368,9 +3369,14 @@ def prune_main(argv):
           % ("deleted" if o.delete else "would delete", done if o.delete else len(delete), prune_human(freed), "freed" if o.delete else "would be freed",
              sum(len(v) for v in kept.values()), PRUNE_AGE_DAYS, kept_text, young))
     if o.delete:
-        with open(os.path.join(state, "prune.jsonl"), "a") as f:   # a run's own record; log.jsonl is the job log and is never written here
-            f.write(json.dumps({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "deleted": done, "planned": len(delete), "bytes": freed, "young": young,
-                                "kept": {k: len(v) for k, v in kept.items()}}) + "\n")
+        record = os.path.join(state, "prune.jsonl")   # a run's own record; log.jsonl is the job log and is never written here
+        try:
+            with open(record, "a") as f:
+                f.write(json.dumps({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "deleted": done, "planned": len(delete), "bytes": freed, "young": young,
+                                    "kept": {k: len(v) for k, v in kept.items()}}) + "\n")
+        except OSError as e:
+            print("kgate prune: the folders are removed but the run could not be recorded in %s: %s" % (record, e.strerror or e), file=sys.stderr)
+            return UNAVAILABLE
         return 0 if done == len(delete) else UNAVAILABLE
     return 0
 
