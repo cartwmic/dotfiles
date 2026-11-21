@@ -210,6 +210,7 @@ Gates live in the repo-root `.chezmoiignore`:
 | [learnings-monitor](./learnings-monitor/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [system-one](./system-one/README.md) (docs; package in settings) | `personal` and `axon-work-computer`; Termux skips `.pi` |
 | [winnow-local](./winnow-local/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi` |
+| [coordinator-helper-gate](./coordinator-helper-gate/README.md) | `personal` and `axon-work-computer`; Termux skips `.pi`. Does nothing where the coordinator checkout is absent |
 
 Do not deploy personal/homelab-only extensions onto `axon-work-computer`.
 
@@ -221,6 +222,7 @@ READMEs already in this tree:
 - [auto-compact](./auto-compact/README.md)
 - [axon-playbook](./axon-playbook/README.md)
 - [claude-compat-guard](./claude-compat-guard/README.md)
+- [coordinator-helper-gate](./coordinator-helper-gate/README.md)
 - [hindsight](./hindsight/README.md)
 - [openrouter-gate](./openrouter-gate/README.md)
 - [pi-patch-guard](./pi-patch-guard/README.md)
@@ -250,7 +252,7 @@ cd ./pi-patch-guard && node --test
 
 Other in-tree suites today: `anthropic-stall-retry/index.test.ts`, `auto-compact/index.test.ts`, `axon-playbook/index.test.ts`,
 `goal/helpers.test.ts`, `hindsight/index.test.ts`, `inspect-prompt/index.test.ts`,
-`openrouter-gate/index.test.ts`,
+`openrouter-gate/index.test.ts`, `coordinator-helper-gate/index.test.ts` (run with `node --experimental-strip-types --disable-warning=ExperimentalWarning --test`),
 `web-search/config.test.ts`, `web-search/codex.test.ts`, and
 `learnings-monitor/` (`node --test`).
 `catalog-overlay-nudge` and `subagent` do not have tests yet. `passage-review`
