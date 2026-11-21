@@ -393,11 +393,11 @@ only; MCP settings are left alone), runs `mise install` for the five tools and `
 mise has each version installed and active. It reads the profile with `chezmoi dump-config` and runs every other chezmoi
 command with a copy of that config without hooks, so no configured chezmoi hook runs. It prints the PR, the merge SHA and the installed versions, and logs each step to
 `~/.local/state/loop-engine-bump/log.jsonl`. A stop names its step (orphans, red checks, drift, another profile); a
-rerun resumes the PR, and a version already pinned does nothing. When two releases land close together, put both pins in one
-PR, because `scripts/check-release-pins.py` fails any PR while either pin lags and separate bump PRs would block each other:
-open this PR, then run `~/.local/user_scripts/agent_kit_bump.py X.Y.Z --pr N` on it, which commits the two agent-kit pin
-files there. Each script then applies only its own files from the merged PR and ignores the other's. Orphans stay a
-person's call (`--prune` below). It
+rerun resumes the PR, and a version already pinned does nothing. When two releases land close together, you can put both pins in one
+PR: open this PR, then run `~/.local/user_scripts/agent_kit_bump.py X.Y.Z --pr N` on it, which commits the two agent-kit pin
+files there. Each script then applies only its own files from the merged PR and ignores the other's. Separate bump PRs do not
+block each other either: `scripts/check-release-pins.py` passes a lagging pin while an open dotfiles PR bumps it to exactly the
+latest release, and prints `pending bump #N` for it. Orphans stay a person's call (`--prune` below). It
 refuses on any profile but personal and is not deployed on the others: the work Mac takes the merged pins with its own
 `chezmoi update`.
 

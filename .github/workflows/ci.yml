@@ -76,10 +76,17 @@ jobs:
   # Its own job, so a lagging pin turns the run red without stopping `tests` from running and reporting on its own merits
   # (2026-11-17: two releases three minutes apart each blocked the other's bump PR, and every open PR's suites never ran).
   # Not in scripts/ci-linux.sh: it reads GitHub through gh, and kgate pods run ci-linux.sh with no gh login.
-  # Main's run still reads red while a pin lags (ci-main-status sees the run, not one job). Branch protection requires
-  # `tests` only, so a PR with a lagging pin is not blocked from merging; the red main is what stops the next merge.
+  # Main's run reads red while a pin lags with no open bump PR for it (ci-main-status sees the run, not one job).
+  # Branch protection requires `tests` only, so a PR with a lagging pin is not blocked from merging; the red main is
+  # what stops the next merge.
   release-pins:
     runs-on: ubuntu-latest
+    # A job's own permissions replace the top-level block, so this lists every scope the job uses:
+    # packages reads the agent-kit versions; pull-requests reads the open dotfiles PRs and their diffs when a pin lags.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v6
         with:
