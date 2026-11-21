@@ -5,7 +5,10 @@ under sh in a scratch HOME with a fake op (tests/cursor/cursor_apply.py).
     python3 -m unittest discover -s tests/cursor -p 'test_apply_cursor.py' -v
 """
 import json
+import os
 import shutil
+import stat
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -130,6 +133,40 @@ class ApplyCursor(unittest.TestCase):
         linked = {p.name for p in (a.home / ".agents/skills").iterdir()}
         self.assertEqual(set(canonical_skills()) - linked, set())
         self.assertFalse((a.home / ".cursor/skills").exists(), "no second copy: Cursor would list each skill twice")
+
+    def test_the_mcp_file_is_only_readable_by_its_owner_new_or_existing(self):
+        # Pin the umask: a runner with a tighter umask would pass even without the fix.
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+
+        with self.subTest(case="new file"):
+            new = Apply(self, "personal")
+            new.run()
+            self.assertEqual(stat.S_IMODE(new.mcp.stat().st_mode), 0o600)
+
+        with self.subTest(case="existing 0644 file whose content changes"):
+            changed = Apply(self, "personal")
+            changed.mcp.write_text(json.dumps({"mcpServers": {"mine": FOREIGN}}))
+            changed.mcp.chmod(0o644)
+            changed.run()
+            self.assertEqual(stat.S_IMODE(changed.mcp.stat().st_mode), 0o600)
+
+        with self.subTest(case="existing 0644 file whose content is already current"):
+            unchanged = Apply(self, "personal")
+            unchanged.run()
+            unchanged.mcp.chmod(0o644)
+            unchanged.run()  # nothing is rewritten, but the mode is still set
+            self.assertEqual(stat.S_IMODE(unchanged.mcp.stat().st_mode), 0o600)
+
+    def test_pi_mcp_file_is_only_readable_by_its_owner(self):
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
+        a = Apply(self, "personal")
+        r = subprocess.run(["sh", str(a.script), "pi"], env=a.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pi_mcp = a.home / ".pi/agent/mcp.json"
+        self.assertIn("context7", json.loads(pi_mcp.read_text())["mcpServers"])
+        self.assertEqual(stat.S_IMODE(pi_mcp.stat().st_mode), 0o600)
 
 
 if __name__ == "__main__":
