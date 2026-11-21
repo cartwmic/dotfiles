@@ -9,7 +9,7 @@ SKILL = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 DRAFTING = (SKILL_DIR / "references/drafting.md").read_text(encoding="utf-8")
 READER = (SKILL_DIR / "references/reader-check.md").read_text(encoding="utf-8")
 CHECK_BRIEF = (SKILL_DIR / "references/check-brief.md").read_text(encoding="utf-8")
-CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py")
+CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py", "final_recheck.py")
 
 
 def frontmatter(text):
@@ -37,7 +37,7 @@ class SkillShapeTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?i)tests?[^.\n]*optional|optional[^.\n]*tests?")
 
     def test_it_stays_near_the_length_the_design_set(self):
-        self.assertLess(len(SKILL.split()), 1400)
+        self.assertLess(len(SKILL.split()), 1450)  # 1,400 before the final re-check step
 
 
 class EveryStepIsAScriptCallTest(unittest.TestCase):

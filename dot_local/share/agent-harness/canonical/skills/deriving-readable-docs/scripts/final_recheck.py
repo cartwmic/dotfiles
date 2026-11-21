@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""The closing step: re-check what changed after the last checker report, and cut what does not hold.
+
+usage: final_recheck.py changed GUIDE.md <repo> --was OLD.md [--out changed.txt]
+       final_recheck.py cut GUIDE.md <repo> --ids changed.txt --reports DIR [-o OUT.md] [--clean]
+
+changed  lists the claims that differ from OLD.md, the guide as the last checker saw it (the same test as slice.py --was: a changed sentence, tag or cited line, or a
+         line that moved). It prints one row a claim, `N.k | sentence`, and writes the ids to --out, one a line, for slice.py --ids. With no changed claim it says so and writes
+         an empty file: there is nothing to check.
+cut      reads the verdicts of the fresh checker's reports in DIR (`read | N.k | VERDICT | path:line` rows) for the claims in the ids file. A claim whose verdict is not HOLDS is
+         cut: an appendix claim loses its line, a Part 1 claim loses its sentence. Then every Part 1 sentence is looked at: a tag that points at a cut appendix line is
+         removed, and a sentence left with no tag is cut too. A sentence that keeps another tag stays, and is listed. Nothing is reworded. Writes the guide to -o (default:
+         GUIDE.md in place); --clean also writes the guide without tags next to it. A claim of the ids file with no row in the reports is an error (exit 1): the checker
+         skipped it, so run it again. A Part 1 line with a citation, or an appendix line with two claims, is refused for the same reason.
+Cutting the guide in place is the last edit: do not run assemble.py again afterwards, it would bring the cut text back from the section files.
+Exit 2 on bad usage. Stdlib only.
+"""
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
+sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
+from assemble import clean, clean_path  # noqa: E402
+from claims import LIST_MARK, TAG, claim_ids, line_items, split_lines, split_sentences, tags_before_stop, words_of  # noqa: E402
+from slice import SliceError, changed_since, part1_lines, read_ids, read_verdicts  # noqa: E402
+
+
+class CutError(Exception):
+    pass
+
+
+def read(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def changed(text, old_text, repo):
+    claims = claim_ids(text, repo)
+    ids = changed_since(old_text, claims, text, repo)
+    return [c for c in claims if c[0] in ids]
+
+
+def part1_pieces(line):
+    """A Part 1 line as (mark, pieces, counted): its list mark, its sentences cut as claim_ids cuts them, and which pieces are claims (they hold a word)."""
+    mark = LIST_MARK.match(line)
+    body = re.sub(r"\s+", " ", line[mark.end():] if mark else line).strip()
+    pieces = [body] if body.startswith("|") else split_sentences(tags_before_stop(body))
+    return (mark.group(0) if mark else ""), pieces, [bool(words_of(p)) for p in pieces]
+
+
+def cut_text(text, repo, chosen, verdicts):
+    """(new_text, report rows): the guide with every chosen claim that did not HOLD cut, and the Part 1 sentences whose tags it left dead cut or untagged."""
+    claims = claim_ids(text, repo)
+    lines = split_lines(text)
+    p1 = part1_lines(text)
+    missing = [c[0] for c in chosen if c[0] not in verdicts]
+    if missing:
+        raise CutError("no report row for: %s (the checker skipped them: run it again)" % ", ".join(missing))
+    failed = {c[0]: verdicts[c[0]] for c in chosen if verdicts[c[0]] != "HOLDS"}
+    per_line = {}
+    for c in claims:
+        per_line.setdefault(c[1], []).append(c[0])
+    rows, drop_lines, dead = [], set(), set()
+    for c in claims:
+        if c[0] not in failed or p1[0] <= c[1] < p1[1]:
+            continue
+        if len(per_line[c[1]]) > 1:
+            raise CutError("appendix line %d holds several claims (%s): cut it by hand" % (c[1], ", ".join(per_line[c[1]])))
+        drop_lines.add(c[1])
+        dead |= set(TAG.findall(lines[c[1] - 1]))
+        rows.append("cut | %s | %s | %s" % (c[0], failed[c[0]], c[2]))
+    edits = {}  # doc line -> {claim id: "cut" | the dead tags to strip}
+    for c in claims:
+        if not p1[0] <= c[1] < p1[1]:
+            continue
+        tags = TAG.findall(c[2])
+        lost = [t for t in tags if t in dead]
+        if c[0] in failed:
+            edits.setdefault(c[1], {})[c[0]] = "cut"
+            rows.append("cut | %s | %s | %s" % (c[0], failed[c[0]], c[2]))
+        elif not lost:
+            continue
+        elif len(lost) == len(tags):
+            edits.setdefault(c[1], {})[c[0]] = "cut"
+            rows.append("cut, lost its only tag | %s | %s" % (c[0], c[2]))
+        else:
+            edits.setdefault(c[1], {})[c[0]] = lost
+            rows.append("kept, tag removed (%s) | %s | %s" % (" ".join(lost), c[0], c[2]))
+    out, deleted_last = [], False
+    for n, line in enumerate(lines, 1):
+        if n in drop_lines:
+            deleted_last = True
+            continue
+        if deleted_last and not line.strip() and out and not out[-1].strip():
+            continue  # the cut line stood alone between two blank lines
+        deleted_last = False
+        if n in edits:
+            if any(cites for _, _, cites, _ in line_items(line, repo)):
+                raise CutError("Part 1 line %d has a citation: cut it by hand" % n)
+            mark, pieces, counted = part1_pieces(line)
+            kept, k = [], 0
+            for piece, is_claim in zip(pieces, counted):
+                k += is_claim
+                todo = edits[n].get("%d.%d" % (n, k)) if is_claim else None
+                if todo == "cut":
+                    continue
+                for tag in todo or []:
+                    piece = piece.replace(tag, "")
+                piece = re.sub(r"\s+([.!?])", r"\1", re.sub(r"\s+", " ", piece)).strip()
+                kept.append(re.sub(r"((?:\s*%s)+)([.!?])$" % TAG.pattern, r"\2\1", piece))  # the tags go back after the stop, where the front writer puts them
+            if not kept:
+                deleted_last = True
+                continue
+            line = mark + " ".join(kept)
+        out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else ""), rows
+
+
+def usage():
+    print(__doc__.split("\n\n")[0], file=sys.stderr)
+    return 2
+
+
+def options(argv, names):
+    """({flag: value}, positional) from argv; None when a flag is unknown or has no value."""
+    found, rest, it = {}, [], iter(argv)
+    for a in it:
+        if a == "--clean":
+            found[a] = True
+        elif a in names:
+            found[a] = next(it, None)
+            if not found[a]:
+                return None
+        elif a.startswith("-") and len(a) > 1:
+            return None
+        else:
+            rest.append(a)
+    return found, rest
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] not in ("changed", "cut"):
+        return usage()
+    mode = argv[1]
+    parsed = options(argv[2:], ("--was", "--out") if mode == "changed" else ("--ids", "--reports", "-o"))
+    if parsed is None or len(parsed[1]) != 2:
+        return usage()
+    opts, (doc, repo) = parsed
+    repo = os.path.realpath(repo)
+    need = ("--was",) if mode == "changed" else ("--ids", "--reports")
+    if not os.path.isfile(doc) or not os.path.isdir(repo) or any(k not in opts for k in need) or ("--clean" in opts and mode == "changed"):
+        return usage()
+    if (mode == "changed" and not os.path.isfile(opts["--was"])) or (mode == "cut" and (not os.path.isfile(opts["--ids"]) or not os.path.isdir(opts["--reports"]))):
+        return usage()
+    text = read(doc)
+    if mode == "changed":
+        rows = changed(text, read(opts["--was"]), repo)
+        for c in rows:
+            print("%s | %s" % (c[0], c[2]))
+        print("%d claims changed since %s" % (len(rows), opts["--was"]) if rows else "nothing changed since %s: no final check needed" % opts["--was"])
+        if "--out" in opts:
+            with open(opts["--out"], "w", encoding="utf-8") as f:
+                f.write("".join(c[0] + "\n" for c in rows))
+        return 0
+    try:
+        chosen = read_ids(opts["--ids"], claim_ids(text, repo), text, repo)
+        new, rows = cut_text(text, repo, chosen, read_verdicts(opts["--reports"]))
+    except (SliceError, CutError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    out = opts.get("-o", doc)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(new)
+    for r in rows:
+        print(r)
+    print("%d claims checked, %s: wrote %s" % (len(chosen), "%d rows above" % len(rows) if rows else "all HOLD, nothing cut", out))
+    if "--clean" in opts:
+        with open(clean_path(out), "w", encoding="utf-8") as f:
+            f.write(clean(new))
+        print("wrote %s" % clean_path(out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
