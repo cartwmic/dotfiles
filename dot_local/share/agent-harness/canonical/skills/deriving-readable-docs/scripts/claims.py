@@ -253,10 +253,11 @@ def appendix_problems(text, repo):
     return unstamped, dups
 
 
-def stamp_text(text):
+def stamp_text(text, guide=False):
     """(new_text, stamped): give each prose line of a section file that has no id one, at its end: `[A4.3f9a]`, the section number from the nearest `## A<n>`
     heading, then four hex digits taken from the line, moved on until they differ from every id already in the file. Lines that have an id are left alone;
-    headings, fenced code, printed blocks and table rows are not prose lines. Raises ValueError when prose comes before the first `## A<n>` heading."""
+    headings, fenced code, printed blocks and table rows are not prose lines. Raises ValueError when prose comes before the first `## A<n>` heading, unless `guide` is true:
+    the text is a whole GUIDE.md, and what comes before its first appendix heading (the header and Part 1) is left alone."""
     lines, taken, sec, stamped = split_lines(text), set(TAG.findall(text)), None, 0
     for n, line, header, heading in doc_lines(text):
         if heading:
@@ -267,6 +268,8 @@ def stamp_text(text):
         if header or line.lstrip().startswith("|") or TAG.search(line):
             continue
         if sec is None:
+            if guide:
+                continue
             raise ValueError("line %d comes before the first `## A<n>` heading" % n)
         salt = 0
         while True:

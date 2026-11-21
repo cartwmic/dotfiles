@@ -86,7 +86,7 @@ When any answer is "no" or "not sure", edit the sentence now: narrow it to what 
 
 ## Briefing the writers (the lead)
 
-Start one fresh session per writer; never one session for the whole repo. Each brief's first line names the seat and the model: Opus for the frame writer, the section writers and the front writer; Sonnet for the scout. Common to all three:
+Start one fresh session per writer; never one session for the whole repo. Each brief's first line is the seat line of `SKILL.md` (Seats): `Seat: lead (skill writer), Opus 5.5 medium` for the frame writer, the section writers and the front writer; `Seat: scout, Haiku 5.5 xhigh` for the scout. Common to all three:
 
 - The paths: the repo (read only, at the commit), `surfaces.json` and `scout.txt`, this skill's folder, and the one folder the writer may write in (`draft.md` and `work/`). Files the brief names go under one line `Files:`, one repo-relative path a line (`groups.txt` from the scout gives them); the lead runs `lint_brief.py` on the brief, which fails a path the repo lacks.
 - The method: read this file, and `SKILL.md` for the citation form and the rules for every sentence.

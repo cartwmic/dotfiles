@@ -9,7 +9,8 @@ SKILL = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 DRAFTING = (SKILL_DIR / "references/drafting.md").read_text(encoding="utf-8")
 READER = (SKILL_DIR / "references/reader-check.md").read_text(encoding="utf-8")
 CHECK_BRIEF = (SKILL_DIR / "references/check-brief.md").read_text(encoding="utf-8")
-CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py", "final_recheck.py")
+EXTEND = (SKILL_DIR / "references/extend.md").read_text(encoding="utf-8")
+CALLED_FROM_SKILL = ("surfaces.py", "check_citations.py", "lint_main.py", "assemble.py", "slice.py", "score.py", "harvest_points.py", "stamp.py", "lint_brief.py", "final_recheck.py", "coverage.py", "extend.py")
 
 
 def frontmatter(text):
@@ -37,7 +38,7 @@ class SkillShapeTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?i)tests?[^.\n]*optional|optional[^.\n]*tests?")
 
     def test_it_stays_near_the_length_the_design_set(self):
-        self.assertLess(len(SKILL.split()), 1450)  # 1,400 before the final re-check step
+        self.assertLess(len(SKILL.split()), 1700)  # 1,400 before the final re-check step; 1,490 with the Seats section; 1,680 with the extend section (the method sits in references/extend.md)
 
 
 class EveryStepIsAScriptCallTest(unittest.TestCase):
@@ -51,7 +52,7 @@ class EveryStepIsAScriptCallTest(unittest.TestCase):
 
     def test_every_flag_in_a_command_is_one_its_script_has(self):
         seen = 0
-        for cmd in re.findall(r"`(python3 -I [^`]+)`", SKILL + READER + DRAFTING + CHECK_BRIEF):
+        for cmd in re.findall(r"`(python3 -I [^`]+)`", SKILL + READER + DRAFTING + CHECK_BRIEF + EXTEND):
             script = re.search(r"scripts/(\w+\.py)", cmd)
             self.assertIsNotNone(script, cmd)
             source = (SKILL_DIR / "scripts" / script.group(1)).read_text(encoding="utf-8")
@@ -150,7 +151,7 @@ class RoundTwoTest(unittest.TestCase):
 
     def test_the_reader_is_opus_and_gets_one_fix_round(self):
         reader = READER.split("## Reader", 1)[1].split("##", 1)[0]
-        self.assertIn("Opus", reader)
+        self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium", reader)
         self.assertNotIn("Sonnet", reader)
         self.assertRegex(READER, r"(?i)one (reader )?fix round")
 
@@ -166,13 +167,20 @@ class RoundTwoTest(unittest.TestCase):
         self.assertRegex(READER, r"(?i)do not list a word the text defines")
 
     def test_every_session_the_skill_starts_names_its_model(self):
-        self.assertIn("scout session (Sonnet)", SKILL)
-        self.assertIn("fresh Opus session per writer", SKILL)
-        self.assertIn("Opus front writer", SKILL)
-        self.assertIn("Opus checker session", SKILL)
-        self.assertIn("fresh Opus reader", SKILL)
-        self.assertIn("fresh Opus grader", SKILL)
-        self.assertIn("Seat: checker, Opus", CHECK_BRIEF)
+        self.assertIn("Scout: `Seat: scout, Haiku 5.5 xhigh`", SKILL)
+        self.assertIn("`Seat: lead (skill writer), Opus 5.5 medium`", SKILL)
+        self.assertIn("`Seat: reviewer (skill checker), Opus 5.5 medium`", SKILL)
+        self.assertIn("scout session", SKILL)
+        self.assertIn("fresh session per writer", SKILL)
+        self.assertIn("separate front writer", SKILL)
+        self.assertIn("fresh checker session", SKILL)
+        self.assertIn("fresh reader", SKILL)
+        self.assertIn("fresh grader", SKILL)
+        self.assertNotRegex(SKILL, r"(?i)\b(?:fresh|separate) Opus\b|Sonnet")
+        self.assertIn("Seat: checker, Opus", CHECK_BRIEF)  # the frozen check brief is not edited; SKILL.md puts the seat line above it
+        self.assertIn("Seat: lead (skill writer), Opus 5.5 medium", DRAFTING)
+        self.assertIn("Seat: scout, Haiku 5.5 xhigh", DRAFTING)
+        self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium", READER)
         self.assertNotIn("the model the caller's table gives", DRAFTING + SKILL)
         self.assertNotIn("the model your seat table gives", CHECK_BRIEF)
 
@@ -183,7 +191,7 @@ class RoundTwoTest(unittest.TestCase):
         self.assertIn("no-ai-slop", front)
 
     def test_step_9_has_the_lead_use_a_front_writer_session_for_part_1_and_a_list_of_ids(self):
-        self.assertRegex(SKILL, r"(?i)Part 1 finding is fixed by a fresh Opus front-writer session")
+        self.assertRegex(SKILL, r"(?i)Part 1 finding is fixed by a fresh front-writer session")
         self.assertIn("--ids", SKILL)
         self.assertIn("--record-fixed", SKILL)
         self.assertIn("--fixed", SKILL)

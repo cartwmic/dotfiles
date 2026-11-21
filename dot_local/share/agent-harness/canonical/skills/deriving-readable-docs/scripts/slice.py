@@ -201,6 +201,28 @@ def record_fixed(path, chosen, part1_range, verdicts):
         f.write("".join("%s | %s\n" % kv for kv in rows.items()))
 
 
+def emit(slices, chosen, p1, doc, repo, only_chosen, out):
+    """Print one line a slice and, with `out`, write each slice's files and slices.json. `chosen` are the claims the slices were cut from; with `only_chosen` a slice's flags are
+    those of its claims' lines, otherwise those of every line it covers."""
+    flags = flags_of(doc, repo)
+    for s in slices:
+        mine = [c for c in chosen if s["first_line"] <= c[1] <= s["last_line"] and (s.get("ids") is None or c[0] in s["ids"])]
+        s["claim_lines"] = ["%s | %s | %s" % (c[0], c[3], c[2]) for c in mine]
+        s["part1"] = any(p1[0] <= c[1] < p1[1] for c in mine)
+        s["flag_lines"] = [l for n, l in flags if n in {c[1] for c in mine}] if only_chosen else [l for n, l in flags if s["first_line"] <= n <= s["last_line"]]
+        s["flags"] = len(s["flag_lines"])
+        print("slice %d: lines %d-%d, %d claims, %d flags%s" % (s["n"], s["first_line"], s["last_line"], s["claims"], s["flags"], ", over" if s["over"] else ""))
+    if out:
+        os.makedirs(out, exist_ok=True)
+        for s in slices:
+            with open(os.path.join(out, "slice-%d.flags.txt" % s["n"]), "w", encoding="utf-8") as f:
+                f.write("\n".join(s["flag_lines"]) + ("\n" if s["flag_lines"] else ""))
+            with open(os.path.join(out, "slice-%d.claims.txt" % s["n"]), "w", encoding="utf-8") as f:
+                f.write("\n".join(s["claim_lines"]) + ("\n" if s["claim_lines"] else ""))
+        with open(os.path.join(out, "slices.json"), "w", encoding="utf-8") as f:
+            json.dump([{k: v for k, v in s.items() if k not in ("flag_lines", "claim_lines", "ids")} for s in slices], f, indent=2)
+
+
 def main(argv):
     args, limit, out, ids, fixed, reports, was, it = [], MAX_CLAIMS, None, None, None, None, None, iter(argv[1:])
     for a in it:
@@ -246,23 +268,7 @@ def main(argv):
         for c in claims:
             per_line[c[1]] = per_line.get(c[1], 0) + 1
         slices = cut(text, per_line, limit)
-    flags = flags_of(doc, repo)
-    for s in slices:
-        mine = [c for c in chosen if s["first_line"] <= c[1] <= s["last_line"] and (s.get("ids") is None or c[0] in s["ids"])]
-        s["claim_lines"] = ["%s | %s | %s" % (c[0], c[3], c[2]) for c in mine]
-        s["part1"] = any(p1[0] <= c[1] < p1[1] for c in mine)
-        s["flag_lines"] = [l for n, l in flags if n in {c[1] for c in mine}] if ids else [l for n, l in flags if s["first_line"] <= n <= s["last_line"]]
-        s["flags"] = len(s["flag_lines"])
-        print("slice %d: lines %d-%d, %d claims, %d flags%s" % (s["n"], s["first_line"], s["last_line"], s["claims"], s["flags"], ", over" if s["over"] else ""))
-    if out:
-        os.makedirs(out, exist_ok=True)
-        for s in slices:
-            with open(os.path.join(out, "slice-%d.flags.txt" % s["n"]), "w", encoding="utf-8") as f:
-                f.write("\n".join(s["flag_lines"]) + ("\n" if s["flag_lines"] else ""))
-            with open(os.path.join(out, "slice-%d.claims.txt" % s["n"]), "w", encoding="utf-8") as f:
-                f.write("\n".join(s["claim_lines"]) + ("\n" if s["claim_lines"] else ""))
-        with open(os.path.join(out, "slices.json"), "w", encoding="utf-8") as f:
-            json.dump([{k: v for k, v in s.items() if k not in ("flag_lines", "claim_lines", "ids")} for s in slices], f, indent=2)
+    emit(slices, chosen, p1, doc, repo, bool(ids), out)
     if fixed:
         record_fixed(fixed, chosen, p1, read_verdicts(reports))
     return 0
