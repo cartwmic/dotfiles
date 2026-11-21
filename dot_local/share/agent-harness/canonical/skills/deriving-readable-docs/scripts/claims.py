@@ -37,6 +37,40 @@ def split_lines(text):
     return lines[:-1] if lines and lines[-1] == "" else lines
 
 
+TABLE_SEPARATOR = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
+
+
+def table_rows(text):
+    """(header_lines, data_lines): the doc line numbers of the header rows and of the data rows of the tables of a doc outside fenced and printed blocks.
+    A table is the run of consecutive `|` lines whose second line is a separator row (`|---|---|`); its first line is the header and the lines after the separator are data rows."""
+    blocks, run = [], []
+    for n, line, _, _ in doc_lines(text):
+        if line.lstrip().startswith("|") and (not run or n == run[-1][0] + 1):
+            run.append((n, line))
+            continue
+        if run:
+            blocks.append(run)
+        run = [(n, line)] if line.lstrip().startswith("|") else []
+    if run:
+        blocks.append(run)
+    header, data = set(), set()
+    for b in blocks:
+        if len(b) >= 2 and TABLE_SEPARATOR.match(b[1][1]):
+            header.add(b[0][0])
+            data.update(n for n, l in b[2:] if not TABLE_SEPARATOR.match(l))
+    return header, data
+
+
+def table_header_lines(text):
+    """The doc lines that are the header row of a table: a row of cell names, no claim about the repo."""
+    return table_rows(text)[0]
+
+
+def row_text(row):
+    """A table row as one sentence: its cells in order, empty ones dropped, joined with `; `."""
+    return "; ".join(c.strip() for c in row.strip().strip("|").split("|") if c.strip())
+
+
 def is_path(repo, path, strict):
     """Should this token be checked as a file citation? Skip clock times, hosts and ports. A whole-span
     token such as `Makefile:5` is checked even with no dot or slash, so a missing file is reported."""
@@ -213,11 +247,11 @@ def appendix_lines(text, repo):
     """The prose lines of the appendix sections, as dicts {line, section, ids, text, cited}: the line's doc number, its section number (`## A4 ...` is "4"),
     the ids it carries (`[A4.3f9a]`), its sentences joined with ids and citations taken out, and whether it holds a citation.
     A heading `## A<n> ...` starts a section; a deeper heading (`###`) stays inside it; any other heading, such as `# Part 2` or `## A-last`, ends it.
-    Table rows are not lines of the appendix: they carry no id."""
+    A data row of a table is a line of the appendix too, and carries its id inside its last cell: its text is its cells joined with `; `. A table's header and separator rows are not."""
     by_line, out, sec = {}, [], None
     for n, s in prose_sentences(text, repo):
         by_line.setdefault(n, []).append(s)
-    raw = split_lines(text)
+    raw, rows = split_lines(text), table_rows(text)[1]
     for n, line, header, heading in doc_lines(text):
         if heading:
             m = re.match(r"(#+)\s+A(\d+)\b", line)
@@ -226,9 +260,11 @@ def appendix_lines(text, repo):
             elif len(re.match(r"#+", line).group(0)) <= 2:
                 sec = None
             continue
-        if sec is None or header or line.lstrip().startswith("|") or n not in by_line:
+        if sec is None or header or (line.lstrip().startswith("|") and n not in rows) or n not in by_line:
             continue
         body = " ".join(by_line[n])
+        if n in rows:
+            body = row_text(TAG.sub("", body))
         out.append({"line": n, "section": sec, "ids": [t.strip("[]") for t in TAG.findall(raw[n - 1])], "text": re.sub(r"\s+([.,;:!?])(?=\s|$)", r"\1", re.sub(r"([.!?])\s*[,;]+(?=\s|$)", r"\1", re.sub(r"\s+", " ", TAG.sub("", body)))).strip(),
                     "cited": any(cites for _, _, cites, _ in line_items(raw[n - 1], repo))})
     return out
@@ -256,15 +292,15 @@ def appendix_problems(text, repo):
 def stamp_text(text):
     """(new_text, stamped): give each prose line of a section file that has no id one, at its end: `[A4.3f9a]`, the section number from the nearest `## A<n>`
     heading, then four hex digits taken from the line, moved on until they differ from every id already in the file. Lines that have an id are left alone;
-    headings, fenced code, printed blocks and table rows are not prose lines. Raises ValueError when prose comes before the first `## A<n>` heading."""
-    lines, taken, sec, stamped = split_lines(text), set(TAG.findall(text)), None, 0
+    headings, fenced code, printed blocks, and a table's header and separator rows are not prose lines; a data row is, and its id goes inside its last cell. Raises ValueError when prose comes before the first `## A<n>` heading."""
+    lines, taken, sec, stamped, rows = split_lines(text), set(TAG.findall(text)), None, 0, table_rows(text)[1]
     for n, line, header, heading in doc_lines(text):
         if heading:
             m = re.match(r"#+\s+A(\d+)\b", line)
             if m:
                 sec = m.group(1)
             continue
-        if header or line.lstrip().startswith("|") or TAG.search(line):
+        if header or (line.lstrip().startswith("|") and n not in rows) or TAG.search(line):
             continue
         if sec is None:
             raise ValueError("line %d comes before the first `## A<n>` heading" % n)
@@ -275,7 +311,7 @@ def stamp_text(text):
                 break
             salt += 1
         taken.add(tag)
-        lines[n - 1] = line.rstrip() + " " + tag
+        lines[n - 1] = line.rstrip()[:-1].rstrip() + " " + tag + " |" if n in rows and line.rstrip().endswith("|") else line.rstrip() + " " + tag
         stamped += 1
     return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), stamped
 
@@ -324,8 +360,8 @@ def untagged_glossary_lines(text):
 
 def claim_ids(text, repo):
     """[(id, doc_line, sentence, kind)] for every claim of the doc, in order. An id is `N.k`: doc line N, sentence k of that line (k is 1 on a line of one
-    sentence). kind is "claim", or "outside" for an untagged glossary entry. The sentence has its citations taken out, and its tags put back at its end."""
-    out, seen, outside = [], {}, untagged_glossary_lines(text)
+    sentence). kind is "claim", or "outside" for an untagged glossary entry or a table header row. The sentence has its citations taken out, and its tags put back at its end."""
+    out, seen, outside = [], {}, untagged_glossary_lines(text) | table_header_lines(text)
     for n, s in prose_sentences(text, repo):
         seen[n] = seen.get(n, 0) + 1
         tags = "".join(TAG.findall(s))

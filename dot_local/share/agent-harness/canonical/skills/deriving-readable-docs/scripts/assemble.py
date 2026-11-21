@@ -5,8 +5,10 @@ usage: assemble.py <work> <repo> [-o GUIDE.md] [--clean] [--index] [--date YYYY-
 
 <work> holds the parts, by name:
   part1.md          the front writer's text: `## ` sections only; assemble adds the `# Part 1: In plain English` heading
-  A3.md, A4.md ...  the frame and the section writers, each starting `## A<n> <title>`; the numbers run from 3 with no gap; every prose line ends in an id
-                    (`stamp.py A4.md` gives them), and no id is on two lines
+  A3.md, A4.md ...  the frame and the section writers, each starting `## A<n> <title>`; the numbers run from 3 with no gap; every prose line and every data row of
+                    a table ends in an id (`stamp.py A4.md` gives them), and no id is on two lines. A file may hold the blocks `### Defaults and limits`
+                    (a table: Setting or behaviour, Value, Unit, Cited) and `### When things fail` (Case, What happens, Cited): assemble moves the rows of every file
+                    into two sections of their own, numbered after the last file (a row keeps its id), and refuses a block with another header or with prose in it
   surfaces.json     from `surfaces.py <repo> --json`
   points.json       from `harvest_points.py <repo>` (optional: without it the evidence block says no tests were found)
   scout.resolved    from `surfaces.py <repo> --resolve scout.txt` (optional); a NOT FOUND or WEAK MATCH row is counted in the header and left out of A1
@@ -30,9 +32,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import PRINTED_BEGIN, PRINTED_END, TAG, appendix_index, appendix_lines, appendix_problems, multi_sentence_lines  # noqa: E402
+from claims import PRINTED_BEGIN, PRINTED_END, TABLE_SEPARATOR, TAG, appendix_index, appendix_lines, appendix_problems, multi_sentence_lines  # noqa: E402
 
 SECTION_FILE = re.compile(r"^A(\d+)\.md$")
+# The two tables every section writer may add as `###` blocks; assemble gathers them into two sections after the last one: title, header cells.
+TABLES = (("Defaults and limits", ("Setting or behaviour", "Value", "Unit", "Cited")), ("When things fail", ("Case", "What happens", "Cited")))
+BLOCK_HEAD = re.compile(r"^###\s+(.+?)\s*$")
 NAMED_KINDS = ("command", "flag", "route", "event", "env")
 KINDS = ("entry", "command", "flag", "route", "event", "env", "config", "manifest", "export", "doc", "ci")
 
@@ -71,6 +76,46 @@ def named_in_tests(repo, rows, test_files):
     return named, never
 
 
+def cells(row):
+    return tuple(c.strip() for c in row.strip().strip("|").split("|"))
+
+
+def take_tables(text, name):
+    """(text without the table blocks, {title: [data rows]}): the `### Defaults and limits` and `### When things fail` blocks of one section file. A block holds
+    only a table with the header named in TABLES; a block with anything else, or another header, is refused."""
+    kept, rows, lines, i = [], {title: [] for title, _ in TABLES}, text.split("\n"), 0
+    heads = dict(TABLES)
+    while i < len(lines):
+        m = BLOCK_HEAD.match(lines[i])
+        if not m or m.group(1) not in heads:
+            kept.append(lines[i])
+            i += 1
+            continue
+        title, i = m.group(1), i + 1
+        block = []
+        while i < len(lines) and not lines[i].startswith("#"):
+            if lines[i].strip():
+                block.append(lines[i].strip())
+            i += 1
+        want = "| " + " | ".join(heads[title]) + " |"
+        if block and (cells(block[0]) != heads[title] or len(block) < 2 or not TABLE_SEPARATOR.match(block[1]) or any(not b.startswith("|") for b in block)):
+            raise AssembleError("%s: the `### %s` block holds only a table whose header is `%s` and a `|---|` row, then one row per line" % (name, title, want))
+        bare = [b for b in block[2:] if not TAG.search(b)]
+        if bare:
+            raise AssembleError("%s: %d rows of `### %s` have no id (first: %s): run stamp.py on it" % (name, len(bare), title, bare[0][:50]))
+        rows[title] += block[2:]
+    return "\n".join(kept), rows
+
+
+def table_sections(first, gathered):
+    """The two gathered sections, numbered from `first`: `## A<n> <title>`, the header and the rows of every section file; a section with no rows says so in a printed block."""
+    out = []
+    for k, (title, head) in enumerate(TABLES):
+        body = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head), *gathered[title]] if gathered[title] else [printed("none listed")]
+        out.append("\n".join(["## A%d %s" % (first + k, title), "", *body]))
+    return out
+
+
 def sections(work):
     found = {}
     for name in os.listdir(work):
@@ -79,13 +124,16 @@ def sections(work):
             found[int(m.group(1))] = name
     if not found or sorted(found) != list(range(3, 3 + len(found))):
         raise AssembleError("%s: need A3.md, then A4.md and on with no gap; found %s" % (work, ", ".join(sorted(found.values())) or "none"))
-    out = []
+    out, gathered = [], {title: [] for title, _ in TABLES}
     for n in sorted(found):
         text = read(os.path.join(work, found[n])).strip()
         if not re.match(r"## A%d\b" % n, text):
             raise AssembleError("%s must start with a `## A%d <title>` heading" % (found[n], n))
-        out.append(text)
-    return out
+        text, rows = take_tables(text, found[n])
+        for title in rows:
+            gathered[title] += rows[title]
+        out.append(text.strip())
+    return out + table_sections(3 + len(found), gathered)
 
 
 def build(work, repo, date, need_part1=True):

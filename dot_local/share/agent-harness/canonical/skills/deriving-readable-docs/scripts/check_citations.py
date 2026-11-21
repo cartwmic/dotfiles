@@ -78,7 +78,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
-from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, split_lines, strip_code, untagged_glossary_lines, word_count, words_of)  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, split_lines, strip_code, table_header_lines, untagged_glossary_lines, word_count, words_of)  # noqa: E402
 
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
 
@@ -254,7 +254,7 @@ def check(doc_text, repo):
     [(doc_line, kind, detail)]. Claims are only judged when all their citations are good."""
     repo = os.path.realpath(repo)
     checked, bad, fails, flags, cache = 0, [], [], [], {}
-    outside = untagged_glossary_lines(doc_text)  # an outside-term glossary entry makes no claim about the repo: lint_main.py and the checkers leave it alone too
+    outside = untagged_glossary_lines(doc_text) | table_header_lines(doc_text)  # an outside-term glossary entry and a table's header row make no claim about the repo: lint_main.py and the checkers leave them alone too
     for c in claims(doc_text, repo):
         before = len(bad)
         for path, start, end in c["cites"]:
@@ -434,9 +434,9 @@ def evidence_fails(doc_text, repo, evidence_text, where):
 
 def uncited_fails(doc_text, repo):
     """[(doc_line, "uncited", detail)]: a sentence of a draft with no citation that does not say "inferred" or "from your list"."""
-    out = []
+    out, heads = [], table_header_lines(doc_text)
     for c in claims(doc_text, repo):
-        if c.get("heading") or c["header"] or c.get("part1") or not c["uncited"].strip():
+        if c.get("heading") or c["header"] or c.get("part1") or c["line"] in heads or not c["uncited"].strip():
             continue
         for raw in sentences(c["uncited"]):
             if words_of(raw) and not re.search(r"\binferred\b|\bfrom your list\b", raw, re.I):

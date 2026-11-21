@@ -37,7 +37,7 @@ class SkillShapeTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?i)tests?[^.\n]*optional|optional[^.\n]*tests?")
 
     def test_it_stays_near_the_length_the_design_set(self):
-        self.assertLess(len(SKILL.split()), 1450)  # 1,400 before the final re-check step
+        self.assertLess(len(SKILL.split()), 1550)  # 1,400 before the final re-check step; 1,517 with the two tables
 
 
 class EveryStepIsAScriptCallTest(unittest.TestCase):
@@ -156,7 +156,7 @@ class RoundTwoTest(unittest.TestCase):
 
     def test_the_check_brief_tells_checkers_a_value_set_on_the_cited_line_holds_for_count(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)set on the cited line")
-        self.assertRegex(CHECK_BRIEF, r"version 8")
+        self.assertRegex(CHECK_BRIEF, r"version 9")
         self.assertNotRegex(CHECK_BRIEF, r"version [567]\b")
 
     def test_a_glossary_entry_is_tagged_like_any_other_part_1_sentence(self):
