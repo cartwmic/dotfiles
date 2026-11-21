@@ -67,6 +67,7 @@ class FrontSamplerUnit(unittest.TestCase):
         self.assertIn("for", message)
         with self.assertRaises(AssertionError):
             sampler.assert_unchanged("the blip")
+        sampler.assert_returned("the blip")   # it came back, so the weaker check passes
 
     def test_a_front_that_never_comes_back_fails_the_assert(self):
         """The front leaves the baseline and never returns (the old launcher keeps it, or a setfront does
@@ -83,6 +84,9 @@ class FrontSamplerUnit(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("Fake App " + B, message)
         self.assertIn("still away", message)
+        with self.assertRaises(AssertionError) as caught:
+            sampler.assert_returned("the steal")
+        self.assertIn("left the frontmost app away", str(caught.exception))
         sampler.stop()
         # and the open change survives stop() as a recorded excursion with no end
         excursions = sampler.excursions()

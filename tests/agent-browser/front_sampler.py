@@ -108,3 +108,13 @@ class FrontSampler:
         if self.excursions():
             raise AssertionError("%s changed the frontmost app (baseline %s): %s"
                                  % (step, self._baseline_name, self.describe()))
+
+    def assert_returned(self, step):
+        """Weaker than assert_unchanged: any change of the front must have ended by now (the front is back on the
+        baseline), however long it lasted."""
+        if self._error is not None:
+            raise AssertionError("%s: sampling the frontmost app failed: %s" % (step, self._error))
+        away = [e for e in self.excursions() if e["end"] is None]
+        if away:
+            raise AssertionError("%s left the frontmost app away from the baseline %s: %s"
+                                 % (step, self._baseline_name, self.describe()))

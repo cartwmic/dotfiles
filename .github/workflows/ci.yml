@@ -7,7 +7,7 @@ name: CI
 #
 # Every run (pull request, push to main, and workflow_dispatch to start an untested main by hand) runs `tests`, `release-pins` and
 # `mise-tests`. The macOS job has no path filter: a path list goes stale, and a filtered required check hangs as "expected".
-# Branch protection requires `tests` only, so a red `mise-tests` shows on the PR but does not block its merge by itself.
+# Branch protection requires `tests` and `mise-tests`, so a red `mise-tests` blocks a merge. `release-pins` is not required.
 # `~/.local/bin/ci-main-status` (source: dot_local/bin/executable_ci-main-status) reads the main runs.
 
 on:
@@ -81,7 +81,7 @@ jobs:
   # (2026-11-17: two releases three minutes apart each blocked the other's bump PR, and every open PR's suites never ran).
   # Not in scripts/ci-linux.sh: it reads GitHub through gh, and kgate pods run ci-linux.sh with no gh login.
   # Main's run reads red while a pin lags with no open bump PR for it (ci-main-status sees the run, not one job).
-  # Branch protection requires `tests` only, so a PR with a lagging pin is not blocked from merging; the red main is
+  # Branch protection requires `tests` and `mise-tests`, not this job, so a PR with a lagging pin is not blocked from merging; the red main is
   # what stops the next merge.
   release-pins:
     runs-on: ubuntu-latest

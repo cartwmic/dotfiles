@@ -45,13 +45,31 @@ log() {
 
 up() { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; }
 
+# True once the app recorded as front before the launch is front again (checked for up to 1 s: a front change is not instant).
+front_is_prev() {
+  j=0
+  while [ "$j" -lt 5 ]; do
+    [ "$(lsappinfo front 2>/dev/null)" = "$PREV_ASN" ] && return 0
+    j=$((j + 1))
+    sleep 0.2
+  done
+  return 1
+}
+
+# Second way to hand the front back, used only when lsappinfo setfront did not take: activate the recorded
+# instance by pid through NSRunningApplication (JXA in osascript; it sends no Apple event, so it needs no
+# Automation consent). Like setfront it names an instance, never a bundle.
+activate_prev_pid() {
+  osascript -l JavaScript -e "ObjC.import('AppKit'); \$.NSRunningApplication.runningApplicationWithProcessIdentifier($PREV_PID).activateWithOptions(2)" >/dev/null 2>&1
+}
+
 # Hand the front back to the app instance that was frontmost before the launch, if the agent Chrome took
 # it: even under open -g -n, Chrome activates itself in-process when its first window shows (chromium
 # issue 40246767), so open alone does not keep the front. The user's own Chrome and the agent Chrome are
 # both com.google.Chrome, so the front is told apart by instance, never by bundle id: the agent Chrome's
 # pid (pgrep on the profile flag, the same handle --stop uses) against the front app's pid (lsappinfo
-# info -only pid). The hand-back is lsappinfo setfront on the recorded ASN — an instance; open -b can
-# only name a bundle, which could raise the wrong Chrome. If the recorded app has quit (its ASN now
+# info -only pid). The hand-back is lsappinfo setfront on the recorded ASN — an instance (then, if the front
+# did not move, an activate by pid); open -b can only name a bundle, which could raise the wrong Chrome. If the recorded app has quit (its ASN now
 # resolves to another pid, or to nothing), the hand-back is skipped and logged: no relaunch. Watches
 # AGENT_CHROME_FOCUS_WAIT seconds (default 5) and hands back at most once. A failure here must never
 # fail the launch, so the caller ignores the outcome.
@@ -66,10 +84,15 @@ hand_front_back() {
       if [ -n "$front_pid" ] && [ "$front_pid" = "$CHROME_PID" ]; then
         prev_pid_now=$(lsappinfo info -only pid "$PREV_ASN" 2>/dev/null | tr -dc '0-9')
         if [ -n "$prev_pid_now" ] && [ "$prev_pid_now" = "$PREV_PID" ]; then
-          if lsappinfo setfront "$PREV_ASN" >/dev/null 2>&1; then
+          # lsappinfo setfront can exit 0 and do nothing (it prints "ERROR #-54 permErr" when the caller may not
+          # change the front, as on a GitHub macOS runner), so its exit code is not the answer: the front is.
+          lsappinfo setfront "$PREV_ASN" >/dev/null 2>&1 || true
+          if front_is_prev; then
             log INFO "the agent Chrome took the front at launch; handed it back to the app that was front before (pid $PREV_PID)"
+          elif activate_prev_pid && front_is_prev; then
+            log INFO "the agent Chrome took the front at launch; lsappinfo setfront did not move it, NSRunningApplication handed it back to the app that was front before (pid $PREV_PID)"
           else
-            log ERROR "the agent Chrome took the front at launch; could not hand it back to $PREV_ASN"
+            log ERROR "the agent Chrome took the front at launch; could not hand it back to $PREV_ASN (pid $PREV_PID)"
           fi
         else
           log INFO "the agent Chrome took the front at launch; the app that was front before has quit, so the front stays with the agent Chrome"
