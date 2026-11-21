@@ -100,6 +100,16 @@ class AssembleTest(unittest.TestCase):
         self.assertNotIn("printed", clean)
         self.assertIn("Notes saves short notes.\nWho it is for: anyone who takes notes.\nYou tag a note", clean)
 
+    def test_the_clean_copy_sits_beside_the_guide_named_after_it_and_is_reported(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo)
+            out_file = str(Path(d, "GUIDE.final.md"))
+            code, out, err = run("assemble.py", d, repo, "--date", "2026-11-20", "-o", out_file, "--clean")
+            self.assertEqual(code, 0, err)
+            self.assertTrue(Path(d, "GUIDE.final.clean.md").exists())
+            self.assertFalse(Path(d, "GUIDE.final.md.clean.md").exists())
+            self.assertIn("wrote %s" % Path(d, "GUIDE.final.clean.md"), out)
+
     def test_index_lists_each_appendix_sentence_under_its_tag_and_needs_no_part_1(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
             setup(d, repo, **{"part1.md": None})
