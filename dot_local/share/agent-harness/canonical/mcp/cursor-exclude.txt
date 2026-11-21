@@ -1,0 +1,8 @@
+# Canonical MCP servers that Cursor does not get. One server name per line; '#' starts a comment.
+#
+# Every server in servers.json.tmpl is written to ~/.cursor/mcp.json by `apply_harness_config.sh cursor`, on both profiles,
+# unless its name is listed here. A name goes on this list only when the server really cannot run in Cursor, with the reason
+# on the line above it. tests/cursor/test_parity.py fails when a canonical server is missing from the Cursor output and is
+# not listed here, and when a name listed here is not a canonical server any more.
+#
+# (empty: Cursor gets every canonical server)
