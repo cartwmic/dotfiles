@@ -15,7 +15,7 @@ no line to read), and slices.json (`[{n, first_line, last_line, claims, flags, o
 or an id of an appendix line (`A4.3f9a`). The slices then hold those claims only, cut the same way and apart for Part 1 and the appendix. An id that is
 nowhere in the doc is an error (exit 1).
 --was OLD.md (with --ids) is the guide as it stood when the last round was cut: the slices then also hold each claim the fix changed without the ids file saying so, found by
-text as well as by id: a claim whose sentence (tags and citations aside) is not in OLD.md (a line a fix split in two: the half that got a new id; or reworded), and a claim
+text as well as by id: a claim whose sentence, tags or cited lines are not in OLD.md (a line a fix split in two: the half that got a new id; reworded; retagged; recited), and a claim
 whose sentence is in OLD.md but whose neighbour before it is not the one it had, when that old neighbour is still in the guide (a line that moved, so an "earlier case" now
 means something else). A neighbour that was edited or cut does not count: the claim after it is as it was.
 --record-fixed FILE (with --ids and --reports DIR) is run once the fix round's checkers have reported: DIR holds their reports. It writes the Part 1 sentences of the
@@ -31,7 +31,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import TAG, appendix_index, claim_ids, doc_lines, split_lines  # noqa: E402
+from claims import TAG, appendix_index, claim_ids, doc_lines, line_items, split_lines  # noqa: E402
 
 squash = lambda sentence: " ".join(re.findall(r"[a-z0-9]+", TAG.sub(" ", sentence).lower()))
 
@@ -141,20 +141,31 @@ def read_ids(path, claims, text, repo):
     return [c for c in claims if c[0] in chosen]
 
 
-def changed_since(old_text, claims, repo):
-    """The ids of the claims a fix changed, found by text: a claim whose sentence is not in the old guide (split or reworded), or whose sentence is in it but whose neighbour
-    before it is no longer the one it had while that old neighbour is still in the guide (moved)."""
-    old = claim_ids(old_text, repo)
-    old_texts, old_before = {squash(c[2]) for c in old}, {}
+def signatures(text, claims, repo):
+    """A claim's identity for change detection: its sentence (tags and citations aside), its tags, and the citations on its doc line. A claim that keeps its words but
+    gets another tag or another cited line is a changed claim: the checker judged the words against the old tag or citation."""
+    raw = split_lines(text)
+    out = []
+    for c in claims:
+        cites = sorted(cite for _, _, cs, _ in line_items(raw[c[1] - 1], repo) for cite in cs)
+        out.append((squash(c[2]), tuple(sorted(TAG.findall(c[2]))), tuple(cites)))
+    return out
+
+
+def changed_since(old_text, claims, text, repo):
+    """The ids of the claims changed since the old guide, found by content: a claim whose sentence, tags or cited lines are not in the old guide (split, reworded, retagged
+    or recited), or whose content is in it but whose neighbour before it is no longer the one it had while that old neighbour is still in the guide (moved)."""
+    old = signatures(old_text, claim_ids(old_text, repo), repo)
+    old_set, old_before = set(old), {}
     for prev, cur in zip([None] + old[:-1], old):
-        old_before.setdefault(squash(cur[2]), squash(prev[2]) if prev else None)
-    now_texts, out = {squash(c[2]) for c in claims}, set()
-    for prev, cur in zip([None] + claims[:-1], claims):
-        t = squash(cur[2])
-        if t not in old_texts:
-            out.add(cur[0])
-        elif (squash(prev[2]) if prev else None) != old_before[t] and old_before[t] in now_texts:
-            out.add(cur[0])
+        old_before.setdefault(cur, prev)
+    sigs = signatures(text, claims, repo)
+    now_set, out = set(sigs), set()
+    for prev, cur, claim in zip([None] + sigs[:-1], sigs, claims):
+        if cur not in old_set:
+            out.add(claim[0])
+        elif prev != old_before[cur] and old_before[cur] in now_set:
+            out.add(claim[0])
     return out
 
 
@@ -223,7 +234,7 @@ def main(argv):
             chosen = read_ids(ids, claims, text, repo)
             if was:
                 with open(was, encoding="utf-8", errors="replace") as f:
-                    moved = changed_since(f.read(), claims, repo)
+                    moved = changed_since(f.read(), claims, text, repo)
                 chosen = [c for c in claims if c in chosen or c[0] in moved]
         except SliceError as e:
             print(e, file=sys.stderr)

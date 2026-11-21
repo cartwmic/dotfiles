@@ -145,6 +145,11 @@ def clean(text):
     return re.sub(r"[ \t]*" + TAG.pattern, "", text) + "\n"
 
 
+def clean_path(out):
+    """Where the guide without tags goes: next to the guide, GUIDE.md becoming GUIDE.clean.md."""
+    return re.sub(r"(\.md)?$", ".clean.md", out, count=1)
+
+
 def main(argv):
     args, out, flags, date, it = [], None, set(), datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), iter(argv[1:])
     for a in it:
@@ -174,10 +179,9 @@ def main(argv):
         f.write(text)
     print("wrote %s" % out)
     if "--clean" in flags:
-        clean_path = re.sub(r"(\.md)?$", ".clean.md", out, count=1)
-        with open(clean_path, "w", encoding="utf-8") as f:
+        with open(clean_path(out), "w", encoding="utf-8") as f:
             f.write(clean(text))
-        print("wrote %s" % clean_path)
+        print("wrote %s" % clean_path(out))
     return 0
 
 
