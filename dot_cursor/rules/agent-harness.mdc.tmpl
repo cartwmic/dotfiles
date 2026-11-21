@@ -1,0 +1,23 @@
+---
+description: Michael's agent instructions from the dotfiles canonical instruction files (the same text Claude Code, Codex and Pi get)
+alwaysApply: true
+---
+{{- /*
+  ~/.cursor/rules/agent-harness.mdc: a user-level Cursor rule that always applies (Cursor reads ~/.cursor/rules/*.mdc for every workspace; checked in
+  the cursor-agent 2026.11.19 bundle). It carries the canonical instructions, so a change to a file in canonical/instructions reaches Cursor on the next apply:
+  AGENTS.md, the Hindsight guide, and on each profile its own file (the work profile also gets the Axon playbook section). The set matches the Codex block
+  (dot_codex/modify_AGENTS.md.tmpl). The per-workspace .cursor/rules/coordinator-seat.mdc is the coordinator's own and is not touched here.
+  tests/cursor/test_parity.py fails when a canonical instruction file's text is missing from this output on either profile.
+*/}}
+
+{{ include "dot_local/share/agent-harness/canonical/instructions/AGENTS.md" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/hindsight-guidance.md" -}}
+{{ if eq .profile "axon-work-computer" }}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/axon-playbook.md.tmpl" . -}}
+{{ end -}}
+{{ if eq .profile "axon-work-computer" }}
+{{ includeTemplate "dot_local/share/agent-harness/canonical/instructions/profile-work.md" . -}}
+{{ end -}}
+{{ if eq .profile "personal" }}
+{{ include "dot_local/share/agent-harness/canonical/instructions/profile-personal.md" -}}
+{{ end }}
