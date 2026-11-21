@@ -303,7 +303,7 @@ class LauncherTest(unittest.TestCase):
         r = self.run_script(bundle, bin_dir=bin_dir)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.open_calls()[0][:4], ["-g", "-n", "-a", str(bundle)])
-        self.assertIn("--no-startup-window", json.loads(argv_log.read_text()))
+        self.assertIn("--deliberately-wrong-flag", json.loads(argv_log.read_text()))
         self.assertEqual(self.cdp_calls(exe),
                          [{"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank", "background": True}}])
         self.assertTrue(any("created the first window over CDP in the background" in l for l in self.record()), self.record())
