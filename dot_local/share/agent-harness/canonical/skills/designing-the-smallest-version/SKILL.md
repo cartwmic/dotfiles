@@ -86,7 +86,7 @@ Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that 
 ## 1. Orientation            (≤1 page: what it is, entry points, size, how a change is proven, where to start; Evidence: the commands behind every number)
 ## 2. What exists            (A: parts table with kind, edge list, diagram, excluded trees. B: what we lean on, the pattern to copy, what is absent)
 ## 3. Requirements and invariants   (OR-n owner words; cited ids; IR-n / II-n inferred; enforced? yes/no/partial; Re-check table)
-## 4. Tensions and problems  (tensions T1…; A: ranked failures DF-n with "reproduced by" or "read only"; B: gaps G1…; each with evidence and cost of leaving it)
+## 4. Tensions and problems  (tensions T1…; A: ranked failures (cited F-n from a requirements file, own DF-n) with "reproduced by" or "read only"; B: gaps G1…; each with evidence and cost of leaving it)
 ## 5. Target design          (decisions D1…: what, why, requirement/failure/gap it answers, rejected alternative; diagram; what could be deleted and still meet the requirements)
 ## 6. Path                   (increments S1…: change, proof from outside, depends on, parallel?)
 ## 7. Not doing              (considered and cut, with the trigger that would reopen it; accepted fails live here)
