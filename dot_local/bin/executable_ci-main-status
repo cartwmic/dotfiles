@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """ci-main-status: is main green, red, or untested? Read before every merge.
 
-usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases)
+usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases, budget-steward)
        ci-main-status [--tip | --merge-gate] --all
-       ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below; for eval-cases the PR being merged, below)
+       ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below; for eval-cases and budget-steward the PR being merged, below)
        ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
@@ -40,6 +40,28 @@ Either fails: a line for each (the failing one with its reason), exit 1. A missi
 it cannot know which PR is merging, so pass --pr N. Without --merge-gate (plain status, --tip, --all) and with --merge-gate
 --all it prints one "n/a (no CI ...)" line and exits 0, like homelab: it never changes the exit of the other repos.
 One more no-CI repo is one more REPOS row ({"github": "owner/repo", "no_ci": True}) and its ORDER entry.
+
+A table repo with a "gitea" key lives on the homelab Gitea, not on GitHub (today budget-steward: cartwmic/budget-steward, no CI
+runner, no required checks; it is gated on a kgate run, playbook 83fbe006). Gitea has no `gh`, so the script reads the Gitea API
+itself (https://gitea.internal.cartwmic.com/api/v1; CI_MAIN_STATUS_GITEA_API overrides it). The token is
+CI_MAIN_STATUS_GITEA_TOKEN, else the git credential for the Gitea host (the same helper `git push` uses); never printed. A repo
+that is private answers 404 to no token: that is an unreadable state (exit 1), never "no evidence". A Gitea repo is not part of
+--all: a machine that cannot reach Gitea (the work Mac, a pod with no token) must not make --all fail; name it to read it. Profiles: the script ships to both; budget-steward is a personal-homelab repo, so the work profile never gates it
+(it has no Gitea reach, and the call would exit 1 with an ERROR line).
+  Evidence for a commit is the worse of two sources: (1) the Gitea combined commit status (success is a pass, failure or error is a
+  fail, no status at all is no evidence); (2) the newest kgate run recorded in ${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl
+  (CI_MAIN_STATUS_KGATE_LOG overrides it) for the commit's git tree hash (read by a one-commit git fetch: Gitea's API gives the
+  commit's own sha as its tree; CI_MAIN_STATUS_GITEA_GIT overrides the fetch URL), of this repo, that ran to its end, was not cancelled and
+  ran the full suite (its command holds both `npm run typecheck` and `npm test`; a run of a few proof tests does not count). Exit 0
+  is a pass, any other exit a fail. kgate hashes the shipped files the way `git write-tree` does, so a run on a branch that has the
+  same tree as the commit counts for the commit.
+  `--merge-gate budget-steward --pr N`: reads PR N from Gitea (it must be open and aimed at main) and its head commit, and passes
+  (exit 0, one GREEN line naming the evidence) only when the head has a pass and no fail. No evidence is a RED line, exit 1:
+  main's own state cannot stand in for it, because a squash merge writes a new tree that no kgate run has seen, so main reads
+  UNTESTED forever. Without --pr it exits 1 and says to pass one, like eval-cases. The gate proves the PR head's own tree, not
+  the merge result; the squash merge into a main that moved is the merger's to check (Gitea's `head_commit_id` pin does that).
+  Plain status and --tip read main's tip the same way: GREEN on a pass (--tip: tip <sha>), RED on a fail, UNTESTED (exit 2)
+  with no evidence.
 
 Every table repo's full name (the "github" field of its row: cartwmic/dotfiles, cartwmic/coordinator, StoryCraftTW/storycraft, ...,
 matched without regard to case) is its table entry: it gets the same verdict as the short name, including --merge-gate, --pr,
@@ -131,11 +153,15 @@ Every gh call carries GH_CALLER=ci-main-status. --merge-gate and --tip also set 
 import itertools
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import traceback
+import urllib.error
+import urllib.request
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 REPOS = {
     "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml"},
@@ -147,8 +173,10 @@ REPOS = {
     "alert-steward": {"github": "cartwmic/alert-steward", "workflow": "image.yml"},
     "storycraft": {"github": "StoryCraftTW/storycraft", "workflow": "ci.yml"},
     "retro": {"github": "cartwmic/retro", "workflow": "unit.yml"},
+    "budget-steward": {"gitea": "cartwmic/budget-steward", "kgate": "budget-steward"},   # on the homelab Gitea: no CI runner; gated on Gitea status or a full-suite kgate run
     "eval-cases": {"github": "cartwmic/eval-cases", "no_ci": True},   # private, no CI, no required checks possible: gated on review verify + pr-body-check
 }
+# budget-steward is not in ORDER: --all must not fail on a machine that cannot reach Gitea (the work Mac, a pod with no token).
 ORDER = ["dotfiles", "loop-engine", "agent-kit", "coordinator", "homelab", "amazon-itemizer", "alert-steward", "storycraft", "retro", "eval-cases"]
 JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/main-journeys.jsonl")
@@ -950,12 +978,171 @@ def no_ci(name, spec, tip_only, pr, gate):
     return 0, [f"{name}: n/a (no CI, no required checks possible; its merge gate is ci-main-status --merge-gate {name} --pr N)"]
 
 
+# ---- Gitea repos (budget-steward): no gh, no CI runner. See the docstring.
+GITEA_API_DEFAULT = "https://gitea.internal.cartwmic.com/api/v1"
+GITEA_SUITE = ("npm run typecheck", "npm test")   # a kgate command that ran the whole unit gate holds both
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def gitea_api():
+    return (os.environ.get("CI_MAIN_STATUS_GITEA_API") or GITEA_API_DEFAULT).rstrip("/")
+
+
+def gitea_token():
+    """The Gitea token: CI_MAIN_STATUS_GITEA_TOKEN, else the git credential for the Gitea host. None when there is none. Never printed."""
+    token = os.environ.get("CI_MAIN_STATUS_GITEA_TOKEN")
+    if token:
+        return token
+    url = urlparse(gitea_api())
+    if not url.hostname:
+        return None
+    ask = f"protocol={url.scheme}\nhost={url.netloc}\n\n"
+    try:
+        r = subprocess.run(["git", "credential", "fill"], input=ask, capture_output=True, text=True,
+                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in r.stdout.splitlines():
+        if line.startswith("password="):
+            return line[len("password="):] or None
+    return None
+
+
+def gitea_get(path):
+    """One Gitea API read as JSON. Any failure (no token for a private repo included: Gitea answers 404) raises Unreadable."""
+    token = gitea_token()
+    request = urllib.request.Request(gitea_api() + path, headers={"Authorization": "token " + token} if token else {})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        hint = "" if token else " (no Gitea token: set CI_MAIN_STATUS_GITEA_TOKEN or a git credential for the Gitea host; a private repo answers 404 without one)"
+        raise Unreadable(f"Gitea GET {path}: HTTP {e.code}{hint}")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise Unreadable(f"Gitea GET {path} failed: {e}")
+
+
+def kgate_log_path():
+    return Path(os.environ.get("CI_MAIN_STATUS_KGATE_LOG")
+                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "kgate/log.jsonl")
+
+
+def kgate_verdict(name, tree):
+    """The newest full-suite kgate run of repo `name` on git tree `tree`, as ("pass" | "fail", job id), or None."""
+    try:
+        lines = kgate_log_path().read_text(errors="replace").splitlines()
+    except OSError:
+        return None   # no log: no evidence
+    found = None
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue   # a torn or foreign line is not a record
+        if not isinstance(r, dict) or r.get("repo") != name or r.get("tree") != tree or r.get("ran") is not True or r.get("cancelled"):
+            continue
+        cmd = r.get("cmd")
+        if not isinstance(cmd, str) or not all(w in cmd for w in GITEA_SUITE):
+            continue
+        code = r.get("exit")
+        if isinstance(code, int) and not isinstance(code, bool):
+            found = ("pass" if code == 0 else "fail", str(r.get("id")))   # file order is time order: the newest run decides
+    return found
+
+
+def gitea_tree(repo, sha):
+    """The git tree hash of commit `sha`, from a one-commit fetch of it. Gitea's API cannot say it: git/commits/SHA and git/trees/SHA
+    both put the commit's own sha where the tree's belongs. kgate hashes the shipped files as `git write-tree` does, so this is the
+    hash a kgate record carries. The token goes in git's environment, never argv."""
+    url = os.environ.get("CI_MAIN_STATUS_GITEA_GIT") or f"{gitea_api().removesuffix('/api/v1')}/{repo}.git"
+    token = gitea_token()
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    if token:
+        env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.extraHeader", GIT_CONFIG_VALUE_0="Authorization: token " + token)
+    with tempfile.TemporaryDirectory(prefix="ci-main-status-") as work:
+        try:
+            for argv in (["init", "-q"], ["fetch", "-q", "--depth", "1", "--no-tags", url, sha], ["rev-parse", "FETCH_HEAD^{tree}"]):
+                r = subprocess.run(["git", "-C", work, *argv], capture_output=True, text=True, env=env, timeout=120)
+                if r.returncode:
+                    raise Unreadable(f"git {argv[0]} of {repo} {sha[:7]} failed: {r.stderr.strip().replace(token or chr(0), '<token>')[:200]}")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise Unreadable(f"git could not read {repo} {sha[:7]}: {e}")
+    tree = r.stdout.strip()
+    if not SHA40.match(tree):
+        raise Unreadable(f"git gave no tree hash for {repo} {sha[:7]}; failing closed")
+    return tree
+
+
+def gitea_evidence(name, spec, sha):
+    """(verdict, what it rests on) for commit `sha`: "pass", "fail" or None (no evidence). The worse source wins."""
+    repo = spec["gitea"]
+    tree = gitea_tree(repo, sha)
+    status = gitea_get(f"/repos/{repo}/commits/{sha}/status")
+    if not isinstance(status, dict) or not isinstance(status.get("total_count"), int):
+        raise Unreadable(f"Gitea commit status of {sha[:7]} is malformed; failing closed")
+    found = []   # (verdict, label)
+    if status["total_count"] > 0 and status.get("state") == "success":
+        found.append(("pass", "Gitea commit status success"))
+    elif status["total_count"] > 0 and status.get("state") in ("failure", "error"):
+        found.append(("fail", f"Gitea commit status {status['state']}"))
+    kg = kgate_verdict(spec["kgate"], tree)
+    if kg:
+        found.append((kg[0], f"kgate {kg[1]} exit {'0' if kg[0] == 'pass' else 'not 0'} on tree {tree[:7]}"))
+    for verdict in ("fail", "pass"):
+        hit = [label for v, label in found if v == verdict]
+        if hit:
+            return verdict, "; ".join(hit)
+    return None, ""
+
+
+def gitea_pr_gate(name, spec, pr):
+    repo = spec["gitea"]
+    pull = gitea_get(f"/repos/{repo}/pulls/{pr}")
+    head = pull.get("head", {}).get("sha") if isinstance(pull, dict) and isinstance(pull.get("head"), dict) else None
+    base = pull.get("base", {}).get("ref") if isinstance(pull, dict) and isinstance(pull.get("base"), dict) else None
+    if not isinstance(head, str) or not SHA40.match(head) or not isinstance(base, str):
+        raise Unreadable(f"Gitea PR #{pr} has no readable head and base; failing closed")
+    where = f"{repo} PR #{pr} head {head[:7]}"
+    if pull.get("state") != "open":
+        return 1, [f"{name}: RED  {where} is not open (state {pull.get('state')!r})"]
+    if base != "main":
+        return 1, [f"{name}: RED  {where} is aimed at {base}, not main"]
+    verdict, what = gitea_evidence(name, spec, head)
+    if verdict == "pass":
+        return 0, [f"{name}: GREEN  {where}: {what}"]
+    if verdict == "fail":
+        return 1, [f"{name}: RED  {where}: {what}"]
+    return 1, [f"{name}: RED  {where}: no evidence. It needs a Gitea commit status success or a kgate run that ran `npm run typecheck` and `npm test` "
+                f"on this exact tree and exited 0 (run `kgate -- sh -c 'npm ci && npm run typecheck && npm test'` in the PR's checkout)."]
+
+
+def gitea_check(name, spec, tip_only, pr, gate):
+    if gate:
+        if not pr:
+            return 1, [f"{name}: ERROR  its merge gate is a PR's kgate or Gitea status evidence, and it cannot tell which PR is merging. "
+                       f"Pass --pr N: ci-main-status --merge-gate {name} --pr N"]
+        return gitea_pr_gate(name, spec, pr)
+    branch = gitea_get(f"/repos/{spec['gitea']}/branches/main")
+    tip = branch.get("commit", {}).get("id") if isinstance(branch, dict) and isinstance(branch.get("commit"), dict) else None
+    if not isinstance(tip, str) or not SHA40.match(tip):
+        raise Unreadable("Gitea branches/main has no readable commit id; failing closed")
+    verdict, what = gitea_evidence(name, spec, tip)
+    if verdict == "pass":
+        return 0, [f"{name}: GREEN  {what} on {tip[:7]}; main tip is tested" + (f"; tip {tip}" if tip_only else "")]
+    if verdict == "fail":
+        return 1, [f"{name}: RED  {what} on {tip[:7]}"]
+    return 2, [f"{name}: UNTESTED  no Gitea commit status and no full-suite kgate run on main {tip[:7]}'s tree. "
+               f"Its merge gate is ci-main-status --merge-gate {name} --pr N."]
+
+
 def check(name, tip_only=False, pr=None, gate=False):
     spec = REPOS[name]
     if spec is None:
         return 0, [f"{name}: n/a (gate is per-PR only)"]
     if spec.get("no_ci"):
         return no_ci(name, spec, tip_only, pr, gate)
+    if "gitea" in spec:
+        return gitea_check(name, spec, tip_only, pr, gate)
     if "journal" in spec:
         verdicts, going = journal_verdicts()
     else:
@@ -984,7 +1171,7 @@ def main(argv):
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
-    by_slug = {v["github"].lower(): k for k, v in REPOS.items() if v}
+    by_slug = {(v.get("github") or v["gitea"]).lower(): k for k, v in REPOS.items() if v}
     argv = [by_slug.get(a.lower(), a) for a in argv]   # every table repo's OWNER/REPO is its table entry: the any-repo path reads only GitHub's required checks, a weaker gate than the table's whole-run read
     pr = None
     if "--pr" in argv:
@@ -1003,7 +1190,7 @@ def main(argv):
     elif len(argv) == 1 and "/" in argv[0] and not tip_only:
         names = argv   # OWNER/REPO: a GitHub repo not in the table; --tip is not for these repos
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N]  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases)", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N]  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases, budget-steward)", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
