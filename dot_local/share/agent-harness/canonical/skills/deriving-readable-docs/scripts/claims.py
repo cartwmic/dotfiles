@@ -164,6 +164,21 @@ def words_of(text):
     return [w for w in TAG.sub(" ", text).split() if re.search(r"\w", w)]
 
 
+def without_citations(line, repo):
+    """The line with its citations taken out. Citations joined by commas, `;`, `&` or "and" (the way `claims` groups them) go as one, so no `, ,` is left where they stood."""
+    spans = []  # [start, end] of each group of citations
+    for start, end, cites, _ in line_items(line, repo):
+        if not cites:
+            continue
+        if spans and JOIN.match(line[spans[-1][1]:start]):
+            spans[-1][1] = end
+        else:
+            spans.append([start, end])
+    for start, end in reversed(spans):
+        line = line[:start] + " " + line[end:]
+    return line
+
+
 def prose_sentences(text, repo):
     """Every sentence of the prose of a doc, as (doc_line, sentence): headings, the header above the first `## ` heading, fenced
     code, printed blocks and citations are left out. A table row is one sentence. This is what the check calls a claim
@@ -173,10 +188,7 @@ def prose_sentences(text, repo):
     for n, line, header, heading in doc_lines(text):
         if heading or header:
             continue
-        for start, end, cites, _ in reversed(line_items(line, repo)):
-            if cites:
-                line = line[:start] + " " + line[end:]
-        line = LIST_MARK.sub("", line).strip()
+        line = LIST_MARK.sub("", without_citations(line, repo)).strip()
         parts = [line] if line.startswith("|") else split_sentences(tags_before_stop(re.sub(r"\s+", " ", line)))
         out += [(n, p.strip()) for p in parts if words_of(p)]
     return out

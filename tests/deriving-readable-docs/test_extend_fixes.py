@@ -592,5 +592,31 @@ class ReaderFixRoundDocTest(unittest.TestCase):
         self.assertIn("need not be the one the docs list first", grader)
 
 
+class CitationJoinTest(unittest.TestCase):
+    """F12: the claim text a checker reads has no stray commas where commas, `;` or "and" joined the citations."""
+    DOC = ("# Part 2\n\n## A4 Stuff\n\nIt saves one `src/a.rs:1`, `src/a.rs:2` [A4.2222]\nIt saves two. `src/a.rs:1`, `src/a.rs:2`, `src/a.rs:3` [A4.2223]\n"
+           "It saves three. `src/a.rs:1` and `src/a.rs:2`; `src/a.rs:3` [A4.2224]\nIt saves four. `src/a.rs:1` [A4.2225]\n")
+
+    def claim_rows(self):
+        with make_repo(REPO) as repo, tempfile.TemporaryDirectory() as d:
+            doc = Path(d) / "DOC.md"
+            doc.write_text(self.DOC)
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "slice.py"), str(doc), repo, "--out", str(Path(d) / "out")], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return (Path(d) / "out/slice-1.claims.txt").read_text().splitlines()
+
+    def test_citations_joined_by_commas_semicolons_or_and_leave_no_stray_mark_in_the_claim_text(self):
+        rows = self.claim_rows()
+        self.assertEqual([r.split(" | ", 2)[2] for r in rows], ["It saves one [A4.2222]", "It saves two. [A4.2223]", "It saves three. [A4.2224]", "It saves four. [A4.2225]"])
+        for r in rows:
+            self.assertNotRegex(r, r"[,;]\s*[,;]|\s,|\band\s*\[")
+
+    def test_the_claim_ids_and_the_appendix_lines_do_not_change(self):
+        with make_repo(REPO) as repo:
+            sys.path.insert(0, str(SCRIPTS))
+            import claims
+            self.assertEqual([c[0] for c in claims.claim_ids(self.DOC, repo)], ["5.1", "6.1", "7.1", "8.1"])
+
+
 if __name__ == "__main__":
     unittest.main()
