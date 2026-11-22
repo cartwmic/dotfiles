@@ -87,7 +87,7 @@ Every component that acts for a user records enough to replay one user action: w
 
 The same records show how the product is used. Each record is one structured line (for example JSON) with a named action and its outcome, so counting records answers usage questions without reading prose: which actions the owner uses, how often, how long they take, how often they fail or are refused, and what they cost. The logs are the metrics; do not build a separate metrics system unless the owner asks for one (§4).
 
-Coverage: every user action a change adds or changes (a command or flag, a refusal, a page, a job or hook step) writes such a record. "No log change" is not a reason to skip this: a touched component that keeps no log gets one in that change. Log meaning, not every call (§4). Never log secrets or tokens. Bodies (prompts, replies) may be kept in local logs for 30 days and are never exported. This applies to new or touched components; do not retrofit untouched ones.
+Coverage: every user action a change adds or changes (a command or flag, a refusal, a page, a job or hook step) writes such a record. "No log change" is not a reason to skip this: when the component behind such an action keeps no log yet, it gets one in that change. A change that adds or changes no user action needs no new record. Log meaning, not every call (§4). Never log secrets or tokens. Bodies (prompts, replies) may be kept in local logs for 30 days and are never exported. This applies to new or touched components; do not retrofit untouched ones.
 
 **Test:** from the logs alone, replay one action, name a seeded fault (§12), and answer one usage question: how many times an action ran in a period, and how many of those failed.
 
