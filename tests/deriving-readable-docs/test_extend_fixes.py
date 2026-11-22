@@ -11,6 +11,8 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/c
 sys.path.insert(0, str(SCRIPTS))
 sys.dont_write_bytecode = True
 import coverage  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_final_recheck as base  # noqa: E402
 SKILL_DIR = SCRIPTS.parent
 EXTEND = (SKILL_DIR / "references/extend.md").read_text(encoding="utf-8")
 
@@ -155,6 +157,127 @@ class PlacementTest(unittest.TestCase):
 
     def test_a_fact_whose_own_file_is_cited_keeps_the_section_that_cites_it_most(self):
         self.assertEqual(self.section_of("src/net/retry.py:1"), "A4")
+
+
+class RecheckRoutingTest(unittest.TestCase):
+    """F2: in an extend pass every failure of a claim the pass wrote goes to repair first, for two tries, then to the cut; a claim the pass did not touch is reported and left alone."""
+    G = base.GUIDE
+    SAVES, STOPS, LISTS = [base.line_of(base.GUIDE, n) for n in ("It saves a note.", "It stops after 5", "It lists notes. `")]
+
+    def n(self, line):
+        return "%d.1" % line
+
+    def report(self, rows, findings=()):
+        return "Slice: slice-1\n" + "".join("read | %s | %s | src/cli.py:3\n" % r for r in rows) + "".join(f + "\n" for f in findings)
+
+    def run_step(self, mode, report, ids, *extra, guide=None, was=None):
+        with base.Work() as w:
+            w.write("GUIDE.md", guide or self.G)
+            w.write("OLD.md", was or self.G)
+            w.write("ids.txt", "\n".join(ids) + "\n")
+            w.write("rep/slice-1.md", report)
+            code, out, err = base.script(mode, w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--out", w.p("fix.txt"), *extra) if mode == "repair" else \
+                base.script(mode, w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), *extra)
+            fix = (w.dir / "fix.txt").read_text().split() if (w.dir / "fix.txt").exists() else None
+            return code, out, err, fix, (w.dir / "GUIDE.md").read_text()
+
+    def six_causes(self):
+        causes = ("MISSING_CONDITION", "NAME", "COUNT", "KIND", "OTHER")
+        a = [base.line_of(self.G, x) for x in ("It saves a note.", "It stops after 5", "It lists notes. `", "It sorts notes by date. `", "Notes saves notes. `")]
+        ids = [self.n(i) for i in a]
+        finds = ["%s | OVERSTATED | %s | words | the code | fix" % (i, c) for i, c in zip(ids, causes)]
+        return ids, self.report([(i, "OVERSTATED") for i in ids], finds)
+
+    def test_every_cause_and_a_failure_with_no_finding_is_to_fix_on_try_1_and_try_2(self):
+        ids, rep = self.six_causes()
+        extra = self.n(base.line_of(self.G, "You can keep 5 notes a day."))
+        ids.append(extra)
+        rep += "read | %s | WRONG | src/cli.py:3\n" % extra  # a failing claim with no finding row at all
+        for tries in ("1", "2"):
+            code, out, err, fix, _ = self.run_step("repair", rep, ids, "--try", tries)
+            self.assertEqual(code, 0, err)
+            self.assertEqual(sorted(fix), sorted(ids), tries)
+            self.assertIn("6 to fix once, 0 to cut, 0 hold", out)
+
+    def test_try_3_is_the_cut_and_every_failure_is_listed_as_cut(self):
+        ids, rep = self.six_causes()
+        code, out, err, fix, _ = self.run_step("repair", rep, ids, "--try", "3")
+        self.assertEqual((code, fix), (0, []), err)
+        self.assertEqual(out.count("cut | "), 5)
+        self.assertNotIn("fix | ", out)
+
+    def test_without_try_the_old_routing_stands(self):
+        ids, rep = self.six_causes()
+        self.assertEqual(self.run_step("repair", rep, ids)[3], ids[:3])
+
+    def test_a_failure_on_a_line_the_pass_changed_is_routed_though_the_ids_file_lacks_it(self):
+        new = self.G.replace("It lists notes. `src/cli.py:3`", "It lists all notes. `src/cli.py:3`")
+        lists, saves = self.n(base.line_of(new, "It lists all notes.")), self.n(base.line_of(new, "It saves a note."))
+        rep = self.report([(lists, "OVERSTATED"), (saves, "HOLDS")], ["%s | OVERSTATED | KIND | lists | the code | fix" % lists])
+        with base.Work() as w:
+            w.write("GUIDE.md", new)
+            w.write("OLD.md", self.G)
+            w.write("ids.txt", saves + "\n")
+            w.write("rep/slice-1.md", rep)
+            args = (w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--was", w.p("OLD.md"))
+            code, out, err = base.script("repair", *args, "--try", "1", "--out", w.p("fix.txt"))
+            self.assertEqual(code, 0, err)
+            self.assertEqual((w.dir / "fix.txt").read_text().split(), [lists])
+            code, out, err = base.script("cut", *args)
+            self.assertEqual(code, 0, err)
+            after = (w.dir / "GUIDE.md").read_text()
+            self.assertNotIn("It lists all notes.", after)
+            self.assertIn("It saves a note.", after)
+
+    def test_a_failure_on_a_line_that_is_as_the_old_guide_has_it_is_reported_and_left_alone(self):
+        lists, saves = self.n(self.LISTS), self.n(self.SAVES)
+        rep = self.report([(lists, "WRONG"), (saves, "HOLDS")], ["%s | WRONG | KIND | lists | the code | cut" % lists])
+        with base.Work() as w:
+            w.write("GUIDE.md", self.G)
+            w.write("OLD.md", self.G)
+            w.write("ids.txt", saves + "\n")
+            w.write("rep/slice-1.md", rep)
+            args = (w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--was", w.p("OLD.md"))
+            code, out, err = base.script("repair", *args, "--try", "1", "--out", w.p("fix.txt"))
+            self.assertEqual((code, (w.dir / "fix.txt").read_text()), (0, ""), err)
+            self.assertIn("unchanged | %s | WRONG | It lists notes." % lists, out)
+            code, out, err = base.script("cut", *args)
+            self.assertEqual(code, 0, err)
+            self.assertIn("unchanged | %s | WRONG | It lists notes." % lists, out)
+            self.assertEqual((w.dir / "GUIDE.md").read_text(), self.G)
+
+    def test_skip_takes_the_held_files_of_every_round(self):
+        with base.Work() as w:
+            old = self.G
+            new = old.replace("It saves a note.", "It saves a note fast.").replace("It lists notes. `", "It lists notes well. `")
+            w.write("GUIDE.md", new)
+            w.write("OLD.md", old)
+            saves, lists = self.n(base.line_of(new, "It saves a note fast.")), self.n(base.line_of(new, "It lists notes well."))
+            w.write("ids.txt", saves + "\n" + lists + "\n")
+            held = []
+            for i, cid in enumerate((saves, lists)):
+                w.write("rep/slice-1.md", self.report([(cid, "HOLDS")]))
+                w.write("only%d.txt" % i, cid + "\n")
+                code, _, err = base.script("cut", w.p("GUIDE.md"), w.dir, "--ids", w.p("only%d.txt" % i), "--reports", w.p("rep"), "--held-out", w.p("held%d.txt" % i))
+                self.assertEqual(code, 0, err)
+                held += ["--skip", w.p("held%d.txt" % i)]
+            code, out, err = base.script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("OLD.md"), *held, "--out", w.p("changed.txt"))
+            self.assertEqual(code, 0, err)
+            self.assertEqual((w.dir / "changed.txt").read_text().split(), [])
+
+    def test_try_and_was_need_their_values(self):
+        for bad in (("--try", "0"), ("--try", "two"), ("--was", "/no/such/file.md")):
+            ids, rep = self.six_causes()
+            self.assertEqual(self.run_step("repair", rep, ids, *bad)[0], 2, bad)
+
+    def test_e7_names_the_flags_the_script_takes_and_the_two_tries(self):
+        step = EXTEND.split("## E7")[1].split("## E8")[0]
+        source = (SCRIPTS / "final_recheck.py").read_text()
+        for flag in ("--try 1", "--try 2", "--was GUIDE.was.md"):
+            self.assertIn(flag, step)
+        for flag in {f for cmd in __import__("re").findall(r"`(python3 -I [^`]*final_recheck\.py[^`]*)`", step) for f in __import__("re").findall(r"(?<![\w-])(--?[a-z][a-z-]*)", cmd.split("final_recheck.py", 1)[1])}:
+            self.assertIn(flag, source, flag)
+        self.assertNotRegex(step, r"(?i)cause MISSING_CONDITION, NAME or COUNT is `fix`")
 
 
 class DuplicateLineTest(unittest.TestCase):

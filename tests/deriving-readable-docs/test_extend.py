@@ -260,7 +260,7 @@ class RecheckAfterRepairTest(Fixture):
         self.checker_report("reports-new", ids, new_id, "%s | OVERSTATED | MISSING_CONDITION | saves | it saves only when sync is on (src/app.py:21) | add the condition\n" % new_id)
 
         steps = self.e7_steps()
-        self.assertEqual([len(steps[k]) for k in (1, 2, 4)], [1, 1, 3], steps)
+        self.assertEqual([len(steps[k]) for k in (1, 2, 4, 5)], [1, 1, 4, 3], steps)
         r = self.run_step(steps[1][0])  # step 1: the claim is a fix, not a cut
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"fix \| %s \| OVERSTATED \| MISSING_CONDITION" % re.escape(new_id))
@@ -278,7 +278,20 @@ class RecheckAfterRepairTest(Fixture):
         self.assertIn(new_id, claims)
         self.assertEqual(set(claims), set(again), "the slice must hold only the ids in changed2.txt: a --was here also adds each claim that differs from GUIDE.was.md, held ones included")
         self.checker_report("reports-new2", again, new_id)  # the fresh check still fails it
-        r = self.run_step(steps[4][2])  # a repaired claim that still fails is cut now
+        r = self.run_step(steps[4][2])  # the second try: a repaired claim that still fails is repaired once more, not cut
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"fix \| %s \| OVERSTATED" % re.escape(new_id))
+        r = self.run_step(steps[4][3])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(self.NEW_CLAIM, Path(self.path("GUIDE.md")).read_text())
+        r = self.run_step(steps[5][0])  # what neither round's held file passed
+        self.assertEqual(r.returncode, 0, r.stderr)
+        third = Path(self.path("changed3.txt")).read_text().split()
+        self.assertIn(new_id, third)
+        r = self.run_step(steps[5][1])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.checker_report("reports-new3", third, new_id)  # it still fails after its second repair
+        r = self.run_step(steps[5][2])  # cut now
         self.assertEqual(r.returncode, 0, r.stderr)
         after = Path(self.path("GUIDE.md")).read_text()
         self.assertNotIn(self.NEW_CLAIM, after)
