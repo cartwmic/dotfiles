@@ -77,7 +77,7 @@ PRINCIPLES = [
     ("Prior art before building", "n/a", "No new capability; it uses the published agent-kit package and the existing install script."),
     ("Verified from the outside", "pass", "tests/release-pins/test_agent_kit_bump.py drives the real script to the apply and the version read-back; after the merge the installed version is read back (log step verify)."),
     ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the owner's standing grant lets the script merge an agent-kit release bump once its checks pass."),
-    ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/agent-kit-bump/log.jsonl."),
+    ("Logs that replay the user's experience and show how it is used", "pass", "One JSON line per step with its outcome, UTC time and seconds, tied by one run id, in ~/.local/state/agent-kit-bump/log.jsonl."),
     ("Fast proof", "n/a", "A pin bump runs no journey; the proof is the PR's CI run."),
     ("Built to last", "pass", "The script changes only the pins; nothing it replaces is left behind."),
 ]
