@@ -217,7 +217,7 @@ PRINCIPLES = [
     ("Prior art before building", "n/a", "No new capability."),
     ("Verified from the outside", "pass", "The sha256s are the linux lines of the release's SHA256SUMS; the install checks the archive against them."),
     ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes."),
-    ("Logs that replay the user's experience", "n/a", "No log changes."),
+    ("Logs that replay the user's experience and show how it is used", "n/a", "No user action is added or changed."),
     ("Fast proof", "n/a", "The proof is the next pod start (dotfiles) or image build (steward)."),
     ("Built to last", "pass", "The old values are replaced in place."),
 ]
