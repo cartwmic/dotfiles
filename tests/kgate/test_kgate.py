@@ -669,7 +669,10 @@ if a[:2] == ["create", "-f"]:
         # already there is refused (AlreadyExists) whatever happens to the pod. The pod made is logged as {"created": name}.
         limit = int(os.environ["FAKE_QUOTA_CPU"])
         used_file = os.path.join(fake, "quota-full")
-        used = int(open(used_file).read()) if os.path.exists(used_file) else 0
+        try:
+            used = int(open(used_file).read())
+        except FileNotFoundError:   # the test took the file away (room()), possibly between a look and a read: no one else uses the quota
+            used = 0
         held = os.path.join(fake, "quota-held")   # FAKE_QUOTA_HOLD: the pods made here count toward the quota until they are deleted, as on a real cluster
         if os.environ.get("FAKE_QUOTA_HOLD") and os.path.isdir(held):
             used += sum(int(open(os.path.join(held, n)).read()) for n in os.listdir(held))
