@@ -2,7 +2,8 @@
 deriving-readable-docs scripts called by path).
 The fixture register has four rows that check_shape.py passes:
   R-1 holds; R-2 cites a real line that does the opposite of what the row says (only a checker can tell); R-4 has owner evidence only;
-  R-5 rests on the README. A second fixture adds R-3, which cites a line the file does not have (check_citations.py catches it before any checker runs).
+  R-5 rests on the README; R-6, R-7 and R-8 cite real lines in other written forms (backticked, a comma list, a remark after the citation); R-9 has two sentences,
+  so two claims. Another fixture adds R-3, which cites a line the file does not have (check_citations.py catches it before any checker runs).
 No model session runs here: the checker's report is recorded in the test, in the form check-brief.md asks for, and score.py ties it to the claims
 file the adapter and slice.py really made.
 Run: python3 -I tests/distilling-requirements/test_check_truth.py"""
@@ -42,6 +43,10 @@ ROWS = {
     "R-3": "Adding a note shall return how many notes are stored.|src/notes.py:99",
     "R-4": "Notes shall be kept for the length of the project.|owner:Dana, kickoff call",
     "R-5": "The store shall hold notes in memory.|README.md:3",
+    "R-6": "Adding a note shall store the text it is given.|`src/notes.py:7`",
+    "R-7": "Adding a note shall report the new count.|src/notes.py:7, src/notes.py:8",
+    "R-8": "The store shall be emptied by clearing.|src/notes.py:12 (the clear call)",
+    "R-9": "Adding a note shall store it. The store shall report its size.|src/notes.py:7-8",
 }
 
 
@@ -87,7 +92,7 @@ class TruthCheckTest(unittest.TestCase):
         return repo, req, work, out
 
     def test_the_shape_check_passes_every_row_of_both_registers(self):
-        for ids in (["R-1", "R-2", "R-4", "R-5"], ["R-1", "R-2", "R-3", "R-4", "R-5"]):
+        for ids in (["R-1", "R-2", "R-4", "R-5"], ["R-1", "R-2", "R-3", "R-4", "R-5"], ["R-6", "R-7", "R-8", "R-9"]):
             with tempfile.TemporaryDirectory() as tmp:
                 _, req, _ = make(tmp, ids)
                 self.assertEqual(run(SHAPE, req), (0, "ok\n", ""), ids)
@@ -150,15 +155,58 @@ class TruthCheckTest(unittest.TestCase):
             (reports / "slice-1.md").write_text(report(work / "slices", {}, {l.split(" | ")[0]: "src/notes.py:4" for l in claims}))
             self.assertEqual(run(TRUTH, "verdicts", work, reports)[0], 0)
 
-    def test_a_row_the_checker_gave_no_verdict_counts_as_a_failure(self):
+    def test_a_row_the_checker_gave_no_verdict_counts_as_a_failure_while_the_row_it_judged_holds(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, _, work, _ = self.prepare(tmp, ["R-1", "R-5"])
+            run(CODEMAP / "slice.py", work / "register-claims.md", repo, "--out", work / "slices")
+            first = (work / "slices/slice-1.claims.txt").read_text().splitlines()[0].split(" | ")[0]  # R-1's claim; R-5's has no row
             reports = work / "reports"
             reports.mkdir()
-            (reports / "slice-1.md").write_text("Slice: slice-1\nread | 5.1 | HOLDS | src/notes.py:4\n")
+            (reports / "slice-1.md").write_text("Slice: slice-1\nread | %s | HOLDS | src/notes.py:4\n" % first)
             code, out, _ = run(TRUTH, "verdicts", work, reports)
             self.assertEqual(code, 1)
-            self.assertRegex(out, r"R-1 NO VERDICT|R-5 NO VERDICT")
+            self.assertIn("R-1 HOLDS", out)
+            self.assertIn("R-5 NO VERDICT", out)
+
+    def test_a_row_takes_the_worst_verdict_of_its_claims_whichever_claim_has_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, _, work, _ = self.prepare(tmp, ["R-9"])
+            run(CODEMAP / "slice.py", work / "register-claims.md", repo, "--out", work / "slices")
+            ids = [l.split(" | ")[0] for l in (work / "slices/slice-1.claims.txt").read_text().splitlines()]
+            self.assertEqual(len(ids), 2)  # one row, two sentences, two claims
+            for verdicts in ({ids[0]: "WRONG"}, {ids[1]: "WRONG"}, {ids[0]: "OVERSTATED", ids[1]: "UNSUPPORTED"}):
+                reports = work / ("reports-%s" % "-".join(sorted(verdicts)))
+                reports.mkdir()
+                (reports / "slice-1.md").write_text(report(work / "slices", verdicts, {i: "src/notes.py:7" for i in ids}))
+                code, out, _ = run(TRUTH, "verdicts", work, reports)
+                self.assertEqual(code, 1, verdicts)
+                self.assertIn("R-9 %s " % ("UNSUPPORTED" if "OVERSTATED" in verdicts.values() else "WRONG"), out)
+
+    def test_every_path_and_line_in_an_evidence_cell_is_checked_whether_backticked_in_a_list_or_followed_by_a_remark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, _, work, out = self.prepare(tmp, ["R-6", "R-7", "R-8"])
+            self.assertIn("3 rows to check, 0 not checked: none", out)
+            doc = (work / "register-claims.md").read_text()
+            self.assertIn("Adding a note shall store the text it is given. `src/notes.py:7`", doc)
+            self.assertIn("Adding a note shall report the new count. `src/notes.py:7`, `src/notes.py:8`", doc)
+            self.assertIn("The store shall be emptied by clearing. `src/notes.py:12`", doc)
+            self.assertEqual(run(CODEMAP / "check_citations.py", work / "register-claims.md", repo)[0], 0)
+
+    def test_a_cell_with_neither_a_citation_nor_an_owner_part_fails_the_row_instead_of_skipping_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, req, work = make(tmp, ["R-1", "R-4"])
+            req.write_text(req.read_text().replace("| src/notes.py:4-5 |", "| the notes module |"))  # the shape check would refuse this cell; prepare must not skip it quietly
+            code, out, _ = run(TRUTH, "prepare", req, "--out", work)
+            self.assertEqual(code, 1)
+            self.assertIn("R-1 FAILED evidence has neither a path:line nor an owner: part (the notes module)", out)
+            self.assertIn("0 rows to check, 1 not checked: R-4", out)
+            reports = work / "reports"
+            reports.mkdir()
+            (reports / "slice-1.md").write_text("Slice: slice-1\n")
+            code, out, _ = run(TRUTH, "verdicts", work, reports)
+            self.assertEqual(code, 1)  # nothing was judged, and the failed row alone makes the exit 1
+            self.assertIn("R-1 FAILED", out)
+            self.assertIn("1 failed before any checker", out)
 
     def test_usage_errors_exit_2_and_no_bytecode_is_left_in_the_deployed_skill_folders(self):
         self.assertEqual(run(TRUTH)[0], 2)
