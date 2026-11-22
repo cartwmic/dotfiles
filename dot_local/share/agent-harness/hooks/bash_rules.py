@@ -18,7 +18,9 @@
               GitHub-run main when PR N's own full-suite run on its head tree succeeded (a pull_request run that skips the suite
               does not count; a workflow_dispatch run does). dotfiles tries its release-pins fix rule first, then that same rule.
               Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
-              which runs both checks itself. The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
+              which runs both checks itself. Never for cartwmic/cartwmic-homelab-v2 either, found the same way and refused even
+              before the gates: use `~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA` (it adds the RED-line check the chained
+              form lacks). The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
               the hook never sees, so they pass.
 
   pr-body     (personal only)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
@@ -77,6 +79,8 @@ from refuse_pattern_kill import ASSIGN, SHELLS, WRAPPERS, Scan, _base, _command_
 HOMELAB = "kubernetes-admin@kubernetes"
 MERGE_PR = "~/git/coordinator/scripts/merge-pr.sh"
 COORDINATOR = re.compile(r"cartwmic/coordinator(?:\.git)?(?![\w-])")
+HOMELAB_MERGE_PR = "~/git/cartwmic-homelab-v2/scripts/merge-pr.sh"
+HOMELAB_REPO = re.compile(r"cartwmic/cartwmic-homelab-v2(?:\.git)?(?![\w-])")
 KUBE_CONTEXT_FLAG = {"kubectl": "--context", "k9s": "--context", "helm": "--kube-context"}
 # docker: the options before the subcommand that take a value (`docker -H host run`), the same for `compose` (`compose -f f.yml up`), and
 # the (subcommand, ...) words that start a local container or image build.
@@ -141,6 +145,11 @@ MERGE_OTHER_PR = "`pr-body-check` checked PR %s, but `gh pr merge` merges PR %s:
 MERGE_COORDINATOR = (
     "`gh pr merge` on cartwmic/coordinator is refused in agent sessions: " + MERGE_PR + " also runs the red-main gate and the decisions check. "
     "Use `" + MERGE_PR + " PR`."
+)
+MERGE_HOMELAB = (
+    "`gh pr merge` on cartwmic/cartwmic-homelab-v2 is refused in agent sessions: " + HOMELAB_MERGE_PR + " runs the red-main gate, `pr-body-check` and "
+    "the RED-line check for a PR that changes a test file, and a typed merge skips the last one. "
+    "Use `" + HOMELAB_MERGE_PR + " N SHA` (N the PR number, SHA the head the checks and the review read)."
 )
 
 
@@ -460,16 +469,18 @@ def merge_rule(walk, ctx):
         args = cmd.words[1:]
         if _base(cmd.words[0]) != "gh" or not any(a == "pr" and b == "merge" for a, b in zip(args, args[1:])):
             continue
+        repo = _flag_value(args, "--repo")
+        repo = _flag_value(args, "-R") if repo is None else repo
+        if repo is None:
+            repo = (ctx.origin_of or origin_of)(cmd.cwd)
+        if repo and HOMELAB_REPO.search(repo):
+            return MERGE_HOMELAB  # before the gates: the chained form skips the homelab RED-line check, so it is no way through
         checked = {e[len(PR_CHECK):] for e in cmd.gated if e.startswith(PR_CHECK)}
         if CI_GATE not in cmd.gated or not checked:
             return MERGE_BARE
         merged = _pr_number(args, "merge", PR_MERGE_VALUE_FLAGS)  # None when it names a branch or no PR: the hook cannot see which
         if merged and str(int(merged)) not in checked:
             return MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE
-        repo = _flag_value(args, "--repo")
-        repo = _flag_value(args, "-R") if repo is None else repo
-        if repo is None:
-            repo = (ctx.origin_of or origin_of)(cmd.cwd)
         if repo and COORDINATOR.search(repo):
             return MERGE_COORDINATOR
     return None

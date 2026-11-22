@@ -266,9 +266,7 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 12 && gh pr merge 12"))
 
     def test_both_checks_first_allow_a_repo_that_is_not_the_coordinator(self):
-        for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
+        for text in ["ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
                      "pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 1 && gh pr merge 5 -R cartwmic/dotfiles --merge",
                      "cd /tmp && ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 --squash",
                      "ci-main-status --merge-gate homelab && pr-body-check homelab 182 &&\n gh pr merge 182",
@@ -304,6 +302,35 @@ class Merge(unittest.TestCase):
                 self.assertIn("~/git/coordinator/scripts/merge-pr.sh", message)
                 self.assertNotIn("coordinator-workspace/bin", message)
 
+    def test_the_homelab_repo_is_refused_with_its_script_even_after_both_gates_and_even_without_them(self):
+        for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "gh pr merge 182 --repo cartwmic/cartwmic-homelab-v2",
+                     "gh pr merge 182 --repo=cartwmic/cartwmic-homelab-v2.git",
+                     "gh pr merge 182 -R https://github.com/cartwmic/cartwmic-homelab-v2",
+                     "gh -R cartwmic/cartwmic-homelab-v2 pr merge 182",
+                     "sh -c 'gh pr merge 182 -R cartwmic/cartwmic-homelab-v2'"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA", message)
+                self.assertNotIn("--revert-of", message)
+                self.assertNotIn("--fix-of", message)
+                self.assertNotIn("~/git/coordinator/scripts/merge-pr.sh", message)
+
+    def test_a_repo_that_only_starts_like_the_homelab_repo_is_not_refused_as_homelab(self):
+        for text in ["ci-main-status --merge-gate x && pr-body-check x 5 && gh pr merge 5 -R cartwmic/cartwmic-homelab-v2-old",
+                     "ci-main-status --merge-gate x && pr-body-check x 5 && gh pr merge 5 -R cartwmic/cartwmic-homelab-v22"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_the_homelab_script_and_its_neighbours_are_not_gh_commands_the_hook_sees(self):
+        for text in ["~/git/cartwmic-homelab-v2/scripts/merge-pr.sh 182 abc1234",
+                     "cd ~/git/cartwmic-homelab-v2 && scripts/merge-pr.sh 182 abc1234",
+                     "gh pr view 182 -R cartwmic/cartwmic-homelab-v2", "gh pr checks 182 -R cartwmic/cartwmic-homelab-v2"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
     def test_the_directory_decides_when_there_is_no_repo_flag(self):
         origins = {"/repos/coord": "git@github.com:cartwmic/coordinator.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git",
                    "/work": "https://github.com/cartwmic/coordinator"}
@@ -314,6 +341,11 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=origins))  # -R decides, not the cwd
         self.assertIsNone(check("cd /nowhere && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1", origins=origins))
         self.assertIsNone(check("cd $d && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1", origins=origins))
+        homelab = {"/repos/hl": "git@github.com:cartwmic/cartwmic-homelab-v2.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git"}
+        self.assertIn("cartwmic-homelab-v2/scripts/merge-pr.sh N SHA", check("cd /repos/hl && gh pr merge 1 --squash", origins=homelab))
+        self.assertIn("cartwmic-homelab-v2/scripts/merge-pr.sh N SHA", check("cd /repos/hl && ci-main-status --merge-gate homelab && pr-body-check homelab 1 && gh pr merge 1", origins=homelab))
+        self.assertIsNone(check("cd /repos/hl && ci-main-status --merge-gate x && pr-body-check x 1 && cd /repos/other && gh pr merge 1", origins=homelab))
+        self.assertIsNone(check("cd /repos/hl && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=homelab))  # -R decides
 
     def test_a_real_checkout_whose_origin_is_the_coordinator(self):
         with tempfile.TemporaryDirectory() as tmp:
