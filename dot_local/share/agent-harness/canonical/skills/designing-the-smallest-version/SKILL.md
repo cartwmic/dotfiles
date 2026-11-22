@@ -1,6 +1,6 @@
 ---
 name: designing-the-smallest-version
-description: Use when asked to design the clean, minimal version of something knowing what we know now — a new capability or feature built from the owner's requirements and what the system it plugs into already does, or a redesign of what an existing repo or component already does. Gives the smallest elegant, maintainable, separable, composable design plus a staged path, as one DESIGN.md with a principles table. Needs no other skill; takes a requirements report, PRD, tested facts, review-map pages or validation points when present. Not for auditing dependency-rule drift only (auditing-clean-architecture), a code-quality cleanup plan (desloppify), explaining a PR (review-map) or extracting requirements (distilling-requirements).
+description: Use when asked to design the clean, minimal version of something knowing what we know now — a new capability or feature built from the owner's requirements and what the system it plugs into already does, or a redesign of what an existing repo or component already does. Gives the smallest elegant, maintainable, separable, composable design plus a staged path, as one DESIGN.md with a principles table. Needs no other skill; reads GUIDE.md (deriving-readable-docs) and REQUIREMENTS.md (distilling-requirements) when present, and takes a PRD, tested facts, review-map pages or validation points. Not for auditing dependency-rule drift only (auditing-clean-architecture), a code-quality cleanup plan (desloppify), explaining a PR (review-map) or extracting requirements (distilling-requirements).
 ---
 
 # Designing the smallest version
@@ -26,6 +26,7 @@ Use what exists; name in the output which you used.
 | Input | Use |
 |---|---|
 | Owner's requirements, in their words | `given`, one `OR-n` row each (Step 3) |
+| A `GUIDE.md` (deriving-readable-docs) | Part 1 is the orientation in Step 1; a "read" Evidence cell may point at a checked guide claim |
 | A `REQUIREMENTS.md` with header `shape: requirements/1` (distilling-requirements) | Replaces inference in Step 3; see below |
 | Repo documents: `docs/PRD.md`, a component's `CONTRACT.md`, specs, ADRs, a `prd-candidate.md` | `given`, even when the caller says "bare" |
 | Tested facts, probe notes, the integrated system's source, docs and live state | The facts a design rests on (Step 1) |
@@ -34,7 +35,7 @@ Use what exists; name in the output which you used.
 
 A bare repo must still work: infer from README, `AGENTS.md`, manifests, entry points and tests, and label every such claim `inferred`.
 
-Reading a `requirements/1` file: cite its ids, never re-mint them. Take requirements from `R-n` (ignore `incidental` rows when drawing boundaries), state machines from `SM-n` with their `writers:` lines, invariants from `I-n`, reachable defects from `F-n` and unenforced invariants from `U-n` (Step 4 failures), `fit` and `enforced` gaps as Step 6 proof gaps only where a decision depends on them, `Q-n` as candidates for Step 8. Check its `commit` against the pinned rev and its `not-read` against your scope. **It is an input, not a fact: re-check every item a ranked failure or decision rests on against the code** (it can be wrong, stale or encode the bug as a requirement) and record each refutation with its command in a Re-check table in Section 3. Findings you add get ids `DF-n`. Any other shape version: read it as free text and say so.
+Reading a `requirements/1` file: cite its ids, never re-mint them. Take requirements from `R-n` (ignore `incidental` rows when drawing boundaries), state machines from `SM-n` with their `writers:` lines, invariants from `I-n`, reachable defects from `F-n` and unenforced invariants from `U-n` (Step 4 failures), `fit` and `enforced` gaps as Step 6 proof gaps only where a decision depends on them, `Q-n` as candidates for Section 8. Check its `commit` against the pinned rev and its `not-read` against your scope. **It is an input, not a fact: re-check every item a ranked failure or decision rests on against the code** (it can be wrong, stale or encode the bug as a requirement) and record each refutation with its command in a Re-check table in Section 3. Findings you add get ids `DF-n`; the `F-n` and `Q-n` above are that file's ids, cited, never minted here. Any other shape version: read it as free text and say so.
 
 ## Steps
 
@@ -85,7 +86,7 @@ Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that 
 ## 1. Orientation            (≤1 page: what it is, entry points, size, how a change is proven, where to start; Evidence: the commands behind every number)
 ## 2. What exists            (A: parts table with kind, edge list, diagram, excluded trees. B: what we lean on, the pattern to copy, what is absent)
 ## 3. Requirements and invariants   (OR-n owner words; cited ids; IR-n / II-n inferred; enforced? yes/no/partial; Re-check table)
-## 4. Tensions and problems  (tensions T1…; A: ranked failures F/DF-n with "reproduced by" or "read only"; B: gaps G1…; each with evidence and cost of leaving it)
+## 4. Tensions and problems  (tensions T1…; A: ranked failures DF-n with "reproduced by" or "read only"; B: gaps G1…; each with evidence and cost of leaving it)
 ## 5. Target design          (decisions D1…: what, why, requirement/failure/gap it answers, rejected alternative; diagram; what could be deleted and still meet the requirements)
 ## 6. Path                   (increments S1…: change, proof from outside, depends on, parallel?)
 ## 7. Not doing              (considered and cut, with the trigger that would reopen it; accepted fails live here)
