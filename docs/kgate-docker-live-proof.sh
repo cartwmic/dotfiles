@@ -54,18 +54,28 @@ pids=""
 fails=0
 all_ids=""
 cleanup() {
-  for p in $pids; do kill "$p" 2>/dev/null; done
-  # a job that has not ended (no exit code yet) is cancelled, whatever way the script leaves: no pod outlives the run, and no job keeps the quota
-  for o in "$work"/*.out; do
-    [ -e "$o" ] || continue
-    nm=$(basename "$o" .out)
+  # A job that has not ended (no exit code yet) is stopped, whatever way the script leaves, so no pod outlives the run and no job keeps the quota. The client
+  # itself is sent SIGTERM (what `kgate cancel` does): it takes its own pod and Secrets down and writes its end line. That reaches a job that has not printed its
+  # pod line yet, which `kgate cancel ID` cannot.
+  for f in "$work"/*.pid; do
+    [ -e "$f" ] || continue
+    nm=$(basename "$f" .pid)
     [ -f "$work/$nm.rc" ] && continue
-    id=$(sed -n 's/^kgate: pod \([^ ]*\) on .*/\1/p' "$o" | head -1)
-    [ -n "$id" ] && kgate cancel --wait 60 "$id" >/dev/null 2>&1
+    kill -TERM "$(cat "$f")" 2>/dev/null
   done
+  for f in "$work"/*.pid; do
+    [ -e "$f" ] || continue
+    n=0; while kill -0 "$(cat "$f")" 2>/dev/null && [ "$n" -lt 90 ]; do sleep 1; n=$((n + 1)); done
+  done
+  for p in $pids; do kill "$p" 2>/dev/null; done
   if [ -n "${KGATE_PROOF_KEEP:-}" ]; then echo "kept: $work"; else rm -rf "$work"; fi
 }
-trap cleanup EXIT INT TERM
+# cleanup runs once, on EXIT. A signal ends the script (130, 143): in dash a trap on INT or TERM that only returns would let the script carry on submitting jobs.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# nap N: sleep N seconds the signal can cut short. dash runs a trap only after the foreground command ends, so a plain `sleep 60` would delay INT or TERM by up to a minute.
+nap() { sleep "$1" & wait $!; }
 
 ok()   { echo "PASS  $*"; }
 bad()  { echo "FAIL  $*"; fails=$((fails + 1)); }
@@ -133,7 +143,8 @@ TOML
 # run NAME REPO [kgate args...] -- CMD...   foreground; output in $work/NAME.out, exit code in $work/NAME.rc
 run() {
   name=$1; repo=$2; shift 2
-  ( cd "$repo" && kgate --profile kgate.toml "$@" > "$work/$name.out" 2>&1; echo $? > "$work/$name.rc" )
+  # the client runs in the background of this subshell so its pid is known (cleanup signals it, not the subshell)
+  ( cd "$repo" && { kgate --profile kgate.toml "$@" > "$work/$name.out" 2>&1 & echo $! > "$work/$name.pid"; wait $!; echo $? > "$work/$name.rc"; } )
 }
 # start NAME REPO ... -> same, in the background; wait with wait_job NAME
 start() { run "$@" & pids="$pids $!"; eval "pid_$1=$!"; }
@@ -143,7 +154,7 @@ jobid() { sed -n 's/^kgate: pod \([^ ]*\) on .*/\1/p' "$work/$1.out" 2>/dev/null
 running() { grep -q '^kgate: pod running on ' "$work/$1.out" 2>/dev/null; } # the pod exists and CMD is about to run (the "kgate: pod ID on NODE" line comes first, before any queueing)
 wait_running() { # wait up to $2 s for NAME's pod to be running
   n=0
-  while [ "$n" -lt "${2:-120}" ]; do running "$1" && return 0; [ -f "$work/$1.rc" ] && return 1; sleep 2; n=$((n + 2)); done
+  while [ "$n" -lt "${2:-120}" ]; do running "$1" && return 0; [ -f "$work/$1.rc" ] && return 1; nap 2; n=$((n + 2)); done
   return 1
 }
 rec() { # rec ID KEY -> the record's value as JSON ("null" when absent)
@@ -170,7 +181,7 @@ quiet() { # quiet SCOPED_MAX GENERAL_MAX [WAIT_S]: wait until the scoped Docker 
     if [ "$s" -le "$1" ] && [ "$g" -le "$2" ]; then return 0; fi
     [ "$n" -ge "${3:-${KGATE_PROOF_QUIET_WAIT:-7200}}" ] && { echo "    the cluster stayed busy: scoped quota $s cpu (want <= $1), kgate-cpu $g (want <= $2)"; return 1; }
     [ $((n % 600)) = 0 ] && echo "    waiting for a quiet cluster: scoped quota $s cpu (want <= $1), kgate-cpu $g (want <= $2)"
-    sleep 60; n=$((n + 60))
+    nap 60; n=$((n + 60))
   done
 }
 quota_used() { # the scoped quota's used, as JSON; prints nothing and fails when it cannot be read
@@ -229,7 +240,7 @@ echo ok > /out/result
 SH
 
 # (c): pull, run a container that outlives the kill, report the client's exit status in /out/rc and exit with it. $1 = seconds the container sleeps, $2 = how long a
-# failed run waits before exiting.
+# failed run waits before exiting (0: it does not).
 cat > "$work/scripts/hold.sh" <<'SH'
 mkdir -p /out
 docker pull busybox >/dev/null 2>&1
@@ -302,26 +313,37 @@ if [ "$(rc_of b)" = 69 ] && case $reasonb in '"evicted:'*) true;; *) false;; esa
 all_ids="$all_ids $idb"
 
 # ---- (c) the daemon dies after CMD started ---------------------------------------------------------------------------------------------------
-echo "=== (c) kill dockerd in the sidecar while CMD's container runs"
 repoc=$(docker_profile "" "" | mkrepo c)
-start c "$repoc" -- sh ./hold.sh 120
-if wait_running c 3600; then
-  idc=$(jobid c)
-  n=0
-  until [ -n "$(kc exec "$idc" -c dind -- docker ps -q 2>/dev/null)" ] || [ "$n" -ge 240 ]; do sleep 2; n=$((n + 2)); done
-  # PID 1 in the sidecar is docker-init, which hands SIGTERM to dockerd; dockerd stops and the container ends. (SIGKILL would do nothing: PID 1 ignores it from inside its own namespace.)
-  err=$(kc exec "$idc" -c dind -- kill -TERM 1 2>&1) || bad "(c) could not signal dockerd in $idc: $err"
-else
-  bad "(c) the job never ran (see $work/c.out)"
-fi
-wait_job c
-rcc=$(rc_of c)
-idc=$(jobid c)
-cmdrc=$(out_file "$idc" rc | tr -d '[:space:]')
-if [ -n "$cmdrc" ] && [ "$rcc" = "$cmdrc" ] && [ "$rcc" != 0 ] && [ "$rcc" != 69 ]; then ok "(c) kgate's exit $rcc equals CMD's (/out/rc), non-zero and not 69"; else bad "(c) kgate exit $rcc, /out/rc '$cmdrc' (want equal, non-zero, not 69)"; fi
-if grep -Eq 'kgate: the docker daemon (restarted|stopped) during the job' "$work/c.out"; then ok "(c) the note was printed"; else bad "(c) no 'the docker daemon restarted' note"; fi
-if [ "$(rec "$idc" docker_sidecar | pyj 'import json,sys; v=json.loads(sys.stdin.read() or "null"); print(1 if v and v.get("restarts",0)>=1 else 0)')" = 1 ]; then ok "(c) docker_sidecar.restarts >= 1: $(rec "$idc" docker_sidecar)"; else bad "(c) docker_sidecar not recorded with restarts >= 1: $(rec "$idc" docker_sidecar)"; fi
-all_ids="$all_ids $idc"
+kill_case() { # kill_case NAME HOLD_S: run hold.sh, stop dockerd in the sidecar while its container runs, check what the client says. HOLD_S = how long CMD waits after the failure
+  nm=$1; hold=$2
+  start "$nm" "$repoc" -- sh ./hold.sh 120 "$hold"
+  if wait_running "$nm" 3600; then
+    id=$(jobid "$nm")
+    n=0
+    until [ -n "$(kc exec "$id" -c dind -- docker ps -q 2>/dev/null)" ] || [ "$n" -ge 240 ]; do nap 2; n=$((n + 2)); done
+    # PID 1 in the sidecar is docker-init, which hands SIGTERM to dockerd; dockerd stops and the container ends. (SIGKILL would do nothing: PID 1 ignores it from inside its own namespace.)
+    err=$(kc exec "$id" -c dind -- kill -TERM 1 2>&1) || bad "($nm) could not signal dockerd in $id: $err"
+  else
+    bad "($nm) the job never ran (see $work/$nm.out)"
+  fi
+  wait_job "$nm"
+  rcc=$(rc_of "$nm")
+  id=$(jobid "$nm")
+  cmdrc=$(out_file "$id" rc | tr -d '[:space:]')
+  if [ -n "$cmdrc" ] && [ "$rcc" = "$cmdrc" ] && [ "$rcc" != 0 ] && [ "$rcc" != 69 ]; then ok "(c) $nm: kgate's exit $rcc equals CMD's (/out/rc), non-zero and not 69"; else bad "(c) $nm: kgate exit $rcc, /out/rc '$cmdrc' (want equal, non-zero, not 69)"; fi
+  if grep -Eq 'kgate: the docker daemon (restarted|stopped) during the job' "$work/$nm.out"; then ok "(c) $nm: the note was printed"; else bad "(c) $nm: no 'the docker daemon restarted' note"; fi
+  sc=$(rec "$id" docker_sidecar)
+  if [ "$hold" -gt 0 ]; then   # the kubelet had time to restart it: the record must say so
+    if [ "$(printf '%s' "$sc" | pyj 'import json,sys; v=json.loads(sys.stdin.read() or "null"); print(1 if v and v.get("restarts",0)>=1 else 0)')" = 1 ]; then ok "(c) $nm: docker_sidecar.restarts >= 1: $sc"; else bad "(c) $nm: docker_sidecar not recorded with restarts >= 1: $sc"; fi
+  else   # CMD failed the moment the daemon died: the client's own wait for the kubelet's status must still see the daemon end, restarted or stopped
+    if [ "$(printf '%s' "$sc" | pyj 'import json,sys; v=json.loads(sys.stdin.read() or "null"); print(1 if v and v.get("exit") is not None else 0)')" = 1 ]; then ok "(c) $nm: docker_sidecar recorded with the daemon's exit: $sc"; else bad "(c) $nm: docker_sidecar not recorded: $sc"; fi
+  fi
+  all_ids="$all_ids $id"
+}
+echo "=== (c) kill dockerd in the sidecar while CMD's container runs (CMD waits for the restart)"
+kill_case c 40
+echo "=== (c) the same, CMD exits at once: the client's own wait for the daemon's end"
+kill_case c3 0
 
 echo "=== (c) control: the same job without the kill"
 run c0 "$repoc" -- sh ./hold.sh 5
@@ -360,7 +382,7 @@ while [ "$ftry" -lt 2 ] && [ "$fok" = no ]; do
 done
 if [ "$fok" = yes ]; then
   idf=$(jobid f)
-  sleep 5
+  nap 5
   kc get pod "$idf" -o json > "$work/f.json" 2>/dev/null
   if pyj '
 import json,sys
@@ -418,7 +440,7 @@ ephemeral_storage_limit = "4Gi"' | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo 
     scoped=no; try=0; last=0
     while [ "$try" -lt "${KGATE_PROOF_E_TRIES:-3}" ]; do
       wait_for=$((last + ${KGATE_PROOF_E_GAP:-1800} - $(date +%s)))
-      [ "$wait_for" -gt 0 ] && sleep "$wait_for"
+      [ "$wait_for" -gt 0 ] && nap "$wait_for"
       quiet 0 $((GENERAL_CPU - 3 * P)) || break
       try=$((try + 1)); last=$(date +%s)
       start e1 "$repoE" --wait 3600 -- sh ./sleep.sh 300
@@ -427,7 +449,7 @@ ephemeral_storage_limit = "4Gi"' | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo 
         echo "    attempt $try: the first two Docker jobs did not start (cluster busy)"
       else
         start e3 "$repoE" --wait 900 -- sh ./ran.sh
-        n=0; until grep -q 'queued: waiting for quota' "$work/e3.out" 2>/dev/null || running e3 || [ -f "$work/e3.rc" ] || [ "$n" -ge 120 ]; do sleep 2; n=$((n + 2)); done
+        n=0; until grep -q 'queued: waiting for quota' "$work/e3.out" 2>/dev/null || running e3 || [ -f "$work/e3.rc" ] || [ "$n" -ge 120 ]; do nap 2; n=$((n + 2)); done
         if grep -q 'queued: waiting for quota: exceeded quota: kgate-docker' "$work/e3.out"; then scoped=yes; break; fi
         echo "    attempt $try: the third Docker job was not refused by the scoped quota ($(grep -m1 'queued: waiting for quota' "$work/e3.out" | cut -c1-140))"
       fi
@@ -442,7 +464,7 @@ ephemeral_storage_limit = "4Gi"' | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo 
     if running e3; then e3_waiting=no; else e3_waiting=yes; fi   # read when the ordinary job starts: it must not have had to wait for the third Docker job
     # a fourth Docker job submitted after the third waits behind it
     start e4 "$repoE" --wait 900 -- sh ./ran.sh
-    n=0; until grep -q "queued: behind $(jobid e3)" "$work/e4.out" 2>/dev/null || [ "$n" -ge 60 ]; do sleep 2; n=$((n + 2)); done
+    n=0; until grep -q "queued: behind $(jobid e3)" "$work/e4.out" 2>/dev/null || [ "$n" -ge 60 ]; do nap 2; n=$((n + 2)); done
     if grep -q "queued: behind $(jobid e3)" "$work/e4.out"; then ok "(e) the fourth Docker job waits behind the third: $(grep -m1 "queued: behind $(jobid e3)" "$work/e4.out" | cut -c1-160)"; else bad "(e) the fourth Docker job did not queue behind the third"; fi
     wait_job eN
     rcN=$(rc_of eN)
