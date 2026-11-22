@@ -574,5 +574,23 @@ class StampGuideSentenceTest(unittest.TestCase):
             self.assertNotIn("[A4.", p.read_text())
 
 
+class ReaderFixRoundDocTest(unittest.TestCase):
+    """F11: reader-check.md lets the one fix round add the appendix lines an answer needs before the front writer cites them, and the grader takes any way to start the docs give."""
+    READER = (SKILL_DIR / "references/reader-check.md").read_text(encoding="utf-8")
+
+    def test_the_fix_round_has_a_section_writer_add_the_appendix_lines_before_the_front_writer_cites_them(self):
+        fix = self.READER.split("## One fix round")[1].split("## Limit")[0]
+        self.assertRegex(fix, r"section writer.*first adds the appendix lines")
+        self.assertRegex(fix, r"front writer then cites them")
+        self.assertLess(fix.index("section writer"), fix.index("front-writer session"))
+        self.assertIn("There is no second fix round", fix)
+        self.assertIn("appendix lines and the sentences the fix changed are checked in the final re-check", fix)
+
+    def test_the_grader_accepts_any_way_to_start_the_docs_give(self):
+        grader = self.READER.split("## Grader")[1].split("## Pass bar")[0]
+        self.assertRegex(grader, r"Q3 it accepts any way to start that the docs give")
+        self.assertIn("need not be the one the docs list first", grader)
+
+
 if __name__ == "__main__":
     unittest.main()
