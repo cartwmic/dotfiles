@@ -51,13 +51,20 @@ Contract (docs/run-and-wake.md):
   in an earlier boot and has no delivered wake (whatever its `end` says: a shutdown makes wrapper shells exit 0 as the job inside dies): "job did NOT finish: the host restarted at <boot time> and the job was killed. Rerun it".
   Jobs logged before the `boot` field existed are never replayed. Pane/Pi-session jobs are not recovered (their panes died too).
   A watcher killed between the send and the wake record can make recovery send a second copy.
+- A job whose watcher is gone (the container or host restarted, or the watcher was killed) is not left with a `start` and nothing else. The watcher holds
+  an exclusive lock on jobs/<job>.lock from before `start` until it has woken, then removes the file; a lock nobody holds on a file that is still there means
+  the watcher died. Every run-and-wake call (launch, --wait, --recover) sweeps these: it writes `end` with error "lost" (once the job's own process is gone too) and
+  wakes the owner with "job did NOT finish ... its status is unknown. Rerun it". --recover waits for T3 as the watcher does; the other calls try once and the next call
+  tries again. Jobs started before the lock existed are never swept.
 - Every job writes to ${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl, one JSON
   record per line, all carrying the job id and a UTC time:
-    start  {cmd, cwd, pane, session, thread, pid, output, op_token, scope, slice, boot}  (boot: the kernel boot id, null off Linux; op_token: env, file, or null: where the job's
+    start  {cmd, cwd, pane, session, thread, pid, pid_start, watcher, output, op_token, scope, slice, boot}  (watcher: the watcher's pid; pid_start: when the job's process
+           started, so a recycled pid is not taken for it; boot: the kernel boot id, null off Linux; op_token: env, file, or null: where the job's
            1Password token came from; the value is never logged. scope: the systemd scope the job runs in, or null;
            slice: the slice that scope is in, read back from /proc, or null)
     end    {exit, signal, duration_s, stopped?}  (stopped: signals this process forwarded to the job; recover also writes one for a job a restart left
-           with no end: exit null, signal null, error "host-restarted", recovered true)
+           with no end: exit null, signal null, error "host-restarted", recovered true; a sweep writes one for a job whose watcher is gone: exit null,
+           signal null, error "lost", lost true: the job's own status is not known)
     blocked {}                      (pane showed a dialog; waiting)
     wake   {target: herdr|t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), merged_with? (the other jobs in the same message), session_after?}
            (session_after: the pane showed another session right after the send; herdr cannot make the send conditional)
@@ -91,6 +98,7 @@ GiB = 1024**3
 FORWARDED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 RECOVER = "--recover"
 WAIT = "--wait"
+SWEEP_LOCK = os.path.join(STATE, "sweep.lock")
 SPOOL = os.path.join(STATE, "spool")  # one file per T3 thread: the finished jobs whose wake is waiting for the merge window to close
 # The T3 CLI says one of these (exit 1) when no server answers: T3 is restarting or the host is. Anything else it says (thread not found) is an answer.
 UNREACHABLE = ("Could not reach the T3 Code server", "No running T3 Code server")
@@ -452,6 +460,8 @@ def job_env(job):
 def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
     """Runs in the detached process: start the job, wait for it, then wake."""
     started = time.monotonic()
+    guard = open(lock_path(job), "a")  # held until this process exits (an open file is not inherited by the job): a lock nobody holds means the watcher died
+    fcntl.flock(guard, fcntl.LOCK_EX)
     env, op_token = job_env(job)
     jobs = []
     stopped = []  # the signals that reached us while the job ran: a job that was stopped did not run to its own end
@@ -481,7 +491,7 @@ def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
             status = f"could not start ({error})"
         else:
             jobs.append(child)
-            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, output=output, op_token=op_token, scope=scope, slice=slice_, boot=boot_id())
+            record(job, "start", cmd=cmd, cwd=os.getcwd(), pane=pane, session=session, thread=thread, pid=child.pid, pid_start=proc_start(child.pid), watcher=os.getpid(), output=output, op_token=op_token, scope=scope, slice=slice_, boot=boot_id())
             tell(report, f"pid {child.pid}")
             code = child.wait()
             for signum in handled:  # nothing left to forward to: a signal now ends the wake wait as it always did
@@ -490,6 +500,10 @@ def watch(job, cmd, output, pane, session, thread, report, scope, slice_):
             record(job, "end", exit=code if code >= 0 else None, signal=sig, duration_s=round(time.monotonic() - started, 3), **({"stopped": stopped} if stopped else {}))
             status = f"killed by {sig}" if sig else f"exit {code}"
     deliver(job, pane, session, thread, message(job, status, time.monotonic() - started, cmd, output), stopped)
+    try:
+        os.unlink(lock_path(job))  # the job is settled: a sweep has nothing to look at
+    except OSError:
+        pass
 
 
 def agent_slice_limited(systemctl):
@@ -575,6 +589,8 @@ def owed(rs, boot):
     if any(w["result"] == "failed" and not t3_unreachable(w.get("error")) for w in wakes):
         return None  # T3 answered and refused (thread gone): trying again changes nothing
     end = next((r for r in rs if r["event"] == "end"), None)
+    if end and end.get("lost"):
+        return None  # the sweep wrote it and sends its wake
     if start["boot"] != boot:
         return "lost"
     return "late" if wakes and end else None  # this boot: only a wake that found T3 down; a job still running is not ours
@@ -629,6 +645,132 @@ def recover():
         if not todo:
             say("INFO", "no job owes a wake")
         return 1 if undelivered else 0
+
+
+def lock_path(job):
+    return os.path.join(STATE, "jobs", job + ".lock")
+
+
+def proc_start(pid):
+    """An opaque stamp of when process `pid` started (Linux: /proc start ticks, else `ps lstart`), None when there is no such process. A recycled pid has another stamp."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()  # state, then the rest: start ticks is field 22 of the file
+        return None if fields[0] == "Z" else fields[19]  # a zombie is gone: nothing runs
+    except (OSError, IndexError):
+        pass
+    if os.path.isdir("/proc/self"):
+        return None  # Linux, and no such process
+    try:
+        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() or None
+
+
+def job_running(start):
+    """The job's own process is still there. This namespace's pids only: from another container's pid space a live job reads as gone, which is why a sweep acts only once the watcher is gone too."""
+    pid = start.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    began = start.get("pid_start")
+    return pid_alive(pid) if began is None else proc_start(pid) == began
+
+
+def watcher_gone(job):
+    """True when the job has a lock file nobody holds: its watcher died (a normal watcher removes the file when it is done)."""
+    try:
+        fd = os.open(lock_path(job), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def wake_owed(rs):
+    """A job still owes its owner a wake: none was sent, none was dropped (a skip), and none was refused (T3 answered, so trying again changes nothing)."""
+    wakes = [r for r in rs if r["event"] == "wake"]
+    if any(r["event"] == "skip" for r in rs) or any(w["result"] == "sent" for w in wakes):
+        return False
+    return not any(w["result"] == "failed" and not t3_unreachable(w.get("error")) for w in wakes)
+
+
+def lost_text(job, start):
+    what = " ".join(shlex.join(start["cmd"]).split())
+    return (f"[{NAME} k:{job}] job did NOT finish: its watcher is gone and left no end record (the container or host restarted, or something killed it), "
+            f"so its status is unknown. Rerun it; this is not a result. Started {start['ts']}: {what}. Partial output: {start['output']}.")
+
+
+def send_owed(job, start, text, deadline):
+    """The one wake a swept job is owed, or the reason it is not sent. True when settled, False when T3 was unreachable and the wake is still owed."""
+    if result_read(job):
+        record(job, "skip", reason="waited", detail="a run-and-wake --wait delivered the result")
+        return True
+    if start.get("thread"):
+        started = time.monotonic()
+        error, attempts = t3_send_when_up(start["thread"], text, deadline)
+        record_wake(job, started, error, attempts, swept=True)
+        return not t3_unreachable(error)
+    wake(job, start.get("pane"), start.get("session"), text)
+    return True
+
+
+def sweep(wait=0.0):
+    """End and wake every job whose watcher is gone. A watcher holds jobs/<job>.lock until it has woken, then removes it, so a lock file nobody holds is a dead watcher
+    (a container restart kills the watcher with the rest: the pod's pid 1 exiting takes every process). The job's own process must be gone too, or it is left running.
+    No `end` yet: write one (error "lost", exit and signal null: its status is not known). Then the wake is sent, trying T3 for `wait` seconds (0: once, and the next
+    sweep tries again). Returns how many wakes are still owed because T3 was unreachable."""
+    try:
+        names = sorted(n[:-5] for n in os.listdir(os.path.join(STATE, "jobs")) if n.endswith(".lock"))
+    except OSError:
+        return 0
+    if not names:
+        return 0
+    deadline = time.monotonic() + wait
+    left = 0
+    with open(SWEEP_LOCK, "a") as guard:
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0  # another sweep is at it
+        jobs = read_jobs()
+        for job in names:
+            if not watcher_gone(job):
+                continue
+            rs = jobs.get(job, [])
+            start = next((r for r in rs if r["event"] == "start"), None)
+            if not start:
+                continue  # the watcher is about to write it
+            end = next((r for r in rs if r["event"] == "end"), None)
+            if not end:
+                if job_running(start):
+                    continue
+                record(job, "end", exit=None, signal=None, duration_s=None, error="lost", lost=True)
+                end = {"lost": True}
+            if wake_owed(rs):
+                text = lost_text(job, start) if end.get("lost") else message(job, status_of(end), end.get("duration_s") or 0, start["cmd"], start["output"]) + " (delivered late: its watcher stopped before it sent this.)"
+                if not send_owed(job, start, text, deadline):
+                    left += 1
+                    continue
+            try:
+                os.unlink(lock_path(job))
+            except OSError:
+                pass
+    return left
+
+
+def sweep_quietly(wait=0.0):
+    """A sweep that never stops the call it rides on."""
+    try:
+        return sweep(wait)
+    except Exception as error:  # noqa: BLE001
+        say("WARN", f"sweep failed: {error!r}")
+        return 0
 
 
 def wait_command(job):
@@ -687,7 +829,11 @@ def wait_for(job):
         fcntl.flock(guard, fcntl.LOCK_SH)  # held until this process exits
     offset, gone = 0, 0
     while True:
+        sweep_quietly()
         end, offset = end_of(job, offset)
+        if end and end.get("lost"):
+            print(lost_text(job, start), flush=True)
+            return 1
         if end and not end.get("recovered"):
             break
         if (start.get("boot") and boot_id() and start["boot"] != boot_id()) or (end and end.get("recovered")):
@@ -717,7 +863,8 @@ def main(argv):
         return 0
     if argv[:1] == [RECOVER]:
         os.makedirs(STATE, exist_ok=True)
-        return recover()
+        recovered = recover()
+        return recovered or (1 if sweep_quietly(T3_RETRY[1]) else 0)
     if argv[:1] == [WAIT]:
         if len(argv) != 2 or argv[1].startswith("-"):
             print(__doc__.strip(), file=sys.stderr)
@@ -731,6 +878,7 @@ def main(argv):
         return 2
     os.makedirs(os.path.join(STATE, "jobs"), exist_ok=True)
     if not scoped:
+        sweep_quietly()  # the jobs a restart or a killed watcher left without an end get one, and their owners their wake
         job = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
         run = scope_runner()
         if run:  # become the launcher inside our own scope: same env, cwd and stdio, a cgroup the caller's scope does not own
