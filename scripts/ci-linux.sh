@@ -110,6 +110,7 @@ python3 scripts/ci-par.py \
   tests/agent-desktop \
   tests/hill-climb \
   tests/deriving-readable-docs \
+  tests/designing-the-smallest-version \
   tests/distilling-requirements \
   tests/reviewing-prs \
   tests/triaging-automated-review \

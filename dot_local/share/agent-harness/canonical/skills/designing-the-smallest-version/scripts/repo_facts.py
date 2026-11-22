@@ -14,6 +14,9 @@ crosses `/` (`src/**` is all of src/; `src/**/x.ts` matches x.ts at any depth).
 --scope adds a `scope` block for the matched files and replaces the top-level
 edges and external_packages with counts; in_flight then holds counts only.
 proof_commands lists gate, check and CI files plus test-like package.json scripts.
+surfaces is the surface list (commands, flags, routes, env, config, entry points) of the tree at REV. It comes
+from the sibling skill's deriving-readable-docs/scripts/surfaces.py --json and is not listed here; the script
+exits 2 if that file is missing. --scope does not narrow it: it always lists the whole repo.
 path_refs maps path strings in config and script files to the files or
 directories they name.
 """
@@ -68,6 +71,9 @@ NOTES = {
     'branches_touching_scope': 'unmerged_patches counts branch commits with no patch-equivalent on REV '
                                '(git cherry); a local branch and its remote twin at the same commit are '
                                'one entry, with remote_ref',
+    'surfaces': 'rows of kind, name, file, line from deriving-readable-docs/scripts/surfaces.py --json, run on the '
+                'tree extracted at REV (the working tree is ignored); each is a literal line of the repo; --scope does not '
+                'narrow it, it always lists the whole repo',
 }
 PLAN_DAYS = 14
 TOP = 20
@@ -87,6 +93,10 @@ TESTS_CAP = 30
 PROOF_SKIP = ('vendor', 'charts', 'archive', 'openspec/changes/archive', 'node_modules')
 DOC_NAMES = ('README.md', 'CLAUDE.md', 'AGENTS.md')
 TARGET_RE = re.compile(r'^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?!=)', re.M)
+
+
+SURFACES_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
+                               'deriving-readable-docs', 'scripts', 'surfaces.py')
 
 
 def die(msg):
@@ -734,6 +744,20 @@ def proof_commands(files, tree):
     return sorted(out, key=lambda r: (r['rank'], r['file'])), skipped
 
 
+def surface_rows(tree):
+    """The surface list of the extracted tree, from the sibling skill's surfaces.py (called by path, nothing copied).
+
+    The path is resolved from this file's real location, so it works through the skill symlinks the apply makes."""
+    if not os.path.isfile(SURFACES_SCRIPT):
+        die(f'surfaces.py not found at {SURFACES_SCRIPT}: install the deriving-readable-docs skill '
+            'next to designing-the-smallest-version')
+    proc = subprocess.run([sys.executable, '-I', SURFACES_SCRIPT, tree, '--json'],
+                          capture_output=True, encoding='utf-8', errors='replace')
+    if proc.returncode:
+        raise RuntimeError('surfaces.py failed: ' + (proc.stderr.strip() or f'exit {proc.returncode}'))
+    return json.loads(proc.stdout)
+
+
 def summarize(facts):
     lines = []
     for k, v in facts.items():
@@ -890,6 +914,7 @@ def analyse(repo, sha, args, rules, tmp):
         'proof_commands_skipped': proof_skipped,
         'path_refs': path_ref_report(path_ref_counts(ref_texts, set(names), dir_set(names)), chosen),
         'gates': gate_list,
+        'surfaces': surface_rows(tree),
         'docs_found': [{'path': p, 'bytes': names[p]} for p in sorted(files) if DOC_RE.search(p)],
         'skipped': {'count': sum(skipped.values()), 'by_reason': dict(sorted(skipped.items()))},
     }
