@@ -95,7 +95,8 @@ class NumberFormTest(unittest.TestCase):
     def test_groups_with_commas_or_underscores_are_one_number_across_more_than_one_group(self):
         for sentence, line in (("It caps at 1,000,000 rows.", "const CAP = 1_000_000;"), ("It caps at 1_000_000 rows.", "const CAP = 1_000_000;"),
                                ("It caps at 1000000 rows.", "const CAP = 1,000,000;"), ("It caps at 2,000,000,000 rows.", "const CAP = 2_000_000_000;"),
-                               ("It caps at 900,000 rows.", "const CAP = 900_000;")):
+                               ("It caps at 900,000 rows.", "const CAP = 900_000;"),
+                               ("It caps at 1_000_000 rows.", "const CAP = 1000000;"), ("It caps at 2_000_000_000 rows.", "const CAP = 2000000000;")):
             ok, out = self.passes(sentence, line)
             self.assertTrue(ok, "%s | %s | %s" % (sentence, line, out))
 
@@ -107,7 +108,8 @@ class NumberFormTest(unittest.TestCase):
 
     def test_a_wrong_number_still_fails_and_a_bare_900_is_not_900_thousand(self):
         for sentence, line in (("It caps at 3 million rows.", "const CAP = 2_000_000;"), ("It caps at 900 rows.", "const CAP = 900_000;"),
-                               ("It caps at 1,000,000 rows.", "const CAP = 1_000_001;")):
+                               ("It caps at 1,000,000 rows.", "const CAP = 1_000_001;"), ("It caps at 2_000_000 rows.", "const CAP = 1_000_000;"),
+                               ("It caps at 2_000_000_000 rows.", "const CAP = 1_000_000_000;")):
             ok, out = self.passes(sentence, line)
             self.assertFalse(ok, "%s | %s" % (sentence, line))
             self.assertIn("FAIL number", out)
