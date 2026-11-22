@@ -4,7 +4,7 @@
 # applied ~/.local/bin/kgate from this change. It is not part of any test suite and nothing runs it on its own.
 #
 # What it does, all through the real client against the real cluster:
-#   A. One Docker job per candidate node, all four at once. Each job runs the steps the campaign needs: `docker info` (a copy-on-write driver, not vfs), a `docker build`
+#   A. One Docker job per candidate node, all at once. Each job runs the steps the campaign needs: `docker info` (a copy-on-write driver, not vfs), a `docker build`
 #      that fails without TARGETARCH and needs the network (apt-get, curl), create/start/exec/cp/inspect, `docker run -d --cpus --memory` then `rm -f`,
 #      `docker compose up -d` with cpus and mem_limit, exec, down, and a result file in /out that the client copies back.
 #      Per node it prints: pass or fail, wall time, docker_peak, `docker system df`, and the node's free ephemeral bytes before, during and after.
@@ -13,16 +13,18 @@
 #      (b) ephemeral_storage_limit = 2Gi and a pull of an image bigger than that: exit 69, reason `evicted: ...` (the Docker root counts against the limit:
 #          its emptyDir has a sizeLimit equal to that limit, and every container has a disk limit, so the kubelet enforces it).
 #      (c) the daemon is killed in the sidecar after CMD started: kgate's exit equals CMD's exit (/out/rc), is not 0 and not 69; the note is printed;
-#          the record has docker_sidecar.restarts >= 1. Control: the same job with no kill exits 0, no note, no docker_sidecar.
+#          the record has docker_sidecar.restarts >= 1 (the job waits after the failure so the kubelet's restart has happened). Control: the same job with no kill exits 0, no note, no docker_sidecar.
 #      (c2) the sidecar cannot start (the docker:29.9.3-cli image in its place): exit 69, the sidecar named, a log tail from the sidecar, CMD not run.
 #           Control: the real dind image runs CMD and exits 0. Needs the P2 client: on an older client the service is refused before any pod exists.
 #      (d) after pass, fail, cancel and eviction the job's pod and Secrets are gone; the scoped quota reads back 0 only after ALL jobs have ended.
-#      (e) three Docker jobs whose requests exceed the scoped quota: the third queues (`queued: waiting for quota`) and then runs; an ordinary job
-#          submitted after it starts at once with no `queued: behind` line; a fourth Docker job waits behind the third. The scoped quota's `used`
-#          moves for the Docker jobs and not for the ordinary one.
+#      (e) three Docker jobs whose requests exceed the scoped quota: the third queues, refused by the scoped quota (`queued: waiting for quota: exceeded quota:
+#          kgate-docker`; a refusal by the general quota proves nothing, so that attempt is cancelled and retried); an ordinary job submitted after it starts
+#          without being queued behind that third job (it may still wait for other work); a fourth Docker job waits behind the third. After the first two are
+#          cancelled (exit 143) the third and fourth run and end 0. The scoped quota's `used` is exactly the Docker job's CPU while an ordinary job runs beside it.
 #      (f) the pod spec of a running Docker job: only the sidecar is privileged; it has no hostPath and no docker.sock; the job container has /cache
 #          and is not privileged.
-#   Note (n7): while (e) runs, some ordinary kgate jobs on this cluster may wait for namespace quota. Run it when that is acceptable.
+#   Note (n7): while (e) runs, some ordinary kgate jobs on this cluster may wait for namespace quota. The cluster is shared, so (f) and (e) wait for room on
+#   both quotas before they start, hold their pods for five minutes at most, and are cancelled as soon as their checks are done (and by a trap on any exit).
 #
 # It changes the cluster only through kgate jobs and reads it with kubectl (over the same ssh host kgate uses). It prints PASS or FAIL per check and
 # exits 1 if any failed. Syntax check only before the cluster is ready: `sh -n docs/kgate-docker-live-proof.sh`.
