@@ -18,7 +18,8 @@ anything. The steps, and the step a stop names:
   merge    squash-merge, only while the head is still the one the checks ran on; read the merge SHA
   source   fast-forward the chezmoi source checkout to the merge SHA (ff-only); if it cannot, stop before apply, so a
            later full apply cannot restore the old pins
-  drift    chezmoi status on the skills tree and the mise config; stop on any change the PR did not make
+  drift    chezmoi status on the skills tree and the mise config (the file chezmoi manages: ~/.config/mise/config.toml, or on the agent
+           host pod conf.d/container.toml); stop on any change the PR did not make
   apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
   install  mise install for the five tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
@@ -52,6 +53,9 @@ from pathlib import Path
 TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
 SKILLS = "dot_local/share/agent-harness/canonical/skills"
 MISE_CONFIG = "dot_config/mise/config.toml"
+# Container mode (the agent host pod; docs/container-mode.md): .chezmoiignore leaves ~/.config/mise/config.toml out and chezmoi renders the same
+# pins into this file instead (dot_config/mise/conf.d/container.toml.tmpl). Which of the two a machine manages is chezmoi's answer, never assumed.
+MISE_CONTAINER = "conf.d/container.toml"
 # agent_kit_bump.py's two pin files (KIT, PIN_FILES there; tests/ci-main-status checks the copies match). One PR may carry both bumps
 # when two releases land close together: this script leaves these files to agent_kit_bump.py and still stops on any other outsider.
 AGENT_KIT_PINS = ("dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json")
@@ -332,8 +336,29 @@ def merge(source, pr, log):
 # --- the scoped apply --------------------------------------------------------------------------
 
 
+def mise_destination(wt, config_dest):
+    """The mise pin file this machine manages: config_dest (~/.config/mise/config.toml), or on the agent host pod its conf.d/container.toml.
+    chezmoi answers (`managed`): .chezmoiignore leaves exactly one of the two out. Stops when it is not exactly one."""
+    candidates = [config_dest, config_dest.parent / MISE_CONTAINER]
+    listed = {Path(line) for line in chezmoi(wt, "managed", "--include=files", "--path-style=absolute", *candidates, step="drift").stdout.split("\n") if line}
+    managed = [c for c in candidates if c in listed]
+    if len(managed) != 1:
+        raise Stop("drift", "chezmoi manages %s of %s; expected exactly one" % (", ".join(str(c) for c in managed) or "neither", " and ".join(str(c) for c in candidates)))
+    return managed[0]
+
+
+def rendered_mise(wt, sha, mise_dest):
+    """(bytes before the PR, bytes after) of the container mise file, as chezmoi renders it from the source at sha^ and at sha. It is a template of
+    config.toml, so the PR's change to the pins reaches it only through the render."""
+    def cat(tree):
+        return chezmoi(tree, "cat", mise_dest, step="drift").stdout.encode("utf-8")
+    with Worktree(wt, sha + "^", "drift") as before:
+        return cat(before.path), cat(wt)
+
+
 def pr_targets(wt, sha):
-    """{destination: (source name, bytes before the PR or None, bytes after or None)} for every file the PR changed except agent-kit's two pins."""
+    """{destination: (source name, bytes before the PR or None, bytes after or None)} for every file the PR changed except agent-kit's two pins.
+    The mise config's destination is the file this machine manages (mise_destination); on the pod its bytes are the rendered container file."""
     names = [n for n in git(wt, "diff", "--name-only", "--no-renames", sha + "^", sha, step="drift").stdout.split("\n")
              if n and n not in AGENT_KIT_PINS]
     if not names:
@@ -347,13 +372,20 @@ def pr_targets(wt, sha):
     destinations = [d for d in chezmoi(wt, "target-path", *[wt / n for n in names], step="drift").stdout.split("\n") if d]
     if len(destinations) != len(names):
         raise Stop("drift", "chezmoi target-path gave %d paths for %d files" % (len(destinations), len(names)))
-    return {Path(d): (n, git_bytes(wt, "%s^:%s" % (sha, n)), git_bytes(wt, "%s:%s" % (sha, n)))
-            for n, d in zip(names, destinations)}
+    targets = {Path(d): (n, git_bytes(wt, "%s^:%s" % (sha, n)), git_bytes(wt, "%s:%s" % (sha, n)))
+               for n, d in zip(names, destinations)}
+    for config_dest, (name, _, _) in list(targets.items()):
+        if name == MISE_CONFIG:
+            mise_dest = mise_destination(wt, config_dest)
+            if mise_dest != config_dest:
+                del targets[config_dest]
+                targets[mise_dest] = (name, *rendered_mise(wt, sha, mise_dest))
+    return targets
 
 
 def check_drift(wt, dest, targets, log):
     """Stop unless the only pending changes under the skills tree and the mise config are the PR's own."""
-    skills_dest, mise_dest = dest / ".local/share/agent-harness/canonical/skills", dest / ".config/mise/config.toml"
+    skills_dest, mise_dest = dest / ".local/share/agent-harness/canonical/skills", mise_destination(wt, dest / ".config/mise/config.toml")
     status = chezmoi(wt, "status", "-x", "scripts", skills_dest, mise_dest, step="drift").stdout
     pending = [dest / line[3:] for line in status.splitlines() if line.strip()]
     # A new bundle's directories are pending too; they are the PR's when a PR file is below them.
@@ -363,7 +395,7 @@ def check_drift(wt, dest, targets, log):
         live = destination.read_bytes() if destination.is_file() else None
         if live != before and live != after:
             drifted.append(str(destination))
-        if git_bytes(wt, "origin/main:%s" % name) != after:
+        if git_bytes(wt, "origin/main:%s" % name) != git_bytes(wt, "HEAD:%s" % name):  # the source file, not `after` (the pod's is rendered)
             moved.append(name)
     shown = outside + drifted if (outside or drifted or moved) else [str(p) for p in pending]
     if shown:
