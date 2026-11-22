@@ -62,6 +62,11 @@ class SurfaceInventoryTest(unittest.TestCase):
         kinds = {r["kind"] for r in expected}
         self.assertTrue({"command", "flag", "route", "env", "entry"} <= kinds, kinds)
 
+    def test_notes_say_where_the_surface_rows_come_from(self):
+        note = json.loads(run_facts(REPO_FACTS, self.repo).stdout)["notes"]["surfaces"]
+        self.assertIn("surfaces.py --json", note)
+        self.assertIn("tree extracted at REV", note)
+
     def test_surface_list_is_the_tree_at_the_rev_not_the_working_tree(self):
         (self.repo / "late.py").write_text('import os\nos.getenv("LATE_ONLY")\n')  # untracked, never committed
         try:
