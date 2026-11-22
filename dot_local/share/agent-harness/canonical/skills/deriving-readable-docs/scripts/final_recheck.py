@@ -21,8 +21,8 @@ cut      reads the verdicts of the fresh checker's reports in DIR (`read | N.k |
          GUIDE.md in place); --clean also writes the guide without tags next to it. A claim of the ids file with no row in the reports is an error (exit 1): the checker
          skipped it, so run it again. A Part 1 line with a citation, or an appendix line with two claims, is refused for the same reason.
 --except FILE (with cut) leaves the claims it names uncut: the ones being repaired. They still need a report row.
---held-out FILE (with cut) writes the content of every checked claim whose verdict is HOLDS (its sentence, tags and cited lines, not its number), and `changed --skip FILE` (once for each file of
-         each round) leaves those out of a later list. It also writes a `pending` row for each claim left to be repaired (--except): `changed` lists a pending claim until a checker passes it,
+--held-out FILE (with cut) writes and then appends to FILE, once for each round, so one file holds every round and `changed --skip FILE` is given it once. It records the content of every checked claim whose verdict is HOLDS (its sentence, tags and cited lines, not its number); `changed --skip FILE` leaves those out of a later list (--skip may still be given
+         more than once). It also writes a `pending` row for each claim left to be repaired (--except): `changed` lists a pending claim until a checker passes it,
          even an unchanged incoming line the repair never touched. The later list then holds every claim still different from OLD.md that no checker passed as it stands: a repaired claim, and a claim that was left to be repaired and never edited,
          which is re-checked and cut when it still fails. A passed claim that only moved (its neighbours changed) is listed again.
 drop     cuts the claims the ids file names without a report, with the same tag clean-up as cut, for a Part 1 sentence that still fails lint_main.py after its one fix. It refuses (exit 1,
@@ -305,8 +305,9 @@ def main(argv):
             keep = {c[0] for c in read_ids(opts["--except"], claims, text, repo)} if "--except" in opts else set()
             new, rows = cut_text(text, repo, chosen, verdicts, keep)
             if "--held-out" in opts:
+                kept = read(opts["--held-out"]).splitlines(True) if os.path.isfile(opts["--held-out"]) else []
                 with open(opts["--held-out"], "w", encoding="utf-8") as f:
-                    f.write(held_rows(text, repo, chosen, verdicts, keep))
+                    f.write("".join(kept) + "".join(r for r in held_rows(text, repo, chosen, verdicts, keep).splitlines(True) if r not in kept))
     except (SliceError, CutError) as e:
         print(e, file=sys.stderr)
         return 1

@@ -480,6 +480,30 @@ class RecheckRoutingTest(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual((w.dir / "changed.txt").read_text().split(), [])
 
+    def test_held_out_appends_each_round_to_one_file_that_skip_takes_once(self):
+        with base.Work() as w:
+            old = self.G
+            new = old.replace("It saves a note.", "It saves a note fast.").replace("It lists notes. `", "It lists notes well. `")
+            w.write("GUIDE.md", new)
+            w.write("OLD.md", old)
+            saves, lists = self.n(base.line_of(new, "It saves a note fast.")), self.n(base.line_of(new, "It lists notes well."))
+            for cid in (saves, lists):
+                w.write("rep/slice-1.md", self.report([(cid, "HOLDS")]))
+                w.write("only.txt", cid + "\n")
+                code, _, err = base.script("cut", w.p("GUIDE.md"), w.dir, "--ids", w.p("only.txt"), "--reports", w.p("rep"), "--held-out", w.p("held.txt"))
+                self.assertEqual(code, 0, err)
+            self.assertEqual(len((w.dir / "held.txt").read_text().splitlines()), 2)
+            code, _, err = base.script("cut", w.p("GUIDE.md"), w.dir, "--ids", w.p("only.txt"), "--reports", w.p("rep"), "--held-out", w.p("held.txt"))
+            self.assertEqual(len((w.dir / "held.txt").read_text().splitlines()), 2)  # the same claim passed again is not written twice
+            code, out, err = base.script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("OLD.md"), "--skip", w.p("held.txt"), "--out", w.p("changed.txt"))
+            self.assertEqual((code, (w.dir / "changed.txt").read_text().split()), (0, []), err)
+
+    def test_e7_gives_held_txt_to_every_round_and_skip_once(self):
+        step = EXTEND.split("## E7")[1].split("## E8")[0]
+        self.assertNotIn("held2.txt", step)
+        self.assertEqual(step.count("--skip"), step.count("--skip held.txt"))
+        self.assertEqual(step.count("--held-out held.txt"), 2)
+
     def test_try_and_was_need_their_values(self):
         for bad in (("--try", "0"), ("--try", "two"), ("--was", "/no/such/file.md")):
             ids, rep = self.six_causes()
