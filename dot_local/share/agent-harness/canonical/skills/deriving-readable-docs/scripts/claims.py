@@ -196,12 +196,14 @@ def split_sentences(line):
     return out
 
 
-def word_count(doc_text, repo):
+def word_count(doc_text, repo, headings=True):
     """Words of the whole doc: citations and fenced code are left out, and so is a bare mark ("-", "1.", "##"). The text
-    above the first `## ` heading, the headings and the backticked names are counted. Printed blocks (what assemble.py prints,
+    above the first `## ` heading, the headings and the backticked names are counted; with headings=False the headings are not. Printed blocks (what assemble.py prints,
     its header among them) are never counted."""
     total = 0
-    for _, line, _, _ in doc_lines(doc_text):
+    for _, line, _, heading in doc_lines(doc_text):
+        if heading and not headings:
+            continue
         for start, end, cites, _ in reversed(line_items(line, repo)):
             if cites:
                 line = line[:start] + " " + line[end:]

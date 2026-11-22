@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the `path:line` citations in a derived doc: the line exists, and the cited text backs the sentence.
 
-usage: check_citations.py <doc.md> <repo> [--max-words N] [--max-sentence-words N] [--audit audit.md [--guards-file F] [--evidence-file F]] [--sheet | --guards]
+usage: check_citations.py <doc.md> <repo> [--max-words N] [--max-row-words N] [--max-sentence-words N] [--audit audit.md [--guards-file F] [--evidence-file F]] [--sheet | --guards]
        check_citations.py --show path:START-END <repo>
 
 A citation is a backticked `path:LINE` or `path:START-END` (paths relative to <repo>; a space after the colon is
@@ -37,7 +37,8 @@ Listed too, whatever the citations, because a script cannot judge them (the chec
   sentence-length  with --max-sentence-words N, FAIL each sentence of more than N words. A sentence is cut after . ! or ? and is
             measured whole, with its citations taken out, so a citation in the middle does not cut it. It prints the claims (every
             sentence, bullet and table row of the prose, headings and the header excluded), their words and the words per claim on every run.
-  budget    with --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
+  budget    with --max-row-words N, FAIL when the doc holds more than N words outside its headings: the budget of a writer's section draft, N = rows x words a row, so the
+            `## A<n> <title>` heading costs none of it. With --max-words N, FAIL when the doc holds more than N words. The words are all of the doc's text, the header
             above the first `## ` heading and the headings and backticked names included; citations, fenced code, printed blocks
             (what assemble.py prints, such as the header) and bare list marks are not words.
             A budget is kept by dropping behaviours, not by joining them. The word count prints on every run.
@@ -532,7 +533,7 @@ def main(argv):
     args, opts = [], {}
     it = iter(argv[1:])
     for a in it:
-        if a in ("--max-words", "--max-sentence-words", "--audit", "--guards-file", "--evidence-file", "--show"):
+        if a in ("--max-words", "--max-row-words", "--max-sentence-words", "--audit", "--guards-file", "--evidence-file", "--show"):
             opts[a] = next(it, None)
         elif a in ("--sheet", "--guards"):
             opts[a] = True
@@ -543,7 +544,7 @@ def main(argv):
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or "--show" in opts \
             or any(opts.get(k) is None for k in opts) \
             or (("--guards-file" in opts or "--evidence-file" in opts) and "--audit" not in opts) \
-            or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-sentence-words")):
+            or any(opts.get(k) is not None and not opts[k].isdigit() for k in ("--max-words", "--max-row-words", "--max-sentence-words")):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     doc, repo = args
@@ -577,6 +578,10 @@ def main(argv):
         fails = sorted(set(fails + [e for e in extra if (e[0], e[1]) not in have or e[1] not in ("uncited",)]))
     if "--max-words" in opts and words > int(opts["--max-words"]):
         fails = sorted(set(fails + [(1, "budget", "%d words, budget %s: drop behaviours, do not join them" % (words, opts["--max-words"]))]))
+    if "--max-row-words" in opts:
+        body = word_count(text, os.path.realpath(repo), headings=False)
+        if body > int(opts["--max-row-words"]):
+            fails = sorted(set(fails + [(1, "budget", "%d words outside the headings, budget %s: drop behaviours, do not join them" % (body, opts["--max-row-words"]))]))
     prose = prose_sentences(text, os.path.realpath(repo))
     if "--max-sentence-words" in opts:
         limit = int(opts["--max-sentence-words"])
