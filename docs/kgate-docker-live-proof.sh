@@ -10,7 +10,8 @@
 #      Per node it prints: pass or fail, wall time, docker_peak, `docker system df`, and the node's free ephemeral bytes before, during and after.
 #   RED controls, each one fails if the code is broken:
 #      (a) the same job, profile without the service: no daemon, the job fails.
-#      (b) ephemeral_storage_limit = 2Gi and a pull of an image bigger than that: exit 69, reason `evicted: ...` (the Docker root counts against the limit).
+#      (b) ephemeral_storage_limit = 2Gi and a pull of an image bigger than that: exit 69, reason `evicted: ...` (the Docker root counts against the limit:
+#          its emptyDir has a sizeLimit equal to that limit, and every container has a disk limit, so the kubelet enforces it).
 #      (c) the daemon is killed in the sidecar after CMD started: kgate's exit equals CMD's exit (/out/rc), is not 0 and not 69; the note is printed;
 #          the record has docker_sidecar.restarts >= 1. Control: the same job with no kill exits 0, no note, no docker_sidecar.
 #      (c2) the sidecar cannot start (the docker:29.9.3-cli image in its place): exit 69, the sidecar named, a log tail from the sidecar, CMD not run.
@@ -92,13 +93,17 @@ mkrepo() {
 }
 
 # profile TABLE_EXTRA... writes a docker profile on stdout: size line options come as arguments (already TOML)
-docker_profile() { # docker_profile "job lines" "docker lines" ["image override"]
+docker_profile() { # docker_profile "job lines" "docker lines" ["image override"] ["disk lines"]
+  # every Docker pod has a disk request and limit (the homelab's quota counts limits.ephemeral-storage); the limit also sizes the data root's emptyDir
+  disk=${4:-'ephemeral_storage = "6Gi"
+ephemeral_storage_limit = "12Gi"'}
   cat <<TOML
 image  = "$JOB_IMAGE"
 cpu    = 1
 memory = "1Gi"
 memory_limit = "2Gi"
 services = ["docker"]
+$disk
 $1
 
 [docker]
@@ -246,13 +251,13 @@ done
 echo "=== (a) the same job without the service"
 repoa=$(plain_profile "" | mkrepo a)
 run a "$repoa" -- sh ./info.sh
-if [ "$(rc_of a)" != 0 ] && grep -qi 'cannot connect to the docker daemon' "$work/a.out"; then ok "(a) no daemon: the job failed with 'Cannot connect to the Docker daemon'"; else bad "(a) expected a failure naming the missing daemon, exit $(rc_of a)"; fi
+if [ "$(rc_of a)" != 0 ] && grep -Eqi 'failed to connect|cannot connect' "$work/a.out"; then ok "(a) no daemon: the job failed, and the docker CLI said it could not connect (Docker 29 says 'failed to connect')"; else bad "(a) expected a non-zero exit and a docker 'failed to connect' line, got exit $(rc_of a)"; fi
 all_ids="$all_ids $(jobid a)"
 
 # ---- (b) eviction ----------------------------------------------------------------------------------------------------------------------------
 echo "=== (b) a pull larger than ephemeral_storage_limit"
-repob=$(docker_profile 'ephemeral_storage = "1Gi"
-ephemeral_storage_limit = "2Gi"' "" | mkrepo b)
+repob=$(docker_profile "" "" "" 'ephemeral_storage = "1Gi"
+ephemeral_storage_limit = "2Gi"' | mkrepo b)
 run b "$repob" --wait 1800 -- sh ./pull.sh "$BIG_IMAGE"
 idb=$(jobid b)
 reasonb=$(rec "$idb" reason)
@@ -350,7 +355,9 @@ if [ -n "$hard" ]; then
     bad "(e) the quota's CPU ($hard) cannot hold two pods of whole slots with a third refused; size the proof by hand"
   else
     side=$((P - 1))
-    repoE=$(docker_profile "" "" | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo E)
+    # small disk, so the quota's CPU is what the third job runs out of, not its disk
+    repoE=$(docker_profile "" "" "" 'ephemeral_storage = "2Gi"
+ephemeral_storage_limit = "4Gi"' | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo E)
     echo "    quota requests.cpu $hard; each Docker job asks $P cpu (job 1 + sidecar $side)"
     start e1 "$repoE" --wait 1200 -- sh ./sleep.sh 60
     start e2 "$repoE" --wait 1200 -- sh ./sleep.sh 60

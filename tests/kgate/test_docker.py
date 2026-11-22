@@ -68,6 +68,21 @@ class Profile(unittest.TestCase):
             with self.assertRaises(K.Unavailable, msg=text):
                 K.parse_profile(text)
 
+    def test_a_docker_profile_always_has_a_disk_request_and_a_limit_the_kubelet_enforces(self):
+        # the homelab's Docker quota counts limits.ephemeral-storage, so a Docker pod without a limit would be refused: the profile gets the campaign default, not an error
+        p = K.parse_profile(docker_profile())
+        self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), ("24Gi", "40Gi"), "no disk keys: the plan's campaign default")
+        p = K.parse_profile(docker_profile(extra='ephemeral_storage = "50Gi"'))
+        self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), ("50Gi", "50Gi"), "a request above the default limit raises the limit with it, as for any homelab pod")
+        p = K.parse_profile(docker_profile(extra='ephemeral_storage_limit = "30Gi"'))
+        self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), ("24Gi", "30Gi"))
+        p = K.parse_profile(docker_profile(extra='ephemeral_storage = "6Gi"\nephemeral_storage_limit = "12Gi"'))
+        self.assertEqual((p["ephemeral_storage"], p["ephemeral_storage_limit"]), ("6Gi", "12Gi"), "what the profile sets is kept")
+        with self.assertRaises(K.Unavailable, msg="a limit below the Docker default request"):
+            K.parse_profile(docker_profile(extra='ephemeral_storage_limit = "20Gi"'))
+        plain = K.parse_profile(TK.Profile.GOOD)
+        self.assertEqual((plain["ephemeral_storage"], plain["ephemeral_storage_limit"]), (None, None), "a job without docker keeps today's defaults")
+
     def test_a_profile_without_the_service_is_as_before(self):
         self.assertIsNone(K.parse_profile(TK.Profile.GOOD)["docker"])
         self.assertEqual(K.parse_profile(TK.Profile.GOOD)["services"], [])
@@ -91,14 +106,14 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(env, {"DOCKER_TLS_CERTDIR": "", "DOCKER_HOST": "tcp://127.0.0.1:2375"})
         self.assertEqual(side["startupProbe"]["exec"]["command"], ["docker", "info"])
         self.assertEqual(side["startupProbe"]["failureThreshold"] * side["startupProbe"]["periodSeconds"], 120)
-        self.assertEqual(side["resources"], {"requests": {"cpu": "4", "memory": "8Gi", "ephemeral-storage": K.DOCKER_SIDECAR_DISK}, "limits": {"memory": "16Gi"}})
+        self.assertEqual(side["resources"], {"requests": {"cpu": "4", "memory": "8Gi", "ephemeral-storage": K.DOCKER_SIDECAR_DISK}, "limits": {"memory": "16Gi", "ephemeral-storage": K.DOCKER_SIDECAR_DISK_LIMIT}})
 
     def test_the_sidecar_has_no_host_path_no_socket_and_only_its_own_data_root(self):
         spec = self.pod()
         (side,) = spec["initContainers"]
         volumes = {v["name"]: v for v in spec["volumes"]}
         self.assertEqual(side["volumeMounts"], [{"name": "docker-data", "mountPath": "/var/lib/docker"}])
-        self.assertEqual(volumes["docker-data"], {"name": "docker-data", "emptyDir": {}}, "the data root is in the pod's own disk: it counts toward the pod's limit and goes with the pod")
+        self.assertEqual(volumes["docker-data"], {"name": "docker-data", "emptyDir": {"sizeLimit": "12Gi"}}, "the data root is in the pod's own disk, sized by the job's limit (the default 12Gi here), and goes with the pod")
         self.assertNotIn("docker.sock", json.dumps(side))
         mounted = {m["name"] for m in side["volumeMounts"]}
         self.assertFalse(any("hostPath" in volumes[n] for n in mounted))
@@ -116,7 +131,29 @@ class PodSpec(unittest.TestCase):
 
     def test_a_cpu_limit_is_rendered_on_the_sidecar_only_when_the_profile_sets_one(self):
         (side,) = self.pod(docker={**self.DOCKER, "cpu_limit": 6})["initContainers"]
-        self.assertEqual(side["resources"]["limits"], {"memory": "16Gi", "cpu": "6"})
+        self.assertEqual(side["resources"]["limits"], {"memory": "16Gi", "cpu": "6", "ephemeral-storage": K.DOCKER_SIDECAR_DISK_LIMIT})
+
+    def test_every_container_has_a_disk_request_and_limit_and_the_data_root_is_sized_by_the_jobs_limit(self):
+        # the kubelet enforces the pod's disk only when EVERY container has a limit; the data root is the pod's biggest user of disk
+        spec = self.pod(ephemeral="24Gi", ephemeral_limit="40Gi")
+        (job,), (side,) = spec["containers"], spec["initContainers"]
+        for c in (job, side):
+            self.assertIn("ephemeral-storage", c["resources"]["requests"], c["name"])
+            self.assertIn("ephemeral-storage", c["resources"]["limits"], c["name"])
+        self.assertEqual((job["resources"]["requests"]["ephemeral-storage"], job["resources"]["limits"]["ephemeral-storage"]), ("24Gi", "40Gi"))
+        self.assertEqual((side["resources"]["requests"]["ephemeral-storage"], side["resources"]["limits"]["ephemeral-storage"]),
+                         (K.DOCKER_SIDECAR_DISK, K.DOCKER_SIDECAR_DISK_LIMIT))
+        self.assertEqual(next(v for v in spec["volumes"] if v["name"] == "docker-data")["emptyDir"], {"sizeLimit": "40Gi"})
+
+    def test_a_profiles_disk_limit_reaches_the_pod_through_the_whole_path(self):
+        prof = K.parse_profile(docker_profile(extra='ephemeral_storage = "6Gi"\nephemeral_storage_limit = "12Gi"'))
+        spec = self.pod(ephemeral=prof["ephemeral_storage"], ephemeral_limit=prof["ephemeral_storage_limit"])
+        self.assertEqual(next(v for v in spec["volumes"] if v["name"] == "docker-data")["emptyDir"], {"sizeLimit": "12Gi"})
+        self.assertEqual(spec["containers"][0]["resources"]["limits"]["ephemeral-storage"], "12Gi")
+        prof = K.parse_profile(docker_profile())   # nothing set: the campaign default, on both containers and the data root
+        spec = self.pod(ephemeral=prof["ephemeral_storage"], ephemeral_limit=prof["ephemeral_storage_limit"])
+        self.assertEqual(next(v for v in spec["volumes"] if v["name"] == "docker-data")["emptyDir"], {"sizeLimit": "40Gi"})
+        self.assertEqual(spec["containers"][0]["resources"]["requests"]["ephemeral-storage"], "24Gi")
 
     def test_a_pod_without_docker_has_no_sidecar_no_data_root_and_no_docker_host(self):
         spec = K.pod_manifests("kgate-1-2", TK.DIGEST, 2, "1Gi", None, {}, None)["items"][-1]["spec"]

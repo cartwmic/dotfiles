@@ -29,7 +29,7 @@ Contract
   fails the job with the tool, expected and found.
   services = ["docker"] (homelab, opt-in) with a [docker] table (image pinned by digest, cpu, cpu_limit, memory, memory_limit,
   ready_s: an integer of at least 30): the pod gets a privileged docker-in-docker native sidecar (emptyDir data root, no hostPath,
-  no host socket) and the job container, which stays unprivileged and keeps /cache, gets DOCKER_HOST. The pod runs in the
+  no host socket; every container has a disk request and limit, and the data root's sizeLimit is the job's ephemeral_storage_limit, default 24Gi/40Gi with docker) and the job container, which stays unprivileged and keeps /cache, gets DOCKER_HOST. The pod runs in the
   `kgate-docker` PriorityClass and counts against the `kgate-docker` quota; priority_class together with docker is refused.
   A sidecar that does not become ready is exit 69 with its log tail and CMD not run. A sidecar that dies after CMD started
   leaves CMD's exit code alone, prints a note and records `docker_sidecar`; `docker_peak` is its peak memory. Docs: "Docker jobs".
@@ -160,7 +160,9 @@ HOMELAB_SERVICES = ("docker",)   # ... and for the homelab: a privileged dind si
 DOCKER_CLASS = "kgate-docker"
 DOCKER_HOST = "tcp://127.0.0.1:2375"   # the daemon listens on the pod's loopback only: no socket file, no group, no TLS
 DOCKER_READY_S = 120         # how long the dind sidecar has to pass its startup probe (`docker info`) when the profile says nothing
-DOCKER_SIDECAR_DISK = "512Mi"   # the sidecar's own ephemeral-storage request: a ResourceQuota that counts disk needs one on every container. Its images and layers are in the data root, which counts toward the job container's limit
+DOCKER_SIDECAR_DISK, DOCKER_SIDECAR_DISK_LIMIT = "512Mi", "1Gi"   # the sidecar's own ephemeral-storage request and limit (its writable layer and logs). Every container has both: the kubelet enforces a pod's disk only when every container has a limit, and the homelab's Docker quota counts limits.ephemeral-storage. Its images and layers are in the data root, an emptyDir sized by the job's limit
+# A Docker pod's disk when the profile says nothing (the plan's campaign default): the request, and the limit that is also the data root's sizeLimit. A profile that sets only the request gets the larger of this limit and the request.
+DOCKER_EPHEMERAL, DOCKER_EPHEMERAL_LIMIT = "24Gi", "40Gi"
 DOCKER_SETTLE_S, DOCKER_SETTLE_POLL_S = 5, 1   # after a CMD that failed, how long the pod's status is read again for the daemon's end: a docker client is cut off the moment the daemon dies, and the kubelet shows it about a second later
 # A quota that counts only some pods: its name -> the PriorityClass it counts. A job refused by one holds back only the jobs it counts (queued_behind); any other quota counts every pod.
 # The homelab repo's `k8s/kgate/resource-quota-docker.yaml` is the other end; its test (`k8s/kgate/test_kgate_quota.py`) pins the same name and scope. If the two drift, a Docker ticket holds back everyone, as before.
@@ -331,14 +333,19 @@ def parse_profile(text):
     ephemeral = raw.get("ephemeral_storage")
     if ephemeral is not None and (not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral)):
         raise Unavailable("profile ephemeral_storage must look like 20Gi, got %r" % (ephemeral,))
+    docker_job = cluster == "homelab" and (raw.get("docker") is not None or "docker" in services)   # its disk has a default of its own (DOCKER_EPHEMERAL)
     ephemeral_limit = raw.get("ephemeral_storage_limit")
     if ephemeral_limit is not None:
         if cluster != "homelab":
             raise Unavailable("profile ephemeral_storage_limit is for the homelab only (a kubectl cluster's limit equals ephemeral_storage)")
         if not isinstance(ephemeral_limit, str) or not re.fullmatch(MEM_SIZE, ephemeral_limit):
             raise Unavailable("profile ephemeral_storage_limit must look like 20Gi, got %r" % (ephemeral_limit,))
-        if mem_bytes(ephemeral_limit) < mem_bytes(ephemeral or EPHEMERAL_DEFAULT):
-            raise Unavailable("profile ephemeral_storage_limit must be at least ephemeral_storage, got ephemeral_storage_limit=%r and ephemeral_storage=%r" % (ephemeral_limit, ephemeral or EPHEMERAL_DEFAULT))
+        request = ephemeral or (DOCKER_EPHEMERAL if docker_job else EPHEMERAL_DEFAULT)
+        if mem_bytes(ephemeral_limit) < mem_bytes(request):
+            raise Unavailable("profile ephemeral_storage_limit must be at least ephemeral_storage, got ephemeral_storage_limit=%r and ephemeral_storage=%r" % (ephemeral_limit, request))
+    if docker_job:   # a Docker pod always has a disk request and a limit the kubelet enforces (the data root's sizeLimit is the limit)
+        ephemeral = ephemeral or DOCKER_EPHEMERAL
+        ephemeral_limit = ephemeral_limit or max(DOCKER_EPHEMERAL_LIMIT, ephemeral, key=mem_bytes)
     cpu_limit = raw.get("cpu_limit")   # at least `cpu` is checked in settings(), where cpu is known
     if cpu_limit is not None and (not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
         raise Unavailable("profile cpu_limit must be a whole number of at least 1, got %r" % (cpu_limit,))
@@ -724,7 +731,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
         container["volumeMounts"].append(mount)
     if docker:
         pod["initContainers"] = [docker_container(docker)]
-        pod["volumes"].append({"name": "docker-data", "emptyDir": {}})
+        pod["volumes"].append({"name": "docker-data", "emptyDir": {"sizeLimit": limits["ephemeral-storage"]}})   # the data root can never outgrow the job's limit
     if pull:
         pod["imagePullSecrets"] = [{"name": job + "-pull"}]
     items.append({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": job, "labels": labels}, "spec": pod})
@@ -735,7 +742,7 @@ def docker_container(svc):
     """The Docker daemon for a job, a native sidecar (an init container that keeps running): the job container starts only once its startup probe (`docker info`) passes. It is
     the pod's one privileged container. It listens on the pod's loopback, and its data root /var/lib/docker is an emptyDir only it mounts, so the layers count toward the pod's
     ephemeral-storage limit and go with the pod. It has no hostPath and no socket. The image's own entrypoint starts the daemon from `args`, as the ARC runners' dind does."""
-    limits = {"memory": svc["memory_limit"]}
+    limits = {"memory": svc["memory_limit"], "ephemeral-storage": DOCKER_SIDECAR_DISK_LIMIT}
     if svc["cpu_limit"] is not None:
         limits["cpu"] = str(svc["cpu_limit"])
     return {"name": "dind", "image": svc["image"], "imagePullPolicy": "IfNotPresent", "restartPolicy": "Always",
