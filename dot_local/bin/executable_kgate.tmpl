@@ -168,6 +168,11 @@ DOCKER_SETTLE_S, DOCKER_SETTLE_POLL_S = 5, 1   # after a CMD that failed, how lo
 # The homelab repo's `k8s/kgate/resource-quota-docker.yaml` is the other end; its test (`k8s/kgate/test_kgate_quota.py`) pins the same name and scope. If the two drift, a Docker ticket holds back everyone, as before.
 SCOPED_QUOTAS = {DOCKER_CLASS: DOCKER_CLASS}
 # The sidecars kgate starts: the container's name -> what the messages call it and the record key for its peak memory.
+# The sidecar's own cgroup, read inside it: the path comes from /proc/self/cgroup because the privileged dind sidecar shares the node's cgroup namespace, so /sys/fs/cgroup there is
+# the NODE's root, not the container's (on the G14 it has a memory.peak of its own that counts the whole machine and its page cache). In a private namespace the path is "/", the same as before.
+# $1 and $2 are the cgroup mount and the proc file, for the tests.
+SIDECAR_PEAK_SH = ('root=${1:-/sys/fs/cgroup}; self=${2:-/proc/self/cgroup}; cg="$root$(sed -n "s/^0:://p" "$self")"; '
+                   'cat "$cg/memory.peak" 2>/dev/null || cat "$cg/memory.current" 2>/dev/null')
 SIDECARS = {"mssql": {"label": "SQL Server", "peak": "service_peak_bytes"}, "dind": {"label": "docker", "peak": "docker_peak"}}
 SLOT_CPU = 4                 # the nodes' CPU is split into slots of this many CPUs (homelab ask 1187; the runners' share of it moved to agent-3, which kgate never uses: decision #3311). A homelab pod's CPU request is a whole number of slots
 MSSQL_PORT = 1433
@@ -2531,8 +2536,7 @@ class Job:
 
     def sidecar_peak(self):
         """Peak memory of the sidecar's own cgroup, read after CMD ends. Best effort: the record says unknown when it cannot be read."""
-        read = self.cluster.run(["exec", self.pod, "-c", self.sidecar, "--", "sh", "-c",
-                                 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current 2>/dev/null'])
+        read = self.cluster.run(["exec", self.pod, "-c", self.sidecar, "--", "sh", "-c", SIDECAR_PEAK_SH])
         value = read.stdout.decode(errors="replace").strip()
         if read.returncode == 0 and value.isdigit():
             self.rec[SIDECARS[self.sidecar]["peak"]] = int(value)

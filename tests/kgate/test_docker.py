@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -194,6 +195,35 @@ class Shape(unittest.TestCase):
 
     def test_the_queue_ranks_a_docker_pod_with_the_ordinary_ones(self):
         self.assertEqual(K.PRIORITY_VALUES[K.DOCKER_CLASS], K.PRIORITY_VALUES[K.PRIORITY_CLASS])
+
+
+class SidecarPeak(unittest.TestCase):
+    """The dind sidecar is privileged and shares the node's cgroup namespace: its `/sys/fs/cgroup` is the node's root, so the peak is read from the cgroup /proc/self/cgroup names."""
+
+    def read(self, root_files, container_files, self_cgroup):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "cgroup")
+            for rel, files in (("", root_files), (self_cgroup.lstrip("/"), container_files)):
+                (root / rel).mkdir(parents=True, exist_ok=True)
+                for name, text in files.items():
+                    (root / rel / name).write_text(text)
+            Path(d, "self").write_text("0::%s\n" % self_cgroup)
+            done = subprocess.run(["sh", "-c", K.SIDECAR_PEAK_SH, "sh", str(root), str(Path(d, "self"))], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            return done.stdout.decode().strip()
+
+    def test_a_shared_cgroup_namespace_reads_the_containers_own_cgroup_not_the_nodes_root(self):
+        path = "/kubepods.slice/pod1/cri-containerd-abc.scope"
+        self.assertEqual(self.read({"memory.peak": "23949156352\n"}, {"memory.peak": "46563328\n"}, path), "46563328", "the node's root counts the whole machine")
+
+    def test_a_node_whose_root_has_no_peak_file_still_gives_the_containers_number(self):
+        path = "/kubepods.slice/pod1/cri-containerd-abc.scope"
+        self.assertEqual(self.read({}, {"memory.current": "20439040\n"}, path), "20439040", "the node root has neither file, the container has memory.current only")
+
+    def test_a_private_cgroup_namespace_reads_its_root_as_before(self):
+        self.assertEqual(self.read({"memory.peak": "734003200\n"}, {}, "/"), "734003200")
+
+    def test_nothing_readable_prints_nothing(self):
+        self.assertEqual(self.read({}, {}, "/kubepods.slice/pod1/x.scope"), "")
 
 
 class DockerJobs(unittest.TestCase):
