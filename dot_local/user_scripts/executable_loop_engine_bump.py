@@ -23,6 +23,10 @@ anything. The steps, and the step a stop names:
   apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
   install  mise install for the five tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
+  scripts  on the agent host pod only: chezmoi runs its one pending script, 05_container_tools.sh, so its run is recorded (its steps are
+           no-ops after the install above, and it checks that no mise tool is missing). It embeds a hash of the mise config, so without
+           this run chezmoi would keep listing it as pending after every bump. Nothing runs on a machine whose `chezmoi status` does not
+           list it (the Mac and omarchy leave the script out). No other script runs; a failure stops here and a rerun picks up here
 
 A PR that also carries agent-kit's two pin files (a combined bump, opened when two releases landed close together) is fine: the
 drift check and the apply here ignore those two files, and agent_kit_bump.py X.Y.Z --pr N applies them. Any other file outside
@@ -61,6 +65,8 @@ MISE_CONTAINER = "conf.d/container.toml"
 AGENT_KIT_PINS = ("dot_local/share/agent-kit/package.json", "dot_local/share/agent-kit/package-lock.json")
 IMPORT_TOOL = "dot_local/user_scripts/executable_import_release_skills.py"
 HARNESS_TOOL = "dot_local/user_scripts/executable_apply_harness_config.sh"
+# Container mode's run_onchange script (run_onchange_after_05_container_tools.sh.tmpl): its content embeds a hash of the mise pins, so a pin bump leaves it pending.
+CONTAINER_TOOLS = "05_container_tools.sh"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 NAME = "loop_engine_bump"
 
@@ -210,6 +216,16 @@ def chezmoi(source, *args, step, check=True):
 def chezmoi_config(source, step):
     """chezmoi's resolved config. dump-config reads no source state, so no hook runs."""
     return json.loads(chezmoi(source, "dump-config", "--format", "json", step=step).stdout)
+
+
+def chezmoi_state_file(source, config, step):
+    """The persistent state file (it records which run_onchange scripts have run). chezmoi keeps it next to the config file, so a copy of the config
+    made in a temporary directory must name the real one, or a script run through the copy is forgotten with it. edit-config names the real config file
+    when its editor is `echo`; like dump-config it reads no source state, so no hook runs."""
+    if config.get("persistentState"):
+        return config["persistentState"]
+    named = run(["chezmoi", "--source", source, "--no-tty", "edit-config"], step, env={**os.environ, "EDITOR": "echo", "VISUAL": "echo"}).stdout.strip()
+    return str(Path(named).parent / "chezmoistate.boltdb")
 
 
 class Worktree:
@@ -436,6 +452,19 @@ def fast_forward_source(source, sha, log):
     log.record("source", "ok", "chezmoi source checkout %s is at %s" % (source, sha))
 
 
+def run_pending_container_tools(wt, dest, log):
+    """On the agent host pod, run 05_container_tools.sh through chezmoi so its run is recorded. Nothing runs when `chezmoi status` does not list it."""
+    pending = {line[3:] for line in chezmoi(wt, "status", "--include", "scripts", step="scripts").stdout.splitlines()}
+    if CONTAINER_TOOLS not in pending:
+        return
+    result = chezmoi(wt, "apply", "--force", "--include", "scripts", dest / CONTAINER_TOOLS, step="scripts", check=False)
+    print(result.stdout, end="", flush=True)
+    if result.returncode != 0:
+        raise Stop("scripts", "%s failed (exit %d), so chezmoi did not record its run and a rerun runs it again: %s"
+                   % (CONTAINER_TOOLS, result.returncode, "\n".join(s for s in (result.stdout.strip(), result.stderr.strip()) if s)))
+    log.record("scripts", "ok", "ran %s through chezmoi" % CONTAINER_TOOLS)
+
+
 def apply(source, dest, sha, pr, version, log):
     git(source, "fetch", "-q", "origin", step="drift")
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
@@ -461,12 +490,13 @@ def apply(source, dest, sha, pr, version, log):
             print(result.stdout, end="", flush=True)
             if result.returncode != 0:
                 raise Stop("verify", "verify-deployed found problems in %s" % ", ".join(bundles))
-    versions = installed_versions(dest)
-    wrong = sorted("%s %s" % (t, v) for t, v in versions.items() if v != version)
-    if wrong:
-        raise Stop("verify", "mise has not installed %s as the active version of: %s" % (version, ", ".join(wrong)))
-    installed = ", ".join("%s %s" % kv for kv in versions.items())
-    log.record("verify", "ok", "PR #%d, merge %s, installed: %s" % (pr["number"], sha, installed))
+        versions = installed_versions(dest)
+        wrong = sorted("%s %s" % (t, v) for t, v in versions.items() if v != version)
+        if wrong:
+            raise Stop("verify", "mise has not installed %s as the active version of: %s" % (version, ", ".join(wrong)))
+        installed = ", ".join("%s %s" % kv for kv in versions.items())
+        log.record("verify", "ok", "PR #%d, merge %s, installed: %s" % (pr["number"], sha, installed))
+        run_pending_container_tools(wt.path, dest, log)
     print("PR #%d %s\nmerge %s\ninstalled: %s" % (pr["number"], pr["url"], sha, installed))
 
 
@@ -480,6 +510,7 @@ def bump(args, log):
         raise Stop("profile", "profile is %r; this script runs only on personal, and nothing was done" % profile)
     log.record("profile", "ok", "personal")
     config.pop("hooks", None)
+    config["persistentState"] = chezmoi_state_file(Path(args.source), config, "profile")
     with tempfile.TemporaryDirectory(prefix=NAME + "-") as tmp:
         HOOKLESS_CONFIG[:] = [Path(tmp) / "chezmoi.json"]
         HOOKLESS_CONFIG[0].write_text(json.dumps(config))
