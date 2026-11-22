@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Turn the coverage grades of a guide into a to-do list for the writers, and record the coverage.
 
-usage: coverage.py <facts.txt> <grades.md> <GUIDE.md> <repo> --label NAME --work DIR (--grow WORDS | --budget WORDS) [--words-per-fact N] [--min PERCENT]
+usage: coverage.py <facts.txt> <grades.md> <GUIDE.md> <repo> --label NAME --work DIR (--grow WORDS | --budget WORDS) [--words-per-fact N] [--min PERCENT] [--inventory inventory.txt]
        coverage.py --facts <facts.txt> <repo>
+       coverage.py --facts <facts-1.txt> <facts-2.txt> ... <repo> --out <facts.txt>
 
 facts.txt   the lister's must-know facts, one a line: `F<n> | core|detail | kind | the fact | path:line` (a range `path:START-END` is fine). The cited line is where the code shows it.
             kind is purpose, run, setting, limit, failure, flow or interface. The same file is graded at every label, so the figures compare.
@@ -19,6 +20,13 @@ GUIDE.md    the guide the grader saw. A quote that is not in it (tags, backticks
 --min       exit 1 when COVERED facts are fewer than this percent of all facts (the files are written first).
 
 --facts     only checks the lister's file (every row well formed, every cited line in the repo, no repeated id, at most 100 facts) and prints the counts: run it before any grader starts.
+            With several files (the three listers of an extend pass) and --out, it checks each file as above, then merges them into the --out file: a fact is dropped when an earlier
+            one has the same cite and the same backticked names (a fact that names nothing: the same words after case and punctuation), and is core when any copy was; at most 20
+            facts stay core (the first ones; the rest become detail); at most 100 facts stay, core first and then one from each file in turn, so no lister's lens is cut away; the
+            facts are numbered F1.. in file order. It prints the counts, the duplicates dropped and the facts the cap cut.
+--inventory inventory.txt (the output of inventory.py)  each row `kind | name | path:line` that no line of the guide cites, no fact's cited range holds and no fact's words name (the
+            row's name as whole words) goes to the to-do as a MISSING detail candidate `I<n>`, after the facts of the lister, one kind in turn, and only while the to-do has room. A
+            candidate is not a fact: no count of the record includes it.
 
 Writes to DIR: `coverage-<label>.json` (counts, rates, each fact's grade, the room and the `--max-words` figure the check should use: the guide's words now plus the room),
 `coverage-<label>.todo.md` (what to edit and add) and one row in `coverage.md` (every label, side by side).
@@ -39,6 +47,7 @@ from claims import TAG, appendix_lines, line_items, part1_slice, split_lines, wo
 from lint_main import WORDS_MAX  # noqa: E402
 
 MAX_FACTS = 100  # the lister's cap: a longer list is more than a guide's word room holds
+MAX_CORE = 20  # core facts kept in a merged list: Part 1 holds no more
 WORDS_PER_FACT = 25  # the words one to-do row is estimated to cost when no --words-per-fact is given
 KINDS = ("purpose", "run", "setting", "limit", "failure", "flow", "interface")
 STATES = ("COVERED", "PARTIAL", "MISSING")
@@ -49,6 +58,9 @@ OPEN_QUOTES, CLOSE_QUOTES = '"\u201c', '"\u201d'
 _ONE = r"`[^`\n]*[\w/.@+-]:\d+[^`\n]*`"
 CITATION_SPAN = re.compile(_ONE + r"(?:\s*[,;]\s*" + _ONE + r")*")
 CITE = re.compile(r"^(.+):(\d+)(?:-(\d+))?$")
+INVENTORY_KINDS = ("message", "header", "route", "default", "limit")
+INVENTORY_ROW = re.compile(r"^(%s)\s*\|\s*(.+?)\s*\|\s*([^\s|]+):(\d+)\s*$" % "|".join(INVENTORY_KINDS))
+CANDIDATE_KIND = {"message": "failure", "header": "interface", "route": "interface", "default": "setting", "limit": "limit"}  # the kind of fact each inventory row is a candidate for
 LABEL = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -85,6 +97,60 @@ def read_facts(path, repo):
     if len(out) > MAX_FACTS:
         raise CoverageError("%s holds %d facts, over the cap of %d: send it back to the lister to keep the %d that matter most (core first)" % (path, len(out), MAX_FACTS, MAX_FACTS))
     return out
+
+
+def read_inventory(path, repo):
+    """[{kind, name, cite}] of an inventory file (inventory.py's output, `kind | name | path:line`; blank lines and `#` lines are skipped). Raises CoverageError for a row of another shape
+    or one that cites a line the repo lacks."""
+    out = []
+    for n, line in enumerate(read(path).split("\n"), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = INVENTORY_ROW.match(line)
+        target = os.path.join(repo, m.group(3)) if m else ""
+        if not m or not os.path.isfile(target) or not 1 <= int(m.group(4)) <= len(split_lines(read(target))):
+            raise CoverageError("%s:%d: not an inventory row (`kind | name | path:line` of a line of the repo, kind one of %s): %s" % (path, n, ", ".join(INVENTORY_KINDS), line[:80]))
+        out.append({"kind": m.group(1), "name": m.group(2), "cite": "%s:%s" % (m.group(3), m.group(4))})
+    return out
+
+
+def words_of_text(text):
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def fact_key(fact, cite):
+    """What makes two facts one: the cite and the backticked names the fact states; a fact that names nothing, the cite and its words after case and punctuation."""
+    names = sorted({words_of_text(n) for n in re.findall(r"`([^`]+)`", fact)} - {""})
+    return (cite, tuple(names)) if names else (cite, words_of_text(fact))
+
+
+def merge_facts(paths, repo):
+    """(facts, duplicates dropped, facts the cap cut): the facts of several listers' files as one list. A fact is dropped when an earlier one has its key (fact_key) and is core when any copy
+    was; the first MAX_CORE core facts stay core; over MAX_FACTS, the core facts stay and the rest are taken one from each file in turn. Numbered F1.. in file order."""
+    kept, index, dropped = [], {}, 0
+    for k, path in enumerate(paths):
+        for _, core, kind, fact, cite in read_facts(path, repo):
+            key = fact_key(fact, cite)
+            if key in index:
+                kept[index[key]]["core"] |= core
+                dropped += 1
+                continue
+            index[key] = len(kept)
+            kept.append({"core": core, "kind": kind, "fact": fact, "cite": cite, "file": k})
+    seen = 0
+    for r in kept:
+        seen += r["core"]
+        r["core"] = r["core"] and seen <= MAX_CORE
+    cut = max(0, len(kept) - MAX_FACTS)
+    if cut:
+        chosen = {id(r) for r in kept if r["core"]}
+        pools = [[r for r in kept if r["file"] == k and not r["core"]] for k in range(len(paths))]
+        while len(chosen) < MAX_FACTS and any(pools):
+            for pool in pools:
+                if pool and len(chosen) < MAX_FACTS:
+                    chosen.add(id(pool.pop(0)))
+        kept = [r for r in kept if id(r) in chosen]
+    return [("F%d" % i, r["core"], r["kind"], r["fact"], r["cite"]) for i, r in enumerate(kept, 1)], dropped, cut
 
 
 def read_grades(path, facts):
@@ -249,8 +315,46 @@ def rank(rows):
     return sorted((r for r in rows if r["state"] != "COVERED"), key=lambda r: (not r["core"], r["state"] != "MISSING", int(r["id"][1:])))
 
 
-def build(facts, grades, guide, repo, budget=None, words_per_fact=WORDS_PER_FACT, grow=None):
-    """The record of one grade. The room for the to-do is `grow` words, or `budget` less the words the guide has now; give one of them."""
+CANDIDATE_TEXT = {"message": 'The code shows the message "%s": say when a user or operator sees it.', "header": "The code reads the header `%s`: say what it is for and what happens without it.",
+                  "route": "The code serves the route `%s`: say what it does.", "default": "The code defaults `%s`: say what it sets and the value.",
+                  "limit": "The code caps `%s`: say what it limits and what happens at the cap."}
+
+
+def range_holds(cite, path, line):
+    """True when the cite `path:LO-HI` is in this file and holds this line."""
+    c = CITE.match(cite)
+    return c.group(1) == path and int(c.group(2)) <= line <= int(c.group(3) or c.group(2))
+
+
+def candidates(inventory, lines, rows, by_file):
+    """The inventory rows that no guide line cites, no fact's cited range holds and no fact's words name (the row's name, before any ` = `), as MISSING detail rows `I<n>` numbered in
+    inventory order; and the same rows interleaved one kind at a time, the order the to-do takes them in."""
+    texts = [" %s " % words_of_text(r["fact"]) for r in rows]
+    found = []
+    for item in inventory:
+        c = CITE.match(item["cite"])
+        path, line = c.group(1), int(c.group(2))
+        name = words_of_text(item["name"].split(" = ")[0])
+        if any(distance(l["cites"], path, line, line) == 0 for l in lines) or any(range_holds(r["cite"], path, line) for r in rows):
+            continue
+        if name and any(" %s " % name in t for t in texts):
+            continue
+        r = {"id": "I%d" % (len(found) + 1), "core": False, "kind": CANDIDATE_KIND[item["kind"]], "fact": CANDIDATE_TEXT[item["kind"]] % item["name"], "cite": item["cite"], "state": "MISSING",
+             "quotes": [], "where": "", "why": "", "section": suggest(item["cite"], by_file), "line_id": None, "route": "add", "near": None, "candidate": True, "inventory_kind": item["kind"]}
+        near = route_missing(r, lines, r["section"])
+        r["near"] = list(near) if near else None
+        found.append(r)
+    pools = [[r for r in found if r["inventory_kind"] == k] for k in INVENTORY_KINDS]
+    ordered = []
+    while any(pools):
+        for pool in pools:
+            if pool:
+                ordered.append(pool.pop(0))
+    return found, ordered
+
+
+def build(facts, grades, guide, repo, budget=None, words_per_fact=WORDS_PER_FACT, grow=None, inventory=None):
+    """The record of one grade. The room for the to-do is `grow` words, or `budget` less the words the guide has now; give one of them. `inventory` (read_inventory) adds the candidates."""
     checked = verify(grades, guide)
     by_file, lines = sections(guide, repo), guide_lines(guide, repo)
     rows = []
@@ -278,12 +382,19 @@ def build(facts, grades, guide, repo, budget=None, words_per_fact=WORDS_PER_FACT
     listed = {r["id"] for r in order[:fit]}
     for r in rows:
         r["listed"] = r["id"] in listed
+    todo = [r["id"] for r in order[:fit]]
+    found, ordered = candidates(inventory, lines, rows, by_file) if inventory is not None else ([], [])
+    taken = {r["id"] for r in ordered[:max(0, fit - len(todo))]}  # a candidate takes only the room the lister's facts leave
+    for r in found:
+        r["listed"] = r["id"] in taken
+    todo += [r["id"] for r in ordered if r["id"] in taken]
+    rows += found
     return {"facts": total, **{s.lower(): counts[s] for s in STATES},
             "covered_percent": round(100.0 * counts["COVERED"] / total, 1), "covered_or_partial_percent": round(100.0 * (counts["COVERED"] + counts["PARTIAL"]) / total, 1),
             "core": sum(1 for r in rows if r["core"]), "core_covered": sum(1 for r in rows if r["core"] and r["state"] == "COVERED"),
             "part1_words": words, "part1_room": WORDS_MAX - words,
             "guide_words": guide_words, "budget": budget, "room": room, "words_per_fact": words_per_fact, "fit": fit,
-            "todo": [r["id"] for r in order[:fit]], "did_not_fit": [r["id"] for r in order[fit:]], "rows": rows}
+            "todo": todo, "did_not_fit": [r["id"] for r in order[fit:]], "candidates": len(found), "candidates_listed": len(taken), "rows": rows}
 
 
 def row_line(r):
@@ -361,20 +472,33 @@ def record(work, label, rec):
 
 def main(argv):
     if "--facts" in argv:
-        rest = [a for a in argv[1:] if a != "--facts"]
-        if len(rest) != 2 or not os.path.isfile(rest[0]) or not os.path.isdir(rest[1]):
+        rest, out, it = [], None, iter(argv[1:])
+        for a in it:
+            if a == "--out":
+                out = next(it, None)
+            elif a != "--facts":
+                rest.append(a)
+        files, repo = rest[:-1], (rest[-1] if rest else "")
+        if not files or not all(os.path.isfile(f) for f in files) or not os.path.isdir(repo) or (len(files) > 1 and not out) or ("--out" in argv and not out):
             print(__doc__.split("\n\n")[0], file=sys.stderr)
             return 2
+        repo = os.path.realpath(repo)
         try:
-            facts = read_facts(rest[0], os.path.realpath(rest[1]))
+            if not out:
+                facts = read_facts(files[0], repo)
+                print("%d facts, %d core" % (len(facts), sum(1 for f in facts if f[1])))
+                return 0
+            facts, dropped, cut = merge_facts(files, repo)
         except CoverageError as e:
             print(e, file=sys.stderr)
             return 1
-        print("%d facts, %d core" % (len(facts), sum(1 for f in facts if f[1])))
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("# merged from %d lister files\n" % len(files) + "".join("%s | %s | %s | %s | %s\n" % (i, "core" if core else "detail", kind, fact, cite) for i, core, kind, fact, cite in facts))
+        print("%d facts, %d core (merged from %d files: %d duplicates dropped, %d cut by the cap of %d)" % (len(facts), sum(1 for f in facts if f[1]), len(files), dropped, cut, MAX_FACTS))
         return 0
     args, opts, it = [], {}, iter(argv[1:])
     for a in it:
-        if a in ("--label", "--work", "--min", "--budget", "--grow", "--words-per-fact"):
+        if a in ("--label", "--work", "--min", "--budget", "--grow", "--words-per-fact", "--inventory"):
             opts[a] = next(it, None)
         else:
             args.append(a)
@@ -383,21 +507,24 @@ def main(argv):
     if len(args) != 4 or not all(os.path.isfile(a) for a in args[:3]) or not os.path.isdir(args[3]) or not LABEL.match(opts.get("--label") or "") \
             or not opts.get("--work") or not os.path.isdir(opts["--work"]) or bad_min \
             or ("--budget" in opts) == ("--grow" in opts) or not re.fullmatch(r"[1-9]\d*", opts.get("--budget") or opts.get("--grow") or "") \
-            or not re.fullmatch(r"[1-9]\d*", opts.get("--words-per-fact") or str(WORDS_PER_FACT)):
+            or not re.fullmatch(r"[1-9]\d*", opts.get("--words-per-fact") or str(WORDS_PER_FACT)) or ("--inventory" in opts and not (opts["--inventory"] and os.path.isfile(opts["--inventory"]))):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     facts_path, grades_path, guide_path, repo = args[0], args[1], args[2], os.path.realpath(args[3])
     try:
         facts = read_facts(facts_path, repo)
         rec = build(facts, read_grades(grades_path, facts), read(guide_path), repo, int(opts["--budget"]) if "--budget" in opts else None,
-                    int(opts.get("--words-per-fact") or WORDS_PER_FACT), int(opts["--grow"]) if "--grow" in opts else None)
+                    int(opts.get("--words-per-fact") or WORDS_PER_FACT), int(opts["--grow"]) if "--grow" in opts else None,
+                    read_inventory(opts["--inventory"], repo) if "--inventory" in opts else None)
         record(opts["--work"], opts["--label"], rec)
     except CoverageError as e:
         print(e, file=sys.stderr)
         return 1
     print("%s: %d facts, covered %d, partial %d, missing %d: %s%% covered, %s%% covered or partial; core %d of %d covered; Part 1 %d of %d words; to-do %d facts, %d did not fit (room %d words; check_citations --max-words %d)" % (
         opts["--label"], rec["facts"], rec["covered"], rec["partial"], rec["missing"], rec["covered_percent"], rec["covered_or_partial_percent"],
-        rec["core_covered"], rec["core"], rec["part1_words"], WORDS_MAX, len(rec["todo"]), len(rec["did_not_fit"]), rec["room"], rec["budget"]))
+        rec["core_covered"], rec["core"], rec["part1_words"], WORDS_MAX, len(rec["todo"]) - rec["candidates_listed"], len(rec["did_not_fit"]), rec["room"], rec["budget"]))
+    if "--inventory" in opts:
+        print("inventory: %d candidates, %d listed (in the to-do after the %d facts of the lister)" % (rec["candidates"], rec["candidates_listed"], len(rec["todo"]) - rec["candidates_listed"]))
     if low is not None and rec["covered_percent"] < float(low):
         print("BELOW %s%%: %d facts are still not covered (coverage-%s.todo.md)" % (low, rec["partial"] + rec["missing"], opts["--label"]))
         return 1

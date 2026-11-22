@@ -1,7 +1,17 @@
-Seat: lead (skill writer), Opus 5.5 medium (the lister). You have not seen the guide, and you must not look for it: open nothing outside the repo, and no `GUIDE.md` or derived-docs folder.
-Lister brief, version 1.
+Seat: lead (skill writer), Opus 5.5 medium (the lister). You have not seen the guide, and you must not look for it: open nothing outside the repo, and no `GUIDE.md` or derived-docs folder. You have not seen a key, a score or a list of facts someone else wants: list what the code shows.
+Lister brief, version 2.
 
-List the facts a newcomer must know to use or work on this repo, taken from the code. Input: the repo path, and your output path (`facts.txt`).
+List the facts a newcomer must know to use or work on this repo, taken from the code. Input: the repo path, the inventory file (`inventory.txt`), your lens and your output path (`facts-<lens number>.txt`). Three listers run side by side, one for each lens, and their files are merged: the facts that no other lens would list are the ones you are there for.
+
+Your lens, one of three:
+
+1. **Setup, config and operation:** how to install, configure, start, run and stop it; each setting, its default and unit (the `default` rows of the inventory); each script or command an operator types.
+2. **User-visible behaviour, messages and errors:** what a person sees and what they can do: each main flow in order, each message a user or operator reads (the `message` rows), each query or input syntax, each answer to a bad input or a refused request.
+3. **Integrations, limits and edge cases:** every outside system, header and route the product talks to or serves (the `header` and `route` rows), each cap, size, timeout and count (the `limit` rows), each content type or format it accepts, and what happens at the edge.
+
+`purpose` and a few `run` facts belong to lens 1; the other lenses leave them out. A fact of another lens that you find on the way is worth a row too.
+
+The inventory lists the literals a user or operator meets (`kind | name | path:line`: message, header, route, default, limit), found by a script. It is a reading aid and not the truth: open the line, read the code around it, and write a fact only when a newcomer needs it. Skip a row that is an internal detail. A fact the inventory lacks is as welcome as one it has.
 
 What to list, by kind (the kind names are the ones the file takes):
 
@@ -18,8 +28,8 @@ How to list:
 - Read the code, not only the README. The README tells you what to look for; the fact comes from the code line. Open the code that defines each fact: the function, the table, the default.
 - One fact on one row, stated in one plain sentence of at most 25 words, with its value, default, limit, unit and failure result when it has them. A fact a reader could not check against one place in the code is two facts or no fact.
 - Every row cites the code line that shows the fact (`path:START-END`, the smallest range that shows it, relative to the repo root). Read the lines first: a row citing a line you did not read is wrong.
-- Cover the whole repo in proportion: more rows for a capability a user meets often, none for an internal helper nobody touches. Write at most 100 rows (the script refuses more): aim for 60 to 100; under 30,000 lines of code, 30 to 60. When you have more, keep the ones a newcomer needs most. A repo with a handful of settings lists every one of them.
-- Mark a fact `core` when a newcomer reading only the first page must have it: what the product is for, how to install and start it, its main flows and its main interfaces. At most 20 rows are `core`; the rest are `detail`.
+- Cover your lens across the whole repo in proportion: more rows for a capability a user meets often, none for an internal helper nobody touches. Write at most 100 rows (the script refuses more): aim for 35 to 50, because three lists are merged and the merge keeps 100 in all; under 30,000 lines of code, 15 to 25. When you have more, keep the ones a newcomer needs most. A repo with a handful of settings lists every one of them.
+- Mark a fact `core` when a newcomer reading only the first page must have it: what the product is for, how to install and start it, its main flows and its main interfaces. At most 7 rows are `core`, because the merge keeps 20 in all; the rest are `detail`.
 - Add no security, privacy or threat topic of your own.
 
 Output: a file of rows, one a line, and nothing else but blank lines and lines starting with `#`:

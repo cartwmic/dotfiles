@@ -45,7 +45,7 @@ The cited lines must show everything the sentence says. `references/drafting.md`
 
 Up to three passes: pass 1 is the Procedure above, unchanged. A later pass takes the repo, the earlier `GUIDE.md` and an output folder, adds what the guide misses and adds no error to the lines it did not write. Method and commands: `references/extend.md`.
 
-- Facts: a fresh lister, blind to the guide, lists the must-know facts from the code. A fresh grader marks each COVERED, PARTIAL or MISSING in the guide. `python3 -I <skill>/scripts/coverage.py ... --grow 1500` fits the to-do to the word room: the appendix grows at most about 1,500 words a pass, and Part 1 stays at most 1,000 words with new text only for core facts.
+- Facts: three fresh listers, blind to the guide, one lens each, list the must-know facts from the code and `inventory.py`'s list of messages, headers, defaults and limits. A fresh grader marks each COVERED, PARTIAL or MISSING in the guide. `python3 -I <skill>/scripts/coverage.py ... --grow 1500` fits the to-do to the word room: the appendix grows at most about 1,500 words a pass, and Part 1 stays at most 1,000 words with new text only for core facts.
 - Writers edit each PARTIAL line in place and add each MISSING line next to its neighbour, every line with a condition audit. A line unchanged since the earlier guide is not rewritten.
 - Fresh checkers check only the new and changed lines (`python3 -I <skill>/scripts/extend.py diff ...`), with `references/check-brief.md` as written, and `score.py` scores them as in pass 1.
 - Repair before cut, lint again, then the reader check on Part 1.

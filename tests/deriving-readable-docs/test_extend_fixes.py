@@ -1,6 +1,7 @@
 """The fix round of the extend mode: check_citations.py (row budget, one sentence a line, duplicate lines, numbers across `_`, `,` and k/M), coverage.py (placement),
 inventory.py and final_recheck.py (re-check routing). Each test breaks one rule and fails without its change.
 Run: python3 -I tests/deriving-readable-docs/test_extend_fixes.py"""
+import json
 import subprocess
 import sys
 import tempfile
@@ -12,9 +13,11 @@ sys.path.insert(0, str(SCRIPTS))
 sys.dont_write_bytecode = True
 import coverage  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_coverage as cov  # noqa: E402
 import test_final_recheck as base  # noqa: E402
 SKILL_DIR = SCRIPTS.parent
 EXTEND = (SKILL_DIR / "references/extend.md").read_text(encoding="utf-8")
+LISTER = (SKILL_DIR / "references/coverage-lister.md").read_text(encoding="utf-8")
 
 
 def make_repo(files):
@@ -157,6 +160,188 @@ class PlacementTest(unittest.TestCase):
 
     def test_a_fact_whose_own_file_is_cited_keeps_the_section_that_cites_it_most(self):
         self.assertEqual(self.section_of("src/net/retry.py:1"), "A4")
+
+
+class MergeFactsTest(cov.Work):
+    """F1: three listers each write a facts file; `coverage.py --facts a b c <repo> --out facts.txt` merges them."""
+
+    def facts_file(self, name, rows):
+        """rows: [(core, kind, fact, cite)] written as F1.. in a file of the work folder."""
+        self.write(name, "".join("F%d | %s | %s | %s | %s\n" % (i, "core" if c else "detail", k, f, ct) for i, (c, k, f, ct) in enumerate(rows, 1)))
+
+    def merge(self, *names, out="merged.txt"):
+        args = [self.path(n) for n in names]
+        r = subprocess.run([sys.executable, "-I", str(cov.SCRIPTS / "coverage.py"), "--facts", *args, self.repo, *(("--out", self.path(out)) if out else ())], capture_output=True, text=True)
+        merged = Path(self.path(out)).read_text() if out and Path(self.path(out)).exists() else None
+        return r, merged
+
+    def rows_of(self, merged):
+        return [l.split(" | ") for l in merged.split("\n") if l and not l.startswith("#")]
+
+    def test_the_same_cite_and_the_same_named_thing_is_one_fact_and_the_first_wording_stays(self):
+        self.facts_file("a.txt", [(False, "setting", "The `--interval` flag defaults to 30 seconds.", "src/app.py:10")])
+        self.facts_file("b.txt", [(True, "setting", "`--interval` is 30 seconds unless set.", "src/app.py:10")])
+        r, merged = self.merge("a.txt", "b.txt")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = self.rows_of(merged)
+        self.assertEqual(rows, [["F1", "core", "setting", "The `--interval` flag defaults to 30 seconds.", "src/app.py:10"]])  # the copy that was core makes it core
+        self.assertIn("1 facts, 1 core", r.stdout)
+        self.assertIn("1 duplicates dropped", r.stdout)
+
+    def test_two_different_named_things_on_one_range_are_two_facts(self):
+        self.facts_file("a.txt", [(False, "setting", "The `--interval` flag defaults to 30 seconds.", "src/app.py:10-20")])
+        self.facts_file("b.txt", [(False, "setting", "The `--retries` flag defaults to 3.", "src/app.py:10-20")])
+        self.assertEqual(len(self.rows_of(self.merge("a.txt", "b.txt")[1])), 2)
+
+    def test_a_fact_that_names_nothing_is_a_duplicate_when_cite_and_words_match_after_case_and_punctuation(self):
+        self.facts_file("a.txt", [(False, "limit", "A note over 1 MB is skipped.", "src/app.py:22-24"), (False, "limit", "A note over 2 MB is refused.", "src/app.py:22-24")])
+        self.facts_file("b.txt", [(False, "limit", "a note over 1 MB is skipped", "src/app.py:22-24")])
+        self.assertEqual([r[3] for r in self.rows_of(self.merge("a.txt", "b.txt")[1])], ["A note over 1 MB is skipped.", "A note over 2 MB is refused."])
+
+    def test_the_merge_numbers_the_facts_again_and_the_file_passes_the_facts_check(self):
+        self.facts_file("a.txt", [(False, "run", "Start it with the sync command.", "src/app.py:30")])
+        self.facts_file("b.txt", [(False, "flow", "A refused connection is retried 3 times.", "src/net.py:7")])
+        _, merged = self.merge("a.txt", "b.txt")
+        self.assertEqual([r[0] for r in self.rows_of(merged)], ["F1", "F2"])
+        r = subprocess.run([sys.executable, "-I", str(cov.SCRIPTS / "coverage.py"), "--facts", self.path("merged.txt"), self.repo], capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "2 facts, 0 core"))
+
+    def test_the_100_row_cap_is_kept_after_the_merge_and_each_lister_keeps_a_share(self):
+        for n, name in enumerate("abc"):
+            self.facts_file("%s.txt" % name, [(False, "setting", "Setting `s%d_%d` is on." % (n, i), "src/app.py:%d" % (i % 40 + 1)) for i in range(40)])
+        r, merged = self.merge("a.txt", "b.txt", "c.txt")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = self.rows_of(merged)
+        self.assertEqual(len(rows), 100)
+        share = [sum(1 for x in rows if x[3].startswith("Setting `s%d_" % n)) for n in range(3)]
+        self.assertEqual(sorted(share), [33, 33, 34], share)
+        self.assertIn("20 cut by the cap of 100", r.stdout)
+
+    def test_at_most_20_facts_stay_core_and_the_first_ones_do(self):
+        for n, name in enumerate("abc"):
+            self.facts_file("%s.txt" % name, [(True, "setting", "Setting `c%d_%d` is on." % (n, i), "src/app.py:%d" % (i + 1)) for i in range(10)])
+        r, merged = self.merge("a.txt", "b.txt", "c.txt")
+        rows = self.rows_of(merged)
+        self.assertEqual(sum(1 for x in rows if x[1] == "core"), 20)
+        self.assertEqual([x[1] for x in rows[:20]], ["core"] * 20)
+        self.assertEqual([x[1] for x in rows[20:]], ["detail"] * 10)
+
+    def test_a_file_that_is_not_facts_is_refused_by_name_and_several_files_need_out(self):
+        self.facts_file("a.txt", [(False, "run", "Start it.", "src/app.py:30")])
+        self.write("b.txt", "F1 | big | run | x | src/app.py:2\n")
+        r, _ = self.merge("a.txt", "b.txt")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("b.txt:1: not a fact row", r.stderr)
+        self.assertEqual(self.merge("a.txt", "a.txt", out=None)[0].returncode, 2)
+
+    def test_one_file_and_no_out_is_the_old_check_that_writes_nothing(self):
+        r, _ = self.merge("facts.txt", out=None)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "5 facts, 3 core"))
+
+
+INVENTORY = """# inventory: 6 rows
+limit | MAX_SYNC_BATCH = 25 | src/app.py:5
+message | The server is busy, try later | src/net.py:12
+route | /sync | src/net.py:5
+header | Authorization | src/app.py:3
+default | SYNC_HOME = /var/lib/sync | src/app.py:23
+default | SYNC_PORT = 8080 | src/app.py:35
+"""
+
+
+class InventoryCandidateTest(cov.Work):
+    """F1: an inventory row that no guide line cites and no fact names goes to the to-do as a MISSING candidate, after the lister's facts and only while the to-do has room."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("inventory.txt", INVENTORY)
+        self.write("facts.txt", cov.FACTS + "F6 | detail | interface | The sync route accepts a note. | src/net.py:15\n")
+        self.write("grades.md", cov.GRADES + "F6 | MISSING | -\n")
+
+    def run_cli(self, *args, label="first"):
+        return subprocess.run([sys.executable, "-I", str(cov.SCRIPTS / "coverage.py"), self.path("facts.txt"), self.path("grades.md"), self.path("GUIDE.md"), self.repo,
+                               "--label", label, "--work", self.work, "--grow", "1500", *args], capture_output=True, text=True)
+
+    def rec(self, *extra):
+        r = self.run_cli(*extra, "--inventory", self.path("inventory.txt"), label="inv")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(Path(self.path("coverage-inv.json")).read_text()), Path(self.path("coverage-inv.todo.md")).read_text(), r.stdout
+
+    def test_a_row_nothing_covers_is_a_missing_candidate_and_the_others_are_not(self):
+        rec, todo, out = self.rec()
+        cands = [r for r in rec["rows"] if r.get("candidate")]
+        self.assertEqual([(c["id"], c["cite"]) for c in cands], [("I1", "src/app.py:5"), ("I2", "src/net.py:12"), ("I3", "src/app.py:35")])
+        for c in cands:
+            self.assertEqual((c["state"], c["core"], c["listed"]), ("MISSING", False, True))
+        self.assertIn("- I1 MISSING detail | ", todo)
+        self.assertIn("MAX_SYNC_BATCH = 25", todo)
+        self.assertIn("inventory: 3 candidates, 3 listed", out)
+
+    def test_a_row_a_guide_line_cites_a_fact_range_holds_or_a_fact_names_is_no_candidate(self):
+        rec, _, _ = self.rec()
+        left = {r["cite"] for r in rec["rows"] if r.get("candidate")}
+        self.assertNotIn("src/app.py:3", left)   # the A3 line cites it
+        self.assertNotIn("src/app.py:23", left)  # F3 cites src/app.py:22-24
+        self.assertNotIn("src/net.py:5", left)   # F6 names the sync route
+
+    def test_candidates_are_not_facts_and_move_no_count(self):
+        rec, _, _ = self.rec()
+        plain = self.run_cli(label="plain")
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        base_rec = json.loads(Path(self.path("coverage-plain.json")).read_text())
+        for key in ("facts", "covered", "partial", "missing", "covered_percent", "core", "did_not_fit"):
+            self.assertEqual(rec[key], base_rec[key], key)
+        self.assertEqual(rec["todo"][:len(base_rec["todo"])], base_rec["todo"])  # the lister's facts keep their order, the candidates follow
+
+    def test_a_full_to_do_takes_no_candidate(self):
+        rec, todo, out = self.rec("--words-per-fact", "750")  # room for 2 rows at 750 words: the lister's own MISSING facts fill it
+        self.assertEqual(rec["fit"], 2)
+        self.assertEqual([r for r in rec["todo"] if r.startswith("I")], [])
+        self.assertIn("inventory: 3 candidates, 0 listed", out)
+        self.assertNotIn("I1", todo)
+
+    def test_the_candidates_of_one_kind_do_not_crowd_out_the_others(self):
+        self.write("inventory.txt", "".join("limit | MAX_%d = %d | src/app.py:%d\n" % (i, i, 30 + i) for i in range(1, 6)) + "message | The server is busy, try later | src/net.py:12\n")
+        rec, _, _ = self.rec("--words-per-fact", "300")  # room for 5 rows: the lister's 4 facts and one candidate, and it is the message, not the first limit
+        self.assertEqual([r["cite"] for r in rec["rows"] if r.get("candidate") and r["listed"]], ["src/net.py:12"])
+
+    def test_a_candidate_is_placed_next_to_the_line_that_cites_its_file(self):
+        rec, todo, _ = self.rec()
+        cand = {r["cite"]: r for r in rec["rows"] if r.get("candidate")}
+        self.assertEqual(cand["src/net.py:12"]["section"], "A4")
+        self.assertEqual(cand["src/net.py:12"]["near"][0], "A4.cccc")
+        self.assertIn("add next to A4.cccc", todo)
+
+    def test_a_malformed_inventory_is_refused_and_no_inventory_means_no_candidates(self):
+        self.write("inventory.txt", "limit | MAX | not a cite\n")
+        r = self.run_cli("--inventory", self.path("inventory.txt"), label="bad")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("inventory.txt:1: not an inventory row", r.stderr)
+        r = self.run_cli(label="none")
+        self.assertNotIn("inventory:", r.stdout)
+
+
+class ListerDocsTest(unittest.TestCase):
+    """F1: E1 runs three listers, one for each lens, on the inventory; the lister brief is blind to any key or score and names no repo."""
+
+    def test_e1_runs_inventory_then_three_listers_then_the_merge(self):
+        e1 = EXTEND.split("## E1")[1].split("## E2")[0]
+        for text in ("inventory.py <repo>", "Three fresh listers run in parallel", "facts-1.txt", "facts-3.txt", "coverage.py --facts facts-1.txt facts-2.txt facts-3.txt <repo> --out facts.txt",
+                     "setup, config and operation", "user-visible behaviour, messages and errors", "integrations, limits and edge cases", "never the guide, a key or a score"):
+            self.assertIn(text, e1)
+        self.assertIn("--inventory inventory.txt", EXTEND.split("## E2")[1].split("## E3")[0])
+
+    def test_the_lister_brief_gives_the_three_lenses_the_inventory_and_a_share_of_the_cap(self):
+        for text in ("1. **Setup, config and operation:**", "2. **User-visible behaviour, messages and errors:**", "3. **Integrations, limits and edge cases:**", "inventory.txt",
+                     "You have not seen a key, a score", "aim for 35 to 50", "at most 100 rows", "At most 7 rows are `core`"):
+            self.assertIn(text, LISTER)
+        self.assertTrue(LISTER.startswith("Seat: lead (skill writer), Opus 5.5 medium"))
+
+    def test_every_flag_of_a_script_command_in_extend_md_is_in_that_script(self):
+        for cmd in __import__("re").findall(r"`(python3 -I <skill>/scripts/([\w.]+)[^`]*)`", EXTEND):
+            source = (SCRIPTS / cmd[1]).read_text()
+            for flag in __import__("re").findall(r"(?<![\w-])(--[a-z][a-z-]*)", cmd[0]):
+                self.assertIn(flag, source, "%s in %s" % (flag, cmd[1]))
 
 
 class RecheckRoutingTest(unittest.TestCase):
