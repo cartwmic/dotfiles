@@ -177,7 +177,7 @@ class RoundTwoTest(unittest.TestCase):
         self.assertIn("fresh reader", SKILL)
         self.assertIn("fresh grader", SKILL)
         self.assertNotRegex(SKILL, r"(?i)\b(?:fresh|separate) Opus\b|Sonnet")
-        self.assertIn("Seat: checker, Opus", CHECK_BRIEF)  # the frozen check brief is not edited; SKILL.md puts the seat line above it
+        self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium. You did not write this doc.", CHECK_BRIEF)  # the frozen check brief's first line is the gate's seat form
         self.assertIn("Seat: lead (skill writer), Opus 5.5 medium", DRAFTING)
         self.assertIn("Seat: scout, Haiku 5.5 xhigh", DRAFTING)
         self.assertIn("Seat: reviewer (skill checker), Opus 5.5 medium", READER)
@@ -205,6 +205,37 @@ class RoundTwoTest(unittest.TestCase):
     def test_the_check_brief_says_how_to_judge_by_default_in_part_1(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)by default")
         self.assertRegex(CHECK_BRIEF, r"(?i)by default[^.\n]*(default|shows)")
+
+
+class SeatLineTest(unittest.TestCase):
+    """The coordinator's helper gate (seatLineProblem) refuses a helper whose brief's first line is not a Seat line from the seat table. SKILL.md's seat lines are the
+    forms the skill uses. Every prompt under references/ that starts with `Seat:` uses one of them, and the five prompt files all start with one."""
+
+    PROMPTS = ("check-brief.md", "coverage-lister.md", "coverage-grader.md", "reader-check.md", "drafting.md")
+
+    @staticmethod
+    def forms():
+        found = {form.rstrip(".") for form in re.findall(r"`(Seat: [^`]+)`", SKILL)}
+        assert {"Seat: scout, Haiku 5.5 xhigh", "Seat: lead (skill writer), Opus 5.5 medium", "Seat: reviewer (skill checker), Opus 5.5 medium"} <= found, found
+        return found
+
+    @staticmethod
+    def starts_with_a_form(first_line, forms):
+        """True when the line is one of the seat forms, followed by the end, a full stop or a space (a grader's `(the grader)` note or a sentence may follow)."""
+        return any(re.match(re.escape(form) + r"(?=[.\s]|$)", first_line) for form in forms)
+
+    def test_every_prompt_that_starts_with_a_seat_line_uses_one_of_skill_mds_seat_lines(self):
+        forms = self.forms()
+        for path in sorted((SKILL_DIR / "references").glob("*.md")):
+            first = path.read_text(encoding="utf-8").split("\n", 1)[0]
+            if first.lower().startswith("seat:"):
+                self.assertTrue(self.starts_with_a_form(first, forms), "references/%s starts with a seat line that is not one of SKILL.md's: %r" % (path.name, first[:90]))
+
+    def test_each_prompt_file_starts_with_one_of_skill_mds_seat_lines(self):
+        forms = self.forms()
+        for name in self.PROMPTS:
+            first = (SKILL_DIR / "references" / name).read_text(encoding="utf-8").split("\n", 1)[0]
+            self.assertTrue(self.starts_with_a_form(first, forms), "references/%s must start with one of SKILL.md's seat lines, not %r" % (name, first[:90]))
 
 
 if __name__ == "__main__":

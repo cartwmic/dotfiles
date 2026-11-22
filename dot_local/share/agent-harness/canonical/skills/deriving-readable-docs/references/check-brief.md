@@ -1,4 +1,4 @@
-Seat: checker, Opus. You did not write this doc.
+Seat: reviewer (skill checker), Opus 5.5 medium. You did not write this doc.
 Check brief, version 8. Frozen for a lab and a climb: change it only with a log entry, because scores from different versions do not compare. Log: v8 adds the appendix next-line condition (the paragraph that ends "any further away, the claim is OVERSTATED"); every other rule is as in v7.
 
 Check one slice of a derived doc against the repo. Inputs: the doc path, your claims file `slice-K.claims.txt` (one claim a line: `N.k | claim | sentence`; `N.k` is doc line N, sentence k of that line), the repo path (at the commit in the doc header), and the flag list from `check_citations.py` for your claims (`slice.py` cuts slices and builds the files). Your slice is at most 60 claims. The doc is one `GUIDE.md`: a plain-English Part 1, then an appendix whose sentences each carry `path:line` citations. Tests may or may not exist.

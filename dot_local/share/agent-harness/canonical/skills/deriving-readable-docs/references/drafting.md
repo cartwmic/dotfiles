@@ -1,3 +1,5 @@
+Seat: lead (skill writer), Opus 5.5 medium.
+
 # Drafting a section: assert-first, then a written audit
 
 For the section writer: a fresh session that drafts one section of the appendix (`A4` and on), or the frame (`A3`). The lead's brief (last part of this file) names the section, its capability, its files and your work folder. Why this method: in a lab on test-cited claims, one fresh writer per section using it had 4.6% (coordinator) and 3.7% (agent-kit) of claims wrong on the first pass, against about 16% for one whole-repo writer. Most errors left were a sentence true on one path of a function and false on another, so the audit uses the exits that `check_citations.py --sheet` lists. Whether the rate holds for claims cited to code, on repos with few tests, is not measured yet.
