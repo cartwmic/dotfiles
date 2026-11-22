@@ -586,7 +586,7 @@ class BatchSixDocsTest(unittest.TestCase):
     def test_the_reader_check_runs_on_the_shipped_guide(self):
         text = self.ref("reader-check.md")
         self.assertRegex(text, r"(?i)shipped guide")
-        self.assertIn("#4966", text)
+        self.assertIn("after the last fix round", text)
 
     def test_skill_step_2_scout_writes_surface_names_and_groups(self):
         self.assertIn("groups.txt", self.skill)

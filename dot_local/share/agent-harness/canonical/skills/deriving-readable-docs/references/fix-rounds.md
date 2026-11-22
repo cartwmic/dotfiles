@@ -29,3 +29,24 @@ The lead's cuts and narrowings, and the reader check's front-writer fix, change 
 2. `slice.py GUIDE.md <repo> --ids changed.txt --was <the guide as last cut> --out slices-final`, one fresh Opus checker per slice with `references/check-brief.md`, reports into `reports-final`, then `score.py <name>=reports-final --doc GUIDE.md --repo <repo> --slices slices-final`. Score before cutting: a claim the checker skipped shows there, and `final_recheck.py cut` refuses it.
 3. `python3 -I <skill>/scripts/final_recheck.py cut GUIDE.md <repo> --ids changed.txt --reports reports-final --clean` cuts every claim that is not HOLDS. An appendix claim loses its line and a Part 1 claim its sentence. A Part 1 sentence tagged to a cut line loses that tag, and is cut when it has no tag left. A sentence that keeps another tag stays, and the output lists it. Nothing is reworded, and there is no further round. It writes GUIDE.md in place and `GUIDE.clean.md`.
 4. Rerun `check_citations.py` and `lint_main.py`. A failure now, such as a Part 1 left without How to start, goes in the report: it is not rewritten. Do not run `assemble.py` again, because it builds the guide from the section files and would bring the cut text back.
+
+## Accepted limits
+
+These gaps were seen in real runs, are known, and are not fixed. A run that hits one reports it; none is a reason to add a second loop.
+
+Final re-check (step 12):
+
+- A cut can remove a condition that the line after it relied on (the checker's "very next line" rule). The cut guide is not checked again.
+- A Part 1 sentence that keeps one tag after another tag's line is cut is not checked again, so it can say more than the remaining tag shows.
+- The reader-check result is from before the final cuts, so a cut can change Part 1 after the reader saw it.
+- A cut can leave Part 1 without How to start or a Who it is for sentence. `lint_main.py` reports it and nothing repairs it.
+- A Part 1 sentence is not listed for the final re-check when its own words and tags are unchanged but the appendix line it is tagged to was narrowed. The checker judged it against the old appendix text.
+- `final_recheck.py cut` refuses an appendix line that holds several claims ("cut it by hand"), so that cut is done outside the script.
+
+Elsewhere:
+
+- Two checkers can disagree on identical text in the appendix and in Part 1.
+- `lint_brief.py` checks the files a brief names, not the files a writer then cites. The order of appendix lines is unchecked.
+- The reader's "no tools" rule is an instruction only: a delegate session cannot remove its file tools.
+- `early_exits.py` knows no project's own error macros (a repo's `err!` or `err_code!`). A sentence about a function that returns through one must name that return itself.
+- `surfaces.py` can resolve a config name to a test file, and `--resolve` reports a `scout.txt` line that carries a gloss as not found: write the name alone.

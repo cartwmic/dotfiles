@@ -53,6 +53,21 @@ class AssembleTest(unittest.TestCase):
             clean = Path(d, "GUIDE.clean.md")
             return code, out, err, guide.read_text() if guide.exists() else None, clean.read_text() if clean.exists() else None
 
+    def test_a_section_has_the_same_word_count_in_the_writers_check_and_in_the_assembled_guide(self):
+        """The heading is a word of the section both times: the budget a writer checks against is the budget the guide is held to."""
+        import re
+        def words(path, repo):
+            return int(re.search(r"(\d+) words\n", run("check_citations.py", str(path), repo)[1]).group(1))
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo)
+            self.assertEqual(run("assemble.py", d, repo, "--date", "2026-11-20")[0], 0)
+            guide = Path(d, "GUIDE.md").read_text()
+            start = guide.index("## A4 Tagging")
+            end = guide.index("\n## ", start + 1)
+            Path(d, "section.md").write_text(guide[start:end] + "\n")
+            self.assertEqual(words(Path(d, "section.md"), repo), words(Path(d, "A4.md"), repo))
+            self.assertEqual(words(Path(d, "A4.md"), repo), 14)  # the heading's 2 words are in it
+
     def test_the_guide_is_header_part_1_then_the_appendix_in_order(self):
         code, out, err, guide, _ = self.assemble()
         self.assertEqual(code, 0, err)
@@ -216,6 +231,14 @@ class SliceTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(out.splitlines(), ["slice 1: lines 1-%d, 1 claims, 0 flags" % (doc.split("\n").index("# Part 2: Appendix") ),
                                             "slice 2: lines %d-%d, 1 claims, 0 flags" % (doc.split("\n").index("# Part 2: Appendix") + 1, len(doc.splitlines()))])
+
+    def test_a_claim_keeps_no_stray_comma_where_its_citation_was_taken_out(self):
+        doc = ("# Part 2: Appendix\n\n## A4 Reading\n\nIt reads `src/cli.py:2`, then stops. [A4.0001]\n"
+               "It reads `src/cli.py:2`, `src/cli.py:3` and writes `src/cli.py:4`; it stops. [A4.0002]\n")
+        code, out, err, files = self.slices(doc)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l.split(" | ", 2)[2] for l in files["slice-1.claims.txt"].splitlines()],
+                         ["It reads, then stops. [A4.0001]", "It reads, and writes; it stops. [A4.0002]"])
 
     def test_bad_usage_exits_2(self):
         self.assertEqual(run("slice.py")[0], 2)

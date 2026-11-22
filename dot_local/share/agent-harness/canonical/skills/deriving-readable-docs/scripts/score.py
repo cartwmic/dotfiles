@@ -19,7 +19,7 @@ checker actually opened (`outside` for a glossary entry with no tag, which has n
 judged), a row names no path:line (a HOLDS row too), the rows are not as many as claims checked or do not add up to the Counts line, or two rows share an id.
 With --slices, a report that read fewer than one distinct line for every three claims also prints a depth warning (it never changes the exit code); the report records the
 lines read, not the tool calls, so tool calls are not judged. With --repo, a path:line must be a line of a file in the repo. With --slices DIR (the folder slice.py wrote), the report's line `Slice: slice-K` names
-DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only.
+DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only. Exit 1 too when a slice of DIR has no report (no report's `Slice:` line names it).
 Prints per repo, and pooled over all repos: claims, the four verdicts, errors, the rate (errors / claims) for all, the appendix and Part 1,
 and claims by cause. With --doc (repeatable) and --repo it adds words, errors per 1,000 words and words per claim, counted as
 check_citations.py counts them. With --out FILE.json it writes the numbers there and the printed text beside it as FILE.txt (a path, never a folder: a folder or a name that does not end in .json is a usage error).
@@ -201,6 +201,12 @@ def slice_sentences(slices, reports):
 
 def score_repo(name, specs, docs, repo, slices=None):
     reports = [parse_report(f, {"repo": os.path.realpath(repo) if repo else None, "slices": slices}) for s in specs for f in report_files(s)]
+    if slices:
+        named = {r["slice"] for r in reports}
+        absent = sorted((f[:-len(".claims.txt")] for f in os.listdir(slices) if f.endswith(".claims.txt")), key=lambda s: (len(s), s))
+        absent = [s for s in absent if s not in named]
+        if absent:
+            raise ScoreError("%s: no report names %s: a slice nobody checked is not scored" % (name, ", ".join(absent)))
     out = totals(reports)
     out["name"] = name
     out["warnings"] = [w for r in reports for w in r["warnings"]]

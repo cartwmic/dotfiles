@@ -329,7 +329,7 @@ def claim_ids(text, repo):
     for n, s in prose_sentences(text, repo):
         seen[n] = seen.get(n, 0) + 1
         tags = "".join(TAG.findall(s))
-        plain = re.sub(r"\s+([.!?])", r"\1", re.sub(r"\s+", " ", TAG.sub("", s))).strip()
+        plain = re.sub(r"\s+([.!?,;:])", r"\1", re.sub(r"\s+", " ", TAG.sub("", s))).strip()
         out.append(("%d.%d" % (n, seen[n]), n, plain + (" " + tags if tags else ""), "outside" if n in outside else "claim"))
     return out
 

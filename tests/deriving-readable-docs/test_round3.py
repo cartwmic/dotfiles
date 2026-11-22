@@ -58,6 +58,12 @@ class DepthFloorScoreTest(unittest.TestCase):
         self.assertEqual(code, 0, err + out)
         self.assertIn("claims checked: 3", out)
 
+    def test_a_slice_with_no_report_fails_and_is_named(self):
+        code, out, err = self.score({"part1-1.md": self.P1})
+        self.assertEqual(code, 1, out)
+        self.assertIn("slice-2", err)
+        self.assertNotIn("slice-1", err)
+
     def test_a_finding_line_headed_by_a_claim_id_is_counted(self):
         found = ("Slice: slice-2\nread | 11.1 | HOLDS | src/cli.py:3\nread | 12.1 | WRONG | src/cli.py:7\n"
                  "12.1 | WRONG | NAME | the words | what the code shows (src/cli.py:7) | the fix\n" + counts(2, 1, wrong=1))

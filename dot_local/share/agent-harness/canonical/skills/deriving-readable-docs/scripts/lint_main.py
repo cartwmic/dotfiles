@@ -3,7 +3,7 @@
 
 usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--fixed fixed-ids.txt]
 
-Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `doc:line: FAIL kind: detail` (or `warn`), then a count; exit 1 on any FAIL.
+Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `doc:line: FAIL kind: detail` (or `warn`), then the Part 1 word count (`Part 1: N words (limit 1000)`) and a count; exit 1 on any FAIL.
   part1-words       over 1,000 words fails, at any step, fix rounds included (headings and backticked names count; citations, printed blocks and tags do not)
   sentence-length   a sentence of more than 18 words fails, and so does an average above 14
   heading-depth     a heading deeper than two levels (###) fails
@@ -271,6 +271,7 @@ def main(argv):
         print("%s:%d: warn %s: %s" % (args[0], n, kind, detail))
     for n, kind, detail in fails:
         print("%s:%d: FAIL %s: %s" % (args[0], n, kind, detail))
+    print("Part 1: %d words (limit %d)" % (word_count(part1_slice(guide), os.path.realpath(args[1])), WORDS_MAX))
     print("%d failed checks, %d warnings" % (len(fails), len(warns)))
     return 1 if fails else 0
 

@@ -40,6 +40,30 @@ class SkillShapeTest(unittest.TestCase):
         self.assertLess(len(SKILL.split()), 1450)  # 1,400 before the final re-check step
 
 
+class SkillReadsAsGeneralTest(unittest.TestCase):
+    def test_no_skill_file_cites_a_ledger_id_or_names_the_owner(self):
+        found = []
+        for f in sorted(SKILL_DIR.rglob("*")):
+            if f.is_file() and "__pycache__" not in f.parts:
+                for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                    if re.search(r"(?i)decision #\d|\bask #?\d|ledger|\bMichael\b|(?<![\w&])#\d{3,}\b", line):
+                        found.append("%s:%d" % (f.relative_to(SKILL_DIR), n))
+        self.assertEqual(found, [])
+
+    def test_the_front_writer_is_told_the_lint_rules_and_that_the_jargon_cap_means_define_not_vaguer(self):
+        for rule in ("average of at most 14", "references/jargon.txt", "define the term", "keep the exact word", "prints the Part 1 word count"):
+            self.assertIn(rule, DRAFTING, rule)
+
+    def test_a_limit_exit_is_a_behaviour_and_never_not_relevant(self):
+        self.assertRegex(DRAFTING, r"rate-limit[^.]*exit is ordinary behaviour[^.]*never mark it `not relevant`")
+
+    def test_the_accepted_limits_are_written_down_next_to_the_final_recheck_text(self):
+        text = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^## Accepted limits$")
+        for limit in ("very next line", "reader-check result is from before the final cuts", "cut it by hand", "error macros"):
+            self.assertIn(limit, text, limit)
+
+
 class EveryStepIsAScriptCallTest(unittest.TestCase):
     def test_each_mechanical_script_is_called_by_its_path_and_exists(self):
         for name in CALLED_FROM_SKILL:

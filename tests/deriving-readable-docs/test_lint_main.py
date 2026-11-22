@@ -143,6 +143,15 @@ class LintMainTest(unittest.TestCase):
         self.assertNotIn("warn part1-words", out)
         self.assertEqual(lint(GUIDE.replace("## What you can do", filler(85) + "\n\n## What you can do"))[0], 0)  # under it
 
+    def test_the_part_1_word_count_is_printed_whether_or_not_a_check_fails(self):
+        import re
+        counts = []
+        for guide in (GUIDE, GUIDE.replace("## What you can do", "\n".join("Notes lets you %s. [A3.1]" % sentence(8) for _ in range(95)) + "\n\n## What you can do")):
+            out = lint(guide)[1]
+            counts.append(int(re.search(r"Part 1: (\d+) words \(limit 1000\)", out).group(1)))
+        self.assertLess(counts[0], 100)
+        self.assertGreater(counts[1], 1000)
+
     def test_a_guide_without_a_part_1_heading_fails(self):
         self.assertEqual(lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))[0], 1)
 
