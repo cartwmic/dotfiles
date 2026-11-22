@@ -412,6 +412,31 @@ class PrBody(unittest.TestCase):
             self.assertIsNone(check("gh pr create --body-file /tmp/pr-body.md", profile=profile))
 
 
+class PrBodyNamesPrOpen(unittest.TestCase):
+    """The refusal names `pr-open` as the shortest path, with its exact command form, and `pr-open` itself is not refused."""
+
+    def test_a_create_refusal_names_the_pr_open_create_form(self):
+        for text in ["gh pr create --title t --fill", "gh pr create --title t --body-file /tmp/pr-body.md", "gh pr new --body 'x'"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("Shortest path: `pr-open --title T --body-file F [--draft]`", message)
+                self.assertIn("pr-body-check --body-file F && gh pr create", message)  # the chained form is still named
+
+    def test_an_edit_refusal_names_the_pr_open_edit_form(self):
+        for text in ["gh pr edit 5 --body 'x'", "gh pr edit 5 --body-file /tmp/pr-5-body.md"]:
+            with self.subTest(text=text):
+                self.assertIn("`pr-open --edit N --body-file F`", check(text))
+
+    def test_the_body_file_name_refusal_names_it_too(self):
+        self.assertIn("Or use `pr-open --title T --body-file F [--draft]`", check("pr-body-check --body-file /tmp/pr-body.md && gh pr create --body-file /tmp/pr-body.md"))
+        self.assertIn("Or use `pr-open --edit N --body-file F`", check("pr-body-check --body-file /tmp/pr-body.md && gh pr edit 5 --body-file /tmp/pr-body.md"))
+
+    def test_pr_open_itself_passes_the_hook(self):
+        for text in ["pr-open --title t --body-file /tmp/pr-body.md", "pr-open --edit 5 --body-file /tmp/pr-body.md", "pr-open --title t --body-file - --draft"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+
 class PrBodyFileName(unittest.TestCase):
     """The body file's name: not a fixed shared name, and for an edit it names the PR number (2026-11-15: /tmp/pr-body.md put #347's body on #345)."""
     FIX = "F=$(mktemp /tmp/pr-N-body.XXXXXX)"
