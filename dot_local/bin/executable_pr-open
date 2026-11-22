@@ -99,12 +99,14 @@ else
   check pr-body-check --body-file "$copy" --base "$base"
 fi
 
-if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+# The branch's own upstream (origin/<head>) is pushed when it is ahead. A branch cut from origin/main tracks origin/main, so any other upstream is replaced.
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || upstream=
+if [ "$upstream" = "origin/$head" ]; then
   if [ -n "$(git rev-list '@{u}..HEAD' 2>/dev/null)" ]; then
-    git push -q || fail 2 "git push failed"
+    git push -q origin "HEAD:refs/heads/$head" || fail 2 "git push origin $head failed"
   fi
 else
-  git push -q -u origin "$head" || fail 2 "git push -u origin $head failed"
+  git push -q -u origin "HEAD:refs/heads/$head" || fail 2 "git push -u origin $head failed"
 fi
 
 set -- pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body-file "$copy"

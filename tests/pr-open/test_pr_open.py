@@ -137,6 +137,15 @@ class PrOpen(unittest.TestCase):
         self.run_open("--title", "T", "--body-file", str(self.body))
         self.assertEqual(self.git(self.origin, "rev-parse", "feature").strip(), self.git(self.repo, "rev-parse", "HEAD").strip())
 
+    def test_a_branch_cut_from_origin_main_is_pushed_under_its_own_name(self):
+        self.git(self.repo, "checkout", "-q", "-b", "cut", "--track", "origin/main")  # its upstream is origin/main, which a bare `git push` refuses
+        (self.repo / "a.txt").write_text("cut\n")
+        self.git(self.repo, "commit", "-q", "-am", "on cut")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cut", self.remote_branches())
+        self.assertEqual(self.git(self.repo, "rev-parse", "--abbrev-ref", "@{u}").strip(), "origin/cut")
+
     def test_a_gh_failure_exits_non_zero_with_a_one_line_reason(self):
         result = self.run_open("--title", "T", "--body-file", str(self.body), extra_env={"FAKE_GH_FAIL": "1"})
         self.assertEqual(result.returncode, 2)
