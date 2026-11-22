@@ -21,7 +21,7 @@ One fresh grader session (`Seat: reviewer (skill checker), Opus 5.5 medium`), br
 `python3 -I <skill>/scripts/coverage.py facts.txt grades.md GUIDE.md <repo> --label extend --work <out> --grow 1500` counts the grades (a quote that is not in the guide is dropped), routes each fact and writes `coverage-extend.todo.md`, `coverage-extend.json` and `coverage.md`. The to-do is cut to the word room: 25 words a fact, core facts first, then MISSING before PARTIAL. Facts that do not fit go under `## Did not fit` and no writer works them.
 
 - A PARTIAL fact is an edit: the to-do names the line (`edit line A4.3f9a in place`) and the writer changes it so it says the fact (the value, unit, default, limit, failure result and the condition it lacked), keeping its id. A PARTIAL fact never gets a second line.
-- A MISSING fact is a new line: the to-do names the nearest line of its section that cites the same file (`add next to A4.3f9a`) and the new line goes directly after it, never at the top of the section. When no line cites the file it goes after the section's last prose line.
+- A MISSING fact is a new line: the to-do names the nearest line of its section that cites the same file (`add next to A4.3f9a`) and the new line goes directly after it, never at the top of the section. When no line cites the file, its section is the one whose cited files share the longest folder prefix with the fact's file (A3 when none share a folder), and it goes after that section's last prose line.
 
 ## E3 Appendix writers
 

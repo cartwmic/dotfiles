@@ -8,6 +8,9 @@ import unittest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
+sys.path.insert(0, str(SCRIPTS))
+sys.dont_write_bytecode = True
+import coverage  # noqa: E402
 SKILL_DIR = SCRIPTS.parent
 EXTEND = (SKILL_DIR / "references/extend.md").read_text(encoding="utf-8")
 
@@ -106,6 +109,52 @@ class NumberFormTest(unittest.TestCase):
 
     def test_a_k_or_m_suffix_is_not_a_number_the_check_reads(self):
         self.assertTrue(self.passes("It reads 4k bytes at a time.", "const BLOCK = 4096;")[0])
+
+
+PLACE_GUIDE = """# Part 1: In plain English
+
+## What it is
+
+It syncs notes. [A3.aaaa]
+
+# Part 2: Appendix: technical detail
+
+## A3 Whole product
+
+The tool syncs notes. `src/app.py:1` [A3.aaaa]
+
+## A4 Networking
+
+A refused connection is retried. `src/net/retry.py:1` [A4.bbbb]
+
+## A5 Screens
+
+The list view shows notes. `ui/view/list.py:1` [A5.cccc]
+"""
+
+
+class PlacementTest(unittest.TestCase):
+    """F6: a MISSING fact whose file no line cites goes to the section whose cited files share the longest path prefix with it, not to A3."""
+
+    def section_of(self, cite):
+        files = {"src/app.py": "x\n", "src/net/retry.py": "x\n", "ui/view/list.py": "x\n", "src/net/tcp.py": "x\n" * 9, "ui/view/detail.py": "x\n" * 9,
+                 "ui/menu.py": "x\n" * 9, "tools/make.py": "x\n" * 9}
+        with make_repo(files) as repo:
+            rec = coverage.build([("F1", False, "failure", "A fact.", cite)], {"F1": ("MISSING", [])}, PLACE_GUIDE, repo, grow=1500)
+        return rec["rows"][0]["section"]
+
+    def test_the_section_with_the_longest_shared_path_prefix_wins(self):
+        self.assertEqual(self.section_of("src/net/tcp.py:3"), "A4")  # src/net/ beats src/
+        self.assertEqual(self.section_of("ui/view/detail.py:3"), "A5")
+
+    def test_a_shorter_shared_prefix_still_beats_the_fallback(self):
+        self.assertEqual(self.section_of("ui/menu.py:3"), "A5")
+
+    def test_a_fact_that_shares_no_folder_with_any_cited_file_goes_to_a3(self):
+        self.assertEqual(self.section_of("tools/make.py:3"), "A3")
+
+    def test_a_fact_whose_own_file_is_cited_keeps_the_section_that_cites_it_most(self):
+        self.assertEqual(self.section_of("src/net/retry.py:1"), "A4")
 
 
 class DuplicateLineTest(unittest.TestCase):

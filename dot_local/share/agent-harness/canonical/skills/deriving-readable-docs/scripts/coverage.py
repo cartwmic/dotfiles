@@ -23,7 +23,7 @@ GUIDE.md    the guide the grader saw. A quote that is not in it (tags, backticks
 Writes to DIR: `coverage-<label>.json` (counts, rates, each fact's grade, the room and the `--max-words` figure the check should use: the guide's words now plus the room),
 `coverage-<label>.todo.md` (what to edit and add) and one row in `coverage.md` (every label, side by side).
 A PARTIAL fact is routed to the guide line that holds its quote (`edit line A4.3f9a`): the line id to edit in place. A Part 1 quote is routed to the appendix line its tag
-points at. A MISSING fact goes under the appendix section whose citations name the same file (else A3), with the nearest line of that section that cites the file (`add next to A4.3f9a`).
+points at. A MISSING fact goes under the appendix section whose citations name the same file (else the one whose cited files share the longest folder prefix with its file, else A3), with the nearest line of that section that cites the file (`add next to A4.3f9a`).
 The core facts that fit are listed again as Part 1 candidates with the words left under the Part 1 cap. Prints one line: label, counts, COVERED percent, Part 1 words, the room.
 Exit 1 when a file is malformed (a fact with no row or two rows, a row for no fact, a fact citing a line the repo lacks, more than 100 facts, a label already recorded) or --min is not met; 2 on bad usage.
 Stdlib only.
@@ -162,10 +162,30 @@ def sections(guide, repo):
     return by_file
 
 
+def shared_folders(a, b):
+    """How many leading folders two repo paths share (`src/net/tcp.py` and `src/net/retry.py` share two)."""
+    n = 0
+    for x, y in zip(a.split("/")[:-1], b.split("/")[:-1]):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 def suggest(cite, by_file):
-    """The appendix section to add a fact to: the one with most citations of the fact's file, else A3."""
-    counts = by_file.get(CITE.match(cite).group(1), {})
-    return "A" + (min(counts, key=lambda s: (-counts[s], int(s))) if counts else "3")
+    """The appendix section to add a fact to: the one with most citations of the fact's file; else the one whose cited files share the longest folder prefix with it
+    (the lowest section number on a tie); else A3, because the fact row names no section."""
+    path = CITE.match(cite).group(1)
+    counts = by_file.get(path, {})
+    if counts:
+        return "A" + min(counts, key=lambda s: (-counts[s], int(s)))
+    near = {}
+    for other, secs in by_file.items():
+        depth = shared_folders(path, other)
+        for sec in secs:
+            near[sec] = max(near.get(sec, 0), depth)
+    best = max(near.values(), default=0)
+    return "A" + (min((s for s in near if near[s] == best), key=int) if best else "3")
 
 
 def guide_lines(guide, repo):
