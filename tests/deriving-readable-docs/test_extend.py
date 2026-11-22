@@ -165,9 +165,26 @@ class TodoGuardTest(Fixture):
         r = self.diff(swap(OLD, *self.EDIT), "--todo", self.todo("A4.bbbb", listed=False))
         self.assertEqual(r.returncode, 1)
 
-    def test_a_new_line_needs_no_to_do_row(self):
-        new = swap(OLD, "Notes are read from the folder. `src/app.py:20` [A4.cccc]\n", "Notes are read from the folder. `src/app.py:20` [A4.cccc]\nThe folder defaults to notes. `src/app.py:21` [A4.ffff]\n")
-        self.assertEqual(self.diff(new, "--todo", self.todo("A4.bbbb")).returncode, 0)
+    NEW = swap(OLD, "Notes are read from the folder. `src/app.py:20` [A4.cccc]\n", "Notes are read from the folder. `src/app.py:20` [A4.cccc]\nThe folder defaults to notes. `src/app.py:21` [A4.ffff]\n")
+
+    def missing(self, cite, listed=True, state="MISSING"):
+        self.write("coverage-extend.json", json.dumps({"rows": [{"id": "F2", "state": state, "line_id": None, "listed": listed, "cite": cite}]}))
+        return self.path("coverage-extend.json")
+
+    def test_a_new_line_that_a_listed_missing_row_explains_passes(self):
+        for cite in ("src/app.py:21", "src/app.py:18-25"):
+            r = self.diff(self.NEW, "--todo", self.missing(cite))
+            self.assertEqual((r.returncode, "NOT IN THE TO-DO" in r.stdout), (0, False), r.stdout)
+
+    def test_a_new_line_that_no_listed_missing_row_explains_fails_and_still_writes_the_slices(self):
+        for todo in (self.todo("A4.bbbb"), self.missing("src/app.py:90"), self.missing("src/net.py:21"), self.missing("src/app.py:21", listed=False), self.missing("src/app.py:21", state="PARTIAL")):
+            r = self.diff(self.NEW, "--todo", todo)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("NOT IN THE TO-DO new A4.ffff | The folder defaults to notes.", r.stdout)
+            self.assertTrue(Path(self.path("out/changed.txt")).read_text().strip())
+
+    def test_a_new_line_without_the_to_do_flag_is_not_checked(self):
+        self.assertEqual(self.diff(self.NEW).returncode, 0)
 
 
 class UsageTest(Fixture):

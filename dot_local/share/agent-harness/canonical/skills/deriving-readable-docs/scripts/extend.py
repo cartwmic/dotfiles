@@ -15,8 +15,10 @@ diff    compares NEW.md with OLD.md, the guide as the earlier pass shipped it, a
           Part 1, tagged line      a Part 1 sentence tagged to an appendix line that was added or edited: it may now say more than that line shows.
         Writes DIR/changed.txt (the ids, for `final_recheck.py` and `slice.py --ids`), DIR/context.txt, and slice-K.claims.txt, slice-K.flags.txt and slices.json as slice.py does.
         Prints the slices, then `unchanged N, checked M (new A, edited E, ...)`, and one `REMOVED A4.3f9a | sentence` row for each old appendix line the new guide lacks.
---todo  the `coverage-<label>.json` the pass worked from: an old appendix line the pass edited that the to-do did not name (a PARTIAL fact's line) is printed as
-        `NOT IN THE TO-DO A4.3f9a | sentence` and the exit code is 1 (the slices are written first). Run it right after the writers: a repair edit later is a different edit.
+--todo  the `coverage-<label>.json` the pass worked from, two ways to fail, each printed as `NOT IN THE TO-DO ...` with exit code 1 (the slices are written first):
+          an old appendix line the pass edited that the to-do did not name (a PARTIAL fact's line): `NOT IN THE TO-DO A4.3f9a | sentence`;
+          a new appendix line no listed MISSING row of the to-do explains (it cites no range that overlaps the cite of a listed MISSING row): `NOT IN THE TO-DO new A4.3f9a | sentence`.
+        Run it right after the writers: a repair edit later is a different edit.
 Exit 2 on bad usage. Stdlib only.
 """
 import json
@@ -26,7 +28,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import TAG, appendix_index, claim_ids  # noqa: E402
+from claims import TAG, appendix_index, claim_ids, line_items, split_lines  # noqa: E402
 from slice import MAX_CLAIMS, changed_since, cut_ids, emit, part1_lines  # noqa: E402
 
 
@@ -70,6 +72,23 @@ def unlisted_edits(old_text, text, repo, todo_path):
     return [(i, index[i][1]) for i in index if i in old_index and old_index[i][1] != index[i][1] and i not in named]
 
 
+def unlisted_new_lines(old_text, text, repo, todo_path):
+    """[(id, sentence)]: new appendix lines (an id the old guide lacks) that no listed MISSING row of the to-do explains: a line explains it when it cites the row's file in a range that overlaps the row's cite."""
+    wanted = []
+    for r in json.loads(read(todo_path))["rows"]:
+        m = r.get("listed") and r["state"] == "MISSING" and re.match(r"^(.+):(\d+)(?:-(\d+))?$", r.get("cite") or "")
+        if m:
+            wanted.append((m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))))
+    old_index, raw, out = appendix_index(old_text, repo), split_lines(text), []
+    for i, (n, sentence, _) in appendix_index(text, repo).items():
+        if i in old_index:
+            continue
+        cites = [c for _, _, cs, _ in line_items(raw[n - 1], repo) for c in cs]
+        if not any(p == path and a <= hi and lo <= b for p, a, b in cites for path, lo, hi in wanted):
+            out.append((i, sentence))
+    return out
+
+
 def diff(argv):
     args, opts, it = [], {}, iter(argv)
     for a in it:
@@ -102,6 +121,9 @@ def diff(argv):
     if "--todo" in opts:
         for i, sentence in unlisted_edits(old_text, text, repo, opts["--todo"]):
             print("NOT IN THE TO-DO %s | %s" % (i, sentence))
+            status = 1
+        for i, sentence in unlisted_new_lines(old_text, text, repo, opts["--todo"]):
+            print("NOT IN THE TO-DO new %s | %s" % (i, sentence))
             status = 1
     return status
 
