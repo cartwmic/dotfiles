@@ -27,6 +27,12 @@ Contract
   priority_class (homelab, optional: kgate, kgate-first or kgate-main; env KGATE_PRIORITY_CLASS overrides it), the exact tool
   versions the gate needs, 1Password references for its secrets. The pod checks the versions before CMD; a mismatch
   fails the job with the tool, expected and found.
+  services = ["docker"] (homelab, opt-in) with a [docker] table (image pinned by digest, cpu, cpu_limit, memory, memory_limit,
+  ready_s: an integer of at least 30): the pod gets a privileged docker-in-docker native sidecar (emptyDir data root, no hostPath,
+  no host socket; every container has a disk request and limit, and the data root's sizeLimit is the job's ephemeral_storage_limit, default 24Gi/40Gi with docker) and the job container, which stays unprivileged and keeps /cache, gets DOCKER_HOST. The pod runs in the
+  `kgate-docker` PriorityClass and counts against the `kgate-docker` quota; priority_class together with docker is refused.
+  A sidecar that does not become ready is exit 69 with its log tail and CMD not run. A sidecar that dies after CMD started
+  leaves CMD's exit code alone, prints a note and records `docker_sidecar`; `docker_peak` is its peak memory. Docs: "Docker jobs".
 - Exit status: CMD's own exit code when CMD ran to its end. 64 for a bad command line, or a CMD element that names a local file outside the worktree (the pod would not have it; nothing is submitted). 69 when the job could not
   start or finish on the cluster: unreachable, bad or missing profile, secret unreadable, pod never started, tree hash
   differs, tool version differs, the connection to a started pod was lost. 75 when the pod was still Unschedulable (PodScheduled=False)
@@ -148,6 +154,21 @@ CACHE_DESCEND = re.compile(r"u[0-9]+(/home(/\.cache)?|/nm)?")   # directories th
 END_GRACE_S = 10             # after CMD's end line, how long the exec stream may stay open before the client stops reading it (a process CMD left behind holds it open)
 MAX_ATTEMPTS = 2             # a job is rerun once when the cluster evicts its pod
 SERVICES = ("mssql",)        # sidecar services a profile for a kubectl cluster may ask for
+HOMELAB_SERVICES = ("docker",)   # ... and for the homelab: a privileged dind sidecar (docs/kgate.md, "Docker jobs"); a kubectl cluster is an employer's, and takes no privileged pod
+# A Docker job runs in the PriorityClass `kgate-docker` (homelab `k8s/kgate/priorityclass-docker.yaml`, value -100 like `kgate`). The class is what the homelab's ResourceQuota `kgate-docker`
+# is scoped to, so a profile may not choose another class with the service (coordinator decisions #5345, #5346).
+DOCKER_CLASS = "kgate-docker"
+DOCKER_HOST = "tcp://127.0.0.1:2375"   # the daemon listens on the pod's loopback only: no socket file, no group, no TLS
+DOCKER_READY_S = 120         # how long the dind sidecar has to pass its startup probe (`docker info`) when the profile says nothing
+DOCKER_SIDECAR_DISK, DOCKER_SIDECAR_DISK_LIMIT = "512Mi", "1Gi"   # the sidecar's own ephemeral-storage request and limit (its writable layer and logs). Every container has both, set here and not left to the API server (it admits a pod with none, and the kubelet enforces a pod's disk only when every container has a limit). Its images and layers are in the data root, an emptyDir sized by the pod's limit. They come out of the profile's disk: the job container gets the rest
+# A Docker pod's disk in total, when the profile says nothing (the plan's campaign default): the request, and the limit that is also the data root's sizeLimit. A profile that sets only the request gets the larger of this limit and the request.
+DOCKER_EPHEMERAL, DOCKER_EPHEMERAL_LIMIT = "24Gi", "40Gi"
+DOCKER_SETTLE_S, DOCKER_SETTLE_POLL_S = 5, 1   # after a CMD that failed, how long the pod's status is read again for the daemon's end: a docker client is cut off the moment the daemon dies, and the kubelet shows it about a second later
+# A quota that counts only some pods: its name -> the PriorityClass it counts. A job refused by one holds back only the jobs it counts (queued_behind); any other quota counts every pod.
+# The homelab repo's `k8s/kgate/resource-quota-docker.yaml` is the other end; its test (`k8s/kgate/test_kgate_quota.py`) pins the same name and scope. If the two drift, a Docker ticket holds back everyone, as before.
+SCOPED_QUOTAS = {DOCKER_CLASS: DOCKER_CLASS}
+# The sidecars kgate starts: the container's name -> what the messages call it and the record key for its peak memory.
+SIDECARS = {"mssql": {"label": "SQL Server", "peak": "service_peak_bytes"}, "dind": {"label": "docker", "peak": "docker_peak"}}
 SLOT_CPU = 4                 # the nodes' CPU is split into slots of this many CPUs (homelab ask 1187; the runners' share of it moved to agent-3, which kgate never uses: decision #3311). A homelab pod's CPU request is a whole number of slots
 MSSQL_PORT = 1433
 MSSQL_UID = 10001            # the SQL Server image's own user
@@ -182,7 +203,7 @@ USAGE = 64
 NOT_SCHEDULED = 75  # EX_TEMPFAIL: the homelab pod stayed Unschedulable for the whole scheduling deadline. Nothing else in kgate uses 75.
 SCHED_WAIT_S = 1800  # default scheduling deadline (--sched-wait, KGATE_SCHED_WAIT)
 # The PriorityClass values (the homelab repo's k8s/kgate/priorityclass*.yaml), for a pod whose spec has no resolved `priority` yet and for this job's own pod.
-PRIORITY_VALUES = {"kgate": -100, "kgate-first": -50, "kgate-main": -40}
+PRIORITY_VALUES = {"kgate": -100, DOCKER_CLASS: -100, "kgate-first": -50, "kgate-main": -40}
 QUEUE_POLL_S = 3      # a queued job looks at the local queue (and, when it is first in line, at the cluster) this often
 QUEUE_LOCAL_POLL_S = 0.3   # while only another client on this machine is ahead (a local file read, no cluster call)
 QUEUE_QUIET_S = 5     # a wait on a neighbour's placement is not reported until it lasts this long; a full cluster is reported at once
@@ -281,7 +302,7 @@ def parse_profile(text):
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Unavailable("profile is not valid TOML: %s" % e)
-    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "image_volumes", "local_hostnames", "github_ci", "install", "scratch_tmpfs", "tmp_tmpfs", "workers_per_cpu"}
+    known = {"image", "cpu", "memory", "memory_limit", "user", "prefer_nodes", "tools", "secrets", "services", "cluster", "ephemeral_storage", "ephemeral_storage_limit", "cpu_limit", "priority_class", "cache_pvc", "mssql", "docker", "image_volumes", "local_hostnames", "github_ci", "install", "scratch_tmpfs", "tmp_tmpfs", "workers_per_cpu"}
     if set(raw) - known - {"split"}:   # [split] is kgate-split's table in the same file (docs/kgate-split.md); kgate ignores it
         raise Unavailable("profile has unknown keys: " + ", ".join(sorted(set(raw) - known - {"split"})))
     tools = {}
@@ -312,14 +333,22 @@ def parse_profile(text):
     ephemeral = raw.get("ephemeral_storage")
     if ephemeral is not None and (not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral)):
         raise Unavailable("profile ephemeral_storage must look like 20Gi, got %r" % (ephemeral,))
+    docker_job = cluster == "homelab" and (raw.get("docker") is not None or "docker" in services)   # its disk has a default of its own (DOCKER_EPHEMERAL)
     ephemeral_limit = raw.get("ephemeral_storage_limit")
     if ephemeral_limit is not None:
         if cluster != "homelab":
             raise Unavailable("profile ephemeral_storage_limit is for the homelab only (a kubectl cluster's limit equals ephemeral_storage)")
         if not isinstance(ephemeral_limit, str) or not re.fullmatch(MEM_SIZE, ephemeral_limit):
             raise Unavailable("profile ephemeral_storage_limit must look like 20Gi, got %r" % (ephemeral_limit,))
-        if mem_bytes(ephemeral_limit) < mem_bytes(ephemeral or EPHEMERAL_DEFAULT):
-            raise Unavailable("profile ephemeral_storage_limit must be at least ephemeral_storage, got ephemeral_storage_limit=%r and ephemeral_storage=%r" % (ephemeral_limit, ephemeral or EPHEMERAL_DEFAULT))
+        request = ephemeral or (DOCKER_EPHEMERAL if docker_job else EPHEMERAL_DEFAULT)
+        if mem_bytes(ephemeral_limit) < mem_bytes(request):
+            raise Unavailable("profile ephemeral_storage_limit must be at least ephemeral_storage, got ephemeral_storage_limit=%r and ephemeral_storage=%r" % (ephemeral_limit, request))
+    if docker_job:   # a Docker pod always has a disk request and a limit the kubelet enforces (the data root's sizeLimit is the limit)
+        ephemeral = ephemeral or DOCKER_EPHEMERAL
+        ephemeral_limit = ephemeral_limit or max(DOCKER_EPHEMERAL_LIMIT, ephemeral, key=mem_bytes)
+        if mem_bytes(ephemeral) <= mem_bytes(DOCKER_SIDECAR_DISK) or mem_bytes(ephemeral_limit) <= mem_bytes(DOCKER_SIDECAR_DISK_LIMIT):
+            raise Unavailable("profile ephemeral_storage (%s) and ephemeral_storage_limit (%s) are the Docker pod's total disk and must be more than the sidecar's own %s and %s"
+                              % (ephemeral, ephemeral_limit, DOCKER_SIDECAR_DISK, DOCKER_SIDECAR_DISK_LIMIT))
     cpu_limit = raw.get("cpu_limit")   # at least `cpu` is checked in settings(), where cpu is known
     if cpu_limit is not None and (not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
         raise Unavailable("profile cpu_limit must be a whole number of at least 1, got %r" % (cpu_limit,))
@@ -334,6 +363,13 @@ def parse_profile(text):
         raise Unavailable("profile [mssql]" + away)
     if cluster != "homelab" and (mssql is not None or "mssql" in services):
         mssql = parse_mssql(mssql, services, cluster, away)
+    docker = raw.get("docker")
+    if docker is not None and cluster != "homelab":
+        raise Unavailable("profile [docker] is for the homelab only (a kubectl cluster takes no privileged pod)")
+    if cluster == "homelab" and (docker is not None or "docker" in services):
+        docker = parse_docker(docker, services)
+        if priority_class is not None:
+            raise docker_class_refused("profile priority_class")
     volumes = raw.get("image_volumes", [])
     if volumes != [] and cluster == "homelab":
         raise Unavailable("profile image_volumes" + away)
@@ -364,7 +400,7 @@ def parse_profile(text):
     return {"install": install, "scratch_tmpfs": scratch, "tmp_tmpfs": tmp, "workers_per_cpu": per_cpu, "image": raw.get("image"), "cpu": raw.get("cpu"), "memory": raw.get("memory"), "github_ci": github_ci,
             "memory_limit": raw.get("memory_limit"), "user": user, "prefer_nodes": prefer,
             "tools": tools, "secrets": secrets, "services": services, "cluster": cluster, "ephemeral_storage": ephemeral, "ephemeral_storage_limit": ephemeral_limit, "cpu_limit": cpu_limit, "priority_class": priority_class, "cache_pvc": cache_pvc,
-            "mssql": mssql, "image_volumes": volumes, "local_hostnames": hostnames}
+            "mssql": mssql, "docker": docker, "image_volumes": volumes, "local_hostnames": hostnames}
 
 
 
@@ -450,6 +486,23 @@ GH_TIMEOUT_S = 15
 IMAGE_DIGEST = r"[^@\s]+@sha256:[0-9a-f]{64}"
 
 
+def check_sidecar_sizes(name, cpu, cpu_limit, memory, memory_limit, ready):
+    """The sizes a sidecar's table (`name`: mssql or docker) states: whole CPUs (the limit, when there is one, at least the request), memory as 4Gi or 512Mi (the limit at least the request),
+    and the seconds the startup probe may take."""
+    for key, value in (("cpu", cpu), ("cpu_limit", cpu_limit)):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+            raise Unavailable("profile [%s] %s must be a whole number of at least 1, got %r" % (name, key, value))
+    if cpu_limit is not None and cpu_limit < cpu:
+        raise Unavailable("profile [%s] cpu_limit must be at least cpu" % name)
+    for key, value in (("memory", memory), ("memory_limit", memory_limit)):
+        if not isinstance(value, str) or not re.fullmatch(MEM_SIZE, value):
+            raise Unavailable("profile [%s] %s must look like 4Gi, got %r" % (name, key, value))
+    if mem_bytes(memory_limit) < mem_bytes(memory):
+        raise Unavailable("profile [%s] memory_limit must be at least memory" % name)
+    if not isinstance(ready, int) or isinstance(ready, bool) or ready < 30:
+        raise Unavailable("profile [%s] ready_s must be a whole number of seconds, at least 30" % name)
+
+
 def parse_mssql(table, services, cluster, away):
     """The [mssql] table of a profile: the SQL Server sidecar's image (pinned by digest) and its own sizes, which count toward the quota."""
     if cluster == "homelab":
@@ -464,23 +517,37 @@ def parse_mssql(table, services, cluster, away):
         raise Unavailable("profile [mssql] image must be pinned by digest (name@sha256:<64 hex>), got %r" % (image,))
     cpu = table.get("cpu", 2)
     cpu_limit = table.get("cpu_limit", cpu)
-    for key, value in (("cpu", cpu), ("cpu_limit", cpu_limit)):
-        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-            raise Unavailable("profile [mssql] %s must be a whole number of at least 1, got %r" % (key, value))
-    if cpu_limit < cpu:
-        raise Unavailable("profile [mssql] cpu_limit must be at least cpu")
     memory = table.get("memory", "4Gi")
     memory_limit = table.get("memory_limit", memory)
     ephemeral = table.get("ephemeral_storage", "4Gi")
-    for key, value in (("memory", memory), ("memory_limit", memory_limit), ("ephemeral_storage", ephemeral)):
-        if not isinstance(value, str) or not re.fullmatch(MEM_SIZE, value):
-            raise Unavailable("profile [mssql] %s must look like 4Gi, got %r" % (key, value))
-    if mem_bytes(memory_limit) < mem_bytes(memory):
-        raise Unavailable("profile [mssql] memory_limit must be at least memory")
     ready = table.get("ready_s", SERVICE_READY_S)
-    if not isinstance(ready, int) or isinstance(ready, bool) or ready < 30:
-        raise Unavailable("profile [mssql] ready_s must be a whole number of seconds, at least 30")
+    check_sidecar_sizes("mssql", cpu, cpu_limit, memory, memory_limit, ready)
+    if not isinstance(ephemeral, str) or not re.fullmatch(MEM_SIZE, ephemeral):
+        raise Unavailable("profile [mssql] ephemeral_storage must look like 4Gi, got %r" % (ephemeral,))
     return {"image": image, "cpu": cpu, "cpu_limit": cpu_limit, "memory": memory, "memory_limit": memory_limit, "ephemeral_storage": ephemeral, "ready_s": ready}
+
+
+def parse_docker(table, services):
+    """The [docker] table of a homelab profile: the dind sidecar's image (pinned by digest) and the CPU and memory its builds and containers use, which are the sidecar's, not the job
+    container's. Its disk is the pod's: the data root is an emptyDir, counted toward the job's ephemeral_storage_limit."""
+    if "docker" not in services or not isinstance(table, dict):
+        raise Unavailable("profile [docker] needs services = [\"docker\"], and services = [\"docker\"] needs a [docker] table with an image")
+    known = {"image", "cpu", "cpu_limit", "memory", "memory_limit", "ready_s"}
+    if set(table) - known:
+        raise Unavailable("profile [docker] has unknown keys: " + ", ".join(sorted(set(table) - known)))
+    image = table.get("image")
+    if not isinstance(image, str) or not re.fullmatch(IMAGE_DIGEST, image):
+        raise Unavailable("profile [docker] image must be pinned by digest (name@sha256:<64 hex>), got %r" % (image,))
+    cpu, cpu_limit = table.get("cpu", 2), table.get("cpu_limit")
+    memory = table.get("memory", "4Gi")
+    memory_limit = table.get("memory_limit", memory)
+    ready = table.get("ready_s", DOCKER_READY_S)
+    check_sidecar_sizes("docker", cpu, cpu_limit, memory, memory_limit, ready)
+    return {"image": image, "cpu": cpu, "cpu_limit": cpu_limit, "memory": memory, "memory_limit": memory_limit, "ready_s": ready}
+
+
+def docker_class_refused(source):
+    return Unavailable("%s cannot be set with services = [\"docker\"]: a Docker job always runs in the class %s, which the homelab's Docker quota is scoped to" % (source, DOCKER_CLASS))
 
 
 def evicted_message(status):
@@ -490,10 +557,21 @@ def evicted_message(status):
     return None
 
 
+def pod_requests(spec):
+    """What a pod asks of the cluster: the requests of its containers and of its native sidecars (init containers with restartPolicy Always, which keep running) added up.
+    An init container that ends before the job starts is not counted."""
+    boxes = list(spec.get("containers") or []) + [c for c in spec.get("initContainers") or [] if c.get("restartPolicy") == "Always"]
+    total = {"cpu": 0, "mem": 0, "disk": 0}
+    for box in boxes:
+        requests = ((box.get("resources") or {}).get("requests")) or {}
+        for key, name in (("cpu", "cpu"), ("mem", "memory"), ("disk", "ephemeral-storage")):
+            total[key] += parse_qty(str(requests.get(name, "0"))) or 0
+    return total
+
+
 def pod_shape(pod):
-    """What makes one kgate pod's wait say something about another's: what it requests, the node it is pinned to, and its priority."""
+    """What makes one kgate pod's wait say something about another's: what it requests, the node it is pinned to, its priority and its class."""
     spec = pod.get("spec") or {}
-    requests = (((spec.get("containers") or [{}])[0].get("resources") or {}).get("requests")) or {}
     pin = None
     required = ((spec.get("affinity") or {}).get("nodeAffinity") or {}).get("requiredDuringSchedulingIgnoredDuringExecution") or {}
     for term in required.get("nodeSelectorTerms") or []:
@@ -503,8 +581,7 @@ def pod_shape(pod):
     priority = spec.get("priority")
     if not isinstance(priority, int):
         priority = PRIORITY_VALUES.get(spec.get("priorityClassName"), PRIORITY_VALUES[PRIORITY_CLASS])
-    return {"cpu": parse_qty(str(requests.get("cpu", "0"))) or 0, "mem": parse_qty(str(requests.get("memory", "0"))) or 0,
-            "disk": parse_qty(str(requests.get("ephemeral-storage", "0"))) or 0, "pin": pin, "priority": priority}
+    return {**pod_requests(spec), "pin": pin, "priority": priority, "class": spec.get("priorityClassName")}
 
 
 def blocks(ahead, mine):
@@ -514,8 +591,30 @@ def blocks(ahead, mine):
             and all(ahead[k] <= mine[k] for k in ("cpu", "mem", "disk")))
 
 
+def quota_name(refusal):
+    """NAME from the text of a quota refusal, `exceeded quota: NAME, requested: ...`."""
+    return re.search(r"exceeded quota: ([^\s,]+)", refusal).group(1)
+
+
+def holds_back(ticket, mine):
+    """True when the queue ticket `ticket` of an earlier job holds the job of shape `mine` back. A ticket a quota refused (its "quota" is that quota's name) holds back
+    every job that quota counts and does not weigh what they ask, so the job keeps its place in line: an unscoped quota counts every pod, a scoped one (SCOPED_QUOTAS) only the pods of
+    its class. A ticket from an older client (`true`) or naming a quota this client does not know counts as unscoped, so it holds back everyone, as it always did. Any other
+    ticket holds back the jobs it blocks()."""
+    quota = ticket.get("quota")
+    if not quota:
+        return blocks(ticket["shape"], mine)
+    scope = SCOPED_QUOTAS.get(quota)
+    return scope is None or scope == mine.get("class")
+
+
 def mem_bytes(size):
     return int(size[:-2]) << (20 if size.endswith("Mi") else 30)
+
+
+def size_minus(size, part):
+    """`size` less `part` (both like 24Gi or 512Mi), in whole Mi."""
+    return "%dMi" % ((mem_bytes(size) - mem_bytes(part)) >> 20)
 
 
 def check_settings(image, cpu, memory, memory_limit=None):
@@ -555,7 +654,7 @@ def check_cpu_limit(prof, cpu):
 def slot_cpu(cpu, service_cpu=0):
     """The job container's CPU request on the homelab: the pod's total request is rounded up to a whole number of SLOT_CPU slots (1 to 3 -> 4, 4 -> 4, 6 -> 8, 12 -> 12), so no CPU is left stranded.
     `cpu` is what the profile or --cpu asks for, `service_cpu` the service containers' requests, which stay as they are: the job container takes the rise
-    (no homelab profile can have a service today, so the caller passes 0; the sidecar case is here for the day one can)."""
+    (a Docker job's `[docker] cpu`: its sidecar's request is part of the pod's, so the pod rounds up as a whole)."""
     total = cpu + service_cpu
     return -(-total // SLOT_CPU) * SLOT_CPU - service_cpu
 
@@ -585,10 +684,11 @@ def tmpfs_volumes(scratch=None, tmp=None):
             for name, size, path in (("scratch", scratch, SCRATCH_PATH), ("tmp", tmp, TMP_PATH)) if size]
 
 
-def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None, scratch=None, per_cpu=1, tmp=None):
-    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request;
+def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None, scratch=None, per_cpu=1, tmp=None, docker=None):
+    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request (with `docker`, the pod's total: the sidecar's share is taken out for the job container);
     `ephemeral_limit` is the limit (the kubelet evicts a pod that writes past it); unset, it is EPHEMERAL_LIMIT_DEFAULT, or the request when that is larger.
-    `priority_class` is the pod's PriorityClass; `cpu_limit` is the CPU limit, unset by default (no CPU limit)."""
+    `priority_class` is the pod's PriorityClass; `cpu_limit` is the CPU limit, unset by default (no CPU limit). `docker` is the profile's [docker] table: the pod then has a
+    privileged dind sidecar and the job container finds its daemon (docker_container)."""
     labels = {"app": "kgate", "kgate-job": job}
     items = []
     if secret_env:
@@ -605,8 +705,12 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
            {"name": "KGATE_NODE", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
            {"name": "CARGO_BUILD_JOBS", "value": str(cpu)}, {"name": "RAYON_NUM_THREADS", "value": str(cpu)},
            {"name": "MAKEFLAGS", "value": "-j%d" % cpu}] + tuning_env(cpu, per_cpu, scratch, taken=secret_env or ())
+    if docker:
+        env.append({"name": "DOCKER_HOST", "value": DOCKER_HOST})
     limits = {"memory": memory_limit or memory}
-    limits["ephemeral-storage"] = ephemeral_limit or max(EPHEMERAL_LIMIT_DEFAULT, ephemeral, key=mem_bytes)
+    limits["ephemeral-storage"] = disk_limit = ephemeral_limit or max(EPHEMERAL_LIMIT_DEFAULT, ephemeral, key=mem_bytes)
+    if docker:   # the profile's disk is the pod's total: the sidecar's share comes out of it, and the job container gets the rest
+        ephemeral, limits["ephemeral-storage"] = size_minus(ephemeral, DOCKER_SIDECAR_DISK), size_minus(disk_limit, DOCKER_SIDECAR_DISK_LIMIT)
     if cpu_limit is not None:
         limits["cpu"] = str(cpu_limit)
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
@@ -635,10 +739,29 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
     for volume, mount in tmpfs_volumes(scratch, tmp):
         pod["volumes"].append(volume)
         container["volumeMounts"].append(mount)
+    if docker:
+        pod["initContainers"] = [docker_container(docker)]
+        pod["volumes"].append({"name": "docker-data", "emptyDir": {"sizeLimit": disk_limit}})   # the data root can never outgrow the pod's limit
     if pull:
         pod["imagePullSecrets"] = [{"name": job + "-pull"}]
     items.append({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": job, "labels": labels}, "spec": pod})
     return {"apiVersion": "v1", "kind": "List", "items": items}
+
+
+def docker_container(svc):
+    """The Docker daemon for a job, a native sidecar (an init container that keeps running): the job container starts only once its startup probe (`docker info`) passes. It is
+    the pod's one privileged container. It listens on the pod's loopback, and its data root /var/lib/docker is an emptyDir only it mounts, so the layers count toward the pod's
+    ephemeral-storage limit and go with the pod. It has no hostPath and no socket. The image's own entrypoint starts the daemon from `args`, as the ARC runners' dind does."""
+    limits = {"memory": svc["memory_limit"], "ephemeral-storage": DOCKER_SIDECAR_DISK_LIMIT}
+    if svc["cpu_limit"] is not None:
+        limits["cpu"] = str(svc["cpu_limit"])
+    return {"name": "dind", "image": svc["image"], "imagePullPolicy": "IfNotPresent", "restartPolicy": "Always",
+            "args": ["dockerd", "--host=" + DOCKER_HOST],
+            "env": [{"name": "DOCKER_TLS_CERTDIR", "value": ""}, {"name": "DOCKER_HOST", "value": DOCKER_HOST}],
+            "securityContext": {"privileged": True},
+            "startupProbe": {"exec": {"command": ["docker", "info"]}, "periodSeconds": 5, "timeoutSeconds": 5, "failureThreshold": max(1, svc["ready_s"] // 5)},
+            "resources": {"requests": {"cpu": str(svc["cpu"]), "memory": svc["memory"], "ephemeral-storage": DOCKER_SIDECAR_DISK}, "limits": limits},
+            "volumeMounts": [{"name": "docker-data", "mountPath": "/var/lib/docker"}]}
 
 
 def cluster_file(name):
@@ -1937,6 +2060,7 @@ class Job:
         self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
         self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
         self.mssql = None       # the SQL Server sidecar's settings, when the profile asks for one
+        self.sidecar = None     # the name of the pod's sidecar container, when it has one: "mssql" or "dind" (SIDECARS)
         self.secret = None      # its generated password: kept out of the log, the record and every message (see mask())
         self.carry = b""        # the end of the last chunk, held back in case it is the start of the password
 
@@ -2001,7 +2125,7 @@ class Job:
         o = self.o
         path = o.profile or os.path.join(wt, "kgate.toml")
         prof = {"image": None, "cpu": None, "memory": None, "memory_limit": None, "user": "1000:1000", "prefer_nodes": True, "tools": {}, "secrets": {},
-                "services": [], "cluster": "homelab", "github_ci": None, "install": {"npm": False}, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "image_volumes": [], "local_hostnames": [], "scratch_tmpfs": None, "tmp_tmpfs": None, "workers_per_cpu": 1}
+                "services": [], "cluster": "homelab", "github_ci": None, "install": {"npm": False}, "ephemeral_storage": None, "ephemeral_storage_limit": None, "cpu_limit": None, "priority_class": None, "mssql": None, "docker": None, "image_volumes": [], "local_hostnames": [], "scratch_tmpfs": None, "tmp_tmpfs": None, "workers_per_cpu": 1}
         if os.path.exists(path):
             with open(path) as f:
                 prof = parse_profile(f.read())
@@ -2026,19 +2150,25 @@ class Job:
         env_class = os.environ.get("KGATE_PRIORITY_CLASS")   # wins over the profile key, like the flag over KGATE_SCHED_WAIT
         if env_class:
             check_priority_class(env_class, prof["cluster"], "KGATE_PRIORITY_CLASS")
+            if prof["docker"]:
+                raise docker_class_refused("KGATE_PRIORITY_CLASS")
             prof["priority_class"] = env_class
+        if prof["docker"]:
+            prof["priority_class"] = DOCKER_CLASS
         if self.kcfg:
             self.use_kubectl(image, prof, cpu)
         else:
-            asked, cpu = cpu, slot_cpu(cpu)
+            sidecar_cpu = prof["docker"]["cpu"] if prof["docker"] else 0
+            asked, cpu = cpu, slot_cpu(cpu, sidecar_cpu)
             if cpu != asked:
-                self.note("cpu request raised from %d to %d: a homelab pod takes whole %d-cpu slots" % (asked, cpu, SLOT_CPU))
+                self.note("cpu request raised from %d to %d: a homelab pod takes whole %d-cpu slots%s" % (asked, cpu, SLOT_CPU, " (with the docker sidecar's %d)" % sidecar_cpu if sidecar_cpu else ""))
             check_cpu_limit(prof, cpu)
             self.rec["priority_class"] = prof["priority_class"] or PRIORITY_CLASS   # the class the pod runs in; a kubectl cluster's own policy decides there, so the record stays null
             if prof["cpu_limit"] is not None:
                 self.rec["cpu_limit"] = prof["cpu_limit"]   # only when the profile sets one (a kubectl cluster always records the effective limit)
-        if prof["services"] and not self.kcfg:     # a kubectl cluster offers SERVICES (checked when the profile is read); the homelab offers none
-            raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(prof["services"]))
+        unoffered = sorted(set(prof["services"]) - set(HOMELAB_SERVICES))
+        if unoffered and not self.kcfg:     # a kubectl cluster offers SERVICES (checked when the profile is read); the homelab offers HOMELAB_SERVICES
+            raise Unavailable("the gate needs %s, which kgate cannot provide; this gate cannot run on kgate" % ", ".join(unoffered))
         if o.node in NEVER_NODES:
             raise Unavailable("node %s is excluded from kgate" % o.node)
         if o.node in OVERFLOW_NODES:
@@ -2164,9 +2294,10 @@ class Job:
         not made to wait behind PR gates), and one flock around "look, create, wait for the scheduler's answer", so two clients never both see room that only one
         of them gets. A job that cannot read the waiting pods creates its pod as before. The wait counts against --wait.
         A create the namespace's ResourceQuota refuses is a wait too: the job releases the flock, says "queued: waiting for quota: ...", sleeps with the quota backoff
-        and tries again. It ends at --wait like the kubectl cluster's quota wait. The refusal marks its ticket ("quota": true), and a marked ticket holds back every job
-        ordered after it, whatever that job asks: the job keeps its place in line, so a stream of small jobs that fit cannot take the quota a large one waits for
-        (a 12-CPU job waited out its whole --wait behind 4-CPU jobs that retry every 3 s). The flock is still let go for the sleep, so a job ordered before it
+        and tries again. It ends at --wait like the kubectl cluster's quota wait. The refusal marks its ticket ("quota": the quota's name), and a marked ticket holds back every job
+        ordered after it that the quota counts, whatever that job asks (holds_back): the job keeps its place in line, so a stream of small jobs that fit cannot take the quota a large one
+        waits for (a 12-CPU job waited out its whole --wait behind 4-CPU jobs that retry every 3 s). The `kgate-docker` quota counts only Docker jobs, so a Docker job it refuses holds
+        back only later Docker jobs and not the ordinary ones (coordinator decision #5350). The flock is still let go for the sleep, so a job ordered before it
         (a higher priority, or an earlier one) is placed meanwhile, and nobody sleeps holding it."""
         mine = pod_shape(next(i for i in manifests["items"] if i["kind"] == "Pod"))
         queue = os.path.join(self.state, "queue")
@@ -2196,7 +2327,7 @@ class Job:
                                         break
                                     why, pause = quota.refused(refused)   # the flock is let go below, before the sleep
                                     t_wait = t_wait or quota.since   # the queue wait starts no later than the quota wait it counts, whatever the delete below takes
-                                    entry["quota"] = True   # the job keeps its place: while this ticket is there, no job ordered after it is placed (queued_behind)
+                                    entry["quota"] = quota_name(refused)   # the job keeps its place: while this ticket is there, no job ordered after it that this quota counts is placed (queued_behind)
                                     write_json_atomic(ticket, entry)
                             finally:
                                 fcntl.flock(lock, fcntl.LOCK_UN)
@@ -2223,7 +2354,7 @@ class Job:
 
     def queued_behind(self, queue, mine):
         """What holds this job back among the clients on this machine: a live ticket made before this one (the higher priority first, then the older) that blocks it, or
-        that the namespace quota refused (it holds back every later job, whatever that asks, so a job the quota refuses keeps its place). None when there is none."""
+        that a quota refused and counts this job (holds_back: it holds back every such later job, whatever that asks, so a job the quota refuses keeps its place). None when there is none."""
         order = lambda t: (-t["shape"]["priority"], t["t"], t["id"])
         tickets = []
         for name in os.listdir(queue):
@@ -2241,7 +2372,7 @@ class Job:
                 continue
             tickets.append(t)
         mine_key = (-mine["priority"], self.t0, self.id)
-        ahead = next((t for t in sorted(tickets, key=order) if order(t) < mine_key and (t.get("quota") or blocks(t["shape"], mine))), None)
+        ahead = next((t for t in sorted(tickets, key=order) if order(t) < mine_key and holds_back(t, mine)), None)
         if ahead and ahead.get("quota"):
             return "behind %s, which the quota refused and was first" % ahead["id"]
         return "behind %s, which asks no more of the cluster and was first" % ahead["id"] if ahead else None
@@ -2305,7 +2436,7 @@ class Job:
             failing_since = None
             status = json.loads(done.stdout).get("status", {})
             cs = (status.get("containerStatuses") or [{}])[0]
-            if self.mssql:
+            if self.sidecar:
                 self.check_sidecar(status)
             waiting = (cs.get("state") or {}).get("waiting") or {}
             ready = status.get("phase") == "Running" and cs.get("ready")
@@ -2347,32 +2478,65 @@ class Job:
             time.sleep(2)
 
     def job_container(self):
-        return ["-c", "job"] if self.mssql else []     # a pod with a sidecar has two containers: say which one runs CMD
+        return ["-c", "job"] if self.sidecar else []     # a pod with a sidecar has two containers: say which one runs CMD
+
+    def sidecar_status(self, status):
+        """The pod status's entry for the sidecar (a native sidecar reports under initContainerStatuses), or None."""
+        return next((c for c in status.get("initContainerStatuses") or [] if c.get("name") == self.sidecar), None)
 
     def check_sidecar(self, status):
-        """Note when the SQL Server sidecar passes its startup probe; fail fast, with its last log lines, when it crashes or restarts."""
-        sc = next((c for c in status.get("initContainerStatuses") or [] if c.get("name") == "mssql"), None)
+        """Note when the sidecar passes its startup probe; fail fast, with its last log lines, when it crashes or restarts."""
+        sc = self.sidecar_status(status)
         if not sc:
             return
+        label = SIDECARS[self.sidecar]["label"]
         if sc.get("started") and "service_ready_s" not in self.rec:
             self.rec["service_ready_s"] = round(time.time() - self.t_pod, 1)
-            self.note("SQL Server ready after %.1fs" % self.rec["service_ready_s"])
+            self.note("%s ready after %.1fs" % (label, self.rec["service_ready_s"]))
         state = sc.get("state") or {}
         crashed = (state.get("terminated") or {}) or (sc.get("lastState") or {}).get("terminated") or {}
         if crashed or sc.get("restartCount"):
-            logs = self.cluster.run(["logs", self.pod, "-c", "mssql", "--tail=15"])
+            logs = self.cluster.run(["logs", self.pod, "-c", self.sidecar, "--tail=15"])
             tail = (logs.stdout + logs.stderr).decode(errors="replace").strip()
-            raise Unavailable("the SQL Server sidecar did not become ready (exit %s, %d restarts); its last log lines:\n%s (CMD not run)"
-                              % (crashed.get("exitCode", "?"), sc.get("restartCount") or 0, tail))
+            raise Unavailable("the %s sidecar did not become ready (exit %s, %d restarts); its last log lines:\n%s (CMD not run)"
+                              % (label, crashed.get("exitCode", "?"), sc.get("restartCount") or 0, tail))
+
+    def docker_ended(self, seen):
+        """Whether the Docker daemon ended during the job, read once from the pod's status after CMD ends. If it did, say so, with its last log lines, and keep it in the record
+        (`docker_sidecar`): CMD's exit code is CMD's whatever the daemon did. A native sidecar is restarted by the kubelet, so there is no mid-run watch. CMD that failed may have failed
+        because the daemon died, and the kubelet shows that about a second after the docker client is cut off, so after a failed CMD the status is read again for DOCKER_SETTLE_S.
+        Best effort: a status that cannot be read says nothing."""
+        end = re.fullmatch(r"\d+ exit (\d+)", seen.get("end", ""))
+        stop = time.time() + (DOCKER_SETTLE_S if not end or end.group(1) != "0" else 0)
+        while True:
+            got = self.cluster.run(["get", "pod", self.pod, "-o", "json"])
+            try:
+                sc = self.sidecar_status(json.loads(got.stdout).get("status") or {}) if got.returncode == 0 else None
+            except ValueError:
+                sc = None
+            restarts = (sc or {}).get("restartCount") or 0
+            stopped = ((sc or {}).get("state") or {}).get("terminated")
+            if restarts or stopped:
+                break
+            if time.time() >= stop:
+                return False
+            time.sleep(DOCKER_SETTLE_POLL_S)
+        last = stopped or (sc.get("lastState") or {}).get("terminated") or {}
+        self.rec["docker_sidecar"] = {"restarts": restarts, "exit": last.get("exitCode"), "reason": last.get("reason")}
+        logs = self.cluster.run(["logs", self.pod, "-c", "dind", "--tail=15"] + (["--previous"] if restarts else []))
+        tail = (logs.stdout + logs.stderr).decode(errors="replace").strip()
+        self.note("the docker daemon %s during the job (%d restarts, last exit %s, reason %s); CMD's exit code is unchanged%s"
+                  % ("restarted" if restarts else "stopped", restarts, last.get("exitCode"), last.get("reason"), "; its last log lines:\n" + tail if tail else ""))
+        return True
 
     def sidecar_peak(self):
         """Peak memory of the sidecar's own cgroup, read after CMD ends. Best effort: the record says unknown when it cannot be read."""
-        read = self.cluster.run(["exec", self.pod, "-c", "mssql", "--", "sh", "-c",
+        read = self.cluster.run(["exec", self.pod, "-c", self.sidecar, "--", "sh", "-c",
                                  'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current 2>/dev/null'])
         value = read.stdout.decode(errors="replace").strip()
         if read.returncode == 0 and value.isdigit():
-            self.rec["service_peak_bytes"] = int(value)
-            self.note("peak mssql %s cgroup" % value)
+            self.rec[SIDECARS[self.sidecar]["peak"]] = int(value)
+            self.note("peak %s %s cgroup" % (self.sidecar, value))
 
     def sidecar_cpu(self):
         """CPU time of the sidecar's own cgroup (cpu.stat usage_usec), read after CMD ends. Best effort: null in the record when it cannot be read."""
@@ -2512,6 +2676,7 @@ class Job:
                      "scratch": prof["scratch_tmpfs"], "tmp": prof["tmp_tmpfs"], "per_cpu": prof["workers_per_cpu"]}
             if prof["mssql"]:
                 self.mssql = prof["mssql"]
+                self.sidecar = "mssql"
                 self.secret = new_password()        # throwaway, for this job's pods only: set in the pod spec of both containers, never logged or recorded
                 extra["password"] = self.secret
                 self.rec["services"] = ["mssql"]
@@ -2526,7 +2691,10 @@ class Job:
             manifests = pod_manifests(self.id, image, cpu, mem, o.node, secret_env, pull, job["uid"], memory_limit=mem_limit, prefer_nodes=prof["prefer_nodes"],
                                       ephemeral=prof["ephemeral_storage"] or EPHEMERAL_DEFAULT, ephemeral_limit=prof["ephemeral_storage_limit"],
                                       priority_class=prof["priority_class"] or PRIORITY_CLASS, cpu_limit=prof["cpu_limit"],
-                                      scratch=prof["scratch_tmpfs"], tmp=prof["tmp_tmpfs"], per_cpu=prof["workers_per_cpu"])
+                                      scratch=prof["scratch_tmpfs"], tmp=prof["tmp_tmpfs"], per_cpu=prof["workers_per_cpu"], docker=prof["docker"])
+            if prof["docker"]:
+                self.sidecar = "dind"
+                self.rec["services"] = ["docker"]
         del secret_env, pull
         while True:
             try:
@@ -2552,8 +2720,10 @@ class Job:
         self.note("pod running on %s" % self.rec["node"])
         self.register()  # again, now that the node is known (kgate cancel --list shows it)
         seen, transport = self.execute(tar_bytes)
-        if self.mssql:
+        restarted = self.sidecar == "dind" and "running" in seen and self.docker_ended(seen)   # a job whose CMD never started has no daemon death to report
+        if self.sidecar and not restarted:   # after a restart the cgroup is the new container's, and its peak says nothing about the job
             self.sidecar_peak()
+        if self.mssql:
             self.sidecar_cpu()
         self.rec["ran"] = self.rec["ran"] or "running" in seen     # CMD started in some attempt
         peak = seen.get("peak", "").split()

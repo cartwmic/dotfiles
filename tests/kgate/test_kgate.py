@@ -684,15 +684,17 @@ if a[:2] == ["create", "-f"]:
                 else:
                     open(path, "w").close()
                 continue
-            asked = int(item["spec"]["containers"][0]["resources"]["requests"]["cpu"])
+            spec = item["spec"]   # the pod's request is its containers' and its native sidecars' (init containers that keep running) together
+            asked = sum(int(c["resources"]["requests"]["cpu"]) for c in spec["containers"] + [i for i in spec.get("initContainers", []) if i.get("restartPolicy") == "Always"])
+            counted = not os.environ.get("FAKE_QUOTA_CLASS") or spec.get("priorityClassName") == os.environ["FAKE_QUOTA_CLASS"]   # a scoped quota (FAKE_QUOTA_CLASS) counts and refuses only pods of that PriorityClass
             if os.environ.get("FAKE_CREATE_ERROR"):
                 sys.stderr.write(os.environ["FAKE_CREATE_ERROR"] + "\n"); failed = True
-            elif used + asked > limit:
-                sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "%s" is forbidden: exceeded quota: scratch-cpu, requested: requests.cpu=%d, used: requests.cpu=%d, limited: requests.cpu=%d\n'
-                                 % (name, asked, used, limit)); failed = True
+            elif counted and used + asked > limit:
+                sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "%s" is forbidden: exceeded quota: %s, requested: requests.cpu=%d, used: requests.cpu=%d, limited: requests.cpu=%d\n'
+                                 % (name, os.environ.get("FAKE_QUOTA_NAME", "scratch-cpu"), asked, used, limit)); failed = True
             else:
                 log({"created": name})
-                if os.environ.get("FAKE_QUOTA_HOLD"):
+                if os.environ.get("FAKE_QUOTA_HOLD") and counted:
                     os.makedirs(held, exist_ok=True)
                     open(os.path.join(held, name), "w").write(str(asked))
         sys.exit(1 if failed else 0)
@@ -735,7 +737,26 @@ if a[:2] == ["get", "pod"]:
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
     else:
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/7 nodes are available: 7 Insufficient cpu."}]}
+    if os.environ.get("FAKE_DOCKER"):   # the pod has a dind sidecar: a native sidecar reports under initContainerStatuses
+        healthy = {"name": "dind", "started": True, "restartCount": 0, "state": {"running": {}}}
+        died = {"name": "dind", "started": True, "restartCount": 1, "state": {"running": {}}, "lastState": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}
+        stopped = {"name": "dind", "started": True, "restartCount": 0, "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}
+        side, ended = healthy, os.path.exists(os.path.join(fake, "cmd-ended"))
+        if os.environ["FAKE_DOCKER"] == "crash":
+            st = {"phase": "Pending", "initContainerStatuses": [{"name": "dind", "started": False, "restartCount": 1, "state": {"terminated": {"exitCode": 127}}}]}
+        elif ended:   # reads of the pod after CMD is over are counted (<fake>/ended-reads); "dies" and "stopped" show the daemon gone, FAKE_DOCKER_LAG reads late, as the kubelet does
+            reads = os.path.join(fake, "ended-reads")
+            n = int(open(reads).read()) + 1 if os.path.exists(reads) else 1
+            open(reads, "w").write(str(n))
+            if os.environ["FAKE_DOCKER"] in ("dies", "stopped") and n > int(os.environ.get("FAKE_DOCKER_LAG", "0")):
+                side = died if os.environ["FAKE_DOCKER"] == "dies" else stopped
+        if st.get("phase") == "Running":
+            st["initContainerStatuses"] = [side]
     print(json.dumps({"spec": {"nodeName": "fake-node"}, "status": st})); sys.exit(0)
+if a[0] == "logs":   # the sidecar's log: what the failing daemon printed
+    print("fake dockerd log: line one\nfake dockerd log: cannot start"); sys.exit(0)
+if a[0] == "exec" and "-c" in a and a[a.index("-c") + 1] == "dind":   # the sidecar's cgroup, read after CMD
+    print("734003200"); sys.exit(0)
 if a[0] == "exec" and "-i" in a:
     job = a[2]
     data = sys.stdin.buffer.read()
@@ -756,7 +777,9 @@ if a[0] == "exec" and "-i" in a:
         sys.stdout.buffer.write(line); sys.stdout.buffer.flush()
         if os.environ.get("FAKE_DIE") and b"]: running" in line:
             proc.kill(); open(os.path.join(fake, "died"), "w").write("x"); sys.stderr.write("error: lost connection to pod\n"); sys.exit(255)
-    sys.exit(proc.wait())
+    code = proc.wait()
+    open(os.path.join(fake, "cmd-ended"), "w").write("x")   # CMD is over: a dind sidecar the fake kills, dies from here on (FAKE_DOCKER)
+    sys.exit(code)
 if a[0] == "exec" and a[-1] == "/sys/fs/cgroup/memory.events":   # the container's cgroup, read after the pod was lost
     print("low 0\nhigh 0\nmax 0\noom 0\noom_kill %s" % os.environ.get("FAKE_OOM_KILLS", "0")); sys.exit(0)
 if a[0] == "exec":
@@ -1428,10 +1451,10 @@ class Black(unittest.TestCase):
         self.assertIn("read op://developer/kgate-github-packages-read/password", ops)
 
     def test_services_the_pod_cannot_provide_stay_on_the_mac_by_failing(self):
-        self.profile(extra='services = ["docker"]')
+        self.profile(extra='services = ["mssql"]')   # the homelab offers docker (tests/kgate/test_docker.py) and no other service
         done = self.kgate("--", "true")
         self.assertEqual(done.returncode, 69)
-        self.assertIn("needs docker", done.stdout)
+        self.assertIn("needs mssql", done.stdout)
         self.assertFalse(any("manifest" in c for c in self.calls()))
 
     def test_unpinned_image_is_69(self):
