@@ -5152,7 +5152,7 @@ class QuotaHomelab(unittest.TestCase):
     def wait_until_secrets_are_taken_out(self, proc, refusals):
         """Wait for the fake cluster to have refused `refusals` creates and for the Secrets of the last to be gone. Between a refused create and the delete that follows it the
         Secrets are there, so a look at a fixed time can land inside that gap; what the job guarantees is that they are gone before its next try (the fake refuses a Secret that
-        is still there). A client that leaves them ends at its next create, and one that never retries never gets here."""
+        is still there). A client that leaves them is refused AlreadyExists, but the fake also refuses the pod for quota, so it keeps retrying and the 30 s limit here is what fails it; one that never retries never gets here."""
         t_end = time.time() + 30
         while self.refused_creates() < refusals or self.secrets():
             self.assertIsNone(proc.poll(), "the job ended while the quota still refused it")
