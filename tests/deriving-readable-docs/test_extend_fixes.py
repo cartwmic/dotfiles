@@ -77,6 +77,37 @@ class OneSentenceLineTest(unittest.TestCase):
         self.assertEqual(check(doc, REPO)[0], 0)
 
 
+class NumberFormTest(unittest.TestCase):
+    """F4: a number is the same number in digits with `_` or `,` between the groups, and with the words thousand and million."""
+
+    def passes(self, sentence, code_line):
+        code, out = check("## A4 Limits\n\n%s `src/a.ts:1`\n" % sentence, {"src/a.ts": code_line + "\n"})
+        return code == 0, out
+
+    def test_groups_with_commas_or_underscores_are_one_number_across_more_than_one_group(self):
+        for sentence, line in (("It caps at 1,000,000 rows.", "const CAP = 1_000_000;"), ("It caps at 1_000_000 rows.", "const CAP = 1_000_000;"),
+                               ("It caps at 1000000 rows.", "const CAP = 1,000,000;"), ("It caps at 2,000,000,000 rows.", "const CAP = 2_000_000_000;"),
+                               ("It caps at 900,000 rows.", "const CAP = 900_000;")):
+            ok, out = self.passes(sentence, line)
+            self.assertTrue(ok, "%s | %s | %s" % (sentence, line, out))
+
+    def test_a_number_followed_by_thousand_or_million_matches_its_digits(self):
+        for sentence, line in (("It caps at 2 million rows.", "const CAP = 2_000_000;"), ("It caps at 1.5 million rows.", "const CAP = 1_500_000;"),
+                               ("It caps at 1.1 million rows.", "const CAP = 1_100_000;"), ("It caps at 5 thousand rows.", "const CAP = 5000;"), ("It caps at 900 thousand rows.", "const CAP = 900_000;")):
+            ok, out = self.passes(sentence, line)
+            self.assertTrue(ok, "%s | %s | %s" % (sentence, line, out))
+
+    def test_a_wrong_number_still_fails_and_a_bare_900_is_not_900_thousand(self):
+        for sentence, line in (("It caps at 3 million rows.", "const CAP = 2_000_000;"), ("It caps at 900 rows.", "const CAP = 900_000;"),
+                               ("It caps at 1,000,000 rows.", "const CAP = 1_000_001;")):
+            ok, out = self.passes(sentence, line)
+            self.assertFalse(ok, "%s | %s" % (sentence, line))
+            self.assertIn("FAIL number", out)
+
+    def test_a_k_or_m_suffix_is_not_a_number_the_check_reads(self):
+        self.assertTrue(self.passes("It reads 4k bytes at a time.", "const BLOCK = 4096;")[0])
+
+
 class DuplicateLineTest(unittest.TestCase):
     """F3: two appendix lines that make the same claim are one claim twice."""
 

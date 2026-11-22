@@ -14,7 +14,7 @@ Prints the number checked and each bad citation as `doc:line: citation: reason`.
 Then it reads what the cited lines say. A claim is the words just before a citation, or before a run of citations
 joined by commas or "and". These checks FAIL a claim, because a miss is a fact the cited lines do not show:
   number    every digit number in the claim (not in a citation; "about N" is skipped; 15 seconds also matches
-            15000 and 15 * 1000) must appear in a cited range, widened by WINDOW lines each side, or in a cited
+            15000 and 15 * 1000; 1,000,000 = 1_000_000 = 1000000; 2 million also matches 2000000, and thousand and billion the same) must appear in a cited range, widened by WINDOW lines each side, or in a cited
             path (journey 111). The words one..twenty in the cited text count as digits.
   string    every `backticked` or "double-quoted" string in the claim (a repo path that exists is exempt) must
             appear there. A one-word string must appear as written; a longer one needs each of its words.
@@ -77,6 +77,7 @@ sentences never change the exit code. The last lines count the failed checks by 
 import os
 import re
 import sys
+from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
@@ -143,9 +144,19 @@ def quantifiers(sent):
     return out
 
 
+GROUP_MARK = re.compile(r"(?<=\d)[,_](?=\d{3}(?:[,_]\d{3})*(?!\w))")
+SCALE_WORD = re.compile(r"^\s+(thousand|million|billion)\b", re.I)
+SCALE = {"thousand": 1000, "million": 10 ** 6, "billion": 10 ** 9}
+
+
+def ungroup(text):
+    """Digits with their group marks out: 2,000 = 2_000 = 2000, and 1,000,000 = 1_000_000 = 1000000."""
+    return GROUP_MARK.sub("", text)
+
+
 def numbers_in(text):
     """The set of numbers in cited text: digits (2,000 = 2000 = 2_000) and the number words one..twenty."""
-    text = re.sub(r"(?<=\d)[,_](?=\d{3}\b)", "", text)
+    text = ungroup(text)
     found = {m.group(0) for m in NUMBER.finditer(text)} | {m.group(0).lstrip("0") or "0" for m in NUMBER.finditer(text) if m.group(0).isdigit()}  # 05 is 5
     for w in re.findall(r"[a-z]+", text.lower()):
         if w in WORDS:
@@ -210,7 +221,7 @@ def check_claim(c, repo, cache):
     if ranges:
         have_text = "\n".join(["\n".join(r[3]) for r in ranges] + [r[0] for r in ranges])  # a journey's number is in its path
         have_nums, have_sq = numbers_in(have_text), squash(have_text)
-        flat = re.sub(r"(?<=\d)[,_](?=\d{3}\b)", "", prose)
+        flat = ungroup(prose)
         for m in NUMBER.finditer(flat):
             tok = m.group(0)
             if APPROX.search(flat[max(0, m.start() - 8):m.start()]):
@@ -218,6 +229,10 @@ def check_claim(c, repo, cache):
             unit = TIME_UNIT.match(flat[m.end():m.end() + 12])
             ok = {tok} | {str(int(tok) * k) for k in TIME_SCALE[unit.group(1).lower()]} if unit and tok.isdigit() else {tok}
             ok |= {tok.lstrip("0") or "0"} if tok.isdigit() else set()
+            scale = SCALE_WORD.match(flat[m.end():m.end() + 10])
+            if scale:  # "2 million" is 2000000, "1.5 million" is 1500000; a bare number is never scaled
+                value = Decimal(tok) * SCALE[scale.group(1).lower()]
+                ok |= {str(int(value))} if value == int(value) else set()
             if not ok & have_nums:
                 fails.append((n, "number", "%s is not in the cited lines" % tok))
         for tok in strings_in(c["text"], repo):
