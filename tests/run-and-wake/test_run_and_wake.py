@@ -1263,9 +1263,13 @@ class RunAndWake(unittest.TestCase):
     def test_a_job_that_finished_normally_leaves_no_lock_and_a_running_one_is_not_swept(self):
         done = self.job_id(self.launch("--", "true", env=self.t3_env()))
         self.replay(done)
+        lock = self.state / f"run-and-wake/jobs/{done}.lock"
+        end = time.monotonic() + 10
+        while lock.exists() and time.monotonic() < end:  # the watcher removes it once it has woken
+            time.sleep(0.02)
+        self.assertFalse(lock.exists(), "removed by the watcher itself: no sweep has run since")
         cmd, release = self.held_job()
         running = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
-        self.assertFalse((self.state / f"run-and-wake/jobs/{done}.lock").exists())
         self.assertTrue((self.state / f"run-and-wake/jobs/{running}.lock").exists())
         self.sweep_by_launching()
         self.assertEqual([r["event"] for r in self.records_of(running)], ["start"], "a live watcher holds its lock: no end, no wake")
@@ -1366,6 +1370,15 @@ class RunAndWake(unittest.TestCase):
         self.assertIn("job finished: exit 0", sends[0])
         self.assertIn("(delivered late: its watcher stopped before it sent this.)", sends[0])
         self.assertEqual([e["event"] for e in self.records_of("20261122T150000Z-aaaaaa")], ["start", "end", "wake"])
+
+    @LINUX_BOOT
+    def test_recover_never_resends_a_lost_end_as_a_result(self):
+        # a swept job from an earlier boot whose wake only found T3 down: the sweep owns it, and --recover must not print its null exit as "exit None"
+        self.seed("20261122T150000Z-cccccc", self.ELSEWHERE, end={"error": "lost", "lost": True}, wake={"result": "failed", "error": f"exit 1: {self.DOWN}"})
+        done = self.recover()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.t3_sends(), [])
+        self.assertEqual([e["event"] for e in self.records_of("20261122T150000Z-cccccc")], ["start", "end", "wake"])
 
     def test_a_job_logged_before_the_lock_existed_is_never_swept(self):
         self.seed("20261122T150000Z-bbbbbb", "b00t")
