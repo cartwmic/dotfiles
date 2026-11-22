@@ -50,7 +50,8 @@ fi
 
 # mise reads GITHUB_TOKEN and ignores GH_TOKEN. Without a token its GitHub release lookups share the 60-requests-an-hour anonymous limit, and a
 # rate-limit error stops a run. Export one for every mise call below and for the tasks they start: GH_TOKEN, else `gh auth token`. With neither,
-# the script runs unauthenticated, as before. The token is never printed.
+# the script runs unauthenticated, as before, and says so below. On a fresh machine gh is not installed yet (mise installs it) and has no login, so
+# `gh auth token` finds nothing: set GH_TOKEN before the first apply. The token is never printed.
 if [ -z "${GITHUB_TOKEN:-}" ]; then
   gh_token="${GH_TOKEN:-}"
   if [ -z "$gh_token" ] && command -v gh >/dev/null 2>&1; then
@@ -59,6 +60,8 @@ if [ -z "${GITHUB_TOKEN:-}" ]; then
   if [ -n "$gh_token" ]; then
     export GITHUB_TOKEN="$gh_token"
     log_info "using a GitHub token from GH_TOKEN or gh for mise"
+  else
+    log_info "WARN: no GitHub token found (GITHUB_TOKEN, GH_TOKEN or gh); mise is limited to 60 GitHub calls an hour and a tool install can fail with a 403. Set GH_TOKEN before the first apply."
   fi
 fi
 

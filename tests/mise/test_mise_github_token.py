@@ -27,7 +27,7 @@ exit 1
 
 
 class MiseGithubTokenTest(unittest.TestCase):
-    def run_script(self, profile="personal", *, gh=True, env_extra=None):
+    def run_script(self, profile="personal", *, gh=True, env_extra=None, with_stderr=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home, bin_dir = root / "home", root / "bin"
@@ -51,7 +51,8 @@ class MiseGithubTokenTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             for secret in ("gh-secret", "env-gh-secret", "env-github-secret"):
                 self.assertNotIn(secret, r.stdout + r.stderr)
-            return {line.split(" GITHUB_TOKEN=")[0]: line.split(" GITHUB_TOKEN=")[1] for line in log.read_text().splitlines() if " GITHUB_TOKEN=" in line}, log.read_text()
+            seen = {line.split(" GITHUB_TOKEN=")[0]: line.split(" GITHUB_TOKEN=")[1] for line in log.read_text().splitlines() if " GITHUB_TOKEN=" in line}
+            return (seen, log.read_text(), r.stderr) if with_stderr else (seen, log.read_text())
 
     def test_gh_token_reaches_every_mise_call_when_nothing_is_set(self):
         for profile in ("personal", "axon-work-computer"):
@@ -75,6 +76,21 @@ class MiseGithubTokenTest(unittest.TestCase):
     def test_without_gh_or_a_token_every_mise_call_runs_unauthenticated(self):
         seen, _ = self.run_script(gh=False)
         self.assertEqual(set(seen.values()), {"<unset>"})
+
+    def test_no_token_prints_one_warning_naming_gh_token(self):
+        for profile in ("personal", "axon-work-computer"):
+            with self.subTest(profile=profile):
+                _, _, stderr = self.run_script(profile, gh=False, with_stderr=True)
+                warnings = [l for l in stderr.splitlines() if "no GitHub token found" in l]
+                self.assertEqual(len(warnings), 1, stderr)
+                self.assertIn("GH_TOKEN", warnings[0])
+                self.assertIn("60 GitHub calls an hour", warnings[0])
+
+    def test_a_token_means_no_warning(self):
+        for extra in ({"GH_TOKEN": "env-gh-secret"}, {"GITHUB_TOKEN": "env-github-secret"}, {}):
+            with self.subTest(extra=sorted(extra)):
+                _, _, stderr = self.run_script(env_extra=extra, with_stderr=True)
+                self.assertNotIn("no GitHub token found", stderr)
 
     def test_gh_signed_out_does_not_fail_the_script(self):
         seen, _ = self.run_script(env_extra={"FAKE_GH_TOKEN": ""})
