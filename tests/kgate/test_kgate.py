@@ -669,7 +669,10 @@ if a[:2] == ["create", "-f"]:
         # already there is refused (AlreadyExists) whatever happens to the pod. The pod made is logged as {"created": name}.
         limit = int(os.environ["FAKE_QUOTA_CPU"])
         used_file = os.path.join(fake, "quota-full")
-        used = int(open(used_file).read()) if os.path.exists(used_file) else 0
+        try:
+            used = int(open(used_file).read())
+        except FileNotFoundError:   # the test took the file away (room()), possibly between a look and a read: no one else uses the quota
+            used = 0
         held = os.path.join(fake, "quota-held")   # FAKE_QUOTA_HOLD: the pods made here count toward the quota until they are deleted, as on a real cluster
         if os.environ.get("FAKE_QUOTA_HOLD") and os.path.isdir(held):
             used += sum(int(open(os.path.join(held, n)).read()) for n in os.listdir(held))
@@ -5143,12 +5146,25 @@ class QuotaHomelab(unittest.TestCase):
         path = self.fake / "secrets"
         return sorted(os.listdir(path)) if path.exists() else []
 
+    def refused_creates(self):
+        return sum(1 for c in self.calls() if "manifest" in c) - self.created()
+
+    def wait_until_secrets_are_taken_out(self, proc, refusals):
+        """Wait for the fake cluster to have refused `refusals` creates and for the Secrets of the last to be gone. Between a refused create and the delete that follows it the
+        Secrets are there, so a look at a fixed time can land inside that gap; what the job guarantees is that they are gone before its next try (the fake refuses a Secret that
+        is still there). A client that leaves them is refused AlreadyExists, but the fake also refuses the pod for quota, so it keeps retrying and the 30 s limit here is what fails it; one that never retries never gets here."""
+        t_end = time.time() + 30
+        while self.refused_creates() < refusals or self.secrets():
+            self.assertIsNone(proc.poll(), "the job ended while the quota still refused it")
+            self.assertLess(time.time(), t_end, "after %d refused creates the Secrets were still there: %s" % (self.refused_creates(), self.secrets()))
+            time.sleep(0.02)
+
     def test_a_job_the_quota_refuses_waits_in_the_queue_then_runs(self):
         env = self.full(used=12)
         proc = self.start("--cpu", "4", "--", "sh", "-c", "echo ran-after-the-quota", env=env)
         seen = self.read_until(proc, "queued: waiting for quota: exceeded quota: scratch-cpu, requested: requests.cpu=4, used: requests.cpu=12, limited: requests.cpu=12")
-        time.sleep(1)   # several retries at 0.2 s, 0.4 s
-        self.assertEqual((self.created(), self.secrets()), (0, []), "no pod, and the Secrets of each refused create are taken out again")
+        self.wait_until_secrets_are_taken_out(proc, 3)   # the first create and two retries (at 0.2 s and 0.4 s)
+        self.assertEqual(self.created(), 0, "no pod")
         self.assertIsNone(proc.poll())
         self.room()
         out, _ = proc.communicate(timeout=60)
