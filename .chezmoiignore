@@ -379,6 +379,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/bin/pr-body-check
 # pr-record runs the coordinator checkout's script that prints and fills a PR's agent record (playbook 5a05bfe8; docs/profiles.md).
 .local/bin/pr-record
+# pr-open checks a PR description with pr-body-check, then opens or edits the PR: personal only, as pr-body-check is (docs/profiles.md).
+.local/bin/pr-open
 # intent-review-check runs the coordinator checkout's script for the review-record merge rule (docs/profiles.md).
 .local/bin/intent-review-check
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).

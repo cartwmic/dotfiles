@@ -1,0 +1,121 @@
+#!/bin/sh
+# pr-open: open a pull request, or replace a PR's description, in the one form the agent-harness Bash hook accepts.
+#
+#   pr-open --title T --body-file F [--base BRANCH] [--repo OWNER/REPO] [--head BRANCH] [--draft]
+#   pr-open --edit N --body-file F [--title T] [--repo OWNER/REPO]
+#
+# F is a file, or `-` for the body on stdin. Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
+# `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
+# passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
+# the body is PATCHed through `gh api` (`gh pr edit` fails on the agent host). --repo defaults to the origin of the current directory, --base to the repo's
+# default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes.
+# Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
+# Personal profile only: it needs pr-body-check (docs/profiles.md).
+set -eu
+
+fail() { # fail CODE REASON
+  printf '[pr-open] ERROR: %s\n' "$2" >&2
+  exit "$1"
+}
+
+usage="usage: pr-open --title T --body-file F [--base BRANCH] [--repo OWNER/REPO] [--head BRANCH] [--draft]   |   pr-open --edit N --body-file F [--title T] [--repo OWNER/REPO]"
+
+repo= base= head= title= body_file= edit= draft=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --repo|--base|--head|--title|--body-file|--edit)
+      [ $# -ge 2 ] || fail 2 "$1 needs a value. $usage"
+      case $1 in
+        --repo) repo=$2 ;; --base) base=$2 ;; --head) head=$2 ;;
+        --title) title=$2 ;; --body-file) body_file=$2 ;; --edit) edit=$2 ;;
+      esac
+      shift 2 ;;
+    --repo=*) repo=${1#*=}; shift ;;
+    --base=*) base=${1#*=}; shift ;;
+    --head=*) head=${1#*=}; shift ;;
+    --title=*) title=${1#*=}; shift ;;
+    --body-file=*) body_file=${1#*=}; shift ;;
+    --edit=*) edit=${1#*=}; shift ;;
+    --draft) draft=1; shift ;;
+    -h|--help) printf '%s\n' "$usage"; exit 0 ;;
+    *) fail 2 "unknown argument '$1'. $usage" ;;
+  esac
+done
+
+[ -n "$body_file" ] || fail 2 "--body-file F is required. $usage"
+if [ -n "$edit" ]; then
+  case $edit in *[!0-9]*|'') fail 2 "--edit takes a PR number, got '$edit'" ;; esac
+  [ -z "$base$head" ] && [ "$draft" = 0 ] || fail 2 "--edit takes only --body-file, --title and --repo. $usage"
+else
+  [ -n "$title" ] || fail 2 "--title T is required to open a PR. $usage"
+fi
+if [ "$body_file" != - ] && [ ! -s "$body_file" ]; then
+  fail 2 "body file '$body_file' is missing or empty"
+fi
+
+copy=$(mktemp "${TMPDIR:-/tmp}/pr-open-body.XXXXXX") || fail 2 "cannot make a temporary body file"
+trap 'rm -f "$copy"' EXIT
+if [ "$body_file" = - ]; then cat > "$copy"; else cat < "$body_file" > "$copy"; fi
+[ -s "$copy" ] || fail 2 "the body is empty"
+
+command -v gh >/dev/null 2>&1 || fail 2 "gh is not on PATH"
+command -v pr-body-check >/dev/null 2>&1 || fail 2 "pr-body-check is not on PATH (it ships with the coordinator checkout; personal profile only)"
+export GH_CALLER=pr-open
+
+if [ -z "$repo" ]; then
+  url=$(git remote get-url origin 2>/dev/null) || fail 2 "no --repo and this directory has no git remote named origin"
+  repo=$(printf '%s\n' "$url" | sed -e 's/\.git$//' -e 's#/*$##' | awk -F'[/:]' 'NF >= 2 { print $(NF-1) "/" $NF }')
+fi
+case $repo in */*) ;; *) fail 2 "cannot read OWNER/REPO from '$repo'" ;; esac
+
+# The check's own output is the refusal message; pass its exit code through (1 a rule failed, 2 it could not run).
+check() {
+  if "$@"; then return 0; else code=$?; fi
+  case $code in 1) fail 1 "the PR description was refused by pr-body-check (output above); fix the body file and run pr-open again, nothing was created" ;;
+    *) fail 2 "pr-body-check could not run (exit $code, output above)" ;; esac
+}
+
+if [ -n "$edit" ]; then
+  check pr-body-check --body-file "$copy"   # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs
+  set -- api -X PATCH "repos/$repo/pulls/$edit" -F "body=@$copy" --jq .html_url
+  [ -z "$title" ] || set -- "$@" -f "title=$title"
+  out=$(gh "$@") || fail 2 "gh api could not update the description of $repo#$edit"
+  printf '%s\n' "$out"
+  exit 0
+fi
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 2 "not inside a git work tree"
+[ -n "$head" ] || head=$(git symbolic-ref --short -q HEAD) || fail 2 "HEAD is detached: check out the branch to open, or pass --head"
+if [ -z "$base" ]; then
+  base=$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##') || base=
+  [ -n "$base" ] || base=$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null) || base=
+  [ -n "$base" ] || fail 2 "cannot find the default branch of $repo: pass --base"
+fi
+[ "$head" != "$base" ] || fail 2 "the branch '$head' is the base branch: check out a feature branch first"
+
+if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then
+  check pr-body-check --body-file "$copy" --base "origin/$base"
+else
+  check pr-body-check --body-file "$copy" --base "$base"
+fi
+
+# The branch's own upstream (origin/<head>) is pushed when it is ahead. A branch cut from origin/main tracks origin/main, so any other upstream is replaced.
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || upstream=
+if [ "$upstream" = "origin/$head" ]; then
+  if [ -n "$(git rev-list '@{u}..HEAD' 2>/dev/null)" ]; then
+    git push -q origin "HEAD:refs/heads/$head" || fail 2 "git push origin $head failed"
+  fi
+else
+  git push -q -u origin "HEAD:refs/heads/$head" || fail 2 "git push -u origin $head failed"
+fi
+
+set -- pr create --repo "$repo" --base "$base" --head "$head" --title "$title" --body-file "$copy"
+[ "$draft" = 0 ] || set -- "$@" --draft
+out=$(gh "$@") || fail 2 "gh pr create failed"
+pr_url=$(printf '%s\n' "$out" | grep -E 'https://[^ ]+/pull/[0-9]+' | tail -n 1) || pr_url=
+[ -n "$pr_url" ] || fail 2 "gh pr create gave no PR URL: $out"
+printf '%s\n' "$pr_url"
+number=${pr_url##*/pull/}
+if command -v pr-record >/dev/null 2>&1; then
+  record=$(pr-record path "$repo#$number" 2>/dev/null) && printf 'agent record (principles table, Decisions: line, job ids go here): %s\n' "$record" || true
+fi

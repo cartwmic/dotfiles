@@ -24,6 +24,7 @@
   pr-body     (personal only)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
               and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
               `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
+              `pr-open --title T --body-file F` (create) or `pr-open --edit N --body-file F` (edit) as the shortest path, then the chained form
               `pr-body-check --body-file F && gh pr create ... --body-file F`, so bookkeeping in the description (the principles table,
               a table in a Proven section, a Decisions: line, ledger or job ids; it belongs in the PR's agent record, playbook 5a05bfe8; a
               Proven section as plain prose stays, playbook f5a367b5) fails when the body is written, not at merge. `gh pr edit` with no
@@ -115,14 +116,19 @@ MERGE_BARE = (
 )
 PR_BODY = (
     "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles table or a table in the Proven section, a Decisions: line, "
-    "ask/decision/grant ids, job ids, Rewinds:, Break-glass:) or a task id is otherwise found only when `gh pr merge` runs. Run "
-    "`pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both). The description keeps what changes, why, how it was checked "
+    "ask/decision/grant ids, job ids, Rewinds:, Break-glass:) or a task id is otherwise found only when `gh pr merge` runs. Shortest path: %s. "
+    "Or run `pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both). The description keeps what changes, why, how it was checked "
     "(a Proven section as plain prose, playbook f5a367b5), risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)."
 )
+PR_OPEN = {  # the one-command form of PR_BODY, by verb: pr-open checks the body, pushes, opens or PATCHes, and prints the URL
+    "create": "`pr-open --title T --body-file F [--draft]` (F is the body file, `-` reads it from stdin; it checks the body, pushes the branch and opens the PR)",
+    "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host)",
+}
 PR_BODY_VERBS = ("create", "new", "edit")  # `gh pr new` is an alias of `gh pr create`
 PR_BODY_FILE = (
     "The body file %s is refused in agent sessions: %s. Make the body file with `F=$(mktemp /tmp/pr-%s-body.XXXXXX)` in the same command "
-    "and pass `--body-file \"$F\"`; a fixed name like /tmp/pr-body.md can be overwritten by another session."
+    "and pass `--body-file \"$F\"`; a fixed name like /tmp/pr-body.md can be overwritten by another session. "
+    "Or use %s: it takes any body file and posts its own private copy."
 )
 # What counts as a mktemp name: a template (`VAR=$(mktemp TEMPLATE)` earlier in the same command text, `--body-file "$VAR"`) whose last part
 # ends in MKTEMP_MIN_X or more X, or a literal name whose last dot-part is MKTEMP_MIN_X or more letters and digits with a digit or an
@@ -497,13 +503,13 @@ def _body_file_problem(body_file, verb, number, mktemps):
     var = re.fullmatch(r"\$(\w+)|\$\{(\w+)\}", body_file)
     template = mktemps.get(var.group(1) or var.group(2)) if var else None
     if var and template is None:
-        return PR_BODY_FILE % ("`%s`" % body_file, "its name is not known here (no `%s=$(mktemp ...)` in this command)" % (var.group(1) or var.group(2)), number or "N")
+        return PR_BODY_FILE % ("`%s`" % body_file, "its name is not known here (no `%s=$(mktemp ...)` in this command)" % (var.group(1) or var.group(2)), number or "N", PR_OPEN[verb])
     name = os.path.basename(template if var else body_file)
     shaped = re.search("X{%d,}$" % MKTEMP_MIN_X, name) if var else MKTEMP_LITERAL.search(name)
     if not shaped:
-        return PR_BODY_FILE % ("`%s`" % body_file, "it is a fixed name or not made by mktemp, so another session can overwrite it", number or "N")
+        return PR_BODY_FILE % ("`%s`" % body_file, "it is a fixed name or not made by mktemp, so another session can overwrite it", number or "N", PR_OPEN[verb])
     if verb == "edit" and number and not re.search(r"(?<!\d)%s(?!\d)" % number, name):
-        return PR_BODY_FILE % ("`%s`" % body_file, "its name `%s` does not contain PR number %s" % (name, number), number)
+        return PR_BODY_FILE % ("`%s`" % body_file, "its name `%s` does not contain PR number %s" % (name, number), number, PR_OPEN[verb])
     return None
 
 
@@ -522,11 +528,11 @@ def pr_body_rule(walk, ctx):
         if verb == "edit" and not sets_body:
             continue  # a title, label or reviewer change carries no body
         if body_file is None or body_file == "-":
-            return PR_BODY % (verb, verb)
+            return PR_BODY % (verb, PR_OPEN[verb], verb)
         number = _pr_number(args) if verb == "edit" else None
         problems = [_body_file_problem(body_file, verb, number, walk.mktemps)]
         if BODY_FILE + body_file not in cmd.gated:
-            problems.append(PR_BODY % (verb, verb))
+            problems.append(PR_BODY % (verb, PR_OPEN[verb], verb))
         problems = [p for p in problems if p]
         if problems:
             return " ".join(problems)
