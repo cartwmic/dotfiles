@@ -56,5 +56,26 @@ class RowBudgetTest(unittest.TestCase):
         self.assertEqual(check(self.DOC, REPO, "--max-row-words", "lots")[0], 2)
 
 
+APPENDIX = "# Part 2: Appendix\n\n## A4 Adding\n\n%s"
+
+
+class OneSentenceLineTest(unittest.TestCase):
+    """F5: the check refuses an appendix line of two sentences, so the writer learns it at write time and not when stamp.py refuses it."""
+
+    def test_an_appendix_line_of_two_sentences_fails_and_names_the_line(self):
+        code, out = check(APPENDIX % "It saves a note. It lists notes. `src/a.rs:1`\n", REPO)
+        self.assertEqual(code, 1, out)
+        self.assertIn("DOC.md:5: FAIL sentences: 2 sentences on one line", out)
+
+    def test_one_sentence_a_line_passes_and_a_stop_inside_a_quoted_message_is_one_sentence(self):
+        doc = APPENDIX % 'It saves a note. `src/a.rs:1`\nIt says "Unable to save. Try again." `src/a.rs:2`\n'
+        code, out = check(doc, {"src/a.rs": "x\nUnable to save. Try again.\n"})
+        self.assertEqual(code, 0, out)
+
+    def test_part_1_lines_of_several_sentences_are_not_refused(self):
+        doc = "# Part 1: In plain English\n\n## What it is\n\nIt saves notes. It lists notes. [A4.0001]\n" + (APPENDIX % "It saves a note. `src/a.rs:1` [A4.0001]\n")
+        self.assertEqual(check(doc, REPO)[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

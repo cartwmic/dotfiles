@@ -30,6 +30,7 @@ joined by commas or "and". These checks FAIL a claim, because a miss is a fact t
   uncited   a sentence after the doc header with no citation, source label ("(README)", "(code comment)"), or
             "inferred" / "from your list" in it, that holds a word of the overreach list below or a count of
             things in digits or words.
+  sentences a line of the appendix with more than one sentence (an id stands for one claim; stamp.py refuses the line too): FAIL, so the writer learns it at write time.
 Listed too, whatever the citations, because a script cannot judge them (the check pass, references/check-brief.md, takes the list):
   overreach  every, each, all, always, never, only, next, none, any, no <noun> (and every/any + thing, one, where, body)
   count      a count of things: "three parts", "6 words" (a count in words also FAILs under overreach above)
@@ -79,7 +80,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 import early_exits  # noqa: E402
-from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, prose_sentences, says_source, sentences, split_lines, strip_code, untagged_glossary_lines, word_count, words_of)  # noqa: E402
+from claims import (SAYS_SOURCE, SPAN, TAG, claims, doc_lines, line_items, multi_sentence_lines, prose_sentences, says_source, sentences, split_lines, strip_code, untagged_glossary_lines, word_count, words_of)  # noqa: E402
 
 WINDOW = 5  # lines each side of a cited range (sweep in the commit message)
 
@@ -576,6 +577,7 @@ def main(argv):
         extra += uncited_fails(text, real) if not bad else []
         have = {(n, k) for n, k, _ in fails}
         fails = sorted(set(fails + [e for e in extra if (e[0], e[1]) not in have or e[1] not in ("uncited",)]))
+    fails = sorted(set(fails + [(n, "sentences", "%d sentences on one line: write one sentence on each line" % count) for n, count in multi_sentence_lines(text)]))
     if "--max-words" in opts and words > int(opts["--max-words"]):
         fails = sorted(set(fails + [(1, "budget", "%d words, budget %s: drop behaviours, do not join them" % (words, opts["--max-words"]))]))
     if "--max-row-words" in opts:
