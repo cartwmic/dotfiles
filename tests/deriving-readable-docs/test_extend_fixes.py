@@ -539,5 +539,40 @@ class DuplicateLineTest(unittest.TestCase):
         self.assertNotIn("duplicate", out)
 
 
+class StampGuideSentenceTest(unittest.TestCase):
+    """F8: stamp.py --guide stamps the lines that have no id and reports a line of two sentences, so an earlier pass's line does not stop the whole guide."""
+    GUIDE = "# Notes\n\n## What it is\n\nIt saves notes.\n\n## A4 Behaviours\n\nIt saves a note. `src/a.rs:1` [A4.1111]\n%s"
+
+    def stamp(self, tail):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "GUIDE.md"
+            p.write_text(self.GUIDE % tail)
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "stamp.py"), "--guide", str(p)], capture_output=True, text=True)
+            return r.returncode, r.stdout, p.read_text()
+
+    def test_a_two_sentence_line_with_an_id_from_an_earlier_pass_is_reported_and_the_new_line_is_stamped(self):
+        code, out, after = self.stamp("It lists notes. It sorts them. `src/a.rs:2` [A4.2222]\nIt deletes a note. `src/a.rs:3`\n")
+        self.assertEqual(code, 0, out)
+        self.assertIn("GUIDE.md:10: 2 sentences on one line, left as it is (it has an id from an earlier pass)", out)
+        self.assertRegex(after, r"It deletes a note\. `src/a\.rs:3` \[A4\.[0-9a-f]{4}\]\n")
+        self.assertIn("It lists notes. It sorts them. `src/a.rs:2` [A4.2222]\n", after)
+
+    def test_a_new_two_sentence_line_is_reported_with_exit_1_and_the_other_new_line_is_still_stamped(self):
+        code, out, after = self.stamp("It lists notes. It sorts them. `src/a.rs:2`\nIt deletes a note. `src/a.rs:3`\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("GUIDE.md:10: 2 sentences on one line, left as it is:", out)
+        self.assertNotIn("earlier pass", out)
+        self.assertIn("It lists notes. It sorts them. `src/a.rs:2`\n", after)
+        self.assertRegex(after, r"It deletes a note\. `src/a\.rs:3` \[A4\.[0-9a-f]{4}\]\n")
+
+    def test_a_section_file_without_the_flag_is_still_refused_whole(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "A4.md"
+            p.write_text("## A4 Behaviours\n\nIt lists notes. It sorts them. `src/a.rs:2`\nIt deletes a note. `src/a.rs:3`\n")
+            r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "stamp.py"), str(p)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1)
+            self.assertNotIn("[A4.", p.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

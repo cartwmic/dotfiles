@@ -7,10 +7,13 @@ Each prose line without an id gets `[A4.3f9a]` at its end: the section number fr
 every id already in the file. A line that has an id keeps it, so an id stays with its line when the line is edited, split or moved, and is never reused.
 Headings, fenced code, printed blocks and table rows are left alone. Run it on a draft before its audit, and again after any edit that adds a line.
 A line holds one sentence: an id stands for one claim, and a Part 1 tag points at a line. A line with two or more sentences, stamped or not, is not stamped; the
-message names the line (`A4.md:3: 2 sentences on one line: ...`), and the fix is to write each sentence on its own line, then run stamp.py again.
---guide: each file is a whole GUIDE.md (an extend pass puts new lines straight into the guide): the header and Part 1 before the first `## A<n>` heading are left alone.
-Prints `file: N lines stamped, M already had an id`. Exit 1 when a file has prose before its first `## A<n>` heading or a line of more than one sentence;
-2 on bad usage. Stdlib only.
+message names the line (`A4.md:3: 2 sentences on one line: ...`), and the fix is to write each sentence on its own line, then run stamp.py again. A section file with such a line
+is not stamped at all.
+--guide: each file is a whole GUIDE.md (an extend pass puts new lines straight into the guide): the header and Part 1 before the first `## A<n>` heading are left alone, and only the
+lines that have no id are stamped. A line of more than one sentence does not stop the guide: it is reported (`GUIDE.md:3: 2 sentences on one line, left as it is: ...`), with no id given,
+and the other lines are stamped. A line an earlier pass left with an id and two sentences is reported and left alone; one with no id is the pass's own, and exit 1 asks for the split.
+Prints `file: N lines stamped, M already had an id`. Exit 1 when a file has prose before its first `## A<n>` heading or a line of more than one sentence that has no id
+(with --guide, a line that has an id does not count); 2 on bad usage. Stdlib only.
 """
 import os
 import re
@@ -18,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import TAG, multi_sentence_lines, stamp_text  # noqa: E402
+from claims import TAG, multi_sentence_lines, split_lines, stamp_text  # noqa: E402
 
 
 def main(argv):
@@ -32,13 +35,18 @@ def main(argv):
         with open(f, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
         many = multi_sentence_lines(text)
-        if many:
+        if many and not guide:
             for n, count in many:
                 print("%s:%d: %d sentences on one line: write one sentence on each line (a sentence has its own id), then run stamp.py again" % (f, n, count))
             status = 1
             continue
+        lines = split_lines(text)
+        for n, count in many:
+            had_id = bool(TAG.search(lines[n - 1]))
+            print("%s:%d: %d sentences on one line, left as it is%s: write one sentence on each line (a sentence has its own id), then run stamp.py again" % (f, n, count, " (it has an id from an earlier pass)" if had_id else ""))
+            status = status or (0 if had_id else 1)
         try:
-            new, stamped = stamp_text(text, guide)
+            new, stamped = stamp_text(text, guide, {n for n, _ in many})
         except ValueError as e:
             print("%s: %s" % (f, e))
             status = 1
