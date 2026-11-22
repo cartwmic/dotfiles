@@ -1,6 +1,6 @@
 ---
 name: distilling-requirements
-description: Use when you need to know what a repo is required to do, from its code, tests, docs and behavior, not from a diff. Produces one REQUIREMENTS.md with a requirements register (explicit and implicit, product, behavioral and technical), the repo's state machines and invariants, invariants it relies on but never enforces, reachable invalid states with evidence, and which test covers each requirement. Use for backfilling a PRD, auditing an unfamiliar or agent-written repo, or listing candidate bugs and races to check (a first pass: it finds real code behavior but misses known defects often, so verify each finding). Not for reviewing a PR (review-map), not for a Loop Engine PRD candidate (using-generate-prd), not for designing.
+description: Use when you need to know what a repo is required to do, from its code, tests, docs and behavior, not from a diff. Produces one REQUIREMENTS.md with a requirements register (explicit and implicit, product, behavioral and technical), the repo's state machines and invariants, invariants it relies on but never enforces, reachable invalid states with evidence, and which test covers each requirement. Use for backfilling a PRD, auditing an unfamiliar or agent-written repo, or listing candidate bugs and races to check (a first pass: it finds real code behavior but misses known defects often, so verify each finding). Not for reviewing a PR (review-map), not for a Loop Engine PRD candidate (using-generate-prd), not for designing (designing-the-smallest-version). Reads GUIDE.md from deriving-readable-docs when present; feeds designing-the-smallest-version.
 ---
 
 # Distilling Requirements
@@ -15,6 +15,7 @@ Read a repo and write down what it must do, including what nobody wrote down, wi
 - Output path. Default: a scratch folder outside the repo. Write inside the repo only if asked.
 - Record the commit SHA at the start. At the end run `git diff --stat <sha> -- <scope paths>`; if the scope moved, re-read what changed and say so in the header. With no git history (an archive), set `source: archive` in the header instead.
 - Read the repo's own docs and `AGENTS.md`/`CLAUDE.md` first.
+- A `GUIDE.md` from deriving-readable-docs, when present, is a map, not truth: use its surface table (A1) and capability sections (A4 on) to scope the work and find entry points. Open every line you cite before writing a row. A guide claim is never a stated source: a row is `explicit` only from the repo's own words, `implicit` when only the code shows it. Without a guide, work as before.
 - A scope path that does not exist: say so in the header and an open question; write no rows from it.
 - Depth: this is a first pass. Read test bodies for the rows that matter most (high impact, or ones a finding rests on) and judge the rest `title`. Stop when new reads stop producing new rows; merge rows that share one source and one check.
 
