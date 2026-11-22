@@ -589,8 +589,6 @@ def owed(rs, boot):
     if any(w["result"] == "failed" and not t3_unreachable(w.get("error")) for w in wakes):
         return None  # T3 answered and refused (thread gone): trying again changes nothing
     end = next((r for r in rs if r["event"] == "end"), None)
-    if end and end.get("lost"):
-        return None  # the sweep wrote it and sends its wake
     if start["boot"] != boot:
         return "lost"
     return "late" if wakes and end else None  # this boot: only a wake that found T3 down; a job still running is not ours
@@ -604,13 +602,15 @@ def lost_message(job, start, end, restarted):
     what = " ".join(shlex.join(start["cmd"]).split())
     text = (f"[{NAME} k:{job}] job did NOT finish: the host restarted at {restarted} and the job was killed. Rerun it; this is not a result. "
             f"Started {start['ts']}: {what}. Partial output: {start['output']}.")
-    if end and not end.get("recovered"):
+    if end and not end.get("recovered") and not end.get("lost"):
         text += f" Its last record, an end at {end['ts']} ({status_of(end)}), is not a result either."
     return text
 
 
-def recover():
-    """Send the wake of every job that owes one. Idempotent: a job with a delivered wake is skipped, and a lock keeps two runs apart."""
+def recover(wait=None, quiet=False):
+    """Send the wake of every job that owes one. Idempotent: a job with a delivered wake is skipped, and a lock keeps two runs apart.
+    `wait`: seconds to wait for T3 (default: the retry window). `quiet`: print nothing (a sweep runs it inside another call)."""
+    say = (lambda *_: None) if quiet else globals()["say"]
     boot = boot_id()
     if not boot:
         say("INFO", "no boot id on this host: nothing to recover")
@@ -623,7 +623,7 @@ def recover():
             return 0
         jobs = read_jobs()
         todo = sorted(((rs[0]["ts"], job, rs, kind) for job, rs in jobs.items() if (kind := owed(rs, boot))), key=lambda t: t[0])
-        deadline = time.monotonic() + T3_RETRY[1]  # one wait for T3 for the whole run, not one per job
+        deadline = time.monotonic() + (T3_RETRY[1] if wait is None else wait)  # one wait for T3 for the whole run, not one per job
         undelivered = 0
         for _, job, rs, kind in todo:
             start = next(r for r in rs if r["event"] == "start")
@@ -702,7 +702,7 @@ def wake_owed(rs):
 
 def lost_text(job, start):
     what = " ".join(shlex.join(start["cmd"]).split())
-    return (f"[{NAME} k:{job}] job did NOT finish: its watcher is gone and left no end record (the container or host restarted, or something killed it), "
+    return (f"[{NAME} k:{job}] job did NOT finish: its watcher is gone and sent no result (the container or host restarted, or something killed it), "
             f"so its status is unknown. Rerun it; this is not a result. Started {start['ts']}: {what}. Partial output: {start['output']}.")
 
 
@@ -720,11 +720,45 @@ def send_owed(job, start, text, deadline):
     return True
 
 
+def earlier_boot(start):
+    """The job started in a boot before this one (a host restart, or the pod on another node): --recover tells its thread, and the sweep leaves that to it."""
+    return bool(start.get("boot") and boot_id() and start["boot"] != boot_id())
+
+
+def sweep_job(job, deadline):
+    """One job with a lock file. Returns "owed" (its wake found T3 down), "recover" (an earlier-boot thread job that --recover owes a wake) or None (settled, or nothing to do)."""
+    if not watcher_gone(job):
+        return None
+    rs = read_jobs().get(job, [])  # read now: the watcher may have finished normally since the lock was listed
+    start = next((r for r in rs if r["event"] == "start"), None)
+    if not start:
+        return None  # the watcher is about to write it
+    owed = wake_owed(rs)
+    if earlier_boot(start) and start.get("thread"):
+        if owed:
+            return "recover"
+    else:
+        end = next((r for r in rs if r["event"] == "end"), None)
+        if not end:
+            if job_running(start):
+                return None
+            record(job, "end", exit=None, signal=None, duration_s=None, error="lost", lost=True)
+        # Whatever the watcher recorded, its job's status is not passed on: a watcher that died before it woke may have been stopped by a shutdown, whose exit status is not a result.
+        if owed and not send_owed(job, start, lost_text(job, start), deadline):
+            return "owed"
+    try:
+        os.unlink(lock_path(job))
+    except OSError:
+        pass
+    return None
+
+
 def sweep(wait=0.0):
     """End and wake every job whose watcher is gone. A watcher holds jobs/<job>.lock until it has woken, then removes it, so a lock file nobody holds is a dead watcher
     (a container restart kills the watcher with the rest: the pod's pid 1 exiting takes every process). The job's own process must be gone too, or it is left running.
-    No `end` yet: write one (error "lost", exit and signal null: its status is not known). Then the wake is sent, trying T3 for `wait` seconds (0: once, and the next
-    sweep tries again). Returns how many wakes are still owed because T3 was unreachable."""
+    No `end` yet: write one (error "lost", exit and signal null: its status is not known). Then one did-not-finish wake is sent, trying T3 for `wait` seconds (0: once,
+    and the next sweep tries again); a recorded status is never sent as a result. A job from an earlier boot is left to --recover, which the sweep runs for it (once, quietly).
+    A job whose sweep raises gets an `error` record and the others go on. Returns how many wakes are still owed because T3 was unreachable."""
     try:
         names = sorted(n[:-5] for n in os.listdir(os.path.join(STATE, "jobs")) if n.endswith(".lock"))
     except OSError:
@@ -732,36 +766,31 @@ def sweep(wait=0.0):
     if not names:
         return 0
     deadline = time.monotonic() + wait
-    left = 0
+    left, for_recover = 0, False
     with open(SWEEP_LOCK, "a") as guard:
         try:
             fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return 0  # another sweep is at it
-        jobs = read_jobs()
         for job in names:
-            if not watcher_gone(job):
-                continue
-            rs = jobs.get(job, [])
-            start = next((r for r in rs if r["event"] == "start"), None)
-            if not start:
-                continue  # the watcher is about to write it
-            end = next((r for r in rs if r["event"] == "end"), None)
-            if not end:
-                if job_running(start):
-                    continue
-                record(job, "end", exit=None, signal=None, duration_s=None, error="lost", lost=True)
-                end = {"lost": True}
-            if wake_owed(rs):
-                text = lost_text(job, start) if end.get("lost") else message(job, status_of(end), end.get("duration_s") or 0, start["cmd"], start["output"]) + " (delivered late: its watcher stopped before it sent this.)"
-                if not send_owed(job, start, text, deadline):
-                    left += 1
-                    continue
             try:
-                os.unlink(lock_path(job))
-            except OSError:
-                pass
+                outcome = sweep_job(job, deadline)
+            except Exception as error:  # noqa: BLE001
+                record_error(job, error)
+                continue
+            left += outcome == "owed"
+            for_recover = for_recover or outcome == "recover"
+    if for_recover:
+        left += recover(wait, quiet=True)
     return left
+
+
+def record_error(job, error):
+    """A sweep that failed leaves a record, so a sweep that fails on every call shows in the log."""
+    try:
+        record(job, "error", step="sweep", error=repr(error))
+    except OSError:
+        say("WARN", f"sweep failed and the log could not be written: {error!r}")
 
 
 def sweep_quietly(wait=0.0):
@@ -769,7 +798,7 @@ def sweep_quietly(wait=0.0):
     try:
         return sweep(wait)
     except Exception as error:  # noqa: BLE001
-        say("WARN", f"sweep failed: {error!r}")
+        record_error("run-and-wake", error)
         return 0
 
 
@@ -864,7 +893,8 @@ def main(argv):
     if argv[:1] == [RECOVER]:
         os.makedirs(STATE, exist_ok=True)
         recovered = recover()
-        return recovered or (1 if sweep_quietly(T3_RETRY[1]) else 0)
+        owed = sweep_quietly(T3_RETRY[1])  # even when recover could not reach T3
+        return recovered or (1 if owed else 0)
     if argv[:1] == [WAIT]:
         if len(argv) != 2 or argv[1].startswith("-"):
             print(__doc__.strip(), file=sys.stderr)

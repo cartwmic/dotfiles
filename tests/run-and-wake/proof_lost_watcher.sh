@@ -3,9 +3,11 @@
 # pid 1 exits (the agent host pod restarting: everything in the container dies, detached sessions included). Then run-and-wake is called again
 # the way an agent would. The old script leaves a `start` with no `end` and sends nothing; the fixed one writes an `end` (error "lost") and wakes the thread.
 # State, the fake `t3` and the thread id are all scratch, so no live log or thread is touched. Never signals anything but the two pids it started.
-# Usage: proof_lost_watcher.sh /path/to/run-and-wake   (run it with the old script and the fixed one and compare)
+# Usage: proof_lost_watcher.sh /path/to/run-and-wake [fixed|old]   (run it with the old script and the fixed one and compare)
+# Exits 1 when the result is not the expected one: "fixed" (default) wants an `end` (lost) and one wake; "old" wants the silent loss.
 set -eu
 script=${1:?path to run-and-wake}
+expect=${2:-fixed}
 dir=$(mktemp -d /tmp/rw-lost.XXXXXX)
 trap 'rm -rf "$dir"' EXIT
 mkdir -p "$dir/bin" "$dir/state"
@@ -26,11 +28,26 @@ kill -KILL $pids
 sleep 1
 env_run python3 "$script" -- true >/dev/null   # any later call: the next agent that starts a job
 sleep 1
-python3 - "$log" "$job" <<'PY'
+python3 - "$log" "$job" "$dir/delivered" "$expect" <<'PY'
 import json, sys
-for line in open(sys.argv[1]):
+log, job, delivered, expect = sys.argv[1:5]
+events = []
+for line in open(log):
     r = json.loads(line)
-    if r["job"] == sys.argv[2]:
+    if r["job"] == job:
+        events.append(r)
         print("  log:", {k: r[k] for k in ("event", "exit", "signal", "error", "lost", "result") if k in r})
+try:
+    sent = sum(1 for line in open(delivered) if f"k:{job}" in line)
+except OSError:
+    sent = 0
+print(f"thread received: {sent} message(s) naming the job")
+names = [r["event"] for r in events]
+end = next((r for r in events if r["event"] == "end"), {})
+if expect == "fixed":
+    ok = names == ["start", "end", "wake"] and end.get("error") == "lost" and end.get("exit") is None and sent == 1
+else:
+    ok = names == ["start"] and sent == 0
+print("RESULT:", "as expected (" + expect + ")" if ok else "NOT as expected (" + expect + ")")
+sys.exit(0 if ok else 1)
 PY
-echo "thread received: $(grep -c "k:$job" "$dir/delivered" 2>/dev/null || true) message(s) naming the job"
