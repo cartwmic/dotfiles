@@ -16,7 +16,7 @@ edges and external_packages with counts; in_flight then holds counts only.
 proof_commands lists gate, check and CI files plus test-like package.json scripts.
 surfaces is the surface list (commands, flags, routes, env, config, entry points) of the tree at REV. It comes
 from the sibling skill's deriving-readable-docs/scripts/surfaces.py --json and is not listed here; the script
-exits 2 if that file is missing.
+exits 2 if that file is missing. --scope does not narrow it: it always lists the whole repo.
 path_refs maps path strings in config and script files to the files or
 directories they name.
 """
@@ -72,7 +72,8 @@ NOTES = {
                                '(git cherry); a local branch and its remote twin at the same commit are '
                                'one entry, with remote_ref',
     'surfaces': 'rows of kind, name, file, line from deriving-readable-docs/scripts/surfaces.py --json, run on the '
-                'tree extracted at REV (the working tree is ignored); each is a literal line of the repo',
+                'tree extracted at REV (the working tree is ignored); each is a literal line of the repo; --scope does not '
+                'narrow it, it always lists the whole repo',
 }
 PLAN_DAYS = 14
 TOP = 20

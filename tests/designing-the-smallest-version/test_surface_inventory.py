@@ -66,15 +66,20 @@ class SurfaceInventoryTest(unittest.TestCase):
         note = json.loads(run_facts(REPO_FACTS, self.repo).stdout)["notes"]["surfaces"]
         self.assertIn("surfaces.py --json", note)
         self.assertIn("tree extracted at REV", note)
+        self.assertIn("--scope does not narrow it", note)
 
-    def test_surface_list_is_the_tree_at_the_rev_not_the_working_tree(self):
-        (self.repo / "late.py").write_text('import os\nos.getenv("LATE_ONLY")\n')  # untracked, never committed
-        try:
-            res = run_facts(REPO_FACTS, self.repo)
-        finally:
-            (self.repo / "late.py").unlink()
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertNotIn("LATE_ONLY", [r["name"] for r in json.loads(res.stdout)["surfaces"]])
+    def test_surface_list_is_the_tree_at_the_pinned_rev_not_the_checkout(self):
+        # OLD_ENV exists at HEAD~1 only (HEAD removed it, NEW_ENV is added), and the checkout is HEAD. A run that reads the
+        # checkout instead of the rev would list NEW_ENV and miss OLD_ENV.
+        repo = self.tmp / "two-commits"
+        make_repo(repo, {"a.py": 'import os\nos.environ.get("OLD_ENV")\n'})
+        (repo / "a.py").write_text('import os\nos.environ.get("NEW_ENV")\n')
+        git(str(repo), "commit", "-q", "-am", "swap env var")
+        old = run_facts(REPO_FACTS, repo, "--rev", "HEAD~1")
+        self.assertEqual(old.returncode, 0, old.stderr)
+        self.assertEqual([r["name"] for r in json.loads(old.stdout)["surfaces"]], ["OLD_ENV"])
+        new = run_facts(REPO_FACTS, repo)
+        self.assertEqual([r["name"] for r in json.loads(new.stdout)["surfaces"]], ["NEW_ENV"])
 
     def test_missing_surfaces_py_gives_a_clear_error(self):
         skills = self.tmp / "skills-without-codemap"
