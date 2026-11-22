@@ -1303,6 +1303,31 @@ class HomelabChatSeatTest(unittest.TestCase):
             "environment": [{"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "sensitive": False, "value": "1"}, FIZZY]})
         self.assertIn(HOMELAB_CHAT, json.loads(script.split("OWNED='")[1].split("'")[0]))
 
+    def pod_render(self):
+        """The settings script as the agent host pod renders it: personal Linux with `container.enabled` true."""
+        env = Env(codex_active=False)
+        try:
+            env.cfg.write_text(env.cfg.read_text() + "  container:\n    enabled: true\n")
+            data = json.dumps({"chezmoi": {"os": "linux"}})
+            script = env.chezmoi("execute-template", "--override-data", data, stdin=(REPO / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text())
+            return script, str(env.home)
+        finally:
+            env.close()
+
+    def test_the_pod_in_container_mode_gets_the_same_instance_and_still_no_pi(self):
+        # The pod's T3 hosts the #homelab lead, and nothing else writes its instance: the homelab kit cannot be the only place (dotfiles#719 finding).
+        script, home = self.pod_render()
+        out = json.loads(run_script(script, "{}"))["providerInstances"]
+        _, _, linux_script = self.instance("linux")
+        outside = json.loads(run_script(linux_script, FIXTURE))["providerInstances"][HOMELAB_CHAT]
+        fleet = "%s/.claude/fleet" % home
+        self.assertEqual(out[HOMELAB_CHAT]["config"]["launchArgs"], "--settings %s/seat-homelab-chat.json --strict-mcp-config --mcp-config %s/mcp-homelab-chat.json" % (fleet, fleet))
+        self.assertEqual({k: v for k, v in out[HOMELAB_CHAT].items() if k != "config"}, {k: v for k, v in outside.items() if k != "config"})
+        self.assertEqual(out[HOMELAB_CHAT]["config"]["autoCompactWindow"], "200000")
+        self.assertIn(HOMELAB_CHAT, json.loads(script.split("OWNED='")[1].split("'")[0]))
+        self.assertFalse({"pi", "pi-lead"} & set(out), "Pi is not in the pod's tool set")
+        self.assertEqual(sorted(k for k in out if k.startswith("seat-")), sorted(["seat-%s" % s for s in ("lead", "builder", "planner", "reviewer", "scout", "homelab-chat")]))
+
     def test_neither_mac_gets_the_instance(self):
         inst, _, script = self.instance("darwin")
         self.assertNotIn(HOMELAB_CHAT, inst)

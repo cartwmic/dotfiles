@@ -1,5 +1,5 @@
 #!/bin/sh
-# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the seat-* instances, pi and pi-lead below; container mode owns only the five seat-lead, seat-builder, seat-planner, seat-reviewer and seat-scout instances).
+# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the seat-* instances, pi and pi-lead below; container mode owns only the five seat-lead, seat-builder, seat-planner, seat-reviewer and seat-scout instances and seat-homelab-chat).
 # The hub pair (claude-hub, codex-hub, data switch t3Hub.enabled) is personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # The hub as the default (data switch hub.enabled, below) applies on the personal profile on macOS and Linux. Personal Linux also owns two more instances, pi and pi-lead (see "pi" and "pi-lead" below).
 # Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
@@ -14,7 +14,7 @@
 #               replaces a variable (it cannot prepend PATH), so the binary is a wrapper (dot_local/user_scripts/executable_pi_lead.sh) that runs the
 #               real `pi` with the coordinator's pane-bin first on PATH and COORDINATOR_STATE_DIR set to <home>/.local/share/coordinator. A thread on it
 #               can run `ledger` and the other pane-bin commands. The work profile has no T3 settings file here (.chezmoiignore), so it gets none.
-# seat-homelab-chat  Linux only, outside container mode (where the coordinator runs; the personal Mac and the work Mac get none). The durable lead that answers
+# seat-homelab-chat  Linux only, in container mode too (the personal Mac and the work Mac get none; the pod's T3 hosts the lead). The durable lead that answers
 #               #homelab, with a fixed tool list held by configuration: launchArgs `--settings <home>/.claude/fleet/seat-homelab-chat.json --strict-mcp-config
 #               --mcp-config <home>/.claude/fleet/mcp-homelab-chat.json`; the settings file registers a PreToolUse hook (hooks/homelab_chat_allowlist.py)
 #               that denies every call not on the list, and the MCP file holds hindsight only. Window 200000, advisor off, like seat-lead.
@@ -93,7 +93,7 @@
 #               without the hindsight guide, plus the skill that carries the guide (docs/profiles.md "Agent seat instances"). The lead, coordinator and default instances are unchanged.
 #               The coordinator instance stays with the coordinator repo (its launchArgs are written there); dot_claude/fleet/seat-coordinator.json
 #               is deployed for it to point at.
-# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and every seat-* instance (lead, builder, planner, reviewer, scout, computer, and homelab-chat on Linux outside container mode); an `environment` entry, merged by name so other entries stay):
+# CLAUDE_CODE_FIZZY_GROVE=1 (every Claude instance: claudeAgent, coordinator, claude-hub and every seat-* instance (lead, builder, planner, reviewer, scout, computer, and homelab-chat on Linux, container mode included); an `environment` entry, merged by name so other entries stay):
 #               T3 delivers a message to a running session as an interrupt (priority "now"). When it lands while Claude Code is still running a
 #               PreToolUse hook, that call is skipped, and Claude Code 2.1.322/323 reports it as "The user doesn't want to take this action right now. STOP
 #               what you are doing and wait for the user to tell you how to proceed." (three false declines in the coordinator session, 2026-11-12/13). With this
@@ -161,7 +161,9 @@ set -eu
 {{- $want = set $want "pi" (dict "driver" "pi" "enabled" true) }}
 {{- $want = set $want "pi-lead" (dict "driver" "pi" "displayName" "Pi (lead)" "enabled" true "config" (dict "binaryPath" (printf "%s/.local/user_scripts/pi_lead.sh" $home))) }}
 {{- $owned = append (append $owned "pi") "pi-lead" }}
-{{- /* seat-homelab-chat: the durable lead that answers #homelab, with a fixed tool list held by a PreToolUse hook in its settings file (docs/profiles.md, "Agent seat instances"). Rendered only where the coordinator runs, personal Linux outside container mode (the same condition as Pi above); the personal Mac and the work Mac get no instance. Same window and environment as seat-lead (no advisor); its MCP file holds hindsight only. */}}
+{{- end }}
+{{- if eq .chezmoi.os "linux" }}
+{{- /* seat-homelab-chat: the durable lead that answers #homelab, with a fixed tool list held by a PreToolUse hook in its settings file (docs/profiles.md, "Agent seat instances"). Rendered on personal Linux, where the coordinator runs, and in container mode (the agent host pod, which is Linux: the pod's T3 hosts the #homelab lead, and its settings file, MCP file and hook script are laid down by the same apply); the personal Mac gets no instance and the work profile has no T3 settings file here. Same window and environment as seat-lead (no advisor); its MCP file holds hindsight only. */}}
 {{- $homelabChat := dict "driver" "claudeAgent" "displayName" "Claude (homelab-chat)" "enabled" true
       "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy)
       "config" (dict "autoCompactWindow" "200000" "launchArgs" (printf "--settings %s/seat-homelab-chat.json --strict-mcp-config --mcp-config %s/mcp-homelab-chat.json" $fleet $fleet)) }}
