@@ -14,12 +14,16 @@ FAKE_LSAPPINFO = """#!%s
 import os, sys
 args = sys.argv[1:]
 if args == ["front"]:
-    print(open(os.environ["FAKE_FRONT_FILE"]).read().strip())
+    value = open(os.environ["FAKE_FRONT_FILE"]).read().strip()
+    with open(os.environ["FAKE_FRONT_LOG"], "a") as log:   # one line per read, so a test can tell the sampler has looked
+        log.write(value + "\\n")
+    print(value)
 elif args[:3] == ["info", "-only", "name"]:
     print('"LSDisplayName"="Fake App %%s"' %% args[3])
 """ % sys.executable
 
 A, B = "ASN:0x0-0x1-0xA:", "ASN:0x0-0x1-0xB:"
+WAIT = 5.0   # generous deadline for the sampler to see a state; a poll returns as soon as it does
 
 
 class FrontSamplerUnit(unittest.TestCase):
@@ -28,7 +32,9 @@ class FrontSamplerUnit(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
         self.front_file = self.root / "front"
-        self.front_file.write_text(A)
+        self.front_log = self.root / "front.log"
+        self.front_log.touch()
+        self.set_front(A)
         self.bin = self.root / "bin"
         self.bin.mkdir()
         tool = self.bin / "lsappinfo"
@@ -39,6 +45,28 @@ class FrontSamplerUnit(unittest.TestCase):
         self.addCleanup(os.environ.__setitem__, "PATH", old_path)
         os.environ["FAKE_FRONT_FILE"] = str(self.front_file)   # the fake lsappinfo subprocesses read this
         self.addCleanup(os.environ.pop, "FAKE_FRONT_FILE")
+        os.environ["FAKE_FRONT_LOG"] = str(self.front_log)
+        self.addCleanup(os.environ.pop, "FAKE_FRONT_LOG")
+
+    def set_front(self, asn):
+        """Switch the fake front app atomically: the sampler's lsappinfo subprocess reads the file at any moment,
+        so it must never see it truncated or half-written. A temp file in the same folder, then a rename."""
+        tmp = self.root / "front.tmp"
+        tmp.write_text(asn)
+        os.replace(tmp, self.front_file)
+
+    def wait_for(self, what, condition):
+        """Poll until condition() is true, up to WAIT seconds; fail naming what never happened."""
+        deadline = time.monotonic() + WAIT
+        while not condition():
+            if time.monotonic() > deadline:
+                self.fail("the sampler did not %s within %.0f s" % (what, WAIT))
+            time.sleep(0.01)
+
+    def wait_for_reads(self, count):
+        """Wait until the fake lsappinfo has answered `front` at least `count` times (the baseline read in start() counts)."""
+        self.wait_for("read the front %d times" % count,
+                      lambda: len(self.front_log.read_text().splitlines()) >= count)
 
     def test_a_blip_that_comes_back_is_caught_and_timed(self):
         """The front blips to another app for well under a second and comes back: a before/after check
@@ -46,11 +74,12 @@ class FrontSamplerUnit(unittest.TestCase):
         sampler = FrontSampler(interval=0.02)
         sampler.start()
         self.addCleanup(sampler.stop)
-        time.sleep(0.15)                 # a few samples on the baseline
-        self.front_file.write_text(B)    # the blip
-        time.sleep(0.4)
-        self.front_file.write_text(A)    # back to the baseline
-        time.sleep(0.15)
+        self.wait_for_reads(4)           # a few samples on the baseline
+        self.set_front(B)                # the blip
+        self.wait_for("see the front leave", lambda: sampler.excursions())
+        time.sleep(0.4)                  # hold the blip: the sampler saw it start before this, so it lasts at least this long
+        self.set_front(A)                # back to the baseline
+        self.wait_for("see the front come back", lambda: all(e["end"] is not None for e in sampler.excursions()))
         sampler.stop()
         excursions = sampler.excursions()
         self.assertEqual(len(excursions), 1, excursions)
@@ -59,8 +88,8 @@ class FrontSamplerUnit(unittest.TestCase):
         self.assertEqual(e["to_name"], "Fake App " + B)
         self.assertIsNotNone(e["end"])   # it came back
         duration = e["end"] - e["start"]
-        self.assertGreaterEqual(duration, 0.2)   # the sampler saw it away for at least this long
-        self.assertLess(duration, 1.0)   # a 0.4 s blip; the macOS runner read it as 0.68 s, so 1.0 s keeps margin
+        self.assertGreaterEqual(duration, 0.4)   # held for 0.4 s after the sampler saw it start, so it was timed at least that
+        # no upper bound: on a loaded runner the sampler may notice the return arbitrarily late
         # and it is reported, with when it happened and how long it lasted
         message = sampler.describe()
         self.assertIn("Fake App " + B, message)
@@ -76,9 +105,9 @@ class FrontSamplerUnit(unittest.TestCase):
         sampler = FrontSampler(interval=0.02)
         sampler.start()
         self.addCleanup(sampler.stop)
-        time.sleep(0.15)                 # a few samples on the baseline
-        self.front_file.write_text(B)    # the front leaves and never comes back
-        time.sleep(0.3)
+        self.wait_for_reads(4)           # a few samples on the baseline
+        self.set_front(B)                # the front leaves and never comes back
+        self.wait_for("see the front leave", lambda: sampler.excursions())
         with self.assertRaises(AssertionError) as caught:
             sampler.assert_unchanged("the steal")   # asserted while the front is still away
         message = str(caught.exception)
@@ -98,7 +127,7 @@ class FrontSamplerUnit(unittest.TestCase):
         sampler = FrontSampler(interval=0.02)
         sampler.start()
         self.addCleanup(sampler.stop)
-        time.sleep(0.2)
+        self.wait_for_reads(6)           # several samples, all on the baseline
         sampler.stop()
         self.assertEqual(sampler.excursions(), [])
         sampler.assert_unchanged("quiet")   # must not raise
