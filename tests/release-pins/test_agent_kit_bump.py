@@ -140,6 +140,9 @@ version = json.load(open("package.json"))["dependencies"]["@cartwmic/agent-kit"]
 if args[:2] == ["install", "--package-lock-only"]:
     json.dump({"lockfileVersion": 3, "packages": {"node_modules/@cartwmic/agent-kit": {"version": version}}}, open("package-lock.json", "w"), indent=2)
 elif args[:1] == ["ci"]:
+    if os.environ.get("FAKE_NPM_FAIL"):
+        print("registry unreachable", file=sys.stderr)
+        sys.exit(1)
     installed = os.environ.get("FAKE_NPM_INSTALLS") or version
     os.makedirs("node_modules/@cartwmic/agent-kit", exist_ok=True)
     json.dump({"name": "@cartwmic/agent-kit", "version": installed}, open("node_modules/@cartwmic/agent-kit/package.json", "w"))
@@ -165,6 +168,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.gh_state = self.dir / "gh.json"
         self.refuse = ""
         self.npm_installs = ""
+        self.npm_fails = ""
         self.git_env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
                         "GIT_COMMITTER_EMAIL": "t@example.test", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
         self.seed = {
@@ -181,7 +185,7 @@ class AgentKitBumpTests(unittest.TestCase):
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_CALL_LOG": str(self.call_log),
                 "FAKE_GH_ENV_LOG": str(self.dir / "gh-env.jsonl"),
                 "FAKE_GH_STATE": str(self.gh_state), "FAKE_ORIGIN": str(self.origin), "FAKE_GATE_REFUSE": self.refuse,
-                "FAKE_NPM_INSTALLS": self.npm_installs, "NODE_AUTH_TOKEN": "fake-token", "FAKE_TRACES_DIR": str(self.dir / "traces"),
+                "FAKE_NPM_INSTALLS": self.npm_installs, "FAKE_NPM_FAIL": self.npm_fails, "NODE_AUTH_TOKEN": "fake-token", "FAKE_TRACES_DIR": str(self.dir / "traces"),
                 "AGENT_KIT_BUMP_POLL_SECONDS": "0", "TMPDIR": str(self.dir), **self.git_env}
 
     def sh(self, *cmd, cwd=None):
@@ -326,6 +330,30 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(len(self.prs()), 1)
         self.assertEqual(len([c for c in self.calls() if c.startswith("gh pr merge")]), 1)
         self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
+
+    def pending_scripts(self):
+        return self.sh("chezmoi", "--source", self.checkout, "--no-tty", "status", "--include", "scripts").split()[1::2]
+
+    def test_the_install_runs_through_chezmoi_so_the_script_is_not_left_pending(self):
+        self.world()
+        self.assertEqual(self.pending_scripts(), ["65_agent_kit_install.sh"])  # the world applied without scripts
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.pending_scripts(), [])  # chezmoi recorded the run
+
+    def test_a_failing_install_stops_at_install_and_a_rerun_runs_it_again(self):
+        self.world()
+        self.npm_fails = "1"
+        result = self.bump()
+        self.assert_stopped(result, "install", "the agent-kit install failed")
+        self.assertIn("registry unreachable", result.stderr)
+        self.assertEqual(self.pending_scripts(), ["65_agent_kit_install.sh"])  # a failed run is not recorded
+        self.npm_fails = ""
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("resuming PR #100 (MERGED)", again.stdout)
+        self.assertEqual(self.pending_scripts(), [])
+        self.assertEqual(self.log_lines()[-1]["step"], "verify")
 
     def test_red_checks_stop_with_the_pr_open_and_a_rerun_merges_it(self):
         self.world()

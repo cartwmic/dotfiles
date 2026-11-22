@@ -392,6 +392,57 @@ class BumpTests(Fixture):
         self.assertEqual(self.live(".config/mise/conf.d/container.toml"), self.POD_PIN + 'gh = "latest"\n' + pins("1.0.0"))
         self.assertEqual(len(self.gh_calls("merge")), 1)
 
+    # The pod's run_onchange scripts embed a hash of the mise pins, so a bump leaves them pending. 05 is the one the bump runs through chezmoi;
+    # 06 stands for any other script and must stay untouched. Both write a line to a runs file in the scratch HOME each time they run.
+    SCRIPT_RUNS = "$HOME/script-runs"
+    SCRIPT_05 = ('#!/bin/sh\n# {{ include "dot_config/mise/config.toml" | sha256sum }}\necho 05 >> "%s"\n'
+                 '[ ! -e "$HOME/container-tools.fail" ] || { echo "mise tools are still missing" >&2; exit 1; }\n' % SCRIPT_RUNS)
+    SCRIPT_06 = '#!/bin/sh\n# {{ include "dot_config/mise/config.toml" | sha256sum }}\necho 06 >> "%s"\n' % SCRIPT_RUNS
+    SCRIPTS = {"run_onchange_after_05_container_tools.sh.tmpl": SCRIPT_05, "run_onchange_after_06_other.sh.tmpl": SCRIPT_06,
+               # As the real .chezmoiignore: 05 is a container-mode script, so every other machine leaves it out.
+               ".chezmoiignore": '{{ if dig "container" "enabled" false . }}\n.config/mise/config.toml\n{{ else }}\n.config/mise/conf.d/container.toml\n05_container_tools.sh\n{{ end }}\n'}
+
+    def script_runs(self):
+        path = self.home / "script-runs"
+        return path.read_text().split() if path.exists() else []
+
+    def pending_scripts(self):
+        return self.sh("chezmoi", "--source", self.checkout, "--no-tty", "status", "--include", "scripts").split()[1::2]
+
+    def test_d1_the_pod_runs_its_one_pending_container_script_through_chezmoi_and_no_other(self):
+        self.world(container=True, extra=self.SCRIPTS)
+        self.assertEqual(self.script_runs(), ["05", "06"])  # the setup apply
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.script_runs(), ["05", "06", "05"])  # 05 once more; 06 did not run
+        self.assertEqual(self.pending_scripts(), ["06_other.sh"])  # chezmoi recorded the 05 run; the other script is still pending
+        steps = [line["step"] for line in self.log_lines()]
+        self.assertEqual(steps[-2:], ["verify", "scripts"])
+        self.assertLess(steps.index("install"), steps.index("scripts"))
+
+    def test_d1_a_machine_without_the_container_script_runs_no_script(self):
+        self.world(extra=self.SCRIPTS)
+        self.assertEqual(self.script_runs(), ["06"])
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.script_runs(), ["06"])
+        self.assertEqual([line["step"] for line in self.log_lines()][-1], "verify")
+
+    def test_d2_a_failing_container_script_stops_at_scripts_and_a_rerun_picks_up_there(self):
+        self.world(container=True, extra=self.SCRIPTS)
+        (self.home / "container-tools.fail").write_text("")
+        result = self.bump()
+        self.assert_stopped(result, "scripts", "05_container_tools.sh failed")
+        self.assertIn("mise tools are still missing", result.stderr)
+        self.assertEqual(self.live(".config/mise/conf.d/container.toml"), self.POD_PIN + 'gh = "latest"\n' + pins("1.0.0"))  # the apply and install had finished
+        self.assertEqual(self.pending_scripts(), ["05_container_tools.sh", "06_other.sh"])  # not recorded, so chezmoi still lists it
+        (self.home / "container-tools.fail").unlink()
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("pr: resuming PR #100 (MERGED)", again.stdout)
+        self.assertEqual(self.script_runs(), ["05", "06", "05", "05"])
+        self.assertEqual(self.pending_scripts(), ["06_other.sh"])
+
     def test_d1_pending_checks_are_waited_for(self):
         self.world()
         self.state["checks"] = [[{"name": "tests", "bucket": "pending"}], [], [{"name": "tests", "bucket": "pass"}]]

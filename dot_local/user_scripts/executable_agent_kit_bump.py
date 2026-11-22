@@ -22,8 +22,8 @@ The steps, and the step a stop names (the same shape as loop_engine_bump.py):
   drift    the PR changes both pin files and, at most, the Loop Engine's pins and skills (a combined bump; loop_engine_bump.py
            applies those); any other file stops it. Only the two pin files are targets. Stop on any live change the PR
            did not make; print the diff of the targets
-  apply    chezmoi apply of exactly those two files (scripts excluded), then the install: the 65 install template rendered
-           from the merge commit and run once (chezmoi apply of explicit targets runs no script)
+  apply    chezmoi apply of exactly those two files (scripts excluded), then the install: chezmoi runs the 65 install script from the merge
+           commit once (chezmoi apply of other explicit targets runs no script), so its run is recorded and chezmoi does not list it as pending
   verify   the version of @cartwmic/agent-kit installed under ~/.local/share/agent-kit is X.Y.Z
 
 --pr N is for two releases that land close together: it puts both pins in one PR. Separate bump PRs also work, because
@@ -57,7 +57,7 @@ PIN_FILES = ("package.json", "package-lock.json")
 # loop_engine_bump.py's files (MISE_CONFIG, SKILLS there; tests/ci-main-status checks the copies match). A combined PR carries them too.
 LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
 LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills"
-INSTALL = "run_onchange_after_65_agent_kit_install.sh.tmpl"
+INSTALL_TARGET = "65_agent_kit_install.sh"  # chezmoi target of run_onchange_after_65_agent_kit_install.sh.tmpl
 PACKAGE = "@cartwmic/agent-kit"
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 NAME = "agent_kit_bump"
@@ -110,13 +110,12 @@ class Log:
         print("[%s] %s: %s" % (NAME, step, detail), flush=True)
 
 
-def run(cmd, step, cwd=None, env=None, check=True, stdin_text=None):
+def run(cmd, step, cwd=None, env=None, check=True):
     # Every gh call here is on a merge path (reads too: pr list, pr checks, pr view). GH_URGENT=1 keeps the gh budget guard
     # from refusing them; GH_CALLER names this script in the gh wrapper's log.
     env = {**(os.environ if env is None else env), "GH_URGENT": "1", "GH_CALLER": NAME}
-    kwargs = {"input": stdin_text} if stdin_text is not None else {"stdin": subprocess.DEVNULL}
     try:
-        result = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, capture_output=True, text=True, **kwargs)
+        result = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     except OSError as error:
         raise Stop(step, "cannot run %s: %s" % (cmd[0], error))
     if check and result.returncode != 0:
@@ -138,14 +137,24 @@ def git_bytes(source, spec):
 HOOKLESS_CONFIG = []  # the hook-free config file, once bump() has written it
 
 
-def chezmoi(source, *args, step, check=True, stdin_text=None):
+def chezmoi(source, *args, step, check=True):
     config = ["--config", HOOKLESS_CONFIG[0], "--config-format", "json"] if HOOKLESS_CONFIG else []
-    return run(["chezmoi", "--source", source, "--no-tty", *config, *args], step, check=check, stdin_text=stdin_text)
+    return run(["chezmoi", "--source", source, "--no-tty", *config, *args], step, check=check)
 
 
 def chezmoi_config(source, step):
     """chezmoi's resolved config. dump-config reads no source state, so no hook runs."""
     return json.loads(chezmoi(source, "dump-config", "--format", "json", step=step).stdout)
+
+
+def chezmoi_state_file(source, config, step):
+    """The persistent state file (it records which run_onchange scripts have run). chezmoi keeps it next to the config file, so a copy of the config
+    made in a temporary directory must name the real one, or a script run through the copy is forgotten with it. edit-config names the real config file
+    when its editor is `echo`; like dump-config it reads no source state, so no hook runs."""
+    if config.get("persistentState"):
+        return config["persistentState"]
+    named = run(["chezmoi", "--source", source, "--no-tty", "edit-config"], step, env={**os.environ, "EDITOR": "echo", "VISUAL": "echo"}).stdout.strip()
+    return str(Path(named).parent / "chezmoistate.boltdb")
 
 
 class Worktree:
@@ -425,13 +434,10 @@ def check_drift(wt, dest, targets, log):
     log.record("drift", "ok", "%d PR target(s), %d pending; nothing else pending under %s" % (len(targets), len(pending), dest / KIT_DEST))
 
 
-def install(wt, log):
-    """Run the agent-kit install once: the 65 template rendered from the merge commit, then sh. chezmoi apply of explicit targets runs no script."""
-    rendered = chezmoi(wt, "execute-template", step="install", stdin_text=(wt / INSTALL).read_text(encoding="utf-8")).stdout
-    with tempfile.TemporaryDirectory(prefix=NAME + "-install-") as tmp:
-        script = Path(tmp) / "agent_kit_install.sh"
-        script.write_text(rendered, encoding="utf-8")
-        result = run(["sh", script], "install", check=False)
+def install(wt, dest, log):
+    """Run the agent-kit install once, through chezmoi so its run is recorded: apply the 65 script's own target (chezmoi apply of other explicit
+    targets runs no script). Without the record chezmoi would keep listing the script as pending after every bump."""
+    result = chezmoi(wt, "apply", "--force", "--include", "scripts", dest / INSTALL_TARGET, step="install", check=False)
     print(result.stdout, end="", flush=True)
     if result.returncode != 0:
         raise Stop("install", "the agent-kit install failed (exit %d): %s" % (result.returncode, (result.stderr or result.stdout).strip()))
@@ -470,7 +476,7 @@ def apply(source, dest, sha, pr, version, log):
         # --force: check_drift showed each live target is the pre-PR or the PR content.
         chezmoi(wt.path, "apply", "--force", "-x", "scripts", *sorted(targets), step="apply")
         log.record("apply", "ok", "%d target(s): %s" % (len(targets), ", ".join(str(t) for t in sorted(targets))))
-        install(wt.path, log)
+        install(wt.path, dest, log)
     installed = installed_version(dest)
     if installed != version:
         raise Stop("verify", "%s %s is installed here, not %s" % (PACKAGE, installed, version))
@@ -488,6 +494,7 @@ def bump(args, log):
         raise Stop("profile", "profile is %r; this script runs only on personal, and nothing was done" % profile)
     log.record("profile", "ok", "personal")
     config.pop("hooks", None)
+    config["persistentState"] = chezmoi_state_file(Path(args.source), config, "profile")
     with tempfile.TemporaryDirectory(prefix=NAME + "-") as tmp:
         HOOKLESS_CONFIG[:] = [Path(tmp) / "chezmoi.json"]
         HOOKLESS_CONFIG[0].write_text(json.dumps(config))
