@@ -76,6 +76,7 @@ Every new boundary, layer or abstraction needs a concrete requirement or a demon
 - every decision maps to a requirement, failure or gap;
 - nothing inferred is presented as given;
 - **every number comes from a command you saw: cite the `facts.json` key or keep the command in Section 1's Evidence list; re-run at the end. Quote `lines` for one file and `code_lines` for sums, and say which.**
+- a "read" evidence cell that cites `path:line` can be checked the way `distilling-requirements` checks register rows (its Truth check step): one claim and its backticked citations under a `## <id>` heading in a scratch doc, then the codemap scripts `check_citations.py` and `slice.py`, fresh checkers briefed with `check-brief.md`, and `score.py`, all by path from `../deriving-readable-docs`. Nothing is copied and there is no design script for it.
 
 ## Output shape (keep it stable; other tools read it)
 
