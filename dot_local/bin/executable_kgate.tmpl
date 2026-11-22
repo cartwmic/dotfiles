@@ -122,6 +122,11 @@ PRIORITY_CLASSES = (PRIORITY_CLASS, "kgate-first", "kgate-main")
 # agent. A pinned --node ignores it, and a profile with prefer_nodes = false (the coordinator journeys) leaves it out. 2026-11-08, Michael,
 # ask 765.
 PREFER_NODES = ("cartwmic-g14-wsl",)
+# The live agent host (namespace agent-host, label app=agent-host: the coordinator, T3 and every agent session in one pod) moves between nodes, so a fixed
+# NEVER_NODES entry cannot follow it. Every pod carries a required pod anti-affinity against it instead: no new kgate pod lands on the node the agent host runs on.
+# 2026-11-22: agent-1 hit load 82 on 16 cores with two 4-CPU kgate pods beside the agent host, whose t3 container requests far less CPU, and coordinator turns
+# crawled (Michael asked for this fix). Running jobs are left alone; the agent host keeps its homelab-critical priority, so it can still preempt kgate pods.
+AGENT_HOST_NAMESPACE, AGENT_HOST_LABELS = "agent-host", {"app": "agent-host"}
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
 # The API server's ResourceQuota admission: `Error from server (Forbidden): ... pods "x" is forbidden: exceeded quota: NAME, requested: ..., used: ..., limited: ...`.
@@ -736,7 +741,10 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
                    [{"weight": 100, "preference": {"matchExpressions": [
                        {"key": "kubernetes.io/hostname", "operator": "In", "values": list(PREFER_NODES)}]}}] if prefer_nodes else []
                ) + [{"weight": 100, "preference": {"matchExpressions": [
-                   {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(OVERFLOW_NODES)}]}}]}},
+                   {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": list(OVERFLOW_NODES)}]}}]},
+                        "podAntiAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": [
+                            {"labelSelector": {"matchLabels": dict(AGENT_HOST_LABELS)}, "topologyKey": "kubernetes.io/hostname",
+                             "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": AGENT_HOST_NAMESPACE}}}]}},
            "tolerations": [{"key": "homelab.cartwmic.com/optional", "operator": "Exists", "effect": "NoSchedule"}],
            "volumes": [{"name": "cache", "hostPath": {"path": "/var/lib/kgate/cache", "type": "DirectoryOrCreate"}},
                        {"name": "out", "emptyDir": {}}],
