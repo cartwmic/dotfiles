@@ -31,7 +31,7 @@
 #   KGATE_DOCKER_JOB_IMAGE    the kgate image variant `docker` (job container), pinned by digest (default: the one homelab#597 built, kgate image run 44986480504)
 #   KGATE_DOCKER_DIND_IMAGE   the dind sidecar image, pinned by digest (default: docker:29.9.3-dind's digest)
 #   KGATE_DOCKER_CLI_IMAGE    an image that cannot start dockerd, for (c2) (default: docker:29.9.3-cli's digest)
-#   KGATE_PROOF_NODES         nodes for A, space separated (default: agent-1, agent-2, agent-4, the G14)
+#   KGATE_PROOF_NODES         nodes for A, space separated (default: agent-1, agent-2, the G14; the client refuses --node for the overflow node agent-4)
 #   KGATE_PROOF_BIG_IMAGE     an image over 4 GiB uncompressed for (b) (default nvidia/cuda:12.4.1-devel-ubuntu22.04)
 #   KGATE_SSH, KGATE_SSH_KEY  as for kgate itself
 set -u
@@ -39,7 +39,7 @@ set -u
 JOB_IMAGE=${KGATE_DOCKER_JOB_IMAGE:-ghcr.io/cartwmic/kgate@sha256:be170720691c03c7edca206d34220863142de522d32ae3c52306d94a117aa69b}
 DIND_IMAGE=${KGATE_DOCKER_DIND_IMAGE:-docker@sha256:7bf70dcb85c822e3fa6f2d332143e474b99147b9d7b39102b0cfe8b04a7dd61b}
 CLI_IMAGE=${KGATE_DOCKER_CLI_IMAGE:-docker@sha256:5a7af0dcb0e46c803efe9b45371dd21cb500e5b4453250394ac6f06d49b6e6f1}
-NODES=${KGATE_PROOF_NODES:-"ubuntu-server-k8s-agent-1 ubuntu-server-k8s-agent-2 ubuntu-server-k8s-agent-4 cartwmic-g14-wsl"}
+NODES=${KGATE_PROOF_NODES:-"ubuntu-server-k8s-agent-1 ubuntu-server-k8s-agent-2 cartwmic-g14-wsl"}
 BIG_IMAGE=${KGATE_PROOF_BIG_IMAGE:-nvidia/cuda:12.4.1-devel-ubuntu22.04}
 STATE=${XDG_STATE_HOME:-$HOME/.local/state}/kgate
 KEY=${KGATE_SSH_KEY:-$HOME/.ssh/homelab}
@@ -352,8 +352,8 @@ if [ -n "$hard" ]; then
     repoE=$(docker_profile "" "" "" 'ephemeral_storage = "2Gi"
 ephemeral_storage_limit = "4Gi"' | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo E)
     echo "    quota requests.cpu $hard; each Docker job asks $P cpu (job 1 + sidecar $side)"
-    start e1 "$repoE" --wait 1200 -- sh ./sleep.sh 60
-    start e2 "$repoE" --wait 1200 -- sh ./sleep.sh 60
+    start e1 "$repoE" --wait 1200 -- sh ./sleep.sh 180
+    start e2 "$repoE" --wait 1200 -- sh ./sleep.sh 180
     wait_id e1 300; wait_id e2 300
     start e3 "$repoE" --wait 1200 -- sh ./ran.sh
     n=0; until grep -q 'queued: waiting for quota' "$work/e3.out" 2>/dev/null || [ "$n" -ge 120 ]; do sleep 2; n=$((n + 2)); done
