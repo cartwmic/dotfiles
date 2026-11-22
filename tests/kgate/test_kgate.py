@@ -763,8 +763,13 @@ if a[0] == "exec" and "-i" in a:
     # A real pod has a real /tmp; on a Mac /tmp is a symlink tar will not extract through, so the job's own two files go under FAKE.
     jobroot = os.path.join(fake, "jobroot")
     os.makedirs(jobroot, exist_ok=True)
-    tar = subprocess.run(["tar", "-xf", "-", "--no-same-owner", "-C", "/", "--exclude", "tmp/kgate-*"], input=data)
     tar2 = subprocess.run(["tar", "-xf", "-", "--no-same-owner", "-C", jobroot, "tmp/%s" % job], input=data)
+    # The pod unpacks onto its own empty disk. Here the shipped worktree has the path of the test's real repo, which other clients are reading at the same moment (git, the
+    # hash): tar would delete and recreate each file under them, and a client that looked in between failed with "not a git repository" (dotfiles#732). The files
+    # are the very ones that are there, so the worktree is left out of the unpack; whatever else the tar holds is unpacked as before.
+    root = json.load(open("%s/tmp/%s/job.json" % (jobroot, job))).get("root") if tar2.returncode == 0 else None
+    skip = ["--exclude", root.strip("/")] if root else []
+    tar = subprocess.run(["tar", "-xf", "-", "--no-same-owner", "-C", "/", "--exclude", "tmp/kgate-*", *skip], input=data)
     if tar.returncode or tar2.returncode:
         sys.exit(1)
     if os.environ.get("FAKE_TAMPER"):
