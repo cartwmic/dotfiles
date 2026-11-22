@@ -1,7 +1,7 @@
 """scripts/warm-chromium.sh reads Chromium's binary and the data files beside it, and nothing when there is no Chromium.
 
 A fake `cat` in front of PATH records which files the script reads, then reads them for real."""
-import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -31,12 +31,14 @@ class WarmChromiumTest(unittest.TestCase):
         fake_cat = self.root / "fake" / "cat"
         fake_cat.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$CAT_LOG"\nexec /bin/cat "$@"\n')
         fake_cat.chmod(0o755)
+        for tool in ("find", "readlink", "dirname"):  # the only other tools the script runs, so a chromium in /usr/bin is not found
+            (self.root / "fake" / tool).symlink_to(shutil.which(tool))
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def warm(self, path_dirs, **env):
-        e = {"PATH": ":".join([str(self.root / "fake"), *path_dirs, "/usr/bin", "/bin"]), "CAT_LOG": str(self.log), **env}
+        e = {"PATH": ":".join([str(self.root / "fake"), *path_dirs, "/nonexistent"]), "CAT_LOG": str(self.log), **env}
         r = subprocess.run([str(SCRIPT)], env=e, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         return self.log.read_text().split() if self.log.exists() else []
