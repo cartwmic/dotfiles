@@ -30,40 +30,48 @@ BASE_ARGS = ["--no-first-run", "--no-default-browser-check", "--disable-search-e
 
 # A fake Chrome as a real .app bundle: open(1) launches the bundle's executable and does not pass the caller's
 # environment, so this one records its argv next to itself instead of through FAKE_ARGV.
+# It imports only what it needs to bind the port. open(1) starts it from cold on the GitHub macOS runner, where the
+# first launch of a job spent 5-7 s importing http.server, hashlib and pathlib before it bound the port (0.2 s on
+# later launches); with the launcher's 10 s wait that was a coin toss. The WebSocket helpers load on a thread after the bind.
 FAKE_BUNDLE_CHROME = """#!%s
-import base64, hashlib, http.server, json, pathlib, socketserver, sys
-pathlib.Path(__file__).resolve().parent.joinpath("argv.log").write_text(json.dumps(sys.argv[1:]))
+import json, os, socketserver, sys, threading
+here = os.path.dirname(os.path.realpath(__file__))
+open(os.path.join(here, "argv.log"), "w").write(json.dumps(sys.argv[1:]))
 port = int([a for a in sys.argv if a.startswith("--remote-debugging-port=")][0].split("=")[1])
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.headers.get("Upgrade", "").lower() == "websocket":   # the launcher's Target.createTarget call (launch forms b and c)
-            if self.path != "/devtools/browser/fake":   # real Chrome requires the leading slash on the request-target
-                self.send_response(400); self.end_headers()
-                return
-            key = self.headers.get("Sec-WebSocket-Key", "")
-            accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
-            self.send_response(101)
-            self.send_header("Upgrade", "websocket")
-            self.send_header("Connection", "Upgrade")
-            self.send_header("Sec-WebSocket-Accept", accept)
-            self.end_headers()
-            frame = self.connection.recv(65536)   # one client frame; client frames are always masked
-            length = frame[1] & 0x7F
-            mask = frame[2:6]
-            call = json.loads(bytes(b ^ mask[i %% 4] for i, b in enumerate(frame[6:6 + length])))
-            pathlib.Path(__file__).resolve().parent.joinpath("cdp.log").write_text(json.dumps(call))
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+class H(socketserver.StreamRequestHandler):
+    def reply(self, status, headers=(), body=b""):
+        headers = list(headers) + ([("Content-Length", len(body))] if body else [])
+        self.wfile.write(("HTTP/1.1 %%s\\r\\n" %% status + "".join("%%s: %%s\\r\\n" %% h for h in headers) + "\\r\\n").encode() + body)
+    def handle(self):
+        path = self.rfile.readline().decode().split()[1]
+        headers = {}
+        for line in iter(self.rfile.readline, b""):
+            if line in (b"\\r\\n", b"\\n"):
+                break
+            name, _, value = line.decode().partition(":")
+            headers[name.strip().lower()] = value.strip()
+        if headers.get("upgrade", "").lower() == "websocket":   # the launcher's Target.createTarget call (launch forms b and c)
+            if path != "/devtools/browser/fake":   # real Chrome requires the leading slash on the request-target
+                return self.reply("400 Bad Request")
+            import base64, hashlib
+            accept = base64.b64encode(hashlib.sha1((headers.get("sec-websocket-key", "") + GUID).encode()).digest()).decode()
+            self.reply("101 Switching Protocols", [("Upgrade", "websocket"), ("Connection", "Upgrade"), ("Sec-WebSocket-Accept", accept)])
+            length = self.rfile.read(2)[1] & 0x7F   # one client frame; client frames are always masked
+            mask = self.rfile.read(4)
+            call = json.loads(bytes(b ^ mask[i %% 4] for i, b in enumerate(self.rfile.read(length))))
+            open(os.path.join(here, "cdp.log"), "w").write(json.dumps(call))
             reply = json.dumps({"id": call.get("id", 1), "result": {"targetId": "fake-target"}}).encode()
-            self.connection.sendall(bytes([0x81, len(reply)]) + reply)
-            return
-        self.send_response(200); self.end_headers()
-        if self.path == "/json/version":
-            self.wfile.write(json.dumps({"webSocketDebuggerUrl": "ws://127.0.0.1:%%d/devtools/browser/fake" %% port}).encode())
+            self.wfile.write(bytes([0x81, len(reply)]) + reply)
+        elif path == "/json/version":
+            self.reply("200 OK", body=json.dumps({"webSocketDebuggerUrl": "ws://127.0.0.1:%%d/devtools/browser/fake" %% port}).encode())
         else:
-            self.wfile.write(b"{}")
-    def log_message(self, *a): pass
+            self.reply("200 OK", body=b"{}")
 class S(socketserver.TCPServer):
     allow_reuse_address = True   # the test relaunches on the same port after --stop
-S(("127.0.0.1", port), H).serve_forever()
+server = S(("127.0.0.1", port), H)
+threading.Thread(target=lambda: __import__("base64") and __import__("hashlib"), daemon=True).start()
+server.serve_forever()
 """ % sys.executable
 
 # A fake open that records its arguments and spawns the bundle's executable at once, like the real one.
