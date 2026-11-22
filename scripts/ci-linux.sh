@@ -31,12 +31,18 @@ for tool in chezmoi zsh lsof rsync node python3; do
   fi
 done
 
+# A fresh runner's disk is cold: read Chromium's files while the node tests run, so the shx tests do not wait on it (dotfiles#702).
+scripts/warm-chromium.sh &
+warm_pid=$!
+
 node --test tests/pi-patches/pi_select.test.mjs
 node --test tests/pi-patches/apply_no_pi.test.mjs
 node --test tests/pi-patches/patch_failure_chain.test.mjs
 node --test tests/pi-patches/refresh_and_verify.test.mjs
 # A Pi extension is TypeScript: node 22.6 or newer runs it by stripping the types (CI's setup-node step gives it).
 node --experimental-strip-types --disable-warning=ExperimentalWarning --test dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts
+
+wait "$warm_pid"
 
 status=0
 python3 scripts/ci-par.py \
@@ -118,6 +124,7 @@ python3 scripts/ci-par.py \
   tests/tmp-on-disk \
   tests/initramfs-ssh-unlock \
   tests/ci-par \
+  tests/warm-chromium \
   tests/mcp-pins \
   tests/release-pins \
   tests/ci-main-status \
