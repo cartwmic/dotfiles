@@ -2,6 +2,8 @@
 Run: python3 -I tests/deriving-readable-docs/test_extend.py"""
 import json
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import unittest
@@ -10,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.dont_write_bytecode = True
 import test_coverage as base  # noqa: E402
+from test_final_recheck import line_of  # noqa: E402
 
 SCRIPTS, SKILL_DIR = base.SCRIPTS, base.SKILL_DIR
 SKILL = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
@@ -213,6 +216,76 @@ class StampGuideTest(Fixture):
         self.write("GUIDE.md", OLD)
         self.assertEqual(self.stamp("--guide").returncode, 0)
         self.assertEqual(Path(self.path("GUIDE.md")).read_text(), OLD)
+
+
+class RecheckAfterRepairTest(Fixture):
+    """E7 step 4 re-checks a claim that failed its check and that the lead left unedited. The test reads the E7 commands out of extend.md, fills in `<skill>` and `<repo>`,
+    and reads step 4's `...` as the guide and repo operands. It runs them in the pass folder. Only the checker's reports are written by hand. On wording that compares with
+    GUIDE.new.cut.md, the unedited line is never listed again and this test fails."""
+
+    NEW_CLAIM = "A note is saved on every edit."
+    NEW = swap(swap(OLD, "Notes are read from the folder. `src/app.py:20` [A4.cccc]\n", "Notes are read from the folder. `src/app.py:20` [A4.cccc]\n"
+                    "A note is saved on every edit. `src/app.py:21` [A4.ffff]\n"),
+               "The sync interval is set in the settings. `src/app.py:10`", "The sync interval defaults to 30 seconds. `src/app.py:10`")
+
+    def e7_steps(self):
+        """{step number: the `python3 -I` commands in backticks on that numbered line of E7 in extend.md}."""
+        section = EXTEND.split("## E7 Repair before cut")[1].split("## E8 ")[0]
+        steps = {}
+        for line in section.splitlines():
+            m = re.match(r"(\d+)\. ", line)
+            if m:
+                steps[int(m.group(1))] = re.findall(r"`(python3 -I <skill>/scripts/[^`]+)`", line)
+        return steps
+
+    def run_step(self, command):
+        args = shlex.split(command.replace("<skill>", str(SKILL_DIR)).replace("<repo>", self.repo).replace(" ... ", " GUIDE.md %s " % self.repo))
+        self.assertEqual(args[:2], ["python3", "-I"], command)
+        return subprocess.run([sys.executable, "-I", *args[2:]], cwd=self.path(""), capture_output=True, text=True)
+
+    def checker_report(self, folder, ids, failing, finding=""):
+        """What a fresh checker writes for one slice: a read row for each claim, the failing one with OVERSTATED, and its finding if the check gave one."""
+        Path(self.path(folder)).mkdir(exist_ok=True)
+        rows = "".join("read | %s | %s | src/app.py:3\n" % (i, "OVERSTATED" if i == failing else "HOLDS") for i in ids)
+        self.write(folder + "/slice-1.md", "Slice: slice-1\n" + rows + finding)
+
+    def test_a_claim_that_failed_its_check_and_was_left_unedited_is_listed_and_checked_again(self):
+        r = self.diff(self.NEW, name="slices-new")  # E6: the pass's own extend.py diff
+        self.assertEqual(r.returncode, 0, r.stdout)
+        shutil.copyfile(self.path("GUIDE.md"), self.path("GUIDE.new.cut.md"))  # E6: keep GUIDE.md as GUIDE.new.cut.md
+        new_id = "%d.1" % line_of(self.NEW, self.NEW_CLAIM)
+        passed_id = "%d.1" % line_of(self.NEW, "The sync interval defaults")
+        ids = Path(self.path("slices-new/changed.txt")).read_text().split()
+        self.assertIn(new_id, ids)
+        self.checker_report("reports-new", ids, new_id, "%s | OVERSTATED | MISSING_CONDITION | saves | it saves only when sync is on (src/app.py:21) | add the condition\n" % new_id)
+
+        steps = self.e7_steps()
+        self.assertEqual([len(steps[k]) for k in (1, 2, 4)], [1, 1, 3], steps)
+        r = self.run_step(steps[1][0])  # step 1: the claim is a fix, not a cut
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"fix \| %s \| OVERSTATED \| MISSING_CONDITION" % re.escape(new_id))
+        r = self.run_step(steps[2][0])  # step 2: --except keeps it
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(self.NEW_CLAIM, Path(self.path("GUIDE.md")).read_text())  # step 3 is the lead's edit, and this lead leaves the line alone
+        r = self.run_step(steps[4][0])  # step 4: what is still different, less what a checker passed as it stands
+        self.assertEqual(r.returncode, 0, r.stderr)
+        again = Path(self.path("changed2.txt")).read_text().split()
+        self.assertIn(new_id, again, "E7 step 4 did not list the line left unedited, so no checker sees it again")
+        self.assertNotIn(passed_id, again)  # an edited line that a checker passed is skipped
+        r = self.run_step(steps[4][1])  # one fresh checker per slice gets it
+        self.assertEqual(r.returncode, 0, r.stderr)
+        claims = [line.split(" | ")[0] for p in Path(self.path("slices-new2")).glob("slice-*.claims.txt") for line in p.read_text().splitlines() if line.strip()]
+        self.assertIn(new_id, claims)
+        self.checker_report("reports-new2", again, new_id)  # the fresh check still fails it
+        r = self.run_step(steps[4][2])  # a repaired claim that still fails is cut now
+        self.assertEqual(r.returncode, 0, r.stderr)
+        after = Path(self.path("GUIDE.md")).read_text()
+        self.assertNotIn(self.NEW_CLAIM, after)
+        self.assertIn("The sync interval defaults to 30 seconds.", after)
+
+    def test_e8_re_checks_with_the_same_was_file_as_step_4(self):
+        was = re.search(r"--was (\S+)", self.e7_steps()[4][0]).group(1)
+        self.assertIn(was, EXTEND.split("## E8 ")[1])
 
 
 class ExtendDocsTest(unittest.TestCase):
