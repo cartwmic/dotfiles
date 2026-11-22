@@ -7,9 +7,9 @@
 # F is a file, or `-` for the body on stdin. Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
 # `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
 # passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
-# the body is PATCHed through `gh api` (`gh pr edit` fails on the agent host). --repo defaults to the origin of the current directory, --base to the repo's
-# default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes.
-# Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
+# the PR's state is read through `gh api`: a merged or closed PR is refused, so its description is never overwritten. An open PR is PATCHed through `gh api` (`gh pr edit` fails on the agent host).
+# --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes.
+# Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments, a merged or closed PR, or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
 # Personal profile only: it needs pr-body-check (docs/profiles.md).
 set -eu
 
@@ -65,6 +65,7 @@ export GH_CALLER=pr-open
 if [ -z "$repo" ]; then
   url=$(git remote get-url origin 2>/dev/null) || fail 2 "no --repo and this directory has no git remote named origin"
   repo=$(printf '%s\n' "$url" | sed -e 's/\.git$//' -e 's#/*$##' | awk -F'[/:]' 'NF >= 2 { print $(NF-1) "/" $NF }')
+  printf '[pr-open] repo %s: taken from the origin of this directory (pass --repo OWNER/REPO to use another)\n' "$repo" >&2
 fi
 case $repo in */*) ;; *) fail 2 "cannot read OWNER/REPO from '$repo'" ;; esac
 
@@ -77,6 +78,15 @@ check() {
 
 if [ -n "$edit" ]; then
   check pr-body-check --body-file "$copy"   # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs
+  pr_info=$(gh api "repos/$repo/pulls/$edit" --jq '.state + " " + (.merged | tostring)') || fail 2 "could not read the state of $repo#$edit. If you meant another repo, pass --repo OWNER/REPO."
+  pr_state=${pr_info%% *}
+  pr_merged=${pr_info#* }
+  case $pr_state in
+    open) ;;
+    closed) if [ "$pr_merged" = true ]; then pr_word=merged; else pr_word=closed; fi
+      fail 2 "$repo#$edit is $pr_word, so its description was not changed. If you meant another repo, pass --repo OWNER/REPO." ;;
+    *) fail 2 "could not read the state of $repo#$edit (got '$pr_info'). If you meant another repo, pass --repo OWNER/REPO." ;;
+  esac
   set -- api -X PATCH "repos/$repo/pulls/$edit" -F "body=@$copy" --jq .html_url
   [ -z "$title" ] || set -- "$@" -f "title=$title"
   out=$(gh "$@") || fail 2 "gh api could not update the description of $repo#$edit"

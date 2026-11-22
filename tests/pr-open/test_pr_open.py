@@ -24,6 +24,7 @@ case "$1 $2" in
                echo "https://github.com/cartwmic/scratch/pull/42" ;;
   "api -X") for a in "$@"; do case $a in body=@*) cp "${a#body=@}" "$FAKE_POSTED" ;; esac; done
             echo "https://github.com/cartwmic/scratch/pull/7" ;;
+  "api repos/"*) echo "${FAKE_PR_INFO:-open false}" ;;
 esac
 '''
 
@@ -78,6 +79,9 @@ class PrOpen(unittest.TestCase):
 
     def calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def patches(self):
+        return [c for c in self.calls() if "[PATCH]" in c]
 
     def remote_branches(self):
         return self.git(self.origin, "branch", "--list").split()
@@ -167,19 +171,61 @@ class PrOpen(unittest.TestCase):
                 self.assertTrue(result.stderr.strip().splitlines()[-1].startswith("[pr-open] ERROR: "), result.stderr)
         self.assertFalse([c for c in self.calls() if c.startswith("gh")])
 
-    def test_edit_checks_then_patches_the_body_through_gh_api(self):
+    def test_edit_checks_then_reads_the_state_then_patches_the_body_through_gh_api(self):
         result = self.run_open("--edit", "7", "--body-file", str(self.body))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines()[-1], "https://github.com/cartwmic/scratch/pull/7")
         calls = self.calls()
         self.assertTrue(calls[0].startswith("pr-body-check"))
-        self.assertIn("[api] [-X] [PATCH] [repos/cartwmic/scratch/pulls/7]", calls[1])
-        self.assertNotIn("[pr] [edit]", calls[1])
+        self.assertIn("[api] [repos/cartwmic/scratch/pulls/7]", calls[1])  # the state is read before the PATCH
+        self.assertEqual(self.patches(), [calls[2]])
+        self.assertIn("[api] [-X] [PATCH] [repos/cartwmic/scratch/pulls/7]", calls[2])
+        self.assertNotIn("[pr] [edit]", calls[2])
         self.assertEqual(self.posted.read_text(), self.body.read_text())
+
+    def test_an_open_pr_is_still_edited(self):
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.patches()), 1)
+        self.assertEqual(self.posted.read_text(), self.body.read_text())
+
+    def test_a_merged_pr_is_refused_and_not_patched(self):
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "closed true"})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: cartwmic/scratch#7 is merged"), last)
+        self.assertIn("If you meant another repo, pass --repo OWNER/REPO", last)
+        self.assertEqual(self.patches(), [])
+        self.assertFalse(self.posted.exists())
+
+    def test_a_closed_pr_is_refused_and_not_patched(self):
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "closed false"})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: cartwmic/scratch#7 is closed"), last)
+        self.assertIn("If you meant another repo, pass --repo OWNER/REPO", last)
+        self.assertEqual(self.patches(), [])
+        self.assertFalse(self.posted.exists())
+
+    def test_the_repo_taken_from_origin_is_named_on_stderr_in_both_modes(self):
+        for args in (("--edit", "7"), ("--title", "T")):
+            with self.subTest(args=args):
+                result = self.run_open(*args, "--body-file", str(self.body))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = [line for line in result.stderr.splitlines() if "taken from the origin of this directory" in line]
+                self.assertEqual(len(lines), 1, result.stderr)
+                self.assertIn("cartwmic/scratch", lines[0])
+
+    def test_no_origin_line_when_repo_is_given(self):
+        for args in (("--edit", "7"), ("--title", "T")):
+            with self.subTest(args=args):
+                result = self.run_open(*args, "--body-file", str(self.body), "--repo", "cartwmic/scratch")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("taken from the origin", result.stderr)
 
     def test_edit_with_a_title_sets_it_too(self):
         self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
-        self.assertIn("[-f] [title=New title]", self.calls()[1])
+        self.assertIn("[-f] [title=New title]", self.patches()[0])
 
     def test_a_refused_body_is_not_patched(self):
         self.body.write_text("REFUSEME\n")
@@ -195,7 +241,7 @@ class PrOpen(unittest.TestCase):
         result = subprocess.run(["sh", str(SCRIPT), "--edit", "7", "--repo", "cartwmic/other", "--body-file", str(self.body)],
                                 cwd=elsewhere, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("repos/cartwmic/other/pulls/7", self.calls()[1])
+        self.assertIn("repos/cartwmic/other/pulls/7", self.patches()[0])
 
 
 if __name__ == "__main__":
