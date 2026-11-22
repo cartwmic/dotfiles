@@ -77,5 +77,25 @@ class OneSentenceLineTest(unittest.TestCase):
         self.assertEqual(check(doc, REPO)[0], 0)
 
 
+class DuplicateLineTest(unittest.TestCase):
+    """F3: two appendix lines that make the same claim are one claim twice."""
+
+    def test_two_lines_with_the_same_words_after_case_and_spacing_fail_and_name_the_first(self):
+        doc = APPENDIX % "It saves a note. `src/a.rs:1`\nIt  SAVES a note.  `src/a.rs:2`\n"
+        code, out = check(doc, REPO)
+        self.assertEqual(code, 1, out)
+        self.assertIn("DOC.md:6: FAIL duplicate: the same claim as line 5", out)
+
+    def test_the_same_words_under_another_section_still_fail(self):
+        doc = (APPENDIX % "It saves a note. `src/a.rs:1`\n") + "\n## A5 Listing\n\nIt saves a note. `src/a.rs:3`\n"
+        self.assertIn("FAIL duplicate", check(doc, REPO)[1])
+
+    def test_different_claims_and_a_part_1_sentence_that_restates_a_line_pass(self):
+        doc = "# Part 1: In plain English\n\n## What it is\n\nIt saves a note. [A4.0001]\n\n" + (APPENDIX % "It saves a note. `src/a.rs:1` [A4.0001]\nIt lists notes. `src/a.rs:2`\n")
+        code, out = check(doc, REPO)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("duplicate", out)
+
+
 if __name__ == "__main__":
     unittest.main()
