@@ -12,7 +12,8 @@ Inputs: the PR's agent record (--pr; the file <traces dir>/emitted/review/<repo>
 where `ledger pr-decisions-check` has them listed; the body path is unchanged.
 The traces dir is $AGENT_TRACES_DIR, else ~/.local/share/agent-traces. Read-only: it reads the ledger and prints.
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
-  every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
+  every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks. Text in a fenced code block is skipped, and an
+  `ask #N` inside an inline code span is skipped: quote check output in code spans or fences, and it is not read as a citation (ledger text is read as it is);
   for a PR that touches `leads/<type>.*`, the ask ids in `approved_by` of `leads/<type>.json` at the PR head (when the file has the key; --pr only);
   the ask each collected decision names (its ask_id, and any `ask #N` in its why); and for each collected ask, the ask its workstream's creation why cites.
 An id the ledger does not know is an error (exit 1, each id named): fix the citation, do not drop it. (The one exception: a number found only in a workstream's free-text
@@ -102,6 +103,31 @@ def ask_refs(text, loose=False):
 def without_block(text):
     """The text with any earlier generated block cut out, so its ids are not read as citations."""
     return re.sub(r"^%s\n.*?^%s[ \t]*\n?" % (re.escape(HEADER), re.escape(END)), "", text, flags=re.M | re.S)
+
+
+def without_fences(text):
+    """The text with every fenced code block (``` or ~~~, closed by a fence of the same mark at least as long; an unclosed one runs to the end) blanked line by line, so what
+    a record quotes from a check's output (`the pick for ask #1 is accepted (303)`) is not read as a citation."""
+    out, mark = [], None
+    for line in text.split("\n"):
+        m = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if mark is None:
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                mark = m.group(1)
+                out.append("")
+            else:
+                out.append(line)
+        else:
+            if m and m.group(1)[0] == mark[0] and len(m.group(1)) >= len(mark) and not m.group(2).strip():
+                mark = None
+            out.append("")
+    return "\n".join(out)
+
+
+def without_spans(text):
+    """The text with every inline code span (a run of backticks to the next run of the same length, inside one paragraph) blanked, newlines kept."""
+    blank = lambda m: re.sub(r"[^\n]", " ", m.group(0))
+    return re.sub(r"(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)\1(?!`)", blank, text, flags=re.S)
 
 
 def quote(text):
@@ -306,10 +332,10 @@ def build(texts, asks_given, decisions_given, ledger, approvals=(), linked=()):
         for n in ids:
             add(ask_why, n, "approved_by of the lead type %s (leads/%s.json at the PR head)" % (t, t))
     for t in texts:
-        t = without_block(t)
+        t = without_fences(without_block(t))  # quoted check output in a fenced block is not a citation; a `Decisions:` line is plain text, so only fences are skipped there
         for n in line_ids(t, "Decisions"):
             add(dec_why, n, "a Decisions: line")
-        for n in ask_refs(t):
+        for n in ask_refs(without_spans(t)):  # an ask named in a code span is quoted output too
             add(ask_why, n, "named in the text")
     errors, decisions, asks = [], {}, {}
     for n in sorted(dec_why):
