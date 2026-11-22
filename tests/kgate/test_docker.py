@@ -135,11 +135,14 @@ class PodSpec(unittest.TestCase):
 
     def test_every_container_has_a_disk_request_and_limit_and_the_data_root_is_sized_by_the_jobs_limit(self):
         # the kubelet enforces the pod's disk only when EVERY container has a limit; the data root is the pod's biggest user of disk
+        # the API server does not force these: a pod with none is admitted and the quota counts it as 0, so the client must set both on every container
         spec = self.pod(ephemeral="24Gi", ephemeral_limit="40Gi")
         (job,), (side,) = spec["containers"], spec["initContainers"]
-        for c in (job, side):
-            self.assertIn("ephemeral-storage", c["resources"]["requests"], c["name"])
-            self.assertIn("ephemeral-storage", c["resources"]["limits"], c["name"])
+        every = spec["containers"] + spec["initContainers"]
+        self.assertEqual(len(every), 2)
+        for c in every:
+            for kind in ("requests", "limits"):
+                self.assertRegex(c["resources"][kind].get("ephemeral-storage", ""), r"^\d+(Mi|Gi)$", "%s %s" % (c["name"], kind))
         self.assertEqual((job["resources"]["requests"]["ephemeral-storage"], job["resources"]["limits"]["ephemeral-storage"]), ("24Gi", "40Gi"))
         self.assertEqual((side["resources"]["requests"]["ephemeral-storage"], side["resources"]["limits"]["ephemeral-storage"]),
                          (K.DOCKER_SIDECAR_DISK, K.DOCKER_SIDECAR_DISK_LIMIT))
