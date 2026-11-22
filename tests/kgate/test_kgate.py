@@ -3342,6 +3342,52 @@ class Archive(unittest.TestCase):
         self.assertNotIn(victim.lstrip("/"), names)
         self.assertIn((common + "/config").lstrip("/"), names)
 
+    def test_a_git_file_that_shrinks_between_stat_and_read_ships_with_the_bytes_it_had_when_read(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(common, "HEAD")
+        real_open = open
+
+        def shrinking_open(path, *a, **k):
+            if os.fspath(path) == victim:
+                with real_open(path, "wb") as f:   # shorter than the size tar stat'ed a moment ago
+                    f.write(b"x\n")
+            return real_open(path, *a, **k)
+        with mock.patch.dict(K.__dict__, {"open": shrinking_open}):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            self.assertEqual(tar.extractfile(victim.lstrip("/")).read(), b"x\n")
+            self.assertIn((common + "/config").lstrip("/"), tar.getnames())
+
+    def test_a_git_file_over_the_read_limit_is_streamed_whole(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(common, "HEAD")
+        want = Path(victim).read_bytes()
+        with mock.patch.dict(K.__dict__, {"GIT_FILE_READ_LIMIT": 0}):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            self.assertEqual(tar.extractfile(victim.lstrip("/")).read(), want)
+
+    def test_a_worktree_file_that_shrinks_while_it_is_read_still_fails_the_job(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(wt, "f")
+        with open(victim, "wb") as f:
+            f.write(b"long enough to shrink\n")
+        real_open = __import__("tarfile").bltn_open
+
+        def shrinking_open(path, *a, **k):
+            if os.fspath(path) == victim:
+                with real_open(path, "wb") as f:
+                    f.write(b"x")
+            return real_open(path, *a, **k)
+        with mock.patch("tarfile.bltn_open", shrinking_open):
+            with self.assertRaises(OSError):
+                K.archive(wt, common, files, {}, history=True)
+
     def test_a_git_folder_deleted_while_it_is_read_is_left_out_with_what_it_held(self):
         # 2026-11-16 01:51Z: a job died on `.git/worktrees/proof-main-old`, a linked worktree's folder removed between the stat and the listing
         main, linked = self.repo_and_linked()
