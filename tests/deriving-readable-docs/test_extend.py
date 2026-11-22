@@ -276,6 +276,7 @@ class RecheckAfterRepairTest(Fixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         claims = [line.split(" | ")[0] for p in Path(self.path("slices-new2")).glob("slice-*.claims.txt") for line in p.read_text().splitlines() if line.strip()]
         self.assertIn(new_id, claims)
+        self.assertEqual(set(claims), set(again), "the slice must hold only the ids in changed2.txt: a --was here also adds each claim that differs from GUIDE.was.md, held ones included")
         self.checker_report("reports-new2", again, new_id)  # the fresh check still fails it
         r = self.run_step(steps[4][2])  # a repaired claim that still fails is cut now
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -302,6 +303,12 @@ class ExtendDocsTest(unittest.TestCase):
             self.assertIn(script, EXTEND, script)
         self.assertRegex(EXTEND, r"references/check-brief\.md` as written \(the same brief pass 1 uses\)")
         self.assertRegex(EXTEND, r"never run `assemble\.py`")
+
+    def test_e6_names_the_repaired_copy_as_the_old_file_the_same_way_e7_step_4_does(self):
+        e6 = EXTEND.split("## E6 ")[1].split("## E7 ")[0]
+        e7 = EXTEND.split("## E7 ")[1].split("## E8 ")[0]
+        self.assertIn("When a run repaired the incoming guide first, that repaired copy is the old file (`GUIDE.was.md`) instead", e6)
+        self.assertIn("When a run repaired the incoming guide first, that repaired copy is the `--was` file instead", e7)
 
     def test_a_partial_fact_is_an_edit_and_a_missing_fact_goes_next_to_its_neighbour(self):
         self.assertRegex(EXTEND, r"A PARTIAL fact never gets a second line")
