@@ -345,7 +345,7 @@ class ListerDocsTest(unittest.TestCase):
 
 
 class RecheckRoutingTest(unittest.TestCase):
-    """F2: in an extend pass every failure of a claim the pass wrote goes to repair first, for two tries, then to the cut; a claim the pass did not touch is reported and left alone."""
+    """F2: in an extend pass every failure on any line goes to repair first, for two tries, then to the cut."""
     G = base.GUIDE
     SAVES, STOPS, LISTS = [base.line_of(base.GUIDE, n) for n in ("It saves a note.", "It stops after 5", "It lists notes. `")]
 
@@ -361,6 +361,7 @@ class RecheckRoutingTest(unittest.TestCase):
             w.write("OLD.md", was or self.G)
             w.write("ids.txt", "\n".join(ids) + "\n")
             w.write("rep/slice-1.md", report)
+            extra = [w.p("OLD.md") if x == "@OLD" else x for x in extra]
             code, out, err = base.script(mode, w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--out", w.p("fix.txt"), *extra) if mode == "repair" else \
                 base.script(mode, w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), *extra)
             fix = (w.dir / "fix.txt").read_text().split() if (w.dir / "fix.txt").exists() else None
@@ -414,7 +415,7 @@ class RecheckRoutingTest(unittest.TestCase):
             self.assertNotIn("It lists all notes.", after)
             self.assertIn("It saves a note.", after)
 
-    def test_a_failure_on_a_line_that_is_as_the_old_guide_has_it_is_reported_and_left_alone(self):
+    def test_a_failure_on_a_line_as_the_old_guide_has_it_is_routed_to_repair_then_to_the_cut(self):
         lists, saves = self.n(self.LISTS), self.n(self.SAVES)
         rep = self.report([(lists, "WRONG"), (saves, "HOLDS")], ["%s | WRONG | KIND | lists | the code | cut" % lists])
         with base.Work() as w:
@@ -424,12 +425,41 @@ class RecheckRoutingTest(unittest.TestCase):
             w.write("rep/slice-1.md", rep)
             args = (w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--was", w.p("OLD.md"))
             code, out, err = base.script("repair", *args, "--try", "1", "--out", w.p("fix.txt"))
+            self.assertEqual((code, (w.dir / "fix.txt").read_text().split()), (0, [lists]), err)
+            self.assertIn("1 failing claims the ids file did not name are routed too (1 as OLD.md has them)", out)
+            code, out, err = base.script("repair", *args, "--try", "3", "--out", w.p("fix.txt"))
             self.assertEqual((code, (w.dir / "fix.txt").read_text()), (0, ""), err)
-            self.assertIn("unchanged | %s | WRONG | It lists notes." % lists, out)
+            self.assertIn("cut | %s | WRONG" % lists, out)
             code, out, err = base.script("cut", *args)
             self.assertEqual(code, 0, err)
-            self.assertIn("unchanged | %s | WRONG | It lists notes." % lists, out)
+            self.assertNotIn("It lists notes.", (w.dir / "GUIDE.md").read_text())
+            self.assertIn("It saves a note.", (w.dir / "GUIDE.md").read_text())
+
+    def test_a_line_next_to_a_changed_claim_that_fails_is_routed_too(self):
+        new = self.G.replace("It saves a note.", "It saves a note fast.")
+        saves, stops = self.n(base.line_of(new, "It saves a note fast.")), self.n(base.line_of(new, "It stops after 5"))
+        rep = self.report([(saves, "HOLDS"), (stops, "OVERSTATED")], ["%s | OVERSTATED | MISSING_CONDITION | stops | the code | fix" % stops])
+        code, out, err, fix, _ = self.run_step("repair", rep, [saves], "--was", "@OLD", "--try", "1", guide=new)
+        self.assertEqual((code, fix), (0, [stops]), err)
+
+    def test_a_pending_claim_the_repair_never_edited_is_listed_again_until_a_checker_passes_it(self):
+        lists = self.n(self.LISTS)
+        with base.Work() as w:
+            w.write("GUIDE.md", self.G)
+            w.write("OLD.md", self.G)
+            w.write("ids.txt", lists + "\n")
+            w.write("fix.txt", lists + "\n")
+            w.write("rep/slice-1.md", self.report([(lists, "WRONG")]))
+            args = (w.p("GUIDE.md"), w.dir, "--ids", w.p("ids.txt"), "--reports", w.p("rep"), "--was", w.p("OLD.md"))
+            code, out, err = base.script("cut", *args, "--except", w.p("fix.txt"), "--held-out", w.p("held.txt"))
+            self.assertEqual(code, 0, err)
             self.assertEqual((w.dir / "GUIDE.md").read_text(), self.G)
+            code, out, err = base.script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("OLD.md"), "--skip", w.p("held.txt"), "--out", w.p("changed2.txt"))
+            self.assertEqual((w.dir / "changed2.txt").read_text().split(), [lists], out)
+            w.write("rep/slice-1.md", self.report([(lists, "HOLDS")]))
+            code, out, err = base.script("cut", *args, "--held-out", w.p("held2.txt"))
+            code, out, err = base.script("changed", w.p("GUIDE.md"), w.dir, "--was", w.p("OLD.md"), "--skip", w.p("held.txt"), "--skip", w.p("held2.txt"), "--out", w.p("changed3.txt"))
+            self.assertEqual((w.dir / "changed3.txt").read_text().split(), [])
 
     def test_skip_takes_the_held_files_of_every_round(self):
         with base.Work() as w:

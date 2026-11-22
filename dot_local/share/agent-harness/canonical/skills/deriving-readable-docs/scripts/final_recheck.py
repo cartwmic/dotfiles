@@ -13,9 +13,8 @@ repair   reads the same reports and lists each claim whose verdict is not HOLDS 
          it gets one fix and one re-check before it may be cut. Any other cause (KIND, OTHER, no cause) is `cut`. --out writes the ids of the `fix` claims, one a line, for `cut --except`.
          --try N (an extend pass) is the repair try this check closes, from 1: on try 1 and 2 every claim that did not HOLD is `fix`, whatever its cause (a MISSING_CONDITION, NAME, COUNT, KIND,
          OTHER or no cause); from try 3 every one is `cut`, so a claim is repaired twice at most. Without --try the causes above decide.
---was OLD.md (with repair or cut) is the guide the pass extended: a claim that did not HOLD in the reports, is not in the ids file and is not as OLD.md has it (another sentence, tag or cited line)
-         is acted on as if the ids file named it, so a failure on a line the pass wrote is never left without a route. A failing claim that is as OLD.md has it is printed as
-         `unchanged | id | VERDICT | sentence` and left alone.
+--was OLD.md (with repair or cut) marks an extend pass: a claim that did not HOLD in the reports and is not in the ids file is acted on as if the ids file named it, whatever line it is: one
+         the pass wrote, a line next to a changed claim that slice.py pulled in, or a line as OLD.md has it. A failure is never left without a route. It prints how many such claims it added.
 cut      reads the verdicts of the fresh checker's reports in DIR (`read | N.k | VERDICT | path:line` rows) for the claims in the ids file. A claim whose verdict is not HOLDS is
          cut: an appendix claim loses its line, a Part 1 claim loses its sentence. Then every Part 1 sentence is looked at: a tag that points at a cut appendix line is
          removed, and a sentence left with no tag is cut too. A sentence that keeps another tag stays, and is listed. Nothing is reworded. Writes the guide to -o (default:
@@ -23,7 +22,8 @@ cut      reads the verdicts of the fresh checker's reports in DIR (`read | N.k |
          skipped it, so run it again. A Part 1 line with a citation, or an appendix line with two claims, is refused for the same reason.
 --except FILE (with cut) leaves the claims it names uncut: the ones being repaired. They still need a report row.
 --held-out FILE (with cut) writes the content of every checked claim whose verdict is HOLDS (its sentence, tags and cited lines, not its number), and `changed --skip FILE` (once for each file of
-         each round) leaves those out of a later list. The later list then holds every claim still different from OLD.md that no checker passed as it stands: a repaired claim, and a claim that was left to be repaired and never edited,
+         each round) leaves those out of a later list. It also writes a `pending` row for each claim left to be repaired (--except): `changed` lists a pending claim until a checker passes it,
+         even an unchanged incoming line the repair never touched. The later list then holds every claim still different from OLD.md that no checker passed as it stands: a repaired claim, and a claim that was left to be repaired and never edited,
          which is re-checked and cut when it still fails. A passed claim that only moved (its neighbours changed) is listed again.
 drop     cuts the claims the ids file names without a report, with the same tag clean-up as cut, for a Part 1 sentence that still fails lint_main.py after its one fix. It refuses (exit 1,
          nothing written) the `Who it is for` sentence and the last sentence of How to start: those are fixed, never dropped.
@@ -56,31 +56,41 @@ def read(path):
         return f.read()
 
 
-def changed(text, old_text, repo, held=frozenset()):
+def changed(text, old_text, repo, held=frozenset(), pending=frozenset()):
     """The claims that differ from OLD (see changed_since), less the held ones: a claim a checker passed as it stands is not listed again. A held claim that is still a claim of OLD
-    and is listed because it moved stays on the list: its neighbours are not the ones the checker saw."""
+    and is listed because it moved stays on the list: its neighbours are not the ones the checker saw. A `pending` claim (one that failed and was left to be repaired) is listed
+    too, edited or not, until a checker passes it: an unchanged incoming line that was routed to repair and never touched is not left to ship."""
     claims = claim_ids(text, repo)
     ids = changed_since(old_text, claims, text, repo)
     sigs = dict(zip([c[0] for c in claims], signatures(text, claims, repo)))
     old = set(signatures(old_text, claim_ids(old_text, repo), repo))
-    return [c for c in claims if c[0] in ids and (sigs[c[0]] not in held or sigs[c[0]] in old)]
+    return [c for c in claims if (c[0] in ids and (sigs[c[0]] not in held or sigs[c[0]] in old)) or (sigs[c[0]] in pending and sigs[c[0]] not in held)]
 
 
-def held_rows(text, repo, chosen, verdicts):
-    """The content of each chosen claim whose verdict is HOLDS, as JSON lines of [sentence, [tags], [[path, first, last]]]: a claim as `changed --skip` knows it, by what it says."""
+def held_rows(text, repo, chosen, verdicts, keep=()):
+    """The content of each chosen claim whose verdict is HOLDS, as JSON lines of [sentence, [tags], [[path, first, last]]]: a claim as `changed --skip` knows it, by what it says.
+    Each chosen claim that did not HOLD and is in `keep` (left to be repaired) follows as {"pending": [...the same...]}."""
     claims = claim_ids(text, repo)
     sigs = dict(zip([c[0] for c in claims], signatures(text, claims, repo)))
-    return "".join(json.dumps([sigs[c[0]][0], list(sigs[c[0]][1]), [list(x) for x in sigs[c[0]][2]]]) + "\n" for c in chosen if verdicts.get(c[0]) == "HOLDS")
+    row = lambda c: [sigs[c[0]][0], list(sigs[c[0]][1]), [list(x) for x in sigs[c[0]][2]]]
+    return "".join(json.dumps(row(c)) + "\n" for c in chosen if verdicts.get(c[0]) == "HOLDS") + \
+        "".join(json.dumps({"pending": row(c)}) + "\n" for c in chosen if verdicts.get(c[0]) not in (None, "HOLDS") and c[0] in keep)
+
+
+def read_rows(path):
+    """([signature of each passed row], [signature of each pending row]) of a held-out file, as `signatures` makes them."""
+    held, pending = set(), set()
+    for line in read(path).splitlines():
+        if line.strip():
+            row = json.loads(line)
+            sentence, tags, cites = row["pending"] if isinstance(row, dict) else row
+            (pending if isinstance(row, dict) else held).add((sentence, tuple(tags), tuple(tuple(c) for c in cites)))
+    return held, pending
 
 
 def read_held(path):
-    """The set of signatures a held-out file holds, as `signatures` makes them."""
-    out = set()
-    for line in read(path).splitlines():
-        if line.strip():
-            sentence, tags, cites = json.loads(line)
-            out.add((sentence, tuple(tags), tuple(tuple(c) for c in cites)))
-    return out
+    """The set of signatures of the claims a held-out file holds as passed."""
+    return read_rows(path)[0]
 
 
 def part1_pieces(line):
@@ -121,14 +131,13 @@ def repair_rows(text, repo, chosen, verdicts, causes, tries=None):
 
 
 def with_new_failures(text, repo, chosen, verdicts, old_text):
-    """(chosen, left): the chosen claims plus each claim the reports fail that the ids file did not name and that differs from the old guide (another sentence, tag or cited line), in doc
-    order, and the claims the reports fail that are as the old guide has them: those are left alone."""
+    """(chosen, extra, as_was): the chosen claims plus each claim the reports fail that the ids file did not name (a line next to a changed claim that a slice pulled in, or a line as the
+    old guide has it), in doc order; `extra` is the claims added, and `as_was` the ones of them that are as the old guide has them (same sentence, tag and cited line)."""
     claims = claim_ids(text, repo)
     sigs = dict(zip([c[0] for c in claims], signatures(text, claims, repo)))
     old, named = set(signatures(old_text, claim_ids(old_text, repo), repo)), {c[0] for c in chosen}
-    failing = [c for c in claims if c[0] not in named and verdicts.get(c[0], "HOLDS") != "HOLDS"]
-    extra = {c[0] for c in failing if sigs[c[0]] not in old}
-    return [c for c in claims if c[0] in named or c[0] in extra], [c for c in failing if c[0] not in extra]
+    extra = [c for c in claims if c[0] not in named and verdicts.get(c[0], "HOLDS") != "HOLDS"]
+    return [c for c in claims if c[0] in named or c in extra], extra, [c for c in extra if sigs[c[0]] in old]
 
 
 def protected(text, repo, chosen):
@@ -260,7 +269,8 @@ def main(argv):
         return usage()
     text = read(doc)
     if mode == "changed":
-        rows = changed(text, read(opts["--was"]), repo, frozenset().union(*map(read_held, opts.get("--skip", []))))
+        held_pending = [read_rows(f) for f in opts.get("--skip", [])]
+        rows = changed(text, read(opts["--was"]), repo, frozenset().union(*[h for h, _ in held_pending]), frozenset().union(*[p for _, p in held_pending]))
         for c in rows:
             print("%s | %s" % (c[0], c[2]))
         print("%d claims changed since %s" % (len(rows), opts["--was"]) if rows else "nothing changed since %s: no final check needed" % opts["--was"])
@@ -273,9 +283,9 @@ def main(argv):
         chosen = read_ids(opts["--ids"], claims, text, repo)
         verdicts = read_verdicts(opts["--reports"]) if "--reports" in opts else {}
         if "--was" in opts and mode in ("repair", "cut"):
-            chosen, left = with_new_failures(text, repo, chosen, verdicts, read(opts["--was"]))
-            for c in left:
-                print("unchanged | %s | %s | %s" % (c[0], verdicts[c[0]], c[2]))
+            chosen, extra, as_was = with_new_failures(text, repo, chosen, verdicts, read(opts["--was"]))
+            if extra:
+                print("%d failing claims the ids file did not name are routed too (%d as %s has them)" % (len(extra), len(as_was), os.path.basename(opts["--was"])))
         if mode == "repair":
             rows = repair_rows(text, repo, chosen, verdicts, read_causes(opts["--reports"], claims), int(opts["--try"]) if "--try" in opts else None)
             for kind, cid, verdict, cause, sentence in rows:
@@ -296,7 +306,7 @@ def main(argv):
             new, rows = cut_text(text, repo, chosen, verdicts, keep)
             if "--held-out" in opts:
                 with open(opts["--held-out"], "w", encoding="utf-8") as f:
-                    f.write(held_rows(text, repo, chosen, verdicts))
+                    f.write(held_rows(text, repo, chosen, verdicts, keep))
     except (SliceError, CutError) as e:
         print(e, file=sys.stderr)
         return 1

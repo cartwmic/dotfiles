@@ -1,6 +1,6 @@
 # Extend an existing guide (passes 2 and 3 of SKILL.md)
 
-Pass 1 is the procedure of `SKILL.md`, unchanged. An extend pass takes the repo and the guide the earlier pass shipped, and adds what that guide misses without adding errors. A line that is unchanged since the earlier guide is not rewritten, so a pass can add errors only in the lines it writes. At most 3 passes in all: pass 2 extends pass 1's guide, pass 3 extends pass 2's.
+Pass 1 is the procedure of `SKILL.md`, unchanged. An extend pass takes the repo and the guide the earlier pass shipped, and adds what that guide misses without adding errors. A line that is unchanged since the earlier guide is not rewritten unless a checker fails it, so a pass can add errors only in the lines it writes or repairs. At most 3 passes in all: pass 2 extends pass 1's guide, pass 3 extends pass 2's.
 
 ## Inputs and folders
 
@@ -58,7 +58,7 @@ One fresh checker per slice (`Seat: reviewer (skill checker), Opus 5.5 medium`),
 
 A finding is repaired, not deleted, and it gets two tries. Whatever the cause (MISSING_CONDITION, NAME, COUNT, KIND, OTHER, or none named), a claim that does not HOLD goes to repair first: an OVERSTATED claim or one missing a condition gets the condition the checker names, split past 18 words with each part keeping its condition. A NAME or COUNT finding gets the value or word the code shows. A KIND or OTHER finding is rewritten to what the code shows, or narrowed to the case the lines read. A WRONG claim is rewritten to what the code shows when that helps a reader. A claim is cut only after its second repair fails the re-check, or when it is wrong and no true version helps, or when nothing in the cited lines supports it. Edit `GUIDE.md` in place (never run `assemble.py`).
 
-Every step below passes `--was GUIDE.was.md`: a failure on any line that differs from it is routed, whether or not the ids file names it, and a failure on a line that is as the incoming guide has it is printed as `unchanged` and left alone. When a run repaired the incoming guide first, that repaired copy is the `--was` file instead, in every command.
+Every step below passes `--was GUIDE.was.md`: every claim that does not HOLD in the reports is routed, whether or not the ids file names it: a line the pass wrote, a line next to one that a slice pulled in, and a line as the incoming guide has it. It goes to repair, then to the cut. A pending claim stays on the `changed` list until a checker passes it, so a line the repair never touched is re-checked and cut. When a run repaired the incoming guide first, that repaired copy is the `--was` file instead, in every command.
 
 1. `python3 -I <skill>/scripts/final_recheck.py repair GUIDE.md <repo> --ids slices-new/changed.txt --reports reports-new --was GUIDE.was.md --try 1 --out repair.txt` lists each claim that did not HOLD as `fix`.
 2. `python3 -I <skill>/scripts/final_recheck.py cut GUIDE.md <repo> --ids slices-new/changed.txt --reports reports-new --was GUIDE.was.md --except repair.txt --held-out held.txt --clean` leaves the `fix` claims in place and writes `held.txt`, the claims the checkers passed.
