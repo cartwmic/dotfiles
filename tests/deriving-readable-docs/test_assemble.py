@@ -68,6 +68,12 @@ class AssembleTest(unittest.TestCase):
             self.assertEqual(words(Path(d, "section.md"), repo), words(Path(d, "A4.md"), repo))
             self.assertEqual(words(Path(d, "A4.md"), repo), 14)  # the heading's 2 words are in it
 
+    def test_a_work_folder_without_scout_resolved_says_so_instead_of_counting_zero_names(self):
+        code, out, err, guide, _ = self.assemble(**{"scout.resolved": None})
+        self.assertEqual(code, 0, err)
+        self.assertIn("no scout.resolved in the work folder, so no scout names were read", guide)
+        self.assertNotIn("0 scout names found", guide)
+
     def test_the_guide_is_header_part_1_then_the_appendix_in_order(self):
         code, out, err, guide, _ = self.assemble()
         self.assertEqual(code, 0, err)

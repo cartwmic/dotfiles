@@ -7,6 +7,7 @@ Round 1 is the checkers' reports on the whole guide. Each later round re-checks 
 - Appendix findings: the lead edits the section files itself, then runs `stamp.py` on them. A line keeps its id, so the Part 1 tags that point at it hold.
 - A fix that splits a sentence splits it. It does not paste the checker's wording: that breaks the 18-word limit.
 - A Part 1 finding is fixed by a fresh Opus front-writer session. When the finding is a missing condition, Part 1 cannot state what its tagged appendix line lacks, so the lead also puts the condition on that appendix line, in the same round.
+- When the fact a finding needs is in no appendix line (an install step, say), Part 1 cannot state it. The lead adds one appendix line for it first: a fresh Opus writer reads the code and writes one cited sentence, the lead runs `stamp.py` on the section, and the front-writer fix then tags that line. The new line and the Part 1 sentence are new claims, so the final re-check lists and checks them.
 - After fix round 2 the lead cuts, or narrows to what the code shows, each sentence that still fails, a Part 1 sentence included. Nothing re-checks those edits until the final re-check below.
 
 ## Part 1 over 1,000 words
@@ -17,7 +18,7 @@ Round 1 is the checkers' reports on the whole guide. Each later round re-checks 
 
 1. Rerun the step 8 script (`check_citations.py` with the budget flags) on the fixed guide. A fix can break a citation or the budget, and `slice.py` reads the guide as it stands.
 2. List the changed ids in `changed.txt` and run `python3 -I <skill>/scripts/slice.py GUIDE.md <repo> --ids changed.txt --out slices-fixN --was <the guide as last cut>`. It cuts Part 1 and the appendix apart, each into slices of near-equal size. With `--was`, it also picks up a line a fix split, reworded or moved, found by comparing its text with the old guide as well as its id.
-3. One fresh Opus checker per slice, with `references/check-brief.md`, reports into `reports-fixN`.
+3. One fresh Opus checker per slice, with `references/check-brief.md`, reports into `reports-fixN`. The brief's own first line (`Seat: checker, Opus ...`) stays the first line of what you send: paste the file as written and put any line your harness requires after it.
 4. `python3 -I <skill>/scripts/slice.py GUIDE.md <repo> --ids changed.txt --was <the guide as last cut> --reports reports-fixN --record-fixed fixed-ids.txt`. Give the same `--was` as in step 2, or a sentence that only `--was` picked up is not recorded. A Part 1 sentence whose re-check says HOLDS is recorded as it stands, and any other as `cut`. `lint_main.py --fixed fixed-ids.txt` then warns when a front writer rewords a recorded sentence, and skips a `cut` row.
 5. Score the round's reports against that round's own slices folder: `score.py <name>=reports-fixN --doc GUIDE.md --repo <repo> --slices slices-fixN`. Its words and rates are those of the re-checked sentences.
 

@@ -1,0 +1,33 @@
+"""output-shape.md and check_shape.py: the shape the skill tells writers to follow is the shape the checker holds them to.
+Run: python3 -I tests/distilling-requirements/test_output_shape.py"""
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+SKILL = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/distilling-requirements"
+SHAPE = (SKILL / "references/output-shape.md").read_text(encoding="utf-8")
+
+HEADER = "```text\nshape: requirements/1\nrepo: x\ncommit: abc\nscope: whole repo\ndate: 2026-11-22\nnot-read: none\ncounts: R=0 SM=1 I=0 U=0 F=0 Q=0\n```\n\n# x\n\n"
+
+
+def check(machine):
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "REQUIREMENTS.md").write_text(HEADER + "### SM-1: job\n\n" + machine)
+        r = subprocess.run([sys.executable, "-I", str(SKILL / "scripts/check_shape.py"), str(Path(d, "REQUIREMENTS.md"))], capture_output=True, text=True)
+    return r.stdout + r.stderr
+
+
+class OutputShapeTest(unittest.TestCase):
+    def test_the_shape_says_a_machine_field_is_a_dash_bullet_and_the_checker_refuses_one_without(self):
+        self.assertIn("each a bullet that starts `- `", SHAPE)
+        self.assertIn("state machine has no '- writers:' line", check("writers: the CLI\n"))
+        self.assertNotIn("state machine has no", check("- writers: the CLI\n"))
+
+    def test_an_incidental_surface_still_gets_a_row_so_coverage_can_reach_zero(self):
+        self.assertIn("still gets a row marked `incidental` that cites it", SHAPE)
+
+
+if __name__ == "__main__":
+    unittest.main()

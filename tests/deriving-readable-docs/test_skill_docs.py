@@ -57,6 +57,13 @@ class SkillReadsAsGeneralTest(unittest.TestCase):
     def test_a_limit_exit_is_a_behaviour_and_never_not_relevant(self):
         self.assertRegex(DRAFTING, r"rate-limit[^.]*exit is ordinary behaviour[^.]*never mark it `not relevant`")
 
+    def test_a_fix_round_may_add_an_appendix_line_for_a_fact_no_line_holds_and_the_check_brief_keeps_its_seat_line_first(self):
+        rounds = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
+        self.assertIn("in no appendix line", rounds)
+        self.assertIn("adds one appendix line for it first", rounds)
+        self.assertIn("stays the first line of what you send", rounds)
+        self.assertIn("when no appendix line holds the missing answer", READER)
+
     def test_the_accepted_limits_are_written_down_next_to_the_final_recheck_text(self):
         text = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^## Accepted limits$")

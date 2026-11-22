@@ -242,6 +242,33 @@ class PathRefsTest(unittest.TestCase):
         self.assertEqual(self.facts['rev'], git(self.repo, 'rev-parse', 'HEAD'))
 
 
+class TypeImportTest(unittest.TestCase):
+    """A type-only import is erased at runtime, so it is no edge and no cycle."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='repo_types_test-')
+        cls.repo = os.path.join(cls.tmp, 'types-repo')
+        os.mkdir(cls.repo)
+        git(cls.repo, 'init', '-q')
+        write(cls.repo, 'src/a.ts', "import type { B } from './b';\nexport const a = 1;\n")
+        write(cls.repo, 'src/b.ts', "import { a } from './a';\nexport type B = typeof a;\n")
+        write(cls.repo, 'src/c.ts', "import { type X, type Y } from './d';\nexport type { X } from './d';\nexport const c = 1;\n")
+        write(cls.repo, 'src/d.ts', "export type X = 1;\nexport type Y = 2;\n")
+        write(cls.repo, 'src/e.ts', "import { type X, v } from './d';\nexport const e = v;\n")
+        commit(cls.repo, 'init')
+        cls.facts = run_json(cls.repo)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_type_only_imports_are_not_edges_and_a_value_import_beside_a_type_one_is(self):
+        self.assertEqual(sorted(self.facts['edges']), [['src/b.ts', 'src/a.ts'], ['src/e.ts', 'src/d.ts']])
+
+    def test_a_loop_closed_only_by_a_type_import_is_not_a_cycle(self):
+        self.assertEqual(self.facts['cycles']['file'], [])
+
+
 class TestsCapTest(unittest.TestCase):
     """More than 30 test files reference one scope file: count plus the 30 closest."""
 

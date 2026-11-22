@@ -35,7 +35,7 @@ One row per requirement. Ids `R-1`, `R-2`, ... never reused.
 
 - `lens`: `product` | `behavioral` | `technical`
 - `kind`: `explicit` (a stated source) | `implicit` (only the code shows it)
-- `durability`: `enduring` | `incidental` | `unclear` (with an open question)
+- `durability`: `enduring` | `incidental` | `unclear` (with an open question). A surface that is only incidental (a test fixture's env name, a debug flag) still gets a row marked `incidental` that cites it, so `surface_coverage.py` stops listing it
 - `status`: `proposed` (default) | `accepted` (the owner accepted it; only the owner sets this) | `disputed`
 - `requirement`: one observable sentence, "shall" form, no implementation words unless the implementation is the requirement
 - `evidence`: `path:line` list, `;`-separated. An owner statement with no file line is `owner:<quoted source>`
@@ -45,7 +45,7 @@ One row per requirement. Ids `R-1`, `R-2`, ... never reused.
 
 ## 2. State machines
 
-One subsection per machine, `### SM-<n>: <name>`, then:
+One subsection per machine, `### SM-<n>: <name>`, then these fields, each a bullet that starts `- ` (`check_shape.py` refuses `writers:` or `where:` without it):
 
 - `where:` the `path:line` of the state field or enum
 - States: a table `| state | meaning | evidence |`

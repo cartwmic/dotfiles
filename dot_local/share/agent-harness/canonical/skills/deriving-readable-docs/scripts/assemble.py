@@ -9,7 +9,7 @@ usage: assemble.py <work> <repo> [-o GUIDE.md] [--clean] [--index] [--date YYYY-
                     (`stamp.py A4.md` gives them), and no id is on two lines
   surfaces.json     from `surfaces.py <repo> --json`
   points.json       from `harvest_points.py <repo>` (optional: without it the evidence block says no tests were found)
-  scout.resolved    from `surfaces.py <repo> --resolve scout.txt` (optional); a NOT FOUND or WEAK MATCH row is counted in the header and left out of A1
+  scout.resolved    from `surfaces.py <repo> --resolve scout.txt` (optional; copy it into <work>, or the header says no scout names were read); a NOT FOUND or WEAK MATCH row is counted in the header and left out of A1
   not-read.txt      one path or folder a line that nobody read (optional); each must exist in <repo>
 Writes GUIDE.md (default <work>/GUIDE.md): the header, Part 1, then Part 2 with A1 Surfaces and A2 Evidence (both printed from the files above), A3, A4 and on,
 and A-last Not read. Everything a script printed sits between `<!-- printed -->` and `<!-- /printed -->`: check_citations.py and lint_main.py do not
@@ -98,6 +98,7 @@ def build(work, repo, date, need_part1=True):
     test_files = sorted({p["file"] for p in points})
     named, never = named_in_tests(repo, rows, test_files)
     per = {k: sum(1 for r in rows if r["kind"] == k) for k in KINDS}
+    scout_present = os.path.isfile(os.path.join(work, "scout.resolved"))
     scout = [l.strip() for l in read(os.path.join(work, "scout.resolved")).splitlines() if l.strip()] if os.path.isfile(os.path.join(work, "scout.resolved")) else []
     scout_weak = [l for l in scout if "| WEAK MATCH " in l]
     scout_found = [l for l in scout if not l.endswith("| NOT FOUND") and l not in scout_weak]
@@ -114,8 +115,10 @@ def build(work, repo, date, need_part1=True):
         "# %s guide" % os.path.basename(repo.rstrip("/")),
         "",
         "Repo: %s. Commit: %s. Date: %s." % (os.path.basename(repo.rstrip("/")), commit_of(repo), date),
-        "Counts: %d surfaces (%s); %d scout names found, %d not found and dropped, %d weak matches (only in scripts or tests) dropped; %d test cases in %d files; %d of %d named surfaces appear in tests."
-        % (len(rows), ", ".join("%s %d" % (k, per[k]) for k in KINDS if per[k]) or "none", len(scout_found), len(scout) - len(scout_found) - len(scout_weak), len(scout_weak),
+        "Counts: %d surfaces (%s); %s; %d test cases in %d files; %d of %d named surfaces appear in tests."
+        % (len(rows), ", ".join("%s %d" % (k, per[k]) for k in KINDS if per[k]) or "none",
+           ("%d scout names found, %d not found and dropped, %d weak matches (only in scripts or tests) dropped" % (len(scout_found), len(scout) - len(scout_found) - len(scout_weak), len(scout_weak)))
+           if scout_present else "no scout.resolved in the work folder, so no scout names were read",
            len(points), len(test_files), len(named), len(named) + len(never)),
         "Evidence: code and the repo's own words first; tests where the repo has them (A2).")
     a1 = ["## A1 Surfaces", "", printed(*([row(r) for r in rows] + ["scout | %s" % l for l in scout_found] or ["none found"]))]

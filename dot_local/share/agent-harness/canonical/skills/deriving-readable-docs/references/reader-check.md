@@ -30,7 +30,7 @@ A fresh Opus session gets `answers.md` and the repo (at the commit), not the rea
 
 ## One fix round
 
-If the bar is missed, a fresh Opus front-writer session fixes Part 1 once (adds the missing answer or defines a word), without rewording a sentence in `fixed-ids.txt` (`lint_main.py --fixed fixed-ids.txt` warns when it does). The guide is linted again (`lint_main.py`), and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round. The sentences the fix changed are checked in the final re-check (`fix-rounds.md`), with the lead's cuts; a cut there can change Part 1 after the reader saw it, so say so in the report.
+If the bar is missed, a fresh Opus front-writer session fixes Part 1 once (adds the missing answer or defines a word; when no appendix line holds the missing answer, the lead adds that line first, as `fix-rounds.md` says), without rewording a sentence in `fixed-ids.txt` (`lint_main.py --fixed fixed-ids.txt` warns when it does). The guide is linted again (`lint_main.py`), and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round. The sentences the fix changed are checked in the final re-check (`fix-rounds.md`), with the lead's cuts; a cut there can change Part 1 after the reader saw it, so say so in the report.
 
 ## Limit
 
