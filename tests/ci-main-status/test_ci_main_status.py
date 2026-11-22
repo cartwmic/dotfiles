@@ -1462,10 +1462,43 @@ class CoordinatorJournal(Fixture):
         self.assertIn("no journal record", out)
         self.assertIn("no conclusive journal line on main", out)
 
-    def test_malformed_journal_line_exits_1(self):
-        self.journal.write_text("{not json\n")
+    def test_malformed_journal_line_before_the_last_good_one_exits_1(self):
+        # A bad line in the middle is not a torn tail: it is still unreadable state, as it was before the tail rule.
+        self.journal.write_text(json.dumps({"tip": self.c2, "verdict": "pass"}) + "\n" + "{not json\n"
+                                + json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n")
         rc, out = self.status("coordinator")
         self.assertEqual(rc, 1, out)
+        self.assertIn("line 2 is not JSON", out)
+
+    def test_a_nul_tail_is_skipped_and_the_last_good_line_decides(self):
+        self.journal.write_text(json.dumps({"tip": self.c2, "verdict": "fail"}) + "\n"
+                                + json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n" + "\x00" * 409)
+        rc, out, err = self.streams("coordinator")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("GREEN  journal line 2 passed on " + self.c3[:7], out)
+        self.assertIn(f"skipped a torn tail of 409 bytes in {self.journal}; using the last complete line", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_a_half_line_after_a_good_line_is_skipped(self):
+        half = '{"tip": "abc", "verd'   # cut off before its newline landed
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n" + half)
+        rc, out, err = self.streams("coordinator")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("GREEN  journal line 1 passed on " + self.c3[:7], out)
+        self.assertIn(f"skipped a torn tail of {len(half)} bytes in {self.journal}; using the last complete line", err)
+
+    def test_a_file_with_no_complete_line_has_no_result(self):
+        self.journal.write_text("\x00" * 409)
+        rc, out, err = self.streams("coordinator")
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("no conclusive journal line on main", out)
+        self.assertIn(f"skipped a torn tail of 409 bytes in {self.journal}; no complete line is left", err)
+
+    def test_blank_lines_after_the_last_line_are_not_a_torn_tail(self):
+        self.journal.write_text(json.dumps({"tip": self.c3, "verdict": "pass"}) + "\n\n  \n")
+        rc, out, err = self.streams("coordinator")
+        self.assertEqual(rc, 0, out + err)
+        self.assertNotIn("torn tail", err)
 
     def test_journal_row_with_a_verdict_and_no_tip_exits_1_in_one_line(self):
         self.journal.write_text(json.dumps({"verdict": "pass"}) + "\n")

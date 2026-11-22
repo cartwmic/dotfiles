@@ -120,7 +120,9 @@ ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/main-journeys.jsonl, and a run 
 tested when a pass line has its tip, or a tree equal to the commit's tree (the walk uses this too); the GREEN line then
 names the line and the tip that had the tree. Lines without "tree" match by tip only. A "flake" line (a red tip ruled
 a flake, with "issue") is not red and not tested: plain mode and --tip both exit 2 for a flake with no later pass
-(start a run), because a deploy needs a pass on the tip.
+(start a run), because a deploy needs a pass on the tip. A torn tail (what a crash leaves after the last complete line: NUL
+bytes, a half line) is skipped with one stderr note that names the file and the byte count; a bad line before the last
+complete line is still an unreadable journal (exit 1).
 The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green,
 or once every commit with a verdict has been reached. WALK_CAP is a backstop. Commit reads use gh's 1-hour cache (a commit
 never changes); run list and branches/main are always read fresh.
@@ -156,6 +158,7 @@ RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,url"
 RUN_LIMIT = 100
 NO_RUNNER = "was not acquired by Runner"   # the annotation GitHub puts on a job it cancelled because no runner picked it up
 UNPROVEN = ("flake", "untested")   # verdicts that are not red and not tested
+JOURNAL_SPACE = b" \t\r\n"          # bytes that make a tail blank rather than torn
 # The pin-fix exception. The step name and the file lists are copies: the step is in .github/workflows/ci.yml, the files are
 # agent_kit_bump.py (KIT, PIN_FILES) and loop_engine_bump.py (MISE_CONFIG, SKILLS); tests/ci-main-status checks that they match.
 PIN_FIX, RED_FIX = "the pin fix", "a fix"   # what --pr says it is not, in a refusal
@@ -593,16 +596,42 @@ def github_verdicts(spec):
     return CommitVerdicts(spec["github"], by_sha), going
 
 
+def is_complete(raw):
+    """True when `raw` (one journal line, no newline) is a JSON object. Read as bytes, so a torn line cannot fail the decode."""
+    try:
+        return isinstance(json.loads(raw.decode("utf-8")), dict)
+    except (UnicodeDecodeError, ValueError):
+        return False
+
+
+def complete_end(data):
+    """The offset just past the journal's last complete line and its newline, or 0 when there is none. What follows it is the
+    torn tail. A complete last line with no newline counts as complete."""
+    keep = start = 0
+    for raw in data.split(b"\n"):
+        end = min(start + len(raw) + 1, len(data))
+        if is_complete(raw):
+            keep = end
+        start = end
+    return keep
+
+
 def journal_verdicts():
     """The last conclusive journal line for each tip, as {tip: Record}, and whether a live lock says a run is going.
 
     Conclusive means pass, fail or flake. A line may carry "tree" (the tip's tree sha); a tip whose last line is a
     pass also tests every commit with that tree. A flake line ({"tip","tree","verdict":"flake","issue","ruled"}) is a
-    red tip ruled a flake: not red, and not tested.
+    red tip ruled a flake: not red, and not tested. The torn tail after the last complete line is skipped, with a note on
+    stderr; a file with no complete line has no verdict.
     """
     verdicts = {}
     if JOURNAL.exists():
-        for n, line in enumerate(JOURNAL.read_text().splitlines(), 1):
+        data = JOURNAL.read_bytes()
+        keep = complete_end(data)
+        if data[keep:].strip(JOURNAL_SPACE):
+            print(f"ci-main-status: skipped a torn tail of {len(data) - keep} bytes in {JOURNAL}; "
+                  + ("using the last complete line" if keep else "no complete line is left"), file=sys.stderr)
+        for n, line in enumerate(data[:keep].decode("utf-8").split("\n"), 1):
             if not line.strip():
                 continue
             try:
