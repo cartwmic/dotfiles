@@ -24,5 +24,19 @@ class WorkProfileTextTests(unittest.TestCase):
         self.assertIn("on a profile with no `pr-record` the `Decisions:` line stays in the handoff or the PR description", contract)
 
 
+class NoteFixDecisionTests(unittest.TestCase):
+    """A fix made for a review finding or note that changes a design choice is itself a choice, and is logged."""
+
+    def test_the_brief_makes_a_missing_record_for_a_choice_changing_fix_a_finding(self):
+        brief = (HARNESS / "reviewer-brief.md").read_text(encoding="utf-8")
+        self.assertIn("A fix for an earlier finding or note is a choice too when it changes a design choice", brief)
+        self.assertIn("A fix that changed a choice and has no record is a blocking finding with the `decision log:` prefix, not a silent pass", brief)
+        self.assertIn("A pure wording or mechanical fix is not a choice and needs none", brief)
+
+    def test_the_contract_names_the_decision_id_on_a_fixed_disposition_that_changed_a_choice(self):
+        contract = (HARNESS / "findings-contract.md").read_text(encoding="utf-8")
+        self.assertIn("A `fixed` disposition whose fix changed a design choice also names that choice's decision id", contract)
+
+
 if __name__ == "__main__":
     unittest.main()
