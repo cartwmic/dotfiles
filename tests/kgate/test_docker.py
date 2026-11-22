@@ -273,6 +273,8 @@ class DockerJobs(unittest.TestCase):
         self.assertNotIn("restarted", done.stdout)
         calls = [c["kubectl"] for c in self.calls() if "kubectl" in c and c["kubectl"][0] == "exec"]
         self.assertTrue(all("-c" in a for a in calls), "every exec says which container: the pod has two")
+        peak = [c for c in calls if c[c.index("-c") + 1] == "dind" and c[-1] == K.SIDECAR_PEAK_SH]
+        self.assertEqual(len(peak), 1, "the sidecar's peak is read with the snippet that follows /proc/self/cgroup, once")
         spec = self.manifest()["items"][-1]["spec"]
         self.assertEqual((spec["priorityClassName"], [c["name"] for c in spec["containers"]], [c["name"] for c in spec["initContainers"]]), ("kgate-docker", ["job"], ["dind"]))
 
