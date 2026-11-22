@@ -87,7 +87,7 @@ mkrepo() {
 
 # profile TABLE_EXTRA... writes a docker profile on stdout: size line options come as arguments (already TOML)
 docker_profile() { # docker_profile "job lines" "docker lines" ["image override"] ["disk lines"]
-  # every Docker pod has a disk request and limit (the homelab's quota counts limits.ephemeral-storage); the limit also sizes the data root's emptyDir
+  # every Docker pod has a disk request and limit (the profile's disk is the pod's total, the sidecar takes a share); the limit also sizes the data root's emptyDir
   disk=${4:-'ephemeral_storage = "6Gi"
 ephemeral_storage_limit = "12Gi"'}
   cat <<TOML
@@ -348,7 +348,7 @@ if [ -n "$hard" ]; then
     bad "(e) the quota's CPU ($hard) cannot hold two pods of whole slots with a third refused; size the proof by hand"
   else
     side=$((P - 1))
-    # small disk, so the quota's CPU is what the third job runs out of, not its disk
+    # small disk, to be kind to the nodes' root disks (the quota counts pods, CPU and memory, not disk)
     repoE=$(docker_profile "" "" "" 'ephemeral_storage = "2Gi"
 ephemeral_storage_limit = "4Gi"' | sed "s/^cpu    = 3/cpu    = $side/" | mkrepo E)
     echo "    quota requests.cpu $hard; each Docker job asks $P cpu (job 1 + sidecar $side)"

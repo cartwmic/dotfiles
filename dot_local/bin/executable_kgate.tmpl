@@ -160,8 +160,8 @@ HOMELAB_SERVICES = ("docker",)   # ... and for the homelab: a privileged dind si
 DOCKER_CLASS = "kgate-docker"
 DOCKER_HOST = "tcp://127.0.0.1:2375"   # the daemon listens on the pod's loopback only: no socket file, no group, no TLS
 DOCKER_READY_S = 120         # how long the dind sidecar has to pass its startup probe (`docker info`) when the profile says nothing
-DOCKER_SIDECAR_DISK, DOCKER_SIDECAR_DISK_LIMIT = "512Mi", "1Gi"   # the sidecar's own ephemeral-storage request and limit (its writable layer and logs). Every container has both: the kubelet enforces a pod's disk only when every container has a limit, and the homelab's Docker quota counts limits.ephemeral-storage. Its images and layers are in the data root, an emptyDir sized by the job's limit
-# A Docker pod's disk when the profile says nothing (the plan's campaign default): the request, and the limit that is also the data root's sizeLimit. A profile that sets only the request gets the larger of this limit and the request.
+DOCKER_SIDECAR_DISK, DOCKER_SIDECAR_DISK_LIMIT = "512Mi", "1Gi"   # the sidecar's own ephemeral-storage request and limit (its writable layer and logs). Every container has both, set here and not left to the API server (it admits a pod with none, and the kubelet enforces a pod's disk only when every container has a limit). Its images and layers are in the data root, an emptyDir sized by the pod's limit. They come out of the profile's disk: the job container gets the rest
+# A Docker pod's disk in total, when the profile says nothing (the plan's campaign default): the request, and the limit that is also the data root's sizeLimit. A profile that sets only the request gets the larger of this limit and the request.
 DOCKER_EPHEMERAL, DOCKER_EPHEMERAL_LIMIT = "24Gi", "40Gi"
 DOCKER_SETTLE_S, DOCKER_SETTLE_POLL_S = 5, 1   # after a CMD that failed, how long the pod's status is read again for the daemon's end: a docker client is cut off the moment the daemon dies, and the kubelet shows it about a second later
 # A quota that counts only some pods: its name -> the PriorityClass it counts. A job refused by one holds back only the jobs it counts (queued_behind); any other quota counts every pod.
@@ -346,6 +346,9 @@ def parse_profile(text):
     if docker_job:   # a Docker pod always has a disk request and a limit the kubelet enforces (the data root's sizeLimit is the limit)
         ephemeral = ephemeral or DOCKER_EPHEMERAL
         ephemeral_limit = ephemeral_limit or max(DOCKER_EPHEMERAL_LIMIT, ephemeral, key=mem_bytes)
+        if mem_bytes(ephemeral) <= mem_bytes(DOCKER_SIDECAR_DISK) or mem_bytes(ephemeral_limit) <= mem_bytes(DOCKER_SIDECAR_DISK_LIMIT):
+            raise Unavailable("profile ephemeral_storage (%s) and ephemeral_storage_limit (%s) are the Docker pod's total disk and must be more than the sidecar's own %s and %s"
+                              % (ephemeral, ephemeral_limit, DOCKER_SIDECAR_DISK, DOCKER_SIDECAR_DISK_LIMIT))
     cpu_limit = raw.get("cpu_limit")   # at least `cpu` is checked in settings(), where cpu is known
     if cpu_limit is not None and (not isinstance(cpu_limit, int) or isinstance(cpu_limit, bool) or cpu_limit < 1):
         raise Unavailable("profile cpu_limit must be a whole number of at least 1, got %r" % (cpu_limit,))
@@ -609,6 +612,11 @@ def mem_bytes(size):
     return int(size[:-2]) << (20 if size.endswith("Mi") else 30)
 
 
+def size_minus(size, part):
+    """`size` less `part` (both like 24Gi or 512Mi), in whole Mi."""
+    return "%dMi" % ((mem_bytes(size) - mem_bytes(part)) >> 20)
+
+
 def check_settings(image, cpu, memory, memory_limit=None):
     if not image or not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image):
         raise Unavailable("image must be pinned by digest (name@sha256:<64 hex>), got %r" % (image,))
@@ -677,7 +685,7 @@ def tmpfs_volumes(scratch=None, tmp=None):
 
 
 def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, memory_limit=None, prefer_nodes=True, ephemeral=EPHEMERAL_DEFAULT, ephemeral_limit=None, priority_class=PRIORITY_CLASS, cpu_limit=None, scratch=None, per_cpu=1, tmp=None, docker=None):
-    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request;
+    """The Secrets and the Pod for one job, as one List. job = the id (also the pod's name). `ephemeral` is the pod's ephemeral-storage request (with `docker`, the pod's total: the sidecar's share is taken out for the job container);
     `ephemeral_limit` is the limit (the kubelet evicts a pod that writes past it); unset, it is EPHEMERAL_LIMIT_DEFAULT, or the request when that is larger.
     `priority_class` is the pod's PriorityClass; `cpu_limit` is the CPU limit, unset by default (no CPU limit). `docker` is the profile's [docker] table: the pod then has a
     privileged dind sidecar and the job container finds its daemon (docker_container)."""
@@ -700,7 +708,9 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
     if docker:
         env.append({"name": "DOCKER_HOST", "value": DOCKER_HOST})
     limits = {"memory": memory_limit or memory}
-    limits["ephemeral-storage"] = ephemeral_limit or max(EPHEMERAL_LIMIT_DEFAULT, ephemeral, key=mem_bytes)
+    limits["ephemeral-storage"] = disk_limit = ephemeral_limit or max(EPHEMERAL_LIMIT_DEFAULT, ephemeral, key=mem_bytes)
+    if docker:   # the profile's disk is the pod's total: the sidecar's share comes out of it, and the job container gets the rest
+        ephemeral, limits["ephemeral-storage"] = size_minus(ephemeral, DOCKER_SIDECAR_DISK), size_minus(disk_limit, DOCKER_SIDECAR_DISK_LIMIT)
     if cpu_limit is not None:
         limits["cpu"] = str(cpu_limit)
     container = {"name": "job", "image": image, "imagePullPolicy": "IfNotPresent",
@@ -731,7 +741,7 @@ def pod_manifests(job, image, cpu, memory, node, secret_env, pull, uid=1000, mem
         container["volumeMounts"].append(mount)
     if docker:
         pod["initContainers"] = [docker_container(docker)]
-        pod["volumes"].append({"name": "docker-data", "emptyDir": {"sizeLimit": limits["ephemeral-storage"]}})   # the data root can never outgrow the job's limit
+        pod["volumes"].append({"name": "docker-data", "emptyDir": {"sizeLimit": disk_limit}})   # the data root can never outgrow the pod's limit
     if pull:
         pod["imagePullSecrets"] = [{"name": job + "-pull"}]
     items.append({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": job, "labels": labels}, "spec": pod})
