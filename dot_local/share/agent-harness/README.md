@@ -395,7 +395,7 @@ authenticated `gh` and writes nothing without `--apply`.
 [`dot_local/user_scripts/executable_loop_engine_bump.py`](../../user_scripts/executable_loop_engine_bump.py), tests:
 `tests/release-skills`). It imports the tag with `--pins` into a fresh worktree from `origin/main`, opens the PR on
 branch `loop-engine-vX.Y.Z`, waits for its checks, squash-merges it, and applies only the PR's targets here: it runs
-`chezmoi status` and `diff` on the skills tree and the mise config, stops if anything there differs in a way the PR did
+`chezmoi status` and `diff` on the skills tree and the mise config (the file chezmoi manages: `~/.config/mise/config.toml`, or on the agent host pod `~/.config/mise/conf.d/container.toml`, which chezmoi renders from the same pins), stops if anything there differs in a way the PR did
 not make, then applies exactly the PR's files, relinks skills with `apply_harness_config.sh skills` (skill links
 only; MCP settings are left alone), runs `mise install` for the five tools and `verify-deployed`, and checks that
 mise has each version installed and active. It reads the profile with `chezmoi dump-config` and runs every other chezmoi
