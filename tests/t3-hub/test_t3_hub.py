@@ -682,10 +682,10 @@ KEEP = {
     "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
     "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "research-method", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
     "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
-    "planner": {"designing-the-smallest-version", "no-ai-slop", "research-method"},
-    "reviewer": {"designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
-    "computer": {"using-computer", "using-browse"},
-    "scout": set(),
+    "planner": {"correcting-repeated-mistakes", "designing-the-smallest-version", "no-ai-slop", "research-method"},
+    "reviewer": {"correcting-repeated-mistakes", "designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
+    "computer": {"correcting-repeated-mistakes", "using-computer", "using-browse"},
+    "scout": {"correcting-repeated-mistakes"},
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
@@ -1082,9 +1082,9 @@ class FleetFilesTest(unittest.TestCase):
             self.assertEqual(sorted(keep & BUNDLED_OFF), [], seat)
         # and the template refuses to render a seat that keeps one: render a copy of fleet_seat whose planner keep-list adds "loop"
         text = (REPO / ".chezmoitemplates/fleet_seat").read_text()
-        old = '"planner" (list "designing-the-smallest-version"'
+        old = '"planner" (list "correcting-repeated-mistakes"'
         self.assertIn(old, text)
-        clashing = text.replace(old, '"planner" (list "loop" "designing-the-smallest-version"')
+        clashing = text.replace(old, old + ' "loop"')
         env = fleet_env("personal")
         try:
             call = '{{ template "fleet_seat_clash" (dict "seat" "%s" "ctx" .) }}'
@@ -1095,7 +1095,7 @@ class FleetFilesTest(unittest.TestCase):
             # the same copy renders for a seat that does not keep "loop": the failure is the clash, not the copy
             self.assertEqual(set(json.loads(env.chezmoi("execute-template", stdin=define + call % "reviewer"))["skillOverrides"]) >= BUNDLED_OFF, True)
             # workflow-authoring is off for the worker seats, so the refusal covers it there (and only there: the lead keeps it listed)
-            wf = text.replace('"planner" (list "designing-the-smallest-version"', '"planner" (list "workflow-authoring" "designing-the-smallest-version"').replace(
+            wf = text.replace('"planner" (list "correcting-repeated-mistakes"', '"planner" (list "workflow-authoring" "correcting-repeated-mistakes"').replace(
                 '"lead" (list "coordinating-loop-engine"', '"lead" (list "workflow-authoring" "coordinating-loop-engine"')
             wfdef = '{{ define "fleet_seat_clash" }}' + wf + "{{ end }}"
             with self.assertRaises(AssertionError) as raised:

@@ -29,7 +29,7 @@ Use this for a serious incident, a bug that cost real time, or a miss in your ow
 1. **Gather the facts.** Timeline, logs, ledger entries and session evidence. Write down what happened, when, and how long it lasted. Do not explain it yet.
 2. **Trace the cause chain.** Ask why until you reach the mechanism that let it happen. Stop at a cause you can change. "The agent was slow" and "I forgot" are not that; ask what let it matter.
 3. **Name the class.** What kind of thing failed, worded so it covers other instances, not this one.
-4. **Search the history for other cases** of that class: `git log`, the review findings logs (above), playbook rules and their quotes, Retro proposals. Search by the mechanism, not by the symptom's words.
+4. **Search the history for other cases** of that class: `git log`, the review findings logs (above), playbook rules and their quotes (`playbook show`), and Retro proposals (`retro list`, in the retro repo's CLI; `retro show <id>` for one). Search by the mechanism, not by the symptom's words.
 5. **Judge what you found.**
    - At least one earlier case: it is a repeated class. Continue with the repeat bar.
    - None: still name the class and pick the fix level, but say plainly that the class rests on one case. Fix the mechanism that let this failure happen. Do not add guards for siblings nobody has seen.
