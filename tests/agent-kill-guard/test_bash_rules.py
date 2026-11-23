@@ -1403,6 +1403,25 @@ class LiveGitWorkCheckout(unittest.TestCase):
     def test_the_old_path_is_still_refused_on_work(self):
         self.assertIn("git merge", self.work("git -C /Users/test/git/coordinator merge origin/main") or "")
 
+    def test_the_refusal_names_the_work_checkout_not_git_coordinator(self):
+        msg = self.work("git -C /Users/test/coordinator-work merge origin/main") or ""
+        self.assertIn("(/Users/test/coordinator-work)", msg)
+        self.assertNotIn("~/git/coordinator", msg)
+        self.assertIn("(/Users/test/coordinator-work)", self.work("gh pr checkout 5", cwd="/Users/test/coordinator-work") or "")
+
+    def test_the_merge_refusals_name_the_work_merge_script(self):
+        for text in ["gh pr merge 12 -R cartwmic/coordinator", "gh pr merge 12 -R acme/app"]:
+            with self.subTest(text=text):
+                msg = self.work(text) or ""
+                self.assertIn("/Users/test/coordinator-work/scripts/merge-pr.sh", msg)
+                self.assertNotIn("~/git/coordinator", msg)
+
+    def test_personal_refusals_still_name_git_coordinator(self):
+        msg = check("git -C /Users/test/git/coordinator merge origin/main", env=self.HOME, cwd="/Users/test/tmp-home/x", profile="personal") or ""
+        self.assertIn("(~/git/coordinator)", msg)
+        merge = check("gh pr merge 12 -R acme/app", env=self.HOME, cwd="/Users/test/tmp-home/x", profile="personal") or ""
+        self.assertIn("~/git/coordinator/scripts/merge-pr.sh", merge)
+
     def test_reads_worktrees_and_other_checkouts_pass(self):
         for text in ["git -C /Users/test/coordinator-work log -3", "git -C /Users/test/coordinator-work fetch",
                      "git -C /Users/test/coordinator-work worktree add ~/tmp-home/x origin/main",

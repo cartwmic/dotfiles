@@ -177,7 +177,7 @@ MERGE_HOMELAB = (
 
 
 GIT_LIVE = (
-    "`%s` in the live coordinator checkout (~/git/coordinator) is refused in agent sessions: the daemon runs from that checkout, and a "
+    "`%s` in the live coordinator checkout (%s) is refused in agent sessions: the daemon runs from that checkout, and a "
     "change to its working tree, index, HEAD or a branch changes the code it runs. "
     "Use a git worktree (git worktree add ~/tmp-home/<name> origin/main); the live checkout runs the daemon; only fetch and the deploy's "
     "`git merge --ff-only <sha>` are allowed there (and the rollback `git reset --keep <sha>`). "
@@ -507,12 +507,12 @@ def merge_rule(walk, ctx):
             return MERGE_HOMELAB  # before the gates: the chained form skips the homelab RED-line check, so it is no way through
         checked = {e[len(PR_CHECK):] for e in cmd.gated if e.startswith(PR_CHECK)}
         if CI_GATE not in cmd.gated or not checked:
-            return MERGE_BARE
+            return MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx))
         merged = _pr_number(args, "merge", PR_MERGE_VALUE_FLAGS)  # None when it names a branch or no PR: the hook cannot see which
         if merged and str(int(merged)) not in checked:
-            return MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE
+            return MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx))
         if repo and COORDINATOR.search(repo):
-            return MERGE_COORDINATOR
+            return MERGE_COORDINATOR.replace(MERGE_PR, _merge_pr(ctx))
     return None
 
 
@@ -802,18 +802,36 @@ def _git_places(cmd, opts, home):
     return [p for p in places if p]
 
 
+def _own_checkout(ctx):
+    """This profile's coordinator checkout when it is not the default ~/git/coordinator (on work: ~/coordinator-work or the path in local data), else None."""
+    home = (ctx.env or {}).get("HOME") or os.path.expanduser("~")
+    repo = ctx.coordinator_repo
+    return repo if repo and os.path.normpath(repo) != os.path.normpath(os.path.join(home, LIVE_CHECKOUT)) else None
+
+
+def _live_checkout_name(ctx):
+    """The live checkout a refusal names: this profile's own when it is not the default, else ~/git/coordinator."""
+    return _own_checkout(ctx) or "~/" + LIVE_CHECKOUT
+
+
+def _merge_pr(ctx):
+    """merge-pr.sh in this profile's coordinator checkout (the work Mac has no ~/git/coordinator)."""
+    own = _own_checkout(ctx)
+    return os.path.join(own, "scripts/merge-pr.sh") if own else MERGE_PR
+
+
 def live_git_rule(walk, ctx):
     for cmd in walk.cmds:
         if _base(cmd.words[0]) == "gh":  # `gh pr checkout` fetches the PR and checks it out in the directory it runs in
             args = cmd.words[1:]
             if any(a == "pr" and b in ("checkout", "co") for a, b in zip(args, args[1:])) and cmd.cwd and _in_live_checkout(cmd.cwd, walk.home, ctx.coordinator_repo):
-                return GIT_LIVE % "gh pr checkout"
+                return GIT_LIVE % ("gh pr checkout", _live_checkout_name(ctx))
         if _base(cmd.words[0]) != "git":
             continue
         opts, sub, args = _git_parts(cmd.words)
         spelling = _git_change(sub, args) if sub else None
         if spelling and any(_in_live_checkout(p, walk.home, ctx.coordinator_repo) for p in _git_places(cmd, opts, walk.home)):
-            return GIT_LIVE % spelling
+            return GIT_LIVE % (spelling, _live_checkout_name(ctx))
     return None
 
 

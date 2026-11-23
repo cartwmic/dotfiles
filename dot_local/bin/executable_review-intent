@@ -24,7 +24,7 @@ Record check (--pr only): before anything is read, the PR's agent record is chec
 that has not happened yet). The run is refused (exit 3, nothing on stdout, pr-body-check's own output on stderr) when that check reports a record defect: no record, no complete
 principles table, no Decisions line, or a Decisions line the ledger does not match. Fix the record, then build the brief. A round is not spent on what a tool already finds.
 Only record defects refuse. The check's other findings (ids or bookkeeping in the description, a Proven section that misses the head, a red or running head run) are printed as a
-note and do not stop the run: a review can still find them useful to see, and some cannot pass until the review is done. If `pr-body-check` is not on PATH (the work profile has none),
+note and do not stop the run: a review can still find them useful to see, and some cannot pass until the review is done. If `pr-body-check` is not on PATH (neither desktop profile lacks it; a machine such as Termux does),
 cannot reach GitHub or the ledger, or times out, the run goes on with a warning: a broken tool never blocks a review. --skip-record-check turns the check off.
 Merge check (--pr only): after the record check, the repo's own merge script is run in its check-only mode, `scripts/merge-pr.sh N --check-only`, which runs every check the real merge runs except the
 review round (and the main-run state, which is not a defect of the PR) and merges nothing. The coordinator's and the homelab's merge scripts have it (agent-kit, loop-engine and dotfiles have no merge script of their own:

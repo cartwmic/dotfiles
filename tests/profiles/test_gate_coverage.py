@@ -277,10 +277,13 @@ class AgentTracesTest(Base):
         return subprocess.run(["/usr/bin/env", "-i", *["%s=%s" % kv for kv in pairs.items()], "/bin/sh", str(self.wrapper(data)), "review", "report"],
                               capture_output=True, text=True, timeout=60)
 
-    def put_kit_in_checkout(self):
-        cli = self.repo / "node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+    def put_kit_in_checkout(self, version="0.69.2"):
+        kit = self.repo / "node_modules/@cartwmic/agent-kit"
+        cli = kit / "dist/traces/cli.js"
         cli.parent.mkdir(parents=True)
         cli.write_text("// fake\n")
+        if version:
+            (kit / "package.json").write_text('{\n  "name": "@cartwmic/agent-kit",\n  "version": "%s",\n  "type": "module"\n}\n' % version)
         return cli
 
     def test_work_uses_the_checkouts_kit_when_there_is_no_pinned_install(self):
@@ -289,10 +292,61 @@ class AgentTracesTest(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(str(cli), r.stdout)
 
+    def test_the_fallback_prints_one_stderr_line_naming_the_kit_path_and_version(self):
+        cli = self.put_kit_in_checkout("0.69.2")
+        r = self.run_it(work_data())
+        lines = [l for l in r.stderr.splitlines() if l.startswith("agent-traces:")]
+        self.assertEqual(len(lines), 1, r.stderr)
+        self.assertIn(str(cli), lines[0])
+        self.assertIn("version 0.69.2", lines[0])
+        self.assertNotIn("version", r.stdout, "the line goes to stderr, not stdout")
+
+    def test_the_fallback_line_says_unknown_when_the_kit_has_no_version(self):
+        self.put_kit_in_checkout(version=None)
+        self.assertIn("version unknown", self.run_it(work_data()).stderr)
+
+    def test_the_fallback_line_uses_the_coordinator_repo_override(self):
+        other = self.root / "elsewhere"
+        kit = other / "node_modules/@cartwmic/agent-kit"
+        (kit / "dist/traces").mkdir(parents=True)
+        (kit / "dist/traces/cli.js").write_text("// fake\n")
+        (kit / "package.json").write_text('{"version": "9.9.9"}\n')
+        r = self.run_it(work_data(), COORDINATOR_REPO=str(other))
+        self.assertIn(str(kit / "dist/traces/cli.js"), r.stderr)
+        self.assertIn("version 9.9.9", r.stderr)
+
+    def test_no_line_is_printed_when_the_pinned_install_is_used_or_on_personal(self):
+        self.put_kit_in_checkout()
+        pinned = self.home / ".local/share/agent-kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        pinned.parent.mkdir(parents=True)
+        pinned.write_text("// pinned\n")
+        self.assertEqual(self.run_it(work_data()).stderr, "")
+        self.assertEqual(self.run_it(personal_data()).stderr, "")
+
     def test_work_exits_3_when_the_checkout_has_no_kit_either(self):
         r = self.run_it(work_data())
         self.assertEqual(r.returncode, 3)
         self.assertIn("by hand", r.stderr)
+
+    def test_the_exit_3_line_says_what_was_looked_for_and_where(self):
+        pinned = self.home / ".local/share/agent-kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        alt = self.repo / "node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        r = self.run_it(work_data())
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("looked for %s and %s" % (pinned, alt), r.stderr)
+
+    def test_the_exit_3_line_on_personal_names_the_pinned_path_only(self):
+        pinned = self.home / ".local/share/agent-kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        r = self.run_it(personal_data(agentKit={"enabled": False}))
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("looked for %s)" % pinned, r.stderr)
+        self.assertNotIn("coordinator-work", r.stderr)
+
+    def test_the_enabled_but_missing_message_also_names_the_path(self):
+        pinned = self.home / ".local/share/agent-kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        r = self.run_it(personal_data(agentKit={"enabled": True}))
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("looked for %s" % pinned, r.stderr)
 
     def test_personal_does_not_fall_back(self):
         self.put_kit_in_checkout()
@@ -304,6 +358,20 @@ class AgentTracesTest(Base):
         pinned.parent.mkdir(parents=True)
         pinned.write_text("// pinned\n")
         self.assertIn(str(pinned), self.run_it(work_data()).stdout)
+
+
+class TermuxTest(unittest.TestCase):
+    """Termux has neither desktop profile's guard rails: no gate wrapper, no hook, no coordinator-instance file is rendered there.
+    (Two layers keep them out: the "not personal or work" block in .chezmoiignore, and the Termux allow-list that already ignores all of
+    .local/bin and .local/share but passage-review; the test fails when both let a gate through.)"""
+
+    def test_termux_renders_none_of_the_gates(self):
+        on_termux = managed("termux")
+        self.assertTrue(on_termux, "chezmoi managed returned nothing for termux")
+        paths = {path for _, _, _, paths, _ in table() for path in paths}
+        self.assertTrue(paths)
+        landed = sorted(p for p in on_termux if any(p == path or p.startswith(path + "/") for path in paths))
+        self.assertEqual(landed, [], "gate paths that land on termux")
 
 
 class HarnessWiringTest(Base):
