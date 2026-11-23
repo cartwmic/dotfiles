@@ -19,7 +19,7 @@ dot_local/share/agent-harness/
   bin/
     config-show              # prints a config file's keys with every value masked (see "Config reader"); source name executable_config-show
     disposition-check        # refuses a `fixed` review disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3); the reviewer brief runs it at re-review (source name executable_disposition-check)
-    known-limits-check       # fails a PR body whose limits are not under "## Known limits", are untracked, or name a ticket the tracker lookup cannot confirm; reviewer-brief.md section 1 runs it on the body as filed (source name executable_known-limits-check)
+    known-limits-check       # fails a PR body whose limits are not under "## Known limits", are untracked, or name a ticket the tracker lookup cannot confirm; a limit accepted as permanent says "accepted as permanent" in the body and has its decision id on the PR agent record's `Permanent limits:` line (`--record FILE`, or `--record-pending` before the record exists); pr-open runs it on every PR body it creates or edits, each run appends a line to its log (`~/.local/state/known-limits-check/log.jsonl`: outcome, and per problem the rule, line and message), and reviewer-brief.md section 1 runs it on the body as filed (source name executable_known-limits-check)
     mcp-ticket-lookup        # confirms one ticket key through a single read-only MCP tool in a locked-down non-interactive claude turn (FOUND or MISSING; exit 0 only on an exact FOUND match with the requested key); the work profile's KNOWN_LIMITS_TRACKER_CMD points known-limits-check at it (source name executable_mcp-ticket-lookup)
   canonical/
     instructions/
