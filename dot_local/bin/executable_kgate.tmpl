@@ -225,7 +225,7 @@ PRIORITY_VALUES = {"kgate": -100, DOCKER_CLASS: -100, "kgate-first": -50, "kgate
 QUEUE_POLL_S = 3      # a queued job looks at the local queue (and, when it is first in line, at the cluster) this often
 QUEUE_LOCAL_POLL_S = 0.3   # while only another client on this machine is ahead (a local file read, no cluster call)
 QUEUE_QUIET_S = 5     # a wait on a neighbour's placement is not reported until it lasts this long; a full cluster is reported at once
-QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or an older one in a pid namespace this one cannot see
+QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or in a pid namespace this one cannot see
 QUEUE_SETTLE_S = 20   # after it creates its pod, a job holds its place until the scheduler has answered for the pod (placed or Unschedulable), for at most this long
 BRAKE_POLL_S = 10     # while the coordinator's pause is on, the job looks at <state>/brake/ this often (KGATE_BRAKE_POLL_S overrides it, for tests)
 POLL_RETRY_S = 60     # a failed read of the pod while waiting for it is tried again for this long (an etcd timeout or a dropped ssh does not last), unless the pod is NotFound
@@ -2535,7 +2535,7 @@ class Job:
                 forget(path)   # its client died without removing it
                 continue
             if t.get("deadline") and time.time() > t["deadline"] + QUEUE_STALE_S:
-                forget(path)   # a client that is stopped, or an older one in a pid namespace this one cannot check, is past its own --wait: it cannot still be waiting
+                forget(path)   # a client that is stopped, or in a pid namespace this one cannot check, is past its own --wait: it cannot still be waiting
                 continue
             tickets.append(t)
         mine_key = (-mine["priority"], self.t0, self.id)
