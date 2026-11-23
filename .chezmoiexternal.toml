@@ -15,7 +15,7 @@
 # pstack's statechart skill (cursor/plugins, MIT), personal profile only. It is the guide and the checker script the
 # creating-formal-verification skill points at: an agent reads its SKILL.md to write and read a TLA+ model. Pinned by the
 # commit sha in the URL: a bump is one sha edit. Only pstack/skills/statechart is extracted. Its 3.8 MB of scripts/test
-# comes with it: chezmoi 2.71 ignored `include` once `exclude` was also set, so the two cannot be combined here.
+# comes with it: on chezmoi 2.71, setting `exclude` next to `include` pulled in the whole archive, so the two are not combined.
 # apply_harness_config.sh links it into Claude, Codex, Pi and ~/.agents like any external skill. The work profile and
 # Termux get nothing: a third-party tool that installs Java and a TLA+ jar on first run is asked about before it goes on
 # the employer's machine, and Termux has no Java. A repo that runs the checker in CI pins the same archive itself
