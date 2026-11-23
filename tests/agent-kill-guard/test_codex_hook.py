@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+os.environ.setdefault("AGENT_HARNESS_GUARD_LOG", os.devnull)  # the hook logs each refusal; a test run leaves no record in the real state dir
+
 try:
     import tomllib
 except ImportError:  # Python before 3.11

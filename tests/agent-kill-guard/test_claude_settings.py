@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+os.environ.setdefault("AGENT_HARNESS_GUARD_LOG", os.devnull)  # the hook logs each refusal; a test run leaves no record in the real state dir
+
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "dot_claude/modify_settings.json.tmpl"
 COMMAND = 'g="$HOME/.local/share/agent-harness/hooks/refuse_pattern_kill.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0'

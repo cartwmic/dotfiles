@@ -1,4 +1,4 @@
-"""The eight bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
+"""The nine bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -18,16 +18,18 @@ HOOKS = ROOT / "dot_local/share/agent-harness/hooks"
 sys.path.insert(0, str(HOOKS))
 import bash_rules  # noqa: E402
 
+os.environ.setdefault("AGENT_HARNESS_GUARD_LOG", os.devnull)  # the hook logs each refusal; a test run leaves no record in the real state dir
+
 HOMELAB = "kubernetes-admin@kubernetes"
 KUBE = {"/kc/homelab": "current-context: %s\n" % HOMELAB, "/kc/other": "apiVersion: v1\ncurrent-context: axon-aks-prod\n",
         "/kc/none": "apiVersion: v1\ncontexts: []\n"}
 
 
-def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None):
+def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False):
     files = KUBE if files is None else files
     origins = origins or {}
     return bash_rules.Context(tool=tool, profile=profile, env=env or {}, cwd=cwd, read_file=files.get,
-                              origin_of=lambda directory: origins.get(directory))
+                              origin_of=lambda directory: origins.get(directory), container=container)
 
 
 def check(text, platform="linux", **kw):
@@ -610,6 +612,59 @@ class Docker(unittest.TestCase):
             self.assertTrue(bash_rules.check("docker run alpine", ctx()))
 
 
+class Heavy(unittest.TestCase):
+    """In the agent host pod a test, journey or stress run is refused and kgate is named; kgate runs, light commands and every other machine pass."""
+    REFUSED = [
+        ("npx vitest run", "npx vitest"), ("vitest", "vitest"), ("vitest run --reporter=dot", "vitest"), ("bunx vitest", "bunx vitest"),
+        ("pnpm exec vitest run", "pnpm exec vitest"), ("npm exec vitest", "npm exec vitest"), ("pnpm dlx vitest", "pnpm dlx vitest"),
+        ("npm test", "npm test"), ("npm t", "npm t"), ("npm test -- --run foo", "npm test"), ("npm --prefix web test", "npm test"),
+        ("npm run test", "npm run test"), ("npm run test:unit", "npm run test:unit"), ("npm run-script test", "npm run-script test"),
+        ("npm run journeys", "npm run journeys"), ("npm run stress", "npm run stress"), ("npm run vitest", "npm run vitest"),
+        ("pnpm test", "pnpm test"), ("pnpm run test:unit", "pnpm run test:unit"), ("pnpm test:unit", "pnpm test:unit"),
+        ("yarn test", "yarn test"), ("yarn vitest", "yarn vitest"), ("bun test", "bun test"), ("bun run test", "bun run test"),
+        ("python3 scripts/journeys.py --skip-evals", "python3 scripts/journeys.py"), ("python3 -u scripts/journeys.py", "python3 scripts/journeys.py"),
+        ("stress --cpu 8", "stress"), ("stress-ng --cpu 4 --timeout 60s", "stress-ng"),
+        ("timeout 900 npm test", "npm test"), ("sh -c 'cd x && npm test'", "npm test"), ("cd x && npx vitest run", "npx vitest"),
+        ("run-and-wake -- npm test", "npm test"), ("heavy-gate npm test", "npm test"), ("nohup npm test &", "npm test"),
+        ("sudo npm test", "npm test"), ("env CI=1 npm test", "npm test"), ("x=$(npm test)", "npm test"), ("echo hi; npm test | tail -5", "npm test"),
+        ("find . -name x -exec vitest run {} \\;", "vitest"),
+    ]
+    ALLOWED = [
+        "kgate -- npm test", "run-and-wake -- kgate -- npx vitest run", "kgate --cpu 4 -- sh -c 'npm ci && npm test'",
+        "run-and-wake -- scripts/kgate-journeys.sh", "scripts/kgate-journeys.sh", "scripts/main-journeys.sh",
+        "git status", "git log --oneline -5", "npm run typecheck", "npm run lint", "npm ci", "npm install", "npm run build", "npm view vitest version",
+        "npm install vitest", "npx tsc --noEmit src/x.ts", "node scripts/x.ts", "node --experimental-strip-types scripts/check-close-commands.ts",
+        "pnpm install", "pnpm lint", "yarn build", "bun install", "python3 scripts/other.py", "python3 -m unittest tests.x",
+        "echo npm test", "git commit -m 'npm test and vitest'", "grep -rn vitest package.json", "cat vitest.config.ts", "ls scripts/journeys",
+        "ssh kgate-host npm test",
+    ]
+
+    def test_refused_with_kgate_named(self):
+        for text, spelling in self.REFUSED:
+            with self.subTest(text=text):
+                message = check(text, container=True) or ""
+                self.assertIn("`%s` is refused in the agent host pod" % spelling, message)
+                self.assertIn("run-and-wake -- kgate -- <cmd>", message)
+
+    def test_allowed(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text, container=True))
+
+    def test_only_the_pod_runs_it(self):
+        text = "npx vitest run"
+        for profile, container, want in [("personal", True, True), ("axon-work-computer", True, True), (None, True, True),
+                                         ("personal", False, False), ("axon-work-computer", False, False), (None, False, False)]:
+            with self.subTest(profile=profile, container=container):
+                self.assertEqual(bool(check(text, profile=profile, container=container)), want)
+
+    def test_the_rule_is_named_in_the_refusal_record(self):
+        full = bash_rules.Context(**dict(ctx(container=True)._asdict(), platform="linux"))
+        self.assertEqual(bash_rules.refusal("npm test", full)[0], "heavy")
+        self.assertEqual(bash_rules.refusal("docker run x", full)[0], "docker")
+        self.assertIsNone(bash_rules.refusal("git status", full))
+
+
 class LiveGit(unittest.TestCase):
     """Git that changes the live coordinator checkout (the daemon runs from it) is refused on every profile; reads, fetch, the deploy's
     `merge --ff-only <sha>`, the `reset --keep <sha>` rollback and worktrees are not. HOME comes from the Context, not the test machine."""
@@ -996,12 +1051,64 @@ class Hook(unittest.TestCase):
         broken = Path(self.tmp) / "broken"
         broken.mkdir()
         shutil.copy(HOOKS / "refuse_pattern_kill.py", broken / "refuse_pattern_kill.py")
-        (broken / "bash_rules.py").write_text("def check(text, ctx):\n    raise RuntimeError('boom')\nContext = lambda **kw: None\n")
+        (broken / "bash_rules.py").write_text("def refusal(text, ctx):\n    raise RuntimeError('boom')\nContext = lambda **kw: None\n")
         run = self.run_hook("until ok; do sleep 1; done", hooks=broken)
         self.assertEqual((run.returncode, run.stderr), (0, ""))
         self.assertEqual(self.run_hook("pkill x", hooks=broken).returncode, 2)  # the old check still works
         (broken / "bash_rules.py").unlink()  # a missing sibling allows too
         self.assertEqual(self.run_hook("until ok; do sleep 1; done", hooks=broken).returncode, 0)
+
+    def set_container_file(self, text):
+        path = self.hooks / "container"
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(text)
+
+    def run_pod_hook(self, command, container_env=None, log=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_GUARD_LOG")}
+        if container_env is not None:
+            env["AGENT_HARNESS_CONTAINER"] = container_env
+        env["AGENT_HARNESS_GUARD_LOG"] = str(log or os.devnull)
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    def test_the_pod_comes_from_the_container_file_beside_the_script(self):
+        for text, want in [("true\n", 2), ("false\n", 0), (None, 0), ("", 0)]:
+            with self.subTest(container_file=text):
+                self.set_container_file(text)
+                run = self.run_pod_hook("npx vitest run")
+                self.assertEqual(run.returncode, want)
+                if want:
+                    self.assertIn("kgate", run.stderr)
+        self.set_container_file(None)
+
+    def test_the_container_env_var_overrides_the_file(self):
+        self.set_container_file("false\n")
+        self.assertEqual(self.run_pod_hook("npm test", container_env="true").returncode, 2)
+        self.set_container_file("true\n")
+        self.assertEqual(self.run_pod_hook("npm test", container_env="false").returncode, 0)
+        self.set_container_file(None)
+
+    def test_in_the_pod_kgate_runs_and_light_commands_pass_through_the_real_script(self):
+        self.set_container_file("true\n")
+        for command in ("kgate -- npm test", "run-and-wake -- kgate -- npx vitest run", "git status", "npm run typecheck"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_pod_hook(command).returncode, 0)
+        self.set_container_file(None)
+
+    def test_a_refusal_is_one_json_line_in_the_guard_log(self):
+        log = Path(self.tmp) / "state" / "guard.jsonl"
+        log.parent.mkdir(exist_ok=True)
+        log.unlink(missing_ok=True)
+        self.assertEqual(self.run_pod_hook("npm test", container_env="true", log=log).returncode, 2)
+        self.assertEqual(self.run_pod_hook("git status", container_env="true", log=log).returncode, 0)  # an allowed command writes nothing
+        self.assertEqual(self.run_pod_hook("npm test", container_env="false", log=log).returncode, 0)
+        records = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(len(records), 1)
+        self.assertEqual((records[0]["action"], records[0]["rule"], records[0]["tool"], records[0]["command"]), ("refuse", "heavy", "Bash", "npm test"))
+        self.assertRegex(records[0]["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "the docker rule runs on Linux only")
     def test_the_reviewers_real_docker_runs_are_refused_through_the_real_script(self):

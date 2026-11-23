@@ -1,4 +1,4 @@
-"""Eight refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Nine refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -37,6 +37,12 @@
               edit; for `gh pr edit N` the name must also contain N. A `$VAR` the command does not assign from mktemp is refused. A name
               is checked even when the chain is right; when both are wrong the refusal gives both fixes.
 
+  heavy       (agent host pod only)  a test, journey or stress run in the pod itself: `npm test` / `npm t` / `npm run test*` (and pnpm, yarn, bun),
+              `vitest` (also `npx`, `bunx`, `pnpx`, `pnpm exec`, `npm exec`), `python3 scripts/journeys.py`, `stress` and `stress-ng`: the pod is shared
+              by every agent and the coordinator, so these run on the cluster (playbook 83fbe006); the refusal names `run-and-wake -- kgate -- <cmd>`.
+              Not refused: anything after `kgate` (it runs on the cluster), `scripts/kgate-journeys.sh`, typecheck, lint, `node script.ts`, git.
+              The pod is known by the `container` file beside this script (chezmoi renders it from container mode, true only there) or
+              AGENT_HARNESS_CONTAINER=true; on every other machine, and on the work profile, the rule does nothing.
   docker      (personal, Linux only)  `docker run`, `docker build`, `docker compose up` and their spellings (`docker container run`,
               `docker image build`, `docker buildx build`, `docker builder build`, `docker-compose up`, global options before the
               subcommand such as `docker -H x run` or `docker compose -f f.yml up`): this workstation runs no local Docker; the refusal
@@ -169,6 +175,13 @@ DOCKER = (
 )
 
 
+HEAVY = (
+    "`%s` is refused in the agent host pod: the pod is shared by every agent and the coordinator, and heavy jobs (tests, journeys, stress runs) run on the cluster (playbook 83fbe006). "
+    "Run it on kgate: `run-and-wake -- kgate -- <cmd>` (for example `run-and-wake -- kgate -- npm test`). "
+    "If GitHub CI runs the same suite on the same commit, push and read CI instead of running it again."
+)
+
+
 def kube_message(what, fix):
     return (
         "%s is refused in agent sessions: the personal homelab grant (playbook f90b9301) covers only the cluster with context `%s`. %s"
@@ -176,7 +189,7 @@ def kube_message(what, fix):
     )
 
 
-Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform", defaults=(None, None, None, None, None, None, None))
+Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container", defaults=(None,) * 8)
 
 
 def read_file(path):
@@ -583,6 +596,57 @@ def docker_rule(walk, ctx):
     return None
 
 
+JS_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
+JS_VALUE_OPTIONS = {"--prefix", "-C", "--cwd", "--filter", "-F", "-w", "--workspace", "--dir"}  # options before the subcommand that take a value
+HEAVY_SCRIPT = re.compile(r"(?:^|[:_-])(?:tests?|vitest|journeys?|stress)(?:$|[:_-])")  # a package script that runs tests, journeys or stress
+NPM_TEST = {"test", "t", "tst"}
+
+
+def _js_args(words):
+    """The words after the package manager that are not options (an option that takes a value is skipped with it)."""
+    args, i = [], 0
+    while i < len(words):
+        if words[i] in JS_VALUE_OPTIONS:
+            i += 2
+            continue
+        if not words[i].startswith("-"):
+            args.append(words[i])
+        i += 1
+    return args
+
+
+def _heavy_spelling(words):
+    """The heavy command in words (`npm test`, `npx vitest`, ...), else None. Only the command position counts."""
+    name = _base(words[0])
+    args = _js_args(words[1:])
+    if name in ("vitest", "stress", "stress-ng", "journeys.py"):
+        return name
+    if name.startswith("python") and args and _base(args[0]) == "journeys.py":
+        return "%s %s" % (name, args[0])
+    if name in ("npx", "bunx", "pnpx"):
+        return "%s vitest" % name if args and _base(args[0]) == "vitest" else None
+    if name not in JS_RUNNERS or not args:
+        return None
+    sub, more = args[0], args[1:]
+    if sub in ("exec", "dlx", "x") and more and _base(more[0]) == "vitest":
+        return "%s %s vitest" % (name, sub)
+    if sub in ("run", "run-script", "rum", "urn") and more and HEAVY_SCRIPT.search(more[0]):
+        return "%s %s %s" % (name, sub, more[0])
+    if sub in NPM_TEST or (name != "npm" and HEAVY_SCRIPT.search(sub)):
+        return "%s %s" % (name, sub)
+    return None
+
+
+def heavy_rule(walk, ctx):
+    if not ctx.container:
+        return None
+    for cmd in walk.cmds:
+        spelling = _heavy_spelling(cmd.words)
+        if spelling:
+            return HEAVY % spelling
+    return None
+
+
 def _git_parts(words):
     """(options before the subcommand as (name, value) pairs, subcommand or None, the words after it) of a git command."""
     opts, i = [], 1
@@ -831,11 +895,20 @@ def credential_rule(walk, ctx):
     return None
 
 
-def check(text, ctx):
-    """The refusal message for the command text, or None."""
+RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, heavy_rule, live_git_rule, credential_rule)
+
+
+def refusal(text, ctx):
+    """(rule name, refusal message) for the command text, or None."""
     walk = Walk(text, ctx.cwd, (ctx.env or {}).get("HOME"))
-    for rule in (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, live_git_rule, credential_rule):
+    for rule in RULES:
         message = rule(walk, ctx)
         if message:
-            return message
+            return rule.__name__.replace("_rule", ""), message
     return None
+
+
+def check(text, ctx):
+    """The refusal message for the command text, or None."""
+    found = refusal(text, ctx)
+    return found[1] if found else None

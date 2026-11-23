@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command, then run the eight checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout, credential config).
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the nine checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git in the live coordinator checkout, credential config).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
   Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
@@ -11,12 +11,15 @@ Input: JSON on stdin with the command at tool_input.command (Claude's and Pi's s
 Output: exit 2 and the reason on stderr when a simple command in the text is pkill or killall, or a bash_rules check refuses it, else exit 0.
 It fails open: input it cannot read is allowed, and an error inside bash_rules allows the command, so a bug never stops an agent from working.
 The bash_rules checks that depend on the profile read AGENT_HARNESS_PROFILE, else the file `profile` beside this script (rendered by chezmoi).
+The heavy-job check runs only in the agent host pod: AGENT_HARNESS_CONTAINER=true, else the file `container` beside this script reads `true` (rendered by chezmoi from container mode).
+Every bash_rules refusal is also written as one JSON line ({ts, rule, tool, command}) to ~/.local/state/agent-harness/guard.jsonl (AGENT_HARNESS_GUARD_LOG overrides the path); a write that fails is ignored.
 
 What counts: the command position of any simple command, found through quotes, `;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `$( )`,
 backticks, `sh -c '...'` (and bash, zsh, dash, ksh; also `-lc`), `eval`, heredocs fed to a shell, and wrappers such as `sudo`, `env`,
 `nohup`, `time`, `xargs`, `find -exec`. A path (/usr/bin/pkill) counts. The word merely appearing as an argument (`grep pkill x`,
 `git commit -m "..pkill.."`, `echo killall`) does not. Not covered: a command built at run time (`$cmd`), a script file, `python -c`.
 """
+import datetime
 import json
 import os
 import re
@@ -426,16 +429,45 @@ def load_profile(env, directory):
         return None
 
 
+def load_container(env, directory):
+    """True in the agent host pod: AGENT_HARNESS_CONTAINER, else the `container` file beside this script (chezmoi renders it `true` in container mode only)."""
+    value = env.get("AGENT_HARNESS_CONTAINER")
+    if value is None:
+        try:
+            with open(os.path.join(directory, "container")) as handle:
+                value = handle.read()
+        except (OSError, ValueError):
+            return False
+    return value.strip() == "true"
+
+
+def log_refusal(rule, tool, command, env):
+    """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. A failed write is ignored."""
+    try:
+        path = env.get("AGENT_HARNESS_GUARD_LOG") or os.path.join(env.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "agent-harness", "guard.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": "refuse", "rule": rule, "tool": tool, "command": command[:500]}
+        with open(path, "a") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
 def bash_rules_message(command, raw):
-    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, PR body, local docker, live-checkout git), else None. Any error allows the command."""
+    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the pod, live-checkout git), else None. Any error allows the command."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path:
             sys.path.insert(0, here)
         import bash_rules
         tool, cwd = hook_fields(raw)
-        ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd())
-        return bash_rules.check(command, ctx)
+        ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd(),
+                                 container=load_container(os.environ, here))
+        found = bash_rules.refusal(command, ctx)
+        if not found:
+            return None
+        log_refusal(found[0], tool, command, os.environ)
+        return found[1]
     except Exception:
         return None
 

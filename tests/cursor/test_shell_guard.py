@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests/shx"))
 import test_agent_access as access  # the chezmoi helper, with the local data keys the work profile needs
 
+os.environ.setdefault("AGENT_HARNESS_GUARD_LOG", os.devnull)  # the hook logs each refusal; a test run leaves no record in the real state dir
+
 HOOKS_TMPL = ROOT / "dot_cursor/modify_hooks.json.tmpl"
 ADAPTER = ROOT / "dot_cursor/hooks/executable_shell_guard.py"
 HARNESS = ROOT / "dot_local/share/agent-harness/hooks"
