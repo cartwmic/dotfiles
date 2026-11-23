@@ -36,10 +36,10 @@ SEAT_ROWS = {
     "axon-work-computer": (
         "| Coordinator | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
         "| Lead | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
-        "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+        "| Planner | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
         "| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
-        "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Computer use | Sonnet 5.5 high, Cursor (claude-sonnet-5-5) |",
+        "| Builder | GLM 5.3 Flash H200 high, Pi (work-glm/test-model) |",
+        "| Computer use | Sonnet 5.5 high, Claude Code (claude-sonnet-5-5) |",
     ),
 }
 SCOUT_LINE = "- A scout is for wide reading and searching that needs no judgment. It reports what it found and changes nothing."
@@ -50,9 +50,9 @@ ADVISOR_LIMIT = (
 )
 CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
 WORK_SEAT_BULLETS = (
-    "- Coordinator and leads use Cursor (`gemini-4-neon`, `medium` effort). Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
-    "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Computer use uses Cursor "
-    "(`claude-sonnet-5-5`, `high` effort).",
+    "- Coordinator, leads and the planner use Cursor (`gemini-4-neon`, `medium` effort). Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
+    "T3 provider claudeAgent. Builders use Pi (`work-glm/test-model`, `high` thinking). Computer use uses Claude Code "
+    "(Anthropic, `claude-sonnet-5-5`, `high` effort).",
 )
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
