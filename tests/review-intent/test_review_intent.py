@@ -475,7 +475,8 @@ class ReviewIntent(unittest.TestCase):
         self.assertTrue(r.stderr.startswith("review-intent: the repo's merge script refuses this PR"), r.stderr)
         (row,) = self.log_rows()
         self.assertEqual((row["outcome"], row["exit"], row["record_check"], row["merge_check"]), ("refused", 3, "passed", "refused"))
-        self.assertTrue(row["reason"].startswith("review-intent: the repo's merge script refuses this PR"), row["reason"])
+        # the log line names the check that failed (the first REFUSED line of the script's output), not just that the script refused
+        self.assertEqual(row["reason"], "the repo's merge script refused: pr-gate-runs: REFUSED journey board-close has no GREEN on the head tree")
 
     def test_a_record_defect_is_refused_by_the_record_check_before_the_merge_script_runs(self):
         self.pr_with_decision()
