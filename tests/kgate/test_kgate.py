@@ -739,6 +739,14 @@ if a[:2] == ["get", "pod"]:
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario == "pullfail":
         st = {"phase": "Pending", "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ErrImagePull", "message": "401 unauthorized"}}}]}
+    elif scenario == "slow":   # the first two looks (one when the pod is placed, one when kgate waits for it) find the image still being pulled; later looks find the pod running
+        reads = os.path.join(fake, "slow-reads")
+        n = int(open(reads).read()) + 1 if os.path.exists(reads) else 1
+        open(reads, "w").write(str(n))
+        if n <= 2:
+            st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
+        else:
+            st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario == "pulling":   # scheduled to a node, image still being pulled: not Unschedulable
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
     else:
@@ -4933,6 +4941,24 @@ class BrakeHomelab(unittest.TestCase):
         self.assertEqual((rec["exit"], rec["ran"]), (0, True))
         self.assertGreater(rec["brake_wait_s"], 0.5)
 
+    def test_a_pause_longer_than_wait_does_not_use_up_the_jobs_wait(self):
+        # --wait 3, the pause holds for 5 s, and the pod still needs a second look to be running: without the pause time added to --wait the job
+        # would make its pod and then fail "pod did not start within 3s" the moment the pause lifts.
+        folder = self.brake(lag="2026-11-22T10:00:00.000Z the inbox is late")
+        proc = self.start("--wait", "3", "--", "sh", "-c", "echo ran-after-a-long-pause", env={**self.env(), "FAKE_POD": "slow"})
+        seen = self.read_until(proc, "paused: ")
+        time.sleep(5)
+        self.assertIsNone(proc.poll())
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertNotIn("did not start", seen)
+        self.assertIn("ran-after-a-long-pause", seen)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (0, True))
+        self.assertGreater(rec["brake_wait_s"], 4.5)
+
     def test_every_reason_is_named_on_one_line_and_the_job_waits_for_the_last_to_go(self):
         folder = self.brake(lag="2026-11-22T10:00:00Z the inbox is late", cpu="2026-11-22T10:00:01Z the host is at 95 percent cpu")
         proc = self.start("--", "true", env=self.env())
@@ -5038,6 +5064,34 @@ class BrakeRerun(unittest.TestCase):
         self.assertEqual([p["metadata"]["name"] for p in self.pods_created()], [rec["id"], rec["id"] + "-r2"])
         self.assertEqual((rec["attempts"], rec["exit"]), (2, 0))
         self.assertGreater(rec["brake_wait_s"], 0.5)
+
+    def test_a_pause_before_the_first_pod_and_another_before_the_rerun_add_up_and_neither_uses_up_wait(self):
+        # --wait 6: the first pause (2 s) and the eviction (4 s into the pod) already take the job to 6 s, and the second pause (2 s) to 8 s. The rerun is still
+        # allowed because the 4 s of pause are added to --wait, and brake_wait_s is the sum of the two waits, not the last one.
+        folder = self.tmp / "coordinator" / "brake"
+        folder.mkdir(parents=True)
+        (folder / "lag").write_text("2026-11-22T10:00:00Z the inbox is late\n")
+        env = {**self.cmd_env, "FAKE_LOST": "1:event", "FAKE_LOST_DELAY": "4", "COORDINATOR_STATE_DIR": str(self.tmp / "coordinator"), "KGATE_BRAKE_POLL_S": "0.2"}
+        proc = self.start("--wait", "6", "--", "sh", "-c", "echo ran-attempt", host="", env=env)
+        seen = self.read_until(proc, "paused: ")
+        time.sleep(2)
+        (folder / "lag").unlink()
+        seen += self.read_until(proc, "the pause lifted after")
+        for _ in range(100):
+            if self.pods_created():
+                break
+            time.sleep(0.1)
+        self.assertEqual(len(self.pods_created()), 1)
+        (folder / "lag").write_text("2026-11-22T10:00:10Z the inbox is late again\n")
+        seen += self.read_until(proc, "paused: ")   # the pod is evicted 4 s in; the rerun then stops at the second pause
+        time.sleep(2)
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        rec = self.records()[-1]
+        self.assertEqual((rec["attempts"], rec["exit"]), (2, 0))
+        self.assertGreater(rec["brake_wait_s"], 3.8, "the two waits add up; the second did not overwrite the first")
 
 
 QUEUE_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"

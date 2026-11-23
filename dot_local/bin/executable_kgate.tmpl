@@ -2107,6 +2107,7 @@ class Job:
         self.t_pod = time.time()
         self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
         self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
+        self.brake_s = 0.0      # seconds this job waited for the coordinator's pause: --wait does not count them
         self.mssql = None       # the SQL Server sidecar's settings, when the profile asks for one
         self.sidecar = None     # the name of the pod's sidecar container, when it has one: "mssql" or "dind" (SIDECARS)
         self.secret = None      # its generated password: kept out of the log, the record and every message (see mask())
@@ -2270,7 +2271,7 @@ class Job:
     def wait_for_brake(self):
         """The coordinator's pause: while `brake/` holds any file, no pod is made. One line names every reason (again when the set of reasons changes), the folder is looked at
         again every BRAKE_POLL_S, and the job goes on once the folder is empty or missing. Nothing here knows what a reason is. A pod already running is not touched. The rerun of an
-        evicted pod waits too, like every pod creation. The wait is not part of --wait, which counts from the pod's creation."""
+        evicted pod waits too, like every pod creation. The time spent here is not part of --wait: wait_deadline() adds it, so a pause longer than --wait does not fail the job."""
         poll = float(os.environ.get("KGATE_BRAKE_POLL_S") or BRAKE_POLL_S)
         said, t_wait = None, None
         while True:
@@ -2283,9 +2284,14 @@ class Job:
                 said = reasons
             time.sleep(poll)
         if t_wait:
+            self.brake_s += time.time() - t_wait
             waited = round(time.time() - t_wait, 1)
             self.rec["brake_wait_s"] = round(self.rec.get("brake_wait_s", 0) + waited, 1)   # a job that also waits before its rerun adds up
             self.note("the pause lifted after %.0fs; going on" % waited)
+
+    def wait_deadline(self):
+        """When --wait runs out: it counts from the job's start, plus the time the job spent waiting for the coordinator's pause."""
+        return self.t0 + self.o.wait + self.brake_s
 
     def reachable(self):
         check_reachable(self.cluster)
@@ -2486,7 +2492,7 @@ class Job:
     def start_pod(self, manifests, cold=None):
         """Create the pod and wait until it runs. `cold`: the same pod without the cache claim. If the claim is held by another job
         (ReadWriteOncePod: the pod stays Pending for CACHE_BUSY_S), the pod is deleted and `cold` is created in its place."""
-        deadline = self.t0 + self.o.wait
+        deadline = self.wait_deadline()
         self.place(manifests, deadline)
         sched_deadline = time.time() + self.o.sched_wait   # homelab only: another cluster's autoscaler can take longer to add a node
         busy_since = None
@@ -2937,7 +2943,7 @@ class Job:
 
     def rerun(self, why, make):
         """The cluster evicted the pod: note it, delete what is left of it, and return the manifests for the one more pod this job may have. The job's own
-        deadlines are not reset: --wait counts from the job's start and the pod deadline from its first pod's creation."""
+        deadlines are not reset: --wait counts from the job's start (less the time spent waiting for the pause) and the pod deadline from its first pod's creation."""
         old, n = self.pod, self.rec["attempts"]
         self.rec.setdefault("evicted", []).append({"attempt": n, "pod": old, "reason": why})
         if n >= MAX_ATTEMPTS:
@@ -2946,7 +2952,7 @@ class Job:
                               % (first["pod"], first["reason"], second["pod"], second["reason"]))
         self.wait_for_brake()   # the rerun makes a pod, so it waits for the coordinator's pause like the first one; the deadlines below are read after the wait
         now = time.time()
-        if now >= self.t0 + self.o.wait:
+        if now >= self.wait_deadline():
             raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the job's --wait of %ds has passed" % (old, why, self.o.wait))
         left = int(self.kcfg["deadline_s"] - (now - self.pod_t0))
         if left < 1:
