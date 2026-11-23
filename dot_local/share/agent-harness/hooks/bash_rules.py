@@ -205,7 +205,7 @@ def kube_message(what, fix):
     )
 
 
-Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container", defaults=(None,) * 8)
+Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container run door", defaults=(None,) * 10)
 
 
 def read_file(path):
@@ -989,7 +989,35 @@ def credential_rule(walk, ctx):
     return None
 
 
-RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, heavy_rule, live_git_rule, credential_rule)
+def door_rule(walk, ctx):
+    """Door delivery (cmd doors): a playbook rule that names a shell command in its `At:` line (`cmd:gh pr create`, `cmd:kubectl`) is told in one refusal per run,
+    and the same command again passes. The rules, the seat filter and the once-per-run record are the coordinator's renderer (`hook.ts --door`), not this file:
+    this rule only asks it, and only for a command whose words start with a prefix in the renderer's index, so node is not started for any other command.
+    The caller supplies `ctx.run` (the harness session id) and `ctx.door`, an object with `cmds()` (the indexed prefixes, a list of word strings) and `render(command_text)`
+    (the refusal text or None). Without either, or on any error, the rule does nothing: the command runs. It runs last, so a command another rule refuses is refused by that
+    rule first and its door rules are not marked told. The renderer writes the log line of what it told; the caller does not log this refusal again (`refuse_pattern_kill.py`)."""
+    door = ctx.door
+    if door is None or not ctx.run:
+        return None
+    prefixes = [p.split() for p in door.cmds() if p.strip()]
+    if not prefixes:
+        return None
+    asked = set()
+    for cmd in walk.cmds:
+        words = [_base(cmd.words[0])] + list(cmd.words[1:])
+        if not any(words[:len(prefix)] == prefix for prefix in prefixes):
+            continue
+        text = " ".join(words)
+        if text in asked:
+            continue
+        asked.add(text)
+        told = door.render(text)
+        if told:
+            return told
+    return None
+
+
+RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, heavy_rule, live_git_rule, credential_rule, door_rule)
 
 
 def refusal(text, ctx):

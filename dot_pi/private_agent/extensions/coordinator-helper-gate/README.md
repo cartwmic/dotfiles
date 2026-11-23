@@ -10,6 +10,9 @@ tool call it loads `<coordinator>/src/coordinator-session/helper-gate.ts` from t
 calls its `helperGateReason(call, env, stateDir)`, which starts `node <coordinator>/src/t3-hook/hook.ts --pi` with the call, the working directory and the session's model on stdin.
 The extension returns `{ block: true, reason }` when that gives a reason. Every other tool passes through (the coordinator's function answers nothing for it).
 
+- **Door delivery for Pi:** the same file also carries two door routes, both the coordinator's own code. A launch tool (`delegate_task`, `t3_thread_launch`) or a tool the door index (`<state>/t3-hook/door-index.json`) names is asked of the hook;
+  any other tool starts nothing. And the extension's `before_agent_start` handler gives the session's first prompt to the coordinator's `firstPromptMessage`: a brief with a `Kind:` line gets that kind's playbook rules as a hidden message, once.
+  An older checkout without `firstPromptMessage` tells nothing.
 - **Where the checkout and state are:** `config.json`, rendered per profile from [config.json.tmpl](./config.json.tmpl), the same places the Claude hook install uses
   (`dot_claude/modify_settings.json.tmpl`): personal `instances.coordinator.repo` (else `~/git/coordinator` on Linux) with state `~/.local/share/coordinator`;
   `axon-work-computer` `~/coordinator-work` with state `~/.local/share/coordinator-work`. `agentHost.removeCoordinatorHook` renders it off, as it takes the hook out of Claude's settings.

@@ -13,7 +13,8 @@ dot_local/share/agent-harness/
   hooks/
     refuse_pattern_kill.py   # the pkill/killall classifier that Claude's hook, Codex's hook and Pi's extension run (see "Pattern-kill guard")
     stop_running_jobs.py     # the builder seat's Stop hook: refuses to stop while a run-and-wake or kgate job this thread started still runs (see "Builder Stop hook")
-    bash_rules.py            # the nine extra refusals it calls: sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git in the live coordinator checkout, credential config
+    bash_rules.py            # the nine extra refusals it calls (and the door rule, the tenth, which tells a playbook rule at a command): sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git in the live coordinator checkout, credential config
+    door.json                # rendered from door.json.tmpl, per profile: the coordinator's renderer command and state directory, read by bash_rules' door rule (see "Door delivery")
     profile                  # rendered from profile.tmpl: just the chezmoi profile name, read by bash_rules
     container                # rendered from container.tmpl: `true` in container mode (the agent host pod), else `false`; read by bash_rules' heavy-job rule
   bin/
@@ -200,6 +201,16 @@ The refusal was hit 868 times in 397 sessions in the week of 2026-11-09 (retro, 
 | Cursor | preToolUse hook on its Shell tool: `python3 -I "$HOME/.cursor/hooks/shell_guard.py"`, which runs the same classifier with Cursor's payload and answers `{"permission": "deny", "user_message": ..., "agent_message": ...}` on exit 2; otherwise it prints nothing and exits 1 (Cursor: "hook failed, action proceeds"). The entry is added to `~/.cursor/hooks.json` beside the coordinator's own and anyone else's, replaced by its script path so it never doubles, and does not need the coordinator checkout | `dot_cursor/hooks/executable_shell_guard.py`, `dot_cursor/modify_hooks.json.tmpl` | `~/.cursor/hooks/shell_guard.py`, `~/.cursor/hooks.json` |
 | shared classifier | command-position parser: sees through quotes, `;`, `&&`, `\|`, `$( )`, `sh -c`, `eval`, wrappers, `find -exec` | `dot_local/share/agent-harness/hooks/refuse_pattern_kill.py` | `~/.local/share/agent-harness/hooks/` |
 | bash rules | the nine refusals below, on the classifier's parser; the profile comes from `AGENT_HARNESS_PROFILE`, else the rendered file `profile` beside the script; the pod comes from `AGENT_HARNESS_CONTAINER`, else the rendered file `container` | `dot_local/share/agent-harness/hooks/bash_rules.py`, `profile.tmpl`, `container.tmpl` | `~/.local/share/agent-harness/hooks/` |
+
+### Door delivery
+
+A playbook rule with an `**At:**` line that names a shell command (`cmd:gh pr create`, `cmd:kubectl`) is shown to the agent at that command. The classifier's last rule, `door` (`bash_rules.py`), asks the coordinator's renderer
+(`hook.ts --door`, in the checkout and state directory named by the rendered `hooks/door.json`) for the rules at the command. A text-only rule is told in one refusal per run: the refusal carries the text, and the same command again passes.
+The rules, the seat filter, the once-per-run record and the log line (`door` in the guard log, outcome `told`) are the renderer's. This file only asks, and only for a command that starts with a prefix in the renderer's index
+(`<state>/t3-hook/door-index.json`), so no other command starts node. The run is the harness session id from the hook JSON: `session_id` (Claude Code, Codex), `conversation_id` (Cursor, which names the adapter `cursor`) or the `session_id` and
+`adapter: "pi"` the Pi extension adds. With no session id, no `door.json` (the door is off by design), `enabled: false` (`agentHost.removeCoordinatorHook`), no index yet, or a renderer that says nothing, the command runs. A `door.json` or index that is there and broken, and a renderer that exits non-zero, times out (15 s), prints something unreadable or says on stderr that it failed open, also let the command run and write one `door-failed` line (run, adapter, reason; never the command) to the guard log, so rules that stop arriving can be traced. A command another rule refuses is refused by that rule first.
+Both desktop profiles: `door.json.tmpl` renders the personal checkout and state (`~/git/coordinator`, `~/.local/share/coordinator`) or the work ones (`~/coordinator-work`, `~/.local/share/coordinator-work`), the places the Claude hook install uses.
+Tests: `tests/agent-kill-guard/test_bash_rules.py` (`DoorDelivery`, with a stub renderer and both profiles' rendered file), `tests/cursor/test_shell_guard.py`, the Pi extension tests.
 
 Both desktop profiles, macOS and Linux; not Termux. Michael's own terminal, and Pi's own `!` command, are not agent tool calls and are not touched.
 It fails open: a missing script, a missing `python3` or an unreadable input lets the command run, so a fault in the guard never stops an agent from working.

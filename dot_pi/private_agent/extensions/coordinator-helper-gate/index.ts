@@ -32,6 +32,17 @@ export const loadGate: LoadGate = async (file) => {
 	return typeof loaded.helperGateReason === "function" ? (loaded.helperGateReason as HelperGate) : undefined;
 };
 
+/** The coordinator's `firstPromptMessage` (same file): the playbook rules for the brief a first prompt carries, or undefined when there is nothing to tell. */
+export type FirstPromptRules = (prompt: { session_id: string; prompt: string; cwd: string }, env: NodeJS.ProcessEnv, stateDir: string) => string | undefined;
+
+/** Loads the coordinator's first-prompt function from its file, or undefined when the file does not hold one (an older checkout). Throws when the file cannot be loaded. */
+export type LoadFirstPrompt = (file: string) => Promise<FirstPromptRules | undefined>;
+
+export const loadFirstPrompt: LoadFirstPrompt = async (file) => {
+	const loaded = (await import(pathToFileURL(file).href)) as { firstPromptMessage?: unknown };
+	return typeof loaded.firstPromptMessage === "function" ? (loaded.firstPromptMessage as FirstPromptRules) : undefined;
+};
+
 /** The config beside the extension, or undefined when it is missing or unreadable. */
 export function loadConfig(path: string): GateConfig | undefined {
 	try {
@@ -75,6 +86,28 @@ export async function gateReason(call: HelperCall, options: { config: GateConfig
 	}
 }
 
+/**
+ * The playbook rules for the brief the session's first prompt carries (its `Kind:` line), as one message text, or undefined when there is nothing to tell. Never throws.
+ * Same guards as `gateReason`: no config, switched off, no checkout or state directory, the coordinator's own session, or a file that cannot be loaded all tell nothing.
+ */
+export async function firstPromptRules(
+	prompt: { sessionId: string; prompt: string; cwd: string },
+	options: { config: GateConfig | undefined; env: NodeJS.ProcessEnv; argv: readonly string[]; load?: LoadFirstPrompt },
+): Promise<string | undefined> {
+	const { config, env } = options;
+	if (config === undefined || config.enabled === false || !config.coordinatorRepo) return undefined;
+	if (loadsCoordinatorSession(options.argv)) return undefined;
+	const file = join(config.coordinatorRepo, "src", "coordinator-session", "helper-gate.ts");
+	const stateDir = env.COORDINATOR_STATE_DIR || config.stateDir;
+	if (!stateDir || !existsSync(file) || !existsSync(stateDir)) return undefined;
+	try {
+		const rules = await (options.load ?? loadFirstPrompt)(file);
+		return rules?.({ session_id: prompt.sessionId, prompt: prompt.prompt, cwd: prompt.cwd }, env, stateDir);
+	} catch {
+		return undefined;
+	}
+}
+
 /** What the handler reads of Pi's tool call and context. */
 interface PiToolCall { toolName: string; toolCallId: string; input: unknown }
 interface PiContext { cwd: string; sessionManager: { getSessionId(): string }; model?: { provider: string; id: string } | undefined }
@@ -91,10 +124,31 @@ export const toolCallHandler =
 	};
 
 /**
+ * The `before_agent_start` handler: the first prompt of a session that carries a `Kind:` line gets that kind's playbook rules as a hidden message (`before_agent_start` can add
+ * a message, `session_start` cannot). Only the first prompt is looked at; a brief is a session's first prompt.
+ */
+export const beforeAgentStartHandler = (options: { config: GateConfig | undefined; env: NodeJS.ProcessEnv; argv: readonly string[]; load?: LoadFirstPrompt }) => {
+	let attempted = false;
+	return async (event: { prompt?: unknown }, ctx: PiContext) => {
+		if (attempted || typeof event.prompt !== "string") return undefined;
+		attempted = true;
+		let sessionId: string;
+		try {
+			sessionId = ctx.sessionManager.getSessionId();
+		} catch {
+			return undefined;
+		}
+		const content = await firstPromptRules({ sessionId, prompt: event.prompt, cwd: ctx.cwd }, options);
+		return content === undefined ? undefined : { message: { customType: "playbook-door", content, display: false } };
+	};
+};
+
+/**
  * Runs the coordinator's helper gate on this Pi session's `subagent` calls: a helper that would run on a model stronger than Haiku 5.5, with no `Seat:` first line
  * that declares it, is blocked. Sessions T3 starts on the `pi` and `pi-lead` instances, and Pi sessions opened in a terminal, load it from the global extensions.
  */
 export default function (pi: ExtensionAPI) {
 	const config = loadConfig(join(dirname(fileURLToPath(import.meta.url)), "config.json"));
 	pi.on("tool_call", toolCallHandler({ config, env: process.env, argv: process.argv }));
+	pi.on("before_agent_start", beforeAgentStartHandler({ config, env: process.env, argv: process.argv }));
 }

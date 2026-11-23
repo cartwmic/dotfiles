@@ -101,6 +101,35 @@ class CursorShellGuard(unittest.TestCase):
                 self.assertDenied(profile, shell("git commit -m x", cwd=str(live)), "refused in agent sessions")
                 self.assertPasses(profile, shell("git commit -m x", cwd="/tmp"))
 
+    def test_a_command_at_a_door_is_denied_once_with_the_rule_text_and_the_conversation_names_the_run(self):
+        # The classifier's door rule asks the coordinator's renderer (a stub here) for the rules at `gh pr create`; Cursor's payload carries conversation_id, which names the run.
+        home = Path(tempfile.mkdtemp())
+        try:
+            hooks = home / ".local/share/agent-harness/hooks"
+            hooks.mkdir(parents=True)
+            (home / ".cursor/hooks").mkdir(parents=True)
+            shutil.copy(ADAPTER, home / ".cursor/hooks/shell_guard.py")
+            for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+                shutil.copy(HARNESS / name, hooks / name)
+            state = home / "state"
+            (state / "t3-hook").mkdir(parents=True)
+            (state / "t3-hook/door-index.json").write_text(json.dumps({"cmds": ["gh pr create"], "tools": []}))
+            asked = home / "asked.jsonl"
+            stub = home / "stub.py"
+            stub.write_text("import json, sys\nask = json.load(sys.stdin)\nopen(%r, 'a').write(json.dumps(ask) + '\\n')\nprint(json.dumps({'text': 'This call is refused in agent sessions this once: rule 1234abcd'}))\n" % str(asked))
+            (hooks / "door.json").write_text(json.dumps({"enabled": True, "command": [sys.executable, str(stub)], "state": str(state)}))
+            for profile in PROFILES:
+                with self.subTest(profile=profile):
+                    asked.write_text("")
+                    payload = json.dumps({"hook_event_name": "preToolUse", "conversation_id": "conv-3", "tool_name": "Shell", "tool_input": {"command": "gh pr create --title x", "cwd": "/tmp", "timeout": 30}})
+                    r = self.run_guard(profile, payload, home)
+                    self.assertEqual((r.returncode, r.stderr), (0, ""))
+                    self.assertIn("1234abcd", json.loads(r.stdout)["agent_message"])
+                    (ask,) = [json.loads(line) for line in asked.read_text().splitlines()]
+                    self.assertEqual((ask["run"], ask["adapter"], ask["value"]), ("conv-3", "cursor", "gh pr create --title x"))
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
     def test_a_missing_classifier_lets_the_command_through(self):
         home = Path(tempfile.mkdtemp())
         try:

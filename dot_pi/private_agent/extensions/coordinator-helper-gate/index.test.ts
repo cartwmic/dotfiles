@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import extension, { type GateConfig, type HelperCall, gateReason, loadConfig, loadsCoordinatorSession, toolCallHandler } from "./index.ts";
+import extension, { type GateConfig, type HelperCall, beforeAgentStartHandler, firstPromptRules, gateReason, loadConfig, loadsCoordinatorSession, toolCallHandler } from "./index.ts";
 
 // The stub has the shape of the coordinator's helperGateReason: (call, env, stateDir) => reason | undefined. It records what it was given.
 // The mode comes from env.STUB_MODE: "block" refuses, "allow" says nothing, "throw" throws. Like the real one, it answers nothing for a tool other than subagent.
@@ -162,11 +162,47 @@ test("the handler gives the gate the session's id, cwd and model, and blocks wit
 	assert.equal(await toolCallHandler({ config: quiet.config, env: quiet.env, argv: ["node", "pi"] })({ toolName: "subagent", toolCallId: "c", input: {} }, { cwd: "/w", sessionManager: { getSessionId: () => "s" } }), undefined);
 });
 
-test("the extension registers one tool_call handler and nothing else; with no config.json beside it (the source tree) it lets everything through", async () => {
+test("the extension registers a tool_call handler and a before_agent_start handler and nothing else; with no config.json beside it (the source tree) both let everything through", async () => {
 	const seen: string[] = [];
-	let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
-	extension({ on: (name: string, fn: typeof handler) => { seen.push(name); handler = fn; } } as never);
-	assert.deepEqual(seen, ["tool_call"]);
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+	extension({ on: (name: string, fn: (event: unknown, ctx: unknown) => Promise<unknown>) => { seen.push(name); handlers.set(name, fn); } } as never);
+	assert.deepEqual(seen, ["tool_call", "before_agent_start"]);
 	const ctx = { cwd: "/w", sessionManager: { getSessionId: () => "s" }, model: { provider: "p", id: "m" } };
-	assert.equal(await handler?.({ toolName: "subagent", toolCallId: "c", input: { agent: "worker" } }, ctx), undefined);
+	assert.equal(await handlers.get("tool_call")?.({ toolName: "subagent", toolCallId: "c", input: { agent: "worker" } }, ctx), undefined);
+	assert.equal(await handlers.get("before_agent_start")?.({ prompt: "Kind: build" }, ctx), undefined);
+});
+
+// The stub has the shape of the coordinator's firstPromptMessage: (prompt, env, stateDir) => message text | undefined.
+const STUB_PROMPT_GATE = `
+import { appendFileSync } from "node:fs";
+export function firstPromptMessage(prompt, env, stateDir) {
+	appendFileSync(env.STUB_RECORD, JSON.stringify({ prompt, state: stateDir }) + "\\n");
+	if (env.STUB_MODE === "throw") throw new Error("stub broke");
+	return /^Kind: build/m.test(prompt.prompt) ? "rules for build" : undefined;
+}
+`;
+
+test("the first prompt of a session gets the coordinator's rules for its kind as a hidden message, once", async (t) => {
+	const r = rig(t, "tell", {}, STUB_PROMPT_GATE);
+	const handler = beforeAgentStartHandler({ config: r.config, env: r.env, argv: ["node", "pi"] });
+	const ctx = { cwd: "/w", sessionManager: { getSessionId: () => "s-9" } };
+	assert.deepEqual(await handler({ prompt: "Seat: builder\nKind: build\n" }, ctx), { message: { customType: "playbook-door", content: "rules for build", display: false } });
+	assert.deepEqual(r.recorded()[0], { prompt: { session_id: "s-9", prompt: "Seat: builder\nKind: build\n", cwd: "/w" }, state: r.state });
+	assert.equal(await handler({ prompt: "Kind: build" }, ctx), undefined);
+	assert.equal(r.recorded().length, 1);
+});
+
+test("a first prompt with no kind, an older coordinator checkout, a throwing function and the daemon's own session all tell nothing", async (t) => {
+	const ctx = { cwd: "/w", sessionManager: { getSessionId: () => "s" } };
+	const plain = rig(t, "tell", {}, STUB_PROMPT_GATE);
+	assert.equal(await beforeAgentStartHandler({ config: plain.config, env: plain.env, argv: ["node", "pi"] })({ prompt: "hello" }, ctx), undefined);
+	const old = rig(t, "tell", {}, "export const unrelated = 1;\n");
+	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: old.config, env: old.env, argv: ["node", "pi"] }), undefined);
+	const broken = rig(t, "throw", {}, STUB_PROMPT_GATE);
+	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: broken.config, env: broken.env, argv: ["node", "pi"] }), undefined);
+	const own = rig(t, "tell", {}, STUB_PROMPT_GATE);
+	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: own.config, env: own.env, argv: ["node", "pi", "-e", "/r/src/coordinator-session/index.ts"] }), undefined);
+	const off = rig(t, "tell", {}, STUB_PROMPT_GATE);
+	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: { ...off.config, enabled: false }, env: off.env, argv: ["node", "pi"] }), undefined);
+	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: undefined, env: off.env, argv: ["node", "pi"] }), undefined);
 });
