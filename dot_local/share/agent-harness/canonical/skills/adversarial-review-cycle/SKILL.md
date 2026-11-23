@@ -110,7 +110,7 @@ Do NOT stop when P0 or unaddressed P1 findings exist and the trajectory is still
 
 ### Step 4: Apply Revisions
 
-First run the four tests in `~/.local/share/agent-harness/finding-triage.md` on each finding. A finding that fails test 1, 2 or 3 is declined with its reason and recorded in the decision tracker, not applied. A finding that fails test 4 (intent) is a follow-up: it takes the new-scope path below and never blocks. A finding that passes takes the bug-fix path.
+First run `agent-traces review repro` for any finding that carries a repro (the finding-triage file says how): a finding whose repro does not reproduce is declined, unless you write why it stands. Then run the four tests in `~/.local/share/agent-harness/finding-triage.md` on each finding. A finding that fails test 1, 2 or 3 is declined with its reason and recorded in the decision tracker, not applied. A finding that fails test 4 (intent) is a follow-up: it takes the new-scope path below and never blocks. A finding that passes takes the bug-fix path.
 
 - **Bug fix / gap fill** (passes the tests, fix is clear) → auto-apply
 - **New scope / feature addition** (fix requires adding something the plan didn't originally include) → record in the decision tracker, do **not** apply, do **not** pause the loop. It surfaces in Step 6 for the owner.
