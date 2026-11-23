@@ -97,7 +97,7 @@ Over-use of `GH_URGENT=1` on reads shows up as `urgent:"env"` in the log.
 
 **Invariants.** It fails open: if the rate read fails, takes over 3 seconds, or returns something unexpected, the call goes on. It never refuses a write, an urgent call, `free` or `search`. It never changes the call's arguments. The floor is an estimate; read the log and set `GH_BUDGET_FLOOR` to what the numbers say.
 
-**Who sets `GH_URGENT=1`.** `ci-main-status --merge-gate` and `--tip` (the cache-and-tags change, PR1). `loop_engine_bump.py`, `agent_kit_bump.py` and the `pr-body-check` shim set it for every gh call they make (dotfiles #537), and `merge-pr.sh` sets it too (coordinator#882, merged as ba086d75), so the reads on their merge paths are not refused under the floor. Plain `ci-main-status` stays non-urgent, so a refusal there reads as `ERROR cannot read state: ... gh-wrapper: core budget low ...`.
+**Who sets `GH_URGENT=1`.** `ci-main-status --merge-gate` and `--tip` (the cache-and-tags change, PR1). `loop_engine_bump.py`, `agent_kit_bump.py`, `intent-review-check`, `pr-record` and the `pr-body-check` shim set it for every gh call they make (dotfiles #537), and `merge-pr.sh` sets it too (coordinator#882, merged as ba086d75), so the reads on their merge paths are not refused under the floor. Plain `ci-main-status` stays non-urgent, so a refusal there reads as `ERROR cannot read state: ... gh-wrapper: core budget low ...`.
 
 ## The budget file
 
