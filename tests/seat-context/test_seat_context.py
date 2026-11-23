@@ -34,14 +34,15 @@ def find_binary():
     return sc.find_binary()
 
 
-def request(files, system="s" * 100, tools=("Bash", "Read"), skills=("alpha", "beta")):
+def request(files, system="s" * 100, tools=("Bash", "Read"), skills=("alpha", "beta"), agents=("general-purpose", "reader")):
     """A request shaped like Claude Code 2.1.330's: the instruction files in one system-reminder block, the skill list in another."""
     body = "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions.\n\n"
     body += "\n\n".join("Contents of %s (%s):\n\n%s" % (path, kind, text) for path, kind, text in files)
     body += "\n</system-reminder>\n"
     listing = "<system-reminder>\n" + sc.SKILL_LIST_HEAD + "\n" + "\n".join("- %s: does a thing" % s for s in skills) + "\n</system-reminder>"
+    roster = "Available agent types for the Agent tool:\n" + "\n".join("- %s: does a thing (Tools: *)" % a for a in agents) + "\n\nWhen you launch several agents, send them together."
     return {"system": [{"type": "text", "text": system}],
-            "messages": [{"role": "user", "content": [{"type": "text", "text": body}, {"type": "text", "text": listing}, {"type": "text", "text": "hi"}]}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": body}, {"type": "text", "text": listing}, {"type": "text", "text": roster}, {"type": "text", "text": "hi"}]}],
             "tools": [{"name": t, "description": "d"} for t in tools]}
 
 
@@ -102,6 +103,61 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(sc.project_slug("/home/agent/.t3/x"), "-home-agent--t3-x")
 
 
+class HomeAndLogTest(unittest.TestCase):
+    """The throwaway HOME carries what a real session finds under ~/.claude; every run leaves one log line. Neither needs the binary."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.real = self.tmp / "real"
+        (self.real / ".claude/skills/kept").mkdir(parents=True)
+        (self.real / ".claude/skills/kept/SKILL.md").write_text("---\nname: kept\n---\n")
+        (self.real / ".claude/agents").mkdir()
+        (self.real / ".claude/agents/reader.md").write_text("---\nname: reader\n---\n")
+        (self.real / ".claude/CLAUDE.md").write_text("user")
+        (self.real / ".claude/settings.json").write_text(json.dumps({"model": "m", "apiKeyHelper": "cat key", "hooks": {"Stop": []}, "env": {"ANTHROPIC_BASE_URL": "http://x", "KEEP": "1"}}))
+
+    def test_the_throwaway_home_links_skills_and_agents_and_copies_settings_without_hooks_or_api_settings(self):
+        home = self.tmp / "throwaway"
+        home.mkdir()
+        sc.throwaway_home(home, self.tmp / "folder", self.real, True)
+        self.assertTrue((home / ".claude/skills/kept/SKILL.md").is_file())
+        self.assertTrue((home / ".claude/agents/reader.md").is_file())
+        self.assertEqual((home / ".claude/CLAUDE.md").read_text(), "user")
+        copied = json.loads((home / ".claude/settings.json").read_text())
+        self.assertEqual(copied, {"model": "m", "env": {"KEEP": "1"}})
+        self.assertIn("apiKeyHelper", json.loads((self.real / ".claude/settings.json").read_text()))  # the real file is left as it was
+
+    def test_the_report_lists_the_agent_types_the_request_carries(self):
+        parsed = sc.parse_request(request([]))
+        self.assertEqual(parsed["agents"], ["general-purpose", "reader"])
+        self.assertEqual(parsed["skills"], ["alpha", "beta"])
+
+    def run_cli(self, *args, log):
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=60, env={**os.environ, "SEAT_CONTEXT_LOG": str(log)})
+
+    def test_a_failed_run_leaves_one_log_line_with_its_arguments_exit_code_and_reason(self):
+        log = self.tmp / "state/log.jsonl"
+        r = self.run_cli("--seat-file", str(self.tmp / "nope.json"), "--binary", str(self.tmp / "no-claude"), log=log)
+        self.assertEqual(r.returncode, 2)
+        lines = log.read_text().splitlines()
+        self.assertEqual(len(lines), 1)
+        entry = json.loads(lines[0])
+        self.assertEqual(entry["exit"], 2)
+        self.assertIn("no claude binary", entry["error"])
+        self.assertEqual(entry["argv"][0], "--seat-file")
+        self.run_cli("--seat-file", str(self.tmp / "nope.json"), "--binary", str(self.tmp / "no-claude"), log=log)
+        self.assertEqual(len(log.read_text().splitlines()), 2)  # appended, not replaced
+
+    def test_a_log_that_cannot_be_written_changes_neither_the_exit_code_nor_the_output(self):
+        unwritable = self.tmp / "dir-not-file"
+        unwritable.mkdir()  # opening a folder for append fails
+        good = self.run_cli("--seat-file", str(self.tmp / "nope.json"), "--binary", str(self.tmp / "no-claude"), log=self.tmp / "ok/log.jsonl")
+        bad = self.run_cli("--seat-file", str(self.tmp / "nope.json"), "--binary", str(self.tmp / "no-claude"), log=unwritable)
+        self.assertEqual((bad.returncode, bad.stdout, bad.stderr), (good.returncode, good.stdout, good.stderr))
+        self.assertEqual(bad.returncode, 2)
+
+
 class BinaryTest(unittest.TestCase):
     """The installed Claude Code, against the stand-in API."""
 
@@ -157,6 +213,19 @@ class BinaryTest(unittest.TestCase):
         self.assertNotIn("Workflow", denied["tools"])
         self.assertNotIn("ScheduleWakeup", denied["tools"])
         self.assertIn(str(worker / "CLAUDE.md"), self.paths(denied))
+
+    def test_the_skills_and_agent_types_in_the_home_are_listed_and_a_skill_override_takes_one_off(self):
+        (self.home / ".claude/skills/kept-skill").mkdir(parents=True)
+        (self.home / ".claude/skills/kept-skill/SKILL.md").write_text("---\nname: kept-skill\ndescription: a kept skill\n---\nbody\n")
+        (self.home / ".claude/skills/muted-skill").mkdir()
+        (self.home / ".claude/skills/muted-skill/SKILL.md").write_text("---\nname: muted-skill\ndescription: a muted skill\n---\nbody\n")
+        (self.home / ".claude/agents").mkdir()
+        (self.home / ".claude/agents/finder.md").write_text("---\nname: finder\ndescription: finds things\n---\nFind.\n")
+        report = self.run_tool({"skillOverrides": {"muted-skill": "off"}})
+        self.assertIn("kept-skill", report["skills"])
+        self.assertNotIn("muted-skill", report["skills"])
+        self.assertIn("finder", report["agents"])
+        self.assertIn("general-purpose", report["agents"])  # a built-in one, so the list is the real one
 
     def test_a_hook_that_runs_is_counted_and_a_dropped_one_is_not(self):
         settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "printf 'hook output %s' $(seq 1 100)"}]}]}}
