@@ -27,6 +27,20 @@ Decisions and escalation. Decide anything that doesn't materially matter yoursel
 
 Once I open a one-way door, it stays open for that work, including for any subagent you hand it to (quote me). Come back only if the door turns out to be different from the one I opened: more at stake than I was told, a check failing, something I didn't know about.
 
+## Enforcement: the inverted pyramid (stopgap)
+
+Use this when you choose how to enforce a rule, or how to stop a repeated mistake. Pick the cheapest, highest layer that works, top first:
+
+1. Codebase: API design, architecture, refactoring.
+2. Static analysis: lints, types, compilers, tests, CI.
+3. Verification: runtime, formal.
+4. Prose: rules, skills, AGENTS.md.
+5. Human review.
+
+Lower layers cost more each time and are trusted less. Source: poteto's pyramid, https://assets.ai.engineer/sites/aiecode2025/sha256/c094802d6073e6ab31aad6a7406c807a88afd34efea9b445be9196cc365761dc.webp
+
+This is a stopgap until I decide what to do with pstack as a whole.
+
 ## The bar
 
 Every repo is held to one of two bars. `personal`: my own project; good enough is the standard and design-principles.md §10 applies; the lead approves a Loop Engine run's intent itself and starts the run, without my sign-off. `shared`: work I share with other people and want to be proud of; §10 does not apply; I sign off a Loop Engine run's intent before it starts. The plan follows from the bar.

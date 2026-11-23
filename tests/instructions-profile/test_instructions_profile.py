@@ -110,6 +110,8 @@ BAR_ROWS = {
     ),
     "axon-work-computer": ("| `git.example.test/*`, `github.com/axon-*` | shared |",),
 }
+CURSOR = ROOT / "dot_cursor" / "rules" / "agent-harness.mdc.tmpl"
+ENFORCEMENT_HEADING = "## Enforcement: the inverted pyramid (stopgap)"
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
@@ -254,6 +256,14 @@ class InstructionProfileTests(unittest.TestCase):
             for profile in ("personal", "axon-work-computer", "termux"):
                 with self.subTest(harness=name, profile=profile):
                     self.assertNotIn("Risk tolerance is high", render(template, profile))
+
+    def test_enforcement_heading_renders_for_every_harness_and_profile(self):
+        for name, template in {**TEMPLATES, "cursor": CURSOR}.items():
+            for profile in ("personal", "axon-work-computer"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    self.assertEqual(text.count(ENFORCEMENT_HEADING), 1)
+                    self.assertLess(text.index(ENFORCEMENT_HEADING), text.index(BAR_HEADING))
 
 
 if __name__ == "__main__":
