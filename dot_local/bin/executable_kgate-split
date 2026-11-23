@@ -738,7 +738,7 @@ def cmd_run(args):
         run_pods([n + 1])
     server.shutdown()
     log.close()
-    merge_pod_outputs(done, state, rundir)
+    merge_pod_outputs(done, state, rundir)   # each pod's /out folder, by the job id run_pod found
     (rundir / "pods.json").write_text(json.dumps({"elapsed_s": time.time() - started, "pods": [done[k] for k in sorted(done)]}, indent=1))
     code, text = receipt(rundir)
     (rundir / "receipt.txt").write_text(text + "\n")
