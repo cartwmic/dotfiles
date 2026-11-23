@@ -312,12 +312,12 @@ class PodSpec(unittest.TestCase):
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
         # the pins moved once, when every pod gained the compile caches and the worker counts (tuning_env), and again when the compile caches moved from /tmp to /var/tmp (the only change: NODE_COMPILE_CACHE and PYTHONPYCACHEPREFIX); a profile without scratch_tmpfs or tmp_tmpfs still renders no memory volume
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311), and 2026-11-22 for the agent host pod anti-affinity (the only change: the affinity gains "podAntiAffinity" against app=agent-host in namespace agent-host)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "5f9dd1b59bac033c124d0185acd027ac2d04d90da42d593dc6c1da515bbd76c9"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "a2bf19c139183b55625e7ae7313677ee7df21ceece144aecc3de8cad150376de"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "13bfbb79b9177ba2fd2f08fa6694d64dea3479e03ecdc0d005337747caf98e38"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "a0a97fdf70c7380507ff778b3970f1bc55f3a507fbd1866fd5c0170ca870e96c"),
+             "7f90c8c9ec950bfff1a8bb2663a0874f2628a037f5eae3149b2b14beee789f17"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "6136bdfc756036beb49c99f084bfd22169c019aa934815cc90c81a3d6b6410b1"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -358,6 +358,14 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(exprs, [
             {"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3"]}])
+
+    def test_keeps_off_the_live_agent_host_node(self):
+        # required, so a busy agent host node never gets a new job; scoped to the live namespace, so the scratch copy does not block a node; pinned jobs too
+        for kw in ({}, {"node": "ubuntu-server-k8s-agent-1"}, {"prefer_nodes": False}):
+            pod, _ = self.pod(**kw)
+            self.assertEqual(pod["spec"]["affinity"]["podAntiAffinity"], {"requiredDuringSchedulingIgnoredDuringExecution": [
+                {"labelSelector": {"matchLabels": {"app": "agent-host"}}, "topologyKey": "kubernetes.io/hostname",
+                 "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "agent-host"}}}]})
 
     def test_prefer_and_overflow_nodes_do_not_overlap(self):
         self.assertFalse(set(K.PREFER_NODES) & set(K.OVERFLOW_NODES))
@@ -2574,7 +2582,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "5f9dd1b59bac033c124d0185acd027ac2d04d90da42d593dc6c1da515bbd76c9"  # the same pin as test_default_render_is_byte_identical
+        want = "a2bf19c139183b55625e7ae7313677ee7df21ceece144aecc3de8cad150376de"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
