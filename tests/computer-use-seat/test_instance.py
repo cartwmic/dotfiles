@@ -102,7 +102,7 @@ class SeatComputerInstanceTest(unittest.TestCase):
             want, owned = h.settings("linux")
             self.assertNotIn("seat-computer", want)
             self.assertNotIn("seat-computer", owned)
-            self.assertEqual({k for k in want if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout"})
+            self.assertEqual({k for k in want if k.startswith("seat-")}, {"seat-lead", "seat-builder", "seat-planner", "seat-reviewer", "seat-scout", "seat-homelab-chat"})
         finally:
             h.close()
 
