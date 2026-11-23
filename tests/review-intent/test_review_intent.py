@@ -75,6 +75,16 @@ exit "$(cat "$FAKE_PBC_DIR/code" 2>/dev/null || echo 0)"
 """
 
 
+# A stand-in for a repo's scripts/merge-pr.sh: logs its arguments, prints FAKE_MERGE_DIR/out (stdout) and err (stderr), and exits with the code in FAKE_MERGE_DIR/mcode (0 when there is no file).
+FAKE_MERGE = """#!/bin/sh
+echo "$@" >> "$FAKE_MERGE_DIR/margs"
+[ -f "$FAKE_MERGE_DIR/mout" ] && cat "$FAKE_MERGE_DIR/mout"
+[ -f "$FAKE_MERGE_DIR/merr" ] && cat "$FAKE_MERGE_DIR/merr" >&2
+[ -f "$FAKE_MERGE_DIR/msleep" ] && exec sleep "$(cat "$FAKE_MERGE_DIR/msleep")"
+exit "$(cat "$FAKE_MERGE_DIR/mcode" 2>/dev/null || echo 0)"
+"""
+
+
 def ask(n, **kw):
     row = {"id": n, "summary": "summary %d" % n, "question": "question %d?" % n, "options": [{"title": "Yes", "consequence": "do it"}, {"title": "No", "consequence": "do not"}],
            "answer_choice": None, "answer": None, "answer_other": None, "answered_at": "2026-01-01T00:00:00.000Z", "workstream": None, "state": "relayed", "updated_at": "T1"}
@@ -100,6 +110,10 @@ class ReviewIntent(unittest.TestCase):
         (self.dir / "bin/gh").chmod(0o755)
         (self.dir / "bin/pr-body-check").write_text(FAKE_PBC, encoding="utf-8")
         (self.dir / "bin/pr-body-check").chmod(0o755)
+        # The checkouts review-intent finds the repos' merge scripts in (REVIEW_INTENT_CHECKOUTS): a coordinator and a homelab one, each a stand-in that passes unless a test says otherwise.
+        for repo in ("coordinator", "cartwmic-homelab-v2"):
+            (self.dir / "git" / repo / "scripts").mkdir(parents=True)
+            (self.dir / "git" / repo / "scripts/merge-pr.sh").write_text(FAKE_MERGE, encoding="utf-8")
         self.db = {"asks": {}, "decisions": {}, "workstreams": {}}
 
     def put(self, *, asks=(), decisions=(), workstreams=()):
@@ -117,7 +131,7 @@ class ReviewIntent(unittest.TestCase):
             f = self.dir / "body.md"
             f.write_text(text, encoding="utf-8")
             argv += ["--body-file", str(f)]
-        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), FAKE_MERGE_DIR=str(self.dir), REVIEW_INTENT_CHECKOUTS=str(self.dir / "git"), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
         if self.path is not None:
             env["PATH"] = self.path
         return subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
@@ -426,6 +440,90 @@ class ReviewIntent(unittest.TestCase):
 
     def fail_with(self, head):
         return "pr-body-check: FAIL cartwmic/coordinator#930\n" + head + "\n  fix: do it\n"
+
+    # --- the merge check: the repo's own `scripts/merge-pr.sh N --check-only`, after the record check ---
+
+    def merge_stub(self, code, out="", err="", sleep=None):
+        for name, text in (("mcode", str(code)), ("mout", out), ("merr", err)):
+            (self.dir / name).write_text(text, encoding="utf-8")
+        if sleep is not None:
+            (self.dir / "msleep").write_text(str(sleep), encoding="utf-8")
+
+    def margs(self):
+        f = self.dir / "margs"
+        return f.read_text().strip().splitlines() if f.exists() else []
+
+    def test_the_repos_merge_script_runs_in_check_only_mode_on_the_prs_number(self):
+        self.pr_with_decision()
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.margs(), ["930 --check-only"])
+        self.assertEqual(r.stderr, "")
+        self.pr_with_decision()
+        self.assertEqual(self.run_script(None, "--pr", "cartwmic/cartwmic-homelab-v2#664").returncode, 0)
+        self.assertEqual(self.margs()[-1], "664 --check-only")
+
+    def test_a_refusal_by_the_merge_script_refuses_with_its_output_and_prints_nothing(self):
+        self.pr_with_decision()
+        self.merge_stub(1, out="pr-gate-runs: REFUSED journey board-close has no GREEN on the head tree\n", err="merge-pr: REFUSED: #930 head abc has no kgate run (named above)\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("journey board-close has no GREEN on the head tree", r.stderr)  # the script's stdout and stderr both come through
+        self.assertIn("merge-pr: REFUSED: #930 head abc has no kgate run", r.stderr)
+        self.assertIn("Fix it before building the brief; nothing was printed", r.stderr)
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["record_check"], row["merge_check"]), ("refused", 3, "passed", "refused"))
+
+    def test_a_record_defect_is_refused_by_the_record_check_before_the_merge_script_runs(self):
+        self.pr_with_decision()
+        self.pbc(1, self.fail_with("the PR has no agent record (x)"))
+        self.merge_stub(1, err="merge-pr: REFUSED: x\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(self.margs(), [])
+
+    def test_a_script_that_is_missing_too_old_failing_or_hanging_is_a_warning_not_a_refusal(self):
+        self.pr_with_decision()
+        # too old to know the flag (exit 64, no REFUSED): the real old coordinator script says `unknown --check-only`
+        self.merge_stub(64, err="merge-pr: unknown --check-only\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("exited 64 without a refusal (merge-pr: unknown --check-only)", r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+        # exit 1 with no REFUSED (gh or node failed): a broken tool does not block a review
+        self.merge_stub(1, err="gh: HTTP 502\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("exited 1 without a refusal (gh: HTTP 502)", r.stderr)
+        # no checkout of the repo
+        r = self.run_script(None, "--pr", "cartwmic/agent-kit#5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("agent-kit/scripts/merge-pr.sh is not there", r.stderr)
+        self.assertEqual([row["merge_check"] for row in self.log_rows()], ["fail-open-error", "fail-open-error", "fail-open-missing"])
+
+    def test_a_merge_script_that_hangs_does_not_block_the_review(self):
+        self.pr_with_decision()
+        self.merge_stub(0, sleep=30)
+        source = SCRIPT.read_text(encoding="utf-8").replace("MERGE_CHECK_SECONDS = 600", "MERGE_CHECK_SECONDS = 1")
+        patched = self.dir / "review-intent-short"
+        patched.write_text(source, encoding="utf-8")
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), FAKE_MERGE_DIR=str(self.dir),
+                   REVIEW_INTENT_CHECKOUTS=str(self.dir / "git"), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        r = subprocess.run(["python3", str(patched), "--state-dir", str(self.dir), "--pr", "cartwmic/coordinator#930"], capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("could not run (timed out)", r.stderr)
+
+    def test_skip_record_check_skips_the_merge_script_too_and_no_pr_means_no_merge_check(self):
+        self.pr_with_decision()
+        self.merge_stub(1, err="merge-pr: REFUSED: x\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930", "--skip-record-check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.margs(), [])
+        (row,) = self.log_rows()
+        self.assertEqual(row["merge_check"], "skipped-flag")
+        self.assertEqual(self.run_script("plain text", "--ask", "5").returncode, 0)  # no --pr: no merge check
+        self.assertEqual(self.margs(), [])
 
     def test_a_record_that_passes_the_check_builds_the_brief(self):
         self.pr_with_decision()

@@ -13,6 +13,7 @@
 # passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
 # the PR's state is read through `gh api`: a merged or closed PR is refused, so its description is never overwritten. An open PR is PATCHed through `gh api` (`gh pr edit` fails on the agent host).
 # --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes and the `pr-body-check <repo> <pr> --skip-intent-review` to run once the record is written (the create-time `--body-file` check does not read it).
+# Create pushes the branch of THIS directory, so it refuses (exit 2, before the body check and any push) when this directory's origin is not --repo, naming both: a PR for one repo is never opened from another repo's checkout.
 # Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments, a merged or closed PR, or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
 # Personal profile only: it needs pr-body-check (docs/profiles.md).
 set -eu
@@ -119,6 +120,11 @@ if [ -n "$edit" ]; then
 fi
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 2 "not inside a git work tree"
+# The push below goes to this directory's origin, whatever --repo says (a builder opened homelab#676 from the coordinator checkout and pushed a stray branch to the coordinator). Refuse first, naming both.
+origin_url=$(git remote get-url origin 2>/dev/null) || fail 2 "this directory has no git remote named origin, so nothing can be pushed for $repo"
+origin_repo=$(printf '%s\n' "$origin_url" | sed -e 's/\.git$//' -e 's#/*$##' | awk -F'[/:]' 'NF >= 2 { print $(NF-1) "/" $NF }')
+[ "$(printf '%s' "$origin_repo" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')" ] ||
+  fail 2 "this directory's origin is $origin_repo, not $repo: pr-open pushes the branch of the directory it runs in, so nothing was pushed or created. Run it from a checkout of $repo (git -C <checkout> ...), or fix --repo"
 [ -n "$head" ] || head=$(git symbolic-ref --short -q HEAD) || fail 2 "HEAD is detached: check out the branch to open, or pass --head"
 if [ -z "$base" ]; then
   base=$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##') || base=

@@ -89,6 +89,22 @@ class PrOpen(unittest.TestCase):
     def remote_branches(self):
         return self.git(self.origin, "branch", "--list").split()
 
+    def test_create_from_another_repos_checkout_is_refused_before_anything_is_checked_or_pushed(self):
+        """homelab#676: pr-open ran from the coordinator checkout with --repo for homelab pushed the branch to the coordinator."""
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other")
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: this directory's origin is cartwmic/scratch, not cartwmic/other"), last)
+        self.assertNotIn("feature", self.remote_branches())
+        self.assertEqual(self.calls(), [])  # no check, no gh call: nothing else ran either
+        self.assertFalse(self.git(self.origin, "log", "--all", "--oneline").count("second"))
+
+    def test_create_with_the_repo_of_this_origin_still_works_in_any_case_and_url_form(self):
+        self.git(self.repo, "remote", "set-url", "origin", "git@github.com:Cartwmic/Scratch.git")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/scratch")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("feature", self.remote_branches())
+
     def test_a_refused_body_creates_and_pushes_nothing(self):
         self.body.write_text("REFUSEME\n")
         result = self.run_open("--title", "T", "--body-file", str(self.body))
