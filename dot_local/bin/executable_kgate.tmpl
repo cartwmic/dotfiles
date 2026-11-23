@@ -2943,7 +2943,7 @@ class Job:
 
     def rerun(self, why, make):
         """The cluster evicted the pod: note it, delete what is left of it, and return the manifests for the one more pod this job may have. The job's own
-        deadlines are not reset: --wait counts from the job's start (less the time spent waiting for the pause) and the pod deadline from its first pod's creation."""
+        deadlines are not reset: --wait counts from the job's start and the pod deadline from its first pod's creation."""
         old, n = self.pod, self.rec["attempts"]
         self.rec.setdefault("evicted", []).append({"attempt": n, "pod": old, "reason": why})
         if n >= MAX_ATTEMPTS:
