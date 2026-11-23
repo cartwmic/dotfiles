@@ -130,7 +130,8 @@ PR_BODY = (
     "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles table or a table in the Proven section, a Decisions: line, "
     "ask/decision/grant ids, job ids, Rewinds:, Break-glass:) or a task id is otherwise found only when `gh pr merge` runs. Shortest path: %s. "
     "Or run `pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both). The description keeps what changes, why, how it was checked "
-    "(a Proven section as plain prose, playbook f5a367b5), risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)."
+    "(a Proven section as plain prose, playbook f5a367b5), risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8). "
+    "The `--body-file` form never reads the agent record: once the PR exists and before you report, run `pr-body-check <owner/repo> <pr> --skip-intent-review`, which does."
 )
 PR_OPEN = {  # the one-command form of PR_BODY, by verb: pr-open checks the body, pushes, opens or PATCHes, and prints the URL
     "create": "`pr-open --title T --body-file F [--draft]` (F is the body file, `-` reads it from stdin; it checks the body, pushes the branch and opens the PR)",

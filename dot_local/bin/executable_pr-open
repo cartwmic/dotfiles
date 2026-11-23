@@ -12,7 +12,7 @@
 # `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
 # passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
 # the PR's state is read through `gh api`: a merged or closed PR is refused, so its description is never overwritten. An open PR is PATCHed through `gh api` (`gh pr edit` fails on the agent host).
-# --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes.
+# --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes and the `pr-body-check <repo> <pr> --skip-intent-review` to run once the record is written (the create-time `--body-file` check does not read it).
 # Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments, a merged or closed PR, or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
 # Personal profile only: it needs pr-body-check (docs/profiles.md).
 set -eu
@@ -152,5 +152,6 @@ pr_url=$(printf '%s\n' "$out" | grep -E 'https://[^ ]+/pull/[0-9]+' | tail -n 1)
 printf '%s\n' "$pr_url"
 number=${pr_url##*/pull/}
 if command -v pr-record >/dev/null 2>&1; then
-  record=$(pr-record path "$repo#$number" 2>/dev/null) && printf 'agent record (principles table, Decisions: line, job ids go here): %s\n' "$record" || true
+  record=$(pr-record path "$repo#$number" 2>/dev/null) && { printf 'agent record (principles table, Decisions: line, job ids go here): %s\n' "$record"
+    printf 'before you report, run: pr-body-check %s %s --skip-intent-review (the --body-file form pr-open ran does not check the agent record)\n' "$repo" "$number"; } || true
 fi
