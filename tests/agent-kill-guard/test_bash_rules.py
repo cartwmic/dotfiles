@@ -1416,6 +1416,15 @@ class LiveGitWorkCheckout(unittest.TestCase):
                 self.assertIn("/Users/test/coordinator-work/scripts/merge-pr.sh", msg)
                 self.assertNotIn("~/git/coordinator", msg)
 
+    def test_the_other_pr_and_coordinator_merge_refusals_name_the_work_merge_script(self):
+        script = "/Users/test/coordinator-work/scripts/merge-pr.sh"
+        other = self.work("ci-main-status --merge-gate acme/app && pr-body-check acme/app 5 && gh pr merge 12 -R acme/app") or ""
+        self.assertIn(script, other)
+        self.assertNotIn("~/git/coordinator", other)
+        coordinator = self.work("ci-main-status --merge-gate cartwmic/coordinator && pr-body-check cartwmic/coordinator 12 && gh pr merge 12 -R cartwmic/coordinator") or ""
+        self.assertIn(script, coordinator)
+        self.assertNotIn("~/git/coordinator", coordinator)
+
     def test_personal_refusals_still_name_git_coordinator(self):
         msg = check("git -C /Users/test/git/coordinator merge origin/main", env=self.HOME, cwd="/Users/test/tmp-home/x", profile="personal") or ""
         self.assertIn("(~/git/coordinator)", msg)

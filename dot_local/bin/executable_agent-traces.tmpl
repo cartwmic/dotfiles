@@ -12,8 +12,10 @@ cli="$kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
 looked="$cli"
 if [ ! -f "$cli" ] && [ -z "${AGENT_TRACES_KIT:-}" ]; then
   repo="${COORDINATOR_REPO:-$(sed -n 1p "$HOME/.local/share/agent-harness/coordinator-instance" 2>/dev/null)}"
-  alt="$repo/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
-  looked="$cli and $alt"
+  if [ -n "$repo" ]; then
+    alt="$repo/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+    looked="$cli and $alt"
+  fi
   if [ -n "$repo" ] && [ -f "$alt" ]; then
     cli="$alt"
     kitver="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$repo/node_modules/@cartwmic/agent-kit/package.json" 2>/dev/null | head -n 1)"
