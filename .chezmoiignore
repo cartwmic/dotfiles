@@ -125,6 +125,11 @@ bin
 bin/**
 {{- end }}
 
+{{- if ne .profile "personal" }}
+# video-rename: a personal media task on Michael's own video files, on whichever personal machine holds them (README.md, "video-rename").
+.local/bin/video-rename
+{{- end }}
+
 {{- if and (ne .profile "termux") (ne .profile "personal") }}
 # SSH key provision is termux + personal only; the homelab credential is
 # personal infrastructure and must not land on a work machine.
@@ -422,8 +427,6 @@ Library/Preferences/pnpm/**
 .local/user_scripts/agent_tmp_move.py
 .local/share/agent-scratch
 .local/share/agent-scratch/**
-# video-rename: a personal media task on the personal Mac (README.md, "video-rename").
-.local/bin/video-rename
 {{- end }}
 
 {{- if and (eq .profile "personal") (eq .chezmoi.os "darwin") (not (includeTemplate "workshop_config" . | fromJson).enabled) }}

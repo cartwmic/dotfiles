@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""video-rename: rename numbered video files to their titles, looked up on a website you configure.
+"""video-rename: rename video files using a website you configure.
 
 usage: video-rename FOLDER                 dry run: print old -> new for each file, change nothing
-       video-rename FOLDER --apply         rename, and write an undo log
+       video-rename FOLDER --apply         rename numbered files to their titles, and write an undo log
        video-rename --undo LOG             reverse an earlier --apply
+       video-rename --search PATH...       dry run: find each titled file's id by searching the site and
+                                           print old -> "<id> - <title>"; PATH is a folder or a file
+       video-rename --search PATH... --apply   do those renames, and write an undo log
 options: --config FILE (default ~/.config/video-rename/config.toml)
          --delay SECONDS (wait between requests; overrides delay_seconds in the config)
 
-The site is never named here. url_template, how to read the title and the other settings live in your
-config file (docs/video-rename.example.toml shows every key). Only files in FOLDER itself are looked at,
-not folders inside it. Python standard library only (tomllib needs Python 3.11 or newer).
+The site is never named here. url_template, search_template, how to read the title and the other settings
+live in your config file (docs/video-rename.example.toml shows every key). A folder's own files are looked
+at, not folders inside it. Python standard library only (tomllib needs Python 3.11 or newer).
 """
 import argparse
 import datetime
@@ -23,6 +26,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".ts", ".mpg", ".mpeg"}
 DEFAULT_CONFIG = "~/.config/video-rename/config.toml"
@@ -30,10 +34,25 @@ LOG_DIR = "~/.local/state/video-rename"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 MAX_NAME_BYTES = 255
 HTML_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+SEARCH_LINK = re.compile(r"""href\s*=\s*["']([^"']*?/video/(\d+)/([^"'/?#]+)[^"']*)["']""", re.I)
+ID_PREFIX = re.compile(r"^\d+ - ")
+LOGIN_PATH = re.compile(r"log-?in|sign-?in", re.I)
+PASSWORD_INPUT = re.compile(r"""<input\b[^>]*\btype\s*=\s*["']?password""", re.I)
 
 
 class Error(Exception):
     """A problem to report in one line, without a traceback."""
+
+
+class HttpStatus(Error):
+    """The site answered with an HTTP error status."""
+    def __init__(self, code):
+        super().__init__(f"HTTP {code}")
+        self.code = code
+
+
+class LoginWall(Error):
+    """The site wants a sign-in. The whole run stops: every later page would be the same wall."""
 
 
 # ---- pure: ids, titles, names -------------------------------------------------------------------
@@ -109,9 +128,35 @@ def unique_name(title, ext, taken):
     return name
 
 
+def slug_key(text):
+    """What two spellings of a title share: accents dropped, lowercase, letters and digits only (so `don-t` and `dont` agree)."""
+    text = unicodedata.normalize("NFKD", urllib.parse.unquote(text))
+    return re.sub(r"[^a-z0-9]+", "", "".join(c for c in text if not unicodedata.combining(c)).lower())
+
+
+def find_results(body, page_url, title):
+    """The videos a search page links to whose slug is `title`'s: {id: video page URL}. A video linked twice counts once."""
+    want = slug_key(title)
+    found = {}
+    for m in SEARCH_LINK.finditer(body):
+        href, vid, slug = html.unescape(m.group(1)), m.group(2), m.group(3)
+        if want and slug_key(slug) == want:
+            found.setdefault(vid, urllib.parse.urljoin(page_url, href))
+    return found
+
+
+def check_login_wall(requested, final, body):
+    """Raise LoginWall when a page looks like a sign-in: it redirected to a login path, or it holds a password field."""
+    asked, got = urllib.parse.urlsplit(requested).path, urllib.parse.urlsplit(final).path
+    if got != asked and LOGIN_PATH.search(got):
+        raise LoginWall(f"the site sent {asked or '/'} to a login page ({got})")
+    if PASSWORD_INPUT.search(body):
+        raise LoginWall(f"{got or '/'} has a password field")
+
+
 # ---- adapters: config, network, disk ------------------------------------------------------------
 
-def load_config(path):
+def load_config(path, search=False):
     import tomllib  # Python 3.11+
     path = os.path.expanduser(path)
     try:
@@ -128,11 +173,12 @@ def load_config(path):
         except (re.error, TypeError) as e:
             raise Error(f"config {key}: {e}")
 
-    template = raw.get("url_template")
-    if not isinstance(template, str) or "{id}" not in template:
-        raise Error('config url_template must be a string containing "{id}"')
+    key, placeholder = ("search_template", "{query}") if search else ("url_template", "{id}")
+    template = raw.get(key)
+    if not isinstance(template, str) or placeholder not in template:
+        raise Error(f'config {key} must be a string containing "{placeholder}"')
     cfg = {
-        "url_template": template,
+        key: template,
         "id_regex": regex("id_regex", r"^[0-9]+$"),
         "title_from": raw.get("title_from", "html"),
         "strip": [regex_str(p) for p in raw.get("strip", [])],
@@ -178,17 +224,18 @@ def read_headers(path):
 
 
 def fetch(url, headers):
-    """The response body as text. Raises Error with a short reason on any failure."""
+    """(the URL the response came from after redirects, the body as text). Raises Error with a short reason on any failure."""
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = resp.read()
+            final = resp.geturl()
             charset = resp.headers.get_content_charset() or "utf-8"
     except urllib.error.HTTPError as e:
-        raise Error(f"HTTP {e.code}")
+        raise HttpStatus(e.code)
     except (urllib.error.URLError, OSError) as e:
         raise Error(f"request failed: {getattr(e, 'reason', e)}")
-    return data.decode(charset, errors="replace")
+    return final, data.decode(charset, errors="replace")
 
 
 # ---- use cases ----------------------------------------------------------------------------------
@@ -211,7 +258,7 @@ def plan(folder, cfg, delay):
             time.sleep(delay)
         first = False
         try:
-            title = extract_title(fetch(cfg["url_template"].format(id=urllib.parse.quote(vid, safe="")), cfg["headers"]), cfg)
+            title = extract_title(fetch(cfg["url_template"].format(id=urllib.parse.quote(vid, safe="")), cfg["headers"])[1], cfg)
             if title is None:
                 raise Error("no title found in the response")
         except Error as e:
@@ -269,26 +316,170 @@ def undo(log_path):
     print(f"{restored} restored, {skipped} skipped")
 
 
+class Pacer:
+    """Waits `delay` seconds before every request after the first."""
+    def __init__(self, delay):
+        self.delay, self.first = delay, True
+
+    def wait(self):
+        if not self.first and self.delay > 0:
+            time.sleep(self.delay)
+        self.first = False
+
+
+class RunLog:
+    """One JSON line per step of a search run, appended to LOG_DIR/search.jsonl; the run id ties them together."""
+    def __init__(self):
+        self.run = uuid.uuid4().hex[:12]
+        self.path = os.path.join(os.path.expanduser(LOG_DIR), "search.jsonl")
+
+    def record(self, action, outcome, started, **fields):
+        line = {"run": self.run, "at": now(), "action": action, "outcome": outcome,
+                "ms": round((time.monotonic() - started) * 1000), **fields}
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "a") as f:
+                f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except OSError as e:
+            raise Error(f"cannot write the run log {self.path}: {e}")
+
+
+def get_page(url, cfg, pacer):
+    """(final URL, body) of a page, after the polite wait. Raises LoginWall when the site wants a sign-in."""
+    pacer.wait()
+    try:
+        final, body = fetch(url, cfg["headers"])
+    except HttpStatus as e:
+        if e.code in (401, 403):
+            raise LoginWall(f"the site answered HTTP {e.code}")
+        raise
+    check_login_wall(url, final, body)
+    return final, body
+
+
+def look_up(name, cfg, pacer):
+    """(id, title) of the one video the site's search finds for `name`. Raises Error saying why when there is not exactly one."""
+    if not slug_key(name):
+        raise Error("the name has no letters or digits to search for")
+    final, body = get_page(cfg["search_template"].format(query=urllib.parse.quote_plus(name)), cfg, pacer)
+    found = find_results(body, final, name)
+    if not found:
+        raise Error("no search result matches this title")
+    if len(found) > 1:
+        raise Error(f"{len(found)} videos match this title (ids {', '.join(sorted(found))})")
+    (vid, page_url), = found.items()
+    title = extract_title(get_page(page_url, cfg, pacer)[1], cfg)
+    if title is None:
+        raise Error(f"no title found on the page for id {vid}")
+    return vid, title
+
+
+def video_files(paths):
+    """Every video file named by `paths`: a file as given, a folder's own files (not folders inside it)."""
+    files = {}
+    for given in paths:
+        path = os.path.abspath(os.path.expanduser(given))
+        if os.path.isdir(path):
+            for entry in sorted(os.listdir(path)):
+                if os.path.isfile(os.path.join(path, entry)) and os.path.splitext(entry)[1].lower() in VIDEO_EXTENSIONS:
+                    files[os.path.join(path, entry)] = None
+        elif os.path.isfile(path) and os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS:
+            files[path] = None
+        else:
+            raise Error(f"{path} is not a video file or a folder")
+    return list(files)
+
+
+def plan_search(paths, cfg, delay, log):
+    """Find the id of each titled video in `paths` by searching the site. Returns (renames, skipped, already)
+    as plan() does; renames are (old_path, new_path, id). A login wall raises LoginWall before anything is renamed."""
+    pacer = Pacer(delay)
+    renames, skipped, already, taken = [], [], 0, {}
+    for path in video_files(paths):
+        folder, entry = os.path.split(path)
+        stem, ext = os.path.splitext(entry)
+        started = time.monotonic()
+        if ID_PREFIX.match(stem):
+            already += 1
+            log.record("lookup", "already-named", started, file=entry)
+            continue
+        try:
+            vid, title = look_up(stem, cfg, pacer)
+        except LoginWall:
+            log.record("lookup", "login-wall", started, file=entry)
+            raise
+        except Error as e:
+            skipped.append((path, str(e)))
+            log.record("lookup", "skipped", started, file=entry, reason=str(e))
+            continue
+        names = taken.setdefault(folder, {name_key(e) for e in os.listdir(folder)})
+        name = unique_name(f"{vid} - {title}", ext, names)
+        names.add(name_key(name))
+        renames.append((path, os.path.join(folder, name), vid))
+        log.record("lookup", "matched", started, file=entry, id=vid, new=name)
+    return renames, skipped, already
+
+
+def search_run(args):
+    """The --search command: plan by searching the site, print old -> new, rename on --apply. Returns the exit code."""
+    log, started = RunLog(), time.monotonic()
+    try:
+        cfg = load_config(args.config, search=True)
+        delay = cfg["delay"] if args.delay is None else args.delay
+        renames, skipped, already = plan_search(args.paths, cfg, delay, log)
+        log_path = os.path.join(os.path.expanduser(LOG_DIR), f"undo-{now().replace(':', '')}.jsonl")
+        many = len({os.path.dirname(old) for old, _, _ in renames} | {os.path.dirname(p) for p, _ in skipped}) > 1
+        shown = (lambda path: path) if many else os.path.basename
+        for old, new, _ in renames:
+            print(f"{shown(old)} -> {shown(new)}")
+        if args.apply and renames:
+            apply_renames(renames, ", ".join(sorted({os.path.dirname(old) for old, _, _ in renames})), log_path)
+    except LoginWall as e:
+        log.record("run", "login-wall", started)
+        raise Error(f"the site looks like a login wall ({e}). Nothing was renamed. Sign in on the site in your browser, "
+                    "copy its Cookie header into the file headers_file names, and run again.")
+    except Error as e:
+        log.record("run", "failed", started, reason=str(e))
+        raise
+    if skipped:
+        print(f"\nno single match for {len(skipped)} file(s), left as they are:")
+        for path, why in skipped:
+            print(f"  {shown(path)}: {why}")
+    verb = "renamed" if args.apply else "would rename"
+    print(f"\n{verb} {len(renames)}, {len(skipped)} skipped, {already} already named")
+    if args.apply and renames:
+        print(f"undo log: {log_path}  (undo with: video-rename --undo {log_path})")
+    elif not args.apply and renames:
+        print("dry run; add --apply to rename")
+    log.record("run", "applied" if args.apply else "dry-run", started, renames=len(renames), skipped=len(skipped), already=already)
+    return 0
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("folder", nargs="?")
+    ap.add_argument("paths", nargs="*", metavar="PATH", help="a folder (a file or folders too with --search)")
     ap.add_argument("--apply", action="store_true", help="rename for real (default is a dry run)")
+    ap.add_argument("--search", action="store_true", help="find each titled file's id by searching the site, and name it '<id> - <title>'")
     ap.add_argument("--undo", metavar="LOG", help="reverse the renames in an undo log")
     ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--delay", type=float, help="seconds to wait between requests")
     args = ap.parse_args(argv)
     try:
         if args.undo:
-            if args.folder or args.apply:
+            if args.paths or args.apply or args.search:
                 raise Error("--undo takes only a log file")
             return undo(args.undo)
-        if not args.folder:
+        if not args.paths:
             ap.error("FOLDER is required")
-        folder = os.path.abspath(os.path.expanduser(args.folder))
+        if args.search:
+            return search_run(args)
+        if len(args.paths) > 1:
+            ap.error("give one FOLDER (--search takes several folders and files)")
+        folder = os.path.abspath(os.path.expanduser(args.paths[0]))
         if not os.path.isdir(folder):
             raise Error(f"{folder} is not a folder")
         cfg = load_config(args.config)
