@@ -15,7 +15,7 @@ Allowed:
             [HOMELAB_BOT_EVENT_ID=<digits>] python3 <homelab_bot.py> <verb ...>      verbs: BOT_VERBS below
             [COORDINATOR_EVENT_ID=<token>] coordinator lead post HomelabChat [--key K] [--text T]   (--key=K / --text=T also)
           and the seat's own schedules (ledger grant 37, ask #1115: "anything that we schedule!"), made the way the rest of the fleet makes them, as coordinator kit jobs
-          that wake this lead (not T3's schedule_task, which stays refused). Every job id starts with JOB_PREFIX, so the seat can only list, approve and remove its own wakes:
+          that wake this lead (not T3's schedule_task, which stays refused). Every job id starts with JOB_PREFIX, so the seat can approve and remove only its own wakes (`jobs list` shows every job in the store):
             coordinator jobs wake HomelabChat --at <UTC ISO> --text T --id <JOB_PREFIX...> [--words W]
             coordinator jobs wake HomelabChat --cron C --zone Z --text T --id <JOB_PREFIX...> [--words W]
             coordinator jobs list
@@ -135,6 +135,8 @@ def flags_of(rest, allowed, shape):
             if i + 1 >= len(rest):
                 raise Deny("%s has no value" % flag)
             i, value = i + 1, rest[i + 1]
+            if value.startswith("-") and len(value) > 1:  # `--flag --other` is a missing value, not a value; the CLIs refuse it too (`--flag=-x` is how a value starting with `-` is written)
+                raise Deny("%s has no value (the next word starts with -)" % flag)
         got[flag] = value
         i += 1
     return got

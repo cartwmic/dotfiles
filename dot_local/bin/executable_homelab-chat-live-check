@@ -20,8 +20,9 @@ declined to try, a call that ran, a refusal from anything but this hook, and any
 
 Usage: homelab-chat-live-check [--seat-settings FILE] [--model M] [--effort E] [--timeout SECONDS] [--keep]
   --seat-settings  use FILE in place of the `--settings` file in the instance's launch arguments (for a RED run: a copy of the seat file without its hooks)
-Output: one line per probe, the session id, and a final PASS or FAIL. Exit 0 on PASS, 1 on FAIL, 2 when the check could not start a session (no instance, no claude).
-Log: one JSON line per run to ~/.local/state/homelab-chat/live-check.jsonl ({ts, session_id, verdict, probes, seconds, model, seat_settings}).
+Output: one line per probe, the session id, and a final PASS or FAIL. Exit 0 on PASS, 1 on FAIL, 2 when the check could not run to a verdict (no instance, no claude, no model, the session timed out).
+Log: every run, whatever its outcome, appends one JSON line to ~/.local/state/homelab-chat/live-check.jsonl ({ts, session_id, verdict, probes, seconds, model, seat_settings, detail}); verdict is PASS, FAIL,
+NOT_RUN (exit 2: the reason is in detail) or ERROR (an unexpected exception: the exception is in detail). One `finally` in `main` writes it, so no early exit skips it.
 """
 import argparse
 import json
@@ -124,11 +125,11 @@ def instance_launch(seat_settings=None):
     try:
         inst = json.loads(path.read_text())["providerInstances"][INSTANCE]
     except (OSError, KeyError, ValueError):
-        raise SystemExit("homelab-chat-live-check: no %s instance in %s" % (INSTANCE, path))
+        raise CannotStart("no %s instance in %s" % (INSTANCE, path))
     args = shlex.split(inst["config"]["launchArgs"])
     if seat_settings:
         if "--settings" not in args:
-            raise SystemExit("homelab-chat-live-check: the instance's launch arguments have no --settings to replace")
+            raise CannotStart("the instance's launch arguments have no --settings to replace")
         args[args.index("--settings") + 1] = str(seat_settings)
     return args, {e["name"]: e["value"] for e in inst.get("environment", [])}
 
@@ -139,7 +140,7 @@ def lead_model():
         lead = json.loads(path.read_text())
         return lead["model"], lead.get("effort")
     except (OSError, KeyError, ValueError):
-        raise SystemExit("homelab-chat-live-check: cannot read the lead's model from %s; pass --model" % path)
+        raise CannotStart("cannot read the lead's model from %s; pass --model" % path)
 
 
 def run_session(args, env, scratch, model, effort, timeout):
@@ -168,23 +169,20 @@ def log_run(entry):
         print("homelab-chat-live-check: log not written: %s" % err, file=sys.stderr)
 
 
-def main(argv):
-    parser = argparse.ArgumentParser(description="Start a real session on the homelab chat seat and check that its hook refuses the denied calls.")
-    parser.add_argument("--seat-settings", help="use this file in place of the instance's --settings file")
-    parser.add_argument("--model")
-    parser.add_argument("--effort")
-    parser.add_argument("--timeout", type=int, default=SESSION_TIMEOUT)
-    parser.add_argument("--keep", action="store_true", help="keep the scratch folder (stream, hook log)")
-    opts = parser.parse_args(argv)
+class CannotStart(Exception):
+    """The check could not get as far as a session: no claude, no seat instance, no model."""
+
+
+def check_session(opts, entry):
+    """Run the check, fill in `entry` as facts become known, return the exit code. `main` writes `entry` to the run log whatever happens here."""
     if shutil.which("claude") is None:
-        print("homelab-chat-live-check: claude is not on PATH", file=sys.stderr)
-        return 2
+        raise CannotStart("claude is not on PATH")
     args, env_vars = instance_launch(opts.seat_settings)
     model, effort = (opts.model, opts.effort) if opts.model else lead_model()
+    entry["model"] = model
     scratch = tempfile.mkdtemp(prefix="homelab-chat-live-check-")
     hook_log = Path(scratch) / "hook.jsonl"
     env = dict(os.environ, **env_vars, HOMELAB_CHAT_HOOK_LOG=str(hook_log))
-    started = time.time()
     try:
         events, done = run_session(args, env, scratch, model, effort, opts.timeout)
         (Path(scratch) / "stream.jsonl").write_text(done.stdout)
@@ -199,17 +197,42 @@ def main(argv):
         passed = all(ok for _, ok, _ in verdict)
         print("session %s, model %s, %d hook lines (%d denied, %d allowed)" % (session, model, len(hook_lines), sum(l["decision"] == "denied" for l in hook_lines), sum(l["decision"] == "allowed" for l in hook_lines)))
         print("PASS" if passed else "FAIL")
-        log_run({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "session_id": session, "verdict": "PASS" if passed else "FAIL", "probes": [{"name": n, "ok": ok, "detail": d} for n, ok, d in verdict],
-                 "seconds": round(time.time() - started, 1), "model": model, "seat_settings": opts.seat_settings or "instance"})
+        entry.update(session_id=session, verdict="PASS" if passed else "FAIL", probes=[{"name": n, "ok": ok, "detail": d} for n, ok, d in verdict])
         if opts.keep:
             print("scratch kept: %s" % scratch)
         return 0 if passed else 1
-    except subprocess.TimeoutExpired:
-        print("homelab-chat-live-check: the session did not finish in %d seconds" % opts.timeout, file=sys.stderr)
-        return 2
     finally:
         if not opts.keep:
             shutil.rmtree(scratch, ignore_errors=True)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(description="Start a real session on the homelab chat seat and check that its hook refuses the denied calls.")
+    parser.add_argument("--seat-settings", help="use this file in place of the instance's --settings file")
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
+    parser.add_argument("--timeout", type=int, default=SESSION_TIMEOUT)
+    parser.add_argument("--keep", action="store_true", help="keep the scratch folder (stream, hook log)")
+    opts = parser.parse_args(argv)
+    started = time.time()
+    # Every run leaves one line in the log, written in the `finally` below, so no exit path can skip it. The verdict stays ERROR unless a branch sets it.
+    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "session_id": None, "verdict": "ERROR", "probes": [], "model": opts.model, "seat_settings": opts.seat_settings or "instance"}
+    try:
+        return check_session(opts, entry)
+    except CannotStart as err:
+        print("homelab-chat-live-check: %s" % err, file=sys.stderr)
+        entry.update(verdict="NOT_RUN", detail=str(err))
+        return 2
+    except subprocess.TimeoutExpired:
+        print("homelab-chat-live-check: the session did not finish in %d seconds" % opts.timeout, file=sys.stderr)
+        entry.update(verdict="NOT_RUN", detail="the session did not finish in %d seconds" % opts.timeout)
+        return 2
+    except BaseException as err:  # anything else: record it, then let it surface as it would have
+        entry["detail"] = "%s: %s" % (type(err).__name__, err)
+        raise
+    finally:
+        entry["seconds"] = round(time.time() - started, 1)
+        log_run(entry)
 
 
 if __name__ == "__main__":

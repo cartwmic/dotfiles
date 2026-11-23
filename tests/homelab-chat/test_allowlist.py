@@ -217,6 +217,22 @@ class ScheduleTest(HookCase):
             with self.subTest(command=command):
                 self.denied(bash(command))
 
+    def test_a_flag_followed_by_another_flag_has_no_value(self):
+        """`--text --id --id wake-HomelabChat-x` must not read `--id` as text; the CLIs refuse such a value too, so the hook says it for itself."""
+        at = "--at 2026-12-01T17:00:00Z"
+        for command in ("coordinator jobs wake HomelabChat %s --text --id --id %s" % (at, ID),
+                        "coordinator jobs wake HomelabChat --cron --native --zone UTC --text t --id %s" % ID,
+                        "coordinator jobs wake HomelabChat %s --text t --id %s --words --db" % (at, ID),
+                        "coordinator jobs remove %s --words --db" % ID,
+                        "coordinator jobs remove %s --words '- not a flag value either'" % ID,
+                        "%s approve-schedule %s --cron c --zone UTC --grant 37 --why --by=x" % (LEDGER, ID),
+                        "coordinator lead post HomelabChat --key k --text --help",
+                        "coordinator lead post HomelabChat --key k --text '- a list item'"):
+            with self.subTest(command=command):
+                self.denied(bash(command), why="has no value")
+        self.allowed(bash("coordinator jobs wake HomelabChat %s --text=-5 --id %s" % (at, ID)), home="/home/agent")  # `--flag=value` is how a value that starts with - is written
+        self.allowed(bash("coordinator jobs wake HomelabChat %s --text - --id %s" % (at, ID)), home="/home/agent")  # a lone - is a value
+
     def test_the_other_jobs_verbs_are_refused(self):
         for command in ("coordinator jobs", "coordinator jobs list --db /tmp/x", "coordinator jobs list x", "coordinator jobs runs", "coordinator jobs run %s" % ID, "coordinator jobs pause %s --words w" % ID,
                         "coordinator jobs resume %s --words w" % ID, "coordinator jobs change %s --words w" % ID, "coordinator jobs add %s --once 2026-12-01T17:00:00Z --kind k --words w" % ID,
