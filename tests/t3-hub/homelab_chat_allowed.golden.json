@@ -1,5 +1,5 @@
 {
- "_about": "The homelab chat seat's allowed calls, pinned. This is Michael's requirement (ledger ask #1228; tool set decision #3441). The hook (hooks/homelab_chat_allowlist.py) must allow exactly these and nothing else, so a change to the hook that adds a tool, a bot verb, a thread, a post flag, or lets through a Bash command listed under 'seen' fails tests/t3-hub/test_homelab_chat_standing.py until this file changes too. Change this file only with Michael's approval. 'seen' lists every tool name, bot verb and other Bash command the test also probes (tools and Bash commands must all be refused unless 'allowed' lists them), so a hook change that lets one of them through is caught by what the hook does, not only by its constants.",
+ "_about": "The homelab chat seat's allowed calls, pinned. This is Michael's requirement (ledger ask #1228; tool set decision #3441). The hook (hooks/homelab_chat_allowlist.py) must allow exactly these and nothing else, so a change to the hook that adds a tool, a bot verb, a thread, a post flag, or lets through a Bash command listed under 'seen' fails tests/t3-hub/test_homelab_chat_standing.py until this file changes too. Change this file only with Michael's approval. The one change he has approved since is scheduling: the seat may make, list, approve and remove its own wakes of HomelabChat as coordinator kit jobs (ledger grant 37, ask #1115, \"anything that we schedule!\"), listed under 'schedule' and 'bash_commands'; T3's schedule_task and run_scheduled_task_now stay refused. 'seen' lists every tool name, bot verb and other Bash command the test also probes (tools and Bash commands must all be refused unless 'allowed' lists them), so a hook change that lets one of them through is caught by what the hook does, not only by its constants.",
  "allowed": {
   "tools": [
    "ToolSearch",
@@ -46,7 +46,38 @@
     "--key",
     "--text"
    ]
-  }
+  },
+  "schedule": {
+   "lead": "HomelabChat",
+   "job_id_prefix": "wake-HomelabChat-",
+   "grant": "37",
+   "state_dirs": [
+    ".local/share/coordinator",
+    ".local/share/coordinator-work"
+   ],
+   "ledger_script": "pane-bin/ledger",
+   "wake_flags": [
+    "--at",
+    "--cron",
+    "--id",
+    "--text",
+    "--words",
+    "--zone"
+   ],
+   "approve_flags": [
+    "--cron",
+    "--grant",
+    "--why",
+    "--zone"
+   ]
+  },
+  "bash_commands": [
+   "coordinator jobs wake HomelabChat --at 2026-12-01T17:00:00Z --text 'Remind Sam' --id wake-HomelabChat-weekly-new",
+   "coordinator jobs wake HomelabChat --cron '0 9 * * 1' --zone America/Los_Angeles --text 'Weekly: what is new' --id wake-HomelabChat-weekly-new --words 'Sam, 2026-11-23: weekly'",
+   "coordinator jobs list",
+   "coordinator jobs remove wake-HomelabChat-weekly-new --words 'Sam, 2026-11-23: no longer needed'",
+   "~/.local/share/coordinator/pane-bin/ledger approve-schedule wake-HomelabChat-weekly-new --cron '0 9 * * 1' --zone America/Los_Angeles --grant 37 --why 'Sam asked in message 123'"
+  ]
  },
  "seen": {
   "tools": [
@@ -216,7 +247,22 @@
    "node -e 1",
    "perl -e 1",
    "find / -name x",
-   "grep -r x ."
+   "grep -r x .",
+   "coordinator jobs wake Homelab --at 2026-12-01T17:00:00Z --text t --id wake-HomelabChat-x",
+   "coordinator jobs wake mcp:launch:other --at 2026-12-01T17:00:00Z --text t --id wake-HomelabChat-x",
+   "coordinator jobs wake homelab-chat --at 2026-12-01T17:00:00Z --text t --id wake-HomelabChat-x",
+   "coordinator jobs wake HomelabChat --at 2026-12-01T17:00:00Z --text t --id wake-Homelab-x",
+   "coordinator jobs wake HomelabChat --at 2026-12-01T17:00:00Z --text t",
+   "coordinator jobs wake HomelabChat --cron '0 9 * * 1' --text t --id wake-HomelabChat-x",
+   "coordinator jobs remove board-reconcile --words w",
+   "coordinator jobs remove wake-HomelabChat-x",
+   "coordinator jobs pause wake-HomelabChat-x --words w",
+   "coordinator jobs add wake-HomelabChat-x --once 2026-12-01T17:00:00Z --kind k --words w",
+   "~/.local/share/coordinator/pane-bin/ledger approve-schedule wake-HomelabChat-x --cron '0 9 * * 1' --zone UTC --grant 38 --why w",
+   "~/.local/share/coordinator/pane-bin/ledger approve-schedule wake-HomelabChat-x --cron '0 9 * * 1' --zone UTC --ask 1115 --why w",
+   "~/.local/share/coordinator/pane-bin/ledger approve-schedule watchdog:leads --cron '0 9 * * 1' --zone UTC --grant 37 --why w",
+   "~/.local/share/coordinator/pane-bin/ledger revoke-schedule wake-HomelabChat-x --cron '0 9 * * 1' --zone UTC --grant 37 --why w",
+   "~/.local/share/coordinator/pane-bin/ledger list asks"
   ]
  }
 }

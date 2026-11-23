@@ -27,6 +27,7 @@ ALLOWED, SEEN = GOLDEN["allowed"], GOLDEN["seen"]
 SEND = ALLOWED["t3_thread_send"]["tool"]
 THREADS = ALLOWED["t3_thread_send"]["threads"]
 COORDINATOR = THREADS[0]
+SCHEDULE = ALLOWED["schedule"]
 BOT = "~/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
 DENIAL_SET = {
     "kubectl delete pod x": hub.bash_call("kubectl delete pod x"),
@@ -37,6 +38,9 @@ DENIAL_SET = {
     "Write": {"tool_name": "Write", "tool_input": {"file_path": "/x", "content": "c"}},
     "delegate_task": {"tool_name": "mcp__t3-code__delegate_task", "tool_input": {"task": "t"}},
     "schedule_task": {"tool_name": "mcp__t3-code__schedule_task", "tool_input": {"prompt": "p"}},
+    "run_scheduled_task_now": {"tool_name": "mcp__t3-code__run_scheduled_task_now", "tool_input": {}},
+    "a wake of another lead": hub.bash_call("coordinator jobs wake Homelab --at 2026-12-01T17:00:00Z --text t --id wake-HomelabChat-x"),
+    "an approval under another grant": hub.bash_call("~/%s/%s approve-schedule wake-HomelabChat-x --cron '0 9 * * 1' --zone UTC --grant 38 --why w" % (SCHEDULE["state_dirs"][0], SCHEDULE["ledger_script"])),
     "t3_thread_send to another thread": {"tool_name": SEND, "tool_input": {"threadId": "mcp:launch:someone-else", "message": "m"}},
 }
 
@@ -78,8 +82,8 @@ class Seat:
         return self.which_allowed(probes + [(SEND, {"tool_name": SEND, "tool_input": {"threadId": COORDINATOR, "message": "m"}})])
 
     def allowed_bash_commands(self):
-        """Every other Bash command in the golden file's `seen` list. The golden list allows none of them, so any that runs is a new command form."""
-        return self.which_allowed([(c, hub.bash_call(c)) for c in SEEN["bash_commands"]])
+        """The Bash commands in the golden file's `seen` list and its allowed `bash_commands` that the command allows. Only the golden allowed ones may run: any other that does is a new command form."""
+        return self.which_allowed([(c, hub.bash_call(c)) for c in SEEN["bash_commands"] + ALLOWED["bash_commands"]])
 
     def allowed_threads(self):
         probes = THREADS + ["mcp:launch:someone-else", ""] + [t + "x" for t in THREADS]
@@ -103,8 +107,9 @@ def differences(seat):
                             ("bot verbs", seat.allowed_bot_verbs(), set(ALLOWED["bot_verbs"]))):
         found += ["%s: allowed but not in the golden list: %s" % (name, sorted(got - want))] * bool(got - want)
         found += ["%s: in the golden list but refused: %s" % (name, sorted(want - got))] * bool(want - got)
-    got = seat.allowed_bash_commands()
-    found += ["bash commands: allowed but not in the golden list: %s" % sorted(got)] * bool(got)
+    got, want = seat.allowed_bash_commands(), set(ALLOWED["bash_commands"])
+    found += ["bash commands: allowed but not in the golden list: %s" % sorted(got - want)] * bool(got - want)
+    found += ["bash commands: in the golden list but refused: %s" % sorted(want - got)] * bool(want - got)
     flags, other = seat.allowed_post_flags()
     found += ["post flags: allowed %s, golden %s" % (sorted(flags), ALLOWED["post"]["flags"])] * (sorted(flags) != sorted(ALLOWED["post"]["flags"]))
     found += ["a post to another lead, or another coordinator lead command, is allowed"] * other
@@ -162,11 +167,16 @@ class StandingTest(unittest.TestCase):
         self.assertEqual(list(hook.COORDINATOR_THREADS), ALLOWED["t3_thread_send"]["threads"])
         self.assertEqual(sorted(verbs), sorted(ALLOWED["bot_verbs"]))
         self.assertEqual((hook.LEAD, sorted(hook.POST_FLAGS)), (ALLOWED["post"]["lead"], sorted(ALLOWED["post"]["flags"])))
+        self.assertEqual((hook.LEAD, hook.JOB_PREFIX, hook.GRANT, list(hook.STATE_DIRS), hook.LEDGER_SCRIPT, sorted(hook.WAKE_FLAGS), sorted(hook.APPROVE_FLAGS)),
+                         (SCHEDULE["lead"], SCHEDULE["job_id_prefix"], SCHEDULE["grant"], SCHEDULE["state_dirs"], SCHEDULE["ledger_script"], SCHEDULE["wake_flags"], SCHEDULE["approve_flags"]))
 
     def test_the_golden_file_is_consistent(self):
         self.assertTrue(set(ALLOWED["tools"]) | {SEND} <= set(SEEN["tools"]) | {SEND})
         self.assertTrue(set(ALLOWED["bot_verbs"]) <= set(SEEN["bot_verbs"]))
-        for names in (ALLOWED["tools"], ALLOWED["bot_verbs"], SEEN["tools"], SEEN["bot_verbs"], SEEN["bash_commands"]):
+        self.assertFalse(set(ALLOWED["bash_commands"]) & set(SEEN["bash_commands"]))
+        self.assertTrue(SCHEDULE["job_id_prefix"].startswith("wake-%s-" % SCHEDULE["lead"]))
+        self.assertTrue({"mcp__t3-code__schedule_task", "mcp__t3-code__run_scheduled_task_now"} <= set(SEEN["tools"]) - set(ALLOWED["tools"]))
+        for names in (ALLOWED["tools"], ALLOWED["bot_verbs"], ALLOWED["bash_commands"], SEEN["tools"], SEEN["bot_verbs"], SEEN["bash_commands"]):
             self.assertEqual(len(names), len(set(names)))
 
     def test_the_check_fails_on_a_hook_that_gained_a_tool_a_verb_a_thread_or_a_flag(self):
@@ -182,7 +192,14 @@ class StandingTest(unittest.TestCase):
                 ("a new Bash command form", '    raise Deny("Bash runs only homelab_bot.py calls', '    if words[:2] == ["kubectl", "get"]:\n        return "kubectl"\n    raise Deny("Bash runs only homelab_bot.py calls',
                  "bash commands: allowed but not in the golden list: ['kubectl get pods', 'kubectl get pods -A']"),
                 ("a new rule for a tool outside the constants", '    if tool == "Bash":', '    if tool == "MultiEdit":\n        return tool, "multiedit"\n    if tool == "Bash":',
-                 "tools: allowed but not in the golden list: ['MultiEdit']")):
+                 "tools: allowed but not in the golden list: ['MultiEdit']"),
+                ("a wake of another lead", "    if rest[:1] != [LEAD]:", "    if False:", "bash commands: allowed but not in the golden list: ['coordinator jobs wake Homelab "),
+                ("a wake without the seat's id prefix", '    job_id(got.get("--id"), shape)\n', "", "coordinator jobs wake HomelabChat --at 2026-12-01T17:00:00Z --text t --id wake-Homelab-x"),
+                ("a remove of any job", "        job_id(rest[1], shape)\n", "", "coordinator jobs remove board-reconcile --words w"),
+                ("an approval under another grant", 'or got["--grant"] != GRANT', "", "--grant 38 --why w"),
+                ("an approval of any job", "    job_id(rest[0], shape)\n    got = flags_of(rest[1:], APPROVE_FLAGS", "    got = flags_of(rest[1:], APPROVE_FLAGS", "approve-schedule watchdog:leads"),
+                ("another jobs verb", '    if rest == ["list"]:', '    if rest[:1] in (["list"], ["pause"]):', "coordinator jobs pause wake-HomelabChat-x --words w"),
+                ("another ledger verb", 'words[1] == "approve-schedule"', 'words[1] in ("approve-schedule", "revoke-schedule")', "revoke-schedule wake-HomelabChat-x")):
             with self.subTest(change=name):
                 self.assertIn(old, original)
                 seat = Seat(original.replace(old, new, 1))

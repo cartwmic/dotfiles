@@ -17,6 +17,9 @@ BOT_OMARCHY = "/home/cartwmic/git/cartwmic-homelab-v2/scripts/homelab-bot/homela
 BOT_TMP = "/tmp/x/git/cartwmic-homelab-v2/scripts/homelab-bot/homelab_bot.py"
 COORDINATOR = "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56"  # the omarchy coordinator thread
 COORDINATOR_POD = "mcp:c9a80a51-19d4-475c-99bb-117660fc88de"  # the coordinator on the pod
+LEDGER = "~/.local/share/coordinator/pane-bin/ledger"
+LEDGER_ABS = "/home/agent/.local/share/coordinator/pane-bin/ledger"
+ID = "wake-HomelabChat-weekly-new-shows"
 MULTILINE = "Done: added it.\nPrice was $5 \\o/ & more; (ok) > fine"  # a chat reply: newline, $, backslash, & ; ( ) >
 
 
@@ -165,6 +168,104 @@ class BashTest(HookCase):
         self.denied(call("Bash", command=["queue"]))
         self.denied(bash(""))
         self.denied(bash("   "))
+
+
+class ScheduleTest(HookCase):
+    """The seat's own schedules (ledger grant 37, ask #1115): wakes of HomelabChat made with the coordinator CLI, and nothing wider."""
+
+    def test_the_allowed_shapes_pass(self):
+        for command in ("coordinator jobs wake HomelabChat --at 2026-12-01T17:00:00Z --text 'Remind Sam: renew the domain' --id wake-HomelabChat-sam-domain",
+                        "coordinator jobs wake HomelabChat --at=2026-12-01T17:00:00Z --text=hi --id=wake-HomelabChat-1764608400 --words 'Sam, 2026-11-23: reminder'",
+                        "coordinator jobs wake HomelabChat --cron '0 9 * * 1' --zone America/Los_Angeles --text 'Weekly: what is new' --id wake-HomelabChat-weekly-new",
+                        "coordinator jobs wake HomelabChat --id wake-HomelabChat-a --zone UTC --text t --cron '*/5 * * * *'",
+                        "coordinator jobs list",
+                        "coordinator jobs remove %s --words 'Sam, 2026-11-23: no longer needed'" % ID,
+                        "%s approve-schedule %s --cron '0 9 * * 1' --zone America/Los_Angeles --grant 37 --why 'Sam asked in message 123'" % (LEDGER, ID),
+                        "%s approve-schedule %s --cron once:2026-12-01T17:00:00Z --zone UTC --grant=37 --why w" % (LEDGER, ID)):
+            with self.subTest(command=command):
+                self.allowed(bash(command), home="/home/agent")
+        self.allowed(bash("%s approve-schedule %s --cron c --zone UTC --grant 37 --why w" % (LEDGER_ABS, ID)), home="/home/agent")
+        self.denied(bash("%s approve-schedule %s --cron c --zone UTC --grant 37 --why w" % (LEDGER_ABS, ID)), home="/home/cartwmic")  # the absolute form is the real home directory's
+        self.allowed(bash("~/.local/share/coordinator-work/pane-bin/ledger approve-schedule %s --cron c --zone UTC --grant 37 --why w" % ID))  # the work Mac's state dir; this file lands on both profiles
+
+    def test_a_wake_of_anything_but_this_lead_is_refused(self):
+        for target in ("Homelab", "homelabchat", "homelab-chat", "HomelabChatx", "Retro", "36", "mcp:5496141f-7b8c-4f3c-afd1-d87a70d69c56", "mcp:launch:abc", "--at"):
+            with self.subTest(target=target):
+                self.denied(bash("coordinator jobs wake %s --at 2026-12-01T17:00:00Z --text t --id %s" % (target, ID)), why="the wake target must be exactly HomelabChat")
+        self.denied(bash("coordinator jobs wake --at 2026-12-01T17:00:00Z --text t --id %s" % ID))
+
+    def test_a_wake_needs_the_exact_shape(self):
+        at = "--at 2026-12-01T17:00:00Z"
+        for command in ("coordinator jobs wake HomelabChat %s --text t" % at,  # no --id
+                        "coordinator jobs wake HomelabChat %s --id %s" % (at, ID),  # no --text
+                        "coordinator jobs wake HomelabChat --text t --id %s" % ID,  # no time
+                        "coordinator jobs wake HomelabChat --cron '0 9 * * 1' --text t --id %s" % ID,  # cron without zone
+                        "coordinator jobs wake HomelabChat --zone UTC --at 2026-12-01T17:00:00Z --text t --id %s" % ID,  # zone with --at
+                        "coordinator jobs wake HomelabChat %s --cron '0 9 * * 1' --zone UTC --text t --id %s" % (at, ID),  # both
+                        "coordinator jobs wake HomelabChat %s --text t --id wake-Homelab-x" % at,  # the Homelab lead's ids
+                        "coordinator jobs wake HomelabChat %s --text t --id watchdog:leads" % at,
+                        "coordinator jobs wake HomelabChat %s --text t --id wake-HomelabChat-" % at,
+                        "coordinator jobs wake HomelabChat %s --text t --id wake-HomelabChat-a/b" % at,
+                        "coordinator jobs wake HomelabChat %s --text t --id %s --id %s" % (at, ID, ID),
+                        "coordinator jobs wake HomelabChat %s --text t --id %s --ask 1" % (at, ID),
+                        "coordinator jobs wake HomelabChat %s --text t --id %s --db /tmp/x" % (at, ID),
+                        "coordinator jobs wake HomelabChat %s --text t --id %s extra" % (at, ID),
+                        "coordinator jobs wake HomelabChat %s --text t --id %s --help" % (at, ID),
+                        "coordinator jobs wake HomelabChat %s --text t --id" % at,
+                        "coordinator jobs wake HomelabChat %s --text t --id %s; coordinator jobs list" % (at, ID),
+                        "coordinator jobs wake HomelabChat %s --text \"$HOME\" --id %s" % (at, ID)):
+            with self.subTest(command=command):
+                self.denied(bash(command))
+
+    def test_a_flag_followed_by_another_flag_has_no_value(self):
+        """`--text --id --id wake-HomelabChat-x` must not read `--id` as text; the CLIs refuse such a value too, so the hook says it for itself."""
+        at = "--at 2026-12-01T17:00:00Z"
+        for command in ("coordinator jobs wake HomelabChat %s --text --id --id %s" % (at, ID),
+                        "coordinator jobs wake HomelabChat --cron --native --zone UTC --text t --id %s" % ID,
+                        "coordinator jobs wake HomelabChat %s --text t --id %s --words --db" % (at, ID),
+                        "coordinator jobs remove %s --words --db" % ID,
+                        "coordinator jobs remove %s --words '- not a flag value either'" % ID,
+                        "%s approve-schedule %s --cron c --zone UTC --grant 37 --why --by=x" % (LEDGER, ID),
+                        "coordinator lead post HomelabChat --key k --text --help",
+                        "coordinator lead post HomelabChat --key k --text '- a list item'"):
+            with self.subTest(command=command):
+                self.denied(bash(command), why="has no value")
+        self.allowed(bash("coordinator jobs wake HomelabChat %s --text=-5 --id %s" % (at, ID)), home="/home/agent")  # `--flag=value` is how a value that starts with - is written
+        self.allowed(bash("coordinator jobs wake HomelabChat %s --text - --id %s" % (at, ID)), home="/home/agent")  # a lone - is a value
+
+    def test_the_other_jobs_verbs_are_refused(self):
+        for command in ("coordinator jobs", "coordinator jobs list --db /tmp/x", "coordinator jobs list x", "coordinator jobs runs", "coordinator jobs run %s" % ID, "coordinator jobs pause %s --words w" % ID,
+                        "coordinator jobs resume %s --words w" % ID, "coordinator jobs change %s --words w" % ID, "coordinator jobs add %s --once 2026-12-01T17:00:00Z --kind k --words w" % ID,
+                        "coordinator jobs remove", "coordinator jobs remove --words w", "coordinator jobs remove %s" % ID, "coordinator jobs remove board-reconcile --words w", "coordinator jobs remove wake-Homelab-x --words w",
+                        "coordinator jobs remove %s --words w --force" % ID, "coordinator jobs remove %s %s --words w" % (ID, ID)):
+            with self.subTest(command=command):
+                self.denied(bash(command))
+
+    def test_an_approval_needs_grant_37_and_this_seats_job_id(self):
+        base = "%s approve-schedule" % LEDGER
+        for command in ("%s %s --cron c --zone UTC --grant 38 --why w" % (base, ID), "%s %s --cron c --zone UTC --grant 370 --why w" % (base, ID), "%s %s --cron c --zone UTC --ask 1115 --why w" % (base, ID),
+                        "%s %s --cron c --zone UTC --why w" % (base, ID), "%s %s --cron c --zone UTC --grant 37" % (base, ID), "%s %s --zone UTC --grant 37 --why w" % (base, ID),
+                        "%s %s --cron c --zone UTC --grant 37 --grant 37 --why w" % (base, ID), "%s %s --cron c --zone UTC --grant 37 --ask 1 --why w" % (base, ID),
+                        "%s %s --cron c --zone UTC --grant 37 --why w --by x" % (base, ID), "%s %s --native hourly --grant 37 --why w" % (base, ID),
+                        "%s watchdog:leads --cron c --zone UTC --grant 37 --why w" % base, "%s wake-Homelab-x --cron c --zone UTC --grant 37 --why w" % base, "%s omarchy/mac-backup --native hourly --grant 37 --why w" % base,
+                        "%s --cron c --zone UTC --grant 37 --why w" % base, base, "%s %s --cron c --zone UTC --grant 37 --why w; id" % (base, ID)):
+            with self.subTest(command=command):
+                self.denied(bash(command))
+
+    def test_the_rest_of_the_ledger_and_other_paths_are_refused(self):
+        for command in ("%s list asks" % LEDGER, "%s open x" % LEDGER, "%s revoke-schedule 1 --why w" % LEDGER, "%s schedule-approvals" % LEDGER, "%s grant x --why w" % LEDGER,
+                        "ledger approve-schedule %s --cron c --zone UTC --grant 37 --why w" % ID, "/tmp/ledger approve-schedule %s --cron c --zone UTC --grant 37 --why w" % ID,
+                        "~/.local/share/coordinator/pane-bin/coordinator jobs list", "sh %s approve-schedule %s --cron c --zone UTC --grant 37 --why w" % (LEDGER, ID),
+                        "%s/../pane-bin/ledger approve-schedule %s --cron c --zone UTC --grant 37 --why w" % (LEDGER.rsplit("/", 1)[0], ID),
+                        "%s approve-schedule %s --cron c --zone UTC --grant 37 --why w" % ("/home/other/.local/share/coordinator/pane-bin/ledger", ID),
+                        "COORDINATOR_EVENT_ID=1 coordinator jobs list", "HOMELAB_BOT_EVENT_ID=1 coordinator jobs list"):
+            with self.subTest(command=command):
+                self.denied(bash(command), home="/home/agent")
+
+    def test_the_t3_and_claude_schedulers_stay_refused(self):
+        for tool in ("mcp__t3-code__schedule_task", "mcp__t3-code__run_scheduled_task_now", "mcp__t3-code__list_scheduled_tasks", "mcp__t3-code__delete_scheduled_task", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup"):
+            with self.subTest(tool=tool):
+                self.denied(call(tool), why="not on the homelab-chat tool list")
 
 
 class OtherToolsTest(HookCase):
