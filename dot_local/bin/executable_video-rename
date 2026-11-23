@@ -422,10 +422,10 @@ def plan_search(paths, cfg, delay, log):
 
 def search_run(args):
     """The --search command: plan by searching the site, print old -> new, rename on --apply. Returns the exit code."""
-    cfg = load_config(args.config, search=True)
-    delay = cfg["delay"] if args.delay is None else args.delay
     log, started = RunLog(), time.monotonic()
     try:
+        cfg = load_config(args.config, search=True)
+        delay = cfg["delay"] if args.delay is None else args.delay
         renames, skipped, already = plan_search(args.paths, cfg, delay, log)
         log_path = os.path.join(os.path.expanduser(LOG_DIR), f"undo-{now().replace(':', '')}.jsonl")
         many = len({os.path.dirname(old) for old, _, _ in renames} | {os.path.dirname(p) for p, _ in skipped}) > 1

@@ -320,6 +320,17 @@ class SearchTest(unittest.TestCase):
         self.assertNotIn("url_template", cfg.read_text())
         self.assertEqual(self.search(str(self.folder), config=cfg).returncode, 0)
 
+    def test_a_run_refused_for_its_config_or_paths_is_in_the_run_log(self):
+        cfg = self.home / "bad.toml"
+        cfg.write_text("delay_seconds = 0\n")
+        self.assertEqual(self.search(str(self.folder), config=cfg).returncode, 1)
+        self.assertEqual(self.search(str(self.folder / "missing.mp4")).returncode, 1)
+        log = self.run_log()
+        self.assertEqual([(e["action"], e["outcome"]) for e in log], [("run", "failed"), ("run", "failed")])
+        self.assertIn("search_template", log[0]["reason"])
+        self.assertIn("is not a video file or a folder", log[1]["reason"])
+        self.assertEqual(len({e["run"] for e in log}), 2)
+
     def test_the_old_mode_still_needs_a_url_template(self):
         r = subprocess.run([sys.executable, str(SCRIPT), str(self.folder), "--config", str(self.config())],
                            capture_output=True, text=True, env=dict(os.environ, HOME=str(self.home)), timeout=60)
