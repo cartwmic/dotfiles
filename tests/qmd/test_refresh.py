@@ -634,6 +634,24 @@ class SignalTest(Base):
                     (self.e.fake / n).unlink(missing_ok=True)
                 self.e.stamp.unlink(missing_ok=True)
 
+    def test_a_stop_runs_few_commands(self):
+        """Every ps and pgrep the stop runs is a fork, and on a loaded machine a fork is slow, so the stop must not run many. It once ran
+        a ps per pid over a list that grew every turn, and counted its grace period in turns: a stop took over a minute (the CI flake)."""
+        for n in ("ps", "pgrep"):
+            path = subprocess.run(["sh", "-c", "command -v " + n], capture_output=True, text=True).stdout.strip()
+            (self.e.bin / n).write_text('#!/bin/sh\necho %s >> "$FAKE/forks"\nexec %s "$@"\n' % (n, path))
+            (self.e.bin / n).chmod(0o755)
+        forks = self.e.fake / "forks"
+        p, qpid = self.start_embed(FAKE_QMD_DEAF="1")
+        before = len(forks.read_text().split()) if forks.exists() else 0
+        p.send_signal(signal.SIGTERM)
+        _, err = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 143)
+        self.assertIn("sending KILL", err)
+        ran = len(forks.read_text().split()) - before
+        self.assertLess(ran, 50, "the stop ran %d ps and pgrep commands (about 25 is normal, over 90 is the old, slow stop)" % ran)
+        self.assertTrue(until(lambda: not alive(qpid), 5), "TERM-resistant job survived")
+
     def test_an_orphaned_job_process_is_stopped_too(self):
         """A process of the job whose parent exited is no longer under the wrapper in the process tree; it must still be stopped.
         This is what the startup race left behind (a process forked while the signal arrived): a TERM-deaf job process holding the pipes."""

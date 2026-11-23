@@ -273,11 +273,19 @@ tree_of() {
 }
 # kill -0 succeeds on an unreaped zombie, so look at the state instead.
 running() { st=$(ps -o stat= -p "$1" 2>/dev/null || true); case $st in ''|Z*) return 1 ;; esac; }
-anyrunning() { for p in $tree; do running "$p" && return 0; done; return 1; }
+# Whether any process in $tree is still running: one ps for the lot, because every command here costs a fork and a loaded machine makes
+# a fork slow (a ps per entry, over a list that grew every turn, made a stop take longer than a minute).
+anyrunning() {
+    [ -n "$tree" ] || return 1
+    st=$(ps -o stat= -p "$(echo $tree | tr ' ' ,)" 2>/dev/null || true)   # unquoted: no leading or trailing blank, so no empty id in the list
+    [ -n "$(printf '%s\n' "$st" | grep -v -e '^[[:space:]]*Z' -e '^[[:space:]]*$')" ]
+}
 # Every process of the job: the tree under $1, and the whole process group $1 leads (see the locker). The tree is not enough: a process
 # whose parent has exited is reparented to init and drops out of it, and a process forked while a signal is on its way is missed by
 # a walk that has already looked.
 members() { tree_of "$1"; pgrep -g "$1" 2>/dev/null || true; }
+# Add the job's present members to $tree, each pid once.
+collect() { tree=$(printf '%s\n' $tree $(members "$child") | sort -u | tr '\n' ' '); }
 # Signal $2 to the process group $1 leads. Quiet when there is none yet (the locker has not made it) or any more.
 killgroup() { perl -e 'kill($ARGV[0], -$ARGV[1])' "$2" "$1" 2>/dev/null || true; }
 # Signal $2 to $1 and its descendants, leaves first.
@@ -302,22 +310,24 @@ child=$!
 # just before) must never leave us blocked on a job that ignores TERM.
 while [ "$stop" = 0 ] && running "$child"; do sleep 0.2 || :; done
 if [ "$stop" = 1 ]; then
-    tree=$(members "$child")
+    collect
     killgroup "$child" TERM
     killtree "$child" TERM
     killgroup "$child" TERM                       # the group may have been made between the two lines above
-    n=0
-    while anyrunning && [ "$n" -lt $((grace * 5)) ]; do
-        sleep 0.2 || :; n=$((n + 1))
-        tree="$tree $(members "$child")"          # a TERM handler may have started something new
+    # The grace period and the KILL phase are read off the clock, not counted in turns: on a loaded machine one turn takes far longer than
+    # its sleep. The clock is whole seconds, so each wait lasts at least what it says and less than a second more.
+    t=$(date +%s)
+    while anyrunning && [ "$(date +%s)" -le $((t + grace)) ]; do
+        sleep 0.2 || :
+        collect                                   # a TERM handler may have started something new
     done
-    n=0
-    while anyrunning && [ "$n" -lt 25 ]; do
-        [ "$n" -ne 0 ] || log "job still running ${grace}s after TERM: sending KILL"
-        tree="$tree $(members "$child")"
+    if anyrunning; then log "job still running ${grace}s after TERM: sending KILL"; fi
+    t=$(date +%s)
+    while anyrunning && [ "$(date +%s)" -le $((t + 5)) ]; do
+        collect
         killgroup "$child" KILL
         for p in $tree; do kill -KILL "$p" 2>/dev/null || true; done
-        sleep 0.2 || :; n=$((n + 1))
+        sleep 0.2 || :
     done
     wait "$child" 2>/dev/null || true
     if anyrunning; then log "stopped by a signal, but some process of the job is still alive and keeps the lock"
