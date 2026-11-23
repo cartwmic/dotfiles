@@ -19,7 +19,7 @@ A mistake has happened twice. Sources:
 - Fix-a-fix commits in `git log`: commits that only repair an earlier fix. Often the best source. One run found 8 commits that did nothing but move line numbers in a doc. Read the log for repeated subjects and for the same file touched again and again.
 - Michael's corrections: coordinator playbook rules and the quotes behind them.
 - Reverts, review comments, and comments that explain a workaround.
-- Code comments that say "do not remove", "keep in sync with" or "talk to X first". Each is a rule nothing enforces. Encode it as a type, test or lint, then delete the comment.
+- Code comments that say "do not remove", "keep in sync with" or "talk to X first". Each is a rule nothing enforces. Encode it as a type, test or lint, then delete the comment. Keep a comment that explains something outside our code, such as an external API quirk.
 
 Name the class by what the agent did and what it should have done. Show both cases.
 
