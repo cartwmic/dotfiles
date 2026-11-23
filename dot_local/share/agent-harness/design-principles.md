@@ -20,6 +20,8 @@ Within a component, structure the code in layers with dependencies pointing inwa
 
 Inner layers never import outer ones; external concerns are reached only through ports. Domain and use cases are testable without any real storage, network or runtime. Scale the layering to the component: a small component may have a handful of files per layer (§4 applies).
 
+- Give each meaningful value its own type, such as an id. Parse outside data into those types at the boundary and trust them inside. Derive each type from the schema that owns its data. Then the compiler enforces rules that would otherwise be prose.
+
 **Gate:** dependency checks fail the build on any outward import.
 
 ## 4. YAGNI and KISS
