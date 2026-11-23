@@ -629,6 +629,29 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((self.dir / "args").exists())
 
+    def test_each_run_starts_with_both_checks_not_run(self):
+        """main() resets what the last run left in RUN, so a second run in one process does not log the first one's merge_check."""
+        import contextlib
+        import importlib.machinery
+        import importlib.util
+        import io
+        loader = importlib.machinery.SourceFileLoader("review_intent_inproc", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("review_intent_inproc", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        mod.RUN["record_check"], mod.RUN["merge_check"] = "passed", "refused"
+        old_state = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = str(self.dir / "state")
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                mod.main(["--help"])
+        finally:
+            if old_state is None:
+                os.environ.pop("XDG_STATE_HOME")
+            else:
+                os.environ["XDG_STATE_HOME"] = old_state
+        self.assertEqual((mod.RUN["record_check"], mod.RUN["merge_check"]), ("not-run", "not-run"))
+
     # --- the run log: one JSON line per run, at $XDG_STATE_HOME/review-intent/log.jsonl ---
 
     def log_rows(self):
