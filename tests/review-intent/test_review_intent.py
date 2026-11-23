@@ -117,7 +117,7 @@ class ReviewIntent(unittest.TestCase):
             f = self.dir / "body.md"
             f.write_text(text, encoding="utf-8")
             argv += ["--body-file", str(f)]
-        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"))
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
         if self.path is not None:
             env["PATH"] = self.path
         return subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
@@ -510,7 +510,7 @@ class ReviewIntent(unittest.TestCase):
         src = SCRIPT.read_text(encoding="utf-8").replace("CHECK_SECONDS = 180", "CHECK_SECONDS = 1")
         quick = self.dir / "review-intent-quick"
         quick.write_text(src, encoding="utf-8")
-        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"))
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
         r = subprocess.run(["python3", str(quick), "--state-dir", str(self.dir), "--pr", "cartwmic/coordinator#930"], capture_output=True, text=True, timeout=60, env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("warning: pr-body-check could not run (timed out)", r.stderr)
@@ -529,12 +529,104 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse((self.dir / "args").exists())
 
+    # --- the run log: one JSON line per run, at $XDG_STATE_HOME/review-intent/log.jsonl ---
+
+    def log_rows(self):
+        path = self.dir / "state/review-intent/log.jsonl"
+        return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+    def test_a_refusal_is_logged(self):
+        self.pr_with_decision()
+        head = "the PR's agent record has no Decisions line (rule ccc6c94b)"
+        self.pbc(1, self.fail_with(head))
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 3)
+        (row,) = self.log_rows()
+        self.assertEqual({k: row[k] for k in ("tool", "pr", "outcome", "exit", "reason", "record_check")},
+                         {"tool": "review-intent", "pr": "cartwmic/coordinator#930", "outcome": "refused", "exit": 3,
+                          "reason": "pr-body-check: FAIL cartwmic/coordinator#930", "record_check": "refused"})
+        self.assertRegex(row["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(row["duration_ms"], int)
+
+    def test_a_pass_is_logged(self):
+        self.pr_with_decision()
+        self.pbc(0, "pr-body-check: OK cartwmic/coordinator#930\n")
+        self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["reason"], row["record_check"]), ("done", 0, "", "passed"))
+
+    def test_the_skip_flag_is_logged(self):
+        self.pr_with_decision()
+        self.pbc(1, self.fail_with("the PR has no agent record (x)"))
+        self.run_script(None, "--pr", "cartwmic/coordinator#930", "--skip-record-check")
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["record_check"]), ("done", 0, "skipped-flag"))
+
+    def test_a_missing_tool_is_logged(self):
+        self.pr_with_decision()
+        (self.dir / "bin/pr-body-check").unlink()
+        tools = self.dir / "tools"
+        tools.mkdir()
+        for name, target in (("python3", shutil.which("python3")), ("gh", str(self.dir / "bin/gh"))):
+            (tools / name).symlink_to(target)
+        self.path = str(tools)
+        self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["record_check"]), ("done", "fail-open-missing"))
+        self.assertIn("pr-body-check is not on PATH", row["reason"])
+
+    def test_a_tool_error_and_a_timeout_are_logged(self):
+        self.pr_with_decision()
+        self.pbc(2, "", "could not read the pull request: gh: HTTP 502")
+        self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(self.log_rows()[-1]["record_check"], "fail-open-error")
+        self.pbc(0, sleep=30)
+        quick = self.dir / "review-intent-quick"
+        quick.write_text(SCRIPT.read_text(encoding="utf-8").replace("CHECK_SECONDS = 180", "CHECK_SECONDS = 1"), encoding="utf-8")
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        subprocess.run(["python3", str(quick), "--state-dir", str(self.dir), "--pr", "cartwmic/coordinator#930"], capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(self.log_rows()[-1]["record_check"], "fail-open-timeout")
+
+    def test_an_unknown_id_and_a_usage_error_are_logged_by_outcome(self):
+        self.put(asks=[ask(60)])
+        self.run_script("asks #61")
+        self.run_script(None, "--bogus", "x")
+        one, two = self.log_rows()
+        self.assertEqual((one["outcome"], one["exit"], one["record_check"]), ("refused", 1, "not-run"))
+        self.assertEqual((two["outcome"], two["exit"]), ("failed", 2))
+        self.assertEqual(one["pr"], "")
+
+    def test_the_log_appends_and_creates_its_directory(self):
+        self.put(asks=[ask(5)])
+        self.run_script("ask #5")
+        self.run_script("ask #5")
+        self.assertEqual(len(self.log_rows()), 2)
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_exit(self):
+        self.put(asks=[ask(5)])
+        blocker = self.dir / "state"
+        blocker.write_text("a file where the log directory should be", encoding="utf-8")
+        r = self.run_script("ask #5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+
+    def test_a_ledger_that_pr_body_check_could_not_read_is_warned_about_and_logged(self):
+        self.pr_with_decision()
+        self.pbc(0, "pr-body-check: OK cartwmic/coordinator#930\n  decisions not checked against the ledger: it cannot be read here (no ledger)\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+        self.assertIn("review-intent: warning: pr-body-check: decisions not checked against the ledger: it cannot be read here (no ledger)", r.stderr)
+        (row,) = self.log_rows()
+        self.assertEqual(row["record_check"], "fail-open-error")
+        self.assertTrue(row["reason"].startswith("review-intent: warning: pr-body-check: decisions not checked"))
+
     @unittest.skipUnless((Path.home() / "git/coordinator/scripts/pr-body-check.ts").is_file() and shutil.which("node"), "needs the coordinator checkout")
     def test_record_heads_match_pr_body_check(self):
         """The heads review-intent refuses on are the first lines pr-body-check really prints for those defects (read from the coordinator checkout)."""
         coord = Path.home() / "git/coordinator"
         js = """
-import { problemBlocks } from './scripts/pr-body-check.ts';
+import { problemBlocks, decisionsCheck } from './scripts/pr-body-check.ts';
 import { prDecisionsFailure } from './src/ledger/pr-decisions.ts';
 const base = { body: '', commits: [], files: ['a.ts'], diff: '' };
 const blocks = [
@@ -542,18 +634,21 @@ const blocks = [
   ...problemBlocks({ ...base, record: 'no table, no decisions' }, 8),
   prDecisionsFailure({ pr: 'cartwmic/x#1', line: null, missing: [{ id: 1, summary: 's' }], notLive: [], noChoice: [] }),
 ];
-console.log(JSON.stringify(blocks.map((b) => b.split('\\n')[0])));
+const skipped = decisionsCheck('cartwmic/x', '1', 'rec', { readDecisions: () => { throw new Error('no ledger'); } }).skipped;
+console.log(JSON.stringify({ firsts: blocks.map((b) => b.split('\\n')[0]), skipped }));
 """
         r = subprocess.run(["node", "--experimental-strip-types", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", js], cwd=coord, capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
-        firsts = json.loads(r.stdout.strip().splitlines()[-1])
+        printed = json.loads(r.stdout.strip().splitlines()[-1])
+        firsts = printed["firsts"]
+        self.assertRegex("  " + printed["skipped"], re.compile(r"^\s*decisions not checked against the ledger\b"))  # the line review-intent warns about
         heads = re.search(r"RECORD_HEADS = \((.*?)\n\)", SCRIPT.read_text(encoding="utf-8"), re.S).group(1)
         heads = [json.loads(l.strip().rstrip(",")) for l in heads.splitlines() if l.strip()]
         for head in heads:
             self.assertTrue(any(f.startswith(head) for f in firsts), "no pr-body-check block starts with %r; it prints %r" % (head, firsts))
 
     def test_a_missing_ledger_is_a_usage_error(self):
-        r = subprocess.run(["python3", str(SCRIPT), "--state-dir", str(self.dir / "nope")], capture_output=True, text=True, timeout=60)
+        r = subprocess.run(["python3", str(SCRIPT), "--state-dir", str(self.dir / "nope")], capture_output=True, text=True, timeout=60, env=dict(os.environ, XDG_STATE_HOME=str(self.dir / "state")))
         self.assertEqual(r.returncode, 2)
         self.assertIn("no ledger at", r.stderr)
 
