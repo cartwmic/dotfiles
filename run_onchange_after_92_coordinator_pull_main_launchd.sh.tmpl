@@ -1,0 +1,37 @@
+#!/bin/sh
+# Load or reload the daily coordinator pull (local.coordinator-pull-main) when its plist or the checkout path changes.
+# axon-work-computer on macOS only (.chezmoiignore). It runs `sh scripts/pull-main.sh` in the work coordinator checkout (cartwmic/coordinator#1083).
+# plist: {{ include "Library/LaunchAgents/local.coordinator-pull-main.plist.tmpl" | sha256sum }}
+# checkout: {{ includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | sha256sum }}
+#
+# Fails (and so fails the apply) when launchd does not end up with the job loaded: chezmoi records a run_onchange script only when
+# it succeeds, so the next apply tries again.
+# Reload: bootout, wait until launchd no longer has the job, then bootstrap with a few retries (dot_local/share/launchd-reload).
+set -eu
+log() { printf '[coordinator_pull_main_launchd] %s: %s\n' "$1" "$2"; }
+
+[ "$(uname -s)" = Darwin ] || exit 0
+label=local.coordinator-pull-main
+plist="$HOME/Library/LaunchAgents/$label.plist"
+lib="$HOME/.local/share/launchd-reload/launchd_reload.sh"
+if [ ! -r "$lib" ]; then
+  log ERROR "$lib is not installed; apply it too (chezmoi apply $lib), then apply again"
+  exit 1
+fi
+LAUNCHD_TAG=coordinator_pull_main_launchd
+. "$lib"
+uid=$(id -u)
+if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
+  if ! launchd_wait_gone "$label"; then
+    log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
+    exit 1
+  fi
+fi
+if [ ! -f "$plist" ]; then
+  log ERROR "$plist is not installed; apply it too (chezmoi apply $plist), then apply again"
+  exit 1
+fi
+mkdir -p "$HOME/Library/Logs/coordinator-work"
+launchd_bootstrap "$label" "$plist" || exit 1
+log INFO "loaded $label (daily at 07:15 local time; log: $HOME/Library/Logs/coordinator-work/pull-main.log)"
