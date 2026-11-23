@@ -5,6 +5,7 @@ looks for go through the real hook script in a temp copy. Nothing here writes in
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1206,6 +1207,16 @@ class DoorDelivery(unittest.TestCase):
                 self.assertEqual((record["action"], record["run"], record["adapter"]), ("door-failed", "run-1", "claude"))
                 self.assertIn(want, record["reason"])
                 self.assertNotIn("SECRET-VALUE", self.log.read_text())
+
+    def test_the_callers_wait_longer_than_the_renderer_so_a_hang_is_logged_not_killed(self):
+        # A renderer that hangs is cut off after DOOR_TIMEOUT seconds and logged as a `door-failed` line. The hosts that run this script (Pi's extension, the Codex hook, Cursor's shell_guard) must not stop it first.
+        inner = int(re.search(r"timeout=(\d+),\s*env=dict\(self\.env, COORDINATOR_STATE_DIR", (HOOKS / "refuse_pattern_kill.py").read_text()).group(1))
+        pi = re.search(r"timeout:\s*(\d+)_(\d{3})", (ROOT / "dot_pi/private_agent/extensions/refuse-pattern-kill/index.ts").read_text())
+        codex = re.search(r"timeout:\s*(\d+)\}", (ROOT / "dot_codex/modify_hooks.json.tmpl").read_text())
+        cursor = re.search(r"timeout\s*=\s*(\d+)", (ROOT / "dot_cursor/hooks/executable_shell_guard.py").read_text())
+        for name, outer in (("Pi", int(pi.group(1)) if pi.group(2) == "000" else None), ("Codex", int(codex.group(1))), ("Cursor", int(cursor.group(1)))):
+            self.assertIsNotNone(outer, name)
+            self.assertGreater(outer, inner, "%s stops the classifier after %s s, before its %s s renderer wait" % (name, outer, inner))
 
     def test_nothing_to_tell_and_a_told_refusal_write_no_failure_line(self):
         self.set_renderer("print('{}')")

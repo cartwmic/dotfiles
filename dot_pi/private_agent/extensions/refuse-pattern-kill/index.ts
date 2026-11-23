@@ -17,7 +17,7 @@ export function refusal(command: string, script: string = GUARD_SCRIPT, sessionI
 	if (!existsSync(script)) return undefined;
 	// `session_id` and `adapter` are what the classifier's door rule needs (rules the coordinator tells once per run, at a command); without a session id it does nothing.
 	const payload = { tool_name: "bash", tool_input: { command }, adapter: "pi", ...(sessionId ? { session_id: sessionId } : {}) };
-	const run = spawnSync("python3", [script], { input: JSON.stringify(payload), encoding: "utf8", timeout: 10_000 });
+	const run = spawnSync("python3", [script], { input: JSON.stringify(payload), encoding: "utf8", timeout: 20_000 });
 	return run.status === 2 && run.stderr.includes(REFUSAL_MARK) ? run.stderr.trim() : undefined;
 }
 
