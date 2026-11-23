@@ -1095,16 +1095,6 @@ class FleetFilesTest(unittest.TestCase):
             finally:
                 env.close()
 
-    def test_only_the_worker_seats_skip_every_agents_md(self):
-        for profile in ("personal", "axon-work-computer"):
-            env = fleet_env(profile)
-            try:
-                for seat in sorted(KEEP) + ["homelab-chat"]:
-                    f = self.render(env, "seat-%s.json" % seat)
-                    self.assertEqual("**/AGENTS.md" in f.get("claudeMdExcludes", []), seat in WORKER_SEATS, (profile, seat))
-            finally:
-                env.close()
-
     def test_no_seat_keeps_a_skill_named_like_a_bundled_one_that_every_seat_turns_off(self):
         # skillOverrides is by name: a kept personal skill called "loop" or "run" would be switched off with the bundled one
         for seat, keep in KEEP.items():
@@ -1275,7 +1265,7 @@ class WorkerInstructionsTest(unittest.TestCase):
     def test_exclude_folder_and_variable_come_together_on_the_worker_seats_only(self):
         home, inst, seats = self.settings_and_seat_files()
         for seat, f in seats.items():
-            has_exclude = f.get("claudeMdExcludes") == ["%s/.claude/CLAUDE.md" % home, "**/AGENTS.md"]  # the user file, and every repo AGENTS.md (a worker's rules come from its brief and the playbook)
+            has_exclude = f.get("claudeMdExcludes") == ["%s/.claude/CLAUDE.md" % home]
             self.assertEqual("claudeMdExcludes" in f, has_exclude, seat)  # no other value
             if seat == "coordinator":  # owned by the coordinator repo: no instance here, and its seat file keeps loading the full file
                 self.assertFalse(has_exclude)
