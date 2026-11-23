@@ -571,17 +571,24 @@ def run_holdout(folder, card, reason):
     return score
 
 
+def refuse(folder, why):
+    """Log an init that was turned away, in the climb's own log, then stop."""
+    folder.mkdir(parents=True, exist_ok=True)
+    append(folder, {"kind": "refused", "why": why.splitlines()[0]})
+    raise Fail(why)
+
+
 def cmd_init(args):
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", args.name):
         raise Fail("Use a short lowercase name with dashes, like build-speed.")
     folder = climbs_dir() / args.name
     if (folder / "card.json").exists():
         raise Fail(f"Climb {args.name!r} already exists. Resume it with: climb.py status {args.name}")
-    if args.perf and not (args.errors and args.work):
-        raise Fail("--perf needs --errors and --work. A faster run that fails more requests, or skips the work, is not a win. "
-                   "Print each count in the check output and name it with a regex, like "
-                   "--errors 'errors: (\\d+)' --work 'processed: (\\d+)'.")
     exclude_state()
+    if args.perf and not (args.errors and args.work):
+        refuse(folder, "--perf needs --errors and --work. A faster run that fails more requests, or skips the work, is not a win. "
+                       "Print each count in the check output and name it with a regex, like "
+                       "--errors 'errors: (\\d+)' --work 'processed: (\\d+)'.")
     threshold(args.min_gain, 1)
     lock = [os.path.relpath(os.path.abspath(path), repo()) for path in args.lock or []]
     roots = [repo()]
@@ -615,6 +622,8 @@ def cmd_init(args):
         if edited:
             raise Fail(f"Can't start: {edited_while_scoring(edited, lock)}. A check and its guards must not edit files.")
         drop_new(trees)
+    except Fail as error:
+        refuse(folder, str(error))
     finally:
         forget(trees)
     locked = fingerprint(lock) if lock else None
@@ -922,7 +931,7 @@ def cmd_relock(args):
     card["best"] = {"score": score, "commit": git("rev-parse", "HEAD"), "step": len([r for r in rows(folder) if r["kind"] == "step"])}
     card["counts"] = counts
     save(folder, card)
-    append(folder, {"kind": "relock", "why": args.why, "score": score})
+    append(folder, {"kind": "relock", "why": args.why, "score": score, **counts})
     print(f"Check relocked. New best {number(score)} measured with the changed check.")
     print(save_kit(folder, card))
 
@@ -1044,9 +1053,9 @@ def parse(argv):
     init.add_argument("--score", action="append",
                       help="regex for the score in the check output, like '(\\d+) failed'; one for all checks or one per check; the matches on the last matching line add up, no match is 0")
     init.add_argument("--perf", action="store_true",
-                      help="a speed or size climb: needs --errors and --work, so a faster run that fails more or does less work is undone")
+                      help="a speed climb: needs --errors and --work, so a faster run that fails more or does less work is undone")
     init.add_argument("--errors", help="regex for the count of errors or failed items in the check output; a step that raises it is undone")
-    init.add_argument("--work", help="regex for the count of items processed or bytes written in the check output; a step that lowers it is undone")
+    init.add_argument("--work", help="regex for the count of input handled (items, rows, requests) in the check output, never the quantity you are shrinking; a step that lowers it is undone")
     init.add_argument("--repo", action="append", help="another git checkout the climb edits (repeatable)")
     init.add_argument("--direction", choices=["max", "min"], required=True)
     init.add_argument("--guard", action="append", help="command that must exit 0 (repeatable)")

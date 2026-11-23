@@ -77,8 +77,11 @@ class PerfGuardTest(unittest.TestCase):
     def card(self):
         return json.loads(Path(".hill-climb/speed/card.json").read_text())
 
+    def log(self):
+        return [json.loads(line) for line in Path(".hill-climb/speed/log.jsonl").read_text().splitlines()]
+
     def last_step(self):
-        return [json.loads(line) for line in Path(".hill-climb/speed/log.jsonl").read_text().splitlines()][-1]
+        return self.log()[-1]
 
     def test_perf_climb_needs_both_counters(self):
         for extra in (["--errors", ERRORS], ["--work", WORK], []):
@@ -87,6 +90,9 @@ class PerfGuardTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("--perf needs --errors and --work", output)
         self.assertFalse(Path(".hill-climb/speed/card.json").exists())
+        refusals = self.log()
+        self.assertEqual([row["kind"] for row in refusals], ["refused"] * 3)
+        self.assertTrue(all(row["why"].startswith("--perf needs --errors and --work") for row in refusals))
 
     def test_baseline_counters_are_read_and_shown(self):
         output = self.start()
@@ -104,6 +110,8 @@ class PerfGuardTest(unittest.TestCase):
             "--perf", "--errors", ERRORS, "--work", WORK)
         self.assertEqual(code, 1)
         self.assertIn("--work matched nothing", output)
+        self.assertEqual(self.last_step()["kind"], "refused")
+        self.assertIn("--work matched nothing in the output of: sh check.sh", self.last_step()["why"])
 
     def test_faster_by_skipping_work_is_undone(self):
         self.start()
@@ -175,13 +183,15 @@ class PerfGuardTest(unittest.TestCase):
         self.assertEqual(self.card()["counts"], {"errors": 2, "work": 55})
 
     def test_worst_scored_run_counts_and_the_warm_up_does_not(self):
+        # Runs 2, 3 and 4 are scored. Run 3, in the middle, is the worst: neither the first nor the last scored
+        # run would find it. Run 1 is the warm-up, and its 7 errors must not count.
         Path("check.sh").write_text(
             "n=$(( $(cat .hill-climb/runs 2>/dev/null || echo 0) + 1 )); echo $n > .hill-climb/runs\n"
             'case $n in 1) e=7;; 3) e=1;; *) e=0;; esac\n'
             'case $n in 3) w=8;; *) w=10;; esac\n'
             'echo "processed: $w"\necho "errors: $e"\ncat time.txt\n')
         git("commit", "-qam", "flaky counts")
-        self.start("--runs", "2")
+        self.start("--runs", "3")
         self.assertEqual(self.card()["counts"], {"errors": 1, "work": 8})
 
     def test_paired_step_is_judged_on_the_new_code_counts(self):
@@ -191,6 +201,20 @@ class PerfGuardTest(unittest.TestCase):
         self.assertIn("errors rose 0 -> 2", output)
         self.edit(time=40)
         self.assertIn("kept", self.run_climb("try", "faster")[1])
+
+    def test_paired_leaves_out_the_counts_of_the_old_code(self):
+        # The init check takes runs 1 to 3. From run 4 on, the old code (time 100) prints 4 errors; the new code never does.
+        Path("check.sh").write_text(
+            "n=$(( $(cat .hill-climb/runs 2>/dev/null || echo 0) + 1 )); echo $n > .hill-climb/runs\n"
+            'if [ "$n" -ge 4 ] && [ "$(cat time.txt)" = 100 ]; then e=4; else e=0; fi\n'
+            'echo "processed: $(cat items.txt)"\necho "errors: $e"\ncat time.txt\n')
+        git("commit", "-qam", "old code errs late")
+        self.start("--runs", "2", "--paired")
+        self.assertEqual(self.card()["counts"]["errors"], 0)
+        self.edit(time=40)
+        code, output = self.run_climb("try", "faster, no errors of its own")
+        self.assertIn("kept", output)
+        self.assertEqual(self.last_step()["errors"], 0)
 
     def test_kit_reuse_prints_the_perf_flags(self):
         self.start()
@@ -210,6 +234,8 @@ class PerfGuardTest(unittest.TestCase):
         code, output = self.run_climb("relock", "--why", "the old check counted the wrong thing")
         self.assertEqual(code, 0, output)
         self.assertEqual(self.card()["counts"], {"errors": 0, "work": 500})
+        row = self.last_step()
+        self.assertEqual((row["kind"], row["errors"], row["work"]), ("relock", 0, 500))
 
     def test_without_counters_nothing_changes(self):
         code, output = self.run_climb(

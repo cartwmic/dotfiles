@@ -41,8 +41,9 @@ fit, as shown in step 2.
    - Faster or smaller: a script that times or counts the work on fresh
      random input. Copy the old code as the reference, and add a guard that
      compares the new output with it. Score with `--direction min --target
-     <N>x --runs 3`, and add `--paired` when it is a timer. Add `--perf
-     --errors '<regex>' --work '<regex>'` too: see "Speed and size goals".
+     <N>x --runs 3`, and add `--paired` when it is a timer. Add
+     `--perf --errors '<regex>' --work '<regex>'` too: see "Speed and size
+     goals".
    - Anything else: whatever prints how close you are as a number.
 2. `init <name> --goal "..." --check "<command>" --lock <check files>`.
    `init` commits the new check files as the first step on the climb
@@ -167,7 +168,7 @@ Examples, not a closed list. Recipes are in `references/checks.md`:
 | Port or clone a tool | Outputs that match the real tool |
 | Bug or feature | Failing tests written from the spec, not from your fix |
 | Audit, stabilize, "make X work" | Failing tests, one per finding. Add a test for each new finding and `relock` |
-| Speed or size | A count of the work behind the time, with `--perf --errors --work` |
+| Speed or size | A count of the work behind the time, or the size itself, with `--perf --errors --work` |
 | Several goals at once | Progress toward the worst bar |
 | Look, feel, writing, API shape | `judge.py --panel claude` with a rubric and good examples |
 
@@ -186,8 +187,10 @@ A faster run can be a broken run. Pass `--perf` and `init` refuses to start
 without both counters, so the check must print them:
 
 - `--errors '<regex>'` reads how many requests, rows or items failed.
-- `--work '<regex>'` reads how much work happened: items processed, bytes
-  written, rows returned.
+- `--work '<regex>'` reads how much input the run handled: items, rows or
+  requests processed. It is never the thing you are making smaller or
+  cheaper (bytes written, memory, time): on a size climb that count falls
+  with every real gain, and the guard would undo each one.
 
 They read the check's output the way `--score` does: the last matching line,
 numbers added up. Every `--check` must print both. A missing count is never
