@@ -66,9 +66,11 @@ owner asked, can also run it by hand.
 - TERM, INT or HUP: the job runs as its own process group (the lock helper calls `setpgrp`, so the group is led by the pid the wrapper
   holds). The wrapper polls (no blocking wait, so a signal at any moment is handled), sends TERM to the whole group and, leaves first,
   to the process tree, re-lists both for `QMD_REFRESH_GRACE` seconds (default 10) of clock time, however slow the machine is, then
-  KILLs every process it found and signals KILL to the group (for at most 5 more seconds, until none is left), and exits 143. It
-  checks all the pids it has seen with one `ps`, so a stop costs a few commands, not one per pid per turn. A group signal reaches
-  every process of the job, also one whose parent already exited (a tree walk alone is a snapshot and misses it). It has to do this because heavy-gate runs its job in the foreground and
+  KILLs every process it found and signals KILL to the group, until none is left or for up to 6 seconds, and exits 143. The clock
+  counts whole seconds, so the grace period lasts at least its value and less than a second more (a grace of 0 waits up to 1 s),
+  and the KILL phase lasts just under 6 s at most. It checks all the pids it has seen with one `ps`, so a stop costs a few commands,
+  not one per pid per turn. A group signal reaches every process of the job, also one whose parent already exited (a tree walk
+  alone is a snapshot and misses it). It has to do this because heavy-gate runs its job in the foreground and
   would otherwise defer the signal until a 45-minute embed ended. A hand run in a terminal: Ctrl-C goes to the wrapper only (the job
   is not in the terminal's foreground group), and the wrapper stops the whole job as above. Ctrl-Z also goes to the wrapper only: it
   pauses the wrapper and the job keeps running (and keeps the lock); `fg` resumes the wrapper, and a TERM to a paused wrapper is

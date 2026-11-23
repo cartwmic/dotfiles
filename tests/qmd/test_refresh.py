@@ -636,7 +636,7 @@ class SignalTest(Base):
 
     def test_a_stop_runs_few_commands(self):
         """Every ps and pgrep the stop runs is a fork, and on a loaded machine a fork is slow, so the stop must not run many. It once ran
-        a ps per pid over a list that grew every turn, and counted its grace period in turns: a stop took over a minute (the CI flake)."""
+        a ps per pid over a list that grew every turn, and counted its grace period in turns: a stop took 30 to 50 s (the CI flake)."""
         for n in ("ps", "pgrep"):
             path = subprocess.run(["sh", "-c", "command -v " + n], capture_output=True, text=True).stdout.strip()
             (self.e.bin / n).write_text('#!/bin/sh\necho %s >> "$FAKE/forks"\nexec %s "$@"\n' % (n, path))

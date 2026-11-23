@@ -274,7 +274,7 @@ tree_of() {
 # kill -0 succeeds on an unreaped zombie, so look at the state instead.
 running() { st=$(ps -o stat= -p "$1" 2>/dev/null || true); case $st in ''|Z*) return 1 ;; esac; }
 # Whether any process in $tree is still running: one ps for the lot, because every command here costs a fork and a loaded machine makes
-# a fork slow (a ps per entry, over a list that grew every turn, made a stop take longer than a minute).
+# a fork slow (a ps per entry, over a list that grew every turn, made a stop take 30 to 50 s).
 anyrunning() {
     [ -n "$tree" ] || return 1
     st=$(ps -o stat= -p "$(echo $tree | tr ' ' ,)" 2>/dev/null || true)   # unquoted: no leading or trailing blank, so no empty id in the list
@@ -315,7 +315,7 @@ if [ "$stop" = 1 ]; then
     killtree "$child" TERM
     killgroup "$child" TERM                       # the group may have been made between the two lines above
     # The grace period and the KILL phase are read off the clock, not counted in turns: on a loaded machine one turn takes far longer than
-    # its sleep. The clock is whole seconds, so each wait lasts at least what it says and less than a second more.
+    # its sleep. The clock is whole seconds, so each wait lasts at least what it says and less than a second more (the KILL phase: up to 6 s).
     t=$(date +%s)
     while anyrunning && [ "$(date +%s)" -le $((t + grace)) ]; do
         sleep 0.2 || :
