@@ -7,7 +7,7 @@
 # F is a file, or `-` for the body on stdin. Both forms first run `known-limits-check` on the body (limits under "## Known limits", each tracked or accepted as
 # permanent), before anything else and before anything is pushed, created or changed. A permanent item needs its decision id on the PR's agent record: on create
 # the PR has no number yet, so the check is told the record is pending (`--record-pending`); on edit it is given the record if `pr-record path` names a file
-# that exists, else pending. Each run of the check leaves one JSON line in ${XDG_STATE_HOME:-~/.local/state}/pr-open/log.jsonl. KNOWN_LIMITS_CHECK names another known-limits-check (the tests use it); the default is the one installed with the agent harness.
+# that exists, else pending. Each run of the check leaves one JSON line in its log (${XDG_STATE_HOME:-~/.local/state}/known-limits-check/log.jsonl: outcome, and for a refusal the rule, line and message; pr-open adds the mode, repo, PR number and, on create, the head branch). KNOWN_LIMITS_CHECK names another known-limits-check (the tests use it); the default is the one installed with the agent harness.
 # Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
 # `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
 # passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
@@ -73,26 +73,17 @@ if [ -z "$repo" ]; then
 fi
 case $repo in */*) ;; *) fail 2 "cannot read OWNER/REPO from '$repo'" ;; esac
 
-# One JSON line per limits check in ${XDG_STATE_HOME:-~/.local/state}/pr-open/log.jsonl (the way run-and-wake keeps its log), so "how many bodies were refused" has an
-# answer after the terminal is gone: when, create or edit, repo, PR (edit), the record mode, ok / refused / could-not-run. A log failure never changes the outcome.
-limits_log() { # limits_log exit-code record-flag
-  case $1 in 0) outcome=ok ;; 1) outcome=refused ;; *) outcome=could-not-run ;; esac
-  if [ -n "$edit" ]; then lmode=edit; else lmode=create; fi
-  case $2 in --record-pending) lrecord=pending ;; *) lrecord=given ;; esac
-  logdir=${XDG_STATE_HOME:-$HOME/.local/state}/pr-open
-  mkdir -p "$logdir" 2>/dev/null || return 0
-  printf '{"at":"%s","action":"known-limits-check","mode":"%s","repo":"%s","pr":"%s","record":"%s","outcome":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$lmode" "$(printf %s "$repo" | tr -d '"\\')" "$edit" "$lrecord" "$outcome" >> "$logdir/log.jsonl" 2>/dev/null || true
-}
-
 # known-limits-check runs first, on the same copy; its stderr says which line to fix. The record flag is the caller's.
 limits_check() { # limits_check what-was-not-done record-args...
   what=$1; shift
   klc=${KNOWN_LIMITS_CHECK:-$HOME/.local/share/agent-harness/bin/known-limits-check}
   [ -x "$klc" ] || fail 2 "known-limits-check is not at $klc (it ships with the agent harness; set KNOWN_LIMITS_CHECK to use another)"
-  if "$klc" --body-file "$copy" "$@"; then code=0; else code=$?; fi
-  limits_log "$code" "$1"
-  [ "$code" != 0 ] || return 0
+  # The check keeps the log (why a body was refused: rule, line, message); pr-open tells it who is asking and which PR or branch.
+  if [ -n "$edit" ]; then lmode=edit; else lmode=create; fi
+  set -- "$@" --context caller=pr-open --context "mode=$lmode" --context "repo=$repo"
+  [ -z "$edit" ] || set -- "$@" --context "pr=$edit"
+  [ -z "$head" ] || set -- "$@" --context "head=$head"
+  if "$klc" --body-file "$copy" "$@"; then return 0; else code=$?; fi
   case $code in
     1) fail 1 "the PR description was refused by known-limits-check (output above): put every limit under a '## Known limits' heading as list items, each ending 'Follow-up: <issue URL>' or 'accepted as permanent' (no decision id in the description; the id goes on the agent record's 'Permanent limits: #id' line); fix the body file and run pr-open again, $what" ;;
     *) fail 2 "known-limits-check could not run (exit $code, output above)" ;;

@@ -14,6 +14,7 @@ amendments A1-A3 applied where they change a row's outcome; each changed row say
 """
 import importlib.machinery
 import importlib.util
+import json
 import os
 import stat
 import subprocess
@@ -36,9 +37,18 @@ PENDING = "--record-pending"
 FOOTER = "\U0001f916 Generated with [a coding agent](https://example.com/agent)"
 
 
+SCRATCH_LOG = tempfile.mkdtemp(prefix="klc-log-")  # the tests' own log, so a run never writes to the real home
+LOG = str(Path(SCRATCH_LOG) / "log.jsonl")
+
+
 def run(*args, stdin=None, env=None):
+    env = dict(os.environ if env is None else env, KNOWN_LIMITS_LOG=LOG)
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
                           timeout=30, input=stdin, env=env)
+
+
+def log_records():
+    return [json.loads(line) for line in Path(LOG).read_text().splitlines()] if Path(LOG).exists() else []
 
 
 _loader = importlib.machinery.SourceFileLoader("known_limits_check", str(SCRIPT))
@@ -296,7 +306,7 @@ class KnownLimitsCheck(unittest.TestCase):
 
     def test_the_old_in_body_marker_forms_are_refused_with_the_rewrite(self):
         for item in ("- A, accepted as permanent (decision #4).", "- A, accepted as permanent (decision TBD).",
-                     "- A. Permanent: decision 4.", "- A. Permanent: #4.", "- A, accepted as permanent. See decision 12."):
+                     "- A. Permanent: decision 4.", "- A. Permanent: #4.", "- A, accepted as permanent. See decision 123."):
             with self.subTest(item=item):
                 out = run("--no-lookup", PENDING, "--body-file", self.body("## Known limits\n" + item + "\n"))
                 self.assertEqual(out.returncode, 1, out.stderr)
@@ -364,6 +374,104 @@ class KnownLimitsCheck(unittest.TestCase):
         out = run("--nope")
         self.assertEqual(out.returncode, 2)
         self.assertIn("[--record FILE | --record-pending]", out.stderr)
+
+    # -- the permanent phrase is a clause of its own; ordinary prose is not a decision id ------------------
+
+    def test_negated_or_conditional_permanent_wording_is_not_coverage(self):
+        for item in ("- A is slow, not accepted as permanent yet.", "- A is slow. To be accepted as permanent by Michael.",
+                     "- A is slow; if accepted as permanent later we say so.", "- Is it accepted as permanent? Unknown."):
+            with self.subTest(item=item):
+                out = run("--no-lookup", PENDING, "--body-file", self.body("## Known limits\n" + item + "\n"))
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn("limit has no follow-up", out.stderr)
+
+    def test_the_permanent_clause_forms_that_should_pass_do(self):
+        for item in ("- A is slow, accepted as permanent.", "- A is slow. Accepted as permanent; tracked in https://example.com/issues/44.",
+                     "- A is slow (accepted as permanent).", "- A is slow - accepted as permanent", "- Accepted as permanent: A is slow"):
+            with self.subTest(item=item):
+                out = run("--no-lookup", PENDING, "--body-file", self.body("## Known limits\n" + item + "\n"))
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_ordinary_words_that_look_like_a_decision_id_pass(self):
+        for item in ("- The tree is 2 decisions 3 deep. Follow-up: PROJ-1", "- It takes 3 decisions 5 times a day, accepted as permanent.",
+                     "- A decision 7 levels up is stale, accepted as permanent."):
+            with self.subTest(item=item):
+                out = run("--no-lookup", PENDING, "--body-file", self.body("## Known limits\n" + item + "\n"))
+                self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_the_decision_id_forms_pr_body_check_refuses_are_refused_here(self):
+        for item in ("- A. Follow-up: PROJ-1, see decision #4.", "- A. Follow-up: PROJ-1, see decision 123."):
+            with self.subTest(item=item):
+                out = run("--no-lookup", "--body-file", self.body("## Known limits\n" + item + "\n"))
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn("decision id is written", out.stderr)
+
+    # -- the log: why a body was refused, from the log alone -----------------------------------------------
+
+    def fresh_log(self):
+        Path(LOG).unlink(missing_ok=True)
+
+    def test_a_refusal_logs_the_rule_the_line_and_the_message(self):
+        self.fresh_log()
+        run("--body-file", self.body("# PR\n\nLimits: B is slow.\n", "logged.md"), "--context", "mode=create", "--context", "head=my-branch")
+        (record,) = log_records()
+        self.assertEqual((record["outcome"], record["tool"], record["limits"], record["permanent"]), ("refused", "known-limits-check", 0, 0))
+        self.assertEqual(record["context"], {"mode": "create", "head": "my-branch"})
+        (problem,) = record["problems"]
+        self.assertEqual((problem["rule"], problem["line"]), ("label", 3))
+        self.assertTrue(problem["body"].endswith("logged.md"))
+        self.assertIn('"Limits" written as a label', problem["message"])
+        self.assertTrue(record["at"].endswith("Z"))
+
+    def test_every_kind_of_refusal_names_its_rule(self):
+        cases = {
+            "label": "Limits: B\n", "inline": "Known limits: B is slow\n", "phrase-outside-section": "See the known limit below.\n",
+            "decision-id-in-body": "## Known limits\n- A, accepted as permanent (decision #4).\n", "no-follow-up": "## Known limits\n- A is slow.\n",
+            "bare-key": "## Known limits\n- A is slow, PROJ-1.\n", "text-in-section": "## Known limits\n- A. Follow-up: PROJ-1\nplain text\n",
+            "section-shape": "## Known limits\n\n", "fence": "```\nnever closed\n",
+        }
+        for rule, text in cases.items():
+            with self.subTest(rule=rule):
+                self.fresh_log()
+                run("--no-lookup", PENDING, "--body-file", self.body(text, "rule.md"))
+                (record,) = log_records()
+                self.assertIn(rule, [p["rule"] for p in record["problems"]], record["problems"])
+                self.assertNotIn("other", [p["rule"] for p in record["problems"]])
+
+    def test_a_record_refusal_and_an_unconfirmed_reference_log_their_rules(self):
+        self.fresh_log()
+        run("--body-file", self.body(FIXED_PERMANENT, "perm.md"))
+        self.assertEqual([p["rule"] for p in log_records()[-1]["problems"]], ["record"])
+        self.assertEqual(log_records()[-1]["record"], "none")
+        self.fresh_log()
+        run("--body-file", self.body(FIXED_WITH_TICKET, "ticket.md"))  # no tracker lookup is configured
+        self.assertEqual([p["rule"] for p in log_records()[-1]["problems"]], ["unconfirmed-reference"])
+
+    def test_a_pass_logs_ok_with_the_record_mode(self):
+        self.fresh_log()
+        run("--body-file", self.body(FIXED_PERMANENT, "pass.md"), PENDING)
+        (record,) = log_records()
+        self.assertEqual((record["outcome"], record["limits"], record["permanent"], record["record"], record["problems"]), ("ok", 1, 1, "pending", []))
+
+    def test_no_log_writes_nothing_and_an_unwritable_log_never_changes_the_result(self):
+        self.fresh_log()
+        self.assertEqual(run("--body-file", self.body(FIXED_PERMANENT), PENDING, "--no-log").returncode, 0)
+        self.assertEqual(log_records(), [])
+        out = run("--body-file", self.body(FIXED_PERMANENT), PENDING, "--log", "/proc/nope/log.jsonl")
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_a_body_that_is_not_utf8_is_refused_and_logged_as_encoding(self):
+        self.fresh_log()
+        bad = Path(self.tmp) / "latin1.md"
+        bad.write_bytes(b"\xff\xfe not utf-8\n")
+        out = run("--body-file", str(bad))
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertEqual([p["rule"] for p in log_records()[-1]["problems"]], ["encoding"])
+
+    def test_a_usage_error_writes_no_log(self):
+        self.fresh_log()
+        run("--nope")
+        self.assertEqual(log_records(), [])
 
     def test_record_and_pending_together_are_a_usage_error(self):
         self.assertEqual(run("--record", "x", PENDING).returncode, 2)

@@ -2,6 +2,7 @@
 """known-limits-check: every limit a PR body lists under "## Known limits" is tracked or accepted.
 
 usage: known-limits-check [--body-file FILE ...] [--record FILE | --record-pending] [--tracker-cmd CMD] [--no-lookup]
+                          [--log FILE | --no-log] [--context KEY=VALUE ...]
 
 A PR description that accepts a known limit on the condition that a follow-up ticket be filed loses the
 limit when nobody files it: nothing fails until a reviewer notices, rounds later. This check makes the
@@ -56,11 +57,18 @@ key, or the tracker cannot be reached, the check fails with exit 1 and a message
 not be confirmed; it never passes silently. --no-lookup turns lookups off; a caller passes it on
 purpose, for the test suite or documented offline use, never in the reviewer brief.
 
+Log: every run that judged a body (exit 0 or 1) appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/known-limits-check/log.jsonl (--log FILE or
+KNOWN_LIMITS_LOG names another; --no-log writes none; a write that fails never changes the result). The line holds the time, the outcome (ok or refused), the number of limits and permanent
+items, how the record was handled (none, pending or given), and for each problem the body name, the line number, the rule (label, phrase-outside-section, inline, heading, text-in-section,
+section-shape, decision-id-in-body, no-follow-up, bare-key, unconfirmed-reference, record, ...) and the message. --context KEY=VALUE adds caller fields (pr-open adds the mode, repo, PR number and head branch), so the
+log alone shows how often bodies are refused and which form keeps coming back.
+
 The body text comes from --body-file files (repeatable) or stdin when no file is given. Exit 0 the body
 passes; 1 any structural error, stray mention, uncovered limit, or unconfirmed reference; 2 bad
 arguments or an unreadable body file. All failures are printed, and every failing run ends with a short
 how-to footer.
 """
+import datetime
 import json
 import os
 import re
@@ -74,9 +82,12 @@ KEY = re.compile(r"\b[A-Z][A-Z0-9]+-[0-9]+\b")  # case-sensitive: a key is upper
 MARKER = re.compile(r"\b(?i:follow-up|tracked)\s*(?::|(?i:in)\b)\s*([A-Z][A-Z0-9]+-[0-9]+)")
 BROWSE = re.compile(r"/browse/([A-Z][A-Z0-9]+-[0-9]+)")
 ISSUE = re.compile(r"https?://\S+/issues/\d+\b")
-PERMANENT = re.compile(r"\baccepted\s+as\s+permanent\b", re.IGNORECASE)
-# a decision id in a limit item: the old marker forms, and any "decision N" (the description carries no ledger ids)
-DECISION_IN_BODY = re.compile(r"\bdecisions?\s*#?\s*\d+|\baccepted\s+as\s+permanent\s*\(\s*decision\b|\bpermanent\s*:\s*#\s*\d+", re.IGNORECASE)
+# "accepted as permanent" counts only as a clause of its own: at the start of the item or after . ; , : ( or a dash, and ending at . ; , : ) or the end of the
+# item. So "not accepted as permanent yet" and "to be accepted as permanent by Michael" are not coverage.
+PERMANENT = re.compile(r"(?:^|[.;,:(\u2013\u2014-])\s*accepted\s+as\s+permanent\s*(?:[.;,:)]|$)", re.IGNORECASE)
+# a decision id in a limit item, the forms pr-body-check refuses ("decision #N", "decision" and a number of 3+ digits) and the old marker forms; ordinary prose
+# such as "2 decisions 3 deep" is not an id
+DECISION_IN_BODY = re.compile(r"\bdecision\s*#\s*\d+|\bdecision\s+\d{3,}\b|\baccepted\s+as\s+permanent\s*\(\s*decision\b|\bpermanent\s*:\s*(?:decision\b|#\s*\d+)", re.IGNORECASE)
 RECORD_PERMANENT = re.compile(r"^[ \t>*_-]*(?:\*\*)?permanent limits(?:\*\*)?[ \t]*:(?:\*\*)?(.*)$", re.IGNORECASE | re.MULTILINE)
 RECORD_DECISIONS = re.compile(r"^[ \t>*_-]*(?:\*\*)?decisions(?:\*\*)?[ \t]*:(?:\*\*)?(.*)$", re.IGNORECASE | re.MULTILINE)
 RECORD_ID = re.compile(r"#(\d+)\b")
@@ -97,6 +108,29 @@ HEADING_ANY = re.compile(r"^#{1,6}\s+(.*)$")
 LIST_PREFIX = re.compile(r"^(?:[-*+]|\d[.)])\s+")
 QUOTE_PREFIX = re.compile(r"^(?:>\s*)+")
 ZERO_WIDTH = "\u200b\u200c\u200d\u2060\ufeff"
+
+
+PROBLEMS = []  # the problems of this run, for the log: {"body", "line", "rule", "message"}
+RULES = (  # (text found in the message, rule): the first match names the rule; an unlisted message is "other" and still logs its text
+    ("written as a label", "label"), ("written inline", "inline"), ("appears outside", "phrase-outside-section"),
+    ("heading mentions", "heading"), ("decision id is written", "decision-id-in-body"), ("not marked as coverage", "bare-key"),
+    ("limit has no follow-up", "no-follow-up"), ("text in the Known limits section", "text-in-section"),
+    ("could not be confirmed", "unconfirmed-reference"), ("agent record", "record"), ("no record was given", "record"),
+    ("section is empty", "section-shape"), ("second", "section-shape"), ("HTML comment", "section-shape"), ("code fence", "section-shape"),
+    ("sub-heading", "section-shape"), ("indented line", "section-shape"), ('"None" must', "section-shape"), ("write no limits", "section-shape"),
+    ("fence never closes", "fence"), ("not UTF-8", "encoding"),
+)
+
+
+def rule_of(message):
+    for fragment, rule in RULES:
+        if fragment in message:
+            return rule
+    return "other"
+
+
+def note_problem(body, line, message):
+    PROBLEMS.append({"body": body, "line": line, "rule": rule_of(message), "message": message})
 
 
 def trunc(text):
@@ -505,6 +539,7 @@ def check_body(text, name):
     errors, section = structural_check(text)
     if errors:
         for no, msg in sorted(errors):
+            note_problem(name, no, msg)
             print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
         return len(errors), set(), 0, 0, 0
     if section is None:
@@ -519,6 +554,7 @@ def check_body(text, name):
     for u in units:
         judge_unit(u, name, failures, marked, counts)
     for no, msg in failures:
+        note_problem(name, no, msg)
         print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
     return len(failures), marked, counts[0], 1, counts[1]
 
@@ -600,12 +636,46 @@ def record_unconfirmed(path):
 
 def usage(why):
     print("known-limits-check: %s" % why, file=sys.stderr)
-    print("usage: known-limits-check [--body-file FILE ...] [--record FILE | --record-pending] [--tracker-cmd CMD] [--no-lookup]",
-          file=sys.stderr)
+    print("usage: known-limits-check [--body-file FILE ...] [--record FILE | --record-pending] [--tracker-cmd CMD] [--no-lookup]\n"
+          "                          [--log FILE | --no-log] [--context KEY=VALUE ...]", file=sys.stderr)
     raise SystemExit(2)
 
 
+def log_path(ctx):
+    if ctx["log"]:
+        return ctx["log"]
+    env = os.environ.get("KNOWN_LIMITS_LOG", "").strip()
+    if env:
+        return env
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "known-limits-check", "log.jsonl")
+
+
+def write_log(ctx, code):
+    """One JSON line for a run that judged a body. A failed write never changes the result."""
+    if ctx["nolog"] or code not in (0, 1):
+        return
+    record = {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "tool": "known-limits-check",
+              "outcome": "ok" if code == 0 else "refused", "limits": ctx["limits"], "permanent": ctx["permanent"],
+              "record": ctx["record"], "problems": list(PROBLEMS), "context": ctx["context"]}
+    try:
+        path = log_path(ctx)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def main(argv):
+    del PROBLEMS[:]
+    ctx = {"log": None, "nolog": False, "context": {}, "limits": 0, "permanent": 0, "record": "none"}
+    code = run_check(argv, ctx)
+    write_log(ctx, code)
+    return code
+
+
+def run_check(argv, ctx):
     bodies = []
     tracker = None
     lookup = True
@@ -628,6 +698,19 @@ def main(argv):
             tracker = shlex.split(a.split("=", 1)[1])
         elif a == "--no-lookup":
             lookup = False
+        elif a == "--log":
+            if not args:
+                usage("--log needs a file")
+            ctx["log"] = args.pop(0)
+        elif a.startswith("--log="):
+            ctx["log"] = a.split("=", 1)[1]
+        elif a == "--no-log":
+            ctx["nolog"] = True
+        elif a == "--context":
+            if not args or "=" not in args[0]:
+                usage("--context needs KEY=VALUE")
+            key, value = args.pop(0).split("=", 1)
+            ctx["context"][key] = value
         elif a == "--record":
             if not args:
                 usage("--record needs a file")
@@ -663,6 +746,7 @@ def main(argv):
             return 2
         text = normalize(raw)
         if text is None:
+            note_problem(body, None, "body is not UTF-8; cannot read it")
             print("known-limits-check: %s: body is not UTF-8; cannot read it" % body, file=sys.stderr)
             bad += 1
             continue
@@ -676,17 +760,21 @@ def main(argv):
     unconfirmed = confirm_refs(marked_keys, tracker, lookup)
     for ref, reason in unconfirmed:
         bad += 1
+        note_problem(None, None, "%s could not be confirmed: %s" % (ref, reason))
         print("known-limits-check: %s could not be confirmed: %s" % (ref, reason), file=sys.stderr)
     if unconfirmed:
         print("  the ticket or issue must exist, or the limit needs a different follow-up; "
               "--no-lookup skips lookups only when a caller passes it on purpose", file=sys.stderr)
 
     record_note = ""
+    ctx["limits"], ctx["permanent"] = limits, permanent
+    ctx["record"] = "given" if record is not None else ("pending" if pending else "none")
     if permanent:
         if record is not None:
             reason = record_unconfirmed(record)
             if reason:
                 bad += 1
+                note_problem(None, None, reason)
                 print("known-limits-check: %s" % reason, file=sys.stderr)
             else:
                 record_note = ", permanent limits backed by the record"
@@ -694,9 +782,11 @@ def main(argv):
             record_note = ", permanent limits: record not checked (pending)"
         else:
             bad += 1
-            print("known-limits-check: %d item(s) are accepted as permanent, so the PR's agent record must name the decision, "
-                  "but no record was given. Pass --record FILE (pr-record path REPO#N prints it), or --record-pending when "
-                  "the record cannot exist yet (a PR that is not open)." % permanent, file=sys.stderr)
+            why = ("%d item(s) are accepted as permanent, so the PR's agent record must name the decision, "
+                   "but no record was given. Pass --record FILE (pr-record path REPO#N prints it), or --record-pending when "
+                   "the record cannot exist yet (a PR that is not open)." % permanent)
+            note_problem(None, None, why)
+            print("known-limits-check: " + why, file=sys.stderr)
 
     if bad:
         print("known-limits-check: FAIL: %d problem(s)" % bad, file=sys.stderr)

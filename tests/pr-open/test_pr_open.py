@@ -327,18 +327,27 @@ class PrOpen(unittest.TestCase):
         self.assertIn("record not checked (pending)", result.stdout)
 
     def limits_log(self):
-        log = self.dir / ".local/state/pr-open/log.jsonl"
+        log = self.dir / ".local/state/known-limits-check/log.jsonl"  # the check's own log; HOME is the scratch directory
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
-    def test_every_limits_check_leaves_one_log_record(self):
+    def test_a_refusal_log_line_says_why_and_on_create_which_branch(self):
         self.body.write_text(self.LABELLED)
         self.run_open("--title", "T", "--body-file", str(self.body))
+        (record,) = self.limits_log()
+        self.assertEqual(record["outcome"], "refused")
+        self.assertEqual(record["context"], {"caller": "pr-open", "mode": "create", "repo": "cartwmic/scratch", "head": "feature"})
+        (problem,) = record["problems"]
+        self.assertEqual((problem["rule"], problem["line"]), ("label", 3))
+        self.assertIn('"Limits" written as a label', problem["message"])
+
+    def test_an_edit_log_line_carries_the_pr_and_the_record_mode(self):
+        self.body.write_text(self.LABELLED)
+        self.run_open("--edit", "7", "--body-file", str(self.body))
         self.body.write_text(self.PERMANENT)
         self.run_open("--edit", "7", "--body-file", str(self.body))
-        records = self.limits_log()
-        self.assertEqual([(r["mode"], r["repo"], r["pr"], r["record"], r["outcome"]) for r in records],
-                         [("create", "cartwmic/scratch", "", "pending", "refused"), ("edit", "cartwmic/scratch", "7", "pending", "ok")])
-        self.assertTrue(all(r["action"] == "known-limits-check" and r["at"].endswith("Z") for r in records))
+        refused, ok = self.limits_log()
+        self.assertEqual((refused["outcome"], refused["context"]["pr"], refused["context"]["mode"], "head" in refused["context"]), ("refused", "7", "edit", False))
+        self.assertEqual((ok["outcome"], ok["record"], ok["permanent"], ok["problems"]), ("ok", "pending", 1, []))
 
     def test_an_unwritable_log_never_changes_the_outcome(self):
         (self.dir / ".local").write_text("a file where the state directory would be\n")
