@@ -404,6 +404,59 @@ class ReviewIntent(unittest.TestCase):
         self.put()
         self.assertEqual(self.marker(self.run_script("asks #41").stdout)[2], before)
 
+    def test_ask_ids_quoted_in_code_are_not_citations(self):
+        self.put(asks=[ask(1), ask(2), ask(3)], decisions=[decision(40), decision(41)])
+        quoted = ("Journeys:\n\n```\nthe pick for ask #1 is accepted (303)\nDecisions: #41\n```\n\n"
+                  "Also `the pick for ask #1 is accepted (303)` and ``ask #3 ` still`` here.\nask #2 is the real one.\nDecisions: #40\n")
+        r = self.run_script(quoted)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("2", "40"))
+
+    def test_a_bare_ask_outside_code_still_counts(self):
+        self.put(asks=[ask(1), ask(2)])
+        for text in ("ask #1 is accepted", "```\nask #2\n```\nask #1", "`x` then ask #1 then `y`", "~~~\nask #2\n~~~\nask #1"):
+            with self.subTest(text=text):
+                self.assertEqual(self.marker(self.run_script(text).stdout)[0], "1")
+
+    def test_an_unclosed_fence_or_span_does_not_swallow_the_rest_wrongly(self):
+        self.put(asks=[ask(1), ask(2)])
+        # an unclosed backtick is plain text; an unclosed fence runs to the end (as markdown reads it)
+        self.assertEqual(self.marker(self.run_script("a ` stray\nask #1").stdout)[0], "1")
+        self.assertEqual(self.marker(self.run_script("ask #1\n```\nask #2\n").stdout)[0], "1")
+        # a span does not reach across a blank line
+        self.assertEqual(self.marker(self.run_script("a ` stray\n\nask #1 `x`").stdout)[0], "1")
+
+    def test_a_record_quoting_check_output_does_not_cite_its_asks(self):
+        self.put(asks=[ask(1), ask(7)], decisions=[decision(40, ask_id=7)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("coordinator#1310", "| journeys | pass |\n\n```\nthe pick for ask #1 is accepted (303)\n```\nDecisions: #40\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#1310")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("7", "40"))
+
+    # cartwmic/retro#27's record quoted a test's failure in double quotes, in plain text; review-intent cited the budget steward's ask #1 for it.
+    RETRO_27_LINE = "- RED controls (host): `replay` on #26's code fails \"no channel to post to\"; `checkins` on #26's code fails \"already asked why:101 as ask #1\".\n"
+
+    def test_a_record_quoting_a_test_in_double_quotes_does_not_cite_its_asks(self):
+        self.put(asks=[ask(1), ask(1452)], decisions=[decision(40)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("retro#27", self.RETRO_27_LINE + "Michael approved this on ask #1452.\nDecisions: #40\n")
+        r = self.run_script(None, "--pr", "cartwmic/retro#27")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("1452", "40"))  # the quoted ask #1 is out; the true citation stays
+
+    def test_a_pr_body_with_no_record_skips_double_quoted_asks_too(self):
+        self.put(asks=[ask(1), ask(1452)])
+        self.put_pr(files=[], contents={}, body=self.RETRO_27_LINE + "Curly: \u201cthe pick for ask #1 is accepted\u201d, then ask #1452.\n")
+        r = self.run_script(None, "--pr", "cartwmic/retro#27", "--skip-record-check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[0], "1452")
+
+    def test_a_brief_body_file_is_read_as_the_kit_reads_it(self):
+        # agent-traces review add finds a quoted `ask #1` in a brief and refuses a marker without it, so the body file keeps counting it.
+        self.put(asks=[ask(1)])
+        self.assertEqual(self.marker(self.run_script('the test says "already asked as ask #1"').stdout)[0], "1")
+
     def test_an_earlier_block_in_a_body_file_is_not_read_as_a_citation(self):
         self.put(asks=[ask(50, answer="x"), ask(51)])
         first = self.run_script("asks #50").stdout

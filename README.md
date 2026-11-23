@@ -42,6 +42,10 @@ RustDesk onchange helper runs on a supported personal desktop, it stops if the
 item cannot be read. Confirm access before each personal desktop apply even
 when unchanged inputs will skip the helper. Keep the token outside this repository.
 
+Before the first apply on a fresh machine, export `GH_TOKEN` (a GitHub token, no scopes needed) in the shell that runs the apply (on a desktop, export it in the outer shell before the Quick Start block, so both the `init` subshell and the later `chezmoi apply` see it). The mise
+bootstrap script passes it to mise as `GITHUB_TOKEN`. Without it, mise is limited to GitHub's 60 anonymous calls an hour and a tool install can fail with a
+403. Installing `gh` first does not help: a fresh `gh` has no login, so `gh auth token` returns nothing. The script prints a warning when it finds no token, and appends one line (time and source: `env`, `gh` or `missing`; never the token) to `~/.local/state/mise-bootstrap/token.jsonl`.
+
 The commands below are for a **fresh installation** and stop if a chezmoi
 config already exists. On an existing host, preserve that config, inspect its
 profile and hooks, and use the [preview/update path](#usage). Do not overwrite
@@ -760,7 +764,12 @@ Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the r
 
 ## Renaming numbered videos (`video-rename`)
 
-Personal Mac only. The work profile and Linux do not get it: it is a personal media task on that one machine.
+Personal profile only, on macOS and Linux (which personal machine holds the videos is not decided). The work profile and the phone do not get it.
+
+`video-rename` has two jobs, both on a website you configure:
+
+- **Numbered files to titles** (`video-rename FOLDER`, below): `12345.mp4` becomes the video's title.
+- **Titled files to `<id> - <title>`** (`video-rename --search PATH...`, [at the end of this section](#adding-the-id-to-titled-videos)): `An Example File Name.mp4` becomes `12345 - An Example File Name.mp4`. It extends this command rather than adding a second one because it uses the same site, the same config file and the same name cleaning, delay and undo log.
 
 Some of your video files are named with a number (`12345.mp4`), one per video on a website. `video-rename` looks each number up on that website and renames the file to the video's title. It never names the website: you describe it in a config file that stays on your Mac (`~/.config/video-rename/config.toml`, never committed; chezmoi is told to leave that folder alone).
 
@@ -783,6 +792,21 @@ Some of your video files are named with a number (`12345.mp4`), one per video on
 - `video-rename --undo ~/.local/state/video-rename/undo-<time>.jsonl` puts every name back. It leaves alone a file that is gone or whose old name has been taken since.
 
 What it does with edge cases: it never overwrites a file (a clash gets ` (2)`, ` (3)`); `/` and `:` in a title are replaced so macOS accepts the name, and the extension is kept; a file whose title cannot be found is listed at the end and left as it is; files that no longer have a numeric name (already renamed) are skipped, so you can run it again any time on the same folder as new videos arrive. A title that is itself only digits (a film called `1984`) would look like an id on the next run, so that file is left numeric and listed with that reason; the same goes for any title your `id_regex` matches, so anchor `id_regex` with `^` and `$`. It looks at the files in the folder itself, not in folders inside it. `--delay SECONDS` (or `delay_seconds` in the config) sets the wait between requests, 1 second by default. It needs Python 3.11 or newer, which the mise setup provides.
+
+### Adding the id to titled videos
+
+For files named only by their title (`An Example File Name.mp4`). The site's video pages look like `https://<site>/video/<id>/<title-slug>`, and `--search` finds the id by searching the site for the file's title.
+
+Setup: in the same `config.toml`, set `search_template` to the site's search address with `{query}` where the search words go. Open the site, search for a word, and copy the address from the address bar, replacing the word with `{query}`. `url_template` is not needed for this. The title read from the video page follows the same `title_from` and `strip` settings as above.
+
+- `video-rename --search ~/Movies/folder` is a **dry run**: it prints `old -> new` and lists every file it skipped, with the reason. Pass folders, files, or both; a folder's own files are used, not the folders inside it.
+- `video-rename --search ~/Movies/folder --apply` renames, and writes the same undo log (`video-rename --undo LOG` works for these renames too).
+
+How it picks the id: it searches for the file's title and looks at the result links of the form `/video/<id>/<slug>`. A result counts when its slug matches the title (accents, case, dashes and punctuation do not matter). A video linked twice on the page counts once. Exactly one match: it opens that video's page and reads the title there. No match, or more than one match with different ids: the file is skipped and listed, not renamed. A name that already starts with `<number> - ` is left alone, so you can run it again on the same folder. It waits `delay_seconds` before every request, and never overwrites a file (a clash gets ` (2)`).
+
+If a page looks like a login wall (HTTP 401 or 403, a redirect to a login or sign-in path, or a password field), it stops the whole run with a clear message and renames nothing. Sign in on the site in your browser, copy the `Cookie: ...` header into the file `headers_file` names, and run again.
+
+Every run adds a JSON line per step to `~/.local/state/video-rename/search.jsonl` (run id, time, action, outcome, milliseconds), so you can see what a run did and how often lookups are skipped or stopped.
 
 Tests: `python3 -m unittest discover -s tests/video-rename -v` (a local fake web server and a temp folder of fake files; no real site is involved).
 
