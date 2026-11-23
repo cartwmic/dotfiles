@@ -5475,6 +5475,45 @@ class QueueHomelab(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual((self.creates(), foreign.exists()), (1, False))
 
+    # --- a client in another pid namespace: gone with its namespace, or still running in a live one (dotfiles#786)
+
+    GONE_NAMESPACE = "pid:[4026539999]"
+
+    def queued_client_seen_from_another_namespace(self):
+        """A real client waiting in the queue for a full cluster, as a client in another pid namespace looks to this one: its entry and ticket name a namespace
+        this test is not in, and a pid that is nothing here. Returns (the client, its job id)."""
+        proc = self.start("--", "true", env=self.full(self.waiting()))
+        self.read_until(proc, "queued: ")
+        (ticket,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        entry = self.state / "kgate" / "active" / ticket.name
+        for path in (ticket, entry):
+            path.write_text(json.dumps({**json.loads(path.read_text()), "pidns": self.GONE_NAMESPACE, "pid": 4194000}))
+        return proc, ticket.stem
+
+    def test_the_entry_and_ticket_of_a_client_killed_in_a_pid_namespace_that_is_gone_are_ended_by_the_next_job(self):
+        proc, gone = self.queued_client_seen_from_another_namespace()
+        os.killpg(proc.pid, signal.SIGKILL)   # the container restart: every client in the namespace dies with no end line
+        proc.wait()
+        done = self.kgate("--wait", "5", "--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout, "the dead client's ticket must not hold the queue")
+        (end,) = [r for r in self.records() if r["id"] == gone]
+        self.assertEqual((end["exit"], end["cancelled"], end["reaped_by"]), (143, True, self.records()[-1]["id"]))
+        self.assertIn("kgate: ended %s: its client" % gone, done.stdout)
+        self.assertEqual(list((self.state / "kgate" / "queue").glob("kgate-*.json")), [])
+        self.assertEqual(list((self.state / "kgate" / "active").glob("kgate-*.json")), [])
+
+    def test_the_entry_and_ticket_of_a_client_still_running_in_another_pid_namespace_are_left_alone(self):
+        proc, alive = self.queued_client_seen_from_another_namespace()
+        done = self.kgate("--wait", "2", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("queued: behind %s" % alive, done.stdout)
+        self.assertNotIn(alive, [r["id"] for r in self.records()], "the running client's job was not ended")
+        self.assertEqual([c for c in self.calls() if alive in json.dumps(c.get("kubectl", []))], [], "no kubectl call touched the running client's pod")
+        self.assertTrue((self.state / "kgate" / "active" / (alive + ".json")).exists())
+        self.assertTrue((self.state / "kgate" / "queue" / (alive + ".json")).exists())
+        self.assertIsNone(proc.poll())
+
     def test_a_job_ticket_carries_its_own_wait_deadline(self):
         proc = self.start("--wait", "100", "--", "true", env=self.full(self.waiting()))
         self.read_until(proc, "queued: ")
