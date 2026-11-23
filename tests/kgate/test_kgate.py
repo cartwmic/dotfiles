@@ -84,10 +84,13 @@ K = load()
 
 _CACHE_HOME = tempfile.mkdtemp(prefix="kt-cache-")
 os.environ["XDG_CACHE_HOME"] = _CACHE_HOME  # no test reads or writes the real ~/.cache/kgate, even one that calls op_read in this process
+_COORDINATOR_STATE = tempfile.mkdtemp(prefix="kt-coordinator-")
+os.environ["COORDINATOR_STATE_DIR"] = _COORDINATOR_STATE  # no test reads the real coordinator's brake/ folder: a pause that is on there would hold every job
 
 
 def tearDownModule():
     shutil.rmtree(_CACHE_HOME, True)
+    shutil.rmtree(_COORDINATOR_STATE, True)
     if _SCRIPT_DIR:
         shutil.rmtree(_SCRIPT_DIR, True)
 
@@ -4875,6 +4878,118 @@ class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
 
 
 # ---------------------------------------------------------------- a job waits in a local queue while the cluster is full (dotfiles: kgate queue)
+
+class BrakeHomelab(unittest.TestCase):
+    """The coordinator's pause: while `$COORDINATOR_STATE_DIR/brake/` holds any file, no pod is made. The job names every reason, looks again on a short poll, and goes on when the
+    folder is empty or missing. It does not know what a reason is: the tests use made-up names."""
+    for _name in ("kgate", "kgate_popen", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def brake(self, **reasons):
+        folder = self.tmp / "coordinator" / "brake"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name, text in reasons.items():
+            (folder / name).write_text(text + "\n")
+        return folder
+
+    def env(self):
+        return {"COORDINATOR_STATE_DIR": str(self.tmp / "coordinator"), "KGATE_BRAKE_POLL_S": "0.2"}
+
+    def creates(self):
+        return sum(1 for c in self.calls() if "manifest" in c)
+
+    def read_until(self, proc, text):
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if text in line:
+                break
+        self.assertIn(text, seen)
+        return seen
+
+    def start(self, *args, env=None):
+        proc = self.kgate_popen(*args, env=env)
+        self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
+        return proc
+
+    def test_a_job_waits_while_the_folder_holds_a_file_then_runs_when_it_is_empty(self):
+        folder = self.brake(lag="2026-11-22T10:00:00.000Z Michael's oldest unanswered message has waited 90 s (limit 60 s)")
+        proc = self.start("--", "sh", "-c", "echo ran-after-the-pause", env=self.env())
+        seen = self.read_until(proc, "paused: ")
+        time.sleep(1)
+        self.assertIsNone(proc.poll())
+        self.assertEqual(self.creates(), 0, "no pod while the pause is on")
+        self.assertEqual(self.calls(), [], "not even a look at the cluster")
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("lag: Michael's oldest unanswered message has waited 90 s (limit 60 s)", seen)
+        self.assertNotIn("2026-11-22T10:00", seen, "the words are shown without the file's time")
+        self.assertIn("the pause lifted after", seen)
+        self.assertIn("ran-after-the-pause", seen)
+        self.assertEqual(self.creates(), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (0, True))
+        self.assertGreater(rec["brake_wait_s"], 0.5)
+
+    def test_every_reason_is_named_on_one_line_and_the_job_waits_for_the_last_to_go(self):
+        folder = self.brake(lag="2026-11-22T10:00:00Z the inbox is late", cpu="2026-11-22T10:00:01Z the host is at 95 percent cpu")
+        proc = self.start("--", "true", env=self.env())
+        seen = self.read_until(proc, "paused: ")
+        line = next(l for l in seen.splitlines() if "paused: " in l)
+        self.assertIn("cpu: the host is at 95 percent cpu; lag: the inbox is late", line)
+        (folder / "lag").unlink()
+        time.sleep(1)
+        self.assertIsNone(proc.poll(), "one reason left: still paused")
+        self.assertEqual(self.creates(), 0)
+        (folder / "cpu").unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+        self.assertEqual(self.creates(), 1)
+
+    def test_a_reason_no_one_has_heard_of_holds_the_job_and_a_new_reason_is_named_again(self):
+        folder = self.brake(**{"something-new": "2026-11-22T10:00:00Z a trigger kgate has never seen"})
+        proc = self.start("--", "true", env=self.env())
+        seen = self.read_until(proc, "something-new: a trigger kgate has never seen")
+        self.brake(**{"another-one": "2026-11-22T10:00:05Z a second trigger"})
+        seen += self.read_until(proc, "another-one: a second trigger")
+        for name in ("something-new", "another-one"):
+            (folder / name).unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+
+    def test_an_empty_or_missing_folder_does_not_hold_the_job(self):
+        self.assertEqual(self.kgate("--", "true", env=self.env()).returncode, 0)   # no folder
+        self.brake()
+        folder = self.tmp / "coordinator" / "brake"
+        (folder / ".hidden").write_text("not a reason\n")
+        (folder / "sub").mkdir()
+        done = self.kgate("--", "true", env=self.env())
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("paused", done.stdout)
+        self.assertNotIn("brake_wait_s", self.records()[-1])
+
+    def test_the_state_dir_defaults_to_the_coordinators_folder_under_home(self):
+        folder = self.home / ".local" / "share" / "coordinator" / "brake"
+        folder.mkdir(parents=True)
+        (folder / "lag").write_text("2026-11-22T10:00:00Z held\n")
+        env = {"COORDINATOR_STATE_DIR": "", "KGATE_BRAKE_POLL_S": "0.2"}
+        proc = self.start("--", "true", env=env)
+        self.read_until(proc, "lag: held")
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out)
+
+    def test_a_stop_while_paused_ends_the_job_with_no_pod(self):
+        self.brake(lag="2026-11-22T10:00:00Z held")
+        proc = self.start("--", "true", env=self.env())
+        self.read_until(proc, "paused: ")
+        os.killpg(proc.pid, signal.SIGTERM)
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 128 + signal.SIGTERM, out)
+        self.assertEqual(self.creates(), 0)
+
 
 QUEUE_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
                 "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"

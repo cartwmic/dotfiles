@@ -141,6 +141,14 @@ Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch,
 
 **The limit.** `Unschedulable` means no node can take the pod now. It does not say that no node ever could. A profile bigger than every node gets the same prefix, with `Insufficient memory` or `Insufficient cpu` in the scheduler message, and so does a `--node` that matches no node. The reason alone cannot separate those cases from a full cluster, so the caller's fit check does.
 
+## The coordinator's pause
+
+The coordinator can pause new work on the fleet. Its pause is a folder, `$COORDINATOR_STATE_DIR/brake/` (default `~/.local/share/coordinator/brake/`), with one file per reason, named for the trigger that wrote it (the inbox lag alarm writes `lag`). The pause is on while the folder holds any file.
+
+Before it makes a pod, kgate looks at that folder. If it holds a file, the job prints one line naming each reason, `kgate: paused: waiting for the coordinator's pause to lift before creating a pod (cpu: <words>; lag: <words>)`, makes no pod and does not touch the cluster, and looks again every 10 s (`KGATE_BRAKE_POLL_S` changes that, for tests). When the folder is empty or missing it prints `kgate: the pause lifted after Ns; going on` and carries on as before. A reason that appears while it waits is named again. kgate does not know what a reason is: any file counts, except a dot file or a folder, so a new trigger needs nothing here. There is no switch to skip the wait.
+
+The wait is not part of `--wait` (which counts from the pod's creation), and `kgate cancel` or a stop ends a paused job with no pod made. A pod that is already running is left alone, and so is the rerun of a pod the cluster evicted (it is the same job). The record has `brake_wait_s` (absent when the job never waited). The same client serves the personal and the work profile, so both wait; on a host with no coordinator state the folder is missing and nothing changes.
+
 ## Nodes kgate never uses
 
 A homelab pod carries a required node affinity that keeps it off `ubuntu-server-k8s-master-1` (control plane), `mac-mini-worker` and `ubuntu-server-k8s-agent-3` (`NEVER_NODES` in the client). `--node` with any of them is refused (exit 69, `excluded`, no pod). agent-3 is the GitHub CI runners' node: kgate pods had reserved its CPU and CI runners stalled, so kgate never runs there (coordinator decision #3311; the homelab repo pins the runner sets to agent-3). kgate can use agent-1, agent-2, agent-4 (overflow only, below) and the G14.
@@ -256,6 +264,7 @@ One JSON line per job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`; th
 | `priority_class` | the PriorityClass the pod ran in (`kgate`, `kgate-first`, `kgate-main` or `kgate-docker`) on the homelab; null on a kubectl cluster, whose own policy decides. Absent on lines older than this field and on an orphan's end line |
 | `cpu_limit`, `quota_wait_s` | `cpu_limit`: on a kubectl cluster, the effective CPU limit (`cpu` when the profile sets none); on the homelab, the profile's `cpu_limit`, present only when the profile sets one. `quota_wait_s`: the seconds spent waiting for namespace quota: on a kubectl cluster always (0 when none), on the homelab only on a job the quota refused (counted inside its `queue_wait_s`) |
 | `queue_wait_s` | homelab, only on a job that waited in the local queue: seconds spent queued (see "When the cluster is full") |
+| `brake_wait_s` | only on a job that waited for the coordinator's pause: seconds waited (see "The coordinator's pause") |
 | `lost_pod` | only on a job whose pod was lost (exit 69, `lost the pod before CMD finished`): what the cluster said about why, also appended to `reason` as `; pod end reason: ...` |
 | `job` | the run-and-wake job id (`RUN_AND_WAKE_JOB`), or null |
 | `start`, `end`, `duration_s` | UTC times and seconds. `duration_s` is the whole job on the Mac: queue, pod start, unpack, CMD and copy-back |
