@@ -441,12 +441,13 @@ def load_container(env, directory):
     return value.strip() == "true"
 
 
-def log_refusal(rule, tool, env, cwd=None, matched=None):
-    """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. A failed write is ignored."""
+def log_refusal(rule, tool, env, cwd=None, matched=None, extra=None):
+    """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. `extra` adds fields a rule chose to log (the gh api body rule's reason and redacted command). A failed write is ignored."""
     try:
         path = env.get("AGENT_HARNESS_GUARD_LOG") or os.path.join(env.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "agent-harness", "guard.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": "refuse", "rule": rule, "tool": tool, "cwd": cwd, "matched": matched}
+        record.update(extra or {})
         with open(path, "a") as handle:
             handle.write(json.dumps(record) + "\n")
     except Exception:
@@ -466,7 +467,7 @@ def bash_rules_message(command, raw):
         found = bash_rules.refusal(command, ctx)
         if not found:
             return None
-        log_refusal(found[0], tool, os.environ, ctx.cwd, found[2])
+        log_refusal(found[0], tool, os.environ, ctx.cwd, found[2], getattr(found[1], "log", None))
         return found[1]
     except Exception:
         return None

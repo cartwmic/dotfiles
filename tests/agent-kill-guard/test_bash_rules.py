@@ -473,6 +473,141 @@ class PrBodyNamesPrOpen(unittest.TestCase):
                 self.assertIsNone(check(text))
 
 
+class PrBodyViaApi(unittest.TestCase):
+    """`gh api` on the pulls endpoints sets a PR body without the body check (dotfiles#451): refused, pointing to `pr-open`."""
+    REFUSED = ["gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+               "gh api --method PATCH repos/cartwmic/x/pulls/1 -F body=@/tmp/b",
+               "gh api --method=PATCH repos/cartwmic/x/pulls/1 --raw-field body=hi",
+               "gh api repos/cartwmic/x/pulls -f title=t -f head=h -f base=main -f body=hi",
+               "gh api repos/{owner}/{repo}/pulls --field body=hi",
+               "gh api -X POST /repos/cartwmic/x/pulls --input /tmp/pr.json",
+               "gh api -H 'Accept: application/json' repos/cartwmic/x/pulls/7/ -X PATCH -f body=hi",
+               "sh -c 'gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi'",
+               "echo ok && gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+               # attached shorthand values, which gh reads the same way (round-1 note n3)
+               "gh api -XPATCH repos/cartwmic/x/pulls/1 -fbody=hi",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 -f=body=hi",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 -Fbody=@/tmp/b",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 -F=body=@/tmp/b",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 --field=body=hi",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field=body=hi",
+               "gh api -X=PATCH repos/cartwmic/x/pulls/1 -f body=hi"]
+    ISSUES_REFUSED = ["gh api -X PATCH repos/cartwmic/x/issues/1 -f body=hi",   # a PR is an issue: this can set a PR body (round-1 note n1)
+                      "gh api repos/cartwmic/x/issues/12 -X PATCH -F body=@/tmp/b",
+                      "gh api -XPATCH repos/cartwmic/x/issues/12 -fbody=hi",
+                      "gh api --method PATCH /repos/cartwmic/x/issues/3/ --input /tmp/i.json"]
+    PASSED = ["gh api repos/cartwmic/x/pulls/1",
+              "gh api -X GET repos/cartwmic/x/pulls/1 -f body=hi", "gh api -XGET repos/cartwmic/x/pulls/1 -f body=hi",
+              "gh api --method=get repos/cartwmic/x/pulls/1 -fbody=hi",
+              "gh api repos/cartwmic/x/pulls/1/comments -f body=hi",
+              "gh api repos/cartwmic/x/issues/1 -X PATCH -f state=closed",
+              "gh api repos/cartwmic/x/issues -f title=t -f body=hi",   # creating an issue
+              "gh api repos/cartwmic/x/issues/1/comments -f body=hi",
+              "gh api repos/cartwmic/x/issues/1 -X GET -f body=hi",
+              "gh api -X PATCH repos/cartwmic/x/issues/1 -f title=t",
+              "gh api repos/cartwmic/x/pulls -f title=t -f head=h -f base=main",
+              "gh api -X PATCH repos/cartwmic/x/pulls/1 -f state=closed",
+              "gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",
+              "gh api repos/cartwmic/x/pulls --jq '.[].number'",
+              "gh pr view 1", "echo gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+              "pr-open --edit 1 --body-file /tmp/pr-1-body.md"]
+
+    def test_a_pulls_call_that_sets_a_body_is_refused_and_names_pr_open(self):
+        for text in self.REFUSED:
+            with self.subTest(text=text):
+                message = check(text) or ""
+                self.assertIn("`gh api` that sets a pull request body (POST, PATCH or PUT", message)
+                self.assertIn("`pr-open --title T --body-file F [--draft]`", message)
+                self.assertIn("`pr-open --edit N --body-file F`", message)
+
+    def test_a_patch_on_an_issue_number_that_sets_a_body_is_refused_for_it_can_set_a_pr_body(self):
+        for text in self.ISSUES_REFUSED:
+            with self.subTest(text=text):
+                message = check(text) or ""
+                self.assertIn("a pull request is an issue too", message)
+                self.assertIn("`pr-open --edit N --body-file F`", message)
+                self.assertIn("gh issue edit N --body-file F", message)
+
+    def test_other_gh_api_calls_pass(self):
+        for text in self.PASSED:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_the_work_profile_and_no_profile_do_not_run_it(self):
+        for profile in ("axon-work-computer", None):
+            self.assertIsNone(check(self.REFUSED[0], profile=profile))
+
+
+class PrBodyViaApiLog(unittest.TestCase):
+    """Each refusal of a gh api body write is one JSON line in the guard log (principle 14): reason, method and endpoint, and the command with every field value redacted. An allowed call writes none."""
+    SECRET = "ghp_notARealToken123456789"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.hooks = Path(self.tmp) / "hooks"
+        shutil.copytree(HOOKS, self.hooks)
+        (self.hooks / "profile").write_text("personal\n")
+        self.log = Path(self.tmp) / "state" / "guard.jsonl"
+
+    def run_hook(self, command):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_GUARD_LOG", "AGENT_HARNESS_PROFILE")}
+        env["AGENT_HARNESS_GUARD_LOG"] = str(self.log)
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    def records(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_a_refusal_writes_one_line_and_an_allowed_call_writes_none(self):
+        for allowed in ("gh api repos/cartwmic/x/pulls/1", "gh api -X PATCH repos/cartwmic/x/pulls/1 -f state=closed", "gh api -X GET repos/cartwmic/x/pulls/1 -f body=hi"):
+            self.assertEqual(self.run_hook(allowed).returncode, 0)
+        self.assertEqual(self.records(), [])
+        run = self.run_hook("gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hello-body-text")
+        self.assertEqual(run.returncode, 2)
+        (record,) = self.records()
+        self.assertEqual((record["action"], record["rule"], record["tool"], record["matched"]), ("refuse", "pr_body", "Bash", "PATCH repos/cartwmic/x/pulls/1"))
+        self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
+        self.assertIn("PATCH", record["reason"])
+        self.assertIn("pulls", record["reason"])
+        self.assertEqual(record["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=<redacted>")
+        self.assertNotIn("hello-body-text", self.log.read_text())
+
+    def test_the_record_never_holds_a_body_a_header_a_token_or_a_query(self):
+        for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -H 'Authorization: token %s' -f body=%s -f title=%s" % ((self.SECRET,) * 3),
+                        "GH_TOKEN=%s gh api repos/cartwmic/x/pulls -fbody=%s" % ((self.SECRET,) * 2),
+                        "gh api -XPATCH 'repos/cartwmic/x/issues/4?access_token=%s' -F body=%s" % ((self.SECRET,) * 2)):
+            self.assertEqual(self.run_hook(command).returncode, 2)
+        self.assertNotIn(self.SECRET, self.log.read_text())
+        self.assertEqual(len(self.records()), 3)
+        self.assertEqual([r["matched"] for r in self.records()], ["PATCH repos/cartwmic/x/pulls/1", "POST repos/cartwmic/x/pulls", "PATCH repos/cartwmic/x/issues/4"])
+
+    def test_an_input_file_refusal_names_the_file_and_says_input(self):
+        self.assertEqual(self.run_hook("gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json").returncode, 2)
+        (record,) = self.records()
+        self.assertIn("--input", record["reason"])
+        self.assertEqual(record["command"], "gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json")
+
+
+class PrBodyNamesFileListFlags(unittest.TestCase):
+    """The PR-body refusal names the file-list flags that let a playbook-only PR pass pr-body-check (dotfiles#454)."""
+
+    def test_the_refusal_names_the_flags(self):
+        for text in ["gh pr create --title t --fill", "gh pr edit 5 --body 'x'", "gh pr create --body-file /tmp/pr-body.md"]:
+            with self.subTest(text=text):
+                message = check(text)
+                for flag in ("--files-file F", "--pr N [--repo R]", "--base REF"):
+                    self.assertIn(flag, message)
+
+    def test_the_wrapper_header_and_readme_name_them_too(self):
+        for path in ("dot_local/bin/executable_pr-body-check", "dot_local/share/agent-harness/README.md"):
+            text = (ROOT / path).read_text()
+            with self.subTest(path=path):
+                for flag in ("--files-file", "--pr N", "--base REF"):
+                    self.assertIn(flag, text)
+
+
 class PrBodyFileName(unittest.TestCase):
     """The body file's name: not a fixed shared name, and for an edit it names the PR number (2026-11-15: /tmp/pr-body.md put #347's body on #345)."""
     FIX = "F=$(mktemp /tmp/pr-N-body.XXXXXX)"
