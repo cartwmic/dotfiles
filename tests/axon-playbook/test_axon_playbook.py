@@ -74,7 +74,9 @@ class ExternalTest(unittest.TestCase):
 
     def test_the_public_source_holds_no_playbook_url(self):
         urls = [l for l in EXTERNAL.read_text().splitlines() if "http" in l and not l.lstrip().startswith("#")]
-        self.assertEqual([u for u in urls if "wyeworks" not in u], [])  # the playbook url comes from chezmoi data only
+        # The playbook url comes from chezmoi data only. The public pins are named here, so a new url still fails this test until someone adds it.
+        public = ("https://github.com/wyeworks/accountable-review/archive/", "https://github.com/cursor/plugins/archive/")
+        self.assertEqual([u for u in urls if not any(p in u for p in public)], [])
         self.assertIn("{{ $axonPlaybookRepo | toJson }}", EXTERNAL.read_text())
 
 
