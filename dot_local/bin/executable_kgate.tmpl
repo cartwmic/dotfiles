@@ -225,7 +225,7 @@ PRIORITY_VALUES = {"kgate": -100, DOCKER_CLASS: -100, "kgate-first": -50, "kgate
 QUEUE_POLL_S = 3      # a queued job looks at the local queue (and, when it is first in line, at the cluster) this often
 QUEUE_LOCAL_POLL_S = 0.3   # while only another client on this machine is ahead (a local file read, no cluster call)
 QUEUE_QUIET_S = 5     # a wait on a neighbour's placement is not reported until it lasts this long; a full cluster is reported at once
-QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or in a pid namespace this one cannot see
+QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or an older one in a pid namespace this one cannot see
 QUEUE_SETTLE_S = 20   # after it creates its pod, a job holds its place until the scheduler has answered for the pod (placed or Unschedulable), for at most this long
 BRAKE_POLL_S = 10     # while the coordinator's pause is on, the job looks at <state>/brake/ this often (KGATE_BRAKE_POLL_S overrides it, for tests)
 POLL_RETRY_S = 60     # a failed read of the pod while waiting for it is tried again for this long (an etcd timeout or a dropped ssh does not last), unless the pod is NotFound
@@ -1742,6 +1742,40 @@ def pid_namespace():
         return None
 
 
+def hold_alive_lock(state, job_id):
+    """Mark this client as running: take an exclusive flock on its own log file and keep the returned fd open until the process ends. The kernel drops the lock when the
+    process dies, in whatever way, and a flock is seen alike from every pid namespace on the machine, so a client_gone() in another namespace can tell a running client
+    from a dead one where a pid cannot. A second open of the log (not the one the job writes to) so that no child process shares it: the fd is close-on-exec."""
+    fd = os.open(os.path.join(state, job_id + ".log"), os.O_RDONLY)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def client_gone(state, rec):
+    """True when the client that wrote `rec` (a registry entry or a queue ticket) is gone, False when it may still be running.
+    A record that says `"locked"` was written by a client that holds hold_alive_lock() for as long as it runs: it is gone when nobody holds that lock, in any pid
+    namespace (a container restart ends the old namespace for good and with it every client in it, and the lock goes with them). The record of an older client has only
+    a pid, which means something only inside the namespace it was written in: it is gone when that (start, command) is not running here, and in another namespace
+    a live client looks gone, so it is never judged gone. A locked record whose log is missing is judged the same way, as an older one."""
+    if rec.get("locked"):
+        try:
+            fd = os.open(os.path.join(state, rec["id"] + ".log"), os.O_RDONLY)
+        except FileNotFoundError:
+            fd = None
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError:
+                return False
+            finally:
+                os.close(fd)
+            return True
+    if "pidns" not in rec or rec["pidns"] != pid_namespace():
+        return False
+    ident = proc_identity(rec["pid"])
+    return not ident or ident[0] != rec.get("start") or rec.get("proc_cmd") not in (None, ident[1])
+
+
 def write_json_atomic(path, obj):
     tmp = "%s.%d.tmp" % (path, os.getpid())
     with open(tmp, "w") as f:
@@ -2145,6 +2179,7 @@ class Job:
         self.cancel_marker = os.path.join(self.state, "active", self.id + ".cancel")
         self.logpath = os.path.join(self.state, self.id + ".log")
         self.log = open(self.logpath, "ab", buffering=0)
+        self.alive = hold_alive_lock(self.state, self.id)   # held until this process ends; what a client in another pid namespace reads to tell this one is running
         self.console = True
         self.rec = {"id": self.id, "job": os.environ.get("RUN_AND_WAKE_JOB"), "start": utc(self.t0), "cwd": os.getcwd(),
                     "cmd": shlex.join(opts.command), "cluster": "homelab", "repo": None, "head": None, "tree": None, "node": None, "image": None,
@@ -2209,7 +2244,7 @@ class Job:
             raise RuntimeError("cannot read this process's start time and command")
         os.makedirs(os.path.dirname(self.entry), exist_ok=True)
         write_json_atomic(self.entry, {"id": self.id, "job": self.rec["job"] or None, "pid": os.getpid(), "start": ident[0],
-                                       "proc_cmd": ident[1], "pidns": pid_namespace(), "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
+                                       "proc_cmd": ident[1], "pidns": pid_namespace(), "locked": True, "cwd": self.rec["cwd"], "argv": sys.argv[:3], "cmd": self.rec["cmd"],
                                        "node": self.rec["node"], "cluster": self.cluster.name, "pod": self.pod,
                                        "thread": os.environ.get("T3CODE_THREAD_ID") or None})
 
@@ -2431,7 +2466,7 @@ class Job:
         os.makedirs(queue, exist_ok=True)
         ticket = os.path.join(queue, self.id + ".json")
         ident = proc_identity(os.getpid())
-        entry = {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": self.wait_deadline(), "shape": mine}
+        entry = {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "locked": True, "t": self.t0, "deadline": self.wait_deadline(), "shape": mine}
         write_json_atomic(ticket, entry)
         t_wait, last, noted = None, None, False
         quota = QuotaWait(self)
@@ -2496,11 +2531,11 @@ class Job:
                     t = json.load(f)
             except (OSError, ValueError):
                 continue   # not a ticket, or one that is being written or removed
-            if t.get("pidns") == pid_namespace() and (proc_identity(t["pid"]) or [None])[0] != t.get("start"):
+            if client_gone(self.state, t):
                 forget(path)   # its client died without removing it
                 continue
             if t.get("deadline") and time.time() > t["deadline"] + QUEUE_STALE_S:
-                forget(path)   # a client that is stopped, or in a pid namespace this one cannot check, is past its own --wait: it cannot still be waiting
+                forget(path)   # a client that is stopped, or an older one in a pid namespace this one cannot check, is past its own --wait: it cannot still be waiting
                 continue
             tickets.append(t)
         mine_key = (-mine["priority"], self.t0, self.id)
@@ -3203,13 +3238,14 @@ def cancel_orphan_on(state, e, ended, name, cluster):
 
 def reap_gone(state, cluster, me, note):
     """End the jobs of `cluster` whose client is gone, before job `me` takes cluster capacity of its own. The pod cannot see this host's pids, so a pod
-    whose client died keeps running; the next client to start is the one that can tell. An entry is reaped only when its client's (start, command) is not
-    running and it was written in this pid namespace (in another one a live client looks gone). Whatever goes wrong here is a note, never the new job's
+    whose client died keeps running; the next client to start is the one that can tell. An entry is reaped when client_gone() says so: its client no longer
+    holds its lock, whatever pid namespace it ran in, or (an entry from an older client) its (start, command) is not running here in the namespace it was written
+    in. Whatever goes wrong here is a note, never the new job's
     failure; an entry whose delete was not confirmed stays for the next client."""
     for e in active_entries(state):
         if e["id"] == me or (e.get("cluster") or "homelab") != cluster.name:
             continue
-        if "pidns" not in e or e["pidns"] != pid_namespace() or proc_identity(e["pid"]) == (e.get("start"), e.get("proc_cmd")):
+        if not client_gone(state, e):
             continue
         entry = os.path.join(state, "active", e["id"] + ".json")
         try:
