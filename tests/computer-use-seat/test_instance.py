@@ -150,7 +150,7 @@ class SeatComputerFilesTest(unittest.TestCase):
                 self.assertFalse(KEEP & set(off), profile)
                 self.assertTrue({"no-ai-slop", "hill-climb", "omarchy"} <= set(off), profile)
                 self.assertEqual(f["permissions"], {"deny": ["Artifact", "ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"]}, profile)
-                self.assertEqual(f["claudeMdExcludes"], ["%s/.claude/CLAUDE.md" % h.home], profile)
+                self.assertEqual(f["claudeMdExcludes"], ["%s/.claude/CLAUDE.md" % h.home, "**/AGENTS.md"], profile)
                 hooks = f["hooks"]["SessionStart"]
                 self.assertEqual(len(hooks), 1, profile)
                 cmd = hooks[0]["hooks"][0]["command"]

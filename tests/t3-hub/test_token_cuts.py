@@ -85,7 +85,7 @@ class ScoutSeatTest(unittest.TestCase):
                     self.assertIn(tool, deny, profile)
                 self.assertNotIn("Bash", deny, "a scout searches through Bash")
                 self.assertEqual(set(f["skillOverrides"].values()), {"off"}, profile)
-                self.assertEqual(f["claudeMdExcludes"], ["%s/.claude/CLAUDE.md" % env.home], profile)
+                self.assertEqual(f["claudeMdExcludes"], ["%s/.claude/CLAUDE.md" % env.home, "**/AGENTS.md"], profile)
                 self.assertNotIn("hooks", f, profile)
                 self.assertNotIn("advisorModel", f, profile)
             finally:

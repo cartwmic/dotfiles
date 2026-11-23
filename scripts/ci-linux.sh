@@ -96,6 +96,7 @@ python3 scripts/ci-par.py \
   tests/cursor \
   tests/agent-host \
   tests/t3-hub \
+  tests/seat-context \
   tests/t3-pin \
   tests/t3-pin-check \
   tests/t3-service \

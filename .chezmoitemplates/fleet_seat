@@ -1,7 +1,7 @@
 {{- /*
   The Claude Code settings file for one agent seat (~/.claude/fleet/seat-<seat>.json). Call:
     {{ includeTemplate "fleet_seat" (dict "seat" "lead" "ctx" .) }}
-  Every seat: the Artifact tool is denied, claude.ai skills are off, Claude Code's bundled skills are off except workflow-authoring on the lead and coordinator (see $bundledOff below), and every personal skill is "off"
+  Every seat: the Artifact tool is denied, claude.ai skills are off, Claude Code's bundled skills are off except workflow-authoring on the homelab chat seat, the one seat that keeps the Workflow tool (see $bundledOff below), and every personal skill is "off"
   unless this seat keeps it. The skills are the union of three listings, each a directory with a SKILL.md: the canonical skills in this source tree
   (dot_local/share/agent-harness/canonical/skills), the skills this source links in later (archive externals and model-fit, below), and what is under
   ~/.claude/skills at apply time. The first two are there because chezmoi writes this file BEFORE apply_harness_config.sh (a run_onchange_after script)
@@ -60,19 +60,21 @@
 {{- /* Claude Code's bundled skills stay ON, with every one but workflow-authoring turned off below. With disableBundledSkills true the Workflow tool's definition carries the whole
   authoring reference (20.3K chars, about 8.3K tokens in every request); with bundled skills on, that reference is the bundled skill workflow-authoring and the tool text
   is 3.5K chars. Measured 2026-11-16 on the seat-builder file, first-request input tokens: disableBundledSkills true 40,352; false with all bundled skills on 36,322; false with the
-  names below off and workflow-authoring on 34,064; false with workflow-authoring off too 40,255 (so it has to stay listed, about 0.1K, on the seats that keep the Workflow tool; the worker seats deny the tool and turn it off).
+  names below off and workflow-authoring on 34,064; false with workflow-authoring off too 40,255 (so it has to stay listed, about 0.1K, on a seat that keeps the Workflow tool: only the homelab chat seat does; every other seat denies the tool and turns the skill off).
   The names are the ones the installed binary (2.1.325) lists to the model with bundled skills on. A bundled skill added by a later Claude Code shows in every seat until
   its name is added here: tests/t3-hub test_every_bundled_skill_is_off_or_workflow_authoring runs the binary and fails naming it. */ -}}
 {{- $bundledOff := list "artifact-design" "artifact-diagramming" "claude-api" "code-review" "dataviz" "fewer-permission-prompts" "init" "keybindings-help" "loop" "plugin-authoring" "run" "security-review" "simplify" "update-config" -}}
-{{- /* Builder, planner and reviewer deny the Workflow tool (below), so they have no use for workflow-authoring: it goes in their off list. The lead and the coordinator keep the tool, so they keep the skill listed. */ -}}
-{{- if has .seat (list "builder" "planner" "reviewer" "computer" "scout") -}}{{- $bundledOff = append $bundledOff "workflow-authoring" -}}{{- end -}}
+{{- /* Every seat but homelab-chat denies the Workflow tool (below), so none has a use for workflow-authoring: it goes in their off list. The homelab chat seat keeps the tool (its allow-list hook decides what runs), so it keeps the skill listed. */ -}}
+{{- $fourOff := ne .seat "homelab-chat" -}}
+{{- if $fourOff -}}{{- $bundledOff = append $bundledOff "workflow-authoring" -}}{{- end -}}
 {{- range $name := $bundledOff -}}{{- if has $name $keep -}}{{ fail (printf "fleet_seat: seat %s keeps %q, which is also a Claude Code bundled skill turned off above; rename the kept skill or drop the name from $bundledOff" $.seat $name) }}{{- end -}}{{- $_ := set $off $name "off" -}}{{- end -}}
-{{- /* Builder, planner and reviewer: four tools they do not use are denied, which takes them out of the tools array (4,898 tokens, measured in every request). ReportFindings (typed review findings for a host UI),
+{{- /* Every seat but homelab-chat: four tools nobody uses are denied, which takes them out of the tools array (4,898 tokens, measured in every request). ReportFindings (typed review findings for a host UI),
   ScheduleWakeup (/loop pacing; sleeping and polling are against the rules), ListAgents, and Workflow (needs an explicit opt-in; 1,993 tokens even with workflow-authoring on). Counts 2026-11-14..16, main sessions:
   none of the four called in the planner and reviewer seats; the builder called ScheduleWakeup 8 times and ListAgents 3 times (polling and a listing it can do without), Workflow once. The lead and the coordinator
-  keep all four: leads drive workflows and loops. Probe and numbers: coordinator-workspace token-efficiency/build-1116/L5/PROBE.md. */ -}}
+  kept them until 2026-11-23 ("leads drive workflows and loops"); across 1,048 main-session transcripts of 2026-11-21..23 (lead 59, coordinator 4) none of the four was called in any seat, so they are denied there too (ask #1549).
+  The homelab chat seat is left alone: its tool list is held by its own hook. Probe and numbers: coordinator-workspace token-efficiency/build-1116/L5/PROBE.md. */ -}}
 {{- $deny := list "Artifact" -}}
-{{- if has .seat (list "builder" "planner" "reviewer" "computer" "scout") -}}{{- $deny = concat $deny (list "ListAgents" "ReportFindings" "ScheduleWakeup" "Workflow") -}}{{- end -}}
+{{- if $fourOff -}}{{- $deny = concat $deny (list "ListAgents" "ReportFindings" "ScheduleWakeup" "Workflow") -}}{{- end -}}
 {{- /* Scout only: a read-only seat (wide reading and searching; it reports what it found and changes nothing). Besides the four tools above, the tools that write files or start or change work are denied: Edit, Write, NotebookEdit, the worktree tools, cron, messaging, the T3 MCP server (it launches and messages threads) and design sync. Bash stays, because searching runs through it (rg, find, git log, gh reads): the seat's instructions say it changes nothing. The reader helper is the model for this list (Read, Grep and Glob only). */ -}}
 {{- if eq .seat "scout" -}}{{- $deny = concat $deny (list "Edit" "Write" "NotebookEdit" "EnterWorktree" "ExitWorktree" "CronCreate" "CronDelete" "SendMessage" "TaskStop" "DesignSync" "mcp__t3-code") -}}{{- end -}}
 {{- $seatFile := dict "permissions" (dict "deny" $deny) "syncClaudeAiSkills" false "disableBundledSkills" false "skillOverrides" $off -}}
@@ -81,9 +83,12 @@
 {{- /* Scout only: the model and effort the seat is meant to run, as a default for a session started without a pick; a caller's pick still wins. */ -}}
 {{- if eq .seat "scout" -}}{{- $_ := set $seatFile "model" "claude-haiku-5-5" -}}{{- $_ := set $seatFile "modelSettings" (dict "claude-haiku-5-5" (dict "effortLevel" "xhigh")) -}}{{- end -}}
 {{- /* Builder, planner and reviewer only: ~/.claude/CLAUDE.md (with the hindsight memory guide) is not loaded; the same text without the guide comes from the worker folder (claudeMdExcludes only skips this one file). The T3 instance adds --add-dir and CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 (modify_settings.json.tmpl) and tests/t3-hub keeps the three halves together: an exclude without them would leave the seat with no user instructions at all. */ -}}
+{{- /* The same list also skips every AGENTS.md: Claude Code 2.1.330 reads AGENTS.md from the project folder as it reads CLAUDE.md, and a worker seat has what it needs from its brief and the playbook hook. Before this line the workers skipped the coordinator repo's AGENTS.md only as a side effect of --add-dir (Claude Code stops loading it when the worker folder is added) and loaded it in a repo whose CLAUDE.md points at AGENTS.md (homelab: 25-30K characters for a reviewer). `seat-context` (dot_local/bin) shows what a seat really loads in a folder. The lead and the coordinator keep AGENTS.md: it is the driver's merge and review procedure. */ -}}
 {{- if has .seat (list "builder" "planner" "reviewer" "computer" "scout") -}}
-{{-   $_ := set $seatFile "claudeMdExcludes" (list (joinPath .ctx.chezmoi.homeDir ".claude" "CLAUDE.md")) -}}
+{{-   $_ := set $seatFile "claudeMdExcludes" (list (joinPath .ctx.chezmoi.homeDir ".claude" "CLAUDE.md") "**/AGENTS.md") -}}
 {{- end -}}
+{{- /* Every seat file tells its session which seat it is: COORDINATOR_SEAT=<seat> in `env`. Claude Code puts a settings `env` into the session's process environment, so a hook sees it from SessionStart on (checked: tests/t3-hub/test_seat_env_binary.py runs the installed binary). The coordinator repo's rules hook reads it instead of asking T3 for the thread's parent, which timed out for 62.6% of sessions (they were told "unknown"). The coordinator's own session gets the same name from `coordinator t3 setup`, which never takes `env` from this file; the line is here so every seat file names its seat. */ -}}
+{{- $_ := set $seatFile "env" (dict "COORDINATOR_SEAT" .seat) -}}
 {{- /* Builder only: a Stop hook that refuses to stop while a run-and-wake or kgate job this thread started still runs (hooks/stop_running_jobs.py; Retro proposal 12, playbook rule 19e13f7b). It fails open: a missing script or python3 allows the stop. */ -}}
 {{- if eq .seat "builder" -}}
 {{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" `g="$HOME/.local/share/agent-harness/hooks/stop_running_jobs.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0`))))) -}}

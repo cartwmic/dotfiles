@@ -1,4 +1,4 @@
-"""What the installed Claude Code lists to the model under each seat file: only workflow-authoring may be a bundled skill (lead and coordinator; the worker seats list none), and the four unused tools are absent from the worker seats.
+"""What the installed Claude Code lists to the model under each seat file: only workflow-authoring may be a bundled skill (the homelab chat seat, which keeps the Workflow tool; every other seat lists none), and the four unused tools are absent from every seat but the homelab chat seat.
 
 .chezmoitemplates/fleet_seat keeps Claude Code's bundled skills on (with disableBundledSkills true the Workflow tool carries its whole 20K-char
 authoring reference in every request) and turns every bundled skill but workflow-authoring off by name, because skillOverrides has no wildcard.
@@ -94,7 +94,7 @@ class BundledSkillsBinaryTest(unittest.TestCase):
                 request = first_request(binary, seat_file)
                 names, workflow_chars = listed_skills(request)
                 # the throwaway HOME has no personal skills, so whatever is listed is a bundled (or built-in) skill
-                # the lead and the coordinator keep the Workflow tool, so workflow-authoring stays listed for them; the worker seats deny the tool and turn the skill off
+                # the homelab chat seat keeps the Workflow tool, so workflow-authoring stays listed for it; every other seat denies the tool and turns the skill off
                 allowed = set() if seat in UNUSED_TOOL_SEATS else {"workflow-authoring"}
                 extra = sorted(set(names) - allowed)
                 self.assertEqual(extra, [], "Claude Code %s lists %s to a %s seat. Add each to $bundledOff in .chezmoitemplates/fleet_seat and to BUNDLED_OFF in "
@@ -103,9 +103,9 @@ class BundledSkillsBinaryTest(unittest.TestCase):
                     self.assertIn("workflow-authoring", names, "workflow-authoring must stay listed: without it the Workflow tool carries its whole 20K-char reference (seat %s)" % seat)
                 tools = {t["name"] for t in request["tools"]}
                 if seat in UNUSED_TOOL_SEATS:
-                    self.assertEqual(sorted(tools & UNUSED_TOOLS), [], "seat %s still has tools it never calls in the first request; the seat file denies them" % seat)
+                    self.assertEqual(sorted(tools & UNUSED_TOOLS), [], "seat %s still has tools nobody calls in the first request; the seat file denies them" % seat)
                 else:
-                    self.assertTrue(UNUSED_TOOLS <= tools, "seat %s lost %s: the lead and the coordinator keep them" % (seat, sorted(UNUSED_TOOLS - tools)))
+                    self.assertTrue(UNUSED_TOOLS <= tools, "seat %s lost %s: only the homelab chat seat keeps them" % (seat, sorted(UNUSED_TOOLS - tools)))
                     self.assertIsNotNone(workflow_chars, "no Workflow tool in the first request of seat %s: has Claude Code dropped it?" % seat)
                     self.assertLess(workflow_chars, 6000, "the Workflow tool description is %d chars on seat %s: the authoring reference is inline again" % (workflow_chars, seat))
         finally:
