@@ -37,6 +37,8 @@ Read all of these:
 
 If a finding depends on behaviour you cannot settle by reading, run it: the journey, the test or the command. Use scratch space and keep the repo clean. Delete only paths you created yourself, never with a glob over a shared directory such as `/tmp` or `/var/folders`. Kill only processes whose PIDs you started. Say what you ran and what it printed.
 
+In a design or plan review, check every sentence that says how existing code behaves (for example "as today", "already", "currently"). Open that code at the named head and say whether the sentence is true or false, with path:line. When the sentence names several tools or files, check each one. A false sentence is a blocking finding when the design relies on it.
+
 ## 4. Report everything at once
 
 Find every problem in one pass. Do not hold findings back for a later round.
