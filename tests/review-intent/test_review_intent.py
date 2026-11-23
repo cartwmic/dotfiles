@@ -420,6 +420,29 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.marker(r.stdout)[:2], ("7", "40"))
 
+    # cartwmic/retro#27's record quoted a test's failure in double quotes, in plain text; review-intent cited the budget steward's ask #1 for it.
+    RETRO_27_LINE = "- RED controls (host): `replay` on #26's code fails \"no channel to post to\"; `checkins` on #26's code fails \"already asked why:101 as ask #1\".\n"
+
+    def test_a_record_quoting_a_test_in_double_quotes_does_not_cite_its_asks(self):
+        self.put(asks=[ask(1), ask(1452)], decisions=[decision(40)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("retro#27", self.RETRO_27_LINE + "Michael approved this on ask #1452.\nDecisions: #40\n")
+        r = self.run_script(None, "--pr", "cartwmic/retro#27")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("1452", "40"))  # the quoted ask #1 is out; the true citation stays
+
+    def test_a_pr_body_with_no_record_skips_double_quoted_asks_too(self):
+        self.put(asks=[ask(1), ask(1452)])
+        self.put_pr(files=[], contents={}, body=self.RETRO_27_LINE + "Curly: \u201cthe pick for ask #1 is accepted\u201d, then ask #1452.\n")
+        r = self.run_script(None, "--pr", "cartwmic/retro#27", "--skip-record-check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[0], "1452")
+
+    def test_a_brief_body_file_is_read_as_the_kit_reads_it(self):
+        # agent-traces review add finds a quoted `ask #1` in a brief and refuses a marker without it, so the body file keeps counting it.
+        self.put(asks=[ask(1)])
+        self.assertEqual(self.marker(self.run_script('the test says "already asked as ask #1"').stdout)[0], "1")
+
     def test_an_earlier_block_in_a_body_file_is_not_read_as_a_citation(self):
         self.put(asks=[ask(50, answer="x"), ask(51)])
         first = self.run_script("asks #50").stdout
