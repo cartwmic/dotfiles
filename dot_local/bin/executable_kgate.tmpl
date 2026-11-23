@@ -226,6 +226,7 @@ QUEUE_LOCAL_POLL_S = 0.3   # while only another client on this machine is ahead 
 QUEUE_QUIET_S = 5     # a wait on a neighbour's placement is not reported until it lasts this long; a full cluster is reported at once
 QUEUE_STALE_S = 60    # a ticket this long past its client's --wait deadline belongs to a client that is stopped, or in a pid namespace this one cannot see
 QUEUE_SETTLE_S = 20   # after it creates its pod, a job holds its place until the scheduler has answered for the pod (placed or Unschedulable), for at most this long
+BRAKE_POLL_S = 10     # while the coordinator's pause is on, the job looks at <state>/brake/ this often (KGATE_BRAKE_POLL_S overrides it, for tests)
 POLL_RETRY_S = 60     # a failed read of the pod while waiting for it is tried again for this long (an etcd timeout or a dropped ssh does not last), unless the pod is NotFound
 LOST_READ_S = 20      # each read of why a pod was lost is cut off here
 CANCELLED = "cancelled by kgate cancel"
@@ -1648,6 +1649,41 @@ def archive(wt, common, files, extra, history=True, skipped=()):
     return buf.getvalue()
 
 
+{{ if eq .profile "personal" -}}
+BRAKE_DEFAULT_STATE = "~/.local/share/coordinator"
+{{- else -}}
+BRAKE_DEFAULT_STATE = "~/.local/share/coordinator-work"
+{{- end }}
+
+
+def brake_dir():
+    """The coordinator's pause folder: `$COORDINATOR_STATE_DIR/brake/`, else the profile's own coordinator state: `~/.local/share/coordinator/brake/` on personal, `~/.local/share/coordinator-work/brake/`
+    on work (the profile this script was rendered for). One file per reason; the pause is on while it holds any file."""
+    return os.path.join(os.environ.get("COORDINATOR_STATE_DIR") or os.path.expanduser(BRAKE_DEFAULT_STATE), "brake")
+
+
+def brake_reasons():
+    """Every reason the pause holds, as (name, words), sorted by name. Empty when the folder is empty or missing. It never looks at which reasons exist: any file counts,
+    except a dot file or a folder (the coordinator's own reader skips the same). The words are the file's line without its leading time."""
+    folder = brake_dir()
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        path = os.path.join(folder, name)
+        if name.startswith(".") or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, errors="replace") as f:
+                text = f.read().strip()
+        except OSError:
+            text = ""
+        found.append((name, re.sub(r"^\d{4}-\d\d-\d\dT\S+\s+", "", text) or "no reason given"))
+    return found
+
+
 def state_dir():
     return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "kgate")
 
@@ -2092,6 +2128,7 @@ class Job:
         self.t_pod = time.time()
         self.pod = self.id      # the pod's name: the job id, and "<id>-r2" for the rerun after an eviction (the pod side's paths and markers keep the job id)
         self.pod_t0 = None      # when the first pod was created: the pod deadline counts from it for the whole job
+        self.brake_s = 0.0      # seconds this job waited for the coordinator's pause: --wait does not count them
         self.mssql = None       # the SQL Server sidecar's settings, when the profile asks for one
         self.sidecar = None     # the name of the pod's sidecar container, when it has one: "mssql" or "dind" (SIDECARS)
         self.secret = None      # its generated password: kept out of the log, the record and every message (see mask())
@@ -2251,6 +2288,31 @@ class Job:
         self.rec["cpu_limit"] = prof["cpu_limit"] or cpu  # the effective limit, which the pod's build parallelism follows
         if self.o.node:
             raise Unavailable("cluster %s does not take --node; the cluster schedules the pod" % name)
+
+    def wait_for_brake(self):
+        """The coordinator's pause: while `brake/` holds any file, no pod is made. One line names every reason (again when the set of reasons changes), the folder is looked at
+        again every BRAKE_POLL_S, and the job goes on once the folder is empty or missing. Nothing here knows what a reason is. A pod already running is not touched. The rerun of an
+        evicted pod waits too, like every pod creation. The time spent here is not part of --wait: wait_deadline() adds it, so a pause longer than --wait does not fail the job."""
+        poll = float(os.environ.get("KGATE_BRAKE_POLL_S") or BRAKE_POLL_S)
+        said, t_wait = None, None
+        while True:
+            reasons = brake_reasons()
+            if not reasons:
+                break
+            t_wait = t_wait or time.time()
+            if reasons != said:
+                self.note("paused: waiting for the coordinator's pause to lift before creating a pod (%s)" % "; ".join("%s: %s" % r for r in reasons))
+                said = reasons
+            time.sleep(poll)
+        if t_wait:
+            self.brake_s += time.time() - t_wait
+            waited = round(time.time() - t_wait, 1)
+            self.rec["brake_wait_s"] = round(self.rec.get("brake_wait_s", 0) + waited, 1)   # a job that also waits before its rerun adds up
+            self.note("the pause lifted after %.0fs; going on" % waited)
+
+    def wait_deadline(self):
+        """When --wait runs out: it counts from the job's start, plus the time the job spent waiting for the coordinator's pause."""
+        return self.t0 + self.o.wait + self.brake_s
 
     def reachable(self):
         check_reachable(self.cluster)
@@ -2451,7 +2513,7 @@ class Job:
     def start_pod(self, manifests, cold=None):
         """Create the pod and wait until it runs. `cold`: the same pod without the cache claim. If the claim is held by another job
         (ReadWriteOncePod: the pod stays Pending for CACHE_BUSY_S), the pod is deleted and `cold` is created in its place."""
-        deadline = self.t0 + self.o.wait
+        deadline = self.wait_deadline()
         self.place(manifests, deadline)
         sched_deadline = time.time() + self.o.sched_wait   # homelab only: another cluster's autoscaler can take longer to add a node
         busy_since = None
@@ -2687,6 +2749,7 @@ class Job:
             shipped = {"tmp/%s/job.json" % self.id: json.dumps(job).encode(), "tmp/%s/kgate.py" % self.id: open(os.path.realpath(__file__), "rb").read()}
         tar_bytes = archive(wt, common, files, shipped, history=self.cluster.kind != "kubectl", skipped=skipped)
         self.note("%s %s tree %s, %d files, %.1f MB" % (self.rec["repo"], (self.rec["head"] or "no HEAD")[:12], tree[:12], len(files), len(tar_bytes) / 1e6))
+        self.wait_for_brake()
         self.reachable()
         self.reap()
         self.sweep()
@@ -2908,8 +2971,9 @@ class Job:
             first, second = self.rec["evicted"][-2:]
             raise Unavailable("lost the pod twice: pod %s was evicted by the cluster (%s), the job was rerun once as pod %s, which was evicted too (%s); not rerun again"
                               % (first["pod"], first["reason"], second["pod"], second["reason"]))
+        self.wait_for_brake()   # the rerun makes a pod, so it waits for the coordinator's pause like the first one; the deadlines below are read after the wait
         now = time.time()
-        if now >= self.t0 + self.o.wait:
+        if now >= self.wait_deadline():
             raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the job's --wait of %ds has passed" % (old, why, self.o.wait))
         left = int(self.kcfg["deadline_s"] - (now - self.pod_t0))
         if left < 1:
