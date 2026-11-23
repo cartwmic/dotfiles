@@ -4,6 +4,7 @@ mise reads GITHUB_TOKEN and ignores GH_TOKEN, so an unauthenticated mise call (t
 rendered with chezmoi (both profiles) and run with a fake mise and gh first on PATH in a throwaway HOME. The fake mise logs the GITHUB_TOKEN
 each call sees; the fake gh answers `auth token`. Run: python3 -m unittest discover -s tests/mise
 """
+import json
 import os
 import subprocess
 import tempfile
@@ -44,7 +45,7 @@ class MiseGithubTokenTest(unittest.TestCase):
                 (bin_dir / name).chmod(0o755)
             log = root / "calls.log"
             log.write_text("")
-            env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_TOKEN", "GH_TOKEN")}
+            env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_TOKEN", "GH_TOKEN", "XDG_STATE_HOME")}
             env.update(HOME=str(home), PATH="%s:/usr/bin:/bin" % bin_dir, FAKE_LOG=str(log), FAKE_GH_TOKEN="gh-secret")
             env.update(env_extra or {})
             r = subprocess.run(["sh", str(script)], capture_output=True, text=True, env=env)
@@ -52,7 +53,12 @@ class MiseGithubTokenTest(unittest.TestCase):
             for secret in ("gh-secret", "env-gh-secret", "env-github-secret"):
                 self.assertNotIn(secret, r.stdout + r.stderr)
             seen = {line.split(" GITHUB_TOKEN=")[0]: line.split(" GITHUB_TOKEN=")[1] for line in log.read_text().splitlines() if " GITHUB_TOKEN=" in line}
+            self.token_log = home / ".local/state/mise-bootstrap/token.jsonl"
+            self.token_log_text = self.token_log.read_text() if self.token_log.exists() else ""
             return (seen, log.read_text(), r.stderr) if with_stderr else (seen, log.read_text())
+
+    def token_records(self):
+        return [json.loads(line) for line in self.token_log_text.splitlines()]
 
     def test_gh_token_reaches_every_mise_call_when_nothing_is_set(self):
         for profile in ("personal", "axon-work-computer"):
@@ -93,8 +99,33 @@ class MiseGithubTokenTest(unittest.TestCase):
                 self.assertNotIn("no GitHub token found", stderr)
 
     def test_gh_signed_out_does_not_fail_the_script(self):
-        seen, _ = self.run_script(env_extra={"FAKE_GH_TOKEN": ""})
+        seen, _, stderr = self.run_script(env_extra={"FAKE_GH_TOKEN": ""}, with_stderr=True)
         self.assertEqual(set(seen.values()), {"<unset>"})
+        self.assertEqual(len([l for l in stderr.splitlines() if "no GitHub token found" in l]), 1, stderr)
+
+    def test_each_run_logs_one_line_naming_the_token_source_and_never_the_token(self):
+        cases = (
+            ("env", {"GH_TOKEN": "env-gh-secret"}, {}),
+            ("env", {"GITHUB_TOKEN": "env-github-secret"}, {}),
+            ("gh", {}, {}),
+            ("missing", {}, {"gh": False}),
+            ("missing", {"FAKE_GH_TOKEN": ""}, {}),
+        )
+        for profile in ("personal", "axon-work-computer"):
+            for source, extra, kwargs in cases:
+                with self.subTest(profile=profile, source=source, extra=sorted(extra)):
+                    self.run_script(profile, env_extra=extra, **kwargs)
+                    (record,) = self.token_records()
+                    self.assertEqual(record["source"], source)
+                    self.assertEqual(record["action"], "mise_bootstrap_token")
+                    self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+                    for secret in ("gh-secret", "env-gh-secret", "env-github-secret"):
+                        self.assertNotIn(secret, self.token_log_text)
+
+    def test_an_unwritable_state_dir_does_not_fail_the_script(self):
+        seen, _, stderr = self.run_script(env_extra={"XDG_STATE_HOME": "/dev/null/state"}, with_stderr=True)
+        self.assertEqual(set(seen.values()), {"gh-secret"})
+        self.assertIn("could not write", stderr)
 
 
 if __name__ == "__main__":

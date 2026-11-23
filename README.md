@@ -42,9 +42,9 @@ RustDesk onchange helper runs on a supported personal desktop, it stops if the
 item cannot be read. Confirm access before each personal desktop apply even
 when unchanged inputs will skip the helper. Keep the token outside this repository.
 
-Before the first apply on a fresh machine, export `GH_TOKEN` (a GitHub token, no scopes needed) in the shell that runs `chezmoi init --apply`. The mise
+Before the first apply on a fresh machine, export `GH_TOKEN` (a GitHub token, no scopes needed) in the shell that runs the apply (on a desktop, export it in the outer shell before the Quick Start block, so both the `init` subshell and the later `chezmoi apply` see it). The mise
 bootstrap script passes it to mise as `GITHUB_TOKEN`. Without it, mise is limited to GitHub's 60 anonymous calls an hour and a tool install can fail with a
-403. Installing `gh` first does not help: a fresh `gh` has no login, so `gh auth token` returns nothing. The script prints a warning when it finds no token.
+403. Installing `gh` first does not help: a fresh `gh` has no login, so `gh auth token` returns nothing. The script prints a warning when it finds no token, and appends one line (time and source: `env`, `gh` or `missing`; never the token) to `~/.local/state/mise-bootstrap/token.jsonl`.
 
 The commands below are for a **fresh installation** and stop if a chezmoi
 config already exists. On an existing host, preserve that config, inspect its
