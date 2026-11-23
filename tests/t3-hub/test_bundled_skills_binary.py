@@ -105,7 +105,7 @@ class BundledSkillsBinaryTest(unittest.TestCase):
                 if seat in UNUSED_TOOL_SEATS:
                     self.assertEqual(sorted(tools & UNUSED_TOOLS), [], "seat %s still has tools it never calls in the first request; the seat file denies them" % seat)
                     if seat == "coordinator":
-                        # the built-in tools of the coordinator's extra deny list go; the ones it keeps stay. (The T3 MCP tools come from the T3 instance, not this file, and `claude -p` lists no AskUserQuestion; test_t3_hub checks neither is denied.)
+                        # the built-in tools of the coordinator's extra deny list go; the ones it keeps stay. (The T3 MCP tools come from the T3 instance, not this file. `claude -p` lists no AskUserQuestion, so test_t3_hub is what checks that one is denied.)
                         self.assertEqual(sorted(tools & {"Edit", "Write"}), [], "the coordinator seat still carries Edit or Write")
                         self.assertTrue({"Agent", "Read", "Skill"} <= tools, "the coordinator lost a tool it keeps: %s" % sorted({"Agent", "Read", "Skill"} - tools))
                 else:
