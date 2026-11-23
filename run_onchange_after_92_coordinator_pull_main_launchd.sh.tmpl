@@ -1,12 +1,14 @@
 #!/bin/sh
-# Load or reload the daily coordinator pull (local.coordinator-pull-main) when its plist or the checkout path changes.
+# Load or reload the daily coordinator pull (local.coordinator-pull-main) when its rendered plist changes.
 # axon-work-computer on macOS only (.chezmoiignore). It runs `sh scripts/pull-main.sh` in the work coordinator checkout (cartwmic/coordinator#1083).
-# plist: {{ include "Library/LaunchAgents/local.coordinator-pull-main.plist.tmpl" | sha256sum }}
-# checkout: {{ includeTemplate "instance_repo" (dict "root" . "name" "coordinator") | sha256sum }}
+# plist: {{ includeTemplate "coordinator_pull_main_plist" . | sha256sum }}
 #
+# The hash is of the rendered plist, so a change to the schedule, the checkout path, instances.coordinator.extraPath or the log path reloads the job.
 # Fails (and so fails the apply) when launchd does not end up with the job loaded: chezmoi records a run_onchange script only when
 # it succeeds, so the next apply tries again.
 # Reload: bootout, wait until launchd no longer has the job, then bootstrap with a few retries (dot_local/share/launchd-reload).
+# Log: every line this script and launchd_reload.sh print (INFO, WARN, ERROR) is also appended, with a UTC timestamp, to
+# ~/Library/Logs/coordinator-work/pull-main.log, the file the job itself writes, so a quiet job can be told from one that never loaded.
 set -eu
 log() { printf '[coordinator_pull_main_launchd] %s: %s\n' "$1" "$2"; }
 
@@ -14,24 +16,40 @@ log() { printf '[coordinator_pull_main_launchd] %s: %s\n' "$1" "$2"; }
 label=local.coordinator-pull-main
 plist="$HOME/Library/LaunchAgents/$label.plist"
 lib="$HOME/.local/share/launchd-reload/launchd_reload.sh"
-if [ ! -r "$lib" ]; then
-  log ERROR "$lib is not installed; apply it too (chezmoi apply $lib), then apply again"
-  exit 1
-fi
-LAUNCHD_TAG=coordinator_pull_main_launchd
-. "$lib"
+logdir="$HOME/Library/Logs/coordinator-work"
+logfile="$logdir/pull-main.log"
 uid=$(id -u)
-if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
-  launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
-  if ! launchd_wait_gone "$label"; then
-    log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
-    exit 1
+
+load() {
+  if [ ! -r "$lib" ]; then
+    log ERROR "$lib is not installed; apply it too (chezmoi apply $lib), then apply again"
+    return 1
   fi
-fi
-if [ ! -f "$plist" ]; then
-  log ERROR "$plist is not installed; apply it too (chezmoi apply $plist), then apply again"
-  exit 1
-fi
-mkdir -p "$HOME/Library/Logs/coordinator-work"
-launchd_bootstrap "$label" "$plist" || exit 1
-log INFO "loaded $label (daily at 07:15 local time; log: $HOME/Library/Logs/coordinator-work/pull-main.log)"
+  LAUNCHD_TAG=coordinator_pull_main_launchd
+  . "$lib"
+  if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+    launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || :
+    if ! launchd_wait_gone "$label"; then
+      log ERROR "could not unload $label; try: launchctl bootout gui/$uid/$label, then chezmoi apply again"
+      return 1
+    fi
+  fi
+  if [ ! -f "$plist" ]; then
+    log ERROR "$plist is not installed; apply it too (chezmoi apply $plist), then apply again"
+    return 1
+  fi
+  launchd_bootstrap "$label" "$plist" || return 1
+  log INFO "loaded $label (daily at 07:15 local time; log: $logfile)"
+}
+
+# Run it with its output in a file, then print the file and append it to the log with a UTC timestamp per line; the status is kept.
+mkdir -p "$logdir"
+out=$(mktemp "${TMPDIR:-/tmp}/coordinator_pull_main_launchd.XXXXXX")
+trap 'rm -f "$out"' EXIT
+rc=0
+load >"$out" 2>&1 || rc=$?
+cat "$out"
+while IFS= read -r line; do
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$line"
+done <"$out" >>"$logfile"
+exit "$rc"

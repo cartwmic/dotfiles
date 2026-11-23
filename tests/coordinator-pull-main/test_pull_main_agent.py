@@ -9,6 +9,7 @@ Run: python3 -m unittest discover -s tests/coordinator-pull-main
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PLIST = REPO / "Library/LaunchAgents/local.coordinator-pull-main.plist.tmpl"
+PLIST_BODY = REPO / ".chezmoitemplates/coordinator_pull_main_plist"
 LOADER = REPO / "run_onchange_after_92_coordinator_pull_main_launchd.sh.tmpl"
 IGNORE = REPO / ".chezmoiignore"
 LIB = REPO / "dot_local/share/launchd-reload/launchd_reload.sh"
@@ -62,10 +64,18 @@ class PlistTest(unittest.TestCase):
         self.assertEqual(p["ProgramArguments"][4], "/Users/test/src/coord")
         self.assertTrue(p["EnvironmentVariables"]["PATH"].startswith("/opt/node/bin:/Users/test/.local/share/mise/shims:"))
 
-    def test_the_loader_reloads_when_the_checkout_changes(self):
-        a = render(LOADER)
-        b = render(LOADER, extra={"instances": {"coordinator": {"repo": "/Users/test/src/coord"}}})
-        self.assertNotEqual(a, b)
+    def test_the_loader_reloads_when_the_rendered_plist_changes(self):
+        """chezmoi reruns a run_onchange script when its rendered text changes: the hash line must follow every part of the plist."""
+        base = render(LOADER)
+        for what, extra in (("checkout", {"repo": "/Users/test/src/coord"}), ("extraPath", {"extraPath": "/opt/node/bin"})):
+            with self.subTest(what):
+                self.assertNotEqual(base, render(LOADER, extra={"instances": {"coordinator": extra}}))
+
+    def test_the_loader_hash_is_of_the_rendered_plist(self):
+        import hashlib
+        hash_line = re.search(r"^# plist: ([0-9a-f]{64})$", render(LOADER), re.M).group(1)
+        self.assertEqual(hash_line, hashlib.sha256(render(PLIST_BODY).encode()).hexdigest())
+        self.assertEqual(render(PLIST), render(PLIST_BODY), "the plist file is its template, rendered")
 
 
 class GateTest(unittest.TestCase):
@@ -138,14 +148,14 @@ echo "launchctl $*" >> "$FAKE/calls"
 case $1 in
   print) [ -f "$FAKE/loaded" ] || exit 113 ;;
   bootout) [ -f "$FAKE/loaded" ] || exit 3; rm -f "$FAKE/loaded" ;;
-  bootstrap) [ ! -f "$FAKE/loaded" ] || exit 5; : > "$FAKE/loaded" ;;
+  bootstrap) [ "${FAKE_BOOTSTRAP_RC:-0}" = 0 ] || exit "$FAKE_BOOTSTRAP_RC"; [ ! -f "$FAKE/loaded" ] || exit 5; : > "$FAKE/loaded" ;;
   *) exit 64 ;;
 esac
 """
 
 
 class LoaderTest(unittest.TestCase):
-    def run_loader(self, installed=True, loaded=False):
+    def run_loader(self, installed=True, loaded=False, **env):
         script = render(LOADER)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -163,7 +173,7 @@ class LoaderTest(unittest.TestCase):
         if loaded:
             (fake / "loaded").write_text("")
         p = subprocess.run(["/bin/sh", "-c", script], capture_output=True, text=True, timeout=30,
-                           env=dict(HOME=str(h), FAKE=str(fake), PATH="%s:%s" % (bin_, SYS), LAUNCHD_POLL_SLEEP="0.01"))
+                           env=dict(env, HOME=str(h), FAKE=str(fake), PATH="%s:%s" % (bin_, SYS), LAUNCHD_POLL_SLEEP="0.01", LAUNCHD_RETRY_SLEEP="0"))
         calls = (fake / "calls").read_text().splitlines() if (fake / "calls").exists() else []
         return p, [c.split()[1] for c in calls], h
 
@@ -173,6 +183,32 @@ class LoaderTest(unittest.TestCase):
         self.assertEqual(calls, ["print", "bootstrap"])
         self.assertTrue((h / "Library/Logs/coordinator-work").is_dir())
         self.assertIn("07:15", p.stdout)
+
+    def log_lines(self, h):
+        f = h / "Library/Logs/coordinator-work/pull-main.log"
+        return f.read_text().splitlines() if f.exists() else []
+
+    def test_a_load_leaves_its_line_in_the_log_with_a_utc_time(self):
+        p, _, h = self.run_loader()
+        lines = self.log_lines(h)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \[coordinator_pull_main_launchd\] INFO: loaded local\.coordinator-pull-main ")
+        self.assertIn("loaded local.coordinator-pull-main", p.stdout, "the terminal still gets the line")
+
+    def test_a_missing_plist_leaves_its_error_in_the_log(self):
+        p, _, h = self.run_loader(installed=False)
+        self.assertEqual(p.returncode, 1)
+        lines = self.log_lines(h)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \[coordinator_pull_main_launchd\] ERROR: .*local\.coordinator-pull-main\.plist is not installed")
+
+    def test_a_failed_bootstrap_leaves_the_helpers_error_in_the_log_and_fails_the_apply(self):
+        p, _, h = self.run_loader(FAKE_BOOTSTRAP_RC="5")
+        self.assertEqual(p.returncode, 1)
+        lines = self.log_lines(h)
+        self.assertTrue(any("ERROR: could not load local.coordinator-pull-main" in l for l in lines), lines)
+        self.assertTrue(all(re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \[", l) for l in lines), lines)
+        self.assertFalse(any("INFO: loaded" in l for l in lines), lines)
 
     def test_a_loaded_job_is_booted_out_first(self):
         p, calls, _ = self.run_loader(loaded=True)
