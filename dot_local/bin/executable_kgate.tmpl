@@ -1560,8 +1560,12 @@ def outside_worktree(command, root, cwd):
     return None
 
 
+GIT_FILE_READ_LIMIT = 16 * 1024 * 1024   # a git-folder file up to this size is read whole before it is archived (see add_git_dir)
+
+
 def add_git_dir(tar, path, arcname, keep):
-    """tar.add(path, arcname, filter=keep) for a git folder, except that a file or folder that vanishes while it is read is left out.
+    """tar.add(path, arcname, filter=keep) for a git folder, except that a file or folder that vanishes while it is read is left out,
+    and a file that shrinks while it is read ships with the bytes it had when it was read.
     Other tools write and delete in a shared .git while a job ships (T3's checkpoint indexes, git's own lock files); tarfile.add stats
     the path before it calls `keep`, so its own recursion cannot tolerate that. Only the git folders use this: a file of the worktree
     that vanishes still fails the job, since the tree hash was taken from it."""
@@ -1578,7 +1582,15 @@ def add_git_dir(tar, path, arcname, keep):
         except FileNotFoundError:
             return
         with f:
-            tar.addfile(info, f)
+            if info.size <= GIT_FILE_READ_LIMIT:
+                # A file that shrinks between the stat and the read would make tarfile raise "unexpected end of data". Read the bytes first
+                # and take the size from them: the archive holds what the file held when it was read. Git's big files (packs) are
+                # written once and renamed into place, so they do not shrink and stay streamed.
+                data = f.read()
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            else:
+                tar.addfile(info, f)
     else:
         tar.addfile(info)
         if info.isdir():
