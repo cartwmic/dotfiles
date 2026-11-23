@@ -757,6 +757,14 @@ if a[:2] == ["get", "pod"]:
             st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario == "pulling":   # scheduled to a node, image still being pulled: not Unschedulable
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
+    elif scenario == "slow":   # image being pulled for the first FAKE_READY_AFTER reads of the pod (the kgate client's own read after the create counts), then running
+        reads = os.path.join(fake, "pod-reads")
+        n = int(open(reads).read()) + 1 if os.path.exists(reads) else 1
+        open(reads, "w").write(str(n))
+        if n > int(os.environ.get("FAKE_READY_AFTER", 2)):
+            st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
+        else:
+            st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
     else:
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/7 nodes are available: 7 Insufficient cpu."}]}
     if os.environ.get("FAKE_DOCKER"):   # the pod has a dind sidecar: a native sidecar reports under initContainerStatuses
@@ -2246,8 +2254,8 @@ if a[:2] == ["create", "-f"]:
         side = lambda vals: ",".join("%s=%s" % (k, v) for k, v in zip(names, vals))
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: jobs-quota-qqqq, requested: %s, used: %s, limited: %s\n'
                          % (side(["8", "10Gi", "2", "8Gi"]), side(["96", "160Gi", "24", "100Gi"]), side(["96", "160Gi", "24", "100Gi"]))); sys.exit(1)
-    if quota and not quota.startswith("long:") and quota != "impossible" and (quota == "always" or n <= int(quota)):
-        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
+    if quota and not quota.startswith("long:") and quota != "impossible" and (not os.path.exists(os.path.join(fake, "lifted")) if quota == "always" else n <= int(quota)):   # "always" ends when <fake>/lifted exists
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: %s, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (os.environ.get("FAKE_QUOTA_NAME", "jobs"), 8 if n == 1 else 6)); sys.exit(1)
     if quota == "impossible":   # asks for more than the namespace's own limit: waiting cannot help
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: limits.cpu=16,requests.cpu=2, used: limits.cpu=0,requests.cpu=0, limited: limits.cpu=8,requests.cpu=8\n'); sys.exit(1)
     if os.environ.get("FAKE_CREATE_ECHO_PW"):   # a refusal that echoes the pod spec's SA password back, as an API error might
@@ -2274,7 +2282,7 @@ if a[:2] == ["get", "pod"]:
     last = json.load(open(os.path.join(fake, "last_manifest.json"))) if os.path.exists(os.path.join(fake, "last_manifest.json")) else {"items": [{"spec": {"volumes": []}}]}
     has_claim = any("persistentVolumeClaim" in v for i in last["items"] for v in i["spec"]["volumes"])
     rwop = "0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod."
-    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-r2" and not (has_claim and last["items"][0]["metadata"]["name"].endswith("-r2"))) \
+    if scenario == "ready" or (scenario == "queued" and n > int(os.environ.get("FAKE_READY_AFTER", 3))) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-r2" and not (has_claim and last["items"][0]["metadata"]["name"].endswith("-r2"))) \
             or (scenario == "rwop-r1" and not (has_claim and not last["items"][0]["metadata"]["name"].endswith("-r2"))) or (scenario == "rwop-gone" and n > 1):
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario in ("rwop", "rwop-gone", "rwop-r2", "rwop-r1"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
@@ -3547,6 +3555,92 @@ class RepoName(unittest.TestCase):
         self.assertEqual(self.repo("some-folder", "/"), "some-folder")
 
 
+class QuotaWaitHold(unittest.TestCase):
+    """QuotaWait's hold clock, without a cluster: the time between two kgate-hold refusals is added to the deadline, any other refusal adds none."""
+
+    def wait(self):
+        job = mock.Mock()
+        job.rec, job.o.wait, job.hold_s = {}, 60, 0.0
+        return K.QuotaWait(job)
+
+    refusal = "exceeded quota: %s, requested: pods=1, used: pods=1, limited: pods=1"
+
+    def refuse(self, qw, name, at):
+        with mock.patch("time.time", return_value=at):
+            return qw.refused(self.refusal % name)
+
+    def test_the_time_between_two_hold_refusals_is_added_to_the_deadline(self):
+        qw = self.wait()
+        self.refuse(qw, K.HOLD_QUOTA, 1000)
+        why, _ = self.refuse(qw, K.HOLD_QUOTA, 1030)
+        self.assertEqual(qw.job.hold_s, 30)
+        self.assertIn("not counted against --wait", why)
+
+    def test_another_quota_adds_nothing_and_ends_a_hold_stretch(self):
+        qw = self.wait()
+        self.refuse(qw, "scratch-cpu", 1000)
+        self.refuse(qw, "scratch-cpu", 1030)
+        self.assertEqual(qw.job.hold_s, 0)
+        self.refuse(qw, K.HOLD_QUOTA, 1040)
+        self.refuse(qw, "scratch-cpu", 1050)   # the stretch ends: the 10 s after the last hold refusal are not held
+        self.refuse(qw, K.HOLD_QUOTA, 1060)    # a new one starts here, adding nothing yet
+        self.assertEqual(qw.job.hold_s, 0)
+
+
+class QuotaWaitHoldRecord(unittest.TestCase):
+    """The hold's own record field and the limit the timeout text states."""
+
+    def refuse(self, qw, name, at):
+        with mock.patch("time.time", return_value=at):
+            return qw.refused("exceeded quota: %s, requested: pods=1, used: pods=1, limited: pods=1" % name)
+
+    def job(self):
+        job = mock.Mock()
+        job.rec, job.o.wait, job.hold_s = {}, 60, 0.0
+        return job
+
+    def test_hold_time_is_its_own_field_apart_from_quota_wait(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        self.refuse(qw, "scratch-cpu", 1000)
+        self.refuse(qw, K.HOLD_QUOTA, 1010)
+        self.refuse(qw, K.HOLD_QUOTA, 1040)
+        self.assertEqual(job.rec["hold_wait_s"], 30)
+        self.assertIn("quota_wait_s", job.rec)
+
+    def test_no_hold_leaves_no_hold_field(self):
+        job = self.job()
+        self.refuse(K.QuotaWait(job), "scratch-cpu", 1000)
+        self.assertNotIn("hold_wait_s", job.rec)
+
+    def test_the_create_that_goes_through_counts_the_stretch_since_the_last_hold_refusal(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        self.refuse(qw, K.HOLD_QUOTA, 1000)
+        self.refuse(qw, K.HOLD_QUOTA, 1030)
+        with mock.patch("time.time", return_value=1050):
+            qw.made()
+        self.assertEqual(job.hold_s, 50)
+        self.assertEqual(job.rec["hold_wait_s"], 50)
+
+    def test_a_look_at_a_neighbour_being_placed_neither_ends_nor_adds_to_a_hold(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        self.refuse(qw, K.HOLD_QUOTA, 1000)
+        qw.hold_tick(None)   # "another job is being placed": neither a hold nor a look that ends it
+        with mock.patch("time.time", return_value=1010):
+            qw.hold_tick(True)
+        self.assertEqual(job.hold_s, 10)
+
+    def test_the_timeout_names_the_real_limit_after_a_hold(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        qw.msg = "exceeded quota: jobs"
+        self.assertEqual(str(qw.timeout()), "quota not available within 60s: exceeded quota: jobs")
+        job.hold_s = 100.4
+        self.assertEqual(str(qw.timeout()), "quota not available within 160s (--wait 60s plus 100s held by the cluster): exceeded quota: jobs")
+
+
 class KubectlBlack(unittest.TestCase):
     """The kubectl adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
     for _name in ("kgate", "records", "calls", "op_token_checks", "op_env", "active", "add_entry", "dead_entry"):
@@ -3839,6 +3933,40 @@ class KubectlBlack(unittest.TestCase):
         self.assertRegex(rec["reason"], r"^quota not available within 2s: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=\d+, limited: requests.cpu=8$")
         self.assertGreaterEqual(rec["quota_wait_s"], 1.5)
         self.assertTrue(rec["cleanup"])
+
+    def lift_after(self, seconds):
+        timer = threading.Timer(seconds, lambda: (self.fake / "lifted").write_text("x"))
+        timer.start()
+        self.addCleanup(timer.cancel)
+
+    def test_a_cluster_hold_longer_than_wait_is_waited_out_not_counted_against_it(self):
+        self.lift_after(5)   # the hold lasts longer than --wait 3
+        done = self.run_kgate("--wait", "3", "--", "sh", "-c", "echo ran-after-the-hold", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-hold"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-after-the-hold", done.stdout)
+        self.assertIn("exceeded quota: kgate-hold", done.stdout)
+        self.assertIn("a cluster hold: not counted against --wait", done.stdout)
+
+    def test_a_held_job_still_has_its_wait_for_a_pod_that_takes_several_polls(self):
+        self.lift_after(7)   # the hold lasts longer than --wait 6; the pod then needs three reads (about 4 s) to run, as a real pod does (ContainerCreating, image pull)
+        done = self.run_kgate("--wait", "6", "--", "sh", "-c", "echo ran-after-the-hold", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-hold", "FAKE_POD": "queued", "FAKE_READY_AFTER": "2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-after-the-hold", done.stdout)
+        rec = self.records()[-1]
+        self.assertGreaterEqual(rec["hold_wait_s"], 6)   # the whole held stretch, to the create that went through
+        self.assertGreaterEqual(rec["quota_wait_s"], rec["hold_wait_s"])
+
+    def test_a_held_job_whose_pod_never_starts_says_the_real_limit(self):
+        self.lift_after(5)
+        done = self.run_kgate("--wait", "3", "--", "true", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-hold", "FAKE_POD": "pending"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within \d+s \(--wait 3s plus \d+s held by the cluster\): ")
+
+    def test_a_full_quota_that_is_not_a_hold_still_ends_at_wait(self):
+        self.lift_after(5)
+        done = self.run_kgate("--wait", "3", "--", "true", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-holdish"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertRegex(self.records()[-1]["reason"], r"^quota not available within 3s: exceeded quota: kgate-holdish, ")
 
     def test_a_request_above_the_namespace_limit_is_69_at_once_not_a_wait(self):
         done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_QUOTA": "impossible"})
@@ -5574,6 +5702,53 @@ class QuotaHomelab(unittest.TestCase):
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within 2s: Unschedulable \(queued, behind kgate-[^,]+, which the quota refused and was first\)$")
         self.assertEqual(self.created(), 0)
+
+    def hold(self):
+        return {**self.full(used=12), "FAKE_QUOTA_NAME": "kgate-hold"}
+
+    def test_a_cluster_hold_longer_than_wait_is_waited_out_not_counted_against_it(self):
+        proc = self.start("--wait", "3", "--cpu", "4", "--", "sh", "-c", "echo ran-after-the-hold", env=self.hold())
+        seen = self.read_until(proc, "a cluster hold: not counted against --wait")
+        time.sleep(5)   # past --wait 3
+        self.assertIsNone(proc.poll(), "the hold does not end the job at --wait")
+        (path,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        ticket = json.loads(path.read_text())
+        self.assertGreater(ticket["deadline"], time.time() - 1, "the ticket's deadline moves with the hold; a later client would otherwise forget it as stale")
+        self.room()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("ran-after-the-hold", seen)
+
+    def test_a_held_job_still_has_its_wait_for_a_pod_that_takes_several_polls(self):
+        env = {**self.hold(), "FAKE_POD": "slow", "FAKE_READY_AFTER": "2"}   # the pod needs three reads, as a real pod does (ContainerCreating, image pull)
+        proc = self.start("--wait", "3", "--cpu", "4", "--", "sh", "-c", "echo ran-after-the-hold", env=env)
+        seen = self.read_until(proc, "a cluster hold: not counted against --wait")
+        time.sleep(5)   # past --wait 3
+        self.room()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("ran-after-the-hold", seen)
+        self.assertGreaterEqual(self.records()[-1]["hold_wait_s"], 5)
+
+    def test_a_job_behind_a_held_job_does_not_run_out_its_wait_either(self):
+        env = self.hold()
+        first = self.start("--wait", "3", "--cpu", "4", "--", "sh", "-c", "echo first-ran", env=env)
+        seen_first = self.read_until(first, "a cluster hold: not counted against --wait")
+        second = self.start("--wait", "3", "--cpu", "1", "--", "sh", "-c", "echo second-ran", env=env)
+        seen_second = self.read_until(second, "queued: behind ")
+        time.sleep(5)   # past --wait 3, for both
+        self.assertIsNone(first.poll())
+        self.assertIsNone(second.poll(), "the job ordered after a held job keeps waiting")
+        self.room()
+        out1, _ = first.communicate(timeout=60)
+        out2, _ = second.communicate(timeout=60)
+        self.assertEqual((first.returncode, second.returncode), (0, 0), (seen_first + out1, seen_second + out2))
+        self.assertIn("first-ran", seen_first + out1)
+        self.assertIn("second-ran", seen_second + out2)
+        for rec in self.records():
+            self.assertGreaterEqual(rec["hold_wait_s"], 5, rec)   # the held job, and the one queued behind it
 
     def test_a_request_above_the_quotas_own_limit_fails_at_once(self):
         done = self.kgate("--wait", "600", "--cpu", "16", "--", "true", env={"FAKE_QUOTA_CPU": "12"})

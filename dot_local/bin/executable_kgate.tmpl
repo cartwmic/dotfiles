@@ -134,6 +134,7 @@ PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/passw
 # A webhook denial or any other text that merely says "exceeded quota" does not match, and fails at once.
 QUOTA_REFUSAL = re.compile(r'^Error from server \(Forbidden\): (?:error when creating "[^"]*": )?pods "[^"]*" is forbidden: exceeded quota: [^\s,]+, requested: .+, used: .+, limited: .+$', re.M)
 CACHE_BUSY_S = 10  # a cache_pvc pod Pending this long on the ReadWriteOncePod conflict runs without the cache
+HOLD_QUOTA = "kgate-hold"   # the homelab's `scripts/kgate/hold.sh` holds new jobs with a quota of this name; the wait for it does not count against --wait (Job.hold_s, Job.wait_deadline())
 QUOTA_FIRST_DELAY, QUOTA_MAX_DELAY = 5, 60  # seconds between create retries while the namespace quota is full: 5, 10, 20, 40, 60, 60, ...
 # What the cluster records when it takes a pod away on purpose (the node autoscaler's consolidation, the taint manager, the scheduler's preemption).
 # Only these events, or the pod's own status saying the same, make kgate rerun a lost pod. An explicit list: the node autoscaler's DisruptionBlocked and the
@@ -889,6 +890,7 @@ class QuotaWait:
     def __init__(self, job):
         self.job, self.delay, self.since, self.msg = job, QUOTA_FIRST_DELAY, None, ""
         self.base = job.rec.get("quota_wait_s") or 0
+        self.hold_t = None   # when the last look was seen to be a hold (None: the last look was not a hold); the seconds go to the job (Job.hold_s), which every deadline of the job reads
 
     def refused(self, full):
         """One refusal. `full`: the whole message, from `exceeded quota:`. Returns (what to say about the wait, seconds to wait before the next create). Raises when
@@ -899,15 +901,41 @@ class QuotaWait:
         self.since = self.since or time.time()
         self.job.rec["quota_wait_s"] = round(self.base + time.time() - self.since, 1)
         pause, self.delay = self.delay, min(self.delay * 2, QUOTA_MAX_DELAY)
-        return "waiting for quota: " + self.msg, pause
+        if not self.hold_tick(quota_name(full) == HOLD_QUOTA):
+            return "waiting for quota: " + self.msg, pause
+        return "waiting for quota: " + self.msg + " (a cluster hold: not counted against --wait)", pause
+
+    def hold_tick(self, held):
+        """One look at the wait: `held` is True when the job is waiting behind a cluster hold (the quota refused it, or a job ahead that the hold refused keeps its place in line),
+        False when the look is anything else, None when it says nothing about the hold (a neighbour is being placed: it neither ends the stretch nor adds to it).
+        The time since the last look that was also a hold is added to the job's hold_s, and to the record's hold_wait_s. Returns `held`."""
+        if held is None:
+            return held
+        now = time.time()
+        if held and self.hold_t is not None:
+            self.add_held(now - self.hold_t)
+        self.hold_t = now if held else None
+        return held
+
+    def add_held(self, seconds):
+        self.job.hold_s += seconds
+        self.job.rec["hold_wait_s"] = round(self.job.hold_s, 1)
 
     def made(self):
-        """The create went through: close the record."""
+        """The create went through: close the record. A hold that was the last look lasted until now."""
+        if self.hold_t is not None:
+            self.add_held(time.time() - self.hold_t)
+            self.hold_t = None
         if self.since:
             self.job.rec["quota_wait_s"] = round(self.base + time.time() - self.since, 1)
 
     def timeout(self):
-        return Unavailable("quota not available within %ds: %s" % (self.job.o.wait, self.msg))
+        return Unavailable("quota not available within %s: %s" % (wait_limit(self.job.o.wait, self.job.hold_s), self.msg))
+
+
+def wait_limit(wait, held):
+    """The limit a timeout message names: --wait, and after a cluster hold the real one (--wait plus the time held), so the number is not smaller than the time waited."""
+    return "%ds" % wait if held < 0.5 else "%ds (--wait %ds plus %ds held by the cluster)" % (round(wait + held), wait, round(held))
 
 
 def new_password():
@@ -2108,6 +2136,8 @@ class Job:
     def __init__(self, opts):
         self.o = opts
         self.t0 = time.time()
+        self.hold_s = 0.0   # seconds held by the cluster's kgate-hold quota (QuotaWait): part of wait_deadline(), beside brake_s
+        self.behind_hold = False
         self.id = "kgate-%d-%d" % (self.t0, os.getpid())
         self.state = state_dir()
         os.makedirs(self.state, exist_ok=True)
@@ -2311,8 +2341,10 @@ class Job:
             self.note("the pause lifted after %.0fs; going on" % waited)
 
     def wait_deadline(self):
-        """When --wait runs out: it counts from the job's start, plus the time the job spent waiting for the coordinator's pause."""
-        return self.t0 + self.o.wait + self.brake_s
+        """When --wait runs out: it counts from the job's start, plus the time the job spent waiting for the coordinator's pause (brake_s) and behind a cluster hold (hold_s: the
+        homelab's kgate-hold quota, see QuotaWait). Every wait of the job reads this one deadline (the quota wait, the queue, the pod start, the cache fallback, the eviction rerun), so
+        a pause or a hold of any length leaves the job its whole --wait once it lifts. A quota that is merely full does not push it back."""
+        return self.t0 + self.o.wait + self.brake_s + self.hold_s
 
     def reachable(self):
         check_reachable(self.cluster)
@@ -2356,7 +2388,7 @@ class Job:
             raise Unavailable("could not create the pod: " + err)
         return " ".join(err[err.index("exceeded quota:"):].split())
 
-    def create_pod(self, manifests, deadline):
+    def create_pod(self, manifests):
         """Create the pod on a kubectl cluster. A ResourceQuota refusal is waited out (backoff) until the deadline; any other refusal is fatal.
         The homelab does not come here: admit() waits in its queue, so the wait never holds the lock the other clients need."""
         quota, said = QuotaWait(self), None
@@ -2369,19 +2401,19 @@ class Job:
             if why != said:
                 self.note(why)
                 said = why
-            if time.time() >= deadline:
+            if time.time() >= self.wait_deadline():   # a cluster hold pushes the deadline back
                 raise quota.timeout()
-            time.sleep(max(0, min(pause, deadline - time.time())))
+            time.sleep(max(0, min(pause, self.wait_deadline() - time.time())))
         quota.made()
 
-    def place(self, manifests, deadline):
+    def place(self, manifests):
         """Create the pod. The homelab first waits in the local queue while the cluster has no room or the namespace quota refuses the pod (see admit()); a kubectl cluster has its own autoscaler and quota wait."""
         if self.cluster.kind == "kubectl":
-            self.create_pod(manifests, deadline)
+            self.create_pod(manifests)
         else:
-            self.admit(manifests, deadline)
+            self.admit(manifests)
 
-    def admit(self, manifests, deadline):
+    def admit(self, manifests):
         """Homelab: create the pod only when the cluster has room for it, so it does not sit Unschedulable until --sched-wait ends it with 75 (344 jobs in a week).
         The scheduler says whether there is room: a pod of this client or another that waits for room (PodScheduled False, Unschedulable, Insufficient ...) and
         asks no more than this one, and is at least as urgent (blocks()), means there is none, and the job waits here, in the local queue, and says so.
@@ -2399,7 +2431,7 @@ class Job:
         os.makedirs(queue, exist_ok=True)
         ticket = os.path.join(queue, self.id + ".json")
         ident = proc_identity(os.getpid())
-        entry = {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": deadline, "shape": mine}
+        entry = {"id": self.id, "pid": os.getpid(), "start": ident[0] if ident else None, "pidns": pid_namespace(), "t": self.t0, "deadline": self.wait_deadline(), "shape": mine}
         write_json_atomic(ticket, entry)
         t_wait, last, noted = None, None, False
         quota = QuotaWait(self)
@@ -2431,15 +2463,20 @@ class Job:
                         if gone.returncode != 0:
                             raise Unavailable("could not remove the Secrets of the create the quota refused: " + gone.stderr.decode(errors="replace").strip())
                     t_wait = t_wait or time.time()
+                    if not pause:   # a refusal ticked the hold clock in quota.refused(); a look at the queue ticks it here
+                        quota.hold_tick(None if why == "another job is being placed" else why.startswith("behind ") and self.behind_hold)
+                    if self.wait_deadline() != entry["deadline"]:   # a hold pushed the deadline back; the ticket says so too, or the next client forgets it as stale (queued_behind)
+                        entry["deadline"] = self.wait_deadline()
+                        write_json_atomic(ticket, entry)
                     local = why.startswith(("behind ", "another job"))   # a neighbour on this machine is being placed: usually seconds, and the cluster has room
                     if why != last and why != "another job is being placed" and (not local or time.time() - t_wait >= QUEUE_QUIET_S or noted):
                         self.note("queued: " + why)
                         last, noted = why, True
                     if noted:
                         self.rec["queue_wait_s"] = round(time.time() - t_wait, 1)
-                    if time.time() >= deadline:
-                        raise quota.timeout() if pause or (last or "").startswith("waiting for quota") else Unavailable("pod did not start within %ds: Unschedulable (queued, %s)" % (self.o.wait, last or why))
-                    time.sleep(max(0, min(pause or (QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S), deadline - time.time())))
+                    if time.time() >= self.wait_deadline():
+                        raise quota.timeout() if pause or (last or "").startswith("waiting for quota") else Unavailable("pod did not start within %s: Unschedulable (queued, %s)" % (wait_limit(self.o.wait, self.hold_s), last or why))
+                    time.sleep(max(0, min(pause or (QUEUE_LOCAL_POLL_S if local else QUEUE_POLL_S), self.wait_deadline() - time.time())))
             finally:
                 forget(ticket)
         quota.made()
@@ -2468,6 +2505,7 @@ class Job:
             tickets.append(t)
         mine_key = (-mine["priority"], self.t0, self.id)
         ahead = next((t for t in sorted(tickets, key=order) if order(t) < mine_key and holds_back(t, mine)), None)
+        self.behind_hold = bool(ahead) and ahead.get("quota") == HOLD_QUOTA   # set by every look at the queue, which admit() makes before it reads this: waiting behind a held job is part of the hold
         if ahead and ahead.get("quota"):
             return "behind %s, which the quota refused and was first" % ahead["id"]
         return "behind %s, which asks no more of the cluster and was first" % ahead["id"] if ahead else None
@@ -2513,8 +2551,7 @@ class Job:
     def start_pod(self, manifests, cold=None):
         """Create the pod and wait until it runs. `cold`: the same pod without the cache claim. If the claim is held by another job
         (ReadWriteOncePod: the pod stays Pending for CACHE_BUSY_S), the pod is deleted and `cold` is created in its place."""
-        deadline = self.wait_deadline()
-        self.place(manifests, deadline)
+        self.place(manifests)
         sched_deadline = time.time() + self.o.sched_wait   # homelab only: another cluster's autoscaler can take longer to add a node
         busy_since = None
         last = None
@@ -2560,7 +2597,7 @@ class Job:
                     gone = self.cluster.run(["delete", "pod/" + self.pod, "--ignore-not-found", "--grace-period=0", "--wait=true"])
                     if gone.returncode != 0:
                         raise Unavailable("could not delete the pod to run without the cache: " + gone.stderr.decode(errors="replace").strip())
-                    self.create_pod(cold, deadline)
+                    self.create_pod(cold)
                     cold, busy_since, last = None, None, None
                     continue
             else:
@@ -2568,8 +2605,8 @@ class Job:
             if what != last:
                 self.note("waiting for the pod: %s" % what)
                 last = what
-            if time.time() > deadline:
-                raise Unavailable("pod did not start within %ds: %s %s" % (self.o.wait, what, detail[:300]))
+            if time.time() > self.wait_deadline():
+                raise Unavailable("pod did not start within %s: %s %s" % (wait_limit(self.o.wait, self.hold_s), what, detail[:300]))
             time.sleep(2)
 
     def job_container(self):
@@ -2974,7 +3011,7 @@ class Job:
         self.wait_for_brake()   # the rerun makes a pod, so it waits for the coordinator's pause like the first one; the deadlines below are read after the wait
         now = time.time()
         if now >= self.wait_deadline():
-            raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the job's --wait of %ds has passed" % (old, why, self.o.wait))
+            raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the job's --wait of %s has passed" % (old, why, wait_limit(self.o.wait, self.hold_s)))
         left = int(self.kcfg["deadline_s"] - (now - self.pod_t0))
         if left < 1:
             raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the pod deadline of %ds has passed" % (old, why, self.kcfg["deadline_s"]))
