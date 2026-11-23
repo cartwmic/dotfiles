@@ -15,7 +15,7 @@ const REFUSAL_MARK = "refused in agent sessions";
  */
 export function refusal(command: string, script: string = GUARD_SCRIPT): string | undefined {
 	if (!existsSync(script)) return undefined;
-	const run = spawnSync("python3", [script], { input: JSON.stringify({ tool_input: { command } }), encoding: "utf8", timeout: 10_000 });
+	const run = spawnSync("python3", [script], { input: JSON.stringify({ tool_name: "bash", tool_input: { command } }), encoding: "utf8", timeout: 10_000 });
 	return run.status === 2 && run.stderr.includes(REFUSAL_MARK) ? run.stderr.trim() : undefined;
 }
 

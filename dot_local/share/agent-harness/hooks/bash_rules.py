@@ -37,10 +37,12 @@
               edit; for `gh pr edit N` the name must also contain N. A `$VAR` the command does not assign from mktemp is refused. A name
               is checked even when the chain is right; when both are wrong the refusal gives both fixes.
 
-  heavy       (agent host pod only)  a test, journey or stress run in the pod itself: `npm test` / `npm t` / `npm run test*` (and pnpm, yarn, bun),
-              `vitest` (also `npx`, `bunx`, `pnpx`, `pnpm exec`, `npm exec`), `python3 scripts/journeys.py`, `stress` and `stress-ng`: the pod is shared
+  heavy       (agent host pod only)  a test, journey or stress run in the pod itself: `npm test` / `npm t` / `npm run test*` (and pnpm, yarn, bun,
+              `yarn workspace <x> test`, `corepack pnpm test`), `vitest` (also `npx`, `bunx`, `pnpx`, `pnpm exec`, `npm exec`, `node .../vitest`),
+              `python3 scripts/journeys.py` (also `uv run scripts/journeys.py`), `stress` and `stress-ng`: the pod is shared
               by every agent and the coordinator, so these run on the cluster (playbook 83fbe006); the refusal names `run-and-wake -- kgate -- <cmd>`.
-              Not refused: anything after `kgate` (it runs on the cluster), `scripts/kgate-journeys.sh`, typecheck, lint, `node script.ts`, git.
+              Not refused: anything after `kgate` (it runs on the cluster), `scripts/kgate-journeys.sh`, typecheck, lint (also scripts named `typecheck:test`, `lint:test`),
+              other runners (playwright, make), `node script.ts`, git.
               The pod is known by the `container` file beside this script (chezmoi renders it from container mode, true only there) or
               AGENT_HARNESS_CONTAINER=true; on every other machine, and on the work profile, the rule does nothing.
   docker      (personal, Linux only)  `docker run`, `docker build`, `docker compose up` and their spellings (`docker container run`,
@@ -599,6 +601,11 @@ def docker_rule(walk, ctx):
 JS_RUNNERS = {"npm", "pnpm", "yarn", "bun"}
 JS_VALUE_OPTIONS = {"--prefix", "-C", "--cwd", "--filter", "-F", "-w", "--workspace", "--dir"}  # options before the subcommand that take a value
 HEAVY_SCRIPT = re.compile(r"(?:^|[:_-])(?:tests?|vitest|journeys?|stress)(?:$|[:_-])")  # a package script that runs tests, journeys or stress
+LIGHT_SCRIPT = re.compile(r"^(?:typecheck|lint)(?:$|[:_-])")  # typecheck:test and lint:test check files; they are not test runs
+
+
+def _heavy_script(name):
+    return bool(HEAVY_SCRIPT.search(name)) and not LIGHT_SCRIPT.match(name)
 NPM_TEST = {"test", "t", "tst"}
 
 
@@ -623,18 +630,33 @@ def _heavy_spelling(words):
         return name
     if name.startswith("python") and args and _base(args[0]) == "journeys.py":
         return "%s %s" % (name, args[0])
+    if name in ("node", "nodejs") and args and _base(args[0]) in ("vitest", "vitest.mjs"):  # node node_modules/.bin/vitest run
+        return "%s vitest" % name
+    if name in ("corepack", "uv") and args:  # corepack pnpm test; uv run scripts/journeys.py
+        inner = words[2:] if name == "uv" and args[0] == "run" else words[1:] if name == "corepack" else None
+        return _heavy_spelling(inner) if inner else None
     if name in ("npx", "bunx", "pnpx"):
         return "%s vitest" % name if args and _base(args[0]) == "vitest" else None
     if name not in JS_RUNNERS or not args:
         return None
     sub, more = args[0], args[1:]
+    if name == "yarn" and sub == "workspace" and len(more) >= 2:  # yarn workspace web test
+        sub, more = more[1], more[2:]
     if sub in ("exec", "dlx", "x") and more and _base(more[0]) == "vitest":
         return "%s %s vitest" % (name, sub)
-    if sub in ("run", "run-script", "rum", "urn") and more and HEAVY_SCRIPT.search(more[0]):
+    if sub in ("run", "run-script", "rum", "urn") and more and _heavy_script(more[0]):
         return "%s %s %s" % (name, sub, more[0])
-    if sub in NPM_TEST or (name != "npm" and HEAVY_SCRIPT.search(sub)):
+    if sub in NPM_TEST or (name != "npm" and _heavy_script(sub)):
         return "%s %s" % (name, sub)
     return None
+
+
+class Matched(str):
+    """A refusal message that also carries the command name the rule matched (`npx vitest`), for the guard log."""
+    def __new__(cls, message, matched):
+        self = super().__new__(cls, message)
+        self.matched = matched
+        return self
 
 
 def heavy_rule(walk, ctx):
@@ -643,7 +665,7 @@ def heavy_rule(walk, ctx):
     for cmd in walk.cmds:
         spelling = _heavy_spelling(cmd.words)
         if spelling:
-            return HEAVY % spelling
+            return Matched(HEAVY % spelling, spelling)
     return None
 
 
@@ -899,12 +921,12 @@ RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_ru
 
 
 def refusal(text, ctx):
-    """(rule name, refusal message) for the command text, or None."""
+    """(rule name, refusal message, matched command name or None) for the command text, or None. The matched name is from the rule's fixed list, never the command text."""
     walk = Walk(text, ctx.cwd, (ctx.env or {}).get("HOME"))
     for rule in RULES:
         message = rule(walk, ctx)
         if message:
-            return rule.__name__.replace("_rule", ""), message
+            return rule.__name__.replace("_rule", ""), message, getattr(message, "matched", None)
     return None
 
 
