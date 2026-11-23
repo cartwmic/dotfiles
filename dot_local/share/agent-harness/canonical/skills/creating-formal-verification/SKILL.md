@@ -11,7 +11,7 @@ The checker is TLC, driven by the `statechart` skill. Its guide is `~/.local/sha
 
 ## Choose the target from the code
 
-Take the strongest written promise whose break costs most and that tests reach least. Start from the invariants the repo "relies on but never enforces" (`distilling-requirements` lists them). Ask the user only what the code and docs cannot tell you. Prefer a target whose covered files do not change every day, because the sync check fires on every change to them.
+Take the strongest written promise whose break costs most and that tests reach least. Start from the invariants the repo "relies on but never enforces": promised in a PRD, README or comment, with no test or check behind them. Ask the user only what the code and docs cannot tell you. Prefer a target whose covered files do not change every day, because the sync check fires on every change to them.
 
 ## Layout in the target repo
 
@@ -20,6 +20,10 @@ Take the strongest written promise whose break costs most and that tests reach l
 - `formal/COVERS`: each covered path with its `git hash-object` value when the model was last confirmed against it.
 - `formal/check-sync.py`: recomputes the hashes. `--update` rewrites `COVERS`, by hand only.
 - `formal/check.sh`: runs the sync check, then the model check. Exit 0 pass, nonzero fail. CI runs only this.
+
+## Getting the checker into CI
+
+The path above is only a local cache on a personal machine. `formal/check.sh` must not call it: CI has neither that path nor Java, and the target repo reads no dotfiles code. The repo's own script downloads the same pinned archive of the `statechart` scripts (a commit sha in the URL) and checks its sha256 before it extracts anything. It reads the `TLA2TOOLS` and `JAVA` environment variables when they are set (CI sets them; statechart then skips mise), and otherwise lets statechart install Java and the jar itself. CI gets Java from `actions/setup-java` and Node from `actions/setup-node`, and fetches the TLC jar with its own pinned sha256. Bumping the pin is one sha edit in each consumer.
 
 ## What makes the model good
 
