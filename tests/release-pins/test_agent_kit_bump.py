@@ -118,6 +118,7 @@ FAKE_GATE = r'''#!/bin/sh
 echo "$(basename "$0") $*" >> "$FAKE_CALL_LOG"
 if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
   echo "$(basename "$0"): RED on stdout"
+  [ -z "${FAKE_GATE_SAY:-}" ] || echo "$FAKE_GATE_SAY"
   echo "$(basename "$0"): refused by the test" >&2
   exit 1
 fi
@@ -401,6 +402,18 @@ class AgentKitBumpTests(unittest.TestCase):
         # The body check printed on stdout and refused on stderr. The stop message must carry the refusal, not only stdout.
         result = self.refused_gate("pr-body-check")
         self.assertIn("pr-body-check: RED on stdout\npr-body-check: refused by the test", result.stderr)
+
+    def test_an_unresolved_thread_refusal_says_so_in_the_stop_message(self):
+        self.world()
+        self.refuse = "pr-body-check"
+        self.git_env = {**self.git_env, "FAKE_GATE_SAY": "cartwmic/dotfiles#100: RED  1 unresolved review thread: resolve each"}
+        result = self.bump()
+        self.assert_stopped(result, "gates", "pr-body-check dotfiles 100 exited 1: an unresolved review thread on the PR refuses it (resolve each thread, then run the bump again)")
+        self.assert_nothing_applied()
+
+    def test_a_body_check_refusal_that_is_not_a_thread_gets_no_thread_hint(self):
+        result = self.refused_gate("pr-body-check")
+        self.assertNotIn("unresolved review thread", result.stderr)
 
     def test_a_live_edit_to_a_pin_file_stops_before_the_apply(self):
         self.world()
