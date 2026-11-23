@@ -125,7 +125,8 @@ PREFER_NODES = ("cartwmic-g14-wsl",)
 # The live agent host (namespace agent-host, label app=agent-host: the coordinator, T3 and every agent session in one pod) moves between nodes, so a fixed
 # NEVER_NODES entry cannot follow it. Every pod carries a required pod anti-affinity against it instead: no new kgate pod lands on the node the agent host runs on.
 # 2026-11-22: agent-1 hit load 82 on 16 cores with two 4-CPU kgate pods beside the agent host, whose t3 container requests far less CPU, and coordinator turns
-# crawled (Michael asked for this fix). Running jobs are left alone; the agent host keeps its homelab-critical priority, so it can still preempt kgate pods.
+# crawled (Michael asked for this fix). Running jobs are left alone. The rule works both ways: a running kgate pod also keeps a new agent-host pod off its
+# node, so an agent-host restart can land on agent-4, or preempt a kgate job there (homelab-critical priority; that job ends exit 69, not rerun). docs/kgate.md.
 AGENT_HOST_NAMESPACE, AGENT_HOST_LABELS = "agent-host", {"app": "agent-host"}
 # image registries that need a pull credential: host -> (user, 1Password reference of the token)
 PULL = {"ghcr.io": ("cartwmic", "op://developer/kgate-github-packages-read/password")}
