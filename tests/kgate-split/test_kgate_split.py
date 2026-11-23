@@ -63,6 +63,7 @@ if os.environ.get("FAKE_KGATE_NOSTART") == pod and not os.path.exists(marker):
     sys.exit(75)
 if os.environ.get("FAKE_KGATE_HANG"):
     child = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    open(os.path.join(state, "hanging-" + kid), "w").write("x")   # the TERM handler is set and the job is up: safe to stop
     child.wait()
     sys.exit(0)
 out = os.path.join(state, kid + ".out")
@@ -398,10 +399,11 @@ class Runs(Base):
     def test_term_stops_every_pod_and_merges_nothing(self):
         repo = write_repo(self.tmp, {"t.sh": "exit 0\n"}, "pods = 2\n")
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "run"], cwd=repo, env=dict(self.env, FAKE_KGATE_HANG="1"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Stop only once both fake pods are up and hold their TERM handler; a pod still starting up would be killed by the default action, unrecorded.
         deadline = time.time() + 20
-        while time.time() < deadline and len(list((self.state / "kgate").glob("split-*/pods/*.console.log"))) < 2:
-            time.sleep(0.1)
-        time.sleep(0.5)
+        while time.time() < deadline and len(list((self.state / "kgate").glob("hanging-*"))) < 2:
+            time.sleep(0.05)
+        self.assertEqual(len(list((self.state / "kgate").glob("hanging-*"))), 2, "both pods should be up before TERM")
         proc.send_signal(signal.SIGTERM)
         out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 143, out + err)
