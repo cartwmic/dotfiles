@@ -689,12 +689,17 @@ KEEP = {
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
-# The tools the builder, planner and reviewer seat files deny (restated from .chezmoitemplates/fleet_seat); the lead and coordinator keep them.
+# The tools the builder, planner, reviewer, computer, scout and coordinator seat files deny (restated from .chezmoitemplates/fleet_seat); the lead keeps them.
 UNUSED_TOOLS = {"ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"}
-UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer", "computer", "scout"}
+UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer", "computer", "scout", "coordinator"}
 # What the scout seat file denies on top of the four tools above: the tools that write files or start or change work (restated from .chezmoitemplates/fleet_seat). Bash stays: searching runs through it.
 SCOUT_DENY = ["Edit", "Write", "NotebookEdit", "EnterWorktree", "ExitWorktree", "CronCreate", "CronDelete", "SendMessage", "TaskStop", "DesignSync", "mcp__t3-code"]
-# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on for the lead and the coordinator, and is off for the seats that deny the Workflow tool.
+# What the coordinator seat file denies on top of the four tools above: it changes no file (decision #6154). It keeps task_status and task_cancel: its seat text tracks and stops its delegates with them.
+# AskUserQuestion is denied: playbook rule 8c5b8ab2 says the coordinator never uses the question tool (it blocks every inbox event); asks go through the ledger.
+COORDINATOR_DENY = ["AskUserQuestion", "Edit", "Write"]
+# What the coordinator keeps of the tools its measured window never called.
+COORDINATOR_KEEPS = ["Agent", "Read", "Skill", "mcp__t3-code__request_secret", "mcp__t3-code__task_status", "mcp__t3-code__task_cancel"]
+# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on for the lead, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
@@ -1063,13 +1068,15 @@ class FleetFilesTest(unittest.TestCase):
                                      | ({"autoCompactWindow"} if seat == "coordinator" else set()), (profile, seat))
                     if seat == "coordinator":
                         self.assertEqual(f["autoCompactWindow"], 200000, profile)
-                    # builder, planner and reviewer also deny the four tools they never call; lead and coordinator keep them
-                    self.assertEqual(f["permissions"], {"deny": ["Artifact"] + (sorted(UNUSED_TOOLS) if seat in UNUSED_TOOL_SEATS else []) + (SCOUT_DENY if seat == "scout" else [])}, (profile, seat))
+                    # the worker seats and the coordinator also deny the four tools they never call; the lead keeps them
+                    self.assertEqual(f["permissions"], {"deny": ["Artifact"] + (sorted(UNUSED_TOOLS) if seat in UNUSED_TOOL_SEATS else []) + (SCOUT_DENY if seat == "scout" else []) + (COORDINATOR_DENY if seat == "coordinator" else [])}, (profile, seat))
+                    for tool in COORDINATOR_KEEPS:
+                        self.assertNotIn(tool, f["permissions"]["deny"], (profile, seat, tool))
                     self.assertIs(f["syncClaudeAiSkills"], False)
                     # bundled skills stay on so the Workflow tool keeps its short text (workflow-authoring carries the reference); every other bundled skill is off
                     self.assertIs(f["disableBundledSkills"], False)
                     self.assertEqual(set(f["skillOverrides"].values()), {"off"})
-                    # the worker seats deny the Workflow tool, so workflow-authoring is off for them; the lead and the coordinator keep both
+                    # the worker seats and the coordinator deny the Workflow tool, so workflow-authoring is off for them; the lead keeps both
                     self.assertEqual("workflow-authoring" in f["skillOverrides"], seat in UNUSED_TOOL_SEATS, (profile, seat))
                     self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL) | FROM_SOURCE) - keep) | BUNDLED_OFF | ({"workflow-authoring"} if seat in UNUSED_TOOL_SEATS else set()), (profile, seat))
                     self.assertNotIn("synced", f["skillOverrides"])
