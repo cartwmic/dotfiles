@@ -179,7 +179,7 @@ class BinaryTest(unittest.TestCase):
         seat_file = self.tmp / "seat.json"
         seat_file.write_text(json.dumps(settings))
         r = subprocess.run([sys.executable, str(SCRIPT), "--seat-file", str(seat_file), "--folder", str(folder or self.repo), "--home", str(self.home),
-                            "--binary", str(self.binary), "--json", *extra], capture_output=True, text=True, timeout=300, env={**os.environ, "CLAUDE_BINARY": str(self.binary)})
+                            "--binary", str(self.binary), "--json", *extra], capture_output=True, text=True, timeout=300, env={**os.environ, "CLAUDE_BINARY": str(self.binary), "SEAT_CONTEXT_LOG": str(self.tmp / "log.jsonl")})
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
 
