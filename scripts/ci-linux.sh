@@ -86,6 +86,7 @@ python3 scripts/ci-par.py \
   tests/disposition-check \
   tests/stop-running-jobs \
   tests/homelab-chat \
+  tests/computer-use-seat \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
   tests/shx \
