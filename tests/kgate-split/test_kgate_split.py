@@ -7,6 +7,7 @@ Ports: every run uses an ephemeral port (KGATE_SPLIT_PORTS=0), never the range t
 """
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -294,6 +296,28 @@ class PodWorker(Base):
         r = K.run_one({"item": "my id", "limit_s": 30, "recorded_s": None}, 3, 2, 1, out, self.tmp, 'echo "$(cat {items}) $KGATE_SPLIT_ID $KGATE_SPLIT_POD $KGATE_SPLIT_LANE"', 1.0)
         self.assertEqual(r["exit"], 0)
         self.assertEqual((out / r["log"]).read_text().strip(), "my id my id 3 2")
+
+
+class PodOwnId(Base):
+    """run_pod credits a pod with the job kgate says it started, not with a job named in an earlier line (one it reaped)."""
+
+    def test_a_pod_that_reaped_dead_jobs_first_is_credited_with_its_own_job(self):
+        # pod 5's real output from coordinator run 74695fd93ae6: two "kgate: ended ..." reap lines come before its own "kgate: pod ... on" line.
+        fixture = Path(__file__).parent / "fixtures" / "pod5-reap-lines-first.txt"
+        own = "kgate-1795467050-28873"
+        (self.state / "kgate").mkdir(parents=True)
+        with open(self.state / "kgate" / "log.jsonl", "w") as f:
+            for kid, code in (("kgate-1795465837-822040", 143), ("kgate-1795466738-1222634", 143), (own, 0)):
+                f.write(json.dumps({"id": kid, "exit": code, "ran": True, "node": "n-" + kid[-5:]}) + "\n")
+
+        class Replay:
+            def start(self, argv, **kw):
+                return subprocess.Popen(["cat", str(fixture)], **kw)
+
+        rec = K.run_pod(5, 7, Replay(), [], [], "", io.StringIO(), self.state / "kgate", threading.Event())
+        self.assertEqual(rec["id"], own)
+        self.assertEqual(rec["exit"], 0)
+        self.assertEqual(rec["node"], "n-28873")
 
 
 class Runs(Base):

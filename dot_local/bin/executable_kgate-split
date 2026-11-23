@@ -586,6 +586,10 @@ def kgate_record(state, kid):
     return {}
 
 
+# kgate's one line that names the job it started. Other lines name other jobs (reaped, queued behind), so take the id from this line only.
+OWN_JOB = re.compile(r"kgate: pod (kgate-\d+-\d+) on ")
+
+
 def run_pod(k, n, pods, kgate_argv, env_words, bootstrap, prefix_log, state, stop):
     """One pod: a kgate job, started once more when it never started (kgate 75, or 69 with `"ran": false`). Returns its record dict."""
     attempts, rec = [], {}
@@ -596,7 +600,8 @@ def run_pod(k, n, pods, kgate_argv, env_words, bootstrap, prefix_log, state, sto
             return {"pod": k, "exit": 143, "attempts": attempts}
         kid = None
         for line in proc.stdout:
-            kid = kid or (re.search(r"kgate-\d+-\d+", line) or [None])[0]
+            own = OWN_JOB.match(line)
+            kid = kid or (own[1] if own else None)
             prefix_log.write(line)
             print(label + line, end="", flush=True)
         code = proc.wait()
