@@ -44,15 +44,15 @@ Search the history (as in step 1.4) for other instances of each pattern, not onl
 
 ## 3. One fix per tier, then pick
 
-For each pattern, write one fix at each tier of the enforcement pyramid (the canonical instructions' "Enforcement: the inverted pyramid"), top first. "No fix at this tier" is allowed, with the reason.
+For each pattern, write one fix at each tier of the enforcement pyramid (the canonical instructions' "Enforcement: the inverted pyramid", with the same tier contents), top first. "No fix at this tier" is allowed, with the reason.
 
-1. **Codebase.** Make the mistake impossible. One owner per piece of state, one supported way per task. Hide internals so the wrong import fails. Replace hand-synced lists with one source of truth. Make the bad state unwritable (types). Delete the old way and the dead code an agent would copy.
-2. **Static analysis.** A lint, type or CI check that keys on the general shape of the mistake, not a keyword list. Its error names the file, type or function to use instead. If the bad pattern is already common, fail only on new additions. Exceptions go on the offending line with a reason, an expiry date and a human's approval.
-3. **Verification.** A test, replay or independent re-derivation that runs. A test must pass two imagined edits. Break the behavior (wrong value, skipped or doubled effect): it must fail. Change only the internals: it must still pass. Fix or delete tests that fail either edit.
+1. **Codebase.** API design, architecture, refactoring. Make the mistake impossible. One owner per piece of state, one supported way per task. Hide internals so the wrong import fails. Replace hand-synced lists with one source of truth. Delete the old way and the dead code an agent would copy.
+2. **Static analysis.** Lints, types, compilers, tests, CI. Make the bad state unwritable in types. A lint or CI check keys on the general shape of the mistake, not a keyword list. Its error names the file, type or function to use instead. If the bad pattern is already common, fail only on new additions. Exceptions go on the offending line with a reason, an expiry date and a human's approval. A test must pass two imagined edits. Break the behavior (wrong value, skipped or doubled effect): it must fail. Change only the internals: it must still pass. Fix or delete tests that fail either edit.
+3. **Verification.** Runtime and formal checks: a replay, a re-run of a claim's source command, a runtime assert, a proof.
 4. **Prose.** An instruction, only for judgment calls. Nothing fails when an agent skips it.
 5. **Human review.** What Michael still looks at, made cheap: one named check, in one place, with the evidence beside it.
 
-If deciding needs judgment, a check cannot own it: write the instruction and say so. Then pick which fix to build first and say why. It is usually the highest tier that works. Say why you passed over each higher one.
+If deciding needs judgment, a check cannot own it: write the instruction and say so. Then pick which fix to build first and say why. It is usually the highest tier that works. Say why you passed over each higher one. The fixes for the other tiers stay as proposals, and are built only if the first fix proves not enough (§9).
 
 Before you change a doc, schema or format, find what else reads or quotes it (grep for its name and path). Update those in the same change.
 
@@ -78,4 +78,4 @@ A fix that removes the mistake (an architecture fix) cannot fail on the past, be
 
 ## 7. Reply
 
-One entry per class: the cause chain (for a single failure), the evidence (each case, with commits, finding ids or quotes), the pattern or patterns above it and where the evidence stops, a table of one fix per tier for each pattern, which fix you built first and why each higher tier did not work, the blind-pass comparison, and the proof. If you found only one case, say: "This class rests on one case."
+One entry per class: the cause chain (for a single failure), the evidence (each case, with commits, finding ids or quotes), the pattern or patterns above it and where the evidence stops, a table of one fix per tier for each pattern, which fix you picked to build first and why each higher tier did not work, with the other tiers' fixes left as proposals, the blind-pass comparison, and the proof. If you found only one case, say: "This class rests on one case."
