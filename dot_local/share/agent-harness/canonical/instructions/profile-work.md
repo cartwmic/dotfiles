@@ -9,15 +9,15 @@ Each agent seat has a model. This is a rule, not a mechanism: there is no launch
 
 | Seat | Model |
 |---|---|
-| Coordinator | Gemini 4 Neon medium, Cursor (gemini-4-neon) |
-| Lead | Gemini 4 Neon medium, Cursor (gemini-4-neon) |
-| Planner | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
-| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |
-| Builder | GLM 5.3 Flash H200, Pi (work-glm/{{ .workGlmModelId }}) |
-| Computer use | Sonnet 5.5 high, Cursor (claude-sonnet-5-5) |
+| Coordinator | GLM 5.3 Flash H200 high, Pi (work-glm/{{ .workGlmModelId }}) |
+| Lead | GLM 5.3 Flash H200 high, Pi (work-glm/{{ .workGlmModelId }}) |
+| Planner | GLM 5.3 Flash H200 high, Pi (work-glm/{{ .workGlmModelId }}) |
+| Reviewer | GLM 5.3 Flash H200 high, Pi (work-glm/{{ .workGlmModelId }}) |
+| Builder | GLM 5.3 Flash H200 high, Pi (work-glm/{{ .workGlmModelId }}) |
+| Computer use | GLM 5.3 Flash H200 high, Pi (work-glm/{{ .workGlmModelId }}) |
 
 - Every brief's first line names the seat and the model.
-- Coordinator and leads use Cursor (`gemini-4-neon`, `medium` effort). Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); T3 provider claudeAgent. Planners and builders use Pi (`work-glm/{{ .workGlmModelId }}`). Computer use uses Cursor (`claude-sonnet-5-5`, `high` effort).
+- Every seat uses Pi (`work-glm/{{ .workGlmModelId }}`, `high` thinking); T3 provider pi.
 - Sessions I open myself are not covered by this table. Their default is set separately.
 - No OpenAI models for now.
 - If you are unsure of a model ID for a harness, use the human names above.
