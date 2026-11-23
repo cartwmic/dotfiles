@@ -643,7 +643,7 @@ class Heavy(unittest.TestCase):
         for text, spelling in self.REFUSED:
             with self.subTest(text=text):
                 message = check(text, container=True) or ""
-                self.assertIn("`%s` is refused in the agent host pod" % spelling, message)
+                self.assertIn("`%s` is refused in agent sessions in the agent host pod" % spelling, message)
                 self.assertIn("run-and-wake -- kgate -- <cmd>", message)
 
     def test_allowed(self):
@@ -1091,6 +1091,13 @@ class Hook(unittest.TestCase):
         self.assertEqual(self.run_pod_hook("npm test", container_env="false").returncode, 0)
         self.set_container_file(None)
 
+    def test_the_heavy_refusal_carries_the_phrase_the_pi_extension_blocks_on(self):   # refuse-pattern-kill/index.ts REFUSAL_MARK
+        self.set_container_file("true\n")
+        run = self.run_pod_hook("npx vitest run")
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("refused in agent sessions", run.stderr)
+        self.set_container_file(None)
+
     def test_in_the_pod_kgate_runs_and_light_commands_pass_through_the_real_script(self):
         self.set_container_file("true\n")
         for command in ("kgate -- npm test", "run-and-wake -- kgate -- npx vitest run", "git status", "npm run typecheck"):
@@ -1107,7 +1114,8 @@ class Hook(unittest.TestCase):
         self.assertEqual(self.run_pod_hook("npm test", container_env="false", log=log).returncode, 0)
         records = [json.loads(line) for line in log.read_text().splitlines()]
         self.assertEqual(len(records), 1)
-        self.assertEqual((records[0]["action"], records[0]["rule"], records[0]["tool"], records[0]["command"]), ("refuse", "heavy", "Bash", "npm test"))
+        self.assertEqual((records[0]["action"], records[0]["rule"], records[0]["tool"]), ("refuse", "heavy", "Bash"))
+        self.assertNotIn("command", records[0])  # a refused command can hold a token
         self.assertRegex(records[0]["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "the docker rule runs on Linux only")

@@ -12,7 +12,7 @@ Output: exit 2 and the reason on stderr when a simple command in the text is pki
 It fails open: input it cannot read is allowed, and an error inside bash_rules allows the command, so a bug never stops an agent from working.
 The bash_rules checks that depend on the profile read AGENT_HARNESS_PROFILE, else the file `profile` beside this script (rendered by chezmoi).
 The heavy-job check runs only in the agent host pod: AGENT_HARNESS_CONTAINER=true, else the file `container` beside this script reads `true` (rendered by chezmoi from container mode).
-Every bash_rules refusal is also written as one JSON line ({ts, rule, tool, command}) to ~/.local/state/agent-harness/guard.jsonl (AGENT_HARNESS_GUARD_LOG overrides the path); a write that fails is ignored.
+Every bash_rules refusal is also written as one JSON line ({ts, action, rule, tool}; no command text, which can hold a token) to ~/.local/state/agent-harness/guard.jsonl (AGENT_HARNESS_GUARD_LOG overrides the path); a write that fails is ignored.
 
 What counts: the command position of any simple command, found through quotes, `;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `$( )`,
 backticks, `sh -c '...'` (and bash, zsh, dash, ksh; also `-lc`), `eval`, heredocs fed to a shell, and wrappers such as `sudo`, `env`,
@@ -441,12 +441,12 @@ def load_container(env, directory):
     return value.strip() == "true"
 
 
-def log_refusal(rule, tool, command, env):
+def log_refusal(rule, tool, env):
     """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. A failed write is ignored."""
     try:
         path = env.get("AGENT_HARNESS_GUARD_LOG") or os.path.join(env.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "agent-harness", "guard.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": "refuse", "rule": rule, "tool": tool, "command": command[:500]}
+        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": "refuse", "rule": rule, "tool": tool}
         with open(path, "a") as handle:
             handle.write(json.dumps(record) + "\n")
     except Exception:
@@ -466,7 +466,7 @@ def bash_rules_message(command, raw):
         found = bash_rules.refusal(command, ctx)
         if not found:
             return None
-        log_refusal(found[0], tool, command, os.environ)
+        log_refusal(found[0], tool, os.environ)
         return found[1]
     except Exception:
         return None

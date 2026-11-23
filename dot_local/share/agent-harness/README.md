@@ -219,7 +219,7 @@ or one Codex imports) leaves ours untrusted, and so skipped, until the next full
 ### The nine bash rules
 
 The same hook, no new entries. Each refusal names its fix, and every message says "refused in agent sessions" (the Pi extension looks for it). The first two and the git rule run on both
-desktop profiles; the other four only on `personal` (a missing or unreadable `profile` file turns them off too); the docker rule also needs a Linux host; the heavy-job rule runs only in the agent host pod (the `container` file reads `true`). Any error inside them allows the command. Each refusal is also one JSON line, `{ts, action, rule, tool, command}`, in `~/.local/state/agent-harness/guard.jsonl` (`AGENT_HARNESS_GUARD_LOG` overrides the path), so `grep -c '"rule": "heavy"'` counts how often the pod refused a heavy job.
+desktop profiles; the other four only on `personal` (a missing or unreadable `profile` file turns them off too); the docker rule also needs a Linux host; the heavy-job rule runs only in the agent host pod (the `container` file reads `true`). Any error inside them allows the command. Each refusal is also one JSON line, `{ts, action, rule, tool}` (no command text, which can hold a token), in `~/.local/state/agent-harness/guard.jsonl` (`AGENT_HARNESS_GUARD_LOG` overrides the path), so `grep -c '"rule": "heavy"'` counts how often the pod refused a heavy job.
 
 | Rule | Refuses | Fix it names |
 |---|---|---|

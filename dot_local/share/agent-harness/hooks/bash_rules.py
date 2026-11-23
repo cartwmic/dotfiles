@@ -176,7 +176,7 @@ DOCKER = (
 
 
 HEAVY = (
-    "`%s` is refused in the agent host pod: the pod is shared by every agent and the coordinator, and heavy jobs (tests, journeys, stress runs) run on the cluster (playbook 83fbe006). "
+    "`%s` is refused in agent sessions in the agent host pod: the pod is shared by every agent and the coordinator, and heavy jobs (tests, journeys, stress runs) run on the cluster (playbook 83fbe006). "
     "Run it on kgate: `run-and-wake -- kgate -- <cmd>` (for example `run-and-wake -- kgate -- npm test`). "
     "If GitHub CI runs the same suite on the same commit, push and read CI instead of running it again."
 )
