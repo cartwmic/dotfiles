@@ -694,11 +694,11 @@ UNUSED_TOOLS = {"ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"}
 UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer", "computer", "scout", "coordinator"}
 # What the scout seat file denies on top of the four tools above: the tools that write files or start or change work (restated from .chezmoitemplates/fleet_seat). Bash stays: searching runs through it.
 SCOUT_DENY = ["Edit", "Write", "NotebookEdit", "EnterWorktree", "ExitWorktree", "CronCreate", "CronDelete", "SendMessage", "TaskStop", "DesignSync", "mcp__t3-code"]
-# What the coordinator seat file denies on top of the four tools above: it changes no file and follows leads through the ledger, not the delegate_task task list (decision #6154).
+# What the coordinator seat file denies on top of the four tools above: it changes no file (decision #6154). It keeps task_status and task_cancel: its seat text tracks and stops its delegates with them.
 # AskUserQuestion is denied: playbook rule 8c5b8ab2 says the coordinator never uses the question tool (it blocks every inbox event); asks go through the ledger.
-COORDINATOR_DENY = ["AskUserQuestion", "Edit", "Write", "mcp__t3-code__task_cancel", "mcp__t3-code__task_status"]
+COORDINATOR_DENY = ["AskUserQuestion", "Edit", "Write"]
 # What the coordinator keeps of the tools its measured window never called.
-COORDINATOR_KEEPS = ["Agent", "Read", "Skill", "mcp__t3-code__request_secret"]
+COORDINATOR_KEEPS = ["Agent", "Read", "Skill", "mcp__t3-code__request_secret", "mcp__t3-code__task_status", "mcp__t3-code__task_cancel"]
 # Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on for the lead, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
