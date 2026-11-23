@@ -4,7 +4,11 @@
 #   pr-open --title T --body-file F [--base BRANCH] [--repo OWNER/REPO] [--head BRANCH] [--draft]
 #   pr-open --edit N --body-file F [--title T] [--repo OWNER/REPO]
 #
-# F is a file, or `-` for the body on stdin. Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
+# F is a file, or `-` for the body on stdin. Both forms first run `known-limits-check` on the body (limits under "## Known limits", each tracked or accepted as
+# permanent), before anything else and before anything is pushed, created or changed. A permanent item needs its decision id on the PR's agent record: on create
+# the PR has no number yet, so the check is told the record is pending (`--record-pending`); on edit it is given the record if `pr-record path` names a file
+# that exists, else pending. Each run of the check leaves one JSON line in ${XDG_STATE_HOME:-~/.local/state}/pr-open/log.jsonl. KNOWN_LIMITS_CHECK names another known-limits-check (the tests use it); the default is the one installed with the agent harness.
+# Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
 # `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
 # passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
 # the PR's state is read through `gh api`: a merged or closed PR is refused, so its description is never overwritten. An open PR is PATCHed through `gh api` (`gh pr edit` fails on the agent host).
@@ -69,6 +73,32 @@ if [ -z "$repo" ]; then
 fi
 case $repo in */*) ;; *) fail 2 "cannot read OWNER/REPO from '$repo'" ;; esac
 
+# One JSON line per limits check in ${XDG_STATE_HOME:-~/.local/state}/pr-open/log.jsonl (the way run-and-wake keeps its log), so "how many bodies were refused" has an
+# answer after the terminal is gone: when, create or edit, repo, PR (edit), the record mode, ok / refused / could-not-run. A log failure never changes the outcome.
+limits_log() { # limits_log exit-code record-flag
+  case $1 in 0) outcome=ok ;; 1) outcome=refused ;; *) outcome=could-not-run ;; esac
+  if [ -n "$edit" ]; then lmode=edit; else lmode=create; fi
+  case $2 in --record-pending) lrecord=pending ;; *) lrecord=given ;; esac
+  logdir=${XDG_STATE_HOME:-$HOME/.local/state}/pr-open
+  mkdir -p "$logdir" 2>/dev/null || return 0
+  printf '{"at":"%s","action":"known-limits-check","mode":"%s","repo":"%s","pr":"%s","record":"%s","outcome":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$lmode" "$(printf %s "$repo" | tr -d '"\\')" "$edit" "$lrecord" "$outcome" >> "$logdir/log.jsonl" 2>/dev/null || true
+}
+
+# known-limits-check runs first, on the same copy; its stderr says which line to fix. The record flag is the caller's.
+limits_check() { # limits_check what-was-not-done record-args...
+  what=$1; shift
+  klc=${KNOWN_LIMITS_CHECK:-$HOME/.local/share/agent-harness/bin/known-limits-check}
+  [ -x "$klc" ] || fail 2 "known-limits-check is not at $klc (it ships with the agent harness; set KNOWN_LIMITS_CHECK to use another)"
+  if "$klc" --body-file "$copy" "$@"; then code=0; else code=$?; fi
+  limits_log "$code" "$1"
+  [ "$code" != 0 ] || return 0
+  case $code in
+    1) fail 1 "the PR description was refused by known-limits-check (output above): put every limit under a '## Known limits' heading as list items, each ending 'Follow-up: <issue URL>' or 'accepted as permanent' (no decision id in the description; the id goes on the agent record's 'Permanent limits: #id' line); fix the body file and run pr-open again, $what" ;;
+    *) fail 2 "known-limits-check could not run (exit $code, output above)" ;;
+  esac
+}
+
 # The check's own output is the refusal message; pass its exit code through (1 a rule failed, 2 it could not run).
 check() {
   if "$@"; then return 0; else code=$?; fi
@@ -77,6 +107,9 @@ check() {
 }
 
 if [ -n "$edit" ]; then
+  record=
+  if command -v pr-record >/dev/null 2>&1; then record=$(pr-record path "$repo#$edit" 2>/dev/null) || record=; fi
+  if [ -n "$record" ] && [ -f "$record" ]; then limits_check "nothing was changed" --record "$record"; else limits_check "nothing was changed" --record-pending; fi
   check pr-body-check --body-file "$copy"   # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs
   pr_info=$(gh api "repos/$repo/pulls/$edit" --jq '.state + " " + (.merged | tostring)') || fail 2 "could not read the state of $repo#$edit. If you meant another repo, pass --repo OWNER/REPO."
   pr_state=${pr_info%% *}
@@ -103,6 +136,7 @@ if [ -z "$base" ]; then
 fi
 [ "$head" != "$base" ] || fail 2 "the branch '$head' is the base branch: check out a feature branch first"
 
+limits_check "nothing was created" --record-pending   # a PR that is not open has no number, so no record yet
 if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then
   check pr-body-check --body-file "$copy" --base "origin/$base"
 else

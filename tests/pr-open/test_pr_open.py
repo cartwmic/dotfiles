@@ -6,6 +6,7 @@ write their arguments to a log; the fake check refuses a body that holds the wor
     python3 -m unittest discover -s tests/pr-open -v
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_pr-open"
+LIMITS_CHECK = ROOT / "dot_local/share/agent-harness/bin/executable_known-limits-check"  # the real check, not a stand-in
 
 FAKE_GH = r'''#!/bin/sh
 printf 'gh' >> "$FAKE_LOG"; for a in "$@"; do printf ' [%s]' "$a" >> "$FAKE_LOG"; done; printf '\n' >> "$FAKE_LOG"
@@ -36,7 +38,7 @@ echo "pr-body-check: OK $body"
 '''
 
 FAKE_RECORD = r'''#!/bin/sh
-echo "/records/$2.md"
+echo "${FAKE_RECORD_DIR:-/records}/$2.md"
 '''
 
 
@@ -73,7 +75,8 @@ class PrOpen(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
 
     def run_open(self, *args, stdin=None, extra_env=None):
-        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted)}
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
+               "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
         env.update(extra_env or {})
         return subprocess.run(["sh", str(SCRIPT), *args], cwd=self.repo, env=env, input=stdin, capture_output=True, text=True, timeout=60)
 
@@ -100,9 +103,10 @@ class PrOpen(unittest.TestCase):
         result = self.run_open("--title", "A title", "--body-file", str(self.body))
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.splitlines()
-        self.assertTrue(lines[0].startswith("pr-body-check: OK"))  # the check's own pass line comes first
-        self.assertEqual(lines[1], "https://github.com/cartwmic/scratch/pull/42")
-        self.assertIn("/records/cartwmic/scratch#42.md", lines[2])  # where the agent record goes
+        self.assertTrue(lines[0].startswith("known-limits:"))  # the limits check runs first
+        self.assertTrue(lines[1].startswith("pr-body-check: OK"))  # then the body check's own pass line
+        self.assertEqual(lines[2], "https://github.com/cartwmic/scratch/pull/42")
+        self.assertIn("/records/cartwmic/scratch#42.md", lines[3])  # where the agent record goes
         self.assertIn("feature", self.remote_branches())
         calls = self.calls()
         self.assertTrue(calls[0].startswith("pr-body-check [--body-file] ["), calls)
@@ -237,11 +241,115 @@ class PrOpen(unittest.TestCase):
     def test_edit_works_outside_a_git_repo_with_repo_named(self):
         elsewhere = self.dir / "elsewhere"
         elsewhere.mkdir()
-        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted)}
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
+               "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
         result = subprocess.run(["sh", str(SCRIPT), "--edit", "7", "--repo", "cartwmic/other", "--body-file", str(self.body)],
                                 cwd=elsewhere, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("repos/cartwmic/other/pulls/7", self.patches()[0])
+
+    # -- known-limits-check runs on the body at create and at edit, before anything else ------------------------------------------------
+
+    LABELLED = "What changed.\n\nLimits: the font has no emoji.\n\nProven: ran it.\n"  # the past mistake: a limit outside "## Known limits"
+    PERMANENT = "What changed.\n\n## Known limits\n- The font has no emoji, accepted as permanent.\n\n## Proven\nran it.\n"
+
+    def test_a_limit_outside_the_section_is_refused_on_create_before_anything_runs(self):
+        self.body.write_text(self.LABELLED)
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"Limits" written as a label', result.stderr)  # the check's own line says which line to fix
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertIn("[pr-open] ERROR", last)
+        self.assertIn("'## Known limits'", last)
+        self.assertIn("nothing was created", last)
+        self.assertEqual(self.calls(), [])  # not even pr-body-check ran
+        self.assertNotIn("feature", self.remote_branches())
+
+    def test_a_limit_outside_the_section_is_refused_on_edit_before_the_pr_is_read(self):
+        self.body.write_text(self.LABELLED)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nothing was changed", result.stderr)
+        self.assertEqual(self.calls(), [])  # no pr-body-check, no state read, no PATCH
+
+    def test_the_phrase_outside_the_section_is_refused(self):
+        self.body.write_text("What changed.\n\nZero change on the runner (see Known limits).\n\n## Known limits\nNone\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"known limit" appears outside', result.stderr)
+
+    def test_a_decision_id_in_a_limit_is_refused(self):
+        self.body.write_text("What.\n\n## Known limits\n- A gap, accepted as permanent (decision #4).\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Permanent limits: #ID", result.stderr)
+
+    def test_a_permanent_limit_opens_the_pr_with_the_record_pending(self):
+        self.body.write_text(self.PERMANENT)
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record not checked (pending)", result.stdout)
+        self.assertEqual(self.posted.read_text(), self.PERMANENT)
+
+    def test_a_body_with_no_limits_section_passes_the_check(self):
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def record_dir(self, text):
+        records = self.dir / "records"
+        records.mkdir(exist_ok=True)
+        if text is not None:
+            (records / "cartwmic" ).mkdir(exist_ok=True)
+            (records / "cartwmic/scratch#7.md").write_text(text)
+        return {"FAKE_RECORD_DIR": str(records)}
+
+    def test_edit_reads_the_record_when_it_exists(self):
+        self.body.write_text(self.PERMANENT)
+        env = self.record_dir("Permanent limits: #5989\nDecisions: #5989\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("backed by the record", result.stdout)
+        self.assertEqual(len(self.patches()), 1)
+
+    def test_edit_refuses_a_record_that_lacks_the_permanent_line(self):
+        self.body.write_text(self.PERMANENT)
+        env = self.record_dir("Decisions: #5989\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env=env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('no "Permanent limits: #ID" line', result.stderr)
+        self.assertEqual(self.patches(), [])
+
+    def test_edit_with_no_record_file_yet_passes_with_it_pending(self):
+        self.body.write_text(self.PERMANENT)
+        env = self.record_dir(None)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record not checked (pending)", result.stdout)
+
+    def limits_log(self):
+        log = self.dir / ".local/state/pr-open/log.jsonl"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def test_every_limits_check_leaves_one_log_record(self):
+        self.body.write_text(self.LABELLED)
+        self.run_open("--title", "T", "--body-file", str(self.body))
+        self.body.write_text(self.PERMANENT)
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        records = self.limits_log()
+        self.assertEqual([(r["mode"], r["repo"], r["pr"], r["record"], r["outcome"]) for r in records],
+                         [("create", "cartwmic/scratch", "", "pending", "refused"), ("edit", "cartwmic/scratch", "7", "pending", "ok")])
+        self.assertTrue(all(r["action"] == "known-limits-check" and r["at"].endswith("Z") for r in records))
+
+    def test_an_unwritable_log_never_changes_the_outcome(self):
+        (self.dir / ".local").write_text("a file where the state directory would be\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_missing_known_limits_check_is_a_could_not_run_error(self):
+        result = self.run_open("--title", "T", "--body-file", str(self.body), extra_env={"KNOWN_LIMITS_CHECK": str(self.dir / "absent")})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("known-limits-check is not at", result.stderr)
+        self.assertEqual(self.calls(), [])
 
 
 if __name__ == "__main__":

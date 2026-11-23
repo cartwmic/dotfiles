@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """known-limits-check: every limit a PR body lists under "## Known limits" is tracked or accepted.
 
-usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD] [--no-lookup]
+usage: known-limits-check [--body-file FILE ...] [--record FILE | --record-pending] [--tracker-cmd CMD] [--no-lookup]
 
 A PR description that accepts a known limit on the condition that a follow-up ticket be filed loses the
 limit when nobody files it: nothing fails until a reviewer notices, rounds later. This check makes the
@@ -28,10 +28,21 @@ Judging is strict. Units, not physical lines: every list item at any depth is it
 counts only on the unit that carries it, with no inheritance: every leaf needs its own marker, and a
 parent with children passes without one only when its text ends in ":" (a group label). The markers are
 "Follow-up: KEY", "Tracked: KEY", "Tracked in KEY", a "/browse/KEY" link, a GitHub issue URL
-(https://.../issues/N), "accepted as permanent (decision #N)", or the alias "Permanent: decision N".
+(https://.../issues/N), or the plain words "accepted as permanent".
 The marker words match without case; the key does not, so "follow-up: x86-64" is not coverage. A bare
 key with no marker fails, with the one-word fix. "None" (or "None.") must be the only line in the
 section; next to listed limits it is an error.
+
+A limit accepted as permanent is written in plain words in the description, with no decision id: the
+description may not carry ledger ids (playbook 5a05bfe8, which pr-body-check enforces). The decision that
+accepts it goes in the PR's agent record, on one line "Permanent limits: #ID [#ID ...]", and each id
+must also be on the record's "Decisions:" line. One line covers every permanent item in the body, so
+one decision may accept several limits. The old in-body forms "accepted as permanent (decision #N)" and
+"Permanent: decision N" are refused, with the rewrite. The record is read only when the body has a
+permanent item. Then --record FILE must name an existing record with that line; with no --record the
+check fails rather than pass silently, and --record-pending says on purpose that the record cannot exist
+yet (pr-open does this when it opens a PR, before the PR has a number; the reviewer brief never does,
+except on a machine with no agent records).
 
 Tracker lookup: every marker-carrying reference is confirmed before the check passes, so a made-up
 ticket does not pass. A GitHub issue URL is looked up with "gh issue view <url> --json state"; the
@@ -63,8 +74,12 @@ KEY = re.compile(r"\b[A-Z][A-Z0-9]+-[0-9]+\b")  # case-sensitive: a key is upper
 MARKER = re.compile(r"\b(?i:follow-up|tracked)\s*(?::|(?i:in)\b)\s*([A-Z][A-Z0-9]+-[0-9]+)")
 BROWSE = re.compile(r"/browse/([A-Z][A-Z0-9]+-[0-9]+)")
 ISSUE = re.compile(r"https?://\S+/issues/\d+\b")
-PERMANENT = re.compile(r"accepted\s+as\s+permanent\s*\(\s*decision\s*#\s*\d+\s*\)", re.IGNORECASE)
-PERMANENT_ALIAS = re.compile(r"permanent\s*:\s*(?:decision\s*#?|#)\s*\d+", re.IGNORECASE)
+PERMANENT = re.compile(r"\baccepted\s+as\s+permanent\b", re.IGNORECASE)
+# a decision id in a limit item: the old marker forms, and any "decision N" (the description carries no ledger ids)
+DECISION_IN_BODY = re.compile(r"\bdecisions?\s*#?\s*\d+|\baccepted\s+as\s+permanent\s*\(\s*decision\b|\bpermanent\s*:\s*#\s*\d+", re.IGNORECASE)
+RECORD_PERMANENT = re.compile(r"^[ \t>*_-]*(?:\*\*)?permanent limits(?:\*\*)?[ \t]*:(?:\*\*)?(.*)$", re.IGNORECASE | re.MULTILINE)
+RECORD_DECISIONS = re.compile(r"^[ \t>*_-]*(?:\*\*)?decisions(?:\*\*)?[ \t]*:(?:\*\*)?(.*)$", re.IGNORECASE | re.MULTILINE)
+RECORD_ID = re.compile(r"#(\d+)\b")
 TRUNC = 60
 
 # -- the finder ----------------------------------------------------------------------------
@@ -449,10 +464,17 @@ def judge_unit(u, name, failures, marked_keys, counts):
     for c in u["children"]:
         judge_unit(c, name, failures, marked_keys, counts)
     text = " ".join(u["parts"])
+    if DECISION_IN_BODY.search(text):
+        failures.append((u["first"], 'a decision id is written in the description: "%s". The description carries no ledger ids. '
+                         'Write "accepted as permanent" with no id here, and put the id on the PR\'s agent record, on a line '
+                         '"Permanent limits: #ID".' % trunc(text)))
+        return
     keys = marker_keys(text)
-    if keys or PERMANENT.search(text) or PERMANENT_ALIAS.search(text):
+    if keys or PERMANENT.search(text):
         marked_keys.update(keys)
         counts[0] += 1
+        if PERMANENT.search(text):
+            counts[1] += 1
         return
     if u["children"] and text.rstrip().endswith(":"):
         return  # a group label: its children carry the limits
@@ -463,7 +485,7 @@ def judge_unit(u, name, failures, marked_keys, counts):
         return
     hint = " If this starts a new section, give it a heading or a label." if u["kind"] == "para" else ""
     failures.append((u["first"], 'limit has no follow-up: "%s". Add "Follow-up: PROJ-123" or '
-                                 '"accepted as permanent (decision #N)" to this item.%s' % (trunc(text), hint)))
+                                 '"accepted as permanent" (the decision id goes on the PR\'s agent record, not here) to this item.%s' % (trunc(text), hint)))
 
 # -- composition: finder, then judge, then lookup -------------------------------------------
 
@@ -479,26 +501,26 @@ def structural_check(text):
 
 def check_body(text, name):
     """Run the finder; when it reports no structural error, run the judge on the section.
-    Returns (failure count, marked references, limits, sections found)."""
+    Returns (failure count, marked references, limits, sections found, permanent items)."""
     errors, section = structural_check(text)
     if errors:
         for no, msg in sorted(errors):
             print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
-        return len(errors), set(), 0, 0
+        return len(errors), set(), 0, 0, 0
     if section is None:
         print("known-limits: no Known limits section")
-        return 0, set(), 0, 0
+        return 0, set(), 0, 0, 0
     if section["none"] is not None:
-        return 0, set(), 0, 1
+        return 0, set(), 0, 1, 0
     units, _ = parse_units(section["content"])
     failures = []
     marked = set()
-    counts = [0]
+    counts = [0, 0]  # covered units, permanent units
     for u in units:
         judge_unit(u, name, failures, marked, counts)
     for no, msg in failures:
         print("known-limits-check: %s: line %d: %s" % (name, no, msg), file=sys.stderr)
-    return len(failures), marked, counts[0], 1
+    return len(failures), marked, counts[0], 1, counts[1]
 
 
 # -- the tracker lookup ---------------------------------------------------------------------
@@ -555,9 +577,31 @@ def confirm_refs(refs, tracker, lookup):
     return bad
 
 
+def record_unconfirmed(path):
+    """The reason the agent record does not back the body's permanent limits, or None when it does.
+    One "Permanent limits: #ID ..." line, and every id on it is also on a "Decisions:" line."""
+    try:
+        text = open(path, encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError) as e:
+        return ("the agent record %s cannot be read (%s); write it (pr-record path REPO#N prints where) "
+                'with a line "Permanent limits: #ID"' % (path, e))
+    lines = RECORD_PERMANENT.findall(text)
+    ids = [i for line in lines for i in RECORD_ID.findall(line)]
+    if not ids:
+        return ('the agent record %s has no "Permanent limits: #ID" line, but the description has an item '
+                'accepted as permanent. Add the line with the id of the decision that accepts it' % path)
+    decided = {i for line in RECORD_DECISIONS.findall(text) for i in RECORD_ID.findall(line)}
+    missing = sorted(set(ids) - decided, key=int)
+    if missing:
+        return ('the agent record %s names #%s on its "Permanent limits:" line but not on its "Decisions:" line; '
+                "add it there" % (path, ", #".join(missing)))
+    return None
+
+
 def usage(why):
     print("known-limits-check: %s" % why, file=sys.stderr)
-    print("usage: known-limits-check [--body-file FILE ...] [--tracker-cmd CMD] [--no-lookup]", file=sys.stderr)
+    print("usage: known-limits-check [--body-file FILE ...] [--record FILE | --record-pending] [--tracker-cmd CMD] [--no-lookup]",
+          file=sys.stderr)
     raise SystemExit(2)
 
 
@@ -565,6 +609,8 @@ def main(argv):
     bodies = []
     tracker = None
     lookup = True
+    record = None
+    pending = False
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -582,11 +628,21 @@ def main(argv):
             tracker = shlex.split(a.split("=", 1)[1])
         elif a == "--no-lookup":
             lookup = False
+        elif a == "--record":
+            if not args:
+                usage("--record needs a file")
+            record = args.pop(0)
+        elif a.startswith("--record="):
+            record = a.split("=", 1)[1]
+        elif a == "--record-pending":
+            pending = True
         elif a in ("-h", "--help"):
             print(__doc__.strip())
             return 0
         else:
             usage("unknown argument %r" % a)
+    if record is not None and pending:
+        usage("--record and --record-pending cannot be used together")
     if tracker is None:
         env = os.environ.get("KNOWN_LIMITS_TRACKER_CMD", "").strip()
         if env:
@@ -598,6 +654,7 @@ def main(argv):
     marked_keys = set()
     limits = 0
     sections = 0
+    permanent = 0
     for body in bodies:
         try:
             raw = sys.stdin.buffer.read() if body == "-" else open(body, "rb").read()
@@ -609,8 +666,9 @@ def main(argv):
             print("known-limits-check: %s: body is not UTF-8; cannot read it" % body, file=sys.stderr)
             bad += 1
             continue
-        body_bad, body_keys, body_limits, body_sections = check_body(text, body)
+        body_bad, body_keys, body_limits, body_sections, body_permanent = check_body(text, body)
         bad += body_bad
+        permanent += body_permanent
         marked_keys.update(body_keys)
         limits += body_limits
         sections += body_sections
@@ -623,19 +681,36 @@ def main(argv):
         print("  the ticket or issue must exist, or the limit needs a different follow-up; "
               "--no-lookup skips lookups only when a caller passes it on purpose", file=sys.stderr)
 
+    record_note = ""
+    if permanent:
+        if record is not None:
+            reason = record_unconfirmed(record)
+            if reason:
+                bad += 1
+                print("known-limits-check: %s" % reason, file=sys.stderr)
+            else:
+                record_note = ", permanent limits backed by the record"
+        elif pending:
+            record_note = ", permanent limits: record not checked (pending)"
+        else:
+            bad += 1
+            print("known-limits-check: %d item(s) are accepted as permanent, so the PR's agent record must name the decision, "
+                  "but no record was given. Pass --record FILE (pr-record path REPO#N prints it), or --record-pending when "
+                  "the record cannot exist yet (a PR that is not open)." % permanent, file=sys.stderr)
+
     if bad:
         print("known-limits-check: FAIL: %d problem(s)" % bad, file=sys.stderr)
         print("How to write known limits:", file=sys.stderr)
         print("  ## Known limits", file=sys.stderr)
         print("  - <limit> Follow-up: PROJ-123", file=sys.stderr)
-        print("  - <limit>, accepted as permanent (decision #4)", file=sys.stderr)
+        print("  - <limit>, accepted as permanent        (and in the agent record: Permanent limits: #4)", file=sys.stderr)
         print('  The section ends at the next # or ## heading, a "---" line, or the Decisions trailer.',
               file=sys.stderr)
         print("  No limits: the single line None", file=sys.stderr)
         return 1
     if sections == 0:
         return 0
-    suffix = ", lookups off" if not lookup else (", references confirmed" if marked_keys else "")
+    suffix = (", lookups off" if not lookup else (", references confirmed" if marked_keys else "")) + record_note
     print("known-limits-check: OK (%d limit(s) in %d section(s), all covered%s)"
           % (limits, sections, suffix))
     return 0
