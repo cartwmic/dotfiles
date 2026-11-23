@@ -62,6 +62,11 @@ that is private answers 404 to no token: that is an unreadable state (exit 1), n
   the merge result; the squash merge into a main that moved is the merger's to check (Gitea's `head_commit_id` pin does that).
   Plain status and --tip read main's tip the same way: GREEN on a pass (--tip: tip <sha>), RED on a fail, UNTESTED (exit 2)
   with no evidence.
+  Every budget-steward call (merge gate, --tip, plain status; a pass, a refusal or an error) appends one JSON line to
+  ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/gitea.jsonl (CI_MAIN_STATUS_GITEA_LOG overrides it): ts (UTC), duration_ms,
+  action (merge-gate, tip, status), repo, pr, sha, tree, verdict (GREEN, RED, UNTESTED, ERROR), exit (the gate's own code),
+  evidence ({"gitea_status": state or null, "kgate_job": id or null}) and detail (the verdict line, token scrubbed). The token is never
+  written. The GitHub paths leave their record through the gh wrapper; this path makes no gh call, so it writes its own.
 
 Every table repo's full name (the "github" field of its row: cartwmic/dotfiles, cartwmic/coordinator, StoryCraftTW/storycraft, ...,
 matched without regard to case) is its table entry: it gets the same verdict as the short name, including --merge-gate, --pr,
@@ -150,6 +155,7 @@ or once every commit with a verdict has been reached. WALK_CAP is a backstop. Co
 never changes); run list and branches/main are always read fresh.
 Every gh call carries GH_CALLER=ci-main-status. --merge-gate and --tip also set GH_URGENT=1; plain and --all add nothing.
 """
+import datetime
 import itertools
 import json
 import os
@@ -157,6 +163,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -988,8 +995,18 @@ def gitea_api():
     return (os.environ.get("CI_MAIN_STATUS_GITEA_API") or GITEA_API_DEFAULT).rstrip("/")
 
 
+_TOKEN = []   # the token, fetched once per run: a credential helper that prompts must prompt once, not once per Gitea read
+
+
 def gitea_token():
-    """The Gitea token: CI_MAIN_STATUS_GITEA_TOKEN, else the git credential for the Gitea host. None when there is none. Never printed."""
+    """The Gitea token: CI_MAIN_STATUS_GITEA_TOKEN, else the git credential for the Gitea host. None when there is none. Never printed.
+    Fetched once per run."""
+    if not _TOKEN:
+        _TOKEN.append(fetch_gitea_token())
+    return _TOKEN[0]
+
+
+def fetch_gitea_token():
     token = os.environ.get("CI_MAIN_STATUS_GITEA_TOKEN")
     if token:
         return token
@@ -1073,20 +1090,24 @@ def gitea_tree(repo, sha):
     return tree
 
 
-def gitea_evidence(name, spec, sha):
-    """(verdict, what it rests on) for commit `sha`: "pass", "fail" or None (no evidence). The worse source wins."""
+def gitea_evidence(name, spec, sha, rec):
+    """(verdict, what it rests on) for commit `sha`: "pass", "fail" or None (no evidence). The worse source wins. `rec` is the
+    run's log record: the sha, the tree and the evidence read go into it as they are found, so an error halfway still logs what it had."""
     repo = spec["gitea"]
-    tree = gitea_tree(repo, sha)
+    rec["sha"] = sha
+    tree = rec["tree"] = gitea_tree(repo, sha)
     status = gitea_get(f"/repos/{repo}/commits/{sha}/status")
     if not isinstance(status, dict) or not isinstance(status.get("total_count"), int):
         raise Unreadable(f"Gitea commit status of {sha[:7]} is malformed; failing closed")
     found = []   # (verdict, label)
+    rec["evidence"] = {"gitea_status": status.get("state") if status["total_count"] > 0 else None, "kgate_job": None}
     if status["total_count"] > 0 and status.get("state") == "success":
         found.append(("pass", "Gitea commit status success"))
     elif status["total_count"] > 0 and status.get("state") in ("failure", "error"):
         found.append(("fail", f"Gitea commit status {status['state']}"))
     kg = kgate_verdict(spec["kgate"], tree)
     if kg:
+        rec["evidence"]["kgate_job"] = kg[1]
         found.append((kg[0], f"kgate {kg[1]} exit {'0' if kg[0] == 'pass' else 'not 0'} on tree {tree[:7]}"))
     for verdict in ("fail", "pass"):
         hit = [label for v, label in found if v == verdict]
@@ -1095,19 +1116,20 @@ def gitea_evidence(name, spec, sha):
     return None, ""
 
 
-def gitea_pr_gate(name, spec, pr):
+def gitea_pr_gate(name, spec, pr, rec):
     repo = spec["gitea"]
     pull = gitea_get(f"/repos/{repo}/pulls/{pr}")
     head = pull.get("head", {}).get("sha") if isinstance(pull, dict) and isinstance(pull.get("head"), dict) else None
     base = pull.get("base", {}).get("ref") if isinstance(pull, dict) and isinstance(pull.get("base"), dict) else None
     if not isinstance(head, str) or not SHA40.match(head) or not isinstance(base, str):
         raise Unreadable(f"Gitea PR #{pr} has no readable head and base; failing closed")
+    rec["sha"] = head
     where = f"{repo} PR #{pr} head {head[:7]}"
     if pull.get("state") != "open":
         return 1, [f"{name}: RED  {where} is not open (state {pull.get('state')!r})"]
     if base != "main":
         return 1, [f"{name}: RED  {where} is aimed at {base}, not main"]
-    verdict, what = gitea_evidence(name, spec, head)
+    verdict, what = gitea_evidence(name, spec, head, rec)
     if verdict == "pass":
         return 0, [f"{name}: GREEN  {where}: {what}"]
     if verdict == "fail":
@@ -1116,17 +1138,17 @@ def gitea_pr_gate(name, spec, pr):
                 f"on this exact tree and exited 0 (run `kgate -- sh -c 'npm ci && npm run typecheck && npm test'` in the PR's checkout)."]
 
 
-def gitea_check(name, spec, tip_only, pr, gate):
+def gitea_check(name, spec, tip_only, pr, gate, rec):
     if gate:
         if not pr:
             return 1, [f"{name}: ERROR  its merge gate is a PR's kgate or Gitea status evidence, and it cannot tell which PR is merging. "
                        f"Pass --pr N: ci-main-status --merge-gate {name} --pr N"]
-        return gitea_pr_gate(name, spec, pr)
+        return gitea_pr_gate(name, spec, pr, rec)
     branch = gitea_get(f"/repos/{spec['gitea']}/branches/main")
     tip = branch.get("commit", {}).get("id") if isinstance(branch, dict) and isinstance(branch.get("commit"), dict) else None
     if not isinstance(tip, str) or not SHA40.match(tip):
         raise Unreadable("Gitea branches/main has no readable commit id; failing closed")
-    verdict, what = gitea_evidence(name, spec, tip)
+    verdict, what = gitea_evidence(name, spec, tip, rec)
     if verdict == "pass":
         return 0, [f"{name}: GREEN  {what} on {tip[:7]}; main tip is tested" + (f"; tip {tip}" if tip_only else "")]
     if verdict == "fail":
@@ -1135,14 +1157,14 @@ def gitea_check(name, spec, tip_only, pr, gate):
                f"Its merge gate is ci-main-status --merge-gate {name} --pr N."]
 
 
-def check(name, tip_only=False, pr=None, gate=False):
+def check(name, tip_only=False, pr=None, gate=False, rec=None):
     spec = REPOS[name]
     if spec is None:
         return 0, [f"{name}: n/a (gate is per-PR only)"]
     if spec.get("no_ci"):
         return no_ci(name, spec, tip_only, pr, gate)
     if "gitea" in spec:
-        return gitea_check(name, spec, tip_only, pr, gate)
+        return gitea_check(name, spec, tip_only, pr, gate, rec if rec is not None else {})
     if "journal" in spec:
         verdicts, going = journal_verdicts()
     else:
@@ -1154,15 +1176,51 @@ def check(name, tip_only=False, pr=None, gate=False):
     return code, lines
 
 
+def gitea_log_path():
+    return Path(os.environ.get("CI_MAIN_STATUS_GITEA_LOG")
+                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ci-main-status/gitea.jsonl")
+
+
+GITEA_VERDICT = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
+
+
+def log_gitea(name, spec, action, pr, started, code, lines, rec):
+    """One JSON line per budget-steward call, kept after the terminal is gone: UTC time, duration, action (merge-gate, tip or status),
+    repo, PR, sha, tree, verdict, exit code and the evidence it used (Gitea status state and kgate job id, or none). `exit` is the
+    gate's own code; the token is never in it. A log that cannot be written is a stderr note and never changes the verdict."""
+    out = "\n".join(lines)
+    token = _TOKEN[0] if _TOKEN else None
+    if token:
+        out = out.replace(token, "<token>")
+    m = GITEA_VERDICT.match(lines[0]) if lines else None
+    row = {"ts": datetime.datetime.fromtimestamp(started, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "duration_ms": round((time.time() - started) * 1000), "action": action, "repo": spec["gitea"], "pr": pr or None,
+           "sha": rec.get("sha"), "tree": rec.get("tree"), "verdict": m.group(1) if m else "ERROR", "exit": code,
+           "evidence": rec.get("evidence"), "detail": out.splitlines()[0][:300] if out else ""}
+    try:
+        path = gitea_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"ci-main-status: could not write {gitea_log_path()}: {e}", file=sys.stderr)
+
+
 def describe(name, tip_only=False, pr=None, gate=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
+    spec = REPOS[name]
+    rec = {}
+    started = time.time()
     try:
-        return check(name, tip_only, pr, gate)
+        code, lines = check(name, tip_only, pr, gate, rec)
     except Unreadable as e:
-        return 1, [f"{name}: ERROR  cannot read state: {e}"]
+        code, lines = 1, [f"{name}: ERROR  cannot read state: {e}"]
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
         traceback.print_exc(file=sys.stderr)
-        return 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
+        code, lines = 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
+    if spec and "gitea" in spec:
+        log_gitea(name, spec, "merge-gate" if gate else "tip" if tip_only else "status", pr if gate else None, started, code, lines, rec)
+    return code, lines
 
 
 def main(argv):

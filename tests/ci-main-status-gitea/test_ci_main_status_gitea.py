@@ -85,7 +85,9 @@ class GiteaGate(unittest.TestCase):
         self.env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
                     "CI_MAIN_STATUS_GITEA_API": f"http://127.0.0.1:{self.server.server_port}/api/v1",
                     "CI_MAIN_STATUS_GITEA_GIT": "file://" + str(self.src),
-                    "CI_MAIN_STATUS_GITEA_TOKEN": TOKEN, "CI_MAIN_STATUS_KGATE_LOG": str(self.kgate_log)}
+                    "CI_MAIN_STATUS_GITEA_TOKEN": TOKEN, "CI_MAIN_STATUS_KGATE_LOG": str(self.kgate_log),
+                    "CI_MAIN_STATUS_GITEA_LOG": str(t / "gitea.jsonl")}
+        self.gitea_log = t / "gitea.jsonl"
 
     def tearDown(self):
         self.server.shutdown()
@@ -100,7 +102,12 @@ class GiteaGate(unittest.TestCase):
         r = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=self.env, timeout=120)
         out = r.stdout + r.stderr
         self.assertNotIn(TOKEN, out)   # the token is never printed
+        if self.gitea_log.exists():
+            self.assertNotIn(TOKEN, self.gitea_log.read_text())   # nor logged
         return r.returncode, out
+
+    def logged(self):
+        return [json.loads(line) for line in self.gitea_log.read_text().splitlines()] if self.gitea_log.exists() else []
 
     # ---- the PR gate
     def test_a_full_suite_kgate_pass_on_the_head_tree_passes_the_gate(self):
@@ -273,13 +280,83 @@ class GiteaGate(unittest.TestCase):
 
     # ---- the table
     def test_all_leaves_it_out_so_an_unreachable_gitea_cannot_fail_it(self):
-        import importlib.machinery
-        import importlib.util
-        loader = importlib.machinery.SourceFileLoader("cms", str(SCRIPT))
-        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("cms", loader))
-        loader.exec_module(mod)
-        self.assertIn("budget-steward", mod.REPOS)
-        self.assertNotIn("budget-steward", mod.ORDER)
+        fake = Path(self.tmp.name) / "bin"
+        fake.mkdir()
+        (fake / "gh").write_text("#!/bin/sh\necho 'fake gh: no network' >&2\nexit 1\n")
+        (fake / "gh").chmod(0o755)
+        self.env["PATH"] = f"{fake}{os.pathsep}{self.env['PATH']}"
+        self.env["CI_MAIN_STATUS_GITEA_API"] = "http://127.0.0.1:1/api/v1"   # nothing listens: reading it would be an ERROR
+        rc, out = self.status("--all")
+        self.assertNotIn("budget-steward", out)
+        self.assertEqual(self.server.calls, [])
+        self.assertEqual(self.logged(), [])   # --all never ran the Gitea gate
+
+    # ---- the log: one structured line per call, never the token
+    def test_a_pass_writes_one_line_with_its_evidence(self):
+        self.record(self.head_tree)
+        self.assertEqual(self.status("--merge-gate", "budget-steward", "--pr", "7")[0], 0)
+        (row,) = self.logged()
+        self.assertEqual((row["action"], row["repo"], row["pr"], row["sha"], row["tree"], row["verdict"], row["exit"]),
+                         ("merge-gate", "cartwmic/budget-steward", 7, self.head, self.head_tree, "GREEN", 0))
+        self.assertEqual(row["evidence"], {"gitea_status": None, "kgate_job": "kgate-1"})
+        self.assertRegex(row["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(row["duration_ms"], int)
+
+    def test_a_gitea_status_is_the_evidence_it_names(self):
+        self.server.state["status"][self.head] = {"state": "success", "total_count": 1}
+        self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(self.logged()[0]["evidence"], {"gitea_status": "success", "kgate_job": None})
+
+    def test_a_refusal_writes_a_red_line(self):
+        rc, _ = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        (row,) = self.logged()
+        self.assertEqual((rc, row["verdict"], row["exit"], row["sha"]), (1, "RED", 1, self.head))
+        self.assertEqual(row["evidence"], {"gitea_status": None, "kgate_job": None})
+
+    def test_a_closed_pr_logs_its_head_and_no_evidence(self):
+        self.server.state["pulls"]["7"]["state"] = "closed"
+        self.status("--merge-gate", "budget-steward", "--pr", "7")
+        (row,) = self.logged()
+        self.assertEqual((row["verdict"], row["sha"], row["tree"], row["evidence"]), ("RED", self.head, None, None))
+
+    def test_an_error_writes_a_line_and_not_the_token(self):
+        self.env["CI_MAIN_STATUS_GITEA_API"] = "http://127.0.0.1:1/api/v1"
+        rc, _ = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        (row,) = self.logged()
+        self.assertEqual((rc, row["verdict"], row["exit"], row["pr"], row["sha"]), (1, "ERROR", 1, 7, None))
+        self.assertIn("Gitea GET", row["detail"])
+
+    def test_no_pr_number_logs_an_error(self):
+        self.status("--merge-gate", "budget-steward")
+        (row,) = self.logged()
+        self.assertEqual((row["verdict"], row["exit"], row["pr"], row["action"]), ("ERROR", 1, None, "merge-gate"))
+
+    def test_status_and_tip_log_their_action(self):
+        self.record(self.tip_tree)
+        self.status("budget-steward")
+        self.status("--tip", "budget-steward")
+        self.assertEqual([(r["action"], r["verdict"], r["exit"], r["sha"]) for r in self.logged()],
+                         [("status", "GREEN", 0, self.tip), ("tip", "GREEN", 0, self.tip)])
+        self.records.clear()
+        self.assertEqual(self.status("budget-steward")[0], 2)
+        self.assertEqual(self.logged()[-1]["verdict"], "UNTESTED")
+        self.assertEqual(self.logged()[-1]["exit"], 2)
+
+    def test_the_token_is_never_in_the_log_even_from_a_git_credential(self):
+        counter = Path(self.tmp.name) / "fills"
+        helper = Path(self.tmp.name) / "helper.sh"
+        helper.write_text(f"#!/bin/sh\necho x >> {counter}\necho username=u\necho password={TOKEN}\n")
+        helper.chmod(0o755)
+        cfg = Path(self.tmp.name) / "gitconfig"
+        cfg.write_text(f"[credential]\n\thelper = {helper}\n")
+        self.env["GIT_CONFIG_GLOBAL"] = str(cfg)
+        del self.env["CI_MAIN_STATUS_GITEA_TOKEN"]
+        self.record(self.head_tree)
+        self.assertEqual(self.status("--merge-gate", "budget-steward", "--pr", "7")[0], 0)
+        self.assertEqual(len(self.logged()), 1)
+        self.assertNotIn(TOKEN, self.gitea_log.read_text())
+        self.assertEqual(len(counter.read_text().splitlines()), 1)   # the credential is filled once per run, not once per Gitea call
+        self.assertGreater(len(self.server.calls), 1)
 
     def test_the_usage_line_names_it(self):
         rc, out = self.status("--merge-gate")
