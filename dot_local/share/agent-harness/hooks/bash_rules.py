@@ -139,13 +139,17 @@ PR_OPEN = {  # the one-command form of PR_BODY, by verb: pr-open checks the body
     "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host)",
 }
 PR_API_BODY = (
-    "`gh api` that sets a pull request body (POST or PATCH on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `body` field or `--input`) is refused in agent sessions: "
+    "`gh api` that sets a pull request body (POST, PATCH or PUT on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `body` field or `--input`) is refused in agent sessions: "
     "it skips the body check that `gh pr create|edit` gets, so agent bookkeeping in the description is found only when `gh pr merge` runs. "
     "Shortest path: %s or %s."
 )
-PR_API_ENDPOINT = re.compile(r"(?:https://[^/]+/(?:api/v3/)?|/)?repos/[^/]+/[^/]+/pulls(?:/\d+)?/?(?:\?.*)?")
+PR_API_ISSUE_BODY = (
+    "`gh api` PATCH on `repos/<owner>/<repo>/issues/<n>` with a `body` field or `--input` is refused in agent sessions: a pull request is an issue too, so this can set a pull request body "
+    "and skip the body check, and the hook cannot tell a PR number from an issue number without a lookup. For a PR: %s. For an issue: `gh issue edit N --body-file F`."
+)
+PR_API_ENDPOINT = re.compile(r"(?:https://[^/]+/(?:api/v3/)?|/)?(?P<path>repos/[^/]+/[^/]+/(?P<kind>pulls|issues)(?:/\d+)?/?)(?:\?.*)?")
 PR_API_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field")
-PR_API_VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-q", "--jq", "-t", "--template", "--cache", "--hostname", "-p", "--preview")
+PR_API_VALUE_FLAGS = ("-H", "--header", "-q", "--jq", "-t", "--template", "--cache", "--hostname", "-p", "--preview")
 PR_BODY_VERBS = ("create", "new", "edit")  # `gh pr new` is an alias of `gh pr create`
 PR_BODY_FILE = (
     "The body file %s is refused in agent sessions: %s. Make the body file with `F=$(mktemp /tmp/pr-%s-body.XXXXXX)` in the same command "
@@ -550,24 +554,33 @@ def _body_file_problem(body_file, verb, number, mktemps):
 
 
 def _api_sets_pr_body(args):
-    """True when `gh api ARGS` is a POST/PATCH/PUT on a pulls endpoint that sets a `body` field (or sends `--input`, whose JSON the hook cannot see)."""
+    """The record of a `gh api ARGS` call that sets a PR body, else None: a POST/PATCH/PUT on a pulls endpoint (or a PATCH on `issues/<n>`, which can set a PR body)
+    with a `body` field or `--input` (whose JSON the hook cannot see). Attached values (`-fbody=x`, `-f=body=x`, `-XPATCH`) are read the way gh reads them.
+    The record is {method, endpoint, reason, command}; `command` is rebuilt from the parsed parts with every field value redacted, so it never holds a body or a token."""
     words = [w for w in args if w != "--"]
     api = next((i for i, w in enumerate(words) if not w.startswith("-")), None)
     if api is None or words[api] != "api":
-        return False
+        return None
     rest = words[api + 1:]
-    endpoint, fields, method, has_input, i = None, [], None, False, 0
+    endpoint, fields, method, input_file, i = None, [], None, None, 0
     while i < len(rest):
         word, nxt = rest[i], rest[i + 1] if i + 1 < len(rest) else ""
         flag, eq, value = word.partition("=")
+        short = word[:2] if len(word) > 2 and word[1] != "-" else None  # -fbody=x, -f=body=x, -XPATCH: the value is attached
         if word in PR_API_FIELD_FLAGS or (eq and flag in PR_API_FIELD_FLAGS and word.startswith("--")):
-            fields.append(value if eq else nxt)
+            fields.append((flag, value if eq else nxt))
             i += 1 if eq else 2
-        elif flag in ("-X", "--method") and (eq or word in ("-X", "--method")):
+        elif short in PR_API_FIELD_FLAGS:
+            fields.append((short, word[2:].removeprefix("=")))
+            i += 1
+        elif word in ("-X", "--method") or (eq and flag == "--method"):
             method = (value if eq else nxt).upper()
             i += 1 if eq else 2
+        elif short == "-X":
+            method = word[2:].removeprefix("=").upper()
+            i += 1
         elif flag == "--input" and (eq or word == "--input"):
-            has_input = True
+            input_file = value if eq else nxt
             i += 1 if eq else 2
         elif word in PR_API_VALUE_FLAGS:
             i += 2
@@ -576,11 +589,19 @@ def _api_sets_pr_body(args):
         else:
             endpoint = endpoint or word
             i += 1
-    if endpoint is None or not PR_API_ENDPOINT.fullmatch(endpoint):
-        return False
-    method = method or ("POST" if fields or has_input else "GET")
-    sets_body = has_input or any(f.partition("=")[0] == "body" for f in fields)
-    return method in ("POST", "PATCH", "PUT") and sets_body
+    found = PR_API_ENDPOINT.fullmatch(endpoint) if endpoint else None
+    if not found:
+        return None
+    has_body = input_file is not None or any(f.partition("=")[0] == "body" for _, f in fields)
+    method = method or ("POST" if fields or input_file is not None else "GET")
+    pulls = found.group("kind") == "pulls"
+    if not has_body or not (method in ("POST", "PATCH", "PUT") if pulls else method == "PATCH" and re.search(r"/\d+/?$", found.group("path"))):
+        return None
+    shown = ["gh", "api", "-X", method, found.group("path")] + [x for flag, f in fields for x in (flag, f.partition("=")[0] + "=<redacted>")]
+    if input_file is not None:
+        shown += ["--input", input_file]
+    reason = "%s on the %s endpoint sets a body (%s)" % (method, found.group("kind"), "--input" if input_file is not None else "a body field")
+    return {"method": method, "endpoint": found.group("path"), "reason": reason, "command": " ".join(shown), "kind": found.group("kind")}
 
 
 def pr_body_rule(walk, ctx):
@@ -588,8 +609,13 @@ def pr_body_rule(walk, ctx):
         return None
     for cmd in walk.cmds:
         args = cmd.words[1:]
-        if _base(cmd.words[0]) == "gh" and _api_sets_pr_body(args):
-            return PR_API_BODY % (PR_OPEN["create"], PR_OPEN["edit"])
+        api_body = _base(cmd.words[0]) == "gh" and _api_sets_pr_body(args)
+        if api_body:
+            template = PR_API_BODY if api_body["kind"] == "pulls" else PR_API_ISSUE_BODY
+            message = Matched(template % ((PR_OPEN["create"], PR_OPEN["edit"]) if api_body["kind"] == "pulls" else (PR_OPEN["edit"],)),
+                              "%s %s" % (api_body["method"], api_body["endpoint"]))
+            message.log = {"reason": api_body["reason"], "command": api_body["command"]}
+            return message
         verb = next((b for a, b in zip(args, args[1:]) if a == "pr" and b in PR_BODY_VERBS), None)
         if _base(cmd.words[0]) != "gh" or verb is None:
             continue
