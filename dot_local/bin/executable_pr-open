@@ -18,7 +18,7 @@
 # {utc, mode (create|edit|""), repo, pr (number or null), outcome (created, edited, refused: a body check or one of the guards above said no, failed: anything else), exit, reason (the last stderr line's
 # message, "" on success), duration_s}. A log that cannot be written never changes the exit code. --help writes none.
 # Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments, a merged or closed PR, or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
-# Personal profile only: it needs pr-body-check (docs/profiles.md).
+# Both desktop profiles, as pr-body-check is (docs/gate-coverage.md).
 set -eu
 
 repo= base= head= title= body_file= edit= draft=0
@@ -98,7 +98,7 @@ if [ "$body_file" = - ]; then cat > "$copy"; else cat < "$body_file" > "$copy"; 
 [ -s "$copy" ] || fail 2 "the body is empty"
 
 command -v gh >/dev/null 2>&1 || fail 2 "gh is not on PATH"
-command -v pr-body-check >/dev/null 2>&1 || fail 2 "pr-body-check is not on PATH (it ships with the coordinator checkout; personal profile only)"
+command -v pr-body-check >/dev/null 2>&1 || fail 2 "pr-body-check is not on PATH (it ships with the coordinator checkout, on both desktop profiles)"
 export GH_CALLER=pr-open
 
 if [ -z "$repo" ]; then

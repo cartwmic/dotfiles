@@ -25,11 +25,11 @@ KUBE = {"/kc/homelab": "current-context: %s\n" % HOMELAB, "/kc/other": "apiVersi
         "/kc/none": "apiVersion: v1\ncontexts: []\n"}
 
 
-def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False):
+def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False, coordinator_repo=None):
     files = KUBE if files is None else files
     origins = origins or {}
     return bash_rules.Context(tool=tool, profile=profile, env=env or {}, cwd=cwd, read_file=files.get,
-                              origin_of=lambda directory: origins.get(directory), container=container)
+                              origin_of=lambda directory: origins.get(directory), container=container, coordinator_repo=coordinator_repo)
 
 
 def check(text, platform="linux", **kw):
@@ -368,8 +368,10 @@ class Merge(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
 
-    def test_the_work_profile_and_no_profile_do_not_run_it(self):
-        for profile in ("axon-work-computer", None):
+    def test_the_work_profile_runs_it_and_no_profile_or_termux_does_not(self):
+        self.assertIsNotNone(check("gh pr merge 12", profile="axon-work-computer"))
+        self.assertIsNone(check("ci-main-status --merge-gate acme/app && pr-body-check acme/app 12 && gh pr merge 12 -R acme/app", profile="axon-work-computer"))
+        for profile in ("termux", None):
             self.assertIsNone(check("gh pr merge 12", profile=profile))
 
 
@@ -439,11 +441,11 @@ class PrBody(unittest.TestCase):
         self.assertIn("pr-body-check --body-file F", check("gh pr create -R cartwmic/coordinator --body-file %s" % c))
         self.assertIsNone(check("pr-body-check --body-file %s && gh pr create -R cartwmic/coordinator --body-file %s" % (c, c)))
 
-    def test_the_work_profile_and_no_profile_do_not_run_it(self):
-        for profile in ("axon-work-computer", None):
-            self.assertIsNone(check("gh pr create --body 'x'", profile=profile))
-            self.assertIsNone(check("gh pr edit 5 --body-file /tmp/pr-body.md", profile=profile))
-            self.assertIsNone(check("gh pr create --body-file /tmp/pr-body.md", profile=profile))
+    def test_the_work_profile_runs_it_and_no_profile_or_termux_does_not(self):
+        for text in ("gh pr create --body 'x'", "gh pr edit 5 --body-file /tmp/pr-body.md", "gh pr create --body-file /tmp/pr-body.md"):
+            self.assertIsNotNone(check(text, profile="axon-work-computer"))
+            for profile in ("termux", None):
+                self.assertIsNone(check(text, profile=profile))
 
 
 class PrBodyNamesPrOpen(unittest.TestCase):
@@ -533,8 +535,9 @@ class PrBodyViaApi(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
 
-    def test_the_work_profile_and_no_profile_do_not_run_it(self):
-        for profile in ("axon-work-computer", None):
+    def test_the_work_profile_runs_it_and_no_profile_or_termux_does_not(self):
+        self.assertIsNotNone(check(self.REFUSED[0], profile="axon-work-computer"))
+        for profile in ("termux", None):
             self.assertIsNone(check(self.REFUSED[0], profile=profile))
 
 
@@ -1151,17 +1154,17 @@ class Hook(unittest.TestCase):
 
     def test_the_profile_comes_from_the_file_beside_the_script(self):
         merge = "gh pr merge 12"
-        for text, want in [("personal\n", 2), ("axon-work-computer\n", 0), (None, 0), ("", 0)]:
+        for text, want in [("personal\n", 2), ("axon-work-computer\n", 2), ("termux\n", 0), (None, 0), ("", 0)]:
             with self.subTest(profile_file=text):
                 self.set_profile_file(text)
                 self.assertEqual(self.run_hook(merge).returncode, want)
         self.set_profile_file(None)
 
     def test_the_env_var_overrides_the_file(self):
-        self.set_profile_file("axon-work-computer\n")
+        self.set_profile_file("termux\n")
         self.assertEqual(self.run_hook("gh pr merge 12", profile="personal").returncode, 2)
         self.set_profile_file("personal\n")
-        self.assertEqual(self.run_hook("gh pr merge 12", profile="axon-work-computer").returncode, 0)
+        self.assertEqual(self.run_hook("gh pr merge 12", profile="termux").returncode, 0)
         self.set_profile_file(None)
 
     def test_poll_and_heredoc_run_with_no_profile_at_all(self):
@@ -1371,6 +1374,40 @@ class Hook(unittest.TestCase):
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()
         self.assertEqual(text, "{{ .profile }}\n")
+
+
+class LiveGitWorkCheckout(unittest.TestCase):
+    """The work coordinator runs from its own checkout (~/coordinator-work, or the path in local data), which the `coordinator-instance` file names:
+    git that changes it is refused as in ~/git/coordinator, and the same file's other path stays protected."""
+    HOME = {"HOME": "/Users/test"}
+    WORK = "/Users/test/coordinator-work"
+
+    def work(self, text, cwd="/Users/test/tmp-home/x", repo=WORK, **kw):
+        return check(text, env=self.HOME, cwd=cwd, profile="axon-work-computer", coordinator_repo=repo, **kw)
+
+    def test_the_work_checkout_is_refused(self):
+        for text, spelling in [("cd /Users/test/coordinator-work && git merge origin/main", "git merge"),
+                               ("git -C /Users/test/coordinator-work commit -m x", "git commit"),
+                               ("cd ~/coordinator-work && git checkout main", "git checkout"),
+                               ("cd /Users/test/coordinator-work/src && git add -A", "git add")]:
+            with self.subTest(text=text):
+                self.assertIn(spelling, self.work(text) or "")
+
+    def test_a_path_set_in_local_data_is_refused_too(self):
+        self.assertIn("git merge", self.work("git -C /Volumes/Workshop/work/coordinator merge origin/main", repo="/Volumes/Workshop/work/coordinator") or "")
+
+    def test_the_old_path_is_still_refused_on_work(self):
+        self.assertIn("git merge", self.work("git -C /Users/test/git/coordinator merge origin/main") or "")
+
+    def test_reads_worktrees_and_other_checkouts_pass(self):
+        for text in ["git -C /Users/test/coordinator-work log -3", "git -C /Users/test/coordinator-work fetch",
+                     "git -C /Users/test/coordinator-work worktree add ~/tmp-home/x origin/main",
+                     "git -C /Users/test/coordinator-work-notes commit -m x", "cd /Users/test/tmp-home/x && git commit -m x"]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.work(text))
+
+    def test_without_the_file_the_work_checkout_is_not_known(self):
+        self.assertIsNone(self.work("git -C /Users/test/coordinator-work commit -m x", repo=None))
 
 
 if __name__ == "__main__":

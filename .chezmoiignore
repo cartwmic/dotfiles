@@ -372,6 +372,15 @@ Library/LaunchAgents/local.qmd-refresh.plist
 Library/LaunchAgents/local.session-keepalive.plist
 {{- end }}
 
+{{- if not (or (eq .profile "personal") (eq .profile "axon-work-computer")) }}
+# The PR gates land on both desktop profiles (docs/gate-coverage.md); any other profile (Termux) has no coordinator checkout for them to run.
+# pr-body-check, pr-record and intent-review-check run scripts in the coordinator checkout; pr-open runs pr-body-check.
+.local/bin/pr-body-check
+.local/bin/pr-record
+.local/bin/pr-open
+.local/bin/intent-review-check
+{{- end }}
+
 {{- if ne .profile "personal" }}
 # The homelab Connect token seed (agents' op reads through the homelab 1Password Connect server): personal only (docs/profiles.md).
 .local/user_scripts/seed_op_connect_token.sh
@@ -380,14 +389,6 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/user_scripts/loop_engine_bump.py
 # The T3 pin check reads the personal coordinator's inbox and the budget-steward checkout and runs from the personal Linux schedules-check unit (docs/profiles.md).
 .local/user_scripts/t3_pin_check.py
-# pr-body-check runs the coordinator checkout's script for the personal-only merge and PR-body rules (docs/profiles.md).
-.local/bin/pr-body-check
-# pr-record runs the coordinator checkout's script that prints and fills a PR's agent record (playbook 5a05bfe8; docs/profiles.md).
-.local/bin/pr-record
-# pr-open checks a PR description with pr-body-check, then opens or edits the PR: personal only, as pr-body-check is (docs/profiles.md).
-.local/bin/pr-open
-# intent-review-check runs the coordinator checkout's script for the review-record merge rule (docs/profiles.md).
-.local/bin/intent-review-check
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).
 .local/bin/coordinator
 # kgate-split serves a work queue from this host's LAN address to pods on the personal homelab cluster: personal only (docs/profiles.md).

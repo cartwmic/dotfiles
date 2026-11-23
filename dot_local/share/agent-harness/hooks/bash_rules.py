@@ -7,7 +7,7 @@
   kube        (personal only)  kubectl, helm, k9s, kubectx on a context other than the homelab's: a context flag, `kubectl config
               use-context`, `kubectx X`, or no flag while the current context (--kubeconfig, an inline KUBECONFIG=, the hook's KUBECONFIG,
               else ~/.kube/config) is another. kubectl inside an ssh string is not inspected. No kubeconfig or no current-context: allowed.
-  merge       (personal only)  `gh pr merge` unless BOTH gates, in their real form, are joined to it by `&&` earlier in the same and-list
+  merge       (personal and work)  `gh pr merge` unless BOTH gates, in their real form, are joined to it by `&&` earlier in the same and-list
               (any order): `ci-main-status --merge-gate <repo> [--pr N]` (a bare one or `--tip` is not the gate) and
               `pr-body-check <repo> <pr>` (two plain words; `pr-body-check --body-file F` is not the merge check, it never reads the PR's
               head runs), with <pr> the PR number `gh pr merge` names when it names one (a branch or no PR cannot be matched); the refusal names
@@ -23,7 +23,7 @@
               form lacks). The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
               the hook never sees, so they pass.
 
-  pr-body     (personal only)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
+  pr-body     (personal and work)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
               and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
               `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
               `pr-open --title T --body-file F` (create) or `pr-open --edit N --body-file F` (edit) as the shortest path, then the chained form
@@ -51,7 +51,7 @@
               names kgate and a throwaway namespace on the homelab cluster (ledger grant 21). Read-only commands (`docker ps`, `images`,
               `inspect`, `manifest inspect`, `compose ps`) pass, and so does anything after `kgate`. Other personal hosts (the Mac, which
               has Docker Desktop for agents) are untouched, since Docker is provisioned there on purpose.
-  live git    (both profiles)  git that changes the working tree, index, HEAD or a branch of the live coordinator checkout, ~/git/coordinator,
+  live git    (both profiles)  git that changes the working tree, index, HEAD or a branch of the live coordinator checkout, ~/git/coordinator (and the profile's own checkout when it is another path: line 1 of the `coordinator-instance` file chezmoi renders, ~/coordinator-work on work),
               which the coordinator daemon runs from (2026-11-11: a reviewer checked out PR #438 there and the daemon restarted onto PR code;
               2026-11-16: a builder ran `git merge origin/main` there). Refused: merge, pull, reset, checkout, switch, restore, commit, rebase,
               cherry-pick, revert, stash, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames), and
@@ -97,6 +97,7 @@ COMPOSE_OPTIONS_WITH_VALUE = {"-f", "--file", "-p", "--project-name", "--profile
 DOCKER_REFUSED = {("run",), ("build",), ("container", "run"), ("image", "build"), ("buildx", "build"), ("builder", "build"), ("compose", "up")}
 
 LIVE_CHECKOUT = "git/coordinator"  # under $HOME on both profiles: the checkout the coordinator daemon runs from
+GATE_PROFILES = ("personal", "axon-work-computer")  # the PR gates (merge, pr-body) run on both desktop profiles; any other profile (Termux) has none
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}  # options before the subcommand
 GIT_ALWAYS_REFUSED = {"pull", "reset", "checkout", "switch", "restore", "commit", "rebase", "cherry-pick", "revert", "clean", "am", "apply",
                       "add", "rm", "mv", "update-ref", "symbolic-ref", "read-tree"}
@@ -205,7 +206,7 @@ def kube_message(what, fix):
     )
 
 
-Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container", defaults=(None,) * 8)
+Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container coordinator_repo", defaults=(None,) * 9)
 
 
 def read_file(path):
@@ -492,7 +493,7 @@ def kube_rule(walk, ctx):
 
 
 def merge_rule(walk, ctx):
-    if ctx.profile != "personal":
+    if ctx.profile not in GATE_PROFILES:
         return None
     for cmd in walk.cmds:
         args = cmd.words[1:]
@@ -605,7 +606,7 @@ def _api_sets_pr_body(args):
 
 
 def pr_body_rule(walk, ctx):
-    if ctx.profile != "personal":
+    if ctx.profile not in GATE_PROFILES:
         return None
     for cmd in walk.cmds:
         args = cmd.words[1:]
@@ -776,10 +777,12 @@ def _git_change(sub, args):
     return "git " + sub if sub in GIT_ALWAYS_REFUSED else None
 
 
-def _in_live_checkout(path, home):
-    root = os.path.normpath(os.path.join(home, LIVE_CHECKOUT))
+def _in_live_checkout(path, home, extra=None):
+    """Whether path is in a live coordinator checkout: ~/git/coordinator on any profile, and `extra` (this profile's own checkout, read from the
+    `coordinator-instance` file: on the work profile ~/coordinator-work or the path set in local data)."""
     path = os.path.normpath(path)
-    return path == root or path.startswith(root + os.sep)
+    roots = [os.path.normpath(os.path.join(home, LIVE_CHECKOUT))] + ([os.path.normpath(extra)] if extra else [])
+    return any(path == root or path.startswith(root + os.sep) for root in roots)
 
 
 def _git_places(cmd, opts, home):
@@ -803,13 +806,13 @@ def live_git_rule(walk, ctx):
     for cmd in walk.cmds:
         if _base(cmd.words[0]) == "gh":  # `gh pr checkout` fetches the PR and checks it out in the directory it runs in
             args = cmd.words[1:]
-            if any(a == "pr" and b in ("checkout", "co") for a, b in zip(args, args[1:])) and cmd.cwd and _in_live_checkout(cmd.cwd, walk.home):
+            if any(a == "pr" and b in ("checkout", "co") for a, b in zip(args, args[1:])) and cmd.cwd and _in_live_checkout(cmd.cwd, walk.home, ctx.coordinator_repo):
                 return GIT_LIVE % "gh pr checkout"
         if _base(cmd.words[0]) != "git":
             continue
         opts, sub, args = _git_parts(cmd.words)
         spelling = _git_change(sub, args) if sub else None
-        if spelling and any(_in_live_checkout(p, walk.home) for p in _git_places(cmd, opts, walk.home)):
+        if spelling and any(_in_live_checkout(p, walk.home, ctx.coordinator_repo) for p in _git_places(cmd, opts, walk.home)):
             return GIT_LIVE % spelling
     return None
 

@@ -1,9 +1,18 @@
 #!/bin/sh
 # agent-traces: the agent-kit traces CLI, for review drivers. Usage: agent-traces review <normalize|add|label|record|report> ...
 # Runs the kit from its pinned install (dot_local/share/agent-kit, installed by run_onchange_after_65_agent_kit_install.sh.tmpl).
-# Exit 3 means the CLI is not installed here, or no usable node is (none found, or older than 22.19); keep the review log by hand (playbook 58fdb05d).
+# Exit 3 means the CLI is not installed here (on the work profile: neither the pinned install nor the coordinator checkout's copy exists), or no usable node is (none found, or older than 22.19); keep the review log by hand (playbook 58fdb05d).
 kit="${AGENT_TRACES_KIT:-$HOME/.local/share/agent-kit}"
 cli="$kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+{{- if eq .profile "axon-work-computer" }}
+# Work profile: the separate install below needs a token for a private package that the work Mac's gh accounts may not read (agentKit.enabled is off there until
+# one can). The work coordinator's checkout depends on the same package, so when the pinned kit is missing use the CLI in that checkout's node_modules
+# (COORDINATOR_REPO, else line 1 of the coordinator-instance file chezmoi renders; its version is the coordinator's pin, not this repo's). Absent there too: exit 3 as before.
+if [ ! -f "$cli" ] && [ -z "${AGENT_TRACES_KIT:-}" ]; then
+  repo="${COORDINATOR_REPO:-$(sed -n 1p "$HOME/.local/share/agent-harness/coordinator-instance" 2>/dev/null)}"
+  [ -z "$repo" ] || [ ! -f "$repo/node_modules/@cartwmic/agent-kit/dist/traces/cli.js" ] || cli="$repo/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+fi
+{{- end }}
 if [ ! -f "$cli" ]; then
 {{- if (includeTemplate "agent_kit_config" . | fromJson).enabled }}
   echo "agent-traces: the agent-kit install is enabled here but missing or failed; retry with:" >&2
