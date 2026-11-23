@@ -471,9 +471,11 @@ class ReviewIntent(unittest.TestCase):
         self.assertEqual(r.stdout, "")
         self.assertIn("journey board-close has no GREEN on the head tree", r.stderr)  # the script's stdout and stderr both come through
         self.assertIn("merge-pr: REFUSED: #930 head abc has no kgate run", r.stderr)
-        self.assertIn("Fix it before building the brief; nothing was printed", r.stderr)
+        self.assertIn("fix what the merge script names (above) before building the brief; nothing was printed", r.stderr)
+        self.assertTrue(r.stderr.startswith("review-intent: the repo's merge script refuses this PR"), r.stderr)
         (row,) = self.log_rows()
         self.assertEqual((row["outcome"], row["exit"], row["record_check"], row["merge_check"]), ("refused", 3, "passed", "refused"))
+        self.assertTrue(row["reason"].startswith("review-intent: the repo's merge script refuses this PR"), row["reason"])
 
     def test_a_record_defect_is_refused_by_the_record_check_before_the_merge_script_runs(self):
         self.pr_with_decision()

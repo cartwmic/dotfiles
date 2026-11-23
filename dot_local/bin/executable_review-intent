@@ -497,8 +497,9 @@ def run(argv):
         print("review-intent: the PR's agent record fails pr-body-check (above). Fix the record, then build the brief; nothing was printed", file=sys.stderr)
         return 3
     except MergeRefused as e:
+        print("review-intent: the repo's merge script refuses this PR before the review (`merge-pr.sh N --check-only`); its output:", file=sys.stderr)
         print(e, file=sys.stderr)
-        print("review-intent: the repo's merge script refuses this PR before the review (above, from `merge-pr.sh N --check-only`). Fix it before building the brief; nothing was printed", file=sys.stderr)
+        print("review-intent: fix what the merge script names (above) before building the brief; nothing was printed", file=sys.stderr)
         return 3
     except Usage as e:
         print(e, file=sys.stderr)
