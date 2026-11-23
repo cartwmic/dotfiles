@@ -29,6 +29,9 @@ HOOK_PRINT = json.dumps({"schema": 1, "entries": [{"event": "PreToolUse", "match
 HOOK = "console.log(process.argv.includes('--print-settings-json') ? %s : '');\n" % json.dumps(HOOK_PRINT)
 IMAGE_TOOLS = ("sh bash cat sed awk grep egrep tr head tail cut sort uniq dirname basename mktemp rm mkdir cp mv chmod ln wc tee uname env date sleep tar gzip find xargs "
                "readlink realpath expr test true false printf echo id whoami printenv diff cmp od sha256sum stat touch rmdir ls git curl jq unzip chezmoi mise").split()
+# The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
+WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
+             "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 CONFIG = "data:\n  profile: %s\n  container:\n    enabled: true\n%s"
 
 
@@ -111,6 +114,17 @@ class ContainerHome(Scratch):
     def test_linked_environments_is_on_in_a_fresh_pods_t3_settings_with_no_script_run(self):   # a peer's `t3 environment link` fails while it is off
         self.assertIs(json.loads((self.home / ".t3/userdata/settings.json").read_text())["linkedEnvironmentsEnabled"], True)
 
+    def test_the_pod_refuses_heavy_jobs_the_guard_runs_and_the_container_file_says_true(self):   # the heavy-job rule in bash_rules.py runs only where this file reads true
+        self.assertEqual((self.home / ".local/share/agent-harness/hooks/container").read_text().strip(), "true")
+        guards = [g for g in self.settings["hooks"]["PreToolUse"] if "refuse_pattern_kill.py" in json.dumps(g)]
+        self.assertTrue(guards, "Claude's Bash guard hook is in the pod's settings")
+        payload = json.dumps({"tool_name": "Bash", "cwd": str(self.home), "tool_input": {"command": "npx vitest run"}})
+        env = dict(os.environ, HOME=str(self.home), AGENT_HARNESS_GUARD_LOG=os.devnull)
+        env.pop("AGENT_HARNESS_CONTAINER", None)
+        run = subprocess.run([sys.executable, str(self.home / ".local/share/agent-harness/hooks/refuse_pattern_kill.py")], input=payload, capture_output=True, text=True, env=env)
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("kgate", run.stderr)
+
     def test_hook_entries_are_installed_when_node_is_there(self):
         self.assertEqual([g["matcher"] for g in self.settings["hooks"]["PreToolUse"] if "hook.ts" in json.dumps(g)], ["^AskUserQuestion$"])
 
@@ -168,6 +182,27 @@ class T3SettingsMerge(unittest.TestCase):
     def test_outside_container_mode_the_key_is_not_added(self):
         config, home = self.setup_home("", {"compactIdleThreads": True})
         self.assertNotIn("linkedEnvironmentsEnabled", self.cat(config, home))
+
+
+class ContainerFileOutsideThePod(unittest.TestCase):
+    """The container file reads false on a personal home that is not the pod and on the work profile, so the heavy-job rule does nothing there."""
+    def render(self, profile, container):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        config = tmp / "chezmoi.yaml"
+        config.write_text("data:\n  profile: %s\n%s" % (profile, container))
+        r = chezmoi(config, tmp / "home", "execute-template", (ROOT / "dot_local/share/agent-harness/hooks/container.tmpl").read_text())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_false_unless_container_mode_is_on(self):
+        self.assertEqual(self.render("personal", ""), "false")
+        self.assertEqual(self.render("personal", "  container:\n    enabled: false\n"), "false")
+        self.assertEqual(self.render("personal", "  container:\n    enabled: true\n"), "true")
+
+    def test_false_on_the_work_profile(self):
+        keys = "".join("  %s: %s\n" % item for item in WORK_DATA.items())
+        self.assertEqual(self.render("axon-work-computer", keys), "false")
 
 
 class LeanMiseSet(Scratch):
