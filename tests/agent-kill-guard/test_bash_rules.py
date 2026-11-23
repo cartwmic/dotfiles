@@ -454,6 +454,8 @@ class PrBodyNamesPrOpen(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("Shortest path: `pr-open --title T --body-file F [--draft]`", message)
+                self.assertIn("never reads the agent record", message)
+                self.assertIn("pr-body-check <owner/repo> <pr> --skip-intent-review", message)
                 self.assertIn("pr-body-check --body-file F && gh pr create", message)  # the chained form is still named
 
     def test_an_edit_refusal_names_the_pr_open_edit_form(self):

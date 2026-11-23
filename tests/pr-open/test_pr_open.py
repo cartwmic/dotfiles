@@ -107,6 +107,7 @@ class PrOpen(unittest.TestCase):
         self.assertTrue(lines[1].startswith("pr-body-check: OK"))  # then the body check's own pass line
         self.assertEqual(lines[2], "https://github.com/cartwmic/scratch/pull/42")
         self.assertIn("/records/cartwmic/scratch#42.md", lines[3])  # where the agent record goes
+        self.assertIn("pr-body-check cartwmic/scratch 42 --skip-intent-review", lines[4])  # the form that reads the record; the --body-file form does not
         self.assertIn("feature", self.remote_branches())
         calls = self.calls()
         self.assertTrue(calls[0].startswith("pr-body-check [--body-file] ["), calls)
