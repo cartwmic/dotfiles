@@ -809,7 +809,7 @@ const base = { body: '', commits: [], files: ['a.ts'], diff: '' };
 const blocks = [
   ...problemBlocks({ ...base, recordProblem: 'none' }, 8),
   ...problemBlocks({ ...base, record: 'no table, no decisions' }, 8),
-  prDecisionsFailure({ pr: 'cartwmic/x#1', line: null, missing: [{ id: 1, summary: 's' }], notLive: [], noChoice: [] }),
+  prDecisionsFailure({ pr: 'cartwmic/x#1', line: null, missing: [{ id: 1, summary: 's' }], notLive: [], ownNumber: [], noChoice: [] }),
 ];
 const skipped = decisionsCheck('cartwmic/x', '1', 'rec', { readDecisions: () => { throw new Error('no ledger'); } }).skipped;
 console.log(JSON.stringify({ firsts: blocks.map((b) => b.split('\\n')[0]), skipped }));
