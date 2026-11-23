@@ -4882,7 +4882,7 @@ class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
 class BrakeHomelab(unittest.TestCase):
     """The coordinator's pause: while `$COORDINATOR_STATE_DIR/brake/` holds any file, no pod is made. The job names every reason, looks again on a short poll, and goes on when the
     folder is empty or missing. It does not know what a reason is: the tests use made-up names."""
-    for _name in ("kgate", "kgate_popen", "records", "calls", "op_env", "profile", "setUp"):
+    for _name in ("kgate", "kgate_popen", "launcher", "records", "calls", "op_env", "profile", "setUp"):
         locals()[_name] = getattr(Black, _name)
 
     def brake(self, **reasons):
