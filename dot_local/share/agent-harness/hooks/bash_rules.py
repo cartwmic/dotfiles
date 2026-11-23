@@ -123,7 +123,7 @@ MERGE_BARE = (
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
     "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
-    "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table and the Decisions line from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused); "
+    "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 PR_BODY = (

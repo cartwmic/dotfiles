@@ -70,7 +70,9 @@ ESCALATION = (
     "the question, run it instead. When you do ask: one question at a time, with your recommendation. The "
     "coordinator, and any session I open myself, ask me directly with your harness's question tool. A lead, planner, "
     "builder or reviewer session does not ask me directly: a worker goes to its lead, and a lead records the decision "
-    "with `ledger open` and stops, so the coordinator asks me. No is an acceptable answer."
+    "with `ledger open` and stops, so the coordinator asks me. `ledger open --question` needs `--because` (one of the fixed "
+    "reasons; the command lists them) and refuses an id with no words beside it, so say what each ask or decision is in plain words. "
+    "No is an acceptable answer."
 )
 OLD_LINES = (
     "At the start of a session, confirm with the user when you will use subagents",
