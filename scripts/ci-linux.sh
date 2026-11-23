@@ -123,6 +123,7 @@ python3 scripts/ci-par.py \
   tests/release-pins \
   tests/ci-main-status \
   tests/ci-main-status-any-repo \
+  tests/ci-main-status-gitea \
   tests/kgate-split \
   tests/test-edit-check \
   tests/untested-hunks-check || status=1
