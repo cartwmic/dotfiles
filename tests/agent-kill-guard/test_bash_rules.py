@@ -1393,6 +1393,10 @@ class LiveGitWorkCheckout(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn(spelling, self.work(text) or "")
 
+    def test_gh_pr_checkout_in_the_work_checkout_is_refused(self):
+        self.assertIn("gh pr checkout", self.work("gh pr checkout 5", cwd="/Users/test/coordinator-work") or "")
+        self.assertIsNone(self.work("gh pr checkout 5", cwd="/Users/test/tmp-home/x"))
+
     def test_a_path_set_in_local_data_is_refused_too(self):
         self.assertIn("git merge", self.work("git -C /Volumes/Workshop/work/coordinator merge origin/main", repo="/Volumes/Workshop/work/coordinator") or "")
 
