@@ -238,6 +238,25 @@ class WaitHintTest(unittest.TestCase):
         self.assertEqual(MOD.wait_hint(7), MOD.wait_hint(7, sys.platform))
 
 
+class CrashTest(unittest.TestCase):
+    """A fault inside main never traps a session: a stop is allowed, and --count prints 0 (the lead's turn-end check then counts no jobs)."""
+
+    def run_broken(self, *args):
+        broken = HOOK.read_text().replace("def main(argv=()):", 'def main(argv=()):\n    raise RuntimeError("boom")\n', 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "broken.py"
+            script.write_text(broken)
+            return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, timeout=30)
+
+    def test_count_prints_zero_when_main_crashes(self):
+        done = self.run_broken("--count")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "0"))
+
+    def test_a_stop_is_allowed_when_main_crashes(self):
+        done = self.run_broken()
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
+
+
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi needed")
 class SeatFileTest(unittest.TestCase):
     """Only the builder's seat file carries this Stop hook (the lead's carries lead_turn_end.py, tested in tests/lead-turn-end); it runs the script and passes its exit 2 through; it fails open."""
