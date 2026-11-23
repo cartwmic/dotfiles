@@ -360,6 +360,101 @@ class AgentTracesTest(Base):
         self.assertIn(str(pinned), self.run_it(work_data()).stdout)
 
 
+class AgentTracesLogTest(Base):
+    """Principle 14: the work wrapper leaves a durable record of each run's kit, not just a stderr line. One JSON line per run goes to
+    $XDG_STATE_HOME/agent-traces/wrapper.jsonl (default ~/.local/state/agent-traces/wrapper.jsonl): utc, outcome (pinned, fallback or none), kit, version, looked."""
+
+    def setUp(self):
+        super().setUp()
+        self.node = self.root / "node"
+        self.node.write_text('#!/bin/sh\nif [ "$1" = "-p" ]; then echo 22.19.0; exit 0; fi\necho "ran:$*"\n')
+        self.node.chmod(self.node.stat().st_mode | stat.S_IXUSR)
+        self.repo = self.home / "coordinator-work"
+        instance = self.home / ".local/share/agent-harness/coordinator-instance"
+        instance.parent.mkdir(parents=True)
+        instance.write_text("%s\n" % self.repo)
+        self.log = self.home / ".local/state/agent-traces/wrapper.jsonl"
+        self.pinned = self.home / ".local/share/agent-kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        self.alt = self.repo / "node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+
+    def put_kit(self, cli, version):
+        cli.parent.mkdir(parents=True)
+        cli.write_text("// fake\n")
+        (cli.parent.parent.parent / "package.json").write_text('{\n  "name": "@cartwmic/agent-kit",\n  "version": "%s"\n}\n' % version)
+
+    def run_it(self, data, **env):
+        pairs = {"HOME": str(self.home), "AGENT_TRACES_NODE": str(self.node), "PATH": "/usr/bin:/bin"}
+        pairs.update(env)
+        path = self.root / ("agent-traces-" + data["profile"])
+        path.write_text(self.render_template("dot_local/bin/executable_agent-traces.tmpl", data))
+        return subprocess.run(["/usr/bin/env", "-i", *["%s=%s" % kv for kv in pairs.items()], "/bin/sh", str(path), "review", "report"],
+                              capture_output=True, text=True, timeout=60)
+
+    def lines(self, log=None):
+        return [json.loads(l) for l in (log or self.log).read_text().splitlines()]
+
+    def test_a_fallback_run_logs_the_kit_path_and_version(self):
+        self.put_kit(self.alt, "0.69.2")
+        r = self.run_it(work_data())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        (line,) = self.lines()
+        self.assertEqual((line["outcome"], line["kit"], line["version"]), ("fallback", str(self.alt), "0.69.2"))
+        self.assertRegex(line["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(line["looked"], "%s and %s" % (self.pinned, self.alt))
+        self.assertIn("version 0.69.2", r.stderr)  # the stderr line stays
+
+    def test_a_pinned_run_logs_pinned_with_its_version(self):
+        self.put_kit(self.alt, "0.69.2")
+        self.put_kit(self.pinned, "0.70.0")
+        self.assertEqual(self.run_it(work_data()).returncode, 0)
+        (line,) = self.lines()
+        self.assertEqual((line["outcome"], line["kit"], line["version"], line["looked"]), ("pinned", str(self.pinned), "0.70.0", str(self.pinned)))
+
+    def test_the_exit_3_run_logs_none_and_where_it_looked(self):
+        r = self.run_it(work_data())
+        self.assertEqual(r.returncode, 3)
+        (line,) = self.lines()
+        self.assertEqual((line["outcome"], line["kit"], line["version"]), ("none", "", ""))
+        self.assertEqual(line["looked"], "%s and %s" % (self.pinned, self.alt))
+
+    def test_each_run_appends_one_line(self):
+        self.put_kit(self.alt, "0.69.2")
+        for _ in range(3):
+            self.run_it(work_data())
+        self.assertEqual(len(self.lines()), 3)
+
+    def test_xdg_state_home_moves_the_log(self):
+        self.put_kit(self.alt, "0.69.2")
+        state = self.root / "xdg"
+        self.run_it(work_data(), XDG_STATE_HOME=str(state))
+        self.assertFalse(self.log.exists())
+        self.assertEqual(self.lines(state / "agent-traces/wrapper.jsonl")[0]["outcome"], "fallback")
+
+    def test_a_log_that_cannot_be_written_changes_nothing(self):
+        self.put_kit(self.alt, "0.69.2")
+        blocked = self.root / "blocked"
+        blocked.write_text("a file where the state directory should be\n")
+        ok = self.run_it(work_data(), XDG_STATE_HOME=str(blocked))
+        self.assertEqual(ok.returncode, 0)
+        self.assertIn("ran:", ok.stdout)
+        self.assertEqual([l for l in ok.stderr.splitlines() if not l.startswith("agent-traces: no pinned install")], [])
+        shutil.rmtree(self.alt.parent.parent.parent.parent.parent.parent)
+        none = self.run_it(work_data(), XDG_STATE_HOME=str(blocked))
+        self.assertEqual(none.returncode, 3)
+
+    def test_a_path_with_quotes_stays_valid_json(self):
+        odd = self.root / 'odd "repo"'
+        alt = odd / "node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+        self.put_kit(alt, "1.2.3")
+        self.run_it(work_data(), COORDINATOR_REPO=str(odd))
+        self.assertEqual(self.lines()[0]["kit"], str(alt))
+
+    def test_personal_writes_no_wrapper_log(self):
+        self.put_kit(self.pinned, "0.70.0")
+        self.assertEqual(self.run_it(personal_data()).returncode, 0)
+        self.assertFalse(self.log.exists())
+
+
 class TermuxTest(unittest.TestCase):
     """Termux has neither desktop profile's guard rails: no gate wrapper, no hook, no coordinator-instance file is rendered there.
     (Two layers keep them out: the "not personal or work" block in .chezmoiignore, and the Termux allow-list that already ignores all of

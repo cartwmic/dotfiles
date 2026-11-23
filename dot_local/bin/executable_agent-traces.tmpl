@@ -7,9 +7,22 @@ cli="$kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
 {{- if eq .profile "axon-work-computer" }}
 # Work profile: the separate install below needs a token for a private package that the work Mac's gh accounts may not read (agentKit.enabled is off there until
 # one can). The work coordinator's checkout depends on the same package, so when the pinned kit is missing use the CLI in that checkout's node_modules
-# (COORDINATOR_REPO, else line 1 of the coordinator-instance file chezmoi renders; its version is the coordinator's pin, not this repo's). Each run that does so prints one
-# line on stderr naming the kit and its version, and the exit-3 path prints where it looked, so a review record can be traced to the kit that wrote it. Absent there too: exit 3 as before.
+# (COORDINATOR_REPO, else line 1 of the coordinator-instance file chezmoi renders; its version is the coordinator's pin, not this repo's). So that a review record can be traced
+# to the kit that wrote it, every run appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/agent-traces/wrapper.jsonl (utc, outcome pinned|fallback|none, kit path, kit version, the
+# paths looked at), the exit-3 run included; a fallback run also prints one line on stderr, and the exit-3 path prints where it looked. A log that cannot be written never changes the run.
+# Absent in both places: exit 3 as before. Node problems found after this point (no node, too old) are not logged here.
+kitversion() { v="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "${1%/dist/traces/cli.js}/package.json" 2>/dev/null | head -n 1)"; echo "${v:-unknown}"; }
+wlog() { # wlog OUTCOME KIT VERSION LOOKED
+  {
+    dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-traces"
+    e1="$(printf '%s' "$2" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    e2="$(printf '%s' "$3" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    e3="$(printf '%s' "$4" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    mkdir -p "$dir" && printf '{"utc":"%s","outcome":"%s","kit":"%s","version":"%s","looked":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$e1" "$e2" "$e3" >> "$dir/wrapper.jsonl"
+  } 2>/dev/null || :
+}
 looked="$cli"
+outcome=pinned
 if [ ! -f "$cli" ] && [ -z "${AGENT_TRACES_KIT:-}" ]; then
   repo="${COORDINATOR_REPO:-$(sed -n 1p "$HOME/.local/share/agent-harness/coordinator-instance" 2>/dev/null)}"
   if [ -n "$repo" ]; then
@@ -18,10 +31,11 @@ if [ ! -f "$cli" ] && [ -z "${AGENT_TRACES_KIT:-}" ]; then
   fi
   if [ -n "$repo" ] && [ -f "$alt" ]; then
     cli="$alt"
-    kitver="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$repo/node_modules/@cartwmic/agent-kit/package.json" 2>/dev/null | head -n 1)"
-    echo "agent-traces: no pinned install; using the coordinator checkout's kit $cli (version ${kitver:-unknown})" >&2
+    outcome=fallback
+    echo "agent-traces: no pinned install; using the coordinator checkout's kit $cli (version $(kitversion "$cli"))" >&2
   fi
 fi
+if [ -f "$cli" ]; then wlog "$outcome" "$cli" "$(kitversion "$cli")" "$looked"; else wlog none "" "" "$looked"; fi
 {{- end }}
 if [ ! -f "$cli" ]; then
 {{- if (includeTemplate "agent_kit_config" . | fromJson).enabled }}
