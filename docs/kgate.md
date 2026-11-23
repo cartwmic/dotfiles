@@ -143,11 +143,11 @@ Every other exit-69 reason (a bad profile, a tree hash or tool version mismatch,
 
 ## The coordinator's pause
 
-The coordinator can pause new work on the fleet. Its pause is a folder, `$COORDINATOR_STATE_DIR/brake/` (default `~/.local/share/coordinator/brake/`), with one file per reason, named for the trigger that wrote it (the inbox lag alarm writes `lag`). The pause is on while the folder holds any file.
+The coordinator can pause new work on the fleet. Its pause is a folder, `$COORDINATOR_STATE_DIR/brake/` (when it is unset, the profile's own coordinator state: `~/.local/share/coordinator/brake/` on the personal profile and `~/.local/share/coordinator-work/brake/` on the work profile), with one file per reason, named for the trigger that wrote it (the inbox lag alarm writes `lag`). The pause is on while the folder holds any file.
 
 Before it makes a pod, kgate looks at that folder. If it holds a file, the job prints one line naming each reason, `kgate: paused: waiting for the coordinator's pause to lift before creating a pod (cpu: <words>; lag: <words>)`, makes no pod and does not touch the cluster, and looks again every 10 s (`KGATE_BRAKE_POLL_S` changes that, for tests). When the folder is empty or missing it prints `kgate: the pause lifted after Ns; going on` and carries on as before. A reason that appears while it waits is named again. kgate does not know what a reason is: any file counts, except a dot file or a folder, so a new trigger needs nothing here. There is no switch to skip the wait.
 
-The wait is not part of `--wait` (which counts from the pod's creation), and `kgate cancel` or a stop ends a paused job with no pod made. A pod that is already running is left alone, and so is the rerun of a pod the cluster evicted (it is the same job). The record has `brake_wait_s` (absent when the job never waited). The same client serves the personal and the work profile, so both wait; on a host with no coordinator state the folder is missing and nothing changes.
+The wait is not part of `--wait` (which counts from the pod's creation), and `kgate cancel` or a stop ends a paused job with no pod made. A pod that is already running is left alone. The rerun of a pod the cluster evicted (`<id>-r2`) makes a pod, so it waits for the pause like the first one; the job's `--wait` and the pod deadline are read after that wait, so a pause long enough to use them up ends the job with the usual "not rerun" reason. The record has `brake_wait_s` (absent when the job never waited; the sum when it waited more than once). The default folder is chosen when chezmoi renders the script, so each profile reads its own coordinator's folder; on a host with no coordinator state the folder is missing and nothing changes.
 
 ## Nodes kgate never uses
 

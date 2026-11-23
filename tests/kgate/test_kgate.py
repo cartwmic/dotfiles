@@ -4907,8 +4907,8 @@ class BrakeHomelab(unittest.TestCase):
         self.assertIn(text, seen)
         return seen
 
-    def start(self, *args, env=None):
-        proc = self.kgate_popen(*args, env=env)
+    def start(self, *args, env=None, host="fake"):
+        proc = self.kgate_popen(*args, env=env, host=host)
         self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
         return proc
 
@@ -4981,6 +4981,22 @@ class BrakeHomelab(unittest.TestCase):
         out, _ = proc.communicate(timeout=60)
         self.assertEqual(proc.returncode, 0, out)
 
+    def test_the_default_folder_is_the_profiles_own_coordinator_state(self):
+        """With COORDINATOR_STATE_DIR unset, each profile reads its own coordinator's folder: personal `~/.local/share/coordinator`, work `~/.local/share/coordinator-work`
+        (the work coordinator's state, README.md "work profile"). The script is rendered for each profile by real chezmoi."""
+        for profile, name in (("personal", "coordinator"), ("work", "coordinator-work")):
+            with self.subTest(profile):
+                path = self.tmp / ("kgate-" + profile)
+                path.write_text(render_script(profile))
+                loader = importlib.machinery.SourceFileLoader("kgate_" + profile, str(path))
+                spec = importlib.util.spec_from_loader("kgate_" + profile, loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                with mock.patch.dict(os.environ, {"HOME": str(self.home), "COORDINATOR_STATE_DIR": ""}):
+                    self.assertEqual(module.brake_dir(), str(self.home / ".local" / "share" / name / "brake"))
+                with mock.patch.dict(os.environ, {"HOME": str(self.home), "COORDINATOR_STATE_DIR": str(self.tmp / "set")}):
+                    self.assertEqual(module.brake_dir(), str(self.tmp / "set" / "brake"), "an explicit folder wins on both profiles")
+
     def test_a_stop_while_paused_ends_the_job_with_no_pod(self):
         self.brake(lag="2026-11-22T10:00:00Z held")
         proc = self.start("--", "true", env=self.env())
@@ -4989,6 +5005,39 @@ class BrakeHomelab(unittest.TestCase):
         out, _ = proc.communicate(timeout=60)
         self.assertEqual(proc.returncode, 128 + signal.SIGTERM, out)
         self.assertEqual(self.creates(), 0)
+
+
+class BrakeRerun(unittest.TestCase):
+    """The rerun of an evicted pod (`<id>-r2`) makes a pod, so it waits for the coordinator's pause like the first one."""
+    for _name in ("kgate", "records", "calls", "op_env", "launcher", "setUp", "write_cluster", "profile", "run_kgate", "kcalls", "pods_created"):
+        locals()[_name] = getattr(KubectlBlack, _name)
+    kgate_popen = Black.kgate_popen
+    read_until = BrakeHomelab.read_until
+    start = BrakeHomelab.start
+
+    def test_an_evicted_pod_is_not_rerun_while_the_pause_is_on_and_is_rerun_when_it_lifts(self):
+        folder = self.tmp / "coordinator" / "brake"
+        env = {**self.cmd_env, "FAKE_LOST": "1:event", "FAKE_LOST_DELAY": "4", "COORDINATOR_STATE_DIR": str(self.tmp / "coordinator"), "KGATE_BRAKE_POLL_S": "0.2"}
+        proc = self.start("--", "sh", "-c", "echo ran-attempt", host="", env=env)
+        for _ in range(100):   # the first pod is made before the pause starts
+            if self.pods_created():
+                break
+            time.sleep(0.1)
+        self.assertEqual(len(self.pods_created()), 1)
+        folder.mkdir(parents=True)
+        (folder / "lag").write_text("2026-11-22T10:00:00Z the inbox is late\n")
+        seen = self.read_until(proc, "paused: ")   # the pod is evicted 4 s in; the rerun then stops at the pause
+        self.assertIn("lag: the inbox is late", seen)
+        time.sleep(1)
+        self.assertIsNone(proc.poll())
+        self.assertEqual(len(self.pods_created()), 1, "no second pod while the pause is on")
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+        rec = self.records()[-1]
+        self.assertEqual([p["metadata"]["name"] for p in self.pods_created()], [rec["id"], rec["id"] + "-r2"])
+        self.assertEqual((rec["attempts"], rec["exit"]), (2, 0))
+        self.assertGreater(rec["brake_wait_s"], 0.5)
 
 
 QUEUE_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"

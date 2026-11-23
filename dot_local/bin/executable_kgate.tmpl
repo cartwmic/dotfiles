@@ -1628,9 +1628,17 @@ def archive(wt, common, files, extra, history=True, skipped=()):
     return buf.getvalue()
 
 
+{{ if eq .profile "personal" -}}
+BRAKE_DEFAULT_STATE = "~/.local/share/coordinator"
+{{- else -}}
+BRAKE_DEFAULT_STATE = "~/.local/share/coordinator-work"
+{{- end }}
+
+
 def brake_dir():
-    """The coordinator's pause folder: `$COORDINATOR_STATE_DIR/brake/`, else `~/.local/share/coordinator/brake/`. One file per reason; the pause is on while it holds any file."""
-    return os.path.join(os.environ.get("COORDINATOR_STATE_DIR") or os.path.expanduser("~/.local/share/coordinator"), "brake")
+    """The coordinator's pause folder: `$COORDINATOR_STATE_DIR/brake/`, else the profile's own coordinator state: `~/.local/share/coordinator/brake/` on personal, `~/.local/share/coordinator-work/brake/`
+    on work (the profile this script was rendered for). One file per reason; the pause is on while it holds any file."""
+    return os.path.join(os.environ.get("COORDINATOR_STATE_DIR") or os.path.expanduser(BRAKE_DEFAULT_STATE), "brake")
 
 
 def brake_reasons():
@@ -2261,8 +2269,8 @@ class Job:
 
     def wait_for_brake(self):
         """The coordinator's pause: while `brake/` holds any file, no pod is made. One line names every reason (again when the set of reasons changes), the folder is looked at
-        again every BRAKE_POLL_S, and the job goes on once the folder is empty or missing. Nothing here knows what a reason is. A pod already running is not touched, and neither is
-        the rerun of an evicted pod (it is the same job). The wait is not part of --wait, which counts from the pod's creation."""
+        again every BRAKE_POLL_S, and the job goes on once the folder is empty or missing. Nothing here knows what a reason is. A pod already running is not touched. The rerun of an
+        evicted pod waits too, like every pod creation. The wait is not part of --wait, which counts from the pod's creation."""
         poll = float(os.environ.get("KGATE_BRAKE_POLL_S") or BRAKE_POLL_S)
         said, t_wait = None, None
         while True:
@@ -2275,8 +2283,9 @@ class Job:
                 said = reasons
             time.sleep(poll)
         if t_wait:
-            self.rec["brake_wait_s"] = round(time.time() - t_wait, 1)
-            self.note("the pause lifted after %.0fs; going on" % self.rec["brake_wait_s"])
+            waited = round(time.time() - t_wait, 1)
+            self.rec["brake_wait_s"] = round(self.rec.get("brake_wait_s", 0) + waited, 1)   # a job that also waits before its rerun adds up
+            self.note("the pause lifted after %.0fs; going on" % waited)
 
     def reachable(self):
         check_reachable(self.cluster)
@@ -2935,6 +2944,7 @@ class Job:
             first, second = self.rec["evicted"][-2:]
             raise Unavailable("lost the pod twice: pod %s was evicted by the cluster (%s), the job was rerun once as pod %s, which was evicted too (%s); not rerun again"
                               % (first["pod"], first["reason"], second["pod"], second["reason"]))
+        self.wait_for_brake()   # the rerun makes a pod, so it waits for the coordinator's pause like the first one; the deadlines below are read after the wait
         now = time.time()
         if now >= self.t0 + self.o.wait:
             raise Unavailable("pod %s was evicted by the cluster (%s); not rerun: the job's --wait of %ds has passed" % (old, why, self.o.wait))
