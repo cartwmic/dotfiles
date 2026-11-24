@@ -233,6 +233,8 @@ LOST_READ_S = 20      # each read of why a pod was lost is cut off here
 CANCELLED = "cancelled by kgate cancel"
 CLEANUP_RETRY_S = 60       # how long a client that gave up on a pod keeps trying to delete it (an API timeout or a lost ssh is transient); under `kgate cancel`'s default --wait of 120
 MUX_PERSIST_S = 120        # the ssh master outlives the longest gap between two calls of a job (the delete retries wait up to 30 s); close() ends it earlier
+INTERRUPT_COALESCE_S = 1   # signals this close together are one stop (see main()); under CANCEL_RESEND_S, so a stop asked again is never taken for the first
+CANCEL_RESEND_S = 2        # how often `kgate cancel` sends its SIGTERM again until the client has ended
 CLEANUP_ATTEMPT_S = 30     # one delete attempt is cut off here, so a hung ssh or kubectl cannot outlast CLEANUP_RETRY_S
 CLEANUP_FIRST_DELAY, CLEANUP_MAX_DELAY = 2, 15   # seconds between delete attempts: 2, 4, 8, 15, 15, ...
 JOB_ID = r"kgate-[0-9]+-[0-9]+"
@@ -3292,6 +3294,7 @@ def cancel_live(state, e, wait):
     except ProcessLookupError:
         pass
     offset = 0
+    resend = time.time() + CANCEL_RESEND_S
     while True:
         rec, offset = end_line(state, e["id"], offset)
         if rec:
@@ -3299,6 +3302,12 @@ def cancel_live(state, e, wait):
         if proc_identity(e["pid"]) != ident:  # the client is gone; its end line is written before it exits
             rec, offset = end_line(state, e["id"], offset)
             return report_end(rec) if rec else cancel_orphan(state, e)
+        if time.time() >= resend:   # the client may have lost the first one (see main(): Python drops an interrupt raised inside a __del__); once it has the stop it ignores this
+            resend += CANCEL_RESEND_S
+            try:
+                os.kill(e["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
         if time.time() >= deadline:
             print("kgate cancel: %s was sent SIGTERM and has not ended after %gs; its client is still running as pid %d. "
                   "kgate cancel does not force it. To force it, run: kill -9 %d" % (e["id"], wait, e["pid"], e["pid"]), file=sys.stderr)
@@ -3750,11 +3759,20 @@ def main(argv):
         return USAGE
     job = Job(opts)
 
+    last_raised = None
+
     def interrupted(signum, _frame):
         # The first interrupt ends the job; the cleanup it starts must run to its end. A stop that signals the whole process group reaches this client twice
         # (the group's signal, and run-and-wake forwarding it), and a second KeyboardInterrupt inside cleanup() left the pod on the cluster (dotfiles#481).
-        for each in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(each, signal.SIG_IGN)
+        # Signals within INTERRUPT_COALESCE_S of the one just raised are that same stop. The signals are ignored for good only where the job has the interrupt
+        # (the except clause below), not here: Python drops a KeyboardInterrupt that is raised inside a __del__ (the finalizer of a finished subprocess runs
+        # on every kubectl call), and a handler that had already gone deaf left the job running until its --wait ran out. A stop that comes again
+        # (kgate cancel asks every CANCEL_RESEND_S) raises again until the job has it.
+        nonlocal last_raised
+        now = time.monotonic()
+        if last_raised is not None and now - last_raised < INTERRUPT_COALESCE_S:
+            return
+        last_raised = now
         raise KeyboardInterrupt(signal.Signals(signum).name, signum)
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
@@ -3769,6 +3787,8 @@ def main(argv):
             code = e.code
             job.note("%s; exit %d, CMD was not run on this Mac" % (reason, code))
         except KeyboardInterrupt as e:
+            for each in (signal.SIGTERM, signal.SIGINT):   # the job has the stop: no later one may cut the cleanup short (children started from here on ignore them too)
+                signal.signal(each, signal.SIG_IGN)
             by = e.args[0] if e.args else "SIGINT"
             if by == "SIGTERM" and os.path.exists(job.cancel_marker):
                 reason = CANCELLED
