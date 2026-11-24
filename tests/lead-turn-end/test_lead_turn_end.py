@@ -1,4 +1,4 @@
-"""The lead's turn-end check on Claude Code and Pi, for both desktop profiles (weak-model floor, piece S4).
+"""The lead's turn-end check on Claude Code and Pi, for both desktop profiles.
 
 - hooks/lead_turn_end.py is run as a process, the way Claude Code runs it, against a stub coordinator checkout whose cli.ts answers from the arguments it was given.
 - The lead seat file (both profiles) carries the Stop hook with this profile's own coordinator checkout and state directory; no other seat does.
@@ -30,6 +30,9 @@ const args = process.argv.slice(2);
 appendFileSync(process.env.STUB_RECORD, JSON.stringify(args) + "\\n");
 if (process.env.STUB_MODE === "garbage") { console.log("not json"); process.exit(0); }
 if (process.env.STUB_MODE === "crash") process.exit(1);
+if (process.env.STUB_MODE === "unknown") { console.error("unknown command: t3 turn-end"); process.exit(2); }
+if (process.env.STUB_MODE === "hang") await new Promise((resolve) => setTimeout(resolve, 20000));
+if (process.env.STUB_MODE === "always-refuse") { console.log(JSON.stringify({ answer: "refuse", message: "Do the work again." })); process.exit(0); }
 console.log(JSON.stringify(args.includes("--continued") ? { answer: "let-through", reason: "x", reported: true } : { answer: "refuse", message: "Do the work, start a waker, ledger open, or state-note." }));
 """
 
@@ -95,6 +98,54 @@ class HookTest(unittest.TestCase):
         self.assertEqual(self.run_hook("{}", extra={"STUB_MODE": "crash"}).returncode, 0)      # the coordinator crashed
         self.assertEqual(self.run_hook("not json at all").returncode, 0)                       # unreadable hook input
         self.assertEqual(self.run_hook("{}", extra={"LEAD_TURN_END_NODE": "/nonexistent/node"}).returncode, 0)
+
+    def adapter_log(self):
+        path = self.state / "t3-hook" / "turn-end-adapter.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_a_check_that_cannot_run_lets_the_end_through_and_leaves_one_line_saying_why(self):
+        cases = [
+            ("a timeout", {"STUB_MODE": "hang", "LEAD_TURN_END_TIMEOUT": "1"}, "timed out after 1 s"),
+            ("a crash", {"STUB_MODE": "crash"}, "no readable answer (exit 1)"),
+            ("output that is not JSON", {"STUB_MODE": "garbage"}, "no readable answer (exit 0)"),
+            ("a missing t3 turn-end command", {"STUB_MODE": "unknown"}, "unknown command: t3 turn-end"),
+            ("a node that is not there", {"LEAD_TURN_END_NODE": "/nonexistent/node"}, "could not start"),
+        ]
+        for name, extra, reason in cases:
+            with self.subTest(name):
+                before = len(self.adapter_log())
+                done = self.run_hook("{}", extra=extra)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(done.stderr, "")
+                lines = self.adapter_log()
+                self.assertEqual(len(lines), before + 1)
+                line = lines[-1]
+                self.assertEqual((line["outcome"], line["cause"], line["thread"], line["adapter"]), ("allowed", "check-failed", "thread:lead", "claude-stop-hook"))
+                self.assertIn(reason, line["reason"])
+                self.assertIsInstance(line["duration_ms"], int)
+                self.assertTrue(line["ts"].endswith("+00:00"))
+
+    def test_a_missing_checkout_or_state_directory_is_a_failed_check_too(self):
+        done = self.run_hook("{}", repo="/nowhere")
+        self.assertEqual(done.returncode, 0)
+        self.assertIn("coordinator checkout not found", self.adapter_log()[-1]["reason"])
+        gone = Path(self.tmp.name) / "no-state-yet"
+        self.assertEqual(self.run_hook("{}", state=gone).returncode, 0)
+        self.assertIn("state directory not found", json.loads((gone / "t3-hook" / "turn-end-adapter.jsonl").read_text().splitlines()[-1])["reason"])
+
+    def test_an_end_that_is_not_a_failure_writes_no_adapter_line(self):
+        self.assertEqual(self.run_hook("{}", thread=None).returncode, 0)                        # not a T3 session
+        self.assertEqual(self.run_hook("{}").returncode, 2)                                     # a refusal
+        self.assertEqual(self.run_hook(json.dumps({"stop_hook_active": True})).returncode, 0)   # the let-through the coordinator reports itself
+        self.assertEqual(self.adapter_log(), [])
+
+    def test_a_refusal_is_never_issued_on_a_stop_that_follows_one(self):
+        done = self.run_hook(json.dumps({"stop_hook_active": True}), extra={"STUB_MODE": "always-refuse"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr, "")
+        line = self.adapter_log()[-1]
+        self.assertEqual((line["outcome"], line["cause"]), ("allowed", "after-refusal"))
+        self.assertIn("--continued", self.asked()[0])
 
     def test_the_sessions_own_state_directory_wins(self):
         other = Path(self.tmp.name) / "other-state"
@@ -175,7 +226,7 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(run().returncode, 0)   # installed, no coordinator checkout: allowed
         (home / "git/coordinator/src/coordinatord").mkdir(parents=True)
         (home / "git/coordinator/src/coordinatord/cli.ts").write_text(STUB)
-        (home / ".local/share/coordinator").mkdir(parents=True)
+        (home / ".local/share/coordinator").mkdir(parents=True, exist_ok=True)   # the failed check above left its log line here
         done = run()
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("Do the work", done.stderr)

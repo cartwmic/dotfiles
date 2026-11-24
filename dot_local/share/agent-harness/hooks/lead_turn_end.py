@@ -7,14 +7,19 @@ whether this stop follows its own refusal: Claude Code sets `stop_hook_active` i
 `--continued`: the coordinator then lets the end through and reports it. No refusal is stored anywhere. No message text is read.
 
 Arguments: --repo COORDINATOR_CHECKOUT --state COORDINATOR_STATE_DIR (the seat file renders both per profile). The session's COORDINATOR_STATE_DIR wins when set.
-Output: exit 2 and the refusal on stderr to keep the session going, else exit 0. It fails open: no T3CODE_THREAD_ID, a missing checkout or state directory, a command that
-fails or times out, or output it cannot read allows the end and prints nothing.
-Test hooks: LEAD_TURN_END_NODE names the node binary.
+Output: exit 2 and the refusal on stderr to keep the session going, else exit 0. It fails open. With no T3CODE_THREAD_ID, or no repo or state argument, the end is allowed and
+nothing is written (this is not a lead session, or it is not set up). Once a thread and both arguments are there, an end that is allowed because the check could not run (a missing
+checkout or state directory, a command that fails, times out or is missing, output it cannot read) writes one JSON line to <state>/t3-hook/turn-end-adapter.jsonl, as does an end
+the coordinator would have refused after a refusal already went out. Each line has `ts`, `adapter`, `thread`, `outcome` ("allowed"), `cause` ("check-failed" or "after-refusal"),
+`reason` and `duration_ms`. A refusal is never issued on a stop that follows one (`stop_hook_active`), whatever the coordinator answers.
+Test hooks: LEAD_TURN_END_NODE names the node binary; LEAD_TURN_END_TIMEOUT is the command's time limit in seconds (default 30).
 """
 import json
 import os
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -36,25 +41,77 @@ def count_jobs(env):
         return 0
 
 
+class CheckFailed(Exception):
+    """The check could not give an answer; the message is the reason that goes in the log."""
+
+
+def log_line(state, thread, cause, reason, started):
+    """One line in <state>/t3-hook/turn-end-adapter.jsonl. The log is best effort: a line that cannot be written never changes the answer."""
+    try:
+        folder = os.path.join(state, "t3-hook")
+        os.makedirs(folder, exist_ok=True)
+        line = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "adapter": "claude-stop-hook", "thread": thread, "outcome": "allowed",
+                "cause": cause, "reason": reason, "duration_ms": int((time.monotonic() - started) * 1000)}
+        with open(os.path.join(folder, "turn-end-adapter.jsonl"), "a", encoding="utf8") as handle:
+            handle.write(json.dumps(line) + "\n")
+    except OSError:
+        pass
+
+
+def ask(argv, hook_input, env, thread, repo, state):
+    """The coordinator's answer for this end: (refusal text or None, reason it did not refuse though it was asked to, or None). Raises CheckFailed when there is no answer."""
+    cli = os.path.join(repo, "src", "coordinatord", "cli.ts")
+    if not os.path.isfile(cli):
+        raise CheckFailed("coordinator checkout not found: " + cli)
+    child = {**env, "COORDINATOR_STATE_DIR": state}
+    continued = hook_input.get("stop_hook_active") is True
+    command = [env.get("LEAD_TURN_END_NODE") or "node", "--experimental-strip-types", "--disable-warning=ExperimentalWarning", cli, "t3", "turn-end",
+               "--thread", thread, "--jobs", str(count_jobs(child))]
+    if continued:
+        command.append("--continued")
+    limit = float(env.get("LEAD_TURN_END_TIMEOUT") or 30)
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=limit, env=child)
+    except subprocess.TimeoutExpired:
+        raise CheckFailed("the command timed out after %g s" % limit)
+    except OSError as error:
+        raise CheckFailed("the command could not start: %s" % error)
+    lines = done.stdout.strip().splitlines()
+    try:
+        answer = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict) or not isinstance(answer.get("answer"), str):
+        tail = (done.stderr.strip().splitlines() or [""])[-1][:200]
+        raise CheckFailed("no readable answer (exit %s)%s" % (done.returncode, ": " + tail if tail else ""))
+    message = answer.get("message")
+    if answer["answer"] != "refuse" or not isinstance(message, str) or not message:
+        return None, None
+    if continued:
+        return None, "the coordinator refused a stop that already followed a refusal"
+    return message, None
+
+
 def refusal(argv, hook_input, env):
-    """The coordinator's refusal text, or None to let the end stand."""
+    """The coordinator's refusal text, or None to let the end stand (writing the log line when the end stands for a reason worth a record)."""
     thread = env.get("T3CODE_THREAD_ID")
     repo, state = option(argv, "--repo"), env.get("COORDINATOR_STATE_DIR") or option(argv, "--state")
     if not thread or not repo or not state:
         return None
-    cli = os.path.join(repo, "src", "coordinatord", "cli.ts")
-    if not os.path.isfile(cli) or not os.path.isdir(state):
+    started = time.monotonic()
+    try:
+        if not os.path.isdir(state):
+            raise CheckFailed("state directory not found: " + state)
+        message, capped = ask(argv, hook_input, env, thread, repo, state)
+    except CheckFailed as error:
+        log_line(state, thread, "check-failed", str(error), started)
         return None
-    child = {**env, "COORDINATOR_STATE_DIR": state}
-    command = [env.get("LEAD_TURN_END_NODE") or "node", "--experimental-strip-types", "--disable-warning=ExperimentalWarning", cli, "t3", "turn-end",
-               "--thread", thread, "--jobs", str(count_jobs(child))]
-    if hook_input.get("stop_hook_active") is True:
-        command.append("--continued")
-    done = subprocess.run(command, capture_output=True, text=True, timeout=30, env=child)
-    lines = done.stdout.strip().splitlines()
-    answer = json.loads(lines[-1]) if lines else {}
-    message = answer.get("message")
-    return message if answer.get("answer") == "refuse" and isinstance(message, str) and message else None
+    except Exception as error:  # a fault in this script itself is a failed check too, not a trap for the lead
+        log_line(state, thread, "check-failed", "hook error: %s: %s" % (type(error).__name__, error), started)
+        return None
+    if capped:
+        log_line(state, thread, "after-refusal", capped, started)
+    return message
 
 
 def main(argv=()):
