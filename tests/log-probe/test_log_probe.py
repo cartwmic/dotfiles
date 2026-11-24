@@ -239,6 +239,51 @@ class CopiesRunRecords(ProbeCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertEqual(len(self.real_log.read_text().splitlines()), 1)
 
+    def own_lines(self):
+        return [json.loads(x) for x in (self.state / "log-probe/log.jsonl").read_text().splitlines()]
+
+    def test_its_own_log_line_names_the_run_ids_it_copied(self):
+        self.probe(command=self.step())
+        self.assertEqual(self.own_lines()[-1]["copied"], ["rr-0123456789ab"])
+        self.assertNotIn("copy_error", self.own_lines()[-1])
+
+    def test_a_line_with_no_copy_has_neither_copy_field(self):
+        self.probe(command=JSON_LOG)
+        self.assertNotIn("copied", self.own_lines()[-1])
+        self.assertNotIn("copy_error", self.own_lines()[-1])
+
+    def test_an_unwritable_step_log_is_said_in_the_report_and_in_its_own_log_and_changes_nothing(self):
+        (self.home / ".local/state").mkdir(parents=True)
+        (self.home / ".local/state/coordinator").write_text("a file where the step log folder should be")
+        r = self.probe(command=self.step())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # the verdict is as before
+        self.assertIn("PASS", r.stdout)
+        self.assertNotIn("copied the step record", r.stdout)
+        self.assertIn("could not write ~/.local/state/coordinator/actions.jsonl", r.stdout)
+        line = self.own_lines()[-1]
+        self.assertEqual(line["outcome"], "pass")
+        self.assertNotIn("copied", line)
+        self.assertIn("rr-0123456789ab", line["copy_error"])
+        self.assertIn("not copied", line["copy_error"])
+        self.assertTrue((self.home / ".local/state/coordinator").is_file())  # nothing was replaced
+
+    def test_malformed_lines_in_the_step_log_are_skipped_and_the_good_record_is_still_copied(self):
+        good = json.dumps({"ts": "2026-11-24T20:00:00Z", "kind": "command", "name": "demo", "detail": {"run": "rr-0123456789ab"}})
+        odd = [
+            "not json at all",
+            '{"unterminated": ',
+            "[1, 2, 3]",
+            json.dumps({"kind": "command", "detail": "a string, not an object"}),
+            json.dumps({"kind": "command"}),
+            json.dumps({"kind": "command", "detail": {"run": 5}}),
+        ]
+        command = "mkdir -p \"$HOME/.local/state/coordinator\"; printf '%%s\\n' %s >> \"$HOME/.local/state/coordinator/actions.jsonl\"" % " ".join("'%s'" % x for x in [*odd, good])
+        r = self.probe(command=command)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        copied = [json.loads(x) for x in self.real_log.read_text().splitlines()]
+        self.assertEqual([c["detail"]["run"] for c in copied], ["rr-0123456789ab"])
+        self.assertEqual(self.own_lines()[-1]["copied"], ["rr-0123456789ab"])
+
 
 if __name__ == "__main__":
     unittest.main()
