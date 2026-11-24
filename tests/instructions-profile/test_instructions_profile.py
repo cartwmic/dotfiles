@@ -35,7 +35,7 @@ SEAT_ROWS = {
     ),
     "axon-work-computer": (
         "| Coordinator | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
-        "| Lead | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
+        "| Lead | Sonnet 5.5 high, Cursor (claude-sonnet-5-5) |",
         "| Planner | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
         "| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
         "| Builder | GLM 5.3 Flash H200 high, Pi (work-glm/test-model) |",
@@ -50,7 +50,7 @@ ADVISOR_LIMIT = (
 )
 CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
 WORK_SEAT_BULLETS = (
-    "- Coordinator, leads and the planner use Cursor (`gemini-4-neon`, `medium` effort). Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
+    "- Coordinator and the planner use Cursor (`gemini-4-neon`, `medium` effort). Leads use Cursor (`claude-sonnet-5-5`, `high` effort). Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
     "T3 provider claudeAgent. Builders use Pi (`work-glm/test-model`, `high` thinking). Computer use uses Claude Code "
     "(Anthropic, `claude-sonnet-5-5`, `high` effort).",
 )
