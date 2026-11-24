@@ -113,6 +113,80 @@ class LogProbe(unittest.TestCase):
         self.assertEqual((rec["outcome"], rec["exit_code"], rec["records"], rec["command"]), ("pass", 3, 1, "sh"))
         self.assertNotIn("secret-argument", lines[-1])
 
+    def own_lines(self):
+        path = self.state / "log-probe" / "log.jsonl"
+        return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+
+    def run_raw(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=self.env, timeout=60)
+
+    def test_every_usage_refusal_is_logged_with_a_reason(self):
+        cases = [
+            (["--seed", "/nope", "--", "true"], "--seed"),
+            (["--watch", "/nope", "--", "true"], "--watch"),
+            ([], "no command"),
+            (["--expect", "(", "--", "true"], "--expect"),
+            (["--timeout", "soon", "--", "true"], "--timeout"),
+            (["--env", "NOEQUALS", "--", "true"], "--env"),
+            (["--frobnicate", "--", "true"], "unknown option"),
+            (["--seed"], "needs a value"),
+        ]
+        for n, (args, word) in enumerate(cases, 1):
+            r = self.run_raw(*args)
+            self.assertEqual(r.returncode, 2, (args, r.stderr))
+            lines = self.own_lines()
+            self.assertEqual(len(lines), n, (args, lines))  # one new line per refusal
+            self.assertEqual(lines[-1]["outcome"], "refused", args)
+            self.assertIn(word, lines[-1]["reason"], args)  # the log alone says which refusal
+
+    def test_each_error_is_logged_with_its_own_reason(self):
+        self.run_raw("--", "/no/such/command")
+        noexec = Path(self.tmp) / "noexec"
+        noexec.write_text("#!/bin/sh\n")
+        noexec.chmod(0o644)
+        self.run_raw("--", str(noexec))
+        r = self.run_raw("--timeout", "0.3", "--", "sleep", "5")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("did not finish", r.stderr)
+        got = [(x["outcome"], x["exit_code"], x["reason"]) for x in self.own_lines()]
+        self.assertEqual(got, [("error", None, "missing command"), ("error", None, "permission denied"), ("error", None, "timeout")])
+
+    def test_a_fail_is_logged_with_its_reason(self):
+        self.probe(command=STDERR_ONLY)
+        self.probe("--expect", "nomatch", command=JSON_LOG)
+        got = [(x["outcome"], x["reason"]) for x in self.own_lines()]
+        self.assertEqual(got, [("fail", "no JSON line in a new or grown file"), ("fail", "none matches --expect")])
+
+    def test_a_pass_and_help_are_logged_without_a_reason(self):
+        self.probe(command=JSON_LOG)
+        self.run_raw("--help")
+        lines = self.own_lines()
+        self.assertEqual([x["outcome"] for x in lines], ["pass", "help"])
+        self.assertTrue(all("reason" not in x for x in lines))
+
+    def test_log_probe_passes_its_own_refusal_probe(self):
+        # the self-probe: a refusal of log-probe must leave a record, so log-probe passes on it
+        r = self.run_raw("--", sys.executable, str(SCRIPT), "--seed", "/nope", "--", "true")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('"outcome": "refused"', r.stdout)
+        self.assertIn("--seed", r.stdout)
+
+    def test_a_renamed_seeded_log_shows_as_new_and_the_reviewer_judges_it(self):
+        # known limit: "new or grown file", not "appended line". The old record is printed under the new name,
+        # so the reviewer sees the 2026-01-01 time and can tell it is not this run's record.
+        seed = Path(self.tmp) / "seed" / ".local/state/w"
+        seed.mkdir(parents=True)
+        (seed / "log.jsonl").write_text('{"utc":"2026-01-01T00:00:00Z"}\n')
+        r = self.probe("--seed", str(seed.parents[2]), command='cd "$HOME/.local/state/w" && mv log.jsonl log.1.jsonl')
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("log.1.jsonl (new)", r.stdout)
+        self.assertIn("2026-01-01T00:00:00Z", r.stdout)
+
+    def test_a_timeout_stops_the_command_and_is_an_error(self):
+        r = self.run_raw("--timeout", "0.3", "--", "sleep", "5")
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("PASS", r.stdout)
+
     def test_an_unwritable_own_log_changes_nothing(self):
         blocker = Path(self.tmp) / "blocked"
         blocker.write_text("a file where the state folder should be")
