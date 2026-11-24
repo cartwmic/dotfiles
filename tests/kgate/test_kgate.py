@@ -3951,7 +3951,11 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 69, done.stdout)
         rec = self.records()[-1]
         self.assertRegex(rec["reason"], r"^quota not available within 2s: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=\d+, limited: requests.cpu=8$")
-        self.assertGreaterEqual(rec["quota_wait_s"], 1.5)
+        # --wait counts from the job's start, and the quota's own clock (quota_wait_s) from the first refusal, which comes after the start-up, the tree hash and the
+        # shipping. Under load that first stretch is most of a second, so quota_wait_s is --wait minus it and can be well under --wait. What kgate promises is that it
+        # does not give up before --wait has passed since the job started: duration_s is measured from that same start.
+        self.assertGreaterEqual(rec["duration_s"], 2)
+        self.assertGreater(rec["quota_wait_s"], 0)   # it did wait for the quota
         self.assertTrue(rec["cleanup"])
 
     def lift_after(self, seconds):
