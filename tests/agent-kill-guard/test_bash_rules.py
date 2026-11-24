@@ -307,6 +307,17 @@ class Merge(unittest.TestCase):
                 self.assertIn("~/git/coordinator/scripts/merge-pr.sh", message)
                 self.assertNotIn("coordinator-workspace/bin", message)
 
+    def test_only_a_plain_repo_and_number_is_the_merge_check(self):
+        """`pr-body-check <repo> <pr>` is the merge check; a flag on it (any spelling) or a body-file form is not, and `--` before the words does not hide them."""
+        gate = "ci-main-status --merge-gate x && "
+        for check_text in ["pr-body-check x 5", "pr-body-check -- x 5"]:
+            with self.subTest(check=check_text):
+                self.assertIsNone(check(gate + check_text + " && gh pr merge 5 --squash --repo cartwmic/other"))
+        for check_text in ["pr-body-check x 5 --skip-intent-review", "pr-body-check --skip-intent-review x 5", "pr-body-check --repo x 5", "pr-body-check -Z x 5", "pr-body-check x",
+                           "pr-body-check x 5 6", "pr-body-check x five"]:
+            with self.subTest(check=check_text):
+                self.assertIn("without both gates", check(gate + check_text + " && gh pr merge 5 --squash --repo cartwmic/other") or "")
+
     def test_the_homelab_repo_is_refused_with_its_script_even_after_both_gates_and_even_without_them(self):
         for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
                      "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
