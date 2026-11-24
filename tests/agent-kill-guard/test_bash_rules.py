@@ -395,6 +395,35 @@ class PrBody(unittest.TestCase):
         # a PR given no --title (an edit that keeps it) needs none on the check
         self.assertIsNone(check("pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e)))
 
+    def test_gh_short_title_flag_is_read_like_the_long_one(self):
+        c, e = self.C, self.E
+        for form in ("-t 'Fix task-12'", "-t='Fix task-12'", "-t'Fix task-12'", "--title='Fix task-12'"):
+            for verb, f in (("create", c), ("edit 5", e)):
+                text = "pr-body-check --body-file %s && gh pr %s %s --body-file %s" % (f, verb, form, f)
+                with self.subTest(text=text):
+                    self.assertIn("was not given", check(text))
+        for form in ("-t t", "-t=t", "-tt"):
+            text = "pr-body-check --body-file %s --title t && gh pr create %s --body-file %s" % (c, form, c)
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_a_title_only_edit_needs_a_check_that_saw_the_title(self):
+        e = self.E
+        for text in ["gh pr edit 5 --title t", "gh pr edit 5 -t t", "pr-body-check --body-file %s --title other && gh pr edit 5 --title t" % e,
+                     "pr-body-check --body-file %s && gh pr edit 5 -t t" % e]:
+            with self.subTest(text=text):
+                self.assertIn("was not given", check(text))
+        for text in ["pr-body-check --body-file %s --title t && gh pr edit 5 --title t" % e, "pr-body-check --body-file %s --title t && gh pr edit 5 -t t" % e,
+                     "gh pr edit 5 --add-label x"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_one_check_must_have_seen_both_the_file_and_the_title(self):
+        c, g = self.C, "/tmp/pr-new-body.zZ9yY8"
+        text = "pr-body-check --body-file %s --title t && pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (g, c, c)
+        self.assertIn("was not given", check(text))
+        self.assertIsNone(check("pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c)))
+
     def test_a_create_or_edit_without_the_check_names_the_chained_form(self):
         for text in ["gh pr create --title t --body-file %s" % self.C, "gh pr edit 5 --body-file %s" % self.E, "gh pr create -F %s" % self.C,
                      "gh pr create --body-file=%s" % self.C, "gh pr new --body-file %s" % self.C, "gh -R cartwmic/dotfiles pr edit 5 -F %s" % self.E,
@@ -447,7 +476,7 @@ class PrBody(unittest.TestCase):
                 self.assertIn("pr-body-check --body-file F", check(text))
 
     def test_an_edit_that_sets_no_body_and_other_pr_commands_pass(self):
-        for text in ["gh pr edit 5 --title t", "gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
+        for text in ["gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
                      "echo gh pr create", "gh issue create --body-file /tmp/pr-body.md", "gh issue edit 5 --body-file /tmp/pr-body.md"]:
             with self.subTest(text=text):
                 self.assertNotIn("pr-body-check --body-file F", check(text) or "")
@@ -593,6 +622,16 @@ class PrBodyViaApiLog(unittest.TestCase):
         self.assertIn("pulls", record["reason"])
         self.assertEqual(record["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=<redacted>")
         self.assertNotIn("hello-body-text", self.log.read_text())
+
+    def test_a_title_refusal_logs_its_reason(self):
+        run = self.run_hook("pr-body-check --body-file /tmp/pr-new-body.aB3xY9 && gh pr create --title t --body-file /tmp/pr-new-body.aB3xY9")
+        self.assertEqual(run.returncode, 2)
+        (record,) = self.records()
+        self.assertEqual((record["rule"], record["reason"]), ("pr_body", "title not given to the check"))
+        self.assertEqual(record["matched"], "gh pr create --title")
+        run = self.run_hook("gh pr create --title t --body-file /tmp/pr-new-body.aB3xY9")  # a missing check is another refusal: no title reason
+        self.assertEqual(run.returncode, 2)
+        self.assertNotIn("reason", self.records()[-1])
 
     def test_the_record_never_holds_a_body_a_header_a_token_or_a_query(self):
         for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -H 'Authorization: token %s' -f body=%s -f title=%s" % ((self.SECRET,) * 3),

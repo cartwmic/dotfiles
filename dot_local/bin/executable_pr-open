@@ -128,7 +128,7 @@ limits_check() { # limits_check what-was-not-done record-args...
 # The check's own output is the refusal message; pass its exit code through (1 a rule failed, 2 it could not run).
 check() {
   if "$@"; then return 0; else code=$?; fi
-  case $code in 1) refuse 1 "the PR description was refused by pr-body-check (output above); fix the body file and run pr-open again, nothing was created" ;;
+  case $code in 1) refuse 1 "the PR description or title was refused by pr-body-check (output above); fix the body file or the title and run pr-open again, nothing was created" ;;
     *) fail 2 "pr-body-check could not run (exit $code, output above)" ;; esac
 }
 

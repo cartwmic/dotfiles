@@ -432,7 +432,7 @@ class PrOpen(unittest.TestCase):
         refused_body.write_text("REFUSEME\n")
         cases = (
             ("bad arguments", ("--bogus",), None, "failed", 2, "unknown argument"),
-            ("a refused body", ("--title", "T", "--body-file", str(refused_body)), None, "refused", 1, "refused by pr-body-check"),
+            ("a refused body", ("--title", "T", "--body-file", str(refused_body)), None, "refused", 1, "description or title was refused by pr-body-check"),
             ("a gh failure", ("--title", "T", "--body-file", str(self.body)), {"FAKE_GH_FAIL": "1"}, "failed", 2, "gh pr create failed"),
             ("a merged PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed true"}, "refused", 2, "is merged"),
             ("a closed PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed false"}, "refused", 2, "is closed"),
