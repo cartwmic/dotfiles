@@ -140,5 +140,62 @@ class Spellings(unittest.TestCase):
             self.assertGreaterEqual(len(variants), 1, name)
 
 
+class FlagBeforeTheVerb(unittest.TestCase):
+    """gh takes flags before the verb (`gh pr -t T edit 5`). An unknown one may take a value, so the word after it can be the verb: the reader cannot tell `edit` or `merge`
+    from a value. Such a command is refused, whatever follows; `-R owner/repo` before the verb is read as before."""
+    REFUSED = [
+        "gh pr -t T edit 5", "gh pr -tT edit 5", "gh pr -t=T edit 5", "gh pr --title T edit 5", "gh pr --title=T edit 5", "gh pr -t x merge 5", "gh pr -tx merge 5",
+        "gh -t x pr merge 5", "gh -x pr edit 5 --body-file /tmp/x", "gh pr -b x edit 5", "gh pr -F /tmp/x edit 5", "gh pr -d create --title T", "gh --weird pr merge 5",
+        "gh -R o/r pr -t x merge 5", "gh pr -R o/r -t x merge 5", "gh pr -R o/r --weird edit 5 --add-label x",
+        "pr-body-check --body-file /tmp/pr-5-body.aB3xY9 --title T && gh pr -t T edit 5 --body-file /tmp/pr-5-body.aB3xY9",
+        "ci-main-status --merge-gate x && pr-body-check x 5 && gh pr -t x merge 5 --squash --repo cartwmic/other",
+    ]
+    READ = [  # (text, rule that refuses it or None): a flag gh lists before the verb is still read
+        ("gh --version", None), ("gh -h", None), ("gh pr -h", None), ("gh pr --help", None), ("gh -R o/r pr view 5", None), ("gh pr -R o/r view 5", None),
+        ("gh -R o/r pr edit 5 --add-label x", None), ("gh pr --repo=o/r edit 5 --add-label x", None), ("gh pr -Ro/r edit 5 --add-label x", None),
+        ("gh -R cartwmic/coordinator pr edit 5 --body x", "pr_body"), ("gh pr -R cartwmic/coordinator edit 5 --body x", "pr_body"), ("gh pr -Rcartwmic/coordinator edit 5 -bx", "pr_body"),
+        ("gh pr -R cartwmic/cartwmic-homelab-v2 merge 182", "merge"), ("gh --repo=cartwmic/cartwmic-homelab-v2 pr merge 182", "merge"),
+        ("gh pr -R o/r edit 5 --title T", "pr_body"),
+    ]
+
+    def test_an_unknown_flag_before_the_verb_is_refused_saying_why(self):
+        for text in self.REFUSED:
+            with self.subTest(text=text):
+                found = verdict(text)
+                self.assertIsNotNone(found)
+                self.assertEqual(found[0], "merge")
+                self.assertIn("before its subcommand", found[1])
+                self.assertIn("cannot tell", found[1])
+
+    def test_a_flag_gh_lists_before_the_verb_is_read(self):
+        for text, rule in self.READ:
+            with self.subTest(text=text):
+                found = verdict(text)
+                self.assertEqual(found[0] if found else None, rule)
+                if found:
+                    self.assertNotIn("before its subcommand", found[1])
+
+    def test_a_flag_after_the_verb_is_not_a_flag_before_it(self):
+        for text in ["gh pr view 5 -t x", "gh pr list --weird", "gh issue list --weird", "gh pr checks 5 -x", "gh issue --weird list", "gh repo -x view"]:
+            with self.subTest(text=text):
+                self.assertIsNone(verdict(text))
+
+    def test_the_log_line_names_the_flag_without_a_value(self):
+        found = base.bash_rules.refusal("gh pr --title=secret edit 5", base.ctx())
+        self.assertEqual(found[1].log, {"reason": "flag before the gh subcommand", "flag": "--title"})
+        self.assertNotIn("secret", str(found[1]))
+
+    def test_the_refusal_applies_on_both_profiles_and_not_elsewhere(self):
+        for profile, refused in (("personal", True), ("axon-work-computer", True), ("termux", False)):
+            with self.subTest(profile=profile):
+                self.assertEqual(verdict("gh pr -t T edit 5", profile=profile) is not None, refused)
+
+    def test_a_gh_pr_checkout_with_a_flag_before_the_verb_is_refused_in_the_live_checkout_on_every_profile(self):
+        """The PR gates run on the two desktop profiles only; the live-checkout rule runs on every profile, so a third profile shows it alone."""
+        env = {"HOME": "/home/cartwmic"}
+        self.assertIn("before its subcommand", (verdict("gh pr -x co 5", profile="termux", env=env, cwd=LIVE) or ("", ""))[1])
+        self.assertIsNone(verdict("gh pr -x co 5", profile="termux", env=env, cwd="/home/cartwmic/tmp-home/x"))
+
+
 if __name__ == "__main__":
     unittest.main()

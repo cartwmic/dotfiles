@@ -157,6 +157,30 @@ class Tables(unittest.TestCase):
             with self.subTest(row=key):
                 self.assertEqual(bash_rules.FLAG_ROWS[key], wrapper[key])
 
+    def test_the_gh_root_row_lists_only_the_flags_the_hook_reads_before_the_group(self):
+        """The ("gh", "") row is the hook's own (the wrapper has no root row): `-R`/`--repo` and the two flags gh itself answers. Any other flag before the group is
+        unknown, so `gh_command` reports it in `before_verb` and the rules refuse the command."""
+        longs, shorts = bash_rules._table(("gh", ""))
+        self.assertEqual(sorted(longs), ["help", "repo", "version"])
+        self.assertEqual(shorts, {"R": "repo", "h": "help"})
+        self.assertEqual(longs["repo"], ("R", 1, False))
+        self.assertEqual(bash_rules.FLAG_ROWS[("gh", "")].split(",")[:2], bash_rules.FLAG_ROWS[("pr", "")].split(","))
+        for words in (["-R", "o/r"], ["-Ro/r"], ["--repo=o/r"], ["--repo", "o/r"]):
+            with self.subTest(words=words):
+                read = bash_rules.normalise([("gh", "")], words + ["pr"], until_positional=True)
+                self.assertEqual((read.value("repo"), read.unknown, read.positional), ("o/r", [], ["pr"]))
+        self.assertEqual(bash_rules.normalise([("gh", "")], ["-t", "x", "pr"], until_positional=True).unknown, ["-t"])
+
+    def test_gh_command_reports_the_flag_before_the_group_or_the_verb(self):
+        before = lambda *args: bash_rules.gh_command(list(args)).before_verb
+        self.assertIsNone(before("pr", "merge", "5"))
+        self.assertIsNone(before("-R", "o/r", "pr", "-R", "p/q", "merge", "5", "-d"))
+        self.assertIsNone(before("pr", "merge", "5", "-x"))  # after the verb: the table for `pr merge` decides
+        self.assertIsNone(before("issue", "-x", "list"))      # not a gated group
+        self.assertEqual(before("pr", "-t", "T", "edit", "5"), "-t")
+        self.assertEqual(before("-t", "x", "pr", "merge", "5"), "-t")
+        self.assertEqual(before("-R", "o/r", "pr", "--weird", "edit"), "--weird")
+
     def test_the_pr_body_check_row_is_its_parse_args_options(self):
         script = Path.home() / "git/coordinator/scripts/pr-body-check.ts"
         if not script.exists():

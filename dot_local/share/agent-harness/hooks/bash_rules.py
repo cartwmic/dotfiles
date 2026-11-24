@@ -76,7 +76,9 @@ Flags are read in one place: FLAG_ROWS (one row per tool and subcommand) and `no
 library accepts (`--x v`, `--x=v`, `-x v`, `-xv`, `-x=v`, clusters of short flags, `--` ending the flags). No rule reads a flag itself (the guard in
 tests/agent-kill-guard/test_flag_normaliser.py fails if one does). A gated command (gh pr create/edit/merge, gh api on a PR or issue endpoint, git's
 merge/reset/stash/branch and any git option before the subcommand in the live checkout, docker before its subcommand) with a flag its row lacks is refused,
-naming the row to extend.
+naming the row to extend. A gh command with a flag before its group (`gh -x pr merge 5`) or, for `gh pr`, between `pr` and the verb (`gh pr -t T edit 5`) is refused
+whatever the flag is, unless it is `-R owner/repo` / `--repo`, `-h`/`--help` or `--version`: gh may take the next word as that flag's value, so the verb cannot be told
+(a flag after the verb is read against the verb's row, as above).
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
 wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
@@ -395,9 +397,11 @@ def _is_pr_check(args):
 # `s:` (a short flag only, read under its letter); a trailing `=` means the flag takes a value (`==`: two words, `jq --arg NAME VALUE`), a trailing `?` a value that can
 # only be attached (`--color=auto`, `-S<key>`). The gh rows are the gh wrapper's FLAGS rows word for word (scripts/gh-wrapper, generated from the installed gh by
 # scripts/leak-guard-gh-flags); tests/agent-kill-guard/test_flag_normaliser.py compares them, because a hook cannot import the wrapper (it is an extensionless script
-# installed apart from the hooks). A flag a gated command carries that its row does not list refuses the command: add it to the row, or regenerate the wrapper's table.
+# installed apart from the hooks). A flag a gated command carries that its row does not list refuses the command: add it to the row, or regenerate the wrapper's table. A flag before the gh group or
+# before the `pr` verb is different: only `-R`/`--repo` (and `-h`, `--version`) are read there, any other refuses the command, because its value may be taken for the verb.
 FLAG_ROWS = {
-    ("gh", ""): "R:repo=,h:help",  # before the group: `gh -R o/r pr merge`
+    ("gh", ""): "R:repo=,h:help,version",  # before the group: `gh -R o/r pr merge`, `gh --version`. The only flags read there: gh takes any other flag before the verb
+                                          # with a value this table cannot size, so the verb cannot be told (see `gh_command`, `_flag_before_verb`)
     ("pr", ""): "R:repo=,h:help",
     ("pr", "create"): "a:assignee=,attach=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
@@ -554,9 +558,11 @@ def normalise(keys, args, until_positional=False):
 
 
 class GhCommand:
-    """A parsed `gh` command: `group` and `verb` (`pr`, `merge`; `api`, ``), `argv` every flag of it read against the rows for that command, `operands` the words after the verb."""
-    def __init__(self, group, verb, argv, operands):
-        self.group, self.verb, self.argv, self.operands = group, verb, argv, operands
+    """A parsed `gh` command: `group` and `verb` (`pr`, `merge`; `api`, ``), `argv` every flag of it read against the rows for that command, `operands` the words after the verb,
+    `before_verb` the first flag before the group or (for `pr`) before the verb that the `gh` and `pr` rows do not list, else None. Such a flag may take a value, so the word after it
+    may be the group or the verb and the command cannot be told: a gated rule refuses it (`_flag_before_verb`)."""
+    def __init__(self, group, verb, argv, operands, before_verb=None):
+        self.group, self.verb, self.argv, self.operands, self.before_verb = group, verb, argv, operands, before_verb
 
 
 GH_VERB_ALIAS = {"new": "create"}  # `gh pr new` is `gh pr create`
@@ -569,21 +575,22 @@ def gh_command(args):
     if not first.positional:
         return None
     group = first.positional[0]
-    keys, verb = [("gh", "")], ""
+    keys, verb, before = [("gh", "")], "", list(first.unknown)
     if group == "api":
         keys.append(("api", ""))
     elif group == "pr":
         second = normalise([("gh", ""), ("pr", "")], first.tail, until_positional=True)
         verb = GH_VERB_ALIAS.get(second.positional[0], second.positional[0]) if second.positional else ""
+        before += second.unknown
         keys += [("pr", "")] + ([("pr", verb)] if ("pr", verb) in FLAG_ROWS else [])
     argv = normalise(keys, first.tail)
     argv.flags, argv.unknown = first.flags + argv.flags, first.unknown + argv.unknown
     if group == "api":
-        return GhCommand(group, "", argv, argv.positional)
+        return GhCommand(group, "", argv, argv.positional, before[0] if before else None)
     if group == "pr":
-        return GhCommand(group, verb, argv, argv.positional[1:])
+        return GhCommand(group, verb, argv, argv.positional[1:], before[0] if before else None)
     verb = argv.positional[0] if argv.positional else ""
-    return GhCommand(group, verb, argv, argv.positional[1:])
+    return GhCommand(group, verb, argv, argv.positional[1:], before[0] if before else None)
 
 
 def _spelled(command, name):
@@ -596,6 +603,23 @@ UNKNOWN_FLAG = (
     "`%s` carries a flag this hook's table does not know (`%s`), so the hook cannot tell what the command does and refuses it. Add the flag to the `%s` row of FLAG_ROWS in "
     "dot_local/share/agent-harness/hooks/bash_rules.py (for gh, copy the row from the gh wrapper's FLAGS: scripts/leak-guard-gh-flags regenerates it), then run the command again."
 )
+
+
+BEFORE_VERB = (
+    "`gh` has a flag before its subcommand (`%s`) that this hook cannot read: gh may take the next word as that flag's value, so the hook cannot tell whether the command is "
+    "`gh pr merge`, `gh pr edit` or `gh pr create`, and it refuses the command. Put the flag after the subcommand (`gh pr edit 5 -t T`); only `-R owner/repo` / `--repo` may come before it."
+)
+
+
+def _flag_before_verb(gh):
+    """The refusal for a gh command with a flag before its group or its `pr` verb that the hook cannot read (`gh pr -t T edit 5`, `gh -x pr merge 5`), else None. It fails closed: the
+    word after such a flag may be the verb, so the rules would never see `edit` or `merge`. The log line names the flag, not any value."""
+    if gh is None or gh.before_verb is None:
+        return None
+    flag = gh.before_verb.partition("=")[0]
+    refusal = Matched(BEFORE_VERB % flag, "gh")
+    refusal.log = {"reason": "flag before the gh subcommand", "flag": flag}
+    return refusal
 
 
 def _unknown_refusal(command, argv, row):
@@ -707,6 +731,8 @@ def merge_rule(walk, ctx):
         return None
     for cmd in walk.cmds:
         gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
+        if _flag_before_verb(gh):
+            return _flag_before_verb(gh)
         if gh is None or (gh.group, gh.verb) != ("pr", "merge"):
             continue
         refused = _unknown_refusal("gh pr merge", gh.argv, "pr merge")
@@ -781,6 +807,8 @@ def pr_body_rule(walk, ctx):
         return None
     for cmd in walk.cmds:
         gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
+        if _flag_before_verb(gh):
+            return _flag_before_verb(gh)
         if gh is None:
             continue
         if gh.group == "api":
@@ -1012,8 +1040,11 @@ def live_git_rule(walk, ctx):
         name = _base(cmd.words[0])
         if name == "gh":  # `gh pr checkout` fetches the PR and checks it out in the directory it runs in
             gh = gh_command(cmd.words[1:])
-            if gh and gh.group == "pr" and gh.verb in ("checkout", "co") and cmd.cwd and _in_live_checkout(cmd.cwd, walk.home, ctx.coordinator_repo):
-                return GIT_LIVE % ("gh pr checkout", _live_checkout_name(ctx))
+            if gh and cmd.cwd and _in_live_checkout(cmd.cwd, walk.home, ctx.coordinator_repo):
+                if _flag_before_verb(gh):  # `gh pr -x co 5`: the verb cannot be told
+                    return _flag_before_verb(gh)
+                if gh.group == "pr" and gh.verb in ("checkout", "co"):
+                    return GIT_LIVE % ("gh pr checkout", _live_checkout_name(ctx))
         if name != "git":
             continue
         top, sub, read = _git_parts(cmd.words)
