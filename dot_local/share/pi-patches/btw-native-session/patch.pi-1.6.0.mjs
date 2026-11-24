@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Pi 1.6.0 and later (1.5.1 to 1.5.x use patch.pi-1.5.1.mjs; 1.5.0 uses patch.pi-1.5.mjs). Anchor-gated, not version-gated: every edit must match exactly once or nothing is written.
-// Bundle chunk names change on every Pi build, so each chunk path in edits.pi-1.6.0.json is only a 1.6.0 hint;
+// Bundle chunk names change on every Pi build, so each chunk path in edits.pi-1.6.0.json is only a hint (they are the 1.5.2 names, which 1.6.0 does not ship);
 // the real chunk is the single bundle file that contains the group's first old or new block.
 import fs from 'node:fs';
 import path from 'node:path';
