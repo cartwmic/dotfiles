@@ -5,6 +5,7 @@ looks for go through the real hook script in a temp copy. Nothing here writes in
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1120,6 +1121,230 @@ class Credential(unittest.TestCase):
     def test_a_relative_path_uses_the_commands_directory(self):
         self.assertTrue(check("cat peers/1.toml", cwd="/home/u/.config/rustdesk"))
         self.assertIsNone(check("cat peers/1.toml", cwd="/home/u/git/app"))
+
+
+class DoorDelivery(unittest.TestCase):
+    """Rule `door`: a command named by a playbook rule's `At:` line is refused once with the rule text, by asking the coordinator's renderer (here a stub script).
+    The real script and `bash_rules.py` are copied beside a `door.json` that points at the stub and an index of the prefixes the renderer answers for."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.hooks = Path(self.tmp) / "hooks"
+        self.hooks.mkdir()
+        for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+            shutil.copy(HOOKS / name, self.hooks / name)
+        self.state = Path(self.tmp) / "state"
+        (self.state / "t3-hook").mkdir(parents=True)
+        self.calls = Path(self.tmp) / "calls.jsonl"
+        self.log = Path(self.tmp) / "guard.jsonl"
+        self.stub = Path(self.tmp) / "stub.py"
+        self.set_renderer('print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:gh pr create): rule 1234abcd"}))')
+        self.set_index(["gh pr create", "kubectl"])
+        self.set_config({"enabled": True, "command": [sys.executable, str(self.stub)], "state": str(self.state)})
+
+    def set_renderer(self, body):
+        self.stub.write_text("import json, sys\nask = json.load(sys.stdin)\nopen(%r, 'a').write(json.dumps(ask) + '\\n')\n%s\n" % (str(self.calls), body))
+
+    def set_index(self, cmds):
+        (self.state / "t3-hook" / "door-index.json").write_text(json.dumps({"cmds": cmds, "tools": []}))
+
+    def set_config(self, config):
+        (self.hooks / "door.json").write_text(json.dumps(config))
+
+    def asked(self):
+        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+
+    def run_hook(self, command, payload=None, profile=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_DOOR", "AGENT_HARNESS_PROFILE", "COORDINATOR_STATE_DIR")}
+        if profile:
+            env["AGENT_HARNESS_PROFILE"] = profile
+        env["AGENT_HARNESS_GUARD_LOG"] = str(self.log)
+        body = {"tool_name": "Bash", "cwd": self.tmp, "session_id": "run-1", "tool_input": {"command": command}}
+        body.update(payload or {})
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(body), capture_output=True, text=True, env=env, timeout=30)
+
+    def test_a_command_at_a_door_is_refused_with_the_rule_text_and_names_the_run(self):
+        run = self.run_hook("gh pr create --title x")
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("refused in agent sessions", run.stderr)
+        self.assertIn("1234abcd", run.stderr)
+        (ask,) = self.asked()
+        self.assertEqual((ask["run"], ask["kind"], ask["value"], ask["adapter"]), ("run-1", "cmd", "gh pr create --title x", "claude"))
+
+    def test_the_renderer_is_not_started_for_a_command_no_door_names(self):
+        for command in ("ls -la", "gh pr view 3", "git status && echo hi", "gh pr"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command).returncode, 0)
+        self.assertEqual(self.asked(), [])
+
+    def test_a_prefix_matches_by_words_and_through_a_path_a_pipe_and_a_compound(self):
+        for command in ("/usr/bin/kubectl get pods", "echo x | kubectl apply -f -", "cd /tmp && gh pr create"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command).returncode, 2)
+        self.assertEqual(self.run_hook("kubectlx get pods").returncode, 0)
+
+    def test_a_repo_flag_before_the_gh_subcommand_does_not_hide_the_door(self):
+        for command in ("gh -R owner/repo pr create --title x", "gh --repo owner/repo pr create", "gh --repo=owner/repo pr create", "gh -R=owner/repo pr create"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command, {"session_id": "run-" + str(abs(hash(command)))}).returncode, 2)
+        self.assertEqual([ask["value"] for ask in self.asked()].count("gh pr create --title x"), 1)
+        self.assertEqual({ask["value"] for ask in self.asked()}, {"gh pr create --title x", "gh pr create"})
+        # only the flag straight after gh is dropped: a `-R` elsewhere, and other gh commands, are as typed
+        self.assertEqual(self.run_hook("gh -R owner/repo pr view 3").returncode, 0)
+
+    def test_pr_open_reaches_its_door_on_both_profiles(self):
+        self.set_index(["gh pr create", "pr-open", "kubectl"])
+        self.set_renderer('print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:pr-open): rule 1234abcd"}))')
+        for profile in ("personal", "axon-work-computer"):
+            with self.subTest(profile=profile):
+                run = self.run_hook("pr-open --edit 5 --body-file /tmp/pr-5-body.AbCdEf", {"session_id": "run-" + profile}, profile=profile)
+                self.assertEqual(run.returncode, 2)
+                self.assertIn("door cmd:pr-open", run.stderr)
+        self.assertEqual({ask["value"] for ask in self.asked()}, {"pr-open --edit 5 --body-file /tmp/pr-5-body.AbCdEf"})
+
+    def test_the_told_refusal_writes_no_guard_log_line_of_its_own(self):
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.assertFalse(self.log.exists())
+
+    def test_a_renderer_with_nothing_to_tell_lets_the_command_run(self):
+        self.set_renderer("print('{}')")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(len(self.asked()), 1)
+
+    def test_a_renderer_that_fails_or_prints_rubbish_lets_the_command_run(self):
+        for body in ("sys.exit(3)", "print('not json')", "print(json.dumps({'text': 5}))"):
+            with self.subTest(body=body):
+                self.set_renderer(body)
+                self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+
+    def records(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_a_renderer_that_fails_is_one_door_failed_line_that_names_the_failure_and_never_the_command(self):
+        for body, want in (("sys.exit(3)", "exited 3"), ("print('not json')", "not readable"), ("sys.stderr.write('t3-hook --door: no playbook\\n')", "no playbook"), ("sys.stderr.write('boom\\n'); sys.exit(1)", "exited 1: boom")):
+            with self.subTest(body=body):
+                self.log.unlink(missing_ok=True)
+                self.set_renderer(body)
+                self.assertEqual(self.run_hook("gh pr create --body SECRET-VALUE").returncode, 0)
+                (record,) = self.records()
+                self.assertEqual((record["action"], record["run"], record["adapter"]), ("door-failed", "run-1", "claude"))
+                self.assertIn(want, record["reason"])
+                self.assertNotIn("SECRET-VALUE", self.log.read_text())
+
+    def test_the_callers_wait_longer_than_the_renderer_so_a_hang_is_logged_not_killed(self):
+        # A renderer that hangs is cut off after DOOR_TIMEOUT seconds and logged as a `door-failed` line. The hosts that run this script (Pi's extension, the Codex hook, Cursor's shell_guard) must not stop it first.
+        inner = int(re.search(r"timeout=(\d+),\s*env=dict\(self\.env, COORDINATOR_STATE_DIR", (HOOKS / "refuse_pattern_kill.py").read_text()).group(1))
+        pi = re.search(r"timeout:\s*(\d+)_(\d{3})", (ROOT / "dot_pi/private_agent/extensions/refuse-pattern-kill/index.ts").read_text())
+        codex = re.search(r"timeout:\s*(\d+)\}", (ROOT / "dot_codex/modify_hooks.json.tmpl").read_text())
+        cursor = re.search(r"timeout\s*=\s*(\d+)", (ROOT / "dot_cursor/hooks/executable_shell_guard.py").read_text())
+        for name, outer in (("Pi", int(pi.group(1)) if pi.group(2) == "000" else None), ("Codex", int(codex.group(1))), ("Cursor", int(cursor.group(1)))):
+            self.assertIsNotNone(outer, name)
+            self.assertGreater(outer, inner, "%s stops the classifier after %s s, before its %s s renderer wait" % (name, outer, inner))
+
+    def test_nothing_to_tell_and_a_told_refusal_write_no_failure_line(self):
+        self.set_renderer("print('{}')")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.set_renderer("print(json.dumps({'text': 'This call is refused in agent sessions this once: x'}))")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.set_renderer("pass")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.records(), [])
+
+    def test_no_session_id_no_config_or_a_disabled_config_means_no_door(self):
+        self.assertEqual(self.run_hook("gh pr create", {"session_id": ""}).returncode, 0)
+        self.set_config({"enabled": False, "command": [sys.executable, str(self.stub)], "state": str(self.state)})
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        (self.hooks / "door.json").unlink()
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.asked(), [])
+
+    def test_a_missing_or_broken_index_means_no_door_and_a_broken_one_is_in_the_log(self):
+        (self.state / "t3-hook" / "door-index.json").write_text("{not json")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        (record,) = self.records()
+        self.assertEqual((record["action"], record["run"]), ("door-failed", "run-1"))
+        self.assertIn("index could not be read", record["reason"])
+        self.log.unlink()
+        (self.state / "t3-hook" / "door-index.json").unlink()
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.asked(), [])
+        self.assertEqual(self.records(), [])  # no index yet is not a failure
+
+    def test_a_door_json_that_is_there_and_broken_is_in_the_log_and_a_missing_one_is_not(self):
+        for text in ("{not json", "[1]", json.dumps({"enabled": True}), json.dumps({"enabled": True, "command": ["x"]})):
+            with self.subTest(text=text):
+                self.log.unlink(missing_ok=True)
+                (self.hooks / "door.json").write_text(text)
+                self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+                (record,) = self.records()
+                self.assertEqual(record["action"], "door-failed")
+                self.assertIn("door.json", record["reason"])
+        self.log.unlink(missing_ok=True)
+        (self.hooks / "door.json").unlink()
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.records(), [])
+
+    def test_cursor_is_named_by_its_conversation_id(self):
+        run = self.run_hook("gh pr create", {"session_id": None, "conversation_id": "conv-9"})
+        self.assertEqual(run.returncode, 2)
+        (ask,) = self.asked()
+        self.assertEqual((ask["run"], ask["adapter"]), ("conv-9", "cursor"))
+
+    def test_the_adapter_is_taken_from_the_payload_when_the_caller_names_it(self):
+        self.assertEqual(self.run_hook("gh pr create", {"adapter": "pi"}).returncode, 2)
+        self.assertEqual(self.asked()[0]["adapter"], "pi")
+
+    def test_another_rule_refuses_first_and_the_renderer_is_not_asked(self):
+        self.set_index(["gh pr create", "gh pr merge"])
+        run = self.run_hook("gh pr merge 3 && gh pr create", profile="personal")
+        self.assertEqual(run.returncode, 2)
+        self.assertNotIn("1234abcd", run.stderr)
+        self.assertEqual(self.asked(), [])
+
+    def render(self, profile, extra=""):
+        home = Path(self.tmp) / ("home-" + profile + str(len(extra)))
+        home.mkdir()
+        config = Path(self.tmp) / (profile + str(len(extra)) + ".yaml")
+        config.write_text("data:\n  profile: %s\n%s" % (profile, extra))
+        run = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination", str(home), "execute-template"],
+                             input=(HOOKS / "door.json.tmpl").read_text(), capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return home, json.loads(run.stdout)
+
+    @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
+    def test_the_rendered_file_names_each_profiles_own_renderer_and_state_directory(self):
+        home, personal = self.render("personal")
+        self.assertEqual(personal["state"], str(home / ".local/share/coordinator"))
+        self.assertEqual(personal["command"][-2:], [str(home / "git/coordinator/src/t3-hook/hook.ts"), "--door"])
+        home, work = self.render("axon-work-computer")
+        self.assertEqual(work["state"], str(home / ".local/share/coordinator-work"))
+        self.assertEqual(work["command"][-2:], [str(home / "coordinator-work/src/t3-hook/hook.ts"), "--door"])
+        for config in (personal, work):
+            self.assertIs(config["enabled"], True)
+
+    @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
+    def test_remove_coordinator_hook_renders_the_door_off(self):
+        _, off = self.render("personal", "  agentHost:\n    removeCoordinatorHook: true\n")
+        self.assertIs(off["enabled"], False)
+        _, on = self.render("personal", "  agentHost:\n    removeCoordinatorHook: false\n")
+        self.assertIs(on["enabled"], True)
+
+    def test_a_renderer_that_tells_once_per_run_lets_the_same_command_pass_the_second_time(self):
+        told = Path(self.tmp) / "told.json"
+        self.set_renderer("""
+import os
+told = %r
+seen = json.load(open(told)) if os.path.exists(told) else []
+if ask["run"] in seen:
+    print("{}")
+else:
+    json.dump(seen + [ask["run"]], open(told, "w"))
+    print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:gh pr create): rule 1234abcd"}))
+""" % str(told))
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.run_hook("gh pr create", {"session_id": "run-2"}).returncode, 2)
 
 
 class Hook(unittest.TestCase):

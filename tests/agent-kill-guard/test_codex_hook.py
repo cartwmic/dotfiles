@@ -29,7 +29,7 @@ TRUST = ROOT / "dot_local/user_scripts/executable_codex_trust_hooks.py"
 COMMAND = (ROOT / ".chezmoitemplates/codex_guard_command").read_text()
 CODEX = shutil.which("codex") or next(iter(sorted(glob.glob(os.path.expanduser("~/.t3/tools/codex/*/bin/codex")))[::-1]), None)
 OWNER_GROUP = {"matcher": "^Bash$", "hooks": [{"type": "command", "command": "echo someone-elses-hook", "timeout": 5}]}
-OURS = {"matcher": "^Bash$", "hooks": [{"type": "command", "command": COMMAND, "timeout": 10}]}
+OURS = {"matcher": "^Bash$", "hooks": [{"type": "command", "command": COMMAND, "timeout": 20}]}
 PERSONAL_HUB = {"profile": "personal", "hub": {"enabled": True}, "t3Hub": {"enabled": False}}
 WORK = {"profile": "axon-work-computer", "hub": {"enabled": False}}
 
