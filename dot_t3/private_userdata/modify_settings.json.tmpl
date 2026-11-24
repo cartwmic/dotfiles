@@ -105,7 +105,7 @@
 #               until that is decided (docs/profiles.md).
 # Compaction point: Claude Code compacts about 33,000 tokens below the window, so 200000 compacts near 167K and 300000 near 267K.
 # Each personal-mode apply replaces exactly the owned ids under providerInstances, sets worktreesDirectory and idleCompaction; no other key or instance is touched. No file, or a file that is
-# not a JSON object, is passed through unchanged; the work mode (below) refuses a providerInstances or an instance config that is not an object the same way, and logs the apply. T3 writes the file without a trailing newline, and so does this script.
+# not a single JSON object, is passed through unchanged; the work mode (below) refuses a multi-value input, a providerInstances, an instance or an instance config that is not an object the same way, and logs the apply. T3 writes the file with a trailing newline, and this script prints a trailing newline exactly when the input has one.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
 # When the merge changes nothing as data (only key order or indentation differ from what T3 wrote), the input is printed byte for byte, so chezmoi shows no drift.
 set -eu
@@ -126,6 +126,8 @@ set -eu
 # (XDG_STATE_HOME respected); a logging failure never fails the apply. The merged document is printed in jq's default pretty
 # form, the form T3 writes, so over a pretty input the apply differs from the input only on the changed lines; when nothing
 # changes as data the input is printed byte for byte, so chezmoi shows no drift.
+# These two literals duplicate the personal body's AUTO_COMPACT_WINDOWS and IDLE_COMPACTION below: the personal body must stay
+# byte for byte what main has, so the work branch cannot read the values from there. WorkModeTest keeps the copies equal.
 AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
 IDLE_COMPACTION='beforeCacheExpires'
 
@@ -140,8 +142,11 @@ log_apply() {
 input=$(cat; printf x)
 input=${input%x}
 
-if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
-  log_apply skipped ',"reason":"input not an object"'
+# The file must be exactly one JSON value and it must be an object: a guard that judged only the last value has already let a
+# second value be dropped (the merge below keeps only the first), so anything else is refused with the input unchanged. Empty
+# input is refused here too, and logged as skipped with this reason.
+if ! printf %s "$input" | jq -s -e 'length == 1 and (.[0] | type) == "object"' >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"input is not a single JSON object"'
   printf %s "$input"
   exit 0
 fi
@@ -152,7 +157,14 @@ if ! printf %s "$input" | jq -e '(.providerInstances // {}) | type == "object"' 
   printf %s "$input"
   exit 0
 fi
-if ! printf %s "$input" | jq -e '[(.providerInstances // {})[] | (.config? // {}) | type] | all(. == "object")' >/dev/null 2>&1; then
+# Nor an instance that is not an object, or one whose config is present and not an object (a string instance or a false config
+# would otherwise be refused only by the merge failing with a jq error on stderr).
+if ! printf %s "$input" | jq -e '[(.providerInstances // {})[] | type] | all(. == "object")' >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"an instance is not an object"'
+  printf %s "$input"
+  exit 0
+fi
+if ! printf %s "$input" | jq -e '[.providerInstances[]? | if type == "object" and has("config") then (.config | type) else "object" end] | all(. == "object")' >/dev/null 2>&1; then
   log_apply skipped ',"reason":"an instance config is not an object"'
   printf %s "$input"
   exit 0
@@ -264,7 +276,7 @@ esac
 {{- $owned = append (append $owned "pi") "pi-lead" }}
 {{- end }}
 {{- if eq .chezmoi.os "linux" }}
-{{- /* seat-homelab-chat: the durable lead that answers #homelab, with a fixed tool list held by a PreToolUse hook in its settings file (docs/profiles.md, "Agent seat instances"). Rendered on personal Linux, where the coordinator runs, and in container mode (the agent host pod, which is Linux: the pod's T3 hosts the #homelab lead, and its settings file, MCP file and hook script are laid down by the same apply); the personal Mac gets no instance and the work profile has no T3 settings file here. Same window and environment as seat-lead (no advisor); its MCP file holds hindsight only. */}}
+{{- /* seat-homelab-chat: the durable lead that answers #homelab, with a fixed tool list held by a PreToolUse hook in its settings file (docs/profiles.md, "Agent seat instances"). Rendered on personal Linux, where the coordinator runs, and in container mode (the agent host pod, which is Linux: the pod's T3 hosts the #homelab lead, and its settings file, MCP file and hook script are laid down by the same apply); the personal Mac gets no instance and the work profile's restricted work mode writes none. Same window and environment as seat-lead (no advisor); its MCP file holds hindsight only. */}}
 {{- $homelabChat := dict "driver" "claudeAgent" "displayName" "Claude (homelab-chat)" "enabled" true
       "environment" (list (dict "name" "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" "value" "1" "sensitive" false) $fizzy)
       "config" (dict "autoCompactWindow" "200000" "launchArgs" (printf "--settings %s/seat-homelab-chat.json --strict-mcp-config --mcp-config %s/mcp-homelab-chat.json" $fleet $fleet)) }}

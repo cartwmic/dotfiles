@@ -829,11 +829,56 @@ class WorkModeTest(unittest.TestCase):
         bad = '{"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "config": "oops"}}}'
         self.assertEqual(self.apply(bad), bad)
 
+    def test_a_multi_value_input_is_refused_unchanged(self):
+        """Two JSON values in one file: a guard that judged only the last value has already let the merge drop the first, so the
+        input is refused unless it is exactly one JSON object, and passes through byte for byte (both values kept). Empty input is
+        refused by the same guard and logged as skipped with the same reason."""
+        for bad in ('{"a": 1} {"keep": "me"}', '{} {}', '{"a": 1} {"keep": "me"}\n', '{} {}\n'):
+            self.assertEqual(self.apply(bad), bad)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            out = self.apply_logged('{"a": 1} {"keep": "me"}', state)
+            self.assertEqual(out, '{"a": 1} {"keep": "me"}')
+            record = json.loads(self.logged_lines(state)[0])
+            self.assertEqual(record["action"], "skipped")
+            self.assertEqual(record["reason"], "input is not a single JSON object")
+
+    def test_a_non_object_instance_is_refused_unchanged(self):
+        """An instance entry that is a string, null or false, or a config that is false: refused up front with a clean skip and
+        the input unchanged, not through a failing merge (apply_logged asserts nothing reaches stderr)."""
+        for bad in ('{"providerInstances": {"claudeAgent": "oops"}}',
+                    '{"providerInstances": {"claudeAgent": null}}',
+                    '{"providerInstances": {"claudeAgent": false}}',
+                    '{"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "config": false}}}'):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.apply_logged(bad, state)
+                self.assertEqual(out, bad)
+                record = json.loads(self.logged_lines(state)[0])
+                self.assertEqual(record["action"], "skipped")
+                self.assertIn(record["reason"], ("an instance is not an object", "an instance config is not an object"), bad)
+
+    def test_the_work_literals_equal_the_personal_ones(self):
+        """The work branch duplicates the personal body's two literals (the personal body must stay byte for byte what main has,
+        so the work branch cannot read the values from there); this test keeps the copies equal."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            personal = self.render_personal(REPO, "darwin", home)
+        for name in ("AUTO_COMPACT_WINDOWS=", "IDLE_COMPACTION="):
+            w = [line for line in self.script.splitlines() if line.startswith(name)]
+            p = [line for line in personal.splitlines() if line.startswith(name)]
+            self.assertEqual(len(w), 1, name)
+            self.assertEqual(len(p), 1, name)
+            self.assertEqual(w[0], p[0], name)
+
     def apply_logged(self, stdin, state):
-        """Run the rendered script with HOME and XDG_STATE_HOME in the scratch dir, so the log line lands there."""
+        """Run the rendered script with HOME and XDG_STATE_HOME in the scratch dir, so the log line lands there. No path may
+        print to stderr: every refusal happens up front, before the merge can fail."""
         r = subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30,
                            env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state")))
         assert r.returncode == 0, r.stderr
+        assert r.stderr == "", r.stderr
         return r.stdout
 
     # Sentinels planted in an input file: file content that must never reach the log, whether the merge keeps it or deletes it.
