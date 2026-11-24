@@ -85,6 +85,7 @@ python3 scripts/ci-par.py \
   tests/agent-kill-guard \
   tests/config-show \
   tests/disposition-check \
+  tests/log-probe \
   tests/stop-running-jobs \
   tests/homelab-chat \
   tests/computer-use-seat \

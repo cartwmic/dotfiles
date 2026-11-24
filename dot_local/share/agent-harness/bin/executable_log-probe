@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""log-probe: does a command leave a record that survives the terminal? (design principle 14)
+
+usage: log-probe [--expect REGEX] [--seed DIR] [--watch DIR ...] [--env NAME=VALUE ...] [--timeout SECONDS] [--keep] -- COMMAND [ARGS ...]
+
+Runs COMMAND once in a scratch HOME (an empty temporary directory, also the XDG state, data, config and cache
+folders) and reports every line in a file the run created or grew there. The run passes when at least one such
+line is a JSON object, the structured line principle 14 asks for. What COMMAND printed and the exit code it gave do
+not count: principle 14 says screen output, stderr and an exit code alone are not a log. The exit code of
+COMMAND is shown but never judged, so a refusal path (a command that exits 3 on purpose) is probed the same way
+as a success.
+
+  --expect REGEX   at least one appended JSON line must match REGEX (Python re.search on the raw line): use it to
+                   probe one path, for example the line a refusal writes: --expect '"outcome": *"refused"'
+  --seed DIR       copy the contents of DIR into the scratch HOME first (a kit, a config file, a fake node): the
+                   setup the command needs to reach the path under test
+  --watch DIR      also watch DIR, a folder outside HOME that only this command writes to (not a folder other
+                   agents write to, such as the live $AGENT_TRACES_DIR: their lines would count). It is read
+                   before and after the run and nothing in it is changed by log-probe
+  --env NAME=VALUE set NAME for COMMAND (repeat). COMMAND inherits the rest of your environment, with only HOME
+                   and the XDG_* folders pointed at the scratch HOME: a variable that holds an absolute path
+                   (COORDINATOR_STATE_DIR, AGENT_TRACES_DIR) still points it at real state, so set it into the
+                   scratch HOME yourself, for example --env AGENT_TRACES_DIR=... through a small sh -c launcher
+  --timeout        seconds before COMMAND is stopped (default 120); that is an error, exit 2
+  --keep           leave the scratch HOME in place and print its path
+
+Why a probe and not a reading of the code: the fix for "the wrapper leaves no record of which kit ran" was a line
+on stderr, and a review round later it was still not a record. Whether a record exists is a fact a run shows.
+A review finding that cites principle 14 names the probe command as its "done when", and the fixer runs it
+before saying the finding is fixed.
+
+What passes is "a new or grown file holding a JSON line", not strictly "an appended log line": a one-line state
+file the command writes fresh, or a log the command renamed (it shows as new), also passes. The report prints the
+record and where it was found; the reviewer judges whether that record is the one principle 14 asks for.
+
+In a finding's repro (the findings contract's field), match the failure with {"output_contains":"log-probe: FAIL"},
+not {"exit":"nonzero"}: exit 2 (the probe could not run) is also nonzero.
+
+Exit 0: at least one JSON line was found (and, with --expect, one matches). 1: none was; the report says what
+changed instead. 2: bad arguments, COMMAND could not be started or timed out.
+
+Every run appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/log-probe/log.jsonl, refusals of its own
+arguments included: utc, command name, outcome pass|fail|error|refused|help, the command's exit code, records seen,
+duration_s, and a reason on every fail, error and refusal (for example "no command", "--seed is not a folder",
+"missing command", "permission denied", "timeout", "none matches --expect"). A log that cannot be written never
+changes the exit code. The command's arguments are not logged.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+SHOW = 300  # characters of a record shown in the report
+TIME = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d")
+
+
+class Refusal(Exception):
+    """A bad argument: main() logs it with this message as the reason, then exits 2."""
+
+
+def usage(message):
+    raise Refusal(message)
+
+
+def snapshot(root):
+    """{path: size} of every regular file under root."""
+    found = {}
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            path = os.path.join(base, name)
+            try:
+                if os.path.isfile(path) and not os.path.islink(path):
+                    found[path] = os.path.getsize(path)
+            except OSError:
+                pass
+    return found
+
+
+def appended(roots, before, after):
+    """[(path, how, bytes)] for each file a run created or grew: the new bytes only."""
+    out = []
+    for path, size in sorted(after.items()):
+        old = before.get(path)
+        if old is not None and size <= old:
+            continue
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(old or 0)
+                out.append((path, "new" if old is None else "appended", handle.read()))
+        except OSError:
+            pass
+    return out
+
+
+def json_lines(data):
+    """The lines of data that are JSON objects, as (raw line, object)."""
+    found = []
+    for raw in data.decode("utf-8", "replace").splitlines():
+        text = raw.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            value = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            found.append((text, value))
+    return found
+
+
+def has_time(value):
+    if isinstance(value, str):
+        return bool(TIME.match(value))
+    if isinstance(value, dict):
+        return any(has_time(v) for v in value.values())
+    return False
+
+
+def write_own_log(real_state, run, started):
+    """One line for this run, in the caller's real state folder. Never raises."""
+    try:
+        folder = Path(real_state) / "log-probe"
+        folder.mkdir(parents=True, exist_ok=True)
+        line = {
+            "utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "action": "probe",
+            "command": os.path.basename(run["command"][0]) if run["command"] else "",
+            "outcome": run["outcome"],
+            "exit_code": run["exit_code"],
+            "records": run["records"],
+            "duration_s": round(time.time() - started, 2),
+        }
+        if run["reason"]:
+            line["reason"] = run["reason"]
+        with open(folder / "log.jsonl", "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line) + "\n")
+    except Exception:
+        pass
+
+
+def probe(argv, run):
+    """Parse argv and probe one command. Returns the exit code; fills run (command, outcome, exit_code, records,
+    reason) as it goes so that main() can log the run however it ends."""
+    expect = seed = None
+    watch, extra_env = [], {}
+    timeout, keep = 120.0, False
+    args = list(argv)
+    command = None
+    run["command"] = []
+    while args:
+        a = args.pop(0)
+        if a == "--":
+            command = run["command"] = args
+            break
+        if a == "--keep":
+            keep = True
+        elif a in ("--expect", "--seed", "--watch", "--env", "--timeout"):
+            if not args:
+                usage("%s needs a value" % a)
+            v = args.pop(0)
+            if a == "--expect":
+                try:
+                    expect = re.compile(v)
+                except re.error as error:
+                    usage("--expect is not a regular expression: %s" % error)
+            elif a == "--seed":
+                seed = v
+            elif a == "--watch":
+                watch.append(v)
+            elif a == "--env":
+                if "=" not in v:
+                    usage("--env needs NAME=VALUE")
+                name, value = v.split("=", 1)
+                extra_env[name] = value
+            else:
+                try:
+                    timeout = float(v)
+                except ValueError:
+                    usage("--timeout needs a number of seconds")
+        elif a in ("-h", "--help"):
+            print((__doc__ or "").strip())
+            run["outcome"] = "help"
+            return 0
+        else:
+            usage("unknown option %s (put the command after --)" % a)
+    if not command:
+        usage("no command: give it after --")
+    if seed is not None and not os.path.isdir(seed):
+        usage("--seed %s is not a folder" % seed)
+    for folder in watch:
+        if not os.path.isdir(folder):
+            usage("--watch %s is not a folder" % folder)
+
+    home = tempfile.mkdtemp(prefix="log-probe-")
+    try:
+        if seed is not None:
+            shutil.copytree(seed, home, symlinks=True, dirs_exist_ok=True)
+        env = dict(os.environ)
+        env.update(HOME=home, XDG_STATE_HOME=os.path.join(home, ".local", "state"), XDG_DATA_HOME=os.path.join(home, ".local", "share"),
+                   XDG_CONFIG_HOME=os.path.join(home, ".config"), XDG_CACHE_HOME=os.path.join(home, ".cache"))
+        env.update(extra_env)
+        roots = [home] + watch
+        before = {}
+        for root in roots:
+            before.update(snapshot(root))
+        try:
+            done = subprocess.run(command, env=env, capture_output=True, timeout=timeout)
+        except FileNotFoundError:
+            print("log-probe: cannot start %s: no such command" % command[0], file=sys.stderr)
+            run["reason"] = "missing command"
+            return 2
+        except PermissionError:
+            print("log-probe: cannot start %s: permission denied" % command[0], file=sys.stderr)
+            run["reason"] = "permission denied"
+            return 2
+        except subprocess.TimeoutExpired:
+            print("log-probe: %s did not finish in %s seconds" % (command[0], timeout), file=sys.stderr)
+            run["reason"] = "timeout"
+            return 2
+        exit_code = run["exit_code"] = done.returncode
+        after = {}
+        for root in roots:
+            after.update(snapshot(root))
+        changed = appended(roots, before, after)
+
+        print("log-probe: ran %s (exit %d); scratch HOME %s" % (" ".join(command)[:200], exit_code, home))
+        print("log-probe: it printed %d bytes on stdout and %d on stderr; neither is a record (principle 14)" % (len(done.stdout), len(done.stderr)))
+        records = []
+        for path, how, data in changed:
+            lines = json_lines(data)
+            shown = path[len(home) + 1:] if path.startswith(home + os.sep) else path
+            if lines:
+                for raw, value in lines:
+                    records.append((shown, raw, value))
+                    print("log-probe: record in %s (%s): %s" % (shown, how, raw[:SHOW] + ("..." if len(raw) > SHOW else "")))
+            else:
+                print("log-probe: %s changed (%s, %d bytes) but holds no JSON line, so it is not a structured record" % (shown, how, len(data)))
+        seen = run["records"] = len(records)
+        if expect is not None:
+            matching = [r for r in records if expect.search(r[1])]
+            if not matching:
+                print("log-probe: FAIL %d record(s), none matches --expect %s" % (seen, expect.pattern))
+                run["outcome"], run["reason"] = "fail", "none matches --expect"
+                return 1
+        if seen == 0:
+            print("log-probe: FAIL nothing was appended as a JSON line under the scratch HOME or --watch folders: the run left no record that survives the terminal")
+            run["outcome"], run["reason"] = "fail", "no JSON line in a new or grown file"
+            return 1
+        if not any(has_time(r[2]) for r in records):
+            print("log-probe: note: no record holds an ISO UTC time; principle 14 asks every record for one")
+        print("log-probe: PASS %d record(s) in %d file(s)" % (seen, len({r[0] for r in records})))
+        run["outcome"] = "pass"
+        return 0
+    finally:
+        if keep:
+            print("log-probe: kept %s" % home)
+        else:
+            shutil.rmtree(home, ignore_errors=True)
+
+
+def main(argv):
+    started = time.time()
+    real_state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    run = {"command": [], "outcome": "error", "exit_code": None, "records": 0, "reason": None}
+    try:
+        code = probe(argv, run)
+    except Refusal as refusal:
+        print("log-probe: %s" % refusal, file=sys.stderr)
+        print((__doc__ or "").split("\n\n")[0].strip(), file=sys.stderr)
+        run["outcome"], run["reason"] = "refused", str(refusal)
+        code = 2
+    except BaseException as error:  # a bug or an interrupt: leave a line, then let it show
+        run["reason"] = "unexpected %s" % type(error).__name__
+        write_own_log(real_state, run, started)
+        raise
+    write_own_log(real_state, run, started)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
