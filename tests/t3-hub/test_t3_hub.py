@@ -492,7 +492,8 @@ class ProfileGateTest(unittest.TestCase):
 
     def test_only_personal_macos_manages_the_hub_files(self):
         for profile in ("axon-work-computer", "termux"):
-            self.assertEqual(self.hub_paths(profile), set(), profile)
+            # work manages the settings file in the restricted work mode (WorkModeTest); termux gets no .t3 at all
+            self.assertEqual(self.hub_paths(profile), set() if profile == "termux" else {".t3", ".t3/userdata", ".t3/userdata/settings.json"}, profile)
         if DARWIN:
             self.assertEqual(self.hub_paths("personal"), {".t3", ".t3/userdata", ".t3/userdata/settings.json", CLAUDE_FILE})
         elif sys.platform.startswith("linux"):
@@ -621,15 +622,16 @@ class LinuxSettingsTest(unittest.TestCase):
         none = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
         self.assertEqual(list(none), list(json.loads(FIXTURE)["providerInstances"]))
 
-    def test_the_work_profile_has_no_t3_settings_file_and_no_wrapper(self):
-        """Work keeps neither the T3 settings file nor the wrapper: both are ignored on axon-work-computer, on either OS."""
+    def test_the_work_profile_keeps_the_settings_file_but_not_the_wrapper(self):
+        """Work manages the T3 settings file (the restricted work mode, WorkModeTest) on either OS, and still no wrapper."""
         for os_name in ("linux", "darwin"):
             env = Env(profile="axon-work-computer", codex_active=False)
             try:
                 managed = env.chezmoi("managed", "--override-data", json.dumps({"chezmoi": {"os": os_name}})).split()
             finally:
                 env.close()
-            self.assertEqual([m for m in managed if m.startswith(".t3") or m.endswith("pi_lead.sh")], [], os_name)
+            self.assertEqual([m for m in managed if m.endswith("pi_lead.sh")], [], os_name)
+            self.assertEqual([m for m in managed if m.startswith(".t3")], [".t3", ".t3/userdata", ".t3/userdata/settings.json"], os_name)
 
     def test_personal_linux_manages_the_wrapper_and_the_mac_does_not(self):
         for os_name, expect in (("linux", True), ("darwin", False)):
@@ -667,6 +669,318 @@ class LinuxSettingsTest(unittest.TestCase):
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": False})
         self.assertNotIn("pi", json.loads(run_script(script, FIXTURE))["providerInstances"])
         self.assertNotIn("pi-lead", json.loads(run_script(script, FIXTURE))["providerInstances"])
+
+
+class WorkModeTest(unittest.TestCase):
+    """The work profile's restricted mode (docs/profiles.md): a small standalone script that owns no provider instance and writes
+    only the compaction keys.
+
+    claudeAgent and coordinator keep their autoCompactWindow (the same values as personal), each only when the instance is already
+    there, and idleCompaction goes to beforeCacheExpires. It adds no seat-*, no pi, no hub instance, no worktreesDirectory, no
+    displayName, no usageLimitSources and no CLAUDE_CODE_FIZZY_GROVE environment entry, and it runs no restore: .t3 was never
+    managed on the work profile before, so nothing this script wrote there can need undoing and hub leftovers (a codex instance in
+    its hub state, a displayName, a usageLimitSources entry) are not ours to delete - they pass through untouched. Everything else
+    passes through byte for byte. The chezmoi OS cannot be faked here, but the work mode has no OS branch, so one run covers it."""
+
+    @classmethod
+    def setUpClass(cls):
+        env = Env(profile="axon-work-computer", codex_active=False)
+        try:
+            cls.script = env.chezmoi("execute-template", stdin=(REPO / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text())
+        finally:
+            env.close()
+
+    def apply(self, stdin):
+        assert "Work mode (axon-work-computer)" in self.script and "log_apply" in self.script, "the render is not the work mode"
+        assert "WANT=" not in self.script and "worktreesDirectory = $worktrees" not in self.script, "the render is not the standalone work script"
+        return run_script(self.script, stdin)
+
+    def test_sets_exactly_the_three_keys_on_a_realistic_file(self):
+        before = json.loads(FIXTURE)
+        out = json.loads(self.apply(FIXTURE))
+        expected = json.loads(json.dumps(before))
+        expected["providerInstances"]["claudeAgent"]["config"] = dict(expected["providerInstances"]["claudeAgent"].get("config", {}), autoCompactWindow=WINDOWS["claudeAgent"])
+        expected["providerInstances"]["coordinator"]["config"] = dict(expected["providerInstances"]["coordinator"]["config"], autoCompactWindow=WINDOWS["coordinator"])
+        expected["idleCompaction"] = IDLE
+        self.assertEqual(out, expected)
+        self.assertEqual(out["providerInstances"]["claudeAgent"]["config"]["autoCompactWindow"], "300000")
+        self.assertEqual(out["providerInstances"]["coordinator"]["config"]["autoCompactWindow"], "200000")
+
+    def test_a_present_claude_agent_keeps_its_other_config_fields(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["claudeAgent"]["config"] = {"launchArgs": "--x", "binaryPath": "/b/claude"}
+        inst = json.loads(self.apply(json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(inst["claudeAgent"]["config"], {"launchArgs": "--x", "binaryPath": "/b/claude", "autoCompactWindow": WINDOWS["claudeAgent"]})
+
+    def test_an_absent_coordinator_is_not_created(self):
+        data = json.loads(FIXTURE)
+        del data["providerInstances"]["coordinator"]
+        out = json.loads(self.apply(json.dumps(data, indent=2)))
+        self.assertNotIn("coordinator", out["providerInstances"])
+        self.assertEqual(out["providerInstances"]["claudeAgent"]["config"]["autoCompactWindow"], WINDOWS["claudeAgent"])
+        self.assertEqual(json.loads(self.apply('{"a": 1}')), {"a": 1, "idleCompaction": IDLE})
+
+    def test_idle_compaction_on_return_becomes_before_cache_expires(self):
+        self.assertEqual(json.loads(FIXTURE)["idleCompaction"], "onReturn")
+        self.assertEqual(json.loads(self.apply(FIXTURE))["idleCompaction"], IDLE)
+        data = json.loads(FIXTURE)
+        del data["idleCompaction"]
+        self.assertEqual(json.loads(self.apply(json.dumps(data, indent=2)))["idleCompaction"], IDLE)
+
+    def test_no_seat_pi_hub_worktrees_displayname_usage_or_fizzy_keys_appear(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["seat-lead"] = {"driver": "claudeAgent", "displayName": "Claude (lead)", "enabled": True,
+                                                 "config": {"autoCompactWindow": "999999"}, "environment": [FIZZY]}
+        data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False}
+        data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub", "enabled": True}}
+        del data["worktreesDirectory"]
+        text = json.dumps(data, indent=2)
+        out = json.loads(self.apply(text))
+        self.assertNotIn("worktreesDirectory", out)
+        self.assertEqual(out["providerInstances"]["seat-lead"], data["providerInstances"]["seat-lead"], "a seat instance is touched")
+        self.assertEqual(out["providerInstances"]["pi"], {"driver": "pi", "enabled": False}, "pi is touched")
+        self.assertEqual(out["usageLimitSources"], data["usageLimitSources"], "usageLimitSources is touched")
+        for i in ("claudeAgent", "coordinator"):
+            self.assertNotIn("displayName", out["providerInstances"][i])
+            self.assertNotIn("environment", out["providerInstances"][i])
+        self.assertEqual(json.dumps(out).count("CLAUDE_CODE_FIZZY_GROVE"), json.dumps(data).count("CLAUDE_CODE_FIZZY_GROVE"), "a FIZZY entry was added or removed")
+        self.assertNotIn("seat-", json.dumps({k: v for k, v in out["providerInstances"].items() if k not in data["providerInstances"]}))
+
+    def test_a_hub_leftover_file_keeps_every_leftover_and_gets_the_three_keys(self):
+        """The hub-on state: the codex instance stays EXACTLY as the input had it (no restore - the work mode never managed .t3
+        before, so the leftovers are not ours to delete), the displayNames, usageLimitSources and secretProviders entries stay,
+        and only the three compaction keys are set on top."""
+        data = json.loads(FIXTURE)
+        inst = data["providerInstances"]
+        hub_codex = {"driver": "codex", "enabled": True, "displayName": "Codex",
+                     "config": {"setupMode": "existing", "binaryPath": "/opt/codex/bin/codex", "launchArgs": "-c model_provider=cliproxy"}}
+        inst["codex"] = hub_codex
+        inst["claudeAgent"]["displayName"] = "Claude"
+        inst["coordinator"]["displayName"] = "Claude (coordinator)"
+        data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub",
+                                                      "url": "https://cliproxy.internal.cartwmic.com", "enabled": True,
+                                                      "managementKey": "cpa_x"}}
+        data["secretProviders"] = {"onepassword": {"kind": "one_password", "label": "1Password", "config": {"account": "my"}}}
+        text = json.dumps(data, indent=2)
+        out = json.loads(self.apply(text))
+        self.assertEqual(out["providerInstances"]["codex"], hub_codex, "the codex instance was touched")
+        for i in ("claudeAgent", "coordinator"):
+            self.assertEqual(out["providerInstances"][i]["displayName"], data["providerInstances"][i]["displayName"])
+        self.assertEqual(out["usageLimitSources"], data["usageLimitSources"])
+        self.assertEqual(out["secretProviders"], data["secretProviders"])
+        self.assertEqual(out["providerInstances"]["claudeAgent"]["config"]["autoCompactWindow"], WINDOWS["claudeAgent"])
+        self.assertEqual(out["providerInstances"]["coordinator"]["config"]["autoCompactWindow"], WINDOWS["coordinator"])
+        self.assertEqual(out["idleCompaction"], IDLE)
+        self.assertEqual(out["worktreesDirectory"], data["worktreesDirectory"], "worktreesDirectory is touched")
+
+    def test_a_file_without_hub_leftovers_still_changes_only_the_three_keys(self):
+        """Nothing to restore: the codex instance T3 wrote itself (setupMode managed) is left alone, and the diff is the three keys."""
+        before = json.loads(FIXTURE)
+        self.assertEqual(before["providerInstances"]["codex"], {"driver": "codex", "enabled": True, "config": {"setupMode": "managed"}})
+        out = json.loads(self.apply(FIXTURE))
+        expected = json.loads(json.dumps(before))
+        expected["providerInstances"]["claudeAgent"]["config"] = dict(expected["providerInstances"]["claudeAgent"].get("config", {}), autoCompactWindow=WINDOWS["claudeAgent"])
+        expected["providerInstances"]["coordinator"]["config"] = dict(expected["providerInstances"]["coordinator"]["config"], autoCompactWindow=WINDOWS["coordinator"])
+        expected["idleCompaction"] = IDLE
+        self.assertEqual(out, expected)
+
+    def test_the_output_stays_pretty_and_diffs_only_on_the_changed_lines(self):
+        """The work script prints jq's default pretty JSON (the form T3 writes), so over the pretty fixture the apply differs
+        from the input only on the changed lines: the idleCompaction value and the two instance blocks gaining their
+        autoCompactWindow. No line carrying any other key or value is removed or added."""
+        out = self.apply(FIXTURE)
+        r = subprocess.run(["jq", "."], input=out, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, r.stderr
+        self.assertEqual(r.stdout.rstrip("\n"), out.rstrip("\n"))  # the output is jq's own pretty form
+        diff = list(difflib.unified_diff(FIXTURE.splitlines(), out.splitlines(), lineterm=""))
+        minus = [l[1:] for l in diff if l.startswith("-") and not l.startswith("---")]
+        plus = [l[1:] for l in diff if l.startswith("+") and not l.startswith("+++")]
+        self.assertIn('  "idleCompaction": "onReturn",', minus)
+        self.assertIn('  "idleCompaction": "beforeCacheExpires",', plus)
+        self.assertIn('        "autoCompactWindow": "300000"', plus)
+        self.assertIn('        "autoCompactWindow": "200000"', plus)
+        for line in minus + plus:
+            for key in ("driver", "favorites", "worktreesDirectory", "linkedEnvironments", "sidebar",
+                        "projectSettingsFolded", "codex", "setupMode", "defaultModelSelection", "instanceId"):
+                self.assertNotIn(key, line, line)
+
+    def test_a_second_run_is_idempotent_over_a_hub_leftover_file(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["codex"] = {"driver": "codex", "enabled": True, "displayName": "Codex",
+                                              "config": {"setupMode": "existing", "binaryPath": "/opt/codex/bin/codex"}}
+        once = self.apply(json.dumps(data, indent=2))
+        self.assertEqual(self.apply(once), once)
+
+    def test_an_input_already_holding_the_values_prints_unchanged(self):
+        once = self.apply(FIXTURE)
+        self.assertEqual(self.apply(once), once)
+
+    def test_empty_and_non_object_input_print_unchanged(self):
+        self.assertEqual(self.apply(""), "")
+        self.assertEqual(self.apply("not json"), "not json")
+        self.assertEqual(self.apply("[]"), "[]")
+
+    def test_a_non_object_provider_instances_is_refused_unchanged(self):
+        """An array or a string where the object should be: the input passes through unchanged, so one apply cannot wipe the file."""
+        for bad in ('{"providerInstances": [1, 2], "x": 1}', '{"providerInstances": "oops", "x": 1}'):
+            self.assertEqual(self.apply(bad), bad)
+
+    def test_a_non_object_config_is_refused_unchanged(self):
+        bad = '{"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "config": "oops"}}}'
+        self.assertEqual(self.apply(bad), bad)
+
+    def apply_logged(self, stdin, state):
+        """Run the rendered script with HOME and XDG_STATE_HOME in the scratch dir, so the log line lands there."""
+        r = subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state")))
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    # Sentinels planted in an input file: file content that must never reach the log, whether the merge keeps it or deletes it.
+    SENTINELS = ("sentinel-display-name", "https://sentinel.example/url", "sentinel-account", "cpa_sentinel-key", "sentinel-launch-arg")
+
+    def logged_lines(self, state):
+        return (state / "state/t3-settings/log.jsonl").read_text().splitlines()
+
+    def test_the_apply_leaves_one_json_log_line_with_keys_and_values_only(self):
+        """Design principle 14: one line per run - wrote with the compaction keys that changed and their new values, skipped with a
+        reason - and no file content in it: sentinels planted in the input (a kept displayName, a kept usage source with its URL, a
+        kept 1Password account, a management key, a launchArgs value) appear nowhere, and no removed: or restored: key is ever
+        named because the work mode removes and restores nothing. A second run of the same input logs unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            data = json.loads(FIXTURE)
+            data["providerInstances"]["claudeAgent"]["displayName"] = "sentinel-display-name"
+            data["providerInstances"]["claudeAgent"]["config"] = {"launchArgs": "sentinel-launch-arg"}
+            data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub",
+                                                          "url": "https://cliproxy.internal.cartwmic.com", "enabled": True,
+                                                          "managementKey": "cpa_sentinel-key"},
+                                          "sentinel-hub": {"kind": "cliproxy", "label": "sentinel", "enabled": True,
+                                                           "url": "https://sentinel.example/url"}}
+            data["secretProviders"] = {"onepassword": {"kind": "one_password", "label": "1Password",
+                                                       "config": {"account": "sentinel-account"}}}
+            out = self.apply_logged(json.dumps(data, indent=2), state)
+            lines = self.logged_lines(state)
+            self.assertEqual(len(lines), 1)
+            record = json.loads(lines[0])
+            self.assertEqual(record["mode"], "work")
+            self.assertEqual(record["action"], "wrote")
+            self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
+            self.assertEqual(record["values"], {"idleCompaction": IDLE,
+                                                "claudeAgent.autoCompactWindow": WINDOWS["claudeAgent"],
+                                                "coordinator.autoCompactWindow": WINDOWS["coordinator"]})
+            self.assertIn("utc", record)
+            for sentinel in self.SENTINELS:
+                for line in lines:
+                    self.assertNotIn(sentinel, line)
+            self.apply_logged('{"providerInstances": [1]}', state)
+            skipped = json.loads(self.logged_lines(state)[1])
+            self.assertEqual((skipped["action"], skipped["reason"]), ("skipped", "providerInstances is not an object"))
+            self.apply_logged(out, state)  # the first output already holds the values
+            self.assertEqual(json.loads(self.logged_lines(state)[2])["action"], "unchanged")
+
+    def test_the_log_names_only_the_compaction_keys_when_hub_leftovers_are_present(self):
+        """A hub-leftover file: the leftovers are kept, so the log names the three compaction keys and nothing else - no
+        removed:displayName, no removed:usageLimitSources, no restored:codex."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            data = json.loads(FIXTURE)
+            inst = data["providerInstances"]
+            inst["codex"] = {"driver": "codex", "enabled": True, "displayName": "Codex",
+                             "config": {"setupMode": "existing", "binaryPath": "/opt/codex/bin/codex"}}
+            inst["claudeAgent"]["displayName"] = "Claude"
+            data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub", "enabled": True}}
+            self.apply_logged(json.dumps(data, indent=2), state)
+            lines = self.logged_lines(state)
+            self.assertEqual(len(lines), 1)
+            record = json.loads(lines[0])
+            self.assertEqual(record["action"], "wrote")
+            self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
+            self.assertEqual(record["values"], {"idleCompaction": IDLE,
+                                                "claudeAgent.autoCompactWindow": WINDOWS["claudeAgent"],
+                                                "coordinator.autoCompactWindow": WINDOWS["coordinator"]})
+            for name in ("removed:", "restored:", "Codex", "cliproxy"):
+                self.assertNotIn(name, lines[0])
+
+
+    def render_personal(self, source, os_name, home):
+        """Render the template from `source` for the personal profile with the hub off, pretending to be os_name."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "c.yaml"
+            cfg.write_text("""data:
+  profile: personal
+  hub:
+    enabled: false
+""")
+            r = subprocess.run(["chezmoi", "--source", str(source), "--config", str(cfg), "--config-format", "yaml",
+                                "--destination", str(home), "execute-template", "--override-data",
+                                json.dumps({"chezmoi": {"os": os_name}})],
+                               input=(Path(source) / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text(),
+                               capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=str(home)))
+            assert r.returncode == 0, r.stderr
+            return r.stdout
+
+    def merge_base_source(self):
+        """A scratch copy of origin/main's source tree, for rendering the merge-base template. Skips when origin/main is absent."""
+        r = subprocess.run(["git", "rev-parse", "--verify", "origin/main"], cwd=REPO, capture_output=True)
+        if r.returncode:
+            self.skipTest("origin/main is not available")
+        base = Path(tempfile.mkdtemp()) / "base"
+        base.mkdir()
+        subprocess.run("git -C " + str(REPO) + " archive origin/main | tar -x -C " + str(base), shell=True, check=True)
+        self.addCleanup(shutil.rmtree, base.parent, ignore_errors=True)
+        return base
+
+    def run_personal_over_malformed(self, script, bad='{"usageLimitSources": "x"}'):
+        """Run a personal script over a malformed section and return the result."""
+        return subprocess.run(["sh", "-c", script], input=bad, capture_output=True, text=True,
+                              timeout=30, env=dict(os.environ, HOME="/nonexistent-home-for-test"))
+
+    def test_the_personal_renders_match_the_merge_base(self):
+        """The personal script is untouched by this PR: from `set -eu` on (the header comments above it may change), the personal
+        macOS and Linux renders are byte-identical to a render of origin/main's template, and a personal run over a malformed
+        usageLimitSources prints the same stdout and return code as the merge base."""
+        base = self.merge_base_source()
+        for os_name in ("darwin", "linux"):
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                home.mkdir()
+                head = self.render_personal(REPO, os_name, home)
+                base_script = self.render_personal(base, os_name, home)
+            self.assertIn("WANT=", head, os_name)  # sanity: this is the unrestricted personal script
+            self.assertNotIn("Work mode (axon-work-computer)", head, os_name)
+            marker = "\nset -eu\n"
+            self.assertEqual(head[head.index(marker) + 1:], base_script[base_script.index(marker) + 1:], os_name)
+            r = self.run_personal_over_malformed(head)
+            base_r = self.run_personal_over_malformed(base_script)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (base_r.returncode, base_r.stdout, base_r.stderr), os_name)
+
+    def test_the_personal_stderr_matches_the_merge_base_on_a_malformed_section(self):
+        """The personal script over a malformed section prints exactly what the merge base printed: over a bad usageLimitSources
+        both run to completion with nothing on stderr, and over a string providerInstances both fail with the same jq error."""
+        base = self.merge_base_source()
+        for os_name in ("darwin", "linux"):
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                home.mkdir()
+                for bad in ('{"usageLimitSources": "x"}', '{"providerInstances": "x"}'):
+                    outs = [self.run_personal_over_malformed(self.render_personal(source, os_name, home), bad) for source in (REPO, base)]
+                    self.assertEqual((outs[0].returncode, outs[0].stdout, outs[0].stderr),
+                                     (outs[1].returncode, outs[1].stdout, outs[1].stderr), os_name)
+                r = self.run_personal_over_malformed(self.render_personal(REPO, os_name, home), '{"providerInstances": "x"}')
+                self.assertIn("jq: error", r.stderr, os_name)
+
+    def test_the_ignore_list_for_work_vs_personal(self):
+        """Work manages .t3 (the settings file) but not the hub's Claude settings file; personal macOS manages both; termux neither."""
+        for profile, expect_t3, expect_claude in (("axon-work-computer", True, False), ("personal", True, True), ("termux", False, False)):
+            env = Env(profile=profile, codex_active=False)
+            try:
+                managed = set(env.chezmoi("managed").split())
+            finally:
+                env.close()
+            t3 = {m for m in managed if m == ".t3" or m.startswith(".t3/")}
+            self.assertEqual(bool(t3), expect_t3, profile)
+            self.assertEqual((CLAUDE_FILE in managed), expect_claude, profile)
 
 
 if __name__ == "__main__":

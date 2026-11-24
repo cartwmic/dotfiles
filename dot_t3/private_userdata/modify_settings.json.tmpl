@@ -1,5 +1,5 @@
 #!/bin/sh
-# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the seat-* instances, pi and pi-lead below; container mode owns only the five seat-lead, seat-builder, seat-planner, seat-reviewer and seat-scout instances and seat-homelab-chat).
+# Own a set of provider instances in ~/.t3/userdata/settings.json and keep everything else T3 writes there (the hub pair, the seat-* instances, pi and pi-lead below; container mode owns only the five seat-lead, seat-builder, seat-planner, seat-reviewer and seat-scout instances and seat-homelab-chat). On the work profile this file is instead a small restricted work mode (after set -eu): it owns no instance, writes only the three compaction keys, leaves hub leftovers alone and logs the apply.
 # The hub pair (claude-hub, codex-hub, data switch t3Hub.enabled) is personal Mac only (.chezmoiignore): the hub is reachable from the home LAN or WireGuard, and this is Michael's personal machine.
 # The hub as the default (data switch hub.enabled, below) applies on the personal profile on macOS and Linux. Personal Linux also owns two more instances, pi and pi-lead (see "pi" and "pi-lead" below).
 # Data switch t3Hub.enabled (default true): false takes the two hub ids (claude-hub, codex-hub) out of WANT, so the next apply removes exactly those two; the seat-* instances (and pi and pi-lead on Linux) stay.
@@ -13,7 +13,7 @@
 #               the Pi instance for durable coordinator leads. T3's Pi config has only binaryPath and launchArgs, and an instance-level environment value
 #               replaces a variable (it cannot prepend PATH), so the binary is a wrapper (dot_local/user_scripts/executable_pi_lead.sh) that runs the
 #               real `pi` with the coordinator's pane-bin first on PATH and COORDINATOR_STATE_DIR set to <home>/.local/share/coordinator. A thread on it
-#               can run `ledger` and the other pane-bin commands. The work profile has no T3 settings file here (.chezmoiignore), so it gets none.
+#               can run `ledger` and the other pane-bin commands. The work profile gets no instance: its apply runs the restricted work mode (below), which writes none.
 # seat-homelab-chat  Linux only, in container mode too (the personal Mac and the work Mac get none; the pod's T3 hosts the lead). The durable lead that answers
 #               #homelab, with a fixed tool list held by configuration: launchArgs `--settings <home>/.claude/fleet/seat-homelab-chat.json --strict-mcp-config
 #               --mcp-config <home>/.claude/fleet/mcp-homelab-chat.json`; the settings file registers a PreToolUse hook (hooks/homelab_chat_allowlist.py)
@@ -36,9 +36,9 @@
 #               Shape: pingdotgg/t3code packages/contracts/src/settings.ts (UsageLimitSourceConfig) and
 #               docs/user/usage.md "Connect a CLIProxyAPI hub".
 # linkedEnvironmentsEnabled (container mode only): true. T3's Settings -> Labs "Linked environments" switch; a peer's `t3 environment link` to the pod's T3 fails while it is off
-#   (the coordinator on omarchy reaches the pod this way). Set on every apply, so a fresh pod has it before anyone opens T3. The work profile has no agent host and no T3 settings file here.
+#   (the coordinator on omarchy reaches the pod this way). Set on every apply, so a fresh pod has it before anyone opens T3. The work profile has no agent host, and its work mode (below) writes no instance.
 # worktreesDirectory: new T3 worktrees go to <dir>/<repo>/<branch> on the Workshop SSD (/Volumes/Workshop exists only on the personal Mac,
-#   and this file is personal macOS only). It affects new worktrees only: T3 keeps managing the ones under ~/.t3/worktrees where they
+#   and personal mode writes this key only there; the work mode below writes no worktreesDirectory). It affects new worktrees only: T3 keeps managing the ones under ~/.t3/worktrees where they
 #   are, and nothing here moves them. Workshop unmounted: /Volumes is root-owned, so `git worktree add` fails with an error; there is
 #   no fallback to the internal disk. The pnpm store lives on Workshop too (dot_config/pnpm/config.yaml) so installs there can hardlink.
 # autoCompactWindow: T3's per-instance "Auto-compact after" (Settings > Providers). Unset, Claude Code compacts a 1M-window model at about
@@ -46,7 +46,7 @@
 #   earlier 500000): claudeAgent "300000" (builders and, until they get their own instance, leads) and coordinator "200000". Sessions compact
 #   about 33K tokens below the value. Values are strings; T3 accepts empty or 100000-1000000. Set on the existing claudeAgent and coordinator
 #   instances only (an absent instance is not created; no other field of theirs is touched, and the coordinator repo's `t3 setup` leaves a
-#   present instance alone). Applies on every apply, hub switch on or off. It reaches new or restarted sessions only: a running session keeps
+#   present instance alone). Applies on every apply, hub switch on or off, and on the work profile (the only keys its work mode writes). It reaches new or restarted sessions only: a running session keeps
 #   the window it started with. To change one, edit its value in AUTO_COMPACT_WINDOWS; to drop one, set it to "" (removes our key on that instance).
 # idleCompaction: T3's top-level "Compact idle threads" (Settings). "beforeCacheExpires" is the choice shown as "Before the cache expires (beta)":
 #   after a Claude run ends, T3 sends /compact about 2 minutes before the prompt cache lapses (1h on subscriptions), so the re-read stays cheap.
@@ -101,15 +101,116 @@
 #               still needed.]" instead. Its only read in the binary is the choice between those two texts. It is a process environment variable: the binary lists
 #               the name as host-owned, so `env` in settings.json (user or --settings) does not set it (tested on 2.1.323). It is undocumented and can disappear in a
 #               later Claude Code; tests/t3-hub/test_fizzy_grove_binary.py fails loudly when the installed binary stops reading it.
-#               It reaches new sessions only. Not on the work profile: .chezmoiignore leaves .t3 out there and nothing else in this source manages T3's settings
-#               on the work Mac, so its T3 sessions keep the old text until that is decided (docs/profiles.md).
+#               It reaches new sessions only. Not on the work profile: its work mode (below) writes no environment entry, so its T3 sessions keep the old text
+#               until that is decided (docs/profiles.md).
 # Compaction point: Claude Code compacts about 33,000 tokens below the window, so 200000 compacts near 167K and 300000 near 267K.
-# Each apply replaces exactly the owned ids under providerInstances, sets worktreesDirectory and idleCompaction; no other key or instance is touched. No file, or a file that is
-# not a JSON object, is passed through unchanged. T3 writes the file without a trailing newline, and so does this script.
+# Each personal-mode apply replaces exactly the owned ids under providerInstances, sets worktreesDirectory and idleCompaction; no other key or instance is touched. No file, or a file that is
+# not a JSON object, is passed through unchanged; the work mode (below) refuses a providerInstances or an instance config that is not an object the same way, and logs the apply. T3 writes the file without a trailing newline, and so does this script.
 # To drop an instance, delete it from WANT: the id is still owned (OWNED), so the next apply removes it.
 # When the merge changes nothing as data (only key order or indentation differ from what T3 wrote), the input is printed byte for byte, so chezmoi shows no drift.
 set -eu
 
+{{- if eq .profile "axon-work-computer" }}
+# Work mode (axon-work-computer): the work Mac runs T3, but the hub, the seats and the workshop disk do not exist there, so this
+# apply owns no provider instance and changes only:
+#   providerInstances.claudeAgent.config.autoCompactWindow and providerInstances.coordinator.config.autoCompactWindow
+#     (the values below; an absent instance is not created, and no other field of a present one is touched), and
+#   top-level idleCompaction.
+# It adds no seat-* or pi instance, no worktreesDirectory (/Volumes/Workshop exists only on the personal Mac), no displayName,
+# no usageLimitSources and no CLAUDE_CODE_FIZZY_GROVE environment entry (that is an open decision for work; docs/profiles.md).
+# It runs no restore: .t3 was never managed on this profile before this file existed, so nothing this script wrote there can
+# need undoing, and a hub leftover (a codex instance in its hub state, a displayName, a usageLimitSources entry) is not ours to
+# delete - the leftovers pass through untouched. A malformed file (not an object, a providerInstances or an instance config
+# that is not an object) is refused with the input unchanged and logged as skipped. Every run appends one JSON line - the
+# compaction keys that changed and their new values, never any other file content - to ~/.local/state/t3-settings/log.jsonl
+# (XDG_STATE_HOME respected); a logging failure never fails the apply. The merged document is printed in jq's default pretty
+# form, the form T3 writes, so over a pretty input the apply differs from the input only on the changed lines; when nothing
+# changes as data the input is printed byte for byte, so chezmoi shows no drift.
+AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
+IDLE_COMPACTION='beforeCacheExpires'
+
+# One JSON line per run (design principle 14): what the apply did. A logging failure must not fail the apply.
+log_apply() {
+  dir="${XDG_STATE_HOME:-$HOME/.local/state}/t3-settings"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  printf '{"utc":"%s","mode":"work","action":"%s"%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" \
+    >> "$dir/log.jsonl" 2>/dev/null || true
+}
+
+input=$(cat; printf x)
+input=${input%x}
+
+if ! printf %s "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"input not an object"'
+  printf %s "$input"
+  exit 0
+fi
+# T3 never writes a providerInstances that is not an object, and one apply must not be able to wipe the file: refuse it and
+# pass the input through unchanged.
+if ! printf %s "$input" | jq -e '(.providerInstances // {}) | type == "object"' >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"providerInstances is not an object"'
+  printf %s "$input"
+  exit 0
+fi
+if ! printf %s "$input" | jq -e '[(.providerInstances // {})[] | (.config? // {}) | type] | all(. == "object")' >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"an instance config is not an object"'
+  printf %s "$input"
+  exit 0
+fi
+
+# The one jq that both makes the change and names it: it emits the merged document, then the keys that changed - only the
+# compaction keys, by path, with their new values, and nothing else from the file. No instance is created, no other field is
+# touched, nothing is added or removed.
+res=$(printf %s "$input" | jq -c --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" '
+  . as $doc
+  | ( reduce ($windows | keys[]) as $id (.;
+        if ($doc.providerInstances[$id]? | type) == "object"
+        then (if $windows[$id] == ""
+              then (if ($doc.providerInstances[$id].config | type) == "object"
+                    then del(.providerInstances[$id].config.autoCompactWindow)
+                    else . end)
+              else .providerInstances[$id].config = ((.providerInstances[$id].config // {}) + {autoCompactWindow: $windows[$id]}) end)
+        else . end )) as $merged
+  | ( if $idle == "" then $merged else $merged | .idleCompaction = $idle end ) as $new
+  | { keys: ( [ (if ($doc.idleCompaction? // null) != ($new.idleCompaction? // null) then "idleCompaction" else empty end) ]
+              + [ $windows | keys[] as $id
+                  | select(($doc.providerInstances[$id]?.config.autoCompactWindow? // null) != ($new.providerInstances[$id]?.config.autoCompactWindow? // null))
+                  | ($id + ".autoCompactWindow") ] ),
+      values: ( [ $windows | keys[] as $id
+                  | select(($doc.providerInstances[$id]?.config.autoCompactWindow? // null) != ($new.providerInstances[$id]?.config.autoCompactWindow? // null))
+                  | { ($id + ".autoCompactWindow"): ($new.providerInstances[$id]?.config.autoCompactWindow? // null) } ]
+                + ( if ($doc.idleCompaction? // null) != ($new.idleCompaction? // null)
+                    then [ {"idleCompaction": ($new.idleCompaction? // null)} ] else [] end )
+                | add // {} ) } as $log
+  | $new, $log') || res=''
+if [ -z "$res" ]; then
+  log_apply skipped ',"reason":"the merge failed"'
+  printf %s "$input"
+  exit 0
+fi
+out=$(printf '%s\n' "$res" | sed -n 1p)
+log=$(printf '%s\n' "$res" | sed -n 2p)
+changed=$(printf %s "$log" | jq -c '.keys')
+values=$(printf %s "$log" | jq -c '.values')
+# T3 writes the file in its own key order, so the bytes would differ on every apply with nothing to change. When the merged
+# result equals the input as data (jq -S sorts object keys; arrays keep their order), print the input as it is.
+sorted_in=$(printf %s "$input" | jq -S .)
+sorted_out=$(printf %s "$out" | jq -S .)
+if [ "$sorted_in" = "$sorted_out" ]; then
+  log_apply unchanged ''
+  printf %s "$input"
+  exit 0
+fi
+log_apply wrote ",\"keys\":$changed,\"values\":$values"
+# T3 writes the file as jq's default pretty JSON, so the merged document is printed in that form too: over a pretty input the
+# apply differs from the input only on the changed lines. (jq . adds a trailing newline; the case below re-applies the input's.)
+pretty=$(printf %s "$out" | jq .) || pretty=$out
+printf %s "$pretty"
+case $input in
+  *"
+") printf '\n' ;;
+esac
+{{- else }}
 {{- $home := .chezmoi.homeDir }}
 {{- $hub := includeTemplate "t3_hub" . }}
 {{- $codex := dict "driver" "codex" "displayName" "Codex (hub)" "enabled" true }}
@@ -266,3 +367,4 @@ case $input in
   *"
 ") printf '\n' ;;
 esac
+{{- end }}

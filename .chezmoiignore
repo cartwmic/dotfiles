@@ -477,11 +477,14 @@ Library/Preferences/pnpm/**
 {{- end }}
 
 {{- $t3Linux := and (eq .profile "personal") (eq .chezmoi.os "linux") }}
+{{- $t3Work := eq .profile "axon-work-computer" }}
 {{- if eq (includeTemplate "t3_hub" .) "n/a" }}
 # T3 provider instances that route through the homelab CLIProxy hub: personal Mac only (docs/profiles.md). With t3Hub.enabled
 # false the files stay managed so the next apply removes the instances, the settings file and the Codex block.
 # Personal Linux keeps the settings file (t3Hub n/a there; the hub default hub.enabled applies, and it writes worktreesDirectory, the auto-compact windows, idleCompaction, and the pi, pi-lead and seat-* provider instances).
-{{- if not $t3Linux }}
+# The work profile keeps the settings file too: its apply runs the same script in the restricted work mode, which writes only
+# the auto-compact windows and idleCompaction and no instance (docs/profiles.md).
+{{- if and (not $t3Linux) (not $t3Work) }}
 .t3
 .t3/**
 {{- end }}
