@@ -33,7 +33,7 @@ FILE_LIMIT = 512_000
 KIT_LIMIT = 2_000_000
 COMMIT_LIMIT = 10_000_000
 STATE_WARN = 200_000_000
-KIT_KEYS = ("name", "goal", "check", "direction", "guards", "holdout", "lock", "runs", "paired", "min_gain", "timeout", "after", "max_steps", "max_hours", "hard", "repos", "score", "baseline")
+KIT_KEYS = ("name", "goal", "check", "direction", "guards", "holdout", "lock", "runs", "paired", "min_gain", "timeout", "after", "max_steps", "max_hours", "hard", "repos", "score", "baseline", "perf", "errors", "work")
 SLOW_STEP = 120
 MORE = "Stop and report. If the user gives more, run: climb.py budget --hours N, --steps N, or --off"
 
@@ -124,17 +124,25 @@ def together(commands, timeout):
         return list(pool.map(lambda command: run(command, timeout), commands))
 
 
+def pull(text, pattern, flag="--score"):
+    """The numbers the pattern captures on the last matching line, added up. None when no line matches."""
+    lines = [line for line in text.splitlines() if re.search(pattern, line)]
+    if not lines:
+        return None
+    found = [group for match in re.finditer(pattern, lines[-1])
+             for group in (match.groups() if match.re.groups else [match.group()]) if group is not None]
+    values = [value.replace(",", "") for value in found]
+    if not all(NUMBER.fullmatch(value) for value in values):
+        raise Fail(f"{flag} matched {found!r} in {lines[-1].strip()!r}, which is not a number")
+    return sum(float(value) for value in values)
+
+
 def read_score(result, pattern):
     text = ANSI.sub("", result.stdout + result.stderr)
     if pattern:
-        lines = [line for line in text.splitlines() if re.search(pattern, line)]
-        if lines:
-            found = [group for match in re.finditer(pattern, lines[-1])
-                     for group in (match.groups() if match.re.groups else [match.group()]) if group is not None]
-            values = [value.replace(",", "") for value in found]
-            if not all(NUMBER.fullmatch(value) for value in values):
-                raise Fail(f"--score matched {found!r} in {lines[-1].strip()!r}, which is not a number")
-            return sum(float(value) for value in values)
+        value = pull(text, pattern)
+        if value is not None:
+            return value
         if not result.returncode:
             return 0.0
         raise Fail(f"check exited {result.returncode} and printed nothing that matches --score\n{tail(text)}")
@@ -146,7 +154,35 @@ def read_score(result, pattern):
     return float(lines[-1])
 
 
-def measure(checks, runs, timeout, output=None, patterns=None):
+def count_work(checks, results, counters, counts):
+    """Read the error and work counters from every check's output into counts: the worst run wins."""
+    for name, pattern in counters.items():
+        total = 0.0
+        for command, result in zip(checks, results):
+            value = pull(ANSI.sub("", result.stdout + result.stderr), pattern, f"--{name}")
+            if value is None:
+                raise Fail(f"--{name} matched nothing in the output of: {command}. A run that crashed prints no count, "
+                           f"so a missing count is never read as zero.")
+            total += value
+        worst = max if name == "errors" else min
+        counts[name] = worst(counts.get(name, total), total)
+
+
+def counter_patterns(card):
+    return {name: card[name] for name in ("errors", "work") if card.get(name)}
+
+
+def counter_regression(card, counts):
+    """Why the counts rule the step out, or None. The best step so far (the baseline at first) sets the bar."""
+    old = card.get("counts") or {}
+    if counts.get("errors", 0) > old.get("errors", 0):
+        return f"errors rose {number(old.get('errors', 0))} -> {number(counts['errors'])}"
+    if "work" in counts and counts["work"] < old.get("work", 0):
+        return f"work fell {number(old['work'])} -> {number(counts['work'])}"
+    return None
+
+
+def measure(checks, runs, timeout, output=None, patterns=None, counters=None, counts=None):
     patterns = patterns or [None]
     if len(patterns) not in (1, len(checks)):
         raise Fail(f"Give one --score for all checks, or one per check: {len(patterns)} for {len(checks)} checks.")
@@ -165,6 +201,8 @@ def measure(checks, runs, timeout, output=None, patterns=None):
             seconds.pop()
             continue
         scores.append(score)
+        if counters:
+            count_work(checks, results, counters, counts)
     return statistics.median(scores), max(scores) - min(scores), sum(seconds) / len(seconds)
 
 
@@ -186,7 +224,7 @@ def put_back(pins):
     return bool(moved)
 
 
-def paired(folder, card, snap):
+def paired(folder, card, snap, counts):
     trees = {path: tree for path, (tree, _) in snap.items()}
     (folder / "pending-tree").write_text(json.dumps(trees) + "\n")
     old = {path: git("rev-parse", "HEAD^{tree}", cwd=path) for path in trees}
@@ -195,7 +233,8 @@ def paired(folder, card, snap):
         order = [(trees, new), (old, base)]
         for side, scores in order if turn % 2 == 0 else order[::-1]:
             switch_trees(side)
-            score, _, took = measure(card["check"], 1, card["timeout"], folder / "last.txt" if side is trees else None, card["score"])
+            score, _, took = measure(card["check"], 1, card["timeout"], folder / "last.txt" if side is trees else None, card["score"],
+                                     counter_patterns(card) if side is trees else None, counts)
             fixed = side_index(side)
             try:
                 edited = written(fixed)[0]
@@ -285,6 +324,10 @@ def outside(paths, allowed):
 
 def number(value):
     return f"{value:.6g}"
+
+
+def counted(counts):
+    return ", ".join(f"{name} {number(value)}" for name, value in counts.items())
 
 
 def interrupted(folder):
@@ -507,11 +550,12 @@ def init_command(meta):
         words += ["--repo", extra["path"]]
     for pattern in meta.get("score") or []:
         words += ["--score", pattern]
-    for flag, key in (("--target", "target"), ("--holdout", "holdout"), ("--max-steps", "max_steps"), ("--max-hours", "max_hours")):
+    for flag, key in (("--target", "target"), ("--holdout", "holdout"), ("--max-steps", "max_steps"), ("--max-hours", "max_hours"),
+                      ("--errors", "errors"), ("--work", "work")):
         if meta.get(key) is not None:
             words += [flag, str(meta[key])]
     words += ["--after", meta["after"], "--runs", str(meta["runs"]), "--min-gain", str(meta["min_gain"]), "--timeout", str(meta["timeout"])]
-    for flag in ("paired", "hard"):
+    for flag in ("paired", "hard", "perf"):
         if meta.get(flag):
             words.append(f"--{flag}")
     for lock in meta["lock"]:
@@ -527,6 +571,13 @@ def run_holdout(folder, card, reason):
     return score
 
 
+def refuse(folder, why):
+    """Log an init that was turned away, in the climb's own log, then stop."""
+    folder.mkdir(parents=True, exist_ok=True)
+    append(folder, {"kind": "refused", "why": why.splitlines()[0]})
+    raise Fail(why)
+
+
 def cmd_init(args):
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", args.name):
         raise Fail("Use a short lowercase name with dashes, like build-speed.")
@@ -534,6 +585,10 @@ def cmd_init(args):
     if (folder / "card.json").exists():
         raise Fail(f"Climb {args.name!r} already exists. Resume it with: climb.py status {args.name}")
     exclude_state()
+    if args.perf and not (args.errors and args.work):
+        refuse(folder, "--perf needs --errors and --work. A faster run that fails more requests, or skips the work, is not a win. "
+                       "Print each count in the check output and name it with a regex, like "
+                       "--errors 'errors: (\\d+)' --work 'processed: (\\d+)'.")
     threshold(args.min_gain, 1)
     lock = [os.path.relpath(os.path.abspath(path), repo()) for path in args.lock or []]
     roots = [repo()]
@@ -556,7 +611,9 @@ def cmd_init(args):
     folder.mkdir(parents=True, exist_ok=True)
     trees = snapshot(roots)
     try:
-        score, spread, seconds = measure(args.check, args.runs, args.timeout, folder / "best.txt", args.score)
+        counts = {}
+        score, spread, seconds = measure(args.check, args.runs, args.timeout, folder / "best.txt", args.score,
+                                         {name: pattern for name, pattern in (("errors", args.errors), ("work", args.work)) if pattern}, counts)
         target = bar(args.target, score, args.direction)
         failed = failing_guards(args.guard or [], args.timeout)
         if failed:
@@ -565,6 +622,8 @@ def cmd_init(args):
         if edited:
             raise Fail(f"Can't start: {edited_while_scoring(edited, lock)}. A check and its guards must not edit files.")
         drop_new(trees)
+    except Fail as error:
+        refuse(folder, str(error))
     finally:
         forget(trees)
     locked = fingerprint(lock) if lock else None
@@ -581,6 +640,10 @@ def cmd_init(args):
         "score": args.score or [],
         "direction": args.direction,
         "guards": args.guard or [],
+        "perf": args.perf,
+        "errors": args.errors,
+        "work": args.work,
+        "counts": counts,
         "target": target,
         "target_text": args.target,
         "after": args.after,
@@ -608,7 +671,7 @@ def cmd_init(args):
     card["baseline"] = score
     card["best"] = {"score": score, "commit": card["start_commit"], "step": 0}
     save(folder, card)
-    append(folder, {"kind": "baseline", "score": score, "spread": spread, "seconds": round(seconds, 2)})
+    append(folder, {"kind": "baseline", "score": score, "spread": spread, "seconds": round(seconds, 2), **counts})
     holdout = run_holdout(folder, card, "baseline")
     also = f" in {len(roots)} repos" if len(roots) > 1 else ""
     print(f"Climb {args.name} started on {card['branch']}{also}. Check output: {folder / 'best.txt'}")
@@ -616,6 +679,8 @@ def cmd_init(args):
         print(f"Not committed, written by the check or a guard: {listed(made)}")
     print(save_kit(folder, card))
     print(f"Baseline {number(score)} ({args.direction}), check takes {seconds:.1f}s.")
+    if counts:
+        print(f"Counters {counted(counts)}. A step that raises errors or lowers work is undone, whatever it scores.")
     if holdout is not None:
         print(f"Holdout baseline {number(holdout)}.")
     step_seconds = seconds * (2 * (args.runs + args.runs % 2) if args.paired else args.runs + (args.runs > 1))
@@ -691,10 +756,12 @@ def scored_step(folder, card, args, roots, trees, step, best, row):
     pins = {path: head_of(path) for path in trees}
     try:
         try:
+            counts = {}
             if card.get("paired"):
-                score, row["pair"], seconds = paired(folder, card, trees)
+                score, row["pair"], seconds = paired(folder, card, trees, counts)
             else:
-                score, _, seconds = measure(card["check"], card["runs"], card["timeout"], folder / "last.txt", card["score"])
+                score, _, seconds = measure(card["check"], card["runs"], card["timeout"], folder / "last.txt", card["score"],
+                                            counter_patterns(card), counts)
         finally:
             if put_back(pins):
                 raise Fail("the check moved HEAD")
@@ -706,14 +773,15 @@ def scored_step(folder, card, args, roots, trees, step, best, row):
         append(folder, {**row, "result": "broke", "why": why})
         print(f"step {step} broke   {args.idea}\n{error}\nUndone. Full output: {folder / 'last.txt'}")
         return
-    row.update(score=score, seconds=round(seconds, 2))
+    row.update(score=score, seconds=round(seconds, 2), **counts)
     held = score >= best if card["direction"] == "max" else score <= best
     if not (better(card, score, best) or args.fix and held):
         undo(card)
         append(folder, {**row, "result": "undone", "why": "score got worse" if args.fix else "no gain"})
         print(f"step {step} undone  {number(score)} (best {number(best)})  {args.idea}\nOutput: {folder / 'last.txt'}")
         return
-    failed = failing_guards(card["guards"], card["timeout"])
+    regression = counter_regression(card, counts)
+    failed = (regression, "") if regression else failing_guards(card["guards"], card["timeout"])
     if put_back(pins):
         failed = ("a guard moved HEAD", "")
     if failed:
@@ -738,6 +806,7 @@ def scored_step(folder, card, args, roots, trees, step, best, row):
     commit(trees, f"climb({card['name']}): step {step} {args.idea}\n\nscore {number(score)}, was {number(best)}")
     keep_output(folder)
     card["best"] = {"score": score, "commit": git("rev-parse", "HEAD"), "step": step}
+    card["counts"] = counts
     save(folder, card)
     append(folder, {**row, "result": "kept", "gain": better(card, score, best)})
     print(f"step {step} kept    {number(score)} (was {number(best)}, start {number(card['baseline'])})  {args.idea}")
@@ -781,6 +850,8 @@ def cmd_status(args):
     limit = f" of {number(card['max_hours'])}" if card.get("max_hours") else ""
     pace = f", about {60 * hours(card) / len(steps):.1f} min a step" if steps else ""
     print(f"Time {hours(card):.1f}{limit} hours{pace}.")
+    if card.get("counts"):
+        print(f"Counters at best: {counted(card['counts'])}.")
     if timed:
         print(f"Check takes {sum(timed) / len(timed):.1f}s on average.")
     for row in log:
@@ -846,7 +917,9 @@ def cmd_relock(args):
         failed = failing_guards(card["guards"], card["timeout"])
         if failed:
             raise Fail(f"A guard fails with the changed check: {failed[0]}\n{failed[1]}")
-        score, _, _ = measure(card["check"], card["runs"], card["timeout"], folder / "best.txt", card["score"])
+        counts = {}
+        score, _, _ = measure(card["check"], card["runs"], card["timeout"], folder / "best.txt", card["score"],
+                              counter_patterns(card), counts)
         edited, made = written(trees)
         if edited:
             raise Fail(f"Not relocked: {edited_while_scoring(edited, card['lock'])}.")
@@ -856,8 +929,9 @@ def cmd_relock(args):
     card["fingerprint"] = fingerprint(card["lock"])
     commit(trees, f"climb({card['name']}): fix the check\n\n{args.why}")
     card["best"] = {"score": score, "commit": git("rev-parse", "HEAD"), "step": len([r for r in rows(folder) if r["kind"] == "step"])}
+    card["counts"] = counts
     save(folder, card)
-    append(folder, {"kind": "relock", "why": args.why, "score": score})
+    append(folder, {"kind": "relock", "why": args.why, "score": score, **counts})
     print(f"Check relocked. New best {number(score)} measured with the changed check.")
     print(save_kit(folder, card))
 
@@ -978,6 +1052,10 @@ def parse(argv):
                       help="command that prints the score (repeatable: they run at once and their scores add)")
     init.add_argument("--score", action="append",
                       help="regex for the score in the check output, like '(\\d+) failed'; one for all checks or one per check; the matches on the last matching line add up, no match is 0")
+    init.add_argument("--perf", action="store_true",
+                      help="a speed climb: needs --errors and --work, so a faster run that fails more or does less work is undone")
+    init.add_argument("--errors", help="regex for the count of errors or failed items in the check output; a step that raises it is undone")
+    init.add_argument("--work", help="regex for the count of input handled (items, rows, requests) in the check output, never the quantity you are shrinking; a step that lowers it is undone")
     init.add_argument("--repo", action="append", help="another git checkout the climb edits (repeatable)")
     init.add_argument("--direction", choices=["max", "min"], required=True)
     init.add_argument("--guard", action="append", help="command that must exit 0 (repeatable)")

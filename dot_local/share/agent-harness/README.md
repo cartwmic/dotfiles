@@ -363,6 +363,11 @@ that changes it re-links.
 Current: Accountable Review's `review-map` (wyeworks/accountable-review), both
 desktop profiles. To bump it, edit the sha in its URL and apply.
 
+pstack's `statechart` (cursor/plugins, pstack/skills/statechart, MIT), personal profile only: it extracts to
+`external-skills/pstack/statechart/` and is the guide behind `creating-formal-verification`. The work profile and Termux
+get neither (docs/profiles.md): the checker installs Java and a TLA+ jar on first use. To bump it, edit the sha in its
+URL and apply; a repo that runs the checker in CI pins the same archive in its own script, so bump that too.
+
 Whole-repo externals also link `<repo>/skills/<skill>`. The private Axon agents playbook is one:
 a `git-repo` external (`refreshPeriod = "24h"`, `git pull --ff-only`) on `axon-work-computer` only, and only
 when chezmoi data has `axonPlaybook.repo` (see `example.chezmoi.yaml`). The URL stays in local chezmoi data, so

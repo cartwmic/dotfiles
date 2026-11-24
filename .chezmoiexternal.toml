@@ -12,6 +12,23 @@
   stripComponents = 2
   include = ["*/skills/review-map/**"]
 
+# pstack's statechart skill (cursor/plugins, MIT), personal profile only. It is the guide and the checker script the
+# creating-formal-verification skill points at: an agent reads its SKILL.md to write and read a TLA+ model. Pinned by the
+# commit sha in the URL: a bump is one sha edit. Only pstack/skills/statechart is extracted. Its 3.8 MB of scripts/test
+# comes with it: on chezmoi 2.71, setting `exclude` next to `include` pulled in the whole archive, so the two are not combined.
+# apply_harness_config.sh links it into Claude, Codex, Pi and ~/.agents like any external skill. The work profile and
+# Termux get nothing: a third-party tool that installs Java and a TLA+ jar on first run is asked about before it goes on
+# the employer's machine, and Termux has no Java. A repo that runs the checker in CI pins the same archive itself
+# (loop-engine: formal/check.sh).
+{{- if eq .profile "personal" }}
+[".local/share/agent-harness/external-skills/pstack/statechart"]
+  type = "archive"
+  url = "https://github.com/cursor/plugins/archive/7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9.tar.gz"
+  exact = true
+  stripComponents = 4
+  include = ["*/pstack/skills/statechart/**"]
+{{- end }}
+
 # Private Axon agents playbook, axon-work-computer only and only when chezmoi data names it.
 # The URL lives in ~/.config/chezmoi/chezmoi.yaml (axonPlaybook.repo), never in this public repo; see
 # example.chezmoi.yaml. Without the key nothing renders. Auth is the existing gh credential helper.

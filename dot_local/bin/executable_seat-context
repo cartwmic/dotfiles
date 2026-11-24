@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""seat-context: what Claude Code really loads for a seat in a folder.
+
+usage: seat-context --seat SEAT [--folder DIR] [--seat-file FILE] [--keep-hooks] [--json]
+       seat-context --instance ID [...]
+       seat-context --seat-file FILE [--add-dir DIR] [--env NAME=VALUE] [--folder DIR] [...]
+
+Launches the installed Claude Code (`claude -p`) in a throwaway HOME against a stand-in for the API that runs on 127.0.0.1 (no network, no key), with the
+seat's settings file, `--add-dir` folders and environment, in --folder as its working directory. It reads the first model request and prints what is in it:
+
+  instruction files   each CLAUDE.md, AGENTS.md or MEMORY.md Claude Code put in the request: path and size in characters (what it loaded, not what config says)
+  system prompt       characters of the system prompt blocks (the playbook text of the coordinator's --append-system-prompt-file is in it)
+  hook text           characters of hook output in the first user message, and which hooks ran
+  tools               the names of the built-in tools in the request (MCP servers are left out: no MCP server is started, and the deferred MCP tool names are not listed)
+  skills              the skill names the request lists
+  agent types         the agent types the Agent tool lists (the built-in ones and ~/.claude/agents)
+
+--seat SEAT takes everything the way T3 starts the seat: the instance `seat-SEAT` (`coordinator` for the coordinator) in --t3-settings (default
+~/.t3/userdata/settings.json) gives the settings file, the --add-dir folders, --append-system-prompt-file and the environment. --seat-file replaces that
+settings file (to test a rendered file that is not deployed yet). Without a T3 settings file, give --seat-file and, for a worker, --add-dir and --env.
+Hooks in the settings file are dropped unless --keep-hooks (the coordinator's real hooks would run against the real coordinator state). The global rules hook is never run: the
+throwaway HOME's copy of ~/.claude/settings.json has its hooks removed, so "hook text" is only what a --keep-hooks hook of the seat's settings file prints.
+
+The throwaway HOME carries what a real session finds under ~/.claude at launch: CLAUDE.md, skills, agents and commands (linked, not copied), the folder's memory index, and a copy of
+settings.json without its hooks, API key helper and API address (the stand-in takes their place).
+Safe to run: the folder is only read, and nothing is written outside the throwaway HOME except one line per run in the log below.
+Log: one JSON line per run in ~/.local/state/seat-context/log.jsonl (SEAT_CONTEXT_LOG names another file): time, arguments, binary, exit code, what it reported or why it failed. A failure to write
+the log is ignored: it never changes the exit code or the output.
+Where the folder is under the real home, Claude Code also finds ~/.claude/CLAUDE.md as an ancestor file; the run excludes that copy so the folder's AGENTS.md loads as it does in a real session (see sanitize_settings).
+Exit 0 done, 2 bad arguments or the binary is missing, 1 the binary sent no request.
+"""
+import argparse
+import http.server
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+EVENTS = [("message_start", {"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "model": "x", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 1}}}),
+          ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+          ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}),
+          ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+          ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}}),
+          ("message_stop", {"type": "message_stop"})]
+SKILL_LIST_HEAD = "The following skills are available for use with the Skill tool:"
+AGENT_LIST_HEAD = "Available agent types for the Agent tool:"
+# "Contents of /abs/path (what it is):" starts each instruction file in the first user message
+FILE_HEAD = re.compile(r"(?m)^Contents of (/[^\n]*?) \(([^\n]*?)\):\n\n")
+DROP_ENV = {"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+
+
+class StandIn(http.server.BaseHTTPRequestHandler):
+    """Answers every message with 'ok' as a stream and keeps the request bodies."""
+    protocol_version = "HTTP/1.1"
+    bodies = []
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("content-length", 0)))
+        if self.path.startswith("/v1/messages") and "count_tokens" not in self.path:
+            self.bodies.append(json.loads(body))
+        out = b"".join(("event: %s\ndata: %s\n\n" % (e, json.dumps(d))).encode() for e, d in EVENTS)
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("content-length", str(len(out)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(out)
+        self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+
+def find_binary():
+    """CLAUDE_BINARY, else the file `claude` on PATH resolves to. Anything under 10 MB is a wrapper, not the binary."""
+    for candidate in (os.environ.get("CLAUDE_BINARY"), shutil.which("claude")):
+        if candidate and Path(candidate).is_file() and Path(candidate).resolve().stat().st_size > 10_000_000:
+            return Path(candidate).resolve()
+    return None
+
+
+def message_texts(request):
+    """Every text block of every message, in order."""
+    out = []
+    for message in request.get("messages", []):
+        content = message["content"]
+        for part in (content if isinstance(content, list) else [{"text": content}]):
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                out.append(part["text"])
+    return out
+
+
+def parse_request(request):
+    """What is in one model request: the instruction files, the system prompt size, the hook text, the tools and the listed skills."""
+    files, skills, agents = [], [], []
+    for text in message_texts(request):
+        matches = list(FILE_HEAD.finditer(text))
+        for i, m in enumerate(matches):
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            body = text[m.end():end]
+            if i + 1 == len(matches):
+                body = re.sub(r"\n*</system-reminder>\s*$", "", body)  # the last file runs up to the end of the reminder
+            else:
+                body = body.rstrip("\n")
+            files.append({"path": m.group(1), "kind": m.group(2), "chars": len(body)})
+        if SKILL_LIST_HEAD in text:
+            skills += re.findall(r"(?m)^- ([A-Za-z0-9:_-]+):", text.split(SKILL_LIST_HEAD, 1)[1].split("<total_tokens>")[0])
+        if AGENT_LIST_HEAD in text:
+            block = text.split(AGENT_LIST_HEAD, 1)[1].split("\n\n", 1)[0]  # the list runs to the first blank line
+            agents += re.findall(r"(?m)^- ([A-Za-z0-9:_-]+):", block)
+    system = request.get("system") or []
+    system_chars = len(system) if isinstance(system, str) else sum(len(b.get("text", "")) for b in system)
+    tools = request.get("tools", [])
+    return {"files": files, "system_chars": system_chars, "message_chars": sum(len(t) for t in message_texts(request)),
+            "tools": [{"name": t["name"], "chars": len(json.dumps(t))} for t in tools], "skills": skills, "agents": agents}
+
+
+def project_slug(folder):
+    return re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+
+
+def read_instance(t3_settings, instance_id):
+    """The launch of one T3 provider instance: its settings file, --add-dir folders, --append-system-prompt-file and environment."""
+    data = json.loads(Path(t3_settings).read_text())
+    inst = data.get("providerInstances", {}).get(instance_id)
+    if inst is None:
+        raise SystemExit("seat-context: %s has no provider instance %r" % (t3_settings, instance_id))
+    words = shlex.split(inst.get("config", {}).get("launchArgs", ""))
+    launch = {"settings": None, "add_dirs": [], "append_system_prompt_file": None, "ignored": [],
+              "env": {e["name"]: e["value"] for e in inst.get("environment", [])}}
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w == "--settings" and i + 1 < len(words):
+            launch["settings"] = words[i + 1]
+            i += 2
+        elif w == "--add-dir":
+            i += 1
+            while i < len(words) and not words[i].startswith("--"):  # --add-dir takes several values
+                launch["add_dirs"].append(words[i])
+                i += 1
+        elif w == "--append-system-prompt-file" and i + 1 < len(words):
+            launch["append_system_prompt_file"] = words[i + 1]
+            i += 2
+        elif w == "--mcp-config" and i + 1 < len(words):
+            launch["ignored"].append("%s %s" % (w, words[i + 1]))
+            i += 2
+        else:
+            launch["ignored"].append(w)
+            i += 1
+    return launch
+
+
+def user_settings_copy(path):
+    """~/.claude/settings.json as the throwaway run reads it: hooks (the global rules hook needs T3 and writes coordinator state), the API key helper and the API address are left out."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    data.pop("apiKeyHelper", None)
+    data.pop("hooks", None)
+    env = data.get("env")
+    if isinstance(env, dict):
+        for k in DROP_ENV:
+            env.pop(k, None)
+    return data
+
+
+def throwaway_home(home, folder, real_home, excludes_real):
+    """What a seat session finds under ~/.claude at launch, from the real files: CLAUDE.md, skills, agents and commands are linked, the folder's memory index is linked, settings.json is copied without its hooks and API settings.
+    (Plugins are not carried: the user settings here enable none; a host that enables plugins would see their skills missing.)"""
+    claude = home / ".claude"
+    claude.mkdir()
+    real = real_home / ".claude"
+    if (real / "CLAUDE.md").is_file():
+        (claude / "CLAUDE.md").symlink_to(real / "CLAUDE.md")
+    for name in ("skills", "agents", "commands"):
+        if (real / name).is_dir():
+            (claude / name).symlink_to(real / name)
+    user = user_settings_copy(real / "settings.json") if (real / "settings.json").is_file() else None
+    if user is not None:
+        (claude / "settings.json").write_text(json.dumps(user))
+    slug = project_slug(folder)
+    memory = real / "projects" / slug / "memory"
+    if memory.is_dir():
+        (claude / "projects" / slug).mkdir(parents=True)
+        (claude / "projects" / slug / "memory").symlink_to(memory)
+
+
+def sanitize_settings(settings, home, real_home, keep_hooks):
+    """The settings file as the throwaway run reads it: the API redirected, no key helper, hooks only on request.
+
+    claudeMdExcludes: an entry under the real home also names the same path under the throwaway HOME (the user file is linked there). The real ~/.claude/CLAUDE.md is always excluded:
+    for a folder under the real home Claude Code finds it a second time as an ancestor's project file, and while it counts as the project's CLAUDE.md the folder's AGENTS.md is not loaded
+    (in a real session that file is the user file, the same path, so the project has no CLAUDE.md of its own and AGENTS.md loads). Checked on the binary: with the exclude, lead in the coordinator folder loads AGENTS.md."""
+    s = json.loads(json.dumps(settings))
+    s.pop("apiKeyHelper", None)
+    if not keep_hooks:
+        s.pop("hooks", None)
+    env = s.get("env")
+    if isinstance(env, dict):
+        for k in DROP_ENV:
+            env.pop(k, None)
+    excludes = list(s.get("claudeMdExcludes") or [])
+    out = list(excludes)
+    for e in excludes:
+        if isinstance(e, str) and e.startswith(str(real_home) + "/"):
+            moved = e.replace(str(real_home), str(home), 1)
+            if moved not in out:
+                out.append(moved)
+    ancestor = str(real_home / ".claude" / "CLAUDE.md")
+    if ancestor not in out:
+        out.append(ancestor)
+    s["claudeMdExcludes"] = out
+    return s
+
+
+def run_claude(binary, settings, folder, add_dirs, env_extra, append_prompt_file, keep_hooks, real_home, timeout=180):
+    """One `claude -p` in a throwaway HOME; returns the first model request (the one with the most tools: the main call, not a title or quota call)."""
+    StandIn.bodies = []
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StandIn)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            throwaway_home(home, folder, real_home, True)
+            settings_file = Path(tmp) / "seat.json"
+            settings_file.write_text(json.dumps(sanitize_settings(settings, home, real_home, keep_hooks)))
+            mcp = Path(tmp) / "mcp.json"
+            mcp.write_text('{"mcpServers": {}}')
+            cmd = [str(binary), "-p", "--model", "claude-haiku-5-5", "--settings", str(settings_file), "--strict-mcp-config", "--mcp-config", str(mcp)]
+            if add_dirs:
+                cmd += ["--add-dir"] + list(add_dirs)
+            if append_prompt_file:
+                cmd += ["--append-system-prompt-file", str(append_prompt_file)]
+            env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home), "ANTHROPIC_BASE_URL": "http://127.0.0.1:%d" % server.server_address[1],
+                   "ANTHROPIC_API_KEY": "x", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+            env.update({k: v for k, v in env_extra.items() if k not in DROP_ENV})
+            result = subprocess.run(cmd, input="hi", env=env, capture_output=True, text=True, timeout=timeout, cwd=str(folder))
+            throwaway = str(home)
+    finally:
+        server.shutdown()
+        server.server_close()
+    if not StandIn.bodies:
+        raise SystemExit("seat-context: Claude Code sent no request (exit %s). stderr: %s" % (result.returncode, result.stderr.strip()[:500]))
+    return max(StandIn.bodies, key=lambda b: len(b.get("tools", []))), throwaway
+
+
+def tilde(path, throwaway, real_home):
+    """Paths as ~/..., the throwaway HOME and the real one alike."""
+    path = path.replace(throwaway, "~")
+    return path.replace(str(real_home), "~", 1) if path.startswith(str(real_home) + "/") else path
+
+
+def collapse(files, throwaway, real_home):
+    """One entry per file: ~/.claude/CLAUDE.md is found as the user file (in the throwaway HOME) and as an ancestor file (real path) when the folder is under the real home; Claude Code lists a file once."""
+    seen, out = set(), []
+    for f in files:
+        p = tilde(f["path"], throwaway, real_home)
+        key = (p, f["chars"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({**f, "path": p})
+    return out
+
+
+def report(parsed, info, throwaway, real_home):
+    files = collapse(parsed["files"], throwaway, real_home)
+    return {"seat": info.get("seat"), "folder": tilde(str(info["folder"]), throwaway, real_home), "settings": info.get("settings"),
+            "seat_env": info.get("seat_env"), "add_dirs": info.get("add_dirs", []), "hooks": "kept" if info.get("keep_hooks") else "dropped",
+            "instruction_files": files, "instruction_chars": sum(f["chars"] for f in files), "system_chars": parsed["system_chars"],
+            "hook_chars": info.get("hook_chars", 0), "hook_events": info.get("hook_events", []),
+            "tools": [t["name"] for t in parsed["tools"]], "tool_chars": sum(t["chars"] for t in parsed["tools"]), "skills": parsed["skills"], "agents": parsed["agents"]}
+
+
+def render(r):
+    lines = ["seat %s in %s" % (r["seat"] or "(settings file)", r["folder"]),
+             "  settings %s; env COORDINATOR_SEAT=%s (as the settings file sets it); add-dir %s; hooks %s" % (r["settings"], r["seat_env"], ", ".join(r["add_dirs"]) or "none", r["hooks"]),
+             "instruction files (%d chars):" % r["instruction_chars"]]
+    lines += ["  %8d  %s" % (f["chars"], f["path"]) for f in r["instruction_files"]] or ["  (none)"]
+    lines += ["system prompt: %d chars" % r["system_chars"],
+              "hook text: %d chars%s" % (r["hook_chars"], (" (settings hooks run: %s)" % ", ".join(r["hook_events"])) if r["hook_events"] else " (no hook ran; the global rules hook never runs here)"),
+              "tools (%d, %d chars, built-in only; MCP tools are not listed): %s" % (len(r["tools"]), r["tool_chars"], " ".join(sorted(r["tools"]))),
+              "skills listed (%d): %s" % (len(r["skills"]), " ".join(r["skills"])),
+              "agent types listed (%d): %s" % (len(r["agents"]), " ".join(r["agents"]))]
+    return "\n".join(lines)
+
+
+def run(argv, outcome):
+    ap = argparse.ArgumentParser(prog="seat-context", description="What Claude Code really loads for a seat in a folder.")
+    ap.add_argument("--seat", help="a seat name: its T3 instance seat-<name> (coordinator: the `coordinator` instance)")
+    ap.add_argument("--instance", help="a T3 provider instance id, instead of --seat")
+    ap.add_argument("--t3-settings", default=os.path.expanduser("~/.t3/userdata/settings.json"))
+    ap.add_argument("--seat-file", help="the Claude settings file to run with (default: the one the instance names)")
+    ap.add_argument("--add-dir", action="append", default=[], help="an --add-dir folder (added to the instance's)")
+    ap.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="an environment variable (added to the instance's)")
+    ap.add_argument("--folder", default=os.getcwd(), help="the working directory of the session (default: here)")
+    ap.add_argument("--keep-hooks", action="store_true", help="run the hooks of the settings file (default: dropped)")
+    ap.add_argument("--home", default=os.path.expanduser("~"), help="the real home: where ~/.claude/CLAUDE.md and the memory index are linked from")
+    ap.add_argument("--binary", help="the Claude Code binary (default: CLAUDE_BINARY, else `claude` on PATH)")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args(argv)
+
+    binary = Path(args.binary) if args.binary else find_binary()
+    if binary is None or not binary.is_file():
+        outcome["error"] = "seat-context: no claude binary found (set CLAUDE_BINARY or --binary)"
+        print(outcome["error"], file=sys.stderr)
+        return 2
+    folder = Path(args.folder).resolve()
+    if not folder.is_dir():
+        outcome["error"] = "seat-context: %s is not a folder" % folder
+        print(outcome["error"], file=sys.stderr)
+        return 2
+    real_home = Path(args.home)
+    instance = args.instance or (("seat-" + args.seat if args.seat != "coordinator" else "coordinator") if args.seat else None)
+    launch = {"settings": None, "add_dirs": [], "append_system_prompt_file": None, "env": {}, "ignored": []}
+    if instance:
+        if not Path(args.t3_settings).is_file() and not args.seat_file:
+            outcome["error"] = "seat-context: %s is not there; give --seat-file (and --add-dir, --env for a worker)" % args.t3_settings
+            print(outcome["error"], file=sys.stderr)
+            return 2
+        if Path(args.t3_settings).is_file():
+            launch = read_instance(args.t3_settings, instance)
+    settings_path = args.seat_file or launch["settings"]
+    if not settings_path or not Path(settings_path).is_file():
+        outcome["error"] = "seat-context: no settings file (give --seat-file)"
+        print(outcome["error"], file=sys.stderr)
+        return 2
+    settings = json.loads(Path(settings_path).read_text())
+    env_extra = dict(launch["env"])
+    for item in args.env:
+        name, _, value = item.partition("=")
+        env_extra[name] = value
+    add_dirs = launch["add_dirs"] + args.add_dir
+    outcome.update({"binary": str(binary), "binary_version": binary_version(binary), "seat": args.seat or args.instance, "folder": str(folder), "seat_file": str(settings_path), "keep_hooks": args.keep_hooks})
+    parsed_request, throwaway = run_claude(binary, settings, folder, add_dirs, env_extra, launch["append_system_prompt_file"], args.keep_hooks, real_home)
+    parsed = parse_request(parsed_request)
+    hook_chars, hook_events = 0, []
+    if args.keep_hooks and settings.get("hooks"):
+        # the hook output is not marked in the request (it opens a block that holds other context too), so its size is the difference to the same launch without the hooks
+        bare, _ = run_claude(binary, {k: v for k, v in settings.items() if k != "hooks"}, folder, add_dirs, env_extra, launch["append_system_prompt_file"], False, real_home)
+        hook_chars = parsed["message_chars"] - parse_request(bare)["message_chars"]
+        hook_events = sorted(settings["hooks"])
+    info = {"seat": args.seat or args.instance, "folder": folder, "settings": tilde(str(settings_path), "\0", real_home), "seat_env": (settings.get("env") or {}).get("COORDINATOR_SEAT", "(not set)"),
+            "add_dirs": [tilde(d, "\0", real_home) for d in add_dirs], "keep_hooks": args.keep_hooks, "hook_chars": hook_chars, "hook_events": hook_events}
+    r = report(parsed, info, throwaway, real_home)
+    outcome["reported"] = {"instruction_files": [{"path": f["path"], "chars": f["chars"]} for f in r["instruction_files"]], "system_chars": r["system_chars"], "hook_chars": r["hook_chars"],
+                           "tools": len(r["tools"]), "tool_chars": r["tool_chars"], "skills": r["skills"], "agents": r["agents"]}
+    print(json.dumps(r, indent=1) if args.json else render(r))
+    return 0
+
+
+LOG_FILE = Path.home() / ".local" / "state" / "seat-context" / "log.jsonl"
+
+
+def binary_version(binary):
+    """The version Claude Code installs under its file name (.../versions/2.1.330), else None."""
+    name = Path(binary).resolve().name
+    return name if re.match(r"^\d+\.\d+\.\d+", name) else None
+
+
+def write_log(record):
+    """One JSON line to the log (SEAT_CONTEXT_LOG names another file). Any failure is dropped: the log must never change what the command prints or returns."""
+    try:
+        path = Path(os.environ.get("SEAT_CONTEXT_LOG") or LOG_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(record, separators=(",", ":"), default=str) + "\n")
+    except Exception:
+        pass
+
+
+def main(argv=None):
+    """run(), then one log line, whatever happened: a normal return, a refusal of the arguments (SystemExit), a failure."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    outcome = {}
+    started = time.time()
+    code = 1
+    try:
+        code = run(argv, outcome)
+        return code
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        if isinstance(exc.code, str):
+            outcome["error"] = exc.code[:500]
+        raise
+    except BaseException as exc:
+        outcome["error"] = ("%s: %s" % (type(exc).__name__, exc))[:500]
+        raise
+    finally:
+        write_log({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "argv": argv, "exit": code, "seconds": round(time.time() - started, 1), **outcome})
+
+
+if __name__ == "__main__":
+    sys.exit(main())

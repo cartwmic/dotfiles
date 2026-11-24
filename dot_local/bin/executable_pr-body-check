@@ -5,6 +5,9 @@
 # Runs the script in the deployed coordinator checkout. The agent-harness Bash hook requires `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr>`
 # before `gh pr merge` on every repo except cartwmic/coordinator (which uses merge-pr.sh), and `pr-body-check --body-file F && gh pr create|edit ... --body-file F`
 # before a PR body is set, with F made by `F=$(mktemp /tmp/pr-N-body.XXXXXX)` (a fixed name such as /tmp/pr-body.md is refused; an edit needs N in the name). Personal profile only (docs/profiles.md).
+# After the body check passes on `pr-body-check REPO PR`, it also runs `ci-main-status --threads REPO PR`: no unresolved review thread may be left (playbook 580f3e02 step 3). So every merge chain
+# that runs this check runs the thread check too, and an unresolved thread is exit 1 like a broken body rule. It is not run for a body-only check (--body-file), a check made before a review round
+# (--skip-intent-review: threads are rarely there yet and a PR owes them only at merge), or the --pr/--repo/--base forms (no REPO PR pair). An unreadable thread state is also exit 1: no silent pass.
 # The gh calls are made by pr-body-check.ts, started below, so they inherit these. They are merge-chain reads: GH_URGENT=1 keeps the
 # gh budget guard from refusing them, and GH_CALLER names this check in the gh wrapper's log.
 export GH_URGENT=1 GH_CALLER=pr-body-check
@@ -13,4 +16,10 @@ if [ ! -f "$script" ]; then
   echo "pr-body-check: $script is missing: pull ~/git/coordinator (the check ships there) and run again" >&2
   exit 2
 fi
-exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"
+node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@" || exit $?
+[ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || exit 0
+case "${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
+for arg in "$@"; do
+  case "$arg" in --skip-intent-review|--body-file) exit 0 ;; esac
+done
+exec ci-main-status --threads "$1" "$2"

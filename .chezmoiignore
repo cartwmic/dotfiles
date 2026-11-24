@@ -130,6 +130,14 @@ bin/**
 .local/bin/video-rename
 {{- end }}
 
+{{- if ne .profile "personal" }}
+# creating-formal-verification: personal only (docs/profiles.md). It tells agents to install and run statechart (a third-party tool that
+# fetches Java and a TLA+ jar), which is asked about before it goes on the employer's machine; Termux has no Java. The statechart external
+# itself (.chezmoiexternal.toml) is gated the same way, so there is nothing to ignore for it here.
+.local/share/agent-harness/canonical/skills/creating-formal-verification
+.local/share/agent-harness/canonical/skills/creating-formal-verification/**
+{{- end }}
+
 {{- if and (ne .profile "termux") (ne .profile "personal") }}
 # SSH key provision is termux + personal only; the homelab credential is
 # personal infrastructure and must not land on a work machine.
