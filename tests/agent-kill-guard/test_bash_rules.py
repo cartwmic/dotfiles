@@ -383,6 +383,18 @@ class PrBody(unittest.TestCase):
     C = "/tmp/pr-new-body.aB3xY9"   # a create: no PR number yet
     E = "/tmp/pr-5-body.aB3xY9"     # an edit of PR 5
 
+    def test_a_title_the_check_was_not_given_is_refused(self):
+        c, e = self.C, self.E
+        for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s --title other && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e)]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("was not given", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr", message)
+        # a PR given no --title (an edit that keeps it) needs none on the check
+        self.assertIsNone(check("pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e)))
+
     def test_a_create_or_edit_without_the_check_names_the_chained_form(self):
         for text in ["gh pr create --title t --body-file %s" % self.C, "gh pr edit 5 --body-file %s" % self.E, "gh pr create -F %s" % self.C,
                      "gh pr create --body-file=%s" % self.C, "gh pr new --body-file %s" % self.C, "gh -R cartwmic/dotfiles pr edit 5 -F %s" % self.E,
@@ -399,7 +411,7 @@ class PrBody(unittest.TestCase):
 
     def test_the_check_chained_with_the_same_file_is_allowed(self):
         c, e = self.C, self.E
-        for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+        for text in ["pr-body-check --body-file %s && gh pr create --body-file %s" % (c, c),
                      "pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c),  # the form the refusal names
                      "pr-body-check --title t --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e),
                      "pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e),
@@ -622,7 +634,8 @@ class PrBodyFileName(unittest.TestCase):
     FIXED = ["/tmp/pr-body.md", "/tmp/body.md", "/tmp/pr-5-body.md", "/tmp/pr-5-body.markdown", "pr-body.md", "/tmp/pr345.md", "/tmp/pr-5-body"]
 
     def chained(self, verb, name):
-        return "pr-body-check --body-file %s && gh pr %s --body-file %s" % (name, verb, name)
+        title = " --title t" if "--title t" in verb else ""  # the check gets the title the PR is given
+        return "pr-body-check --body-file %s%s && gh pr %s --body-file %s" % (name, title, verb, name)
 
     def test_a_fixed_name_is_refused_for_create_and_edit_even_when_checked(self):
         for name in self.FIXED:
@@ -660,8 +673,8 @@ class PrBodyFileName(unittest.TestCase):
                      'F=$(mktemp --suffix .md /tmp/pr-345-body.XXXXXX); pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
                      'F="$(mktemp /tmp/pr-345-body.XXXXXXXX)"; pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
                      'F=`mktemp /tmp/pr-345-body.XXXXXX`; pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
-                     'F=$(mktemp /tmp/pr-new-body.XXXXXX); pr-body-check --body-file "$F" && gh pr create --title t --body-file "$F"',
-                     'F=$(mktemp); pr-body-check --body-file "$F" && gh pr create --title t --body-file "$F"',
+                     'F=$(mktemp /tmp/pr-new-body.XXXXXX); pr-body-check --body-file "$F" --title t && gh pr create --title t --body-file "$F"',
+                     'F=$(mktemp); pr-body-check --body-file "$F" --title t && gh pr create --title t --body-file "$F"',
                      'F=$(mktemp -p /tmp pr-345-body.XXXXXX); pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"']:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))

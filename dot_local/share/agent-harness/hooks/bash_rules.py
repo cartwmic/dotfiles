@@ -24,7 +24,8 @@
               the hook never sees, so they pass.
 
   pr-body     (personal and work)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
-              and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
+              and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list, and, when the command
+              sets `--title T`, that check was given the same `--title T` (it reads the title for task ids). Refused: an inline
               `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
               `pr-open --title T --body-file F` (create) or `pr-open --edit N --body-file F` (edit) as the shortest path, then the chained form
               `pr-body-check --body-file F --title T && gh pr create --title T ... --body-file F`, so bookkeeping in the description (the principles table,
@@ -78,6 +79,7 @@ Context; the file reads and the git call are the Context's `read_file` and `orig
 """
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import namedtuple
@@ -118,6 +120,7 @@ HEREDOC = (
 CI_GATE = "ci-main-status --merge-gate"  # the gated entry for a real `ci-main-status --merge-gate <repo> [--pr N]`
 PR_CHECK = "pr-body-check PR "           # prefix of the gated entry for a real `pr-body-check <repo> <pr>`: PR_CHECK + the PR number
 BODY_FILE = "pr-body-check --body-file "  # prefix of the gated entry that names a file the body check already read
+BODY_TITLE = "pr-body-check --title "  # prefix of the gated entry that names a title the body check already read
 MERGE_BARE = (
     "`gh pr merge` without both gates in their real form is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
     "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
@@ -152,6 +155,10 @@ PR_API_ENDPOINT = re.compile(r"(?:https://[^/]+/(?:api/v3/)?|/)?(?P<path>repos/[
 PR_API_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field")
 PR_API_VALUE_FLAGS = ("-H", "--header", "-q", "--jq", "-t", "--template", "--cache", "--hostname", "-p", "--preview")
 PR_BODY_VERBS = ("create", "new", "edit")  # `gh pr new` is an alias of `gh pr create`
+PR_TITLE = (
+    "`gh pr %s --title %s` sets a title that `pr-body-check` was not given: the check reads the title for task ids, which become part of the commit text on main, and it can only read the one it is passed. "
+    "Pass the same title to both: `pr-body-check --body-file F --title T && gh pr %s --title T ... --body-file F`, or use %s."
+)
 PR_BODY_FILE = (
     "The body file %s is refused in agent sessions: %s. Make the body file with `F=$(mktemp /tmp/pr-%s-body.XXXXXX)` in the same command "
     "and pass `--body-file \"$F\"`; a fixed name like /tmp/pr-body.md can be overwritten by another session. "
@@ -305,6 +312,9 @@ class Walk:
                 body_file = _flag_value(args, "--body-file")
                 if body_file is not None:
                     found.add(BODY_FILE + body_file)
+                title = _flag_value(args, "--title")
+                if title is not None:
+                    found.add(BODY_TITLE + title)
         return frozenset(found)
 
     def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
@@ -632,6 +642,9 @@ def pr_body_rule(walk, ctx):
         problems = [_body_file_problem(body_file, verb, number, walk.mktemps)]
         if BODY_FILE + body_file not in cmd.gated:
             problems.append(PR_BODY % (verb, PR_OPEN[verb], verb))
+        title = _flag_value(args, "--title")
+        if title is not None and BODY_FILE + body_file in cmd.gated and BODY_TITLE + title not in cmd.gated:
+            problems.append(PR_TITLE % (verb, shlex.quote(title), verb, PR_OPEN[verb]))
         problems = [p for p in problems if p]
         if problems:
             return " ".join(problems)
