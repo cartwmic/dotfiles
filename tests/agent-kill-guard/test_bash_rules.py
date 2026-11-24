@@ -1179,6 +1179,25 @@ class DoorDelivery(unittest.TestCase):
                 self.assertEqual(self.run_hook(command).returncode, 2)
         self.assertEqual(self.run_hook("kubectlx get pods").returncode, 0)
 
+    def test_a_repo_flag_before_the_gh_subcommand_does_not_hide_the_door(self):
+        for command in ("gh -R owner/repo pr create --title x", "gh --repo owner/repo pr create", "gh --repo=owner/repo pr create", "gh -R=owner/repo pr create"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command, {"session_id": "run-" + str(abs(hash(command)))}).returncode, 2)
+        self.assertEqual([ask["value"] for ask in self.asked()].count("gh pr create --title x"), 1)
+        self.assertEqual({ask["value"] for ask in self.asked()}, {"gh pr create --title x", "gh pr create"})
+        # only the flag straight after gh is dropped: a `-R` elsewhere, and other gh commands, are as typed
+        self.assertEqual(self.run_hook("gh -R owner/repo pr view 3").returncode, 0)
+
+    def test_pr_open_reaches_its_door_on_both_profiles(self):
+        self.set_index(["gh pr create", "pr-open", "kubectl"])
+        self.set_renderer('print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:pr-open): rule 1234abcd"}))')
+        for profile in ("personal", "axon-work-computer"):
+            with self.subTest(profile=profile):
+                run = self.run_hook("pr-open --edit 5 --body-file /tmp/pr-5-body.AbCdEf", {"session_id": "run-" + profile}, profile=profile)
+                self.assertEqual(run.returncode, 2)
+                self.assertIn("door cmd:pr-open", run.stderr)
+        self.assertEqual({ask["value"] for ask in self.asked()}, {"pr-open --edit 5 --body-file /tmp/pr-5-body.AbCdEf"})
+
     def test_the_told_refusal_writes_no_guard_log_line_of_its_own(self):
         self.assertEqual(self.run_hook("gh pr create").returncode, 2)
         self.assertFalse(self.log.exists())
@@ -1278,11 +1297,11 @@ class DoorDelivery(unittest.TestCase):
         self.assertNotIn("1234abcd", run.stderr)
         self.assertEqual(self.asked(), [])
 
-    def render(self, profile):
-        home = Path(self.tmp) / ("home-" + profile)
+    def render(self, profile, extra=""):
+        home = Path(self.tmp) / ("home-" + profile + str(len(extra)))
         home.mkdir()
-        config = Path(self.tmp) / (profile + ".yaml")
-        config.write_text("data:\n  profile: %s\n" % profile)
+        config = Path(self.tmp) / (profile + str(len(extra)) + ".yaml")
+        config.write_text("data:\n  profile: %s\n%s" % (profile, extra))
         run = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination", str(home), "execute-template"],
                              input=(HOOKS / "door.json.tmpl").read_text(), capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=60)
         self.assertEqual(run.returncode, 0, run.stderr)
@@ -1298,6 +1317,29 @@ class DoorDelivery(unittest.TestCase):
         self.assertEqual(work["command"][-2:], [str(home / "coordinator-work/src/t3-hook/hook.ts"), "--door"])
         for config in (personal, work):
             self.assertIs(config["enabled"], True)
+
+    @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
+    def test_remove_coordinator_hook_renders_the_door_off(self):
+        _, off = self.render("personal", "  agentHost:\n    removeCoordinatorHook: true\n")
+        self.assertIs(off["enabled"], False)
+        _, on = self.render("personal", "  agentHost:\n    removeCoordinatorHook: false\n")
+        self.assertIs(on["enabled"], True)
+
+    def test_a_renderer_that_tells_once_per_run_lets_the_same_command_pass_the_second_time(self):
+        told = Path(self.tmp) / "told.json"
+        self.set_renderer("""
+import os
+told = %r
+seen = json.load(open(told)) if os.path.exists(told) else []
+if ask["run"] in seen:
+    print("{}")
+else:
+    json.dump(seen + [ask["run"]], open(told, "w"))
+    print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:gh pr create): rule 1234abcd"}))
+""" % str(told))
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.run_hook("gh pr create", {"session_id": "run-2"}).returncode, 2)
 
 
 class Hook(unittest.TestCase):

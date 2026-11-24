@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -42,6 +43,23 @@ export const loadFirstPrompt: LoadFirstPrompt = async (file) => {
 	const loaded = (await import(pathToFileURL(file).href)) as { firstPromptMessage?: unknown };
 	return typeof loaded.firstPromptMessage === "function" ? (loaded.firstPromptMessage as FirstPromptRules) : undefined;
 };
+
+/**
+ * One `door-failed` line in the guard log (the file the shell classifier's door failures go to: AGENT_HARNESS_GUARD_LOG, else ~/.local/state/agent-harness/guard.jsonl), for a
+ * first-prompt delivery that could not run. Without it a Pi child that never got its brief rules looks the same in the logs as a brief with no `Kind:` line.
+ * Same fields as the classifier's line; the reason is the error's message, never the prompt. A failed write is ignored.
+ */
+export function logFirstPromptFailure(env: NodeJS.ProcessEnv, sessionId: string, error: unknown): void {
+	try {
+		const path = env.AGENT_HARNESS_GUARD_LOG || join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "agent-harness", "guard.jsonl");
+		mkdirSync(dirname(path), { recursive: true });
+		const reason = `the first-prompt rules could not be delivered: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300);
+		const record = { ts: new Date().toISOString(), action: "door-failed", outcome: "failed", run: sessionId, adapter: "pi", door: "brief", reason };
+		appendFileSync(path, `${JSON.stringify(record)}\n`);
+	} catch {
+		// the log is best effort
+	}
+}
 
 /** The config beside the extension, or undefined when it is missing or unreadable. */
 export function loadConfig(path: string): GateConfig | undefined {
@@ -88,7 +106,7 @@ export async function gateReason(call: HelperCall, options: { config: GateConfig
 
 /**
  * The playbook rules for the brief the session's first prompt carries (its `Kind:` line), as one message text, or undefined when there is nothing to tell. Never throws.
- * Same guards as `gateReason`: no config, switched off, no checkout or state directory, the coordinator's own session, or a file that cannot be loaded all tell nothing.
+ * Same guards as `gateReason`: no config, switched off, no checkout or state directory, the coordinator's own session, or an older checkout with no such function all tell nothing, quietly. A file that cannot be loaded, or a function that throws, tells nothing and writes one `door-failed` line.
  */
 export async function firstPromptRules(
 	prompt: { sessionId: string; prompt: string; cwd: string },
@@ -103,7 +121,8 @@ export async function firstPromptRules(
 	try {
 		const rules = await (options.load ?? loadFirstPrompt)(file);
 		return rules?.({ session_id: prompt.sessionId, prompt: prompt.prompt, cwd: prompt.cwd }, env, stateDir);
-	} catch {
+	} catch (error) {
+		logFirstPromptFailure(env, prompt.sessionId, error);
 		return undefined;
 	}
 }

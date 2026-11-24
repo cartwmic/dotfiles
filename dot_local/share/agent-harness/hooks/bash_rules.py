@@ -989,6 +989,17 @@ def credential_rule(walk, ctx):
     return None
 
 
+def _without_gh_repo_flag(words):
+    """`gh -R owner/repo pr create` and `gh --repo owner/repo pr create` (also `-R=...`, `--repo=...`) as `gh pr create`: the repo flag before the subcommand does not change what the command is.
+    Only a flag that comes straight after `gh` is dropped; anything else is left as typed."""
+    if words[:1] != ["gh"]:
+        return words
+    rest = words[1:]
+    while rest and (rest[0] in ("-R", "--repo") or rest[0].startswith(("-R=", "--repo="))):
+        rest = rest[2:] if rest[0] in ("-R", "--repo") else rest[1:]
+    return ["gh"] + rest
+
+
 def door_rule(walk, ctx):
     """Door delivery (cmd doors): a playbook rule that names a shell command in its `At:` line (`cmd:gh pr create`, `cmd:kubectl`) is told in one refusal per run,
     and the same command again passes. The rules, the seat filter and the once-per-run record are the coordinator's renderer (`hook.ts --door`), not this file:
@@ -1004,7 +1015,7 @@ def door_rule(walk, ctx):
         return None
     asked = set()
     for cmd in walk.cmds:
-        words = [_base(cmd.words[0])] + list(cmd.words[1:])
+        words = _without_gh_repo_flag([_base(cmd.words[0])] + list(cmd.words[1:]))
         if not any(words[:len(prefix)] == prefix for prefix in prefixes):
             continue
         text = " ".join(words)

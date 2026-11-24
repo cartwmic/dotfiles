@@ -35,6 +35,8 @@ interface Rig {
 	config: GateConfig;
 	env: NodeJS.ProcessEnv;
 	recorded: () => { call: HelperCall; state: string; t3: string | null }[];
+	/** The lines the extension wrote to the guard log (the rig points AGENT_HARNESS_GUARD_LOG at a scratch file). */
+	guardLog: () => Record<string, unknown>[];
 }
 
 const rig = (t: TestContext, mode: string, env: NodeJS.ProcessEnv = {}, gateSource: string = STUB_GATE): Rig => {
@@ -51,7 +53,8 @@ const rig = (t: TestContext, mode: string, env: NodeJS.ProcessEnv = {}, gateSour
 		state,
 		record,
 		config: { enabled: true, coordinatorRepo: repo, stateDir: state },
-		env: { PATH: process.env.PATH, STUB_RECORD: record, STUB_MODE: mode, ...env },
+		env: { PATH: process.env.PATH, STUB_RECORD: record, STUB_MODE: mode, AGENT_HARNESS_GUARD_LOG: join(root, "guard.jsonl"), ...env },
+		guardLog: () => (existsSync(join(root, "guard.jsonl")) ? readFileSync(join(root, "guard.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []),
 		recorded: () => (existsSync(record) ? readFileSync(record, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []),
 	};
 };
@@ -205,4 +208,27 @@ test("a first prompt with no kind, an older coordinator checkout, a throwing fun
 	const off = rig(t, "tell", {}, STUB_PROMPT_GATE);
 	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: { ...off.config, enabled: false }, env: off.env, argv: ["node", "pi"] }), undefined);
 	assert.equal(await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: undefined, env: off.env, argv: ["node", "pi"] }), undefined);
+});
+
+test("a first-prompt delivery that fails writes one door-failed line; a prompt with nothing to tell, an older checkout and a switched-off gate write none", async (t) => {
+	const ctx = { cwd: "/w", sessionManager: { getSessionId: () => "s-fail" } };
+	const broken = rig(t, "throw", {}, STUB_PROMPT_GATE);
+	assert.equal(await beforeAgentStartHandler({ config: broken.config, env: broken.env, argv: ["node", "pi"] })({ prompt: "Seat: builder\nKind: build SECRET-VALUE" }, ctx), undefined);
+	const [line, ...more] = broken.guardLog();
+	assert.equal(more.length, 0);
+	assert.deepEqual({ action: line.action, outcome: line.outcome, run: line.run, adapter: line.adapter, door: line.door }, { action: "door-failed", outcome: "failed", run: "s-fail", adapter: "pi", door: "brief" });
+	assert.match(String(line.reason), /could not be delivered: stub broke/);
+	assert.match(String(line.ts), /^\d{4}-\d\d-\d\dT/);
+	assert.ok(!JSON.stringify(line).includes("SECRET-VALUE"), "the prompt is never logged");
+
+	const unloadable = rig(t, "tell", {}, 'throw new Error("at load");');
+	await firstPromptRules({ sessionId: "s-load", prompt: "Kind: build", cwd: "/w" }, { config: unloadable.config, env: unloadable.env, argv: ["node", "pi"] });
+	assert.equal(unloadable.guardLog().length, 1, "a file that cannot be loaded");
+
+	const quiet = rig(t, "tell", {}, STUB_PROMPT_GATE);
+	await firstPromptRules({ sessionId: "s", prompt: "hello", cwd: "/w" }, { config: quiet.config, env: quiet.env, argv: ["node", "pi"] });
+	await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: { ...quiet.config, enabled: false }, env: quiet.env, argv: ["node", "pi"] });
+	const old = rig(t, "tell", {}, "export const unrelated = 1;\n");
+	await firstPromptRules({ sessionId: "s", prompt: "Kind: build", cwd: "/w" }, { config: old.config, env: old.env, argv: ["node", "pi"] });
+	assert.deepEqual([...quiet.guardLog(), ...old.guardLog()], []);
 });
