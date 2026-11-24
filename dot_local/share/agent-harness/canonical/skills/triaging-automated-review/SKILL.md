@@ -42,10 +42,6 @@ through `reviewing-prs`.
 3. **Triage.** Open the code each finding points at, apply the
    [four tests](#the-four-tests), and note the verdict, with the failed test for
    anything you defer or decline.
-   A finding from a reviewer agent whose return carries a `repro` (the
-   `reviewing-prs` pass in step 8) first gets `agent-traces review repro`: a
-   finding whose repro does not reproduce is declined, unless you write why it
-   stands (`finding-triage.md`).
 4. **Fix, test, lint, push.** Commit each fix small, on the PR's own branch, and
    run the checks the repo has for what you changed before you push.
 5. **Answer and resolve.** In each bot thread you triaged, post one reply:
@@ -70,6 +66,9 @@ through `reviewing-prs`.
    here.)
 9. **Triage what it finds** by the same four tests, fix what passes and push.
    Its findings have no threads, so put declines and deferrals in the report.
+   A finding whose return carries a `repro` first gets `agent-traces review
+   repro`: a finding whose repro does not reproduce is declined, unless you
+   write why it stands (`finding-triage.md`).
 10. **Go round again** until a round turns up nothing that applies. What goes to
     people must be the head that was reviewed last. If you pushed after that
     review, review just the new commits (`<last reviewed sha>..HEAD`).
