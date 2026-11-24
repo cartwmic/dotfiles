@@ -124,9 +124,10 @@ set -eu
 # is not an object) is refused with the input unchanged and logged as skipped; behind the guards, a post-condition on the merged
 # document makes the promise hold for every input: the result may differ from the input only at the three compaction paths (an
 # empty config the merge created for a compaction key is forgiven), and any other difference prints the input byte for byte and
-# logs skipped - so no input shape can lose data. Every run appends one JSON line - the
-# compaction keys that changed and their new values, never any other file content - to ~/.local/state/t3-settings/log.jsonl
-# (XDG_STATE_HOME respected); a logging failure never fails the apply. The merged document is printed in jq's default pretty
+# logs skipped - so no input shape can lose data. Every apply appends one JSON line - the command (apply), the compaction keys
+# that changed and their new values, never any other file content - to ~/.local/state/t3-settings/log.jsonl (XDG_STATE_HOME
+# respected); chezmoi also runs this script for diff, status, cat and verify, and those previews write no log line; a logging
+# failure never fails the apply. The merged document is printed in jq's default pretty
 # form, the form T3 writes, so over a pretty input the apply differs from the input only on the changed lines; when nothing
 # changes as data the input is printed byte for byte, so chezmoi shows no drift.
 # These two literals duplicate the personal body's AUTO_COMPACT_WINDOWS and IDLE_COMPACTION below: the rendered personal script
@@ -135,50 +136,61 @@ set -eu
 AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
 IDLE_COMPACTION='beforeCacheExpires'
 
-# One JSON line per run (design principle 14): what the apply did. A logging failure must not fail the apply.
+# One JSON line per real apply (design principle 14): what the apply did. chezmoi renders and runs this script for every command
+# that needs the target file - diff, status, cat, verify too - and those are previews, not applies: log_apply writes nothing
+# unless CHEZMOI_COMMAND (which chezmoi sets per command) is apply, and a direct run with it unset logs nothing either. A
+# logging failure must not fail the apply.
 log_apply() {
+  [ "${CHEZMOI_COMMAND:-}" = "apply" ] || return 0
   dir="${XDG_STATE_HOME:-$HOME/.local/state}/t3-settings"
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '{"utc":"%s","mode":"work","action":"%s"%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" \
+  printf '{"utc":"%s","mode":"work","command":"apply","action":"%s"%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" \
     >> "$dir/log.jsonl" 2>/dev/null || true
 }
 
-input=$(cat; printf x)
-input=${input%x}
+# Spool stdin to a temp file (removed on exit): every byte-for-byte fallback below must print the input's exact bytes, and a
+# command substitution would drop NUL bytes. If spooling fails, pass the input through and log skipped.
+spool=$(mktemp) || {
+  log_apply skipped ',"reason":"could not spool the input"'
+  cat
+  exit 0
+}
+trap 'rm -f "$spool"' EXIT
+cat > "$spool"
 
 # The file must be exactly one JSON value and it must be an object: a guard that judged only the last value has already let a
 # second value be dropped (the merge below keeps only the first), so anything else is refused with the input unchanged. Empty
 # input is refused here too, and logged as skipped with this reason.
-if ! printf %s "$input" | jq -s -e 'length == 1 and (.[0] | type) == "object"' >/dev/null 2>&1; then
+if ! jq -s -e 'length == 1 and (.[0] | type) == "object"' < "$spool" >/dev/null 2>&1; then
   log_apply skipped ',"reason":"input is not a single JSON object"'
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
 # T3 never writes a providerInstances that is not an object: refuse one with a clean reason (a present false would slip past a
 # `// {}` fallback - false is falsy in jq - and the merge would then wipe the file). An absent or null providerInstances is
 # allowed and simply has no instance to set.
-if ! printf %s "$input" | jq -e '.providerInstances? | (. == null or type == "object")' >/dev/null 2>&1; then
+if ! jq -e '.providerInstances? | (. == null or type == "object")' < "$spool" >/dev/null 2>&1; then
   log_apply skipped ',"reason":"providerInstances is not an object"'
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
 # Nor an instance that is not an object, or one whose config is present and not an object (a string instance or a false config
 # would otherwise be refused only by the merge failing with a jq error on stderr).
-if ! printf %s "$input" | jq -e '[.providerInstances[]? | type] | all(. == "object")' >/dev/null 2>&1; then
+if ! jq -e '[.providerInstances[]? | type] | all(. == "object")' < "$spool" >/dev/null 2>&1; then
   log_apply skipped ',"reason":"an instance is not an object"'
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
-if ! printf %s "$input" | jq -e '[.providerInstances[]? | if type == "object" and has("config") then (.config | type) else "object" end] | all(. == "object")' >/dev/null 2>&1; then
+if ! jq -e '[.providerInstances[]? | if type == "object" and has("config") then (.config | type) else "object" end] | all(. == "object")' < "$spool" >/dev/null 2>&1; then
   log_apply skipped ',"reason":"an instance config is not an object"'
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
 
 # The one jq that both makes the change and names it: it emits the merged document, then the keys that changed - only the
 # compaction keys, by path, with their new values, and nothing else from the file. No instance is created, no other field is
 # touched, nothing is added or removed.
-res=$(printf %s "$input" | jq -c --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" '
+res=$(jq -c --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" '
   . as $doc
   | ( reduce ($windows | keys[]) as $id (.;
         if ($doc.providerInstances[$id]? | type) == "object"
@@ -199,22 +211,23 @@ res=$(printf %s "$input" | jq -c --argjson windows "$AUTO_COMPACT_WINDOWS" --arg
                 + ( if ($doc.idleCompaction? // null) != ($new.idleCompaction? // null)
                     then [ {"idleCompaction": ($new.idleCompaction? // null)} ] else [] end )
                 | add // {} ) } as $log
-  | $new, $log') || res=''
+  | $new, $log' < "$spool" 2>/dev/null) || res=''
 if [ -z "$res" ]; then
   log_apply skipped ',"reason":"the merge failed"'
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
 out=$(printf '%s\n' "$res" | sed -n 1p)
 log=$(printf '%s\n' "$res" | sed -n 2p)
-changed=$(printf %s "$log" | jq -c '.keys')
-values=$(printf %s "$log" | jq -c '.values')
+changed=$(printf %s "$log" | jq -c '.keys' 2>/dev/null)
+values=$(printf %s "$log" | jq -c '.values' 2>/dev/null)
 # The post-condition that makes "one apply must not be able to wipe the file" true for every input, whatever the guards name:
 # delete the three allowed paths from both documents (an empty config object under an instance is deleted from both too, since
 # the merge creates one only to hold a compaction key) and require equality; require each allowed path to hold exactly the
 # expected value; and require the log to name only allowed keys. If it fails for any reason, print the input byte for byte and
-# log skipped - nothing reaches stderr.
-ok=$(printf '%s\n' "$input" "$out" | jq -s --argjson log "$log" --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" '
+# log skipped - nothing reaches stderr. The input is spooled to a temp file (removed on exit) so those byte-for-byte fallbacks
+# print its exact bytes: reading it through a command substitution would drop NUL bytes.
+ok=$({ cat "$spool"; printf '\n%s\n' "$out"; } | jq -s --argjson log "$log" --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" '
   def strip:
     delpaths([["idleCompaction"],
               ["providerInstances", "claudeAgent", "config", "autoCompactWindow"],
@@ -230,30 +243,30 @@ ok=$(printf '%s\n' "$input" "$out" | jq -s --argjson log "$log" --argjson window
              elif $windows[$id] == "" then (($new.providerInstances[$id].config.autoCompactWindow? // null) == null)
              else $new.providerInstances[$id].config.autoCompactWindow == $windows[$id] end ]
          | all)
-    and ($log.keys | all(. == "idleCompaction" or . == "claudeAgent.autoCompactWindow" or . == "coordinator.autoCompactWindow"))') || ok=false
+    and ($log.keys | all(. == "idleCompaction" or . == "claudeAgent.autoCompactWindow" or . == "coordinator.autoCompactWindow"))' 2>/dev/null) || ok=false
 if [ "$ok" != "true" ]; then
   log_apply skipped ',"reason":"the change would touch more than the three keys"'
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
 # T3 writes the file in its own key order, so the bytes would differ on every apply with nothing to change. When the merged
 # result equals the input as data (jq -S sorts object keys; arrays keep their order), print the input as it is.
-sorted_in=$(printf %s "$input" | jq -S .)
-sorted_out=$(printf %s "$out" | jq -S .)
+sorted_in=$(jq -S . < "$spool" 2>/dev/null)
+sorted_out=$(printf %s "$out" | jq -S . 2>/dev/null)
 if [ "$sorted_in" = "$sorted_out" ]; then
   log_apply unchanged ''
-  printf %s "$input"
+  cat "$spool"
   exit 0
 fi
 log_apply wrote ",\"keys\":$changed,\"values\":$values"
 # T3 writes the file as jq's default pretty JSON, so the merged document is printed in that form too: over a pretty input the
 # apply differs from the input only on the changed lines. (jq . adds a trailing newline; the case below re-applies the input's.)
-pretty=$(printf %s "$out" | jq .) || pretty=$out
+pretty=$(printf %s "$out" | jq . 2>/dev/null) || pretty=$out
 printf %s "$pretty"
-case $input in
-  *"
-") printf '\n' ;;
-esac
+# Re-append the input's trailing newline: jq . added one, and the input may or may not have had one.
+if [ "$(tail -c 1 "$spool" | wc -l)" -eq 1 ]; then
+  printf '\n'
+fi
 {{- else }}
 {{- $home := .chezmoi.homeDir }}
 {{- $hub := includeTemplate "t3_hub" . }}

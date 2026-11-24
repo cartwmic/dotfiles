@@ -149,7 +149,10 @@ def run_script(script, stdin, want=None, window=None, idle=None, envvars=None):
         script = "".join("IDLE_COMPACTION='%s'\n" % idle if l.startswith("IDLE_COMPACTION=") else l for l in script.splitlines(keepends=True))
     if envvars is not None:
         script = "".join("ENV_VARS='%s'\n" % envvars if l.startswith("ENV_VARS=") else l for l in script.splitlines(keepends=True))
-    r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
+    # A scratch HOME and state dir: a modify script that logs (the work mode) must never write to the real user's log.
+    with tempfile.TemporaryDirectory() as tmp:
+        r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, HOME=tmp, XDG_STATE_HOME=os.path.join(tmp, "state")))
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -901,8 +904,14 @@ class WorkModeTest(unittest.TestCase):
                                                    "config": {"setupMode": "managed"}}
         leftovers["providerInstances"]["seat-lead"] = {"driver": "claudeAgent", "displayName": "Claude (lead)", "enabled": True}
         leftovers["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "hub", "enabled": True}}
+        deep = current = {}
+        for _ in range(300):
+            current["a"] = {}
+            current = current["a"]
         return [
             "", "   ", "\n", "not json", "[]", '"x"', "42", "null", "true", "{}",
+            '{"a": NaN, "keep": 1}', json.dumps(deep),
+            '{"a": "x"}\x00\n', '{"a": "x"}\x00',
             '{"providerInstances": false}', '{"providerInstances": null}', '{"providerInstances": 0}',
             '{"providerInstances": ""}', '{"providerInstances": []}', '{"providerInstances": "x"}', '{"providerInstances": 3.5}',
             '{"providerInstances": {"claudeAgent": false}}', '{"providerInstances": {"claudeAgent": null}}',
@@ -931,7 +940,7 @@ class WorkModeTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     state = Path(tmp)
                     r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=True, timeout=30,
-                                       env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state")))
+                                       env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
                     self.assertEqual(r.returncode, 0, shape[:80])
                     self.assertEqual(r.stderr, "", shape[:80])
                     lines = self.logged_lines(state)
@@ -943,6 +952,70 @@ class WorkModeTest(unittest.TestCase):
                         self.assertEqual(record["action"], "wrote", shape[:80])
                         self.assertTrue(set(record["keys"]) <= self.ALLOWED_KEYS, shape[:80])
                         self.assertEqual(self.strip_allowed(json.loads(shape)), self.strip_allowed(json.loads(r.stdout)), shape[:80])
+
+    def test_only_a_real_apply_logs(self):
+        """chezmoi runs the script for diff, status, cat and verify too; those previews change nothing and write no log line, and
+        a direct run with CHEZMOI_COMMAND unset logs nothing either. The output itself is the same merged document either way."""
+        for command in ("diff", "status", "cat", "verify", None):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                env = dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"))
+                if command is not None:
+                    env["CHEZMOI_COMMAND"] = command
+                out = subprocess.run(["sh", "-c", self.script], input=FIXTURE, capture_output=True, text=True, timeout=30, env=env)
+                self.assertEqual(out.returncode, 0, command)
+                self.assertEqual(out.stderr, "", command)
+                self.assertEqual(json.loads(out.stdout)["idleCompaction"], IDLE, command)
+                self.assertFalse((state / "state/t3-settings/log.jsonl").exists(), command)
+
+    def test_the_helpers_never_touch_the_real_home_log(self):
+        """run_script and apply_logged run with a scratch HOME and state dir: a test run neither creates nor appends to the real
+        user's apply log."""
+        real_log = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")) / "t3-settings" / "log.jsonl"
+        before = real_log.read_text() if real_log.exists() else ""
+        self.apply_logged(FIXTURE, Path(tempfile.mkdtemp()))
+        run_script(self.script, FIXTURE)
+        after = real_log.read_text() if real_log.exists() else ""
+        self.assertEqual(before, after)
+
+    def test_the_corpus_would_catch_a_broken_post_condition(self):
+        """Mutation check that test_no_input_shape_loses_data exercises the post-condition: with the post-condition's skip forced
+        off (the simplest honest mutant - `if false; then` in place of its ok test), a shape the guards let through but the merge
+        corrupts (a NaN value, which jq reprints as null) reaches the output changed, and the corpus check - output equal to the
+        input once the allowed paths are deleted from both documents - fails on it."""
+        mutant = self.script.replace('if [ "$ok" != "true" ]; then', 'if false; then')
+        self.assertNotEqual(mutant, self.script, "the post-condition's ok test was not found")
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            r = subprocess.run(["sh", "-c", mutant], input='{"a": NaN, "keep": 1}', capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(r.stdout, '{"a": NaN, "keep": 1}', "the mutant printed the input unchanged")
+            with self.assertRaises(AssertionError):
+                self.assertEqual(self.strip_allowed(json.loads('{"a": NaN, "keep": 1}')),
+                                 self.strip_allowed(json.loads(r.stdout)), "the corpus check passed on a corrupted output")
+
+        # A second injected fault: the merge itself deletes a non-allowed key. With the post-condition intact the script refuses
+        # the wrong merge (output byte for byte, logged skipped); with the post-condition also forced off the corruption reaches
+        # stdout, and the corpus check fails on it.
+        wrong_merge = self.script.replace("  | $new, $log'", "  | ($new | del(.theme)), $log'")
+        self.assertNotEqual(wrong_merge, self.script, "the merge's emit line was not found")
+        for script, expect_input_back in ((wrong_merge, True), (wrong_merge.replace('if [ "$ok" != "true" ]; then', 'if false; then'), False)):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                r = subprocess.run(["sh", "-c", script], input='{"theme": "dark", "keep": 1}', capture_output=True, text=True,
+                                   timeout=30,
+                                   env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(r.stderr, "", r.stderr)
+                if expect_input_back:
+                    self.assertEqual(r.stdout, '{"theme": "dark", "keep": 1}', "the post-condition did not refuse the wrong merge")
+                    self.assertEqual(json.loads(self.logged_lines(state)[0])["action"], "skipped")
+                else:
+                    self.assertNotEqual(r.stdout, '{"theme": "dark", "keep": 1}', "the corruption did not reach stdout")
+                    with self.assertRaises(AssertionError):
+                        self.assertEqual(self.strip_allowed(json.loads('{"theme": "dark", "keep": 1}')),
+                                         self.strip_allowed(json.loads(r.stdout)), "the corpus check passed on a corrupted output")
 
     def test_the_work_literals_equal_the_personal_ones(self):
         """The work branch duplicates the personal body's two literals (the personal body must stay byte for byte what main has,
@@ -959,10 +1032,11 @@ class WorkModeTest(unittest.TestCase):
             self.assertEqual(w[0], p[0], name)
 
     def apply_logged(self, stdin, state):
-        """Run the rendered script with HOME and XDG_STATE_HOME in the scratch dir, so the log line lands there. No path may
-        print to stderr: every refusal happens up front, before the merge can fail."""
+        """Run the rendered script as a real apply (CHEZMOI_COMMAND=apply, as chezmoi sets it) with HOME and XDG_STATE_HOME in the
+        scratch dir, so the log line lands there. No path may print to stderr: every refusal happens up front, before the merge
+        can fail."""
         r = subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30,
-                           env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state")))
+                           env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
         assert r.returncode == 0, r.stderr
         assert r.stderr == "", r.stderr
         return r.stdout
@@ -995,6 +1069,7 @@ class WorkModeTest(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             record = json.loads(lines[0])
             self.assertEqual(record["mode"], "work")
+            self.assertEqual(record["command"], "apply")
             self.assertEqual(record["action"], "wrote")
             self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
             self.assertEqual(record["values"], {"idleCompaction": IDLE,
