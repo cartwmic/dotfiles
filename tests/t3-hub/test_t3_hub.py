@@ -680,8 +680,8 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
 # The skills each seat keeps (restated; the template holds the same lists and the reasons for them).
 KEEP = {
     "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "research-method", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
+    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "builder": {"correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"correcting-repeated-mistakes", "designing-the-smallest-version", "no-ai-slop", "research-method"},
     "reviewer": {"correcting-repeated-mistakes", "designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
     "computer": {"correcting-repeated-mistakes", "using-computer", "using-browse"},
@@ -704,8 +704,8 @@ BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-re
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
-# The skills the seat files name from the source because this apply links them later: the archive external (.chezmoiexternal.toml) review-map; model-fit only where the coordinator checkout has it (these tests have none).
-FROM_SOURCE = {"review-map"}
+# The skills the seat files name from the source because this apply links them later: the archive externals (.chezmoiexternal.toml) review-map and statechart; model-fit only where the coordinator checkout has it (these tests have none).
+FROM_SOURCE = {"review-map", "statechart"}
 CANONICAL = sorted({p.parent.name for pat in ("*/SKILL.md", "*/SKILL.md.tmpl") for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat)})  # reviewing-prs ships SKILL.md.tmpl
 
 
