@@ -185,6 +185,12 @@ class WrapperTest(Base):
         node.write_text('#!/bin/sh\nfor a in "$@"; do case "$a" in *.ts) echo "script=$a";; esac; done\necho "state=${COORDINATOR_STATE_DIR:-unset}"\n')
         node.chmod(node.stat().st_mode | stat.S_IXUSR)
         self.log = self.root / "node.log"
+        # `pr-body-check REPO PR` ends by running `ci-main-status --threads REPO PR` (the review-thread gate). A stub records its arguments, so a wrapper run
+        # needs no gh and prints nothing the checkout/state-dir assertions would trip on.
+        self.threads_log = self.root / "threads.log"
+        status = self.bin / "ci-main-status"
+        status.write_text('#!/bin/sh\necho "$@" >> "%s"\n' % self.threads_log)
+        status.chmod(status.stat().st_mode | stat.S_IXUSR)
 
     def install(self, data, repo, state=None, with_instance_file=True):
         """A home for `data`'s profile: the instance file chezmoi renders, a fake checkout with the three scripts, and optionally the state dir's pane-bin/ledger."""
@@ -213,6 +219,16 @@ class WrapperTest(Base):
                 r = self.run_wrapper(name)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual(r.stdout.split(), ["script=%s/scripts/%s" % (repo, script), "state=%s" % state])
+
+    def test_the_work_pr_body_check_also_runs_the_thread_check(self):
+        repo, state = self.home / "coordinator-work", self.home / ".local/share/coordinator-work"
+        self.install(work_data(), repo, state)
+        self.assertEqual(self.run_wrapper("pr-body-check").returncode, 0)
+        self.assertEqual(self.threads_log.read_text().split(), ["--threads", "x/y", "1"])
+        self.threads_log.unlink()
+        for name in ("pr-record", "intent-review-check"):
+            self.assertEqual(self.run_wrapper(name).returncode, 0)
+        self.assertFalse(self.threads_log.exists(), "only pr-body-check runs the thread check")
 
     def test_work_wrappers_use_the_checkout_from_local_data(self):
         repo = self.root / "elsewhere/coordinator"
