@@ -35,6 +35,8 @@ The gate wrappers run scripts in the coordinator checkout. Chezmoi renders `~/.l
 
 After the body check passes, `pr-body-check REPO PR` runs `ci-main-status --threads REPO PR`: no unresolved review thread may be left (playbook 580f3e02 step 3). Every merge chain that runs the body check therefore runs the thread check, and an unresolved thread is exit 1, like a broken body rule. An unreadable thread state is also exit 1, never a silent pass. The thread check is not run for a body-only check (`--body-file`), a check made before a review round (`--skip-intent-review`), or the `--pr`/`--repo`/`--base` forms, which have no `REPO PR` pair. `ci-main-status --threads` itself ships on both profiles, in `ci-main-status`.
 
+The merge form of `pr-body-check` also refuses a PR whose agent record has no `Promises:` line (the coordinator's `pr-body-check.ts`; both profiles run the same checkout script).
+
 ## `agent-traces` on work
 
 `intent-review-check` and the merge form of `pr-body-check` call `agent-traces review verify` for the five repos the review rule covers (the cartwmic repos: coordinator, dotfiles, cartwmic-homelab-v2, agent-kit, loop-engine). For any other repo, the check says "out of scope" and does not call it, so a work repo's merge needs no `agent-traces`. The review log itself (`agent-traces review add`, `label`, `record`, `report`) does.

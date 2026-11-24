@@ -206,6 +206,8 @@ class Merge(unittest.TestCase):
                 self.assertIn("ecd63156, 385acc43, ccc6c94b and 5a05bfe8", message)
                 self.assertIn("agent record", message)
                 self.assertIn("pr-record path <repo>#N", message)
+                self.assertIn("`Promises:` line", message)
+                self.assertIn("unresolved review thread", message)
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))

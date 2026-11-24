@@ -63,7 +63,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/check-test-edits.py "$BASE_SHA" "$HEAD_SHA"
-      - name: "Linux checks: scripts/ci-linux.sh (five node tests, then every Linux Python suite via scripts/ci-par.py)"
+      - name: "Linux checks: scripts/ci-linux.sh (six node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
       # A pull request that changes what a Python script does needs a test that notices each changed hunk (dotfiles#641: two fix
       # commits added tests, none for the loop rule they rewrote, and review round 2 found the regression there). It undoes each hunk
