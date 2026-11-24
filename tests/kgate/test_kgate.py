@@ -855,6 +855,16 @@ while True:
 '''
 
 
+def read_jsonl(path):
+    """The records of a JSON-lines file that a fake or the client may be appending to as it is read. Only whole lines count: a line with no newline yet is half written
+    (a write that crosses a page is seen in two parts), and the next read has all of it."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return []
+    return [json.loads(line) for line in data[:data.rfind(b"\n") + 1].splitlines()]
+
+
 def stub_launcher(tmp, name, text):
     """The command that runs the client through a stub script. A test calls launcher() again for each client it starts, and a client that has just started is still reading
     the stub: writing the file in place truncates it first, and a client that reads it then runs an empty script, exits 0 and prints nothing. The new text goes to
@@ -875,6 +885,19 @@ class StubLauncher(unittest.TestCase):
             stub_launcher(tmp, "s.py", "print('second')\n")
             self.assertEqual(reading.read(), "print('first')\n" * 1000)
         self.assertEqual(Path(command[1]).read_text(), "print('second')\n", "the next client runs the new text")
+
+
+class ReadJsonl(unittest.TestCase):
+    def test_a_line_that_is_still_being_written_is_left_for_the_next_read(self):
+        path = Path(tempfile.mkdtemp(prefix="kt-jsonl-")).resolve() / "calls.jsonl"
+        self.addCleanup(shutil.rmtree, path.parent, True)
+        self.assertEqual(read_jsonl(path), [], "no file yet")
+        line = json.dumps({"manifest": {"data": "x" * 500}}) + "\n"
+        path.write_text(json.dumps({"probe": "u@host"}) + "\n" + line[:300])   # a writer that has put down the first 300 bytes of its second line
+        self.assertEqual(read_jsonl(path), [{"probe": "u@host"}])
+        with open(path, "a") as f:
+            f.write(line[300:])
+        self.assertEqual(read_jsonl(path), [{"probe": "u@host"}, {"manifest": {"data": "x" * 500}}])
 
 
 class Black(unittest.TestCase):
@@ -930,12 +953,10 @@ class Black(unittest.TestCase):
         return subprocess.Popen([*self.launcher(), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
 
     def records(self):
-        path = self.state / "kgate" / "log.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.state / "kgate" / "log.jsonl")
 
     def calls(self):
-        path = self.fake / "calls.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.fake / "calls.jsonl")
 
     def op_token_checks(self):
         """What each fake `op` run saw in OP_SERVICE_ACCOUNT_TOKEN: ok (the token), unset, or wrong."""
@@ -3653,7 +3674,7 @@ class KubectlBlack(unittest.TestCase):
                              "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                              "loader.exec_module(K)\n"
                              "K.QUOTA_FIRST_DELAY = 0.2\n"
-                             "K.CACHE_BUSY_S = 0.6\n"
+                             "K.CACHE_BUSY_S = 0.6\n" + getattr(self, "stub_extra", "") +
                              "sys.exit(K.main(sys.argv[2:]))\n")
 
     def setUp(self):
@@ -3686,8 +3707,7 @@ class KubectlBlack(unittest.TestCase):
         return self.kgate(*args, host="", env={**self.cmd_env, **(env or {})})
 
     def kcalls(self):
-        path = self.fake / "kcalls.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.fake / "kcalls.jsonl")
 
     def kubectl_args(self):
         return [c["argv"][6:] for c in self.kcalls() if "argv" in c and c["argv"][2:3] != ["config"]]
@@ -4026,6 +4046,41 @@ class KubectlBlack(unittest.TestCase):
         rec = [r for r in self.records() if r["id"] == job_id][0]
         self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"], rec["cluster"]), (143, "cancelled by kgate cancel", True, True, "example"))
         self.assertIn(["delete", "pod/" + job_id, "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
+        self.assertEqual(list((self.state / "kgate" / "active").glob("*.json")), [])
+
+    def test_kgate_cancel_ends_a_client_whose_first_stop_python_dropped(self):
+        """Python drops an exception raised inside a __del__, and every finished kubectl call frees a Popen whose __del__ runs. A stop that lands there is lost, and a client
+        whose handler had gone deaf at that first signal ran on until its --wait was out: `kgate cancel` waited its whole --wait and gave up, the way it did in CI. Here the
+        first stop is sent from inside a __del__ after the first refused create; kgate cancel then asks again until the client ends."""
+        self.stub_extra = ("import os, signal\n"
+                           "class Dropped:\n"
+                           "    def __del__(self):\n"
+                           "        os.kill(os.getpid(), signal.SIGTERM)\n"
+                           "once = []\n"
+                           "run = K.KubectlCluster.run\n"
+                           "def run_then_lose_a_stop(self, kargs, stdin=b'', timeout=None):\n"
+                           "    done = run(self, kargs, stdin, timeout)\n"
+                           "    if kargs[:1] == ['create'] and not once:\n"
+                           "        once.append(1)\n"
+                           "        Dropped()\n"
+                           "    return done\n"
+                           "K.KubectlCluster.run = run_then_lose_a_stop\n")
+        env = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "",
+               "KGATE_SSH_KEY": "/dev/null", **self.op_env(), "FAKE_QUOTA": "always"}
+        proc = subprocess.Popen([*self.launcher(), "--wait", "300", "--", "true"], cwd=self.repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if "waiting for quota" in line:
+                break
+        self.assertIsNone(proc.poll(), "the client lost the first stop and goes on waiting for quota")
+        job_id = next(json.loads(p.read_text())["id"] for p in (self.state / "kgate" / "active").glob("*.json"))
+        done = self.run_kgate("cancel", "--wait", "20", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(proc.wait(timeout=30), 143)
+        rec = [r for r in self.records() if r["id"] == job_id][0]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"]), (143, "cancelled by kgate cancel", True, True))
         self.assertEqual(list((self.state / "kgate" / "active").glob("*.json")), [])
 
     def test_any_other_create_error_is_an_immediate_69(self):
@@ -6094,8 +6149,7 @@ class SshMux:
         return stub_launcher(self.tmp, "orphan_launch.py", ORPHAN_LAUNCH)
 
     def ssh_calls(self):
-        path = self.fake / "ssh-argv.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.fake / "ssh-argv.jsonl")
 
     def control_paths(self, calls):
         return {a[1].partition("=")[2] for c in calls for a in zip(c, c[1:]) if a[0] == "-o" and a[1].startswith("ControlPath=")}
