@@ -52,7 +52,9 @@ class AgentKitInstallTest(unittest.TestCase):
         self.assertFalse(home.script_managed())
         r = home.install_wrapper()
         self.assertEqual(r.returncode, 3)
-        self.assertIn("not installed here; keep the review log by hand (playbook 58fdb05d)", r.stderr)
+        self.assertIn("not installed here (looked for ", r.stderr)
+        self.assertIn("); keep the review log by hand (playbook 58fdb05d)", r.stderr)
+        self.assertNotIn(" and ", r.stderr.split("looked for ")[1].split(")")[0], "no coordinator checkout is known here, so only the pinned path is named")
         self.assertNotIn(RETRY, r.stderr)
         self.assertTrue((home.home / ".local/share/agent-kit/package.json").is_file())
 

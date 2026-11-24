@@ -3,13 +3,26 @@
 # only when a review round passed on its head, the PR is exempt, or its agent record declares a break-glass. Exit 0 pass, 1 refused (the output
 # names the reason and the fix), 2 bad arguments or the check could not read the PR or the ledger.
 # Loop Engine's release-after-merge step calls it at its merge step. The coordinator's own merge path runs the script directly, and
-# pr-body-check runs the same rule in its merge form. Personal profile only, like pr-body-check (docs/profiles.md).
+# pr-body-check runs the same rule in its merge form. Both desktop profiles, like pr-body-check (docs/gate-coverage.md).
 # The gh calls are made by intent-review-check.ts, started below, so they inherit these. They are merge-chain reads: GH_URGENT=1 keeps the
 # gh budget guard from refusing them, and GH_CALLER names this check in the gh wrapper's log.
 export GH_URGENT=1 GH_CALLER=intent-review-check
-script="$HOME/git/coordinator/scripts/intent-review-check.ts"
+# The coordinator checkout: COORDINATOR_REPO, else line 1 of ~/.local/share/agent-harness/coordinator-instance (chezmoi renders it per profile: personal
+# ~/git/coordinator, work the work coordinator's checkout), else ~/git/coordinator. On the work profile line 2 is the work coordinator's state dir; it is used
+# only when COORDINATOR_STATE_DIR is unset and that dir holds pane-bin/ledger, so the ledger read is the work instance's, never the personal default.
+instance="$HOME/.local/share/agent-harness/coordinator-instance"
+repo="${COORDINATOR_REPO:-}"
+if [ -z "$repo" ] && [ -f "$instance" ]; then
+  repo="$(sed -n 1p "$instance")"
+  if [ -z "${COORDINATOR_STATE_DIR:-}" ]; then
+    state="$(sed -n 2p "$instance")"
+    [ -z "$state" ] || [ ! -e "$state/pane-bin/ledger" ] || export COORDINATOR_STATE_DIR="$state"
+  fi
+fi
+[ -n "$repo" ] || repo="$HOME/git/coordinator"
+script="$repo/scripts/intent-review-check.ts"
 if [ ! -f "$script" ]; then
-  echo "intent-review-check: $script is missing: pull ~/git/coordinator (the check ships there) and run again" >&2
+  echo "intent-review-check: $script is missing: pull ~/git/coordinator (the check ships there; on the work profile, the coordinator checkout named in ~/.local/share/agent-harness/coordinator-instance) and run again" >&2
   exit 2
 fi
 exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"

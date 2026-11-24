@@ -53,7 +53,7 @@ to read, so its merge gate is the PR's own review and body check: `--merge-gate 
 reads PR N's head from GitHub, then runs `agent-traces review verify --item eval-cases#N --head <head> --require-block`
 and `pr-body-check cartwmic/eval-cases N`. Both run, and both exit 0: one "no CI" line naming what it passed on, exit 0.
 Either fails: a line for each (the failing one with its reason), exit 1. A missing agent-traces or pr-body-check is a failure
-(both are personal-profile tools, so on the work profile this gate exits 1). `--merge-gate eval-cases` without --pr exits 1:
+(both ship to the personal and work profiles; the gate fails only where one is missing). `--merge-gate eval-cases` without --pr exits 1:
 it cannot know which PR is merging, so pass --pr N. Without --merge-gate (plain status, --tip, --all) and with --merge-gate
 --all it prints one "n/a (no CI ...)" line and exits 0, like homelab: it never changes the exit of the other repos.
 One more no-CI repo is one more REPOS row ({"github": "owner/repo", "no_ci": True}) and its ORDER entry.
