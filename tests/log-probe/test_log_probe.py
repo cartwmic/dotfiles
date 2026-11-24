@@ -25,7 +25,7 @@ STDERR_ONLY = 'echo "wrapper: using fallback kit /x/kit" >&2; exit 3'
 JSON_LOG = 'mkdir -p "$HOME/.local/state/w"; printf \'{"utc":"2026-11-23T00:00:00Z","outcome":"fallback"}\\n\' >> "$HOME/.local/state/w/wrapper.jsonl"; echo "wrapper: using fallback" >&2; exit 3'
 
 
-class LogProbe(unittest.TestCase):
+class ProbeCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.state = Path(self.tmp) / "state"  # the caller's state folder: where log-probe writes its own line
@@ -41,6 +41,8 @@ class LogProbe(unittest.TestCase):
             cmd += ["--", "sh", "-c", command]
         return subprocess.run(cmd, capture_output=True, text=True, env=self.env, timeout=60)
 
+
+class LogProbe(ProbeCase):
     def test_stderr_and_exit_code_only_fails(self):
         r = self.probe(command=STDERR_ONLY)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
@@ -193,6 +195,94 @@ class LogProbe(unittest.TestCase):
         self.env["XDG_STATE_HOME"] = str(blocker)
         r = self.probe(command=JSON_LOG)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class CopiesRunRecords(ProbeCase):
+    """The step record of a runCli script the probe ran survives in the real step log, marked as a probe run (the line of a Proven section cites its id)."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = Path(self.tmp) / "realhome"
+        self.home.mkdir()
+        self.env["HOME"] = str(self.home)
+        self.real_log = self.home / ".local/state/coordinator/actions.jsonl"
+
+    def step(self, run="rr-0123456789ab", kind="command", path=".local/state/coordinator/actions.jsonl"):
+        record = json.dumps({"ts": "2026-11-24T20:00:00Z", "kind": kind, "name": "demo", "outcome": "done", "detail": {"run": run, "tree": "t" * 40, "exit": 0}})
+        return "mkdir -p \"$HOME/$(dirname %s)\"; printf '%%s\\n' '%s' >> \"$HOME/%s\"" % (path, record, path)
+
+    def test_the_record_is_copied_to_the_real_step_log_and_marked(self):
+        r = self.probe(command=self.step())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        copied = [json.loads(x) for x in self.real_log.read_text().splitlines()]
+        self.assertEqual(len(copied), 1)
+        self.assertEqual(copied[0]["detail"]["run"], "rr-0123456789ab")
+        self.assertTrue(copied[0]["detail"]["log_probe"])
+        self.assertEqual(copied[0]["detail"]["tree"], "t" * 40)  # the rest of the record is as the script wrote it
+        self.assertIn("copied the step record of run rr-0123456789ab", r.stdout)
+
+    def test_it_appends_to_a_step_log_that_has_lines(self):
+        self.real_log.parent.mkdir(parents=True)
+        self.real_log.write_text('{"name":"earlier"}\n')
+        self.probe(command=self.step())
+        lines = self.real_log.read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(json.loads(lines[0])["name"], "earlier")
+
+    def test_a_record_with_no_run_id_a_non_command_record_or_another_file_is_not_copied(self):
+        for command in (self.step(run="not-a-run"), self.step(kind="daemon"), self.step(path=".local/state/w/other.jsonl")):
+            self.probe(command=command)
+        self.assertFalse(self.real_log.exists())
+
+    def test_a_probe_that_fails_still_copies_the_record_the_command_wrote(self):
+        r = self.probe("--expect", "no-such-text", command=self.step())
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(len(self.real_log.read_text().splitlines()), 1)
+
+    def own_lines(self):
+        return [json.loads(x) for x in (self.state / "log-probe/log.jsonl").read_text().splitlines()]
+
+    def test_its_own_log_line_names_the_run_ids_it_copied(self):
+        self.probe(command=self.step())
+        self.assertEqual(self.own_lines()[-1]["copied"], ["rr-0123456789ab"])
+        self.assertNotIn("copy_error", self.own_lines()[-1])
+
+    def test_a_line_with_no_copy_has_neither_copy_field(self):
+        self.probe(command=JSON_LOG)
+        self.assertNotIn("copied", self.own_lines()[-1])
+        self.assertNotIn("copy_error", self.own_lines()[-1])
+
+    def test_an_unwritable_step_log_is_said_in_the_report_and_in_its_own_log_and_changes_nothing(self):
+        (self.home / ".local/state").mkdir(parents=True)
+        (self.home / ".local/state/coordinator").write_text("a file where the step log folder should be")
+        r = self.probe(command=self.step())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # the verdict is as before
+        self.assertIn("PASS", r.stdout)
+        self.assertNotIn("copied the step record", r.stdout)
+        self.assertIn("could not write ~/.local/state/coordinator/actions.jsonl", r.stdout)
+        line = self.own_lines()[-1]
+        self.assertEqual(line["outcome"], "pass")
+        self.assertNotIn("copied", line)
+        self.assertIn("rr-0123456789ab", line["copy_error"])
+        self.assertIn("not copied", line["copy_error"])
+        self.assertTrue((self.home / ".local/state/coordinator").is_file())  # nothing was replaced
+
+    def test_malformed_lines_in_the_step_log_are_skipped_and_the_good_record_is_still_copied(self):
+        good = json.dumps({"ts": "2026-11-24T20:00:00Z", "kind": "command", "name": "demo", "detail": {"run": "rr-0123456789ab"}})
+        odd = [
+            "not json at all",
+            '{"unterminated": ',
+            "[1, 2, 3]",
+            json.dumps({"kind": "command", "detail": "a string, not an object"}),
+            json.dumps({"kind": "command"}),
+            json.dumps({"kind": "command", "detail": {"run": 5}}),
+        ]
+        command = "mkdir -p \"$HOME/.local/state/coordinator\"; printf '%%s\\n' %s >> \"$HOME/.local/state/coordinator/actions.jsonl\"" % " ".join("'%s'" % x for x in [*odd, good])
+        r = self.probe(command=command)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        copied = [json.loads(x) for x in self.real_log.read_text().splitlines()]
+        self.assertEqual([c["detail"]["run"] for c in copied], ["rr-0123456789ab"])
+        self.assertEqual(self.own_lines()[-1]["copied"], ["rr-0123456789ab"])
 
 
 if __name__ == "__main__":

@@ -39,11 +39,20 @@ not {"exit":"nonzero"}: exit 2 (the probe could not run) is also nonzero.
 Exit 0: at least one JSON line was found (and, with --expect, one matches). 1: none was; the report says what
 changed instead. 2: bad arguments, COMMAND could not be started or timed out.
 
+A coordinator script that goes through runCli (scripts/lib/run-cli.ts) writes a step record with a run id (`rr-` and
+12 hex digits) to <HOME>/.local/state/coordinator/actions.jsonl, which here is the scratch HOME and is deleted when the
+probe ends. So that a PR description can cite the run id of the probed run (the merge check scripts/pr-proven-runs.ts
+reads that file in the real home), log-probe copies each such record, marked `"log_probe": true` in its `detail`, to
+the real ~/.local/state/coordinator/actions.jsonl before it deletes the scratch HOME, and says so. Only a step record
+with kind "command" and a run id in that one file is copied; nothing else is. A copy that fails (the real step log
+cannot be written) is said in the report and never changes the verdict or the exit code.
+
 Every run appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/log-probe/log.jsonl, refusals of its own
 arguments included: utc, command name, outcome pass|fail|error|refused|help, the command's exit code, records seen,
 duration_s, and a reason on every fail, error and refusal (for example "no command", "--seed is not a folder",
-"missing command", "permission denied", "timeout", "none matches --expect"). A log that cannot be written never
-changes the exit code. The command's arguments are not logged.
+"missing command", "permission denied", "timeout", "none matches --expect"). When the probed command wrote runCli step
+records, the line also holds "copied" (the run ids copied to the real step log) and, when a copy failed, "copy_error"
+(what failed, with the run ids it could not copy). A log that cannot be written never changes the exit code. The command's arguments are not logged.
 """
 import json
 import os
@@ -57,6 +66,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SHOW = 300  # characters of a record shown in the report
+RUN_ID = re.compile(r"^rr-[0-9a-f]{12}$")  # the id scripts/lib/run-cli.ts gives a run
+STEP_LOG = os.path.join(".local", "state", "coordinator", "actions.jsonl")  # where a script's step record goes, under its HOME
 TIME = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d")
 
 
@@ -138,10 +149,36 @@ def write_own_log(real_state, run, started):
         }
         if run["reason"]:
             line["reason"] = run["reason"]
+        if run["copied"]:
+            line["copied"] = run["copied"]
+        if run["copy_error"]:
+            line["copy_error"] = run["copy_error"]
         with open(folder / "log.jsonl", "a", encoding="utf-8") as handle:
             handle.write(json.dumps(line) + "\n")
     except Exception:
         pass
+
+
+def copy_run_records(records, real_home):
+    """Copy the step records of runCli scripts that the probed command wrote under the scratch HOME to the real step log.
+
+    records: [(path shown relative to the scratch HOME, raw line, parsed object)]. Returns (run ids copied, run ids not
+    copied, why): a log that cannot be written changes nothing about the probe, but the caller reports it. Never raises."""
+    copied, failed, why = [], [], None
+    for shown, _raw, value in records:
+        detail = value.get("detail")
+        if shown != STEP_LOG or value.get("kind") != "command" or not isinstance(detail, dict) or not RUN_ID.match(str(detail.get("run", ""))):
+            continue
+        try:
+            target = Path(real_home) / STEP_LOG
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(dict(value, detail=dict(detail, log_probe=True))) + "\n")
+            copied.append(detail["run"])
+        except Exception as error:
+            failed.append(detail["run"])
+            why = why or "%s: %s" % (type(error).__name__, str(error)[:120])
+    return copied, failed, why
 
 
 def probe(argv, run):
@@ -242,6 +279,13 @@ def probe(argv, run):
             else:
                 print("log-probe: %s changed (%s, %d bytes) but holds no JSON line, so it is not a structured record" % (shown, how, len(data)))
         seen = run["records"] = len(records)
+        copied, failed, why = copy_run_records(records, os.path.expanduser("~"))
+        run["copied"] = copied
+        for run_id in copied:
+            print("log-probe: copied the step record of run %s to %s, marked log_probe, so a description can cite it" % (run_id, os.path.join("~", STEP_LOG)))
+        if failed:
+            run["copy_error"] = "could not write %s (%s); not copied: %s" % (os.path.join("~", STEP_LOG), why, ", ".join(failed))
+            print("log-probe: note: %s, so a description cannot cite %s" % (run["copy_error"], "it" if len(failed) == 1 else "them"))
         if expect is not None:
             matching = [r for r in records if expect.search(r[1])]
             if not matching:
@@ -267,7 +311,7 @@ def probe(argv, run):
 def main(argv):
     started = time.time()
     real_state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    run = {"command": [], "outcome": "error", "exit_code": None, "records": 0, "reason": None}
+    run = {"command": [], "outcome": "error", "exit_code": None, "records": 0, "reason": None, "copied": [], "copy_error": None}
     try:
         code = probe(argv, run)
     except Refusal as refusal:
