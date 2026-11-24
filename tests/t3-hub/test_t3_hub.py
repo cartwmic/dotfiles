@@ -1062,9 +1062,9 @@ class FleetFilesTest(unittest.TestCase):
             try:
                 for seat, keep in KEEP.items():
                     f = self.render(env, "seat-%s.json" % seat)
-                    # the builder seat also carries its Stop hook (tests/stop-running-jobs); the coordinator seat carries its auto-compact window
+                    # the builder seat also carries its Stop hook (tests/stop-running-jobs) and the lead seat its turn-end Stop hook (tests/lead-turn-end); the coordinator seat carries its auto-compact window
                     # every seat file also names its seat in env (COORDINATOR_SEAT)
-                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides", "env"} | ({"hooks"} if seat in ("builder", "computer") else set()) | ({"advisorModel"} if seat == "builder" else set()) | ({"model", "modelSettings"} if seat == "scout" else set())
+                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides", "env"} | ({"hooks"} if seat in ("builder", "computer", "lead") else set()) | ({"advisorModel"} if seat == "builder" else set()) | ({"model", "modelSettings"} if seat == "scout" else set())
                                      | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set())
                                      | ({"autoCompactWindow"} if seat == "coordinator" else set()), (profile, seat))
                     if seat == "coordinator":

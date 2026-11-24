@@ -94,6 +94,14 @@
 {{- if eq .seat "builder" -}}
 {{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" `g="$HOME/.local/share/agent-harness/hooks/stop_running_jobs.py"; [ -r "$g" ] || exit 0; python3 "$g"; [ $? -eq 2 ] && exit 2; exit 0`))))) -}}
 {{- end -}}
+{{- /* Lead only: a Stop hook that asks the coordinator whether the turn may end (hooks/lead_turn_end.py runs `coordinator t3 turn-end`; part of the weak-model floor work). The first end with nothing to wake the lead is refused once and the refusal names the ways out; a second one is let through and reported. The checkout and the state directory are this profile's own coordinator (the places the Pi extensions use). agentHost.removeCoordinatorHook leaves it out, as it does the coordinator hook. It fails open: a missing script or python3 allows the stop. */ -}}
+{{- if and (eq .seat "lead") (not (includeTemplate "agent_host_config" .ctx | fromJson).removeCoordinatorHook) -}}
+{{-   $repo := includeTemplate "instance_repo" (dict "root" .ctx "name" "coordinator") -}}
+{{-   $state := joinPath .ctx.chezmoi.homeDir ".local/share/coordinator" -}}
+{{-   if eq .ctx.profile "axon-work-computer" -}}{{- $state = joinPath .ctx.chezmoi.homeDir ".local/share/coordinator-work" -}}{{- end -}}
+{{-   $command := printf `g="$HOME/.local/share/agent-harness/hooks/lead_turn_end.py"; [ -r "$g" ] || exit 0; python3 "$g" --repo %s --state %s; [ $? -eq 2 ] && exit 2; exit 0` (includeTemplate "shquote" $repo) (includeTemplate "shquote" $state) -}}
+{{-   $_ := set $seatFile "hooks" (dict "Stop" (list (dict "hooks" (list (dict "type" "command" "command" $command))))) -}}
+{{- end -}}
 {{- /* Homelab chat seat only: a PreToolUse hook on every tool that allows the calls on the seat's list and denies the rest (hooks/homelab_chat_allowlist.py; Michael's requirement, ledger asks #1228). In Claude Code only exit 2 blocks a call, so the command turns a missing script, a missing python3 and any crash into exit 2. The seat keeps no skills; the hook denies the Skill tool in any case. */ -}}
 {{- if eq .seat "homelab-chat" -}}
 {{-   $script := joinPath .ctx.chezmoi.homeDir ".local/share/agent-harness/hooks/homelab_chat_allowlist.py" -}}

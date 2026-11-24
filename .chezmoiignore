@@ -16,6 +16,7 @@
 .pi/agent/extensions/bash-default-timeout/*.test.*
 .pi/agent/extensions/refuse-pattern-kill/*.test.*
 .pi/agent/extensions/coordinator-helper-gate/*.test.*
+.pi/agent/extensions/lead-turn-end/*.test.*
 .local/share/agent-harness/hooks/__pycache__
 .local/share/agent-harness/hooks/__pycache__/**
 .pi/agent/extensions/anthropic-stall-retry/*.test.*
