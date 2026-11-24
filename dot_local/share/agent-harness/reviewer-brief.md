@@ -77,6 +77,7 @@ The task gives the round number.
 - **Round 1**: the whole diff.
 - **Round 2**: the whole diff again, and check each fix from round 1.
 - **Round 3 and later**: only the fixed findings and the fix diff. Does each fix hold, and did it break what it touches? Code unchanged since round 2 is out of scope.
+- For a finding you would label `follow-on` (it extends one you raised before) or `repeat`, search every artifact for the earlier finding's claim instead of re-reading only the line the fix touched: grep the PR description and the agent record for the earlier finding's key words and list each copy that still says the old thing. Each such copy is part of one finding, with the grep command in its `evidence`; do not file the copies one round at a time.
 - From round 2 on, run `~/.local/share/agent-harness/bin/disposition-check --head <head> --base <merge-base with the base branch> --repo <the checkout> ~/.local/share/agent-traces/emitted/review/<item>/findings.jsonl`: it refuses every `fixed` disposition that has neither a sha of the reviewed change nor an artifact reference (findings-contract.md rule 3), and each entry it names on exit 1 is a blocking finding whose `obligation` is that rule.
 
 ## 7. Return
