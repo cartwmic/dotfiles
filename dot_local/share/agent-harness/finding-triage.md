@@ -11,6 +11,7 @@ Run them in order. Act on a finding that passes all four.
 
 - **Failed test 1, 2 or 3:** decline it with one short reason that starts with the test it failed.
 - **Failed test 4:** it is a follow-up. Do not decline or drop it. Mention it as a non-blocking note that starts "for a follow-up:". It never blocks the change and is never a blocker or should-fix.
+- **Fixing one that passed: fix the claim, not the line.** A finding names one sentence, flag, count or example that is wrong. That claim has a copy in every artifact that states it: the code, a skill or help text, the tests, the PR description and the agent record. Fix the source, then search the others for the claim's distinctive words (grep the PR description and the agent record for the old phrase) and fix every copy that still says it. A fix that corrects the one line the finding cites and leaves a copy in the PR description is the commonest reason a finding comes back as a follow-on. Say in the disposition which copies you searched. Then read the whole PR description against the new diff once; `Description checked` says you did, not that it is right. If the finding gives a command (a repro or a "done when"), run it after the fix and quote its result.
 
 ```
 declined (useful): the message is never shown to a user
