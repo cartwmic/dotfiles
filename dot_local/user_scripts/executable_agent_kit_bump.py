@@ -377,7 +377,9 @@ def gates(source, pr, version, log):
         raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, "\n".join(s for s in (main.stdout.strip(), main.stderr.strip()) if s)))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
-        raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)))
+        shown = "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)
+        why = "an unresolved review thread on the PR refuses it (resolve each thread, then run the bump again): " if "unresolved review thread" in shown else ""   # pr-body-check runs ci-main-status --threads after the body check
+        raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s%s" % (pr["number"], body.returncode, why, shown))
     log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed%s"
                % (pr["number"], pr["number"], " (the agent record was missing; wrote it)" if wrote else ""))
 

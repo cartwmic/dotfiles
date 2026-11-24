@@ -680,8 +680,8 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
 # The skills each seat keeps (restated; the template holds the same lists and the reasons for them).
 KEEP = {
     "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "research-method", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "builder": {"correcting-repeated-mistakes", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
+    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "builder": {"correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"correcting-repeated-mistakes", "designing-the-smallest-version", "no-ai-slop", "research-method"},
     "reviewer": {"correcting-repeated-mistakes", "designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
     "computer": {"correcting-repeated-mistakes", "using-computer", "using-browse"},
@@ -689,9 +689,9 @@ KEEP = {
 }
 for _seat in ("lead", "builder"):  # the seats that drive PRs also keep the review-bot loop and reviewing-prs, which its last step runs
     KEEP[_seat] = KEEP[_seat] | {"reviewing-prs", "triaging-automated-review"}
-# The tools the builder, planner, reviewer, computer, scout and coordinator seat files deny (restated from .chezmoitemplates/fleet_seat); the lead keeps them.
+# The tools every seat file but the homelab chat seat's denies (restated from .chezmoitemplates/fleet_seat). The coordinator lost them in dotfiles#807 and the lead in ask #1549 (no session of either called one).
 UNUSED_TOOLS = {"ListAgents", "ReportFindings", "ScheduleWakeup", "Workflow"}
-UNUSED_TOOL_SEATS = {"builder", "planner", "reviewer", "computer", "scout", "coordinator"}
+UNUSED_TOOL_SEATS = {"lead", "coordinator", "builder", "planner", "reviewer", "computer", "scout"}
 # What the scout seat file denies on top of the four tools above: the tools that write files or start or change work (restated from .chezmoitemplates/fleet_seat). Bash stays: searching runs through it.
 SCOUT_DENY = ["Edit", "Write", "NotebookEdit", "EnterWorktree", "ExitWorktree", "CronCreate", "CronDelete", "SendMessage", "TaskStop", "DesignSync", "mcp__t3-code"]
 # What the coordinator seat file denies on top of the four tools above: it changes no file (decision #6154). It keeps task_status and task_cancel: its seat text tracks and stops its delegates with them.
@@ -699,13 +699,13 @@ SCOUT_DENY = ["Edit", "Write", "NotebookEdit", "EnterWorktree", "ExitWorktree", 
 COORDINATOR_DENY = ["AskUserQuestion", "Edit", "Write"]
 # What the coordinator keeps of the tools its measured window never called.
 COORDINATOR_KEEPS = ["Agent", "Read", "Skill", "mcp__t3-code__request_secret", "mcp__t3-code__task_status", "mcp__t3-code__task_cancel"]
-# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on for the lead, and is off for the seats that deny the Workflow tool.
+# Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on only for the homelab chat seat, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
 INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
-# The skills the seat files name from the source because this apply links them later: the archive external (.chezmoiexternal.toml) review-map; model-fit only where the coordinator checkout has it (these tests have none).
-FROM_SOURCE = {"review-map"}
+# The skills the seat files name from the source because this apply links them later: the archive externals (.chezmoiexternal.toml) review-map and statechart; model-fit only where the coordinator checkout has it (these tests have none).
+FROM_SOURCE = {"review-map", "statechart"}
 CANONICAL = sorted({p.parent.name for pat in ("*/SKILL.md", "*/SKILL.md.tmpl") for p in (REPO / "dot_local/share/agent-harness/canonical/skills").glob(pat)})  # reviewing-prs ships SKILL.md.tmpl
 
 
@@ -1063,12 +1063,13 @@ class FleetFilesTest(unittest.TestCase):
                 for seat, keep in KEEP.items():
                     f = self.render(env, "seat-%s.json" % seat)
                     # the builder seat also carries its Stop hook (tests/stop-running-jobs); the coordinator seat carries its auto-compact window
-                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides"} | ({"hooks"} if seat in ("builder", "computer") else set()) | ({"advisorModel"} if seat == "builder" else set()) | ({"model", "modelSettings"} if seat == "scout" else set())
+                    # every seat file also names its seat in env (COORDINATOR_SEAT)
+                    self.assertEqual(set(f), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides", "env"} | ({"hooks"} if seat in ("builder", "computer") else set()) | ({"advisorModel"} if seat == "builder" else set()) | ({"model", "modelSettings"} if seat == "scout" else set())
                                      | ({"claudeMdExcludes"} if seat in WORKER_SEATS else set())
                                      | ({"autoCompactWindow"} if seat == "coordinator" else set()), (profile, seat))
                     if seat == "coordinator":
                         self.assertEqual(f["autoCompactWindow"], 200000, profile)
-                    # the worker seats and the coordinator also deny the four tools they never call; the lead keeps them
+                    # every seat but homelab-chat also denies the four tools nobody calls
                     self.assertEqual(f["permissions"], {"deny": ["Artifact"] + (sorted(UNUSED_TOOLS) if seat in UNUSED_TOOL_SEATS else []) + (SCOUT_DENY if seat == "scout" else []) + (COORDINATOR_DENY if seat == "coordinator" else [])}, (profile, seat))
                     for tool in COORDINATOR_KEEPS:
                         self.assertNotIn(tool, f["permissions"]["deny"], (profile, seat, tool))
@@ -1076,10 +1077,21 @@ class FleetFilesTest(unittest.TestCase):
                     # bundled skills stay on so the Workflow tool keeps its short text (workflow-authoring carries the reference); every other bundled skill is off
                     self.assertIs(f["disableBundledSkills"], False)
                     self.assertEqual(set(f["skillOverrides"].values()), {"off"})
-                    # the worker seats and the coordinator deny the Workflow tool, so workflow-authoring is off for them; the lead keeps both
+                    # a seat that denies the Workflow tool has no use for workflow-authoring, so it is off there; the homelab chat seat keeps both
                     self.assertEqual("workflow-authoring" in f["skillOverrides"], seat in UNUSED_TOOL_SEATS, (profile, seat))
                     self.assertEqual(set(f["skillOverrides"]), ((set(INSTALLED) | set(CANONICAL) | FROM_SOURCE) - keep) | BUNDLED_OFF | ({"workflow-authoring"} if seat in UNUSED_TOOL_SEATS else set()), (profile, seat))
                     self.assertNotIn("synced", f["skillOverrides"])
+            finally:
+                env.close()
+
+    def test_every_seat_file_names_its_seat_in_env_and_only_there(self):
+        # The coordinator repo's rules hook reads COORDINATOR_SEAT (Claude Code puts a settings `env` into the session's process environment) instead of asking T3 which seat the thread is.
+        for profile in ("personal", "axon-work-computer"):
+            env = fleet_env(profile)
+            try:
+                for seat in sorted(KEEP) + ["homelab-chat"]:
+                    f = self.render(env, "seat-%s.json" % seat)
+                    self.assertEqual(f["env"], {"COORDINATOR_SEAT": seat}, (profile, seat))
             finally:
                 env.close()
 
@@ -1101,15 +1113,17 @@ class FleetFilesTest(unittest.TestCase):
             self.assertIn('seat planner keeps "loop"', str(raised.exception))
             # the same copy renders for a seat that does not keep "loop": the failure is the clash, not the copy
             self.assertEqual(set(json.loads(env.chezmoi("execute-template", stdin=define + call % "reviewer"))["skillOverrides"]) >= BUNDLED_OFF, True)
-            # workflow-authoring is off for the worker seats, so the refusal covers it there (and only there: the lead keeps it listed)
+            # workflow-authoring is off for every seat that denies the Workflow tool, so the refusal covers the planner and the lead (and not the homelab chat seat, which keeps the tool and the skill listed)
             wf = text.replace('"planner" (list "correcting-repeated-mistakes"', '"planner" (list "workflow-authoring" "correcting-repeated-mistakes"').replace(
-                '"lead" (list "coordinating-loop-engine"', '"lead" (list "workflow-authoring" "coordinating-loop-engine"')
+                '"lead" (list "coordinating-loop-engine"', '"lead" (list "workflow-authoring" "coordinating-loop-engine"').replace(
+                '"homelab-chat" (list)', '"homelab-chat" (list "workflow-authoring")')
             wfdef = '{{ define "fleet_seat_clash" }}' + wf + "{{ end }}"
-            with self.assertRaises(AssertionError) as raised:
-                env.chezmoi("execute-template", stdin=wfdef + call % "planner")
-            self.assertIn('seat planner keeps "workflow-authoring"', str(raised.exception))
-            lead = json.loads(env.chezmoi("execute-template", stdin=wfdef + call % "lead"))
-            self.assertNotIn("workflow-authoring", lead["skillOverrides"])
+            for seat in ("planner", "lead"):
+                with self.assertRaises(AssertionError) as raised:
+                    env.chezmoi("execute-template", stdin=wfdef + call % seat)
+                self.assertIn('seat %s keeps "workflow-authoring"' % seat, str(raised.exception))
+            homelab = json.loads(env.chezmoi("execute-template", stdin=wfdef + call % "homelab-chat"))
+            self.assertNotIn("workflow-authoring", homelab["skillOverrides"])
         finally:
             env.close()
 
@@ -1357,7 +1371,7 @@ class HomelabChatSeatTest(unittest.TestCase):
                 managed = set(env.chezmoi("managed", "--include=files").split())
                 self.assertTrue({".claude/fleet/seat-homelab-chat.json", ".claude/fleet/mcp-homelab-chat.json", ".local/share/agent-harness/hooks/homelab_chat_allowlist.py"} <= managed, profile)
                 seat = json.loads(env.render("dot_claude/fleet/seat-homelab-chat.json.tmpl"))
-                self.assertEqual(set(seat), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides", "hooks"}, profile)
+                self.assertEqual(set(seat), {"permissions", "syncClaudeAiSkills", "disableBundledSkills", "skillOverrides", "hooks", "env"}, profile)
                 self.assertEqual(set(seat["skillOverrides"].values()), {"off"})
                 self.assertTrue(set(INSTALLED) <= set(seat["skillOverrides"]), "the seat keeps no skill")
                 groups = seat["hooks"]["PreToolUse"]
