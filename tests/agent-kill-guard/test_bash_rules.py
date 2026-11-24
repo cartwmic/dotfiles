@@ -391,7 +391,7 @@ class PrBody(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("refused in agent sessions", message)
-                self.assertIn("pr-body-check --body-file F && gh pr", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr", message)
                 self.assertIn("agent bookkeeping", message)
                 self.assertIn("the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)", message)
                 self.assertIn("a Proven section as plain prose, playbook f5a367b5", message)  # the Proven section stays; only its tables and job ids move
@@ -400,6 +400,8 @@ class PrBody(unittest.TestCase):
     def test_the_check_chained_with_the_same_file_is_allowed(self):
         c, e = self.C, self.E
         for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c),  # the form the refusal names
+                     "pr-body-check --title t --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e),
                      "pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e),
                      "pr-body-check --body-file=%s && gh pr create -F %s" % (c, c),
                      "pr-body-check --body-file %s && gh pr new --body-file=%s" % (c, c),
@@ -461,7 +463,7 @@ class PrBodyNamesPrOpen(unittest.TestCase):
                 self.assertIn("Shortest path: `pr-open --title T --body-file F [--draft]`", message)
                 self.assertIn("never reads the agent record", message)
                 self.assertIn("pr-body-check <owner/repo> <pr> --skip-intent-review", message)
-                self.assertIn("pr-body-check --body-file F && gh pr create", message)  # the chained form is still named
+                self.assertIn("pr-body-check --body-file F --title T && gh pr create --title T", message)  # the chained form is still named
 
     def test_an_edit_refusal_names_the_pr_open_edit_form(self):
         for text in ["gh pr edit 5 --body 'x'", "gh pr edit 5 --body-file /tmp/pr-5-body.md"]:
@@ -630,7 +632,7 @@ class PrBodyFileName(unittest.TestCase):
                     self.assertIn("F=$(mktemp /tmp/pr-%s-body.XXXXXX)" % n, message)
                     self.assertIn("a fixed name like /tmp/pr-body.md can be overwritten by another session", message)
                     self.assertIn("`%s`" % name, message)
-                    self.assertNotIn("pr-body-check --body-file F && gh pr", message)  # the chain is right; only the name is wrong
+                    self.assertNotIn("pr-body-check --body-file F --title T && gh pr", message)  # the chain is right; only the name is wrong
 
     def test_a_name_with_another_number_or_none_is_refused_for_an_edit(self):
         for name in ["/tmp/pr-4-body.aB3xY9", "/tmp/pr-45-body.aB3xY9", "/tmp/pr-55-body.aB3xY9", "/tmp/pr-body.aB3xY9", "/tmp/pr-345-body.aB3xY9"]:

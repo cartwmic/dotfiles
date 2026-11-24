@@ -244,6 +244,20 @@ class PrOpen(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("taken from the origin", result.stderr)
 
+    def test_create_passes_the_title_to_the_body_check(self):
+        self.run_open("--title", "A title", "--body-file", str(self.body))
+        self.assertIn("[--title] [A title]", self.calls()[0])  # call 0 is the check, not gh pr create
+        self.assertTrue(self.calls()[0].startswith("pr-body-check"))
+
+    def test_edit_with_a_title_passes_it_to_the_body_check(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
+        self.assertTrue(self.calls()[0].startswith("pr-body-check"))
+        self.assertIn("[--title] [New title]", self.calls()[0])
+
+    def test_edit_without_a_title_gives_the_body_check_none(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertNotIn("--title", self.calls()[0])
+
     def test_edit_with_a_title_sets_it_too(self):
         self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
         self.assertIn("[-f] [title=New title]", self.patches()[0])

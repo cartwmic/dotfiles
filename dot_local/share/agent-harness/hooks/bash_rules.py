@@ -27,7 +27,7 @@
               and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list. Refused: an inline
               `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
               `pr-open --title T --body-file F` (create) or `pr-open --edit N --body-file F` (edit) as the shortest path, then the chained form
-              `pr-body-check --body-file F && gh pr create ... --body-file F`, so bookkeeping in the description (the principles table,
+              `pr-body-check --body-file F --title T && gh pr create --title T ... --body-file F`, so bookkeeping in the description (the principles table,
               a table in a Proven section, a Decisions: line, ledger or job ids; it belongs in the PR's agent record, playbook 5a05bfe8; a
               Proven section as plain prose stays, playbook f5a367b5) fails when the body is written, not at merge. `gh pr edit` with no
               body flag (title, labels, reviewers) passes. No repo is exempt: unlike the merge rule, nothing else runs this check at create time.
@@ -130,7 +130,7 @@ MERGE_BARE = (
 PR_BODY = (
     "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles table or a table in the Proven section, a Decisions: line, "
     "ask/decision/grant ids, job ids, Rewinds:, Break-glass:) or a task id is otherwise found only when `gh pr merge` runs. Shortest path: %s. "
-    "Or run `pr-body-check --body-file F && gh pr %s ... --body-file F` (the same file F in both). "
+    "Or run `pr-body-check --body-file F --title T && gh pr %s --title T ... --body-file F` (the same file F and the same title T in both: the check reads the title for task ids, which become part of the commit text on main; an edit that keeps the title leaves `--title T` out of both). "
     "A playbook-only PR (no code to check) passes the body check with `--files-file F`, `--pr N [--repo R]` or `--base REF` added to it. The description keeps what changes, why, how it was checked "
     "(a Proven section as plain prose, playbook f5a367b5), risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8). "
     "The `--body-file` form never reads the agent record: once the PR exists and before you report, run `pr-body-check <owner/repo> <pr> --skip-intent-review`, which does."
