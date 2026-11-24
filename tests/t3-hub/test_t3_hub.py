@@ -4,6 +4,7 @@ Everything runs through chezmoi against the real source with a minimal personal 
 chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.json is a copy of the real
 ~/.t3/userdata/settings.json (three instances, no trailing newline).
 """
+import copy
 import difflib
 import json
 import re
@@ -857,6 +858,91 @@ class WorkModeTest(unittest.TestCase):
                 record = json.loads(self.logged_lines(state)[0])
                 self.assertEqual(record["action"], "skipped")
                 self.assertIn(record["reason"], ("an instance is not an object", "an instance config is not an object"), bad)
+
+    ALLOWED_PATHS = [["idleCompaction"],
+                     ["providerInstances", "claudeAgent", "config", "autoCompactWindow"],
+                     ["providerInstances", "coordinator", "config", "autoCompactWindow"]]
+    ALLOWED_KEYS = {"idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"}
+
+    @classmethod
+    def strip_allowed(cls, doc):
+        """The test's own check, independent of the script's post-condition: delete the three allowed paths, then an empty config
+        object under a provider instance (the merge creates one only to hold a compaction key), and return what must be equal."""
+        doc = copy.deepcopy(doc)
+
+        def delpath(d, path):
+            if isinstance(d, dict) and path[0] in d:
+                if len(path) == 1:
+                    del d[path[0]]
+                else:
+                    delpath(d[path[0]], path[1:])
+
+        for path in cls.ALLOWED_PATHS:
+            delpath(doc, path)
+        instances = doc.get("providerInstances")
+        if isinstance(instances, dict):
+            for inst in instances.values():
+                if isinstance(inst, dict) and inst.get("config") == {}:
+                    del inst["config"]
+        return doc
+
+    def corpus(self):
+        """Input shapes: the bad ones the guards name, the ones only the post-condition can catch, and the good ones that must
+        still write."""
+        f = json.loads(FIXTURE)
+        set_vals = json.loads(json.dumps(f))
+        set_vals["providerInstances"]["claudeAgent"].setdefault("config", {})["autoCompactWindow"] = WINDOWS["claudeAgent"]
+        set_vals["providerInstances"]["coordinator"]["config"]["autoCompactWindow"] = WINDOWS["coordinator"]
+        set_vals["idleCompaction"] = IDLE
+        only_claude = {"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "enabled": True}}}
+        only_coord = {"providerInstances": {"coordinator": {"driver": "claudeAgent", "enabled": True, "config": {"launchArgs": "--x"}}}}
+        leftovers = json.loads(json.dumps(f))
+        leftovers["providerInstances"]["codex"] = {"driver": "codex", "displayName": "Codex (hub)", "enabled": True,
+                                                   "config": {"setupMode": "managed"}}
+        leftovers["providerInstances"]["seat-lead"] = {"driver": "claudeAgent", "displayName": "Claude (lead)", "enabled": True}
+        leftovers["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "hub", "enabled": True}}
+        return [
+            "", "   ", "\n", "not json", "[]", '"x"', "42", "null", "true", "{}",
+            '{"providerInstances": false}', '{"providerInstances": null}', '{"providerInstances": 0}',
+            '{"providerInstances": ""}', '{"providerInstances": []}', '{"providerInstances": "x"}', '{"providerInstances": 3.5}',
+            '{"providerInstances": {"claudeAgent": false}}', '{"providerInstances": {"claudeAgent": null}}',
+            '{"providerInstances": {"claudeAgent": 0}}', '{"providerInstances": {"claudeAgent": ""}}',
+            '{"providerInstances": {"claudeAgent": []}}', '{"providerInstances": {"claudeAgent": "x"}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": false}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": null}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": 0}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": ""}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": []}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": "x"}}}',
+            '{"a": 1} {"keep": "me"}', '{} {}', '{"a":1,"a":2}',
+            '{"providerInstances": {"claudeAgent": {"config": {}}}}',
+            '{"idleCompaction": "onReturn"}',
+            FIXTURE, json.dumps(set_vals, indent=2), json.dumps(only_claude), json.dumps(only_coord),
+            json.dumps(leftovers, indent=2),
+        ]
+
+    def test_no_input_shape_loses_data(self):
+        """Every input shape in the corpus ends in exactly one of two ways: the input comes back byte for byte with the log saying
+        skipped or unchanged, or the log says wrote and the output differs from the input only at the three allowed paths (checked
+        here by deleting those paths from both documents, independently of the script's own post-condition). Nothing reaches
+        stderr, and a wrote log names only allowed keys."""
+        for shape in self.corpus():
+            with self.subTest(shape=shape[:40]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    state = Path(tmp)
+                    r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=True, timeout=30,
+                                       env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state")))
+                    self.assertEqual(r.returncode, 0, shape[:80])
+                    self.assertEqual(r.stderr, "", shape[:80])
+                    lines = self.logged_lines(state)
+                    self.assertEqual(len(lines), 1, shape[:80])
+                    record = json.loads(lines[0])
+                    if r.stdout == shape:
+                        self.assertIn(record["action"], ("skipped", "unchanged"), shape[:80])
+                    else:
+                        self.assertEqual(record["action"], "wrote", shape[:80])
+                        self.assertTrue(set(record["keys"]) <= self.ALLOWED_KEYS, shape[:80])
+                        self.assertEqual(self.strip_allowed(json.loads(shape)), self.strip_allowed(json.loads(r.stdout)), shape[:80])
 
     def test_the_work_literals_equal_the_personal_ones(self):
         """The work branch duplicates the personal body's two literals (the personal body must stay byte for byte what main has,

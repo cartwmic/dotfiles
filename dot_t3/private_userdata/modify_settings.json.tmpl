@@ -120,14 +120,18 @@ set -eu
 # no usageLimitSources and no CLAUDE_CODE_FIZZY_GROVE environment entry (that is an open decision for work; docs/profiles.md).
 # It runs no restore: .t3 was never managed on this profile before this file existed, so nothing this script wrote there can
 # need undoing, and a hub leftover (a codex instance in its hub state, a displayName, a usageLimitSources entry) is not ours to
-# delete - the leftovers pass through untouched. A malformed file (not an object, a providerInstances or an instance config
-# that is not an object) is refused with the input unchanged and logged as skipped. Every run appends one JSON line - the
+# delete - the leftovers pass through untouched. A malformed file (not an object, a providerInstances or an instance config that
+# is not an object) is refused with the input unchanged and logged as skipped; behind the guards, a post-condition on the merged
+# document makes the promise hold for every input: the result may differ from the input only at the three compaction paths (an
+# empty config the merge created for a compaction key is forgiven), and any other difference prints the input byte for byte and
+# logs skipped - so no input shape can lose data. Every run appends one JSON line - the
 # compaction keys that changed and their new values, never any other file content - to ~/.local/state/t3-settings/log.jsonl
 # (XDG_STATE_HOME respected); a logging failure never fails the apply. The merged document is printed in jq's default pretty
 # form, the form T3 writes, so over a pretty input the apply differs from the input only on the changed lines; when nothing
 # changes as data the input is printed byte for byte, so chezmoi shows no drift.
-# These two literals duplicate the personal body's AUTO_COMPACT_WINDOWS and IDLE_COMPACTION below: the personal body must stay
-# byte for byte what main has, so the work branch cannot read the values from there. WorkModeTest keeps the copies equal.
+# These two literals duplicate the personal body's AUTO_COMPACT_WINDOWS and IDLE_COMPACTION below: the rendered personal script
+# is identical to main's (a test renders both; one chezmoi comment line differs in the template and emits nothing), so the work
+# branch cannot read the values from there. WorkModeTest keeps the copies equal.
 AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
 IDLE_COMPACTION='beforeCacheExpires'
 
@@ -150,16 +154,17 @@ if ! printf %s "$input" | jq -s -e 'length == 1 and (.[0] | type) == "object"' >
   printf %s "$input"
   exit 0
 fi
-# T3 never writes a providerInstances that is not an object, and one apply must not be able to wipe the file: refuse it and
-# pass the input through unchanged.
-if ! printf %s "$input" | jq -e '(.providerInstances // {}) | type == "object"' >/dev/null 2>&1; then
+# T3 never writes a providerInstances that is not an object: refuse one with a clean reason (a present false would slip past a
+# `// {}` fallback - false is falsy in jq - and the merge would then wipe the file). An absent or null providerInstances is
+# allowed and simply has no instance to set.
+if ! printf %s "$input" | jq -e '.providerInstances? | (. == null or type == "object")' >/dev/null 2>&1; then
   log_apply skipped ',"reason":"providerInstances is not an object"'
   printf %s "$input"
   exit 0
 fi
 # Nor an instance that is not an object, or one whose config is present and not an object (a string instance or a false config
 # would otherwise be refused only by the merge failing with a jq error on stderr).
-if ! printf %s "$input" | jq -e '[(.providerInstances // {})[] | type] | all(. == "object")' >/dev/null 2>&1; then
+if ! printf %s "$input" | jq -e '[.providerInstances[]? | type] | all(. == "object")' >/dev/null 2>&1; then
   log_apply skipped ',"reason":"an instance is not an object"'
   printf %s "$input"
   exit 0
@@ -204,6 +209,33 @@ out=$(printf '%s\n' "$res" | sed -n 1p)
 log=$(printf '%s\n' "$res" | sed -n 2p)
 changed=$(printf %s "$log" | jq -c '.keys')
 values=$(printf %s "$log" | jq -c '.values')
+# The post-condition that makes "one apply must not be able to wipe the file" true for every input, whatever the guards name:
+# delete the three allowed paths from both documents (an empty config object under an instance is deleted from both too, since
+# the merge creates one only to hold a compaction key) and require equality; require each allowed path to hold exactly the
+# expected value; and require the log to name only allowed keys. If it fails for any reason, print the input byte for byte and
+# log skipped - nothing reaches stderr.
+ok=$(printf '%s\n' "$input" "$out" | jq -s --argjson log "$log" --argjson windows "$AUTO_COMPACT_WINDOWS" --arg idle "$IDLE_COMPACTION" '
+  def strip:
+    delpaths([["idleCompaction"],
+              ["providerInstances", "claudeAgent", "config", "autoCompactWindow"],
+              ["providerInstances", "coordinator", "config", "autoCompactWindow"]])
+    | if (.providerInstances? | type) == "object"
+      then .providerInstances |= (to_entries | map(.value |= (if .config == {} then del(.config) else . end)) | from_entries)
+      else . end;
+  . as [$doc, $new]
+  | (($doc | strip) == ($new | strip))
+    and (if $idle == "" then ($new.idleCompaction? // null) == ($doc.idleCompaction? // null) else $new.idleCompaction == $idle end)
+    and ([ $windows | keys[] as $id
+           | if ($doc.providerInstances[$id]? | type) != "object" then (($new.providerInstances[$id]? // null) == null)
+             elif $windows[$id] == "" then (($new.providerInstances[$id].config.autoCompactWindow? // null) == null)
+             else $new.providerInstances[$id].config.autoCompactWindow == $windows[$id] end ]
+         | all)
+    and ($log.keys | all(. == "idleCompaction" or . == "claudeAgent.autoCompactWindow" or . == "coordinator.autoCompactWindow"))') || ok=false
+if [ "$ok" != "true" ]; then
+  log_apply skipped ',"reason":"the change would touch more than the three keys"'
+  printf %s "$input"
+  exit 0
+fi
 # T3 writes the file in its own key order, so the bytes would differ on every apply with nothing to change. When the merged
 # result equals the input as data (jq -S sorts object keys; arrays keep their order), print the input as it is.
 sorted_in=$(printf %s "$input" | jq -S .)
