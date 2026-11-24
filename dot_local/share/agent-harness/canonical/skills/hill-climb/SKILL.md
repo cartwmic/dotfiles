@@ -41,7 +41,9 @@ fit, as shown in step 2.
    - Faster or smaller: a script that times or counts the work on fresh
      random input. Copy the old code as the reference, and add a guard that
      compares the new output with it. Score with `--direction min --target
-     <N>x --runs 3`, and add `--paired` when it is a timer.
+     <N>x --runs 3`, and add `--paired` when it is a timer. Add
+     `--perf --errors '<regex>' --work '<regex>'` too: see "Speed and size
+     goals".
    - Anything else: whatever prints how close you are as a number.
 2. `init <name> --goal "..." --check "<command>" --lock <check files>`.
    `init` commits the new check files as the first step on the climb
@@ -166,7 +168,7 @@ Examples, not a closed list. Recipes are in `references/checks.md`:
 | Port or clone a tool | Outputs that match the real tool |
 | Bug or feature | Failing tests written from the spec, not from your fix |
 | Audit, stabilize, "make X work" | Failing tests, one per finding. Add a test for each new finding and `relock` |
-| Speed or size | A count of the work behind the time |
+| Speed or size | A count of the work behind the time, or the size itself, with `--perf --errors --work` |
 | Several goals at once | Progress toward the worst bar |
 | Look, feel, writing, API shape | `judge.py --panel claude` with a rubric and good examples |
 
@@ -178,6 +180,45 @@ scores 0. Patterns for common runners are in `references/checks.md`.
 Repeat `--check` to run several commands at once, like the backend and the
 frontend suites. Their scores add up. Give one `--score` for all of them,
 or one per `--check` in the same order.
+
+### Speed and size goals
+
+A faster run can be a broken run. Pass `--perf` and `init` refuses to start
+without both counters, so the check must print them:
+
+- `--errors '<regex>'` reads how many requests, rows or items failed.
+- `--work '<regex>'` reads how much input the run handled: items, rows or
+  requests processed. It is never the thing you are making smaller or
+  cheaper (bytes written, memory, time): on a size climb that count falls
+  with every real gain, and the guard would undo each one.
+
+They read the check's output the way `--score` does: the last matching line,
+numbers added up. Every `--check` must print both. A missing count is never
+read as 0, because a run that crashed prints nothing: `init` stops, and `try`
+marks the step broke. With `--runs`, the worst scored run counts (most errors,
+least work). A step that scores better is still undone when errors rise above,
+or work falls below, the best step so far. The log says `guard failed:
+errors rose 0 -> 3` or `work fell 1000 -> 10`. The two counts are not the
+only checks. Keep your own `--guard` for output that must match the reference.
+Use `--errors` and `--work` without `--perf` on any other climb that needs
+them. After a `relock`, the counts are measured again.
+
+Before you trust the number, answer three questions with evidence from a run,
+not from reading the code:
+
+1. **What limits it?** Profile in a run you do not score, since profilers slow
+   the work. Check CPU, I/O wait and the load generator: if the generator
+   maxes out first, you are timing the generator. A change that did not move
+   the score is explained by the limiter, so find it before you call the idea
+   useless.
+2. **Is it tuned?** Run both sides the way production runs: release build,
+   real flags, real batch sizes and pools, caches as warm or cold as they
+   are there, same data. One side on defaults means you compared settings, not
+   code. If you cannot tune a side, do not pick a winner from that run.
+3. **What are its limits?** Do the sums. Compare bytes a second with disk and
+   network bandwidth, and operations a second with your cores. Removing a piece
+   that takes 10% of the run can make it at most about 11% faster. A result
+   past a limit measured a cache, a no-op or a bug.
 
 **Work in several repos?** Add `--repo <path>` for each other checkout the
 climb edits. Each gets the same `climb/<name>` branch. `try` keeps or undoes
@@ -450,7 +491,7 @@ mid-climb, the next one starts at step 0.
 
 | Command | Does |
 | --- | --- |
-| `init <name> --goal --check --direction min\|max` | Card, baseline, branch, kit. Options: `--check` (repeat, runs at once, scores add), `--score '<regex>'`, `--repo <path>` (repeat), `--guard` (repeat), `--target` (number or `2x`), `--after stop\|raise`, `--runs`, `--paired` (old and new code in turns), `--min-gain`, `--timeout`, `--holdout`, `--lock` (repeat), `--max-hours` and `--max-steps` (only when I set a limit, soft unless `--hard`), `--here` (no new branch) |
+| `init <name> --goal --check --direction min\|max` | Card, baseline, branch, kit. Options: `--check` (repeat, runs at once, scores add), `--score '<regex>'`, `--perf` with `--errors '<regex>'` and `--work '<regex>'` (speed climbs: undo a step that raises errors or lowers work), `--repo <path>` (repeat), `--guard` (repeat), `--target` (number or `2x`), `--after stop\|raise`, `--runs`, `--paired` (old and new code in turns), `--min-gain`, `--timeout`, `--holdout`, `--lock` (repeat), `--max-hours` and `--max-steps` (only when I set a limit, soft unless `--hard`), `--here` (no new branch) |
 | `try "<idea>" [--fix]` | Score the edit, keep or undo it. `--fix` keeps a repair that holds the score |
 | `status [name]` | Score, trail, last steps, PLATEAU or STUCK |
 | `holdout --why "..."` | Run the holdout now |
@@ -466,4 +507,4 @@ mid-climb, the next one starts at step 0.
 
 ## Attribution
 
-Adapted from Bil0000's [Hill-Climb](https://github.com/Bil0000/Hill-Climb) at commit `84b95909383379d4a84ad02ecadf928aba6b3b9b` under the bundled [MIT License](LICENSE). `scripts/climb.py` is unchanged. `scripts/judge.py` has one patch: the default `--panel` is `claude`, not the upstream `claude,codex`, so the Codex CLI is not needed. `references/helpers.md` follows the house seat table (Haiku or Sonnet builders, Sonnet planners, Opus reviewers) instead of upstream's tier advice. This version moves the Helpers section and the card and report layouts into `references/`, adds `--panel claude` to the judge example in `references/checks.md`, and trims the description and some promotional wording.
+Adapted from Bil0000's [Hill-Climb](https://github.com/Bil0000/Hill-Climb) at commit `84b95909383379d4a84ad02ecadf928aba6b3b9b` under the bundled [MIT License](LICENSE). `scripts/climb.py` adds `--perf`, `--errors` and `--work`: two guards that undo a step whose error count rises or whose work count falls, from the benchmark checklist in pstack (7a583913). `scripts/judge.py` has one patch: the default `--panel` is `claude`, not the upstream `claude,codex`, so the Codex CLI is not needed. `references/helpers.md` follows the house seat table (Haiku or Sonnet builders, Sonnet planners, Opus reviewers) instead of upstream's tier advice. This version moves the Helpers section and the card and report layouts into `references/`, adds `--panel claude` to the judge example in `references/checks.md`, and trims the description and some promotional wording.

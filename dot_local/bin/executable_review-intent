@@ -24,12 +24,20 @@ Record check (--pr only): before anything is read, the PR's agent record is chec
 that has not happened yet). The run is refused (exit 3, nothing on stdout, pr-body-check's own output on stderr) when that check reports a record defect: no record, no complete
 principles table, no Decisions line, or a Decisions line the ledger does not match. Fix the record, then build the brief. A round is not spent on what a tool already finds.
 Only record defects refuse. The check's other findings (ids or bookkeeping in the description, a Proven section that misses the head, a red or running head run) are printed as a
-note and do not stop the run: a review can still find them useful to see, and some cannot pass until the review is done. If `pr-body-check` is not on PATH (the work profile has none),
+note and do not stop the run: a review can still find them useful to see, and some cannot pass until the review is done. If `pr-body-check` is not on PATH (neither desktop profile lacks it; a machine such as Termux does),
 cannot reach GitHub or the ledger, or times out, the run goes on with a warning: a broken tool never blocks a review. --skip-record-check turns the check off.
-Exit 0 the block is printed; 1 an id is unknown; 2 bad arguments, no ledger, or gh failed; 3 the PR's agent record fails pr-body-check.
+Merge check (--pr only): after the record check, the repo's own merge script is run in its check-only mode, `scripts/merge-pr.sh N --check-only`, which runs every check the real merge runs except the
+review round (and the main-run state, which is not a defect of the PR) and merges nothing. The coordinator's and the homelab's merge scripts have it (agent-kit, loop-engine and dotfiles have no merge script of their own:
+they merge through pr-body-check, which the record check covers). The script is found at <checkouts>/<repo name>/scripts/merge-pr.sh, where <checkouts> is $REVIEW_INTENT_CHECKOUTS, else ~/git: the checkout the
+repo's pr-body-check already runs from. The run is refused (exit 3, nothing on stdout) when the script exits 1 and says REFUSED: its whole output goes to stderr, then a line saying to fix it before building the
+brief. This goes further than the record check: a red or still-running head run, a Proven section that misses the head, bookkeeping in the description, a missing gate run or RECORD or RED line all refuse here, because the
+merge would refuse them. A script that is not there (a checkout that cannot be found, the work profile), is too old to know the flag (exit 64), exits any other way, or runs over MERGE_CHECK_SECONDS is a warning
+and the run goes on, as for the record check. --skip-record-check turns both checks off.
+Exit 0 the block is printed; 1 an id is unknown; 2 bad arguments, no ledger, or gh failed; 3 the PR's agent record fails pr-body-check, or the repo's merge script refuses it before the review.
 Log: every run appends one JSON line to $XDG_STATE_HOME/review-intent/log.jsonl (else ~/.local/state/review-intent/log.jsonl), written at the one place main() returns, so a
 refusal added later is recorded without more code. Fields: ts, tool ("review-intent"), pr (the --pr value or ""), outcome (done: exit 0; refused: exit 1 or 3; failed: exit 2),
-exit, reason (the first line the run printed to stderr, or ""), record_check (passed, refused, skipped-flag, fail-open-missing, fail-open-error, fail-open-timeout, not-run: no --pr), duration_ms.
+exit, reason (the first line the run printed to stderr, or ""; when the merge script refuses, "the repo's merge script refused: " and the first line of its output that says REFUSED, the check that failed), record_check (passed, refused, skipped-flag, fail-open-missing, fail-open-error, fail-open-timeout, not-run: no --pr),
+merge_check (the same values, for the repo's merge script), duration_ms.
 A log line that cannot be written never changes the exit code.
 
 The block (one per brief):
@@ -76,6 +84,10 @@ class Usage(Exception):
 
 
 class RecordRefused(Exception):
+    pass
+
+
+class MergeRefused(Exception):
     pass
 
 
@@ -400,7 +412,8 @@ RECORD_HEADS = (
 )
 CHECK_SECONDS = 180
 LEDGER_SKIPPED = re.compile(r"^\s*decisions not checked against the ledger\b.*$", re.M)
-RUN = {"record_check": "not-run"}  # what the record check did in this run; read by the log line in main()
+MERGE_CHECK_SECONDS = 600  # a coordinator check-only run builds the merge result for Bookends and reads the head's runs: minutes, not seconds
+RUN = {"record_check": "not-run", "merge_check": "not-run", "reason": ""}  # what each check did in this run, and a reason that beats the first stderr line; read by the log line in main()
 
 
 def record_precheck(spec):
@@ -431,6 +444,33 @@ def record_precheck(spec):
     if p.returncode == 1:
         warnings.append("review-intent: note: pr-body-check also reports the following. It is not about the agent record, so the run goes on:\n%s" % p.stdout.rstrip("\n"))
     return warnings
+
+
+def merge_check(spec):
+    """Runs the repo's merge script in check-only mode on the PR. Returns the warnings to print; raises MergeRefused (with the script's output) when it refuses. Sets RUN["merge_check"]."""
+    repo, n = pr_ref(spec)
+    root = os.environ.get("REVIEW_INTENT_CHECKOUTS") or os.path.join(os.path.expanduser("~"), "git")
+    script = os.path.join(root, repo.split("/")[1], "scripts", "merge-pr.sh")
+    if not os.path.isfile(script):
+        RUN["merge_check"] = "fail-open-missing"
+        return ["review-intent: warning: %s is not there, so %s#%s was not checked against the repo's merge script" % (script, repo, n)]
+    try:
+        p = subprocess.run(["bash", script, n, "--check-only"], capture_output=True, text=True, timeout=MERGE_CHECK_SECONDS,
+                           env=dict(os.environ, GH_CALLER="review-intent"))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        RUN["merge_check"] = "fail-open-error" if isinstance(e, OSError) else "fail-open-timeout"
+        return ["review-intent: warning: %s --check-only could not run (%s), so %s#%s was not checked against the repo's merge script" % (script, e.strerror if isinstance(e, OSError) else "timed out", repo, n)]
+    out = (p.stdout + p.stderr).rstrip("\n")
+    if p.returncode == 0:
+        RUN["merge_check"] = "passed"
+        return []
+    if p.returncode == 1 and "REFUSED" in out:
+        RUN["merge_check"] = "refused"
+        RUN["reason"] = "the repo's merge script refused: %s" % next(l.strip() for l in out.splitlines() if "REFUSED" in l)  # the first line that says REFUSED: the check that failed
+        raise MergeRefused(out)
+    RUN["merge_check"] = "fail-open-error"
+    why = out.splitlines()
+    return ["review-intent: warning: %s --check-only exited %d without a refusal (%s), so %s#%s was not checked against the repo's merge script" % (script, p.returncode, why[-1] if why else "no output", repo, n)]
 
 
 def parse(argv):
@@ -466,10 +506,11 @@ def run(argv):
     try:
         o = parse(argv)
         if o["pr"] and not o["skip_record"]:
-            for w in record_precheck(o["pr"]):
-                print(w, file=sys.stderr)
+            for check in (record_precheck, merge_check):  # each prints its warnings before the next runs, so a refusal by the second still shows the first's
+                for w in check(o["pr"]):
+                    print(w, file=sys.stderr)
         elif o["pr"]:
-            RUN["record_check"] = "skipped-flag"
+            RUN["record_check"] = RUN["merge_check"] = "skipped-flag"
         texts, pr_texts = [], []
         linked_pr = None
         for f in o["files"]:
@@ -490,6 +531,11 @@ def run(argv):
     except RecordRefused as e:
         print(e, file=sys.stderr)
         print("review-intent: the PR's agent record fails pr-body-check (above). Fix the record, then build the brief; nothing was printed", file=sys.stderr)
+        return 3
+    except MergeRefused as e:
+        print("review-intent: the repo's merge script refuses this PR before the review (`merge-pr.sh N --check-only`); its output:", file=sys.stderr)
+        print(e, file=sys.stderr)
+        print("review-intent: fix what the merge script names (above) before building the brief; nothing was printed", file=sys.stderr)
         return 3
     except Usage as e:
         print(e, file=sys.stderr)
@@ -531,8 +577,8 @@ def log_run(pr, code, reason, started):
         path = log_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "review-intent", "pr": pr or "",
-               "outcome": "done" if code == 0 else "failed" if code == 2 else "refused", "exit": code, "reason": reason,
-               "record_check": RUN["record_check"], "duration_ms": int((time.monotonic() - started) * 1000)}
+               "outcome": "done" if code == 0 else "failed" if code == 2 else "refused", "exit": code, "reason": RUN["reason"] or reason,
+               "record_check": RUN["record_check"], "merge_check": RUN["merge_check"], "duration_ms": int((time.monotonic() - started) * 1000)}
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row) + "\n")
     except Exception:
@@ -542,7 +588,8 @@ def log_run(pr, code, reason, started):
 def main(argv):
     """The one exit point of every run: runs, then logs the exit it is about to return."""
     started = time.monotonic()
-    RUN["record_check"] = "not-run"
+    RUN["record_check"] = RUN["merge_check"] = "not-run"
+    RUN["reason"] = ""
     real = sys.stderr
     tee = sys.stderr = Tee(real)
     pr = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--pr"), "")

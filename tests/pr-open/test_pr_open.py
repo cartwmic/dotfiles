@@ -89,6 +89,22 @@ class PrOpen(unittest.TestCase):
     def remote_branches(self):
         return self.git(self.origin, "branch", "--list").split()
 
+    def test_create_from_another_repos_checkout_is_refused_before_anything_is_checked_or_pushed(self):
+        """homelab#676: pr-open ran from the coordinator checkout with --repo for homelab pushed the branch to the coordinator."""
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other")
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: this directory's origin is cartwmic/scratch, not cartwmic/other"), last)
+        self.assertNotIn("feature", self.remote_branches())
+        self.assertEqual(self.calls(), [])  # no check, no gh call: nothing else ran either
+        self.assertFalse(self.git(self.origin, "log", "--all", "--oneline").count("second"))
+
+    def test_create_with_the_repo_of_this_origin_still_works_in_any_case_and_url_form(self):
+        self.git(self.repo, "remote", "set-url", "origin", "git@github.com:Cartwmic/Scratch.git")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/scratch")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("feature", self.remote_branches())
+
     def test_a_refused_body_creates_and_pushes_nothing(self):
         self.body.write_text("REFUSEME\n")
         result = self.run_open("--title", "T", "--body-file", str(self.body))
@@ -360,6 +376,83 @@ class PrOpen(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("known-limits-check is not at", result.stderr)
         self.assertEqual(self.calls(), [])
+
+    # -- pr-open's own run log: one line per run, written from the EXIT trap, whatever way the run ends ---------------------------------
+
+    def run_rows(self):
+        log = self.dir / ".local/state/pr-open/log.jsonl"  # HOME is the scratch directory
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def test_the_wrong_checkout_refusal_writes_a_log_line_that_names_the_origin_mismatch(self):
+        """f1 on dotfiles#797: the refusal printed to stderr and was gone; the log is how Michael sees whether it still fires, and for which repo pair."""
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other")
+        self.assertEqual(result.returncode, 2)
+        (row,) = self.run_rows()
+        self.assertEqual((row["mode"], row["repo"], row["pr"], row["outcome"], row["exit"]), ("create", "cartwmic/other", None, "refused", 2))
+        self.assertTrue(row["reason"].startswith("this directory's origin is cartwmic/scratch, not cartwmic/other"), row["reason"])
+        self.assertRegex(row["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(row["duration_s"], int)
+
+    def test_a_directory_with_no_origin_is_refused_and_logged(self):
+        self.git(self.repo, "remote", "remove", "origin")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/scratch")
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertEqual(last, "[pr-open] ERROR: this directory has no git remote named origin, so nothing can be pushed for cartwmic/scratch")
+        self.assertEqual(self.calls(), [])  # no check and no gh call
+        self.assertNotIn("feature", self.remote_branches())  # nothing pushed
+        (row,) = self.run_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["reason"]), ("refused", 2, last.split("ERROR: ")[1]))
+
+    def test_a_created_pr_and_an_edit_each_write_a_line(self):
+        self.run_open("--title", "T", "--body-file", str(self.body))
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        created, edited = self.run_rows()
+        self.assertEqual((created["mode"], created["repo"], created["pr"], created["outcome"], created["exit"], created["reason"]),
+                         ("create", "cartwmic/scratch", 42, "created", 0, ""))
+        self.assertEqual((edited["mode"], edited["pr"], edited["outcome"], edited["exit"]), ("edit", 7, "edited", 0))
+
+    def test_every_way_a_run_ends_writes_exactly_one_line(self):
+        self.git(self.repo, "checkout", "-q", "-b", "other-branch")
+        refused_body = self.dir / "refused.md"
+        refused_body.write_text("REFUSEME\n")
+        cases = (
+            ("bad arguments", ("--bogus",), None, "failed", 2, "unknown argument"),
+            ("a refused body", ("--title", "T", "--body-file", str(refused_body)), None, "refused", 1, "refused by pr-body-check"),
+            ("a gh failure", ("--title", "T", "--body-file", str(self.body)), {"FAKE_GH_FAIL": "1"}, "failed", 2, "gh pr create failed"),
+            ("a merged PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed true"}, "refused", 2, "is merged"),
+            ("a closed PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed false"}, "refused", 2, "is closed"),
+        )
+        for name, args, env, outcome, code, why in cases:
+            with self.subTest(name):
+                before = len(self.run_rows())
+                self.assertEqual(self.run_open(*args, extra_env=env).returncode, code)
+                rows = self.run_rows()
+                self.assertEqual(len(rows), before + 1)
+                self.assertEqual((rows[-1]["outcome"], rows[-1]["exit"]), (outcome, code))
+                self.assertIn(why, rows[-1]["reason"])
+
+    def test_help_and_a_reason_with_quotes_leave_valid_json(self):
+        before = len(self.run_rows())
+        self.assertEqual(self.run_open("--help").returncode, 0)
+        self.assertEqual(len(self.run_rows()), before)  # help is not a run
+        self.run_open("--title", "T", "--body-file", str(self.body), "--repo", 'cartwmic/"odd"\\name')
+        (row,) = self.run_rows()  # json.loads in run_rows would raise on a broken line
+        self.assertEqual(row["outcome"], "refused")
+        self.assertIn('not cartwmic/"odd"\\name:', row["reason"])  # quotes and backslashes in a reason survive the round trip
+
+    def test_the_log_depends_on_the_exit_trap(self):
+        """The refusal tests above must fail if the trap goes: the same refusal, run through a copy of pr-open with the trap line removed, writes nothing."""
+        text = SCRIPT.read_text()
+        self.assertEqual(text.count("\ntrap finish EXIT\n"), 1)
+        mutant = self.dir / "pr-open-no-trap"
+        mutant.write_text(text.replace("\ntrap finish EXIT\n", "\n"))
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
+               "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
+        result = subprocess.run(["sh", str(mutant), "--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other"],
+                                cwd=self.repo, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.run_rows(), [])
 
 
 if __name__ == "__main__":

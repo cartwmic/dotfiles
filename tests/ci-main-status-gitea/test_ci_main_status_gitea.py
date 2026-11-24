@@ -35,6 +35,13 @@ class FakeGitea(BaseHTTPRequestHandler):
         state = self.server.state
         if self.path == API + "/branches/main":
             return self.send(200, {"commit": {"id": state["tip"]}})
+        if self.path.startswith(API + "/pulls/") and "/reviews" in self.path:
+            parts = self.path.split("?")[0].split("/reviews")[1].strip("/").split("/")   # [] (the reviews), or [id, "comments"]
+            reviews = state.get("reviews", [])
+            if parts == [""]:
+                return self.send(200, [{"id": r["id"], "state": r.get("state", "COMMENT")} for r in reviews])
+            review = next((r for r in reviews if str(r["id"]) == parts[0]), None)
+            return self.send(200, review["comments"]) if review else self.send(404, {"message": "no such review"})
         if self.path.startswith(API + "/pulls/"):
             pull = state["pulls"].get(self.path.rsplit("/", 1)[1])
             return self.send(200, pull) if pull else self.send(404, {"message": "no such pr"})
@@ -88,6 +95,8 @@ class GiteaGate(unittest.TestCase):
                     "CI_MAIN_STATUS_GITEA_TOKEN": TOKEN, "CI_MAIN_STATUS_KGATE_LOG": str(self.kgate_log),
                     "CI_MAIN_STATUS_GITEA_LOG": str(t / "gitea.jsonl")}
         self.gitea_log = t / "gitea.jsonl"
+        self.threads_log = t / "threads.jsonl"
+        self.env["CI_MAIN_STATUS_THREADS_LOG"] = str(self.threads_log)
 
     def tearDown(self):
         self.server.shutdown()
@@ -108,6 +117,90 @@ class GiteaGate(unittest.TestCase):
 
     def logged(self):
         return [json.loads(line) for line in self.gitea_log.read_text().splitlines()] if self.gitea_log.exists() else []
+
+    # ---- review threads (the PR gate runs ci-main-status --threads after its own evidence passes)
+    def comment(self, resolved=False, path="app.ts", position=4, body="Rename this\nplease", **extra):
+        return {"path": path, "original_position": position, "body": body, "html_url": f"http://gitea/pulls/7#issuecomment-{path}{position}",
+                "resolver": {"login": "someone"} if resolved else None, **extra}
+
+    def reviews(self, *reviews):
+        self.server.state["reviews"] = [{"id": i + 1, **r} for i, r in enumerate(reviews)]
+
+    def test_a_pass_with_no_review_comments_prints_the_threads_line_too(self):
+        self.record(self.head_tree)
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("cartwmic/budget-steward#7: GREEN  no unresolved review threads", out)
+
+    def test_an_unresolved_conversation_refuses_the_gate_and_is_listed(self):
+        self.record(self.head_tree)
+        self.reviews({"comments": [self.comment()]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(out.startswith("budget-steward: RED"), out)   # the verdict line is first, and it is not GREEN
+        self.assertIn("the evidence passed (kgate kgate-1 exit 0", out)
+        self.assertIn("cartwmic/budget-steward#7: RED  1 unresolved review thread", out)
+        self.assertEqual([r["verdict"] for r in self.logged()], ["RED"])   # the gitea.jsonl row says RED too, never GREEN with exit 1
+        self.assertEqual(self.logged()[0]["exit"], 1)
+        self.assertIn("    app.ts  Rename this  http://gitea/pulls/7#issuecomment-app.ts4", out)
+
+    def test_the_threads_log_gets_one_line_per_run_for_the_gate_and_the_standalone_check(self):
+        self.record(self.head_tree)
+        self.reviews({"comments": [self.comment()]})
+        self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.status("--threads", "budget-steward", "7")
+        rows = [json.loads(line) for line in self.threads_log.read_text().splitlines()]
+        self.assertEqual([(r["repo"], r["pr"], r["forge"], r["result"], r["unresolved"]) for r in rows], [("cartwmic/budget-steward", 7, "gitea", "refused", 1)] * 2)
+        self.assertEqual(rows[0]["threads"], [{"where": "app.ts", "url": "http://gitea/pulls/7#issuecomment-app.ts4"}])
+
+    def test_an_unreadable_thread_state_is_error_in_the_gate_line_and_in_both_logs(self):
+        self.record(self.head_tree)
+        old = self.comment()
+        del old["resolver"]
+        self.reviews({"comments": [old]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(out.startswith("budget-steward: ERROR"), out)
+        self.assertEqual([r["verdict"] for r in self.logged()], ["ERROR"])
+        self.assertEqual([json.loads(line)["result"] for line in self.threads_log.read_text().splitlines()], ["error"])
+
+    def test_a_review_with_many_comments_is_read_in_one_call_because_the_comments_endpoint_has_no_paging(self):
+        self.record(self.head_tree)
+        self.reviews({"comments": [self.comment(resolved=True, path=f"f{i}.ts") for i in range(120)]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len([c for c in self.server.calls if c.split("?")[0].endswith("/reviews/1/comments")]), 1)
+
+    def test_a_resolved_conversation_passes(self):
+        self.record(self.head_tree)
+        self.reviews({"comments": [self.comment(resolved=True)]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 0, out)
+
+    def test_a_reply_in_a_resolved_conversation_does_not_reopen_it_and_a_pending_draft_is_skipped(self):
+        self.record(self.head_tree)
+        self.reviews({"comments": [self.comment(resolved=True)]}, {"comments": [self.comment()]},
+                     {"state": "PENDING", "comments": [self.comment(path="draft.ts")]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 0, out)
+
+    def test_a_comment_with_no_resolver_field_fails_closed(self):
+        self.record(self.head_tree)
+        old = self.comment()
+        del old["resolver"]
+        self.reviews({"comments": [old]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR  cannot read review threads", out)
+
+    def test_a_failed_pass_does_not_read_threads_and_the_standalone_check_reads_them(self):
+        self.reviews({"comments": [self.comment()]})
+        rc, out = self.status("--merge-gate", "budget-steward", "--pr", "7")   # no evidence: RED before any thread read
+        self.assertEqual(rc, 1, out)
+        self.assertFalse(any("/reviews" in c for c in self.server.calls))
+        rc, out = self.status("--threads", "budget-steward", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("1 unresolved review thread", out)
 
     # ---- the PR gate
     def test_a_full_suite_kgate_pass_on_the_head_tree_passes_the_gate(self):

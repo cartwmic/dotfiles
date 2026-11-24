@@ -5,6 +5,7 @@ usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, ag
        ci-main-status [--tip | --merge-gate] --all
        ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below; for eval-cases and budget-steward the PR being merged, below)
        ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
+       ci-main-status --threads REPO PR                (the PR's unresolved review threads, below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
@@ -30,13 +31,29 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
 
+--threads REPO PR is the per-PR check the repo-wide gate cannot be: PR PR must have no unresolved review thread (playbook 580f3e02
+step 3, "resolve the threads", as a gate; the idea is poteto's watch-pr). REPO is a table name, OWNER/REPO, or a bare name taken as
+cartwmic/NAME. GitHub: GraphQL reviewThreads. Every thread that is not resolved counts, outdated ones included (GitHub marks a thread outdated
+when the lines under it change, which does not mean the finding was answered): only resolving a thread clears it. Any unresolved one is RED,
+exit 1, and each is printed as `path:line  first line of its first comment  url`.
+Gitea (budget-steward): the review comments' `resolver` says who resolved a conversation, and every unresolved one counts, the same as on
+GitHub. A conversation is the comments on one path and diff position, resolved when any of them has a resolver; two separate conversations at
+the same path and position (rare) read as one, so resolving either clears both: Gitea's API gives no id that tells them apart. A read that
+fails, or a malformed answer, is ERROR, exit 1: no silent pass. Every run writes one line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/threads.jsonl
+(CI_MAIN_STATUS_THREADS_LOG overrides it), whoever calls it: ts (UTC), duration_ms, repo, pr, forge (github or gitea), result (pass, refused or
+error), unresolved (the count, or null on error), threads (path, line and url of each unresolved thread), exit and detail (the error, on error).
+Who runs it: the
+`pr-body-check REPO PR` shim runs it after the body check (every merge chain already runs that: the hook's gh pr merge chain, the
+homelab merge-pr.sh, the bump scripts), and the Gitea PR gate (`--merge-gate budget-steward --pr N`) runs it itself after its own
+evidence passes, as that repo's only merge gate.
+
 A table repo marked no_ci has no CI and cannot have required checks (today eval-cases: a private repo on a plan with no
 rulesets or branch protection; GitHub answers 403 "Upgrade to GitHub Pro or make this repository public"). Main has no state
 to read, so its merge gate is the PR's own review and body check: `--merge-gate eval-cases --pr N` (or cartwmic/eval-cases)
 reads PR N's head from GitHub, then runs `agent-traces review verify --item eval-cases#N --head <head> --require-block`
 and `pr-body-check cartwmic/eval-cases N`. Both run, and both exit 0: one "no CI" line naming what it passed on, exit 0.
 Either fails: a line for each (the failing one with its reason), exit 1. A missing agent-traces or pr-body-check is a failure
-(both are personal-profile tools, so on the work profile this gate exits 1). `--merge-gate eval-cases` without --pr exits 1:
+(both ship to the personal and work profiles; the gate fails only where one is missing). `--merge-gate eval-cases` without --pr exits 1:
 it cannot know which PR is merging, so pass --pr N. Without --merge-gate (plain status, --tip, --all) and with --merge-gate
 --all it prints one "n/a (no CI ...)" line and exits 0, like homelab: it never changes the exit of the other repos.
 One more no-CI repo is one more REPOS row ({"github": "owner/repo", "no_ci": True}) and its ORDER entry.
@@ -1131,7 +1148,11 @@ def gitea_pr_gate(name, spec, pr, rec):
         return 1, [f"{name}: RED  {where} is aimed at {base}, not main"]
     verdict, what = gitea_evidence(name, spec, head, rec)
     if verdict == "pass":
-        return 0, [f"{name}: GREEN  {where}: {what}"]
+        code, lines = check_threads(repo, pr)   # this repo's only merge gate: the unresolved-thread check has no other place to run
+        if code:   # the verdict line comes first, because log_gitea reads the verdict from it: a thread refusal is RED (or ERROR), never GREEN
+            kind = "ERROR" if ": ERROR " in lines[0] else "RED"
+            return code, [f"{name}: {kind}  {where}: the evidence passed ({what}), but the review threads refuse it"] + lines
+        return 0, [f"{name}: GREEN  {where}: {what}"] + lines
     if verdict == "fail":
         return 1, [f"{name}: RED  {where}: {what}"]
     return 1, [f"{name}: RED  {where}: no evidence. It needs a Gitea commit status success or a kgate run that ran `npm run typecheck` and `npm test` "
@@ -1155,6 +1176,147 @@ def gitea_check(name, spec, tip_only, pr, gate, rec):
         return 1, [f"{name}: RED  {what} on {tip[:7]}"]
     return 2, [f"{name}: UNTESTED  no Gitea commit status and no full-suite kgate run on main {tip[:7]}'s tree. "
                f"Its merge gate is ci-main-status --merge-gate {name} --pr N."]
+
+
+THREADS_QUERY = """query($owner: String!, $name: String!, $pr: Int!, $after: String) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $pr) {
+    reviewThreads(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { isResolved path line originalLine comments(first: 1) { nodes { body url } } } } } } }"""
+THREAD_LIMIT = 50   # Gitea reads: page size
+THREAD_PAGES = 40   # a backstop: 2000 reviews or comments on one PR is a read gone wrong
+
+
+def first_line(text):
+    """The first non-empty line of a comment, cut to 120 characters."""
+    for line in str(text or "").splitlines():
+        if line.strip():
+            return line.strip()[:120]
+    return ""
+
+
+def thread(path, line, text, url):
+    place = path or "(no file)"
+    return {"where": f"{place}:{line}" if line else place, "text": first_line(text), "url": url or ""}
+
+
+def github_threads(repo, pr):
+    """The unresolved review threads of GitHub PR `pr`, outdated ones included. Paged by hand: gh's --paginate prints one JSON document per page."""
+    owner, name = repo.split("/", 1)
+    found, after = [], None
+    for _ in range(THREAD_PAGES):
+        args = ["api", "graphql", "-f", "query=" + THREADS_QUERY, "-f", "owner=" + owner, "-f", "name=" + name, "-F", f"pr={pr}"]
+        if after:
+            args += ["-f", "after=" + after]
+        data = gh(args)
+        if not isinstance(data, dict) or data.get("errors"):
+            raise Unreadable(f"GitHub's review threads of {repo}#{pr} came back with errors: {json.dumps(data.get('errors') if isinstance(data, dict) else data)[:300]}")
+        try:
+            pull = data["data"]["repository"]["pullRequest"]
+            threads = pull["reviewThreads"]
+            nodes, more = threads["nodes"], threads["pageInfo"]
+        except (KeyError, TypeError):
+            raise Unreadable(f"GitHub has no readable review threads for {repo}#{pr} (no such PR, or a shape this check does not know); failing closed")
+        for t in nodes:
+            if not isinstance(t, dict) or not isinstance(t.get("isResolved"), bool):
+                raise Unreadable(f"a review thread of {repo}#{pr} is malformed; failing closed")
+            if t["isResolved"]:
+                continue
+            comments = (t.get("comments") or {}).get("nodes") or [{}]
+            found.append(thread(t.get("path"), t.get("line") or t.get("originalLine"), comments[0].get("body"), comments[0].get("url")))
+        if not more.get("hasNextPage"):
+            return found
+        after = more.get("endCursor")
+        if not after:
+            raise Unreadable(f"GitHub says there are more review threads of {repo}#{pr} but gave no cursor; failing closed")
+    raise Unreadable(f"more than {THREAD_PAGES} pages of review threads on {repo}#{pr}; failing closed")
+
+
+def gitea_paged(path):
+    """Every item of a Gitea list endpoint, page by page."""
+    items = []
+    for page in range(1, THREAD_PAGES + 1):
+        got = gitea_get(f"{path}{'&' if '?' in path else '?'}limit={THREAD_LIMIT}&page={page}")
+        if not isinstance(got, list):
+            raise Unreadable(f"Gitea GET {path} did not return a list; failing closed")
+        items += got
+        if len(got) < THREAD_LIMIT:
+            return items
+    raise Unreadable(f"more than {THREAD_PAGES} pages from Gitea GET {path}; failing closed")
+
+
+def gitea_threads(repo, pr):
+    """The unresolved conversations of Gitea PR `pr`, every one that is not resolved."""
+    groups = {}   # (path, original diff position) -> [the conversation's first comment, resolved?]
+    for review in gitea_paged(f"/repos/{repo}/pulls/{pr}/reviews"):
+        if not isinstance(review, dict) or not isinstance(review.get("id"), int):
+            raise Unreadable(f"a Gitea review of {repo}#{pr} is malformed; failing closed")
+        if review.get("state") == "PENDING":
+            continue   # a draft its author has not submitted
+        comments = gitea_get(f"/repos/{repo}/pulls/{pr}/reviews/{review['id']}/comments")   # no page or limit parameter (the 1.26 swagger): all of the review's comments come at once
+        if not isinstance(comments, list):
+            raise Unreadable(f"Gitea review {review['id']} of {repo}#{pr} did not return a list of comments; failing closed")
+        for c in comments:
+            if not isinstance(c, dict) or "resolver" not in c:
+                raise Unreadable(f"a Gitea review comment of {repo}#{pr} has no `resolver` field (an older Gitea?); failing closed")
+            key = (c.get("path"), c.get("original_position"))
+            group = groups.setdefault(key, [c, False])
+            group[1] = group[1] or c["resolver"] is not None
+    return [thread(c.get("path"), None, c.get("body"), c.get("html_url")) for c, resolved in groups.values() if not resolved]
+
+
+def thread_repo(arg):
+    """(OWNER/REPO, on Gitea?) for a table name, OWNER/REPO, or a bare name taken as cartwmic/NAME."""
+    spec = REPOS.get(arg)
+    slug = (spec.get("github") or spec["gitea"]) if spec else arg if "/" in arg else "cartwmic/" + arg
+    gitea = {v["gitea"].lower() for v in REPOS.values() if v and "gitea" in v}
+    return slug, slug.lower() in gitea
+
+
+def thread_lines(slug, pr, found):
+    if not found:
+        return [f"{slug}#{pr}: GREEN  no unresolved review threads"]
+    lines = [f"{slug}#{pr}: RED  {len(found)} unresolved review thread{'s' if len(found) != 1 else ''}: resolve each, or say why it stays, before merging"]
+    return lines + [f"    {t['where']}  {t['text']}  {t['url']}" for t in found]
+
+
+def threads_log_path():
+    return Path(os.environ.get("CI_MAIN_STATUS_THREADS_LOG")
+                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ci-main-status/threads.jsonl")
+
+
+def log_threads(slug, pr, forge, started, code, found, error):
+    """One JSON line per --threads run, whoever calls it (the shim, the Gitea gate, a person): the repo, PR and forge, the result (pass, refused or
+    error), the unresolved threads, the exit code and, on error, why. A log that cannot be written is a stderr note and never changes the verdict."""
+    detail = error or ""
+    if _TOKEN and _TOKEN[0]:
+        detail = detail.replace(_TOKEN[0], "<token>")
+    row = {"ts": datetime.datetime.fromtimestamp(started, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "duration_ms": round((time.time() - started) * 1000), "repo": slug, "pr": pr, "forge": forge,
+           "result": "error" if error else "refused" if found else "pass", "unresolved": None if error else len(found),
+           "threads": [{"where": t["where"], "url": t["url"]} for t in found or []], "exit": code, "detail": detail[:300]}
+    try:
+        path = threads_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"ci-main-status: could not write {threads_log_path()}: {e}", file=sys.stderr)
+
+
+def check_threads(arg, pr):
+    """One PR's review threads: (exit code, lines). A read that fails is ERROR, exit 1. Every call leaves one line in threads.jsonl."""
+    slug, on_gitea = thread_repo(arg)
+    started = time.time()
+    found, error = [], None
+    try:
+        found = (gitea_threads if on_gitea else github_threads)(slug, pr)
+        code, lines = (1 if found else 0), thread_lines(slug, pr, found)
+    except Unreadable as e:
+        error = str(e)
+        code, lines = 1, [f"{slug}#{pr}: ERROR  cannot read review threads: {e}"]
+    log_threads(slug, pr, "gitea" if on_gitea else "github", started, code, found, error)
+    return code, lines
 
 
 def check(name, tip_only=False, pr=None, gate=False, rec=None):
@@ -1225,6 +1387,15 @@ def describe(name, tip_only=False, pr=None, gate=False):
 
 def main(argv):
     global URGENT
+    if "--threads" in argv:
+        rest = [a for a in argv if a != "--threads"]
+        if len(rest) != 2 or not rest[1].isdigit() or int(rest[1]) < 1 or rest[0].startswith("-"):
+            print("usage: ci-main-status --threads REPO PR     (REPO: a table name, OWNER/REPO, or NAME for cartwmic/NAME)", file=sys.stderr)
+            return 1
+        URGENT = True   # a merge-chain read: the gh budget guard must not refuse it
+        code, lines = check_threads(rest[0], int(rest[1]))
+        print("\n".join(lines))
+        return code
     tip_only = "--tip" in argv
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
@@ -1248,7 +1419,7 @@ def main(argv):
     elif len(argv) == 1 and "/" in argv[0] and not tip_only:
         names = argv   # OWNER/REPO: a GitHub repo not in the table; --tip is not for these repos
     else:
-        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N]  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases, budget-steward)", file=sys.stderr)
+        print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N] | --threads REPO PR  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases, budget-steward)", file=sys.stderr)
         return 1
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0

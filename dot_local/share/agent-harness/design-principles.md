@@ -20,6 +20,8 @@ Within a component, structure the code in layers with dependencies pointing inwa
 
 Inner layers never import outer ones; external concerns are reached only through ports. Domain and use cases are testable without any real storage, network or runtime. Scale the layering to the component: a small component may have a handful of files per layer (§4 applies).
 
+- Give each meaningful value its own type, such as an id. Parse outside data into those types at the boundary and trust them inside. Derive each type from the schema that owns its data. Then the compiler enforces rules that would otherwise be prose.
+
 **Gate:** dependency checks fail the build on any outward import.
 
 ## 4. YAGNI and KISS
@@ -109,6 +111,6 @@ The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new componen
 3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13, §14, §16).
 4. Agent instructions: AGENTS.md files should reference this document. Instructions alone do not enforce compliance.
 
-Fix a mistake agents repeat at the highest level that works: architecture, then types, then a check whose error names the fix, then a test. Write an instruction last, because nothing fails when an agent skips it. The `correcting-repeated-mistakes` skill walks this.
+Fix a mistake agents repeat at the highest level that works, aimed at the pattern above the class, not the one case. Tiers, top first, as in the pyramid in the canonical instructions: codebase (API design, architecture, refactoring), static analysis (lints, types, compilers, tests, CI), verification (runtime, formal), prose, human review. Write an instruction late, because nothing fails when an agent skips it. The `correcting-repeated-mistakes` skill walks this.
 
 Use the proportionality and trade-off checks in the existing design and review steps. Do not add separate gates for each check.

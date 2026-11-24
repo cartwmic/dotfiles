@@ -519,6 +519,17 @@ def load_profile(env, directory):
         return None
 
 
+def load_coordinator_repo(env, directory):
+    """This profile's coordinator checkout: AGENT_HARNESS_COORDINATOR_REPO, else line 1 of the `coordinator-instance` file one level up (chezmoi renders it per profile); None when neither is there."""
+    if env.get("AGENT_HARNESS_COORDINATOR_REPO"):
+        return env["AGENT_HARNESS_COORDINATOR_REPO"].strip()
+    try:
+        with open(os.path.join(os.path.dirname(directory), "coordinator-instance")) as handle:
+            return handle.readline().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def load_container(env, directory):
     """True in the agent host pod: AGENT_HARNESS_CONTAINER, else the `container` file beside this script (chezmoi renders it `true` in container mode only)."""
     value = env.get("AGENT_HARNESS_CONTAINER")
@@ -567,7 +578,8 @@ def bash_rules_message(command, raw):
         tool, cwd = hook_fields(raw)
         run_id, adapter = hook_session(raw)
         ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd(),
-                                 container=load_container(os.environ, here), run=run_id, door=load_door(os.environ, here, run_id, adapter))
+                                 container=load_container(os.environ, here), coordinator_repo=load_coordinator_repo(os.environ, here),
+                                 run=run_id, door=load_door(os.environ, here, run_id, adapter))
         found = bash_rules.refusal(command, ctx)
         if not found:
             return None

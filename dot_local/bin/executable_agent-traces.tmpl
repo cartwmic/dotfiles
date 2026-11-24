@@ -1,16 +1,49 @@
 #!/bin/sh
 # agent-traces: the agent-kit traces CLI, for review drivers. Usage: agent-traces review <normalize|add|label|record|report> ...
 # Runs the kit from its pinned install (dot_local/share/agent-kit, installed by run_onchange_after_65_agent_kit_install.sh.tmpl).
-# Exit 3 means the CLI is not installed here, or no usable node is (none found, or older than 22.19); keep the review log by hand (playbook 58fdb05d).
+# Exit 3 means the CLI is not installed here (on the work profile: neither the pinned install nor the coordinator checkout's copy exists), or no usable node is (none found, or older than 22.19); keep the review log by hand (playbook 58fdb05d).
 kit="${AGENT_TRACES_KIT:-$HOME/.local/share/agent-kit}"
 cli="$kit/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+{{- if eq .profile "axon-work-computer" }}
+# Work profile: the separate install below needs a token for a private package that the work Mac's gh accounts may not read (agentKit.enabled is off there until
+# one can). The work coordinator's checkout depends on the same package, so when the pinned kit is missing use the CLI in that checkout's node_modules
+# (COORDINATOR_REPO, else line 1 of the coordinator-instance file chezmoi renders; its version is the coordinator's pin, not this repo's). So that a review record can be traced
+# to the kit that wrote it, every run appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/agent-traces/wrapper.jsonl (utc, outcome pinned|fallback|none, kit path, kit version, the
+# paths looked at), the exit-3 run included; a fallback run also prints one line on stderr, and the exit-3 path prints where it looked. A log that cannot be written never changes the run.
+# Absent in both places: exit 3 as before. Node problems found after this point (no node, too old) are not logged here.
+kitversion() { v="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "${1%/dist/traces/cli.js}/package.json" 2>/dev/null | head -n 1)"; echo "${v:-unknown}"; }
+wlog() { # wlog OUTCOME KIT VERSION LOOKED
+  {
+    dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-traces"
+    e1="$(printf '%s' "$2" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    e2="$(printf '%s' "$3" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    e3="$(printf '%s' "$4" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    mkdir -p "$dir" && printf '{"utc":"%s","outcome":"%s","kit":"%s","version":"%s","looked":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$e1" "$e2" "$e3" >> "$dir/wrapper.jsonl"
+  } 2>/dev/null || :
+}
+looked="$cli"
+outcome=pinned
+if [ ! -f "$cli" ] && [ -z "${AGENT_TRACES_KIT:-}" ]; then
+  repo="${COORDINATOR_REPO:-$(sed -n 1p "$HOME/.local/share/agent-harness/coordinator-instance" 2>/dev/null)}"
+  if [ -n "$repo" ]; then
+    alt="$repo/node_modules/@cartwmic/agent-kit/dist/traces/cli.js"
+    looked="$cli and $alt"
+  fi
+  if [ -n "$repo" ] && [ -f "$alt" ]; then
+    cli="$alt"
+    outcome=fallback
+    echo "agent-traces: no pinned install; using the coordinator checkout's kit $cli (version $(kitversion "$cli"))" >&2
+  fi
+fi
+if [ -f "$cli" ]; then wlog "$outcome" "$cli" "$(kitversion "$cli")" "$looked"; else wlog none "" "" "$looked"; fi
+{{- end }}
 if [ ! -f "$cli" ]; then
 {{- if (includeTemplate "agent_kit_config" . | fromJson).enabled }}
-  echo "agent-traces: the agent-kit install is enabled here but missing or failed; retry with:" >&2
+  echo "agent-traces: the agent-kit install is enabled here but missing or failed (looked for ${looked:-$cli}); retry with:" >&2
   echo 'cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token --user ACCOUNT) npm ci   # ACCOUNT: a gh account that can read @cartwmic/agent-kit (gh auth status lists them)' >&2
   echo "agent-traces: until it works, keep the review log by hand (playbook 58fdb05d)" >&2
 {{- else }}
-  echo "agent-traces: not installed here; keep the review log by hand (playbook 58fdb05d)" >&2
+  echo "agent-traces: not installed here (looked for ${looked:-$cli}); keep the review log by hand (playbook 58fdb05d)" >&2
 {{- end }}
   exit 3
 fi
