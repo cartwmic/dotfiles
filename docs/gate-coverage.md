@@ -15,17 +15,15 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 | Bash rule: unquoted heredoc with a backtick | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: credential config read raw | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/bin/config-show` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: git that changes the live coordinator checkout | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/coordinator-instance` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
-| Bash rule: heavy jobs in the agent host pod | yes (pod only) | no | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
-| Bash rule: kubectl on a context other than the homelab's | yes | no | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
-| Bash rule: local `docker run`, `build`, `compose up` | yes (Linux) | no | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
+| Bash rule: heavy jobs in the agent host pod | yes (pod only) | no: a pod-only rule (the personal Mac gets it too, inert); the work Mac is no pod and has no kgate host, so a work lead runs a suite where its repo runs it | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
+| Bash rule: kubectl on a context other than the homelab's | yes | no: it keeps agents on the personal homelab cluster (ledger grant 21), the grant covers that cluster only, not the work clusters | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
+| Bash rule: local `docker run`, `build`, `compose up` | yes (Linux) | no: it guards Linux personal hosts (kgate and a throwaway namespace) and the work profile has no Linux machine | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash hook wired into Claude Code, Codex, Cursor and Pi | yes | yes | `.local/share/agent-harness/hooks/refuse_pattern_kill.py`, `.cursor/hooks/shell_guard.py`, `.pi/agent/extensions/refuse-pattern-kill/index.ts` | `tests/agent-kill-guard/test_claude_settings.py`, `tests/agent-kill-guard/test_codex_hook.py`, `tests/cursor/test_shell_guard.py`, `tests/profiles/test_gate_coverage.py` |
 | Review log CLI: `agent-traces` | yes | yes, when the work coordinator's checkout holds the kit (else exit 3) | `.local/bin/agent-traces` | `tests/agent-kit/test_wrapper.py`, `tests/profiles/test_gate_coverage.py` |
 
-## Why the "no" rows are no
+## The "no" rows were looked at for a port
 
-- **Heavy jobs in the pod.** The rule runs only in the agent host pod (a `container` file beside the hook), which exists on the personal homelab cluster. The work Mac is not a pod, so it has none, and neither does the personal Mac. Playbook rule 83fbe006 names the personal cluster. A work lead runs a suite where its repo runs it.
-- **kubectl context.** The rule keeps agents on the personal homelab cluster (ledger grant 21). The work Mac has its own clusters and the grant does not cover them.
-- **Local docker.** Linux personal hosts only (kgate and a throwaway namespace); the work profile has no Linux machine.
+The three Bash rules that read "no" on work cannot fire there: each guards the personal homelab cluster or the pod. A rule that guarded the work clusters would be a new hook on the work Mac, which is the owner's call, not part of this table. The reason is in each Work cell. Everything else, including every PR gate, the poll, heredoc, credential and live-checkout rules, and the review log, is "yes" on work.
 
 ## How the work profile finds the coordinator
 
