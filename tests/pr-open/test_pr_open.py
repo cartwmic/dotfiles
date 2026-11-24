@@ -244,6 +244,20 @@ class PrOpen(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("taken from the origin", result.stderr)
 
+    def test_create_passes_the_title_to_the_body_check(self):
+        self.run_open("--title", "A title", "--body-file", str(self.body))
+        self.assertIn("[--title] [A title]", self.calls()[0])  # call 0 is the check, not gh pr create
+        self.assertTrue(self.calls()[0].startswith("pr-body-check"))
+
+    def test_edit_with_a_title_passes_it_to_the_body_check(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
+        self.assertTrue(self.calls()[0].startswith("pr-body-check"))
+        self.assertIn("[--title] [New title]", self.calls()[0])
+
+    def test_edit_without_a_title_gives_the_body_check_none(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertNotIn("--title", self.calls()[0])
+
     def test_edit_with_a_title_sets_it_too(self):
         self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
         self.assertIn("[-f] [title=New title]", self.patches()[0])
@@ -418,7 +432,7 @@ class PrOpen(unittest.TestCase):
         refused_body.write_text("REFUSEME\n")
         cases = (
             ("bad arguments", ("--bogus",), None, "failed", 2, "unknown argument"),
-            ("a refused body", ("--title", "T", "--body-file", str(refused_body)), None, "refused", 1, "refused by pr-body-check"),
+            ("a refused body", ("--title", "T", "--body-file", str(refused_body)), None, "refused", 1, "description or title was refused by pr-body-check"),
             ("a gh failure", ("--title", "T", "--body-file", str(self.body)), {"FAKE_GH_FAIL": "1"}, "failed", 2, "gh pr create failed"),
             ("a merged PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed true"}, "refused", 2, "is merged"),
             ("a closed PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed false"}, "refused", 2, "is closed"),

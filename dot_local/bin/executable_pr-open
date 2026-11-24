@@ -9,8 +9,8 @@
 # the PR has no number yet, so the check is told the record is pending (`--record-pending`); on edit it is given the record if `pr-record path` names a file
 # that exists, else pending. Each run of the check leaves one JSON line in its log (${XDG_STATE_HOME:-~/.local/state}/known-limits-check/log.jsonl: outcome, and for a refusal the rule, line and message; pr-open adds the mode, repo, PR number and, on create, the head branch). KNOWN_LIMITS_CHECK names another known-limits-check (the tests use it); the default is the one installed with the agent harness.
 # Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
-# `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
-# passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
+# `pr-body-check --body-file COPY --base origin/BASE --title T` (the title is passed so the check reads it for task ids, coordinator#1605; the same check, on the same branch commits and diff, the hook's own form runs), and only if that
+# passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (`pr-body-check --body-file COPY`, plus `--title T` when --title is given, as the hook's edit form), then
 # the PR's state is read through `gh api`: a merged or closed PR is refused, so its description is never overwritten. An open PR is PATCHed through `gh api` (`gh pr edit` fails on the agent host).
 # --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes and the `pr-body-check <repo> <pr> --skip-intent-review` to run once the record is written (the create-time `--body-file` check does not read it).
 # Create pushes the branch of THIS directory, so it refuses (exit 2, before the body check and any push) when this directory's origin is not --repo, naming both: a PR for one repo is never opened from another repo's checkout.
@@ -128,7 +128,7 @@ limits_check() { # limits_check what-was-not-done record-args...
 # The check's own output is the refusal message; pass its exit code through (1 a rule failed, 2 it could not run).
 check() {
   if "$@"; then return 0; else code=$?; fi
-  case $code in 1) refuse 1 "the PR description was refused by pr-body-check (output above); fix the body file and run pr-open again, nothing was created" ;;
+  case $code in 1) refuse 1 "the PR description or title was refused by pr-body-check (output above); fix the body file or the title and run pr-open again, nothing was created" ;;
     *) fail 2 "pr-body-check could not run (exit $code, output above)" ;; esac
 }
 
@@ -136,7 +136,8 @@ if [ -n "$edit" ]; then
   record=
   if command -v pr-record >/dev/null 2>&1; then record=$(pr-record path "$repo#$edit" 2>/dev/null) || record=; fi
   if [ -n "$record" ] && [ -f "$record" ]; then limits_check "nothing was changed" --record "$record"; else limits_check "nothing was changed" --record-pending; fi
-  check pr-body-check --body-file "$copy"   # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs
+  # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs. A title being set is passed too, so the check reads it for task ids.
+  if [ -n "$title" ]; then check pr-body-check --body-file "$copy" --title "$title"; else check pr-body-check --body-file "$copy"; fi
   pr_info=$(gh api "repos/$repo/pulls/$edit" --jq '.state + " " + (.merged | tostring)') || fail 2 "could not read the state of $repo#$edit. If you meant another repo, pass --repo OWNER/REPO."
   pr_state=${pr_info%% *}
   pr_merged=${pr_info#* }
@@ -169,9 +170,9 @@ fi
 
 limits_check "nothing was created" --record-pending   # a PR that is not open has no number, so no record yet
 if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then
-  check pr-body-check --body-file "$copy" --base "origin/$base"
+  check pr-body-check --body-file "$copy" --base "origin/$base" --title "$title"
 else
-  check pr-body-check --body-file "$copy" --base "$base"
+  check pr-body-check --body-file "$copy" --base "$base" --title "$title"
 fi
 
 # The branch's own upstream (origin/<head>) is pushed when it is ahead. A branch cut from origin/main tracks origin/main, so any other upstream is replaced.

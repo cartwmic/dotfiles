@@ -307,6 +307,17 @@ class Merge(unittest.TestCase):
                 self.assertIn("~/git/coordinator/scripts/merge-pr.sh", message)
                 self.assertNotIn("coordinator-workspace/bin", message)
 
+    def test_only_a_plain_repo_and_number_is_the_merge_check(self):
+        """`pr-body-check <repo> <pr>` is the merge check; a flag on it (any spelling) or a body-file form is not, and `--` before the words does not hide them."""
+        gate = "ci-main-status --merge-gate x && "
+        for check_text in ["pr-body-check x 5", "pr-body-check -- x 5"]:
+            with self.subTest(check=check_text):
+                self.assertIsNone(check(gate + check_text + " && gh pr merge 5 --squash --repo cartwmic/other"))
+        for check_text in ["pr-body-check x 5 --skip-intent-review", "pr-body-check --skip-intent-review x 5", "pr-body-check --repo x 5", "pr-body-check -Z x 5", "pr-body-check x",
+                           "pr-body-check x 5 6", "pr-body-check x five"]:
+            with self.subTest(check=check_text):
+                self.assertIn("without both gates", check(gate + check_text + " && gh pr merge 5 --squash --repo cartwmic/other") or "")
+
     def test_the_homelab_repo_is_refused_with_its_script_even_after_both_gates_and_even_without_them(self):
         for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
                      "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
@@ -383,6 +394,47 @@ class PrBody(unittest.TestCase):
     C = "/tmp/pr-new-body.aB3xY9"   # a create: no PR number yet
     E = "/tmp/pr-5-body.aB3xY9"     # an edit of PR 5
 
+    def test_a_title_the_check_was_not_given_is_refused(self):
+        c, e = self.C, self.E
+        for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s --title other && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e)]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("was not given", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr", message)
+        # a PR given no --title (an edit that keeps it) needs none on the check
+        self.assertIsNone(check("pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e)))
+
+    def test_gh_short_title_flag_is_read_like_the_long_one(self):
+        c, e = self.C, self.E
+        for form in ("-t 'Fix task-12'", "-t='Fix task-12'", "-t'Fix task-12'", "--title='Fix task-12'"):
+            for verb, f in (("create", c), ("edit 5", e)):
+                text = "pr-body-check --body-file %s && gh pr %s %s --body-file %s" % (f, verb, form, f)
+                with self.subTest(text=text):
+                    self.assertIn("was not given", check(text))
+        for form in ("-t t", "-t=t", "-tt"):
+            text = "pr-body-check --body-file %s --title t && gh pr create %s --body-file %s" % (c, form, c)
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_a_title_only_edit_needs_a_check_that_saw_the_title(self):
+        e = self.E
+        for text in ["gh pr edit 5 --title t", "gh pr edit 5 -t t", "pr-body-check --body-file %s --title other && gh pr edit 5 --title t" % e,
+                     "pr-body-check --body-file %s && gh pr edit 5 -t t" % e]:
+            with self.subTest(text=text):
+                self.assertIn("was not given", check(text))
+        for text in ["pr-body-check --body-file %s --title t && gh pr edit 5 --title t" % e, "pr-body-check --body-file %s --title t && gh pr edit 5 -t t" % e,
+                     "gh pr edit 5 --add-label x"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_one_check_must_have_seen_both_the_file_and_the_title(self):
+        c, g = self.C, "/tmp/pr-new-body.zZ9yY8"
+        text = "pr-body-check --body-file %s --title t && pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (g, c, c)
+        self.assertIn("was not given", check(text))
+        self.assertIsNone(check("pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c)))
+
     def test_a_create_or_edit_without_the_check_names_the_chained_form(self):
         for text in ["gh pr create --title t --body-file %s" % self.C, "gh pr edit 5 --body-file %s" % self.E, "gh pr create -F %s" % self.C,
                      "gh pr create --body-file=%s" % self.C, "gh pr new --body-file %s" % self.C, "gh -R cartwmic/dotfiles pr edit 5 -F %s" % self.E,
@@ -391,7 +443,7 @@ class PrBody(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("refused in agent sessions", message)
-                self.assertIn("pr-body-check --body-file F && gh pr", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr", message)
                 self.assertIn("agent bookkeeping", message)
                 self.assertIn("the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)", message)
                 self.assertIn("a Proven section as plain prose, playbook f5a367b5", message)  # the Proven section stays; only its tables and job ids move
@@ -399,7 +451,9 @@ class PrBody(unittest.TestCase):
 
     def test_the_check_chained_with_the_same_file_is_allowed(self):
         c, e = self.C, self.E
-        for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+        for text in ["pr-body-check --body-file %s && gh pr create --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c),  # the form the refusal names
+                     "pr-body-check --title t --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e),
                      "pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e),
                      "pr-body-check --body-file=%s && gh pr create -F %s" % (c, c),
                      "pr-body-check --body-file %s && gh pr new --body-file=%s" % (c, c),
@@ -433,7 +487,7 @@ class PrBody(unittest.TestCase):
                 self.assertIn("pr-body-check --body-file F", check(text))
 
     def test_an_edit_that_sets_no_body_and_other_pr_commands_pass(self):
-        for text in ["gh pr edit 5 --title t", "gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
+        for text in ["gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
                      "echo gh pr create", "gh issue create --body-file /tmp/pr-body.md", "gh issue edit 5 --body-file /tmp/pr-body.md"]:
             with self.subTest(text=text):
                 self.assertNotIn("pr-body-check --body-file F", check(text) or "")
@@ -461,7 +515,7 @@ class PrBodyNamesPrOpen(unittest.TestCase):
                 self.assertIn("Shortest path: `pr-open --title T --body-file F [--draft]`", message)
                 self.assertIn("never reads the agent record", message)
                 self.assertIn("pr-body-check <owner/repo> <pr> --skip-intent-review", message)
-                self.assertIn("pr-body-check --body-file F && gh pr create", message)  # the chained form is still named
+                self.assertIn("pr-body-check --body-file F --title T && gh pr create --title T", message)  # the chained form is still named
 
     def test_an_edit_refusal_names_the_pr_open_edit_form(self):
         for text in ["gh pr edit 5 --body 'x'", "gh pr edit 5 --body-file /tmp/pr-5-body.md"]:
@@ -580,6 +634,16 @@ class PrBodyViaApiLog(unittest.TestCase):
         self.assertEqual(record["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=<redacted>")
         self.assertNotIn("hello-body-text", self.log.read_text())
 
+    def test_a_title_refusal_logs_its_reason(self):
+        run = self.run_hook("pr-body-check --body-file /tmp/pr-new-body.aB3xY9 && gh pr create --title t --body-file /tmp/pr-new-body.aB3xY9")
+        self.assertEqual(run.returncode, 2)
+        (record,) = self.records()
+        self.assertEqual((record["rule"], record["reason"]), ("pr_body", "title not given to the check"))
+        self.assertEqual(record["matched"], "gh pr create --title")
+        run = self.run_hook("gh pr create --title t --body-file /tmp/pr-new-body.aB3xY9")  # a missing check is another refusal: no title reason
+        self.assertEqual(run.returncode, 2)
+        self.assertNotIn("reason", self.records()[-1])
+
     def test_the_record_never_holds_a_body_a_header_a_token_or_a_query(self):
         for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -H 'Authorization: token %s' -f body=%s -f title=%s" % ((self.SECRET,) * 3),
                         "GH_TOKEN=%s gh api repos/cartwmic/x/pulls -fbody=%s" % ((self.SECRET,) * 2),
@@ -620,7 +684,8 @@ class PrBodyFileName(unittest.TestCase):
     FIXED = ["/tmp/pr-body.md", "/tmp/body.md", "/tmp/pr-5-body.md", "/tmp/pr-5-body.markdown", "pr-body.md", "/tmp/pr345.md", "/tmp/pr-5-body"]
 
     def chained(self, verb, name):
-        return "pr-body-check --body-file %s && gh pr %s --body-file %s" % (name, verb, name)
+        title = " --title t" if "--title t" in verb else ""  # the check gets the title the PR is given
+        return "pr-body-check --body-file %s%s && gh pr %s --body-file %s" % (name, title, verb, name)
 
     def test_a_fixed_name_is_refused_for_create_and_edit_even_when_checked(self):
         for name in self.FIXED:
@@ -630,7 +695,7 @@ class PrBodyFileName(unittest.TestCase):
                     self.assertIn("F=$(mktemp /tmp/pr-%s-body.XXXXXX)" % n, message)
                     self.assertIn("a fixed name like /tmp/pr-body.md can be overwritten by another session", message)
                     self.assertIn("`%s`" % name, message)
-                    self.assertNotIn("pr-body-check --body-file F && gh pr", message)  # the chain is right; only the name is wrong
+                    self.assertNotIn("pr-body-check --body-file F --title T && gh pr", message)  # the chain is right; only the name is wrong
 
     def test_a_name_with_another_number_or_none_is_refused_for_an_edit(self):
         for name in ["/tmp/pr-4-body.aB3xY9", "/tmp/pr-45-body.aB3xY9", "/tmp/pr-55-body.aB3xY9", "/tmp/pr-body.aB3xY9", "/tmp/pr-345-body.aB3xY9"]:
@@ -658,8 +723,8 @@ class PrBodyFileName(unittest.TestCase):
                      'F=$(mktemp --suffix .md /tmp/pr-345-body.XXXXXX); pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
                      'F="$(mktemp /tmp/pr-345-body.XXXXXXXX)"; pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
                      'F=`mktemp /tmp/pr-345-body.XXXXXX`; pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
-                     'F=$(mktemp /tmp/pr-new-body.XXXXXX); pr-body-check --body-file "$F" && gh pr create --title t --body-file "$F"',
-                     'F=$(mktemp); pr-body-check --body-file "$F" && gh pr create --title t --body-file "$F"',
+                     'F=$(mktemp /tmp/pr-new-body.XXXXXX); pr-body-check --body-file "$F" --title t && gh pr create --title t --body-file "$F"',
+                     'F=$(mktemp); pr-body-check --body-file "$F" --title t && gh pr create --title t --body-file "$F"',
                      'F=$(mktemp -p /tmp pr-345-body.XXXXXX); pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"']:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
