@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Check Part 1 of a GUIDE.md reads as plain English and says nothing the appendix does not.
 
-usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--fixed fixed-ids.txt]
+usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--fixed fixed-ids.txt] [--max-words N]
 
 Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `doc:line: FAIL kind: detail` (or `warn`), then the Part 1 word count (`Part 1: N words (limit 1000)`) and a count; exit 1 on any FAIL.
-  part1-words       over 1,000 words fails, at any step, fix rounds included (headings and backticked names count; citations, printed blocks and tags do not)
+  part1-words       over 1,000 words (or --max-words N: the halved budget of a small repo) fails, at any step, fix rounds included (headings and backticked names count; citations, printed blocks and tags do not)
   sentence-length   a sentence of more than 18 words fails, and so does an average above 14
   heading-depth     a heading deeper than two levels (###) fails
   tag               every sentence ends in a tag such as [A4.3f9a] and every tag must name an appendix line (the id that line carries at its end)
@@ -147,7 +147,7 @@ def section_lines(part1):
     return {name: (n + 1, (heads[i + 1][0] - 1) if i + 1 < len(heads) else total) for i, (n, name) in enumerate(heads)}
 
 
-def lint(guide, repo, rows, terms, fixed=None):
+def lint(guide, repo, rows, terms, fixed=None, words_max=WORDS_MAX):
     """Return (fails, warns, words): the first two as [(doc_line, kind, detail)], then the Part 1 word count. `fixed` is {tags: sentence}: Part 1 sentences a checker already fixed."""
     fails, warns = [], []
     part1 = part1_slice(guide)
@@ -155,8 +155,8 @@ def lint(guide, repo, rows, terms, fixed=None):
         return [(1, "part1", "no heading `Part 1`")], warns, 0
     index = appendix_index(guide, repo)
     words = word_count(part1, repo)
-    if words > WORDS_MAX:
-        fails.append((1, "part1-words", "%d words, limit %d at every step: shorten or merge sentences a fix narrowed first; never cut How to start or the who-it-is-for sentence" % (words, WORDS_MAX)))
+    if words > words_max:
+        fails.append((1, "part1-words", "%d words, limit %d at every step: shorten or merge sentences a fix narrowed first; never cut How to start or the who-it-is-for sentence" % (words, words_max)))
     sents = prose_sentences(part1, repo)
     sections = section_lines(part1)
     gloss = next((v for k, v in sections.items() if k.startswith("glossary")), None)
@@ -253,12 +253,13 @@ def lint(guide, repo, rows, terms, fixed=None):
 def main(argv):
     args, opts, it = [], {}, iter(argv[1:])
     for a in it:
-        if a in ("--surfaces", "--jargon", "--fixed"):
+        if a in ("--surfaces", "--jargon", "--fixed", "--max-words"):
             opts[a] = next(it, None)
         else:
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or not opts.get("--surfaces") or not os.path.isfile(opts["--surfaces"]) \
-            or (opts.get("--jargon") and not os.path.isfile(opts["--jargon"])) or (opts.get("--fixed") and not os.path.isfile(opts["--fixed"])):
+            or (opts.get("--jargon") and not os.path.isfile(opts["--jargon"])) or (opts.get("--fixed") and not os.path.isfile(opts["--fixed"])) \
+            or None in opts.values() or (opts.get("--max-words") is not None and not opts["--max-words"].isdigit()):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     jargon = opts.get("--jargon") or os.path.join(SKILL, "references", "jargon.txt")
@@ -268,14 +269,15 @@ def main(argv):
         terms = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     with open(args[0], encoding="utf-8", errors="replace") as f:
         guide = f.read()
-    fails, warns, words = lint(guide, os.path.realpath(args[1]), rows, terms, read_fixed(opts["--fixed"]) if opts.get("--fixed") else None)
+    words_max = int(opts["--max-words"]) if "--max-words" in opts else WORDS_MAX
+    fails, warns, words = lint(guide, os.path.realpath(args[1]), rows, terms, read_fixed(opts["--fixed"]) if opts.get("--fixed") else None, words_max)
     for n, kind, detail in warns:
         print("%s:%d: warn %s: %s" % (args[0], n, kind, detail))
     for n, kind, detail in fails:
         print("%s:%d: FAIL %s: %s" % (args[0], n, kind, detail))
-    print("Part 1: %d words (limit %d)" % (words, WORDS_MAX))
+    print("Part 1: %d words (limit %d)" % (words, words_max))
     print("%d failed checks, %d warnings" % (len(fails), len(warns)))
-    log_run("lint_main.py", "lint-part1", "failed" if fails else "ok", part1_words=words, words_limit=WORDS_MAX, fails=len(fails), warns=len(warns))
+    log_run("lint_main.py", "lint-part1", "failed" if fails else "ok", part1_words=words, words_limit=words_max, fails=len(fails), warns=len(warns))
     return 1 if fails else 0
 
 

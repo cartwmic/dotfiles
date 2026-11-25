@@ -159,6 +159,19 @@ class LintMainTest(unittest.TestCase):
         self.assertLess(counts[0], 100)
         self.assertGreater(counts[1], 1000)
 
+    def test_max_words_sets_the_part_1_limit_and_a_bad_value_is_a_usage_error(self):
+        code, out = lint(GUIDE, "--max-words", "20")
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL part1-words:", out)
+        self.assertIn("limit 20 at every step", out)
+        self.assertIn("(limit 20)", out)
+        self.assertEqual(lint(GUIDE, "--max-words", "500")[0], 0)
+        self.assertEqual(lint(GUIDE, "--max-words", "many")[0], 2)
+
+    def test_a_trailing_option_with_no_value_exits_2_instead_of_using_a_default(self):
+        for option in ("--max-words", "--jargon", "--fixed"):
+            self.assertEqual(lint(GUIDE, option)[0], 2, option)
+
     def test_a_guide_without_a_part_1_heading_fails(self):
         code, out = lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))
         self.assertEqual(code, 1)

@@ -3,6 +3,7 @@
 Builds a throwaway git repo, runs the script as a subprocess, and asserts on
 the JSON. Run: python3 -B test_repo_facts.py
 """
+import atexit
 import json
 import os
 import shutil
@@ -10,6 +11,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+STATE = tempfile.mkdtemp(prefix='state-')  # the script logs each run (runlog.py): keep these runs out of the real log
+os.environ['XDG_STATE_HOME'] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, 'repo_facts.py')
@@ -240,6 +245,74 @@ class PathRefsTest(unittest.TestCase):
     def test_rev_arg_and_resolved_rev(self):
         self.assertEqual(self.facts['rev_arg'], 'HEAD')
         self.assertEqual(self.facts['rev'], git(self.repo, 'rev-parse', 'HEAD'))
+
+
+class TypeImportTest(unittest.TestCase):
+    """A type-only import is erased at runtime, so it is no edge and no cycle."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='repo_types_test-')
+        cls.repo = os.path.join(cls.tmp, 'types-repo')
+        os.mkdir(cls.repo)
+        git(cls.repo, 'init', '-q')
+        write(cls.repo, 'src/a.ts', "import type { B } from './b';\nexport const a = 1;\n")
+        write(cls.repo, 'src/b.ts', "import { a } from './a';\nexport type B = typeof a;\n")
+        write(cls.repo, 'src/c.ts', "import { type X, type Y } from './d';\nexport type { X } from './d';\nexport const c = 1;\n")
+        write(cls.repo, 'src/d.ts', "export type X = 1;\nexport type Y = 2;\n")
+        write(cls.repo, 'src/e.ts', "import { type X, v } from './d';\nexport const e = v;\n")
+        commit(cls.repo, 'init')
+        cls.facts = run_json(cls.repo)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_type_only_imports_are_not_edges_and_a_value_import_beside_a_type_one_is(self):
+        self.assertEqual(sorted(self.facts['edges']), [['src/b.ts', 'src/a.ts'], ['src/e.ts', 'src/d.ts']])
+
+    def test_a_loop_closed_only_by_a_type_import_is_not_a_cycle(self):
+        self.assertEqual(self.facts['cycles']['file'], [])
+
+
+class RunLogTest(unittest.TestCase):
+    """Each run leaves one JSON line (runlog.py): a count of runs, how many were refused and why, with the size of what it read."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='repo_log_test-')
+        cls.repo = os.path.join(cls.tmp, 'log-repo')
+        os.mkdir(cls.repo)
+        git(cls.repo, 'init', '-q', '-b', 'main')
+        write(cls.repo, 'src/a.ts', "import { b } from './b';\nimport type { C } from './c';\nexport const a = b;\n")
+        write(cls.repo, 'src/b.ts', 'export const b = 1;\n')
+        write(cls.repo, 'src/c.ts', 'export type C = 1;\n')
+        commit(cls.repo, 'log fixture')
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def log(self):
+        with open(os.path.join(STATE, 'designing-the-smallest-version', 'log.jsonl'), encoding='utf-8') as fh:
+            return [json.loads(line) for line in fh]
+
+    def test_a_run_leaves_an_ok_line_with_the_files_and_edges_it_found(self):
+        facts = run_json(self.repo)
+        row = self.log()[-1]
+        self.assertEqual((row['script'], row['action'], row['outcome']), ('repo_facts.py', 'repo-facts', 'ok'))
+        self.assertEqual((row['files'], row['edges']), (3, len(facts['edges'])))
+        self.assertEqual(row['edges'], 1)  # the import type is no edge
+
+    def test_a_scoped_run_logs_the_edge_count_the_scope_reports(self):
+        facts = run_json(self.repo, '--scope', 'src/**')
+        self.assertEqual(self.log()[-1]['edges'], facts['edge_count'])
+
+    def test_a_refused_run_leaves_a_line_with_the_reason_it_printed(self):
+        res = run_script(self.repo, '--rev', 'no-such-rev')
+        self.assertEqual(res.returncode, 2)
+        row = self.log()[-1]
+        self.assertEqual((row['action'], row['outcome']), ('repo-facts', 'refused'))
+        self.assertEqual(row['reason'], res.stderr.strip().removeprefix('repo_facts: '))
 
 
 class TestsCapTest(unittest.TestCase):

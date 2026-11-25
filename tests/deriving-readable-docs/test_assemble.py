@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
@@ -74,6 +75,12 @@ class AssembleTest(unittest.TestCase):
             Path(d, "section.md").write_text(guide[start:end] + "\n")
             self.assertEqual(words(Path(d, "section.md"), repo), words(Path(d, "A4.md"), repo))
             self.assertEqual(words(Path(d, "A4.md"), repo), 14)  # the heading's 2 words are in it
+
+    def test_a_work_folder_without_scout_resolved_says_so_instead_of_counting_zero_names(self):
+        code, out, err, guide, _ = self.assemble(**{"scout.resolved": None})
+        self.assertEqual(code, 0, err)
+        self.assertIn("no scout.resolved in the work folder, so no scout names were read", guide)
+        self.assertNotIn("0 scout names found", guide)
 
     def test_the_guide_is_header_part_1_then_the_appendix_in_order(self):
         code, out, err, guide, _ = self.assemble()
@@ -250,6 +257,54 @@ class SliceTest(unittest.TestCase):
     def test_bad_usage_exits_2(self):
         self.assertEqual(run("slice.py")[0], 2)
         self.assertEqual(self.slices(SLICE_DOC, "--max-claims", "zero")[0], 2)
+
+
+class AssembleLogTest(unittest.TestCase):
+    """Each run leaves one JSON line (runlog.py) with its outcome, so how often the guide was assembled or refused can be counted."""
+
+    def setUp(self):
+        # Seven of this folder's test modules set XDG_STATE_HOME at import, so under `unittest discover` the last import
+        # wins; give each test its own state folder so the line it reads is the one its own run wrote.
+        state = tempfile.TemporaryDirectory(prefix="state-")
+        self.addCleanup(state.cleanup)
+        self.state = state.name
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def last(self):
+        lines = Path(self.state, "deriving-readable-docs", "log.jsonl").read_text().splitlines()
+        return json.loads(lines[-1]), len(lines)
+
+    def assemble(self, *extra, **over):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo, **over)
+            return run("assemble.py", d, repo, "--date", "2026-11-20", *extra)
+
+    def test_a_run_that_writes_the_guide_leaves_one_ok_line_with_the_guide_size(self):
+        code, out, err = self.assemble("--clean")
+        self.assertEqual(code, 0, err)
+        row, _ = self.last()
+        self.assertEqual((row["script"], row["action"], row["outcome"], row["clean"]), ("assemble.py", "assemble", "ok", True))
+        self.assertGreater(row["guide_lines"], 10)
+
+    def test_the_index_run_is_its_own_action_with_the_number_of_appendix_lines(self):
+        code, out, err = self.assemble("--index")
+        self.assertEqual(code, 0, err)
+        row, _ = self.last()
+        self.assertEqual((row["action"], row["outcome"], row["appendix_lines"]), ("assemble-index", "ok", len(out.splitlines())))
+
+    def test_a_refusal_leaves_a_refused_line_with_the_reason_it_printed(self):
+        code, out, err = self.assemble(**{"A3.md": None})
+        self.assertEqual(code, 1, out)
+        row, _ = self.last()
+        self.assertEqual((row["action"], row["outcome"], row["reason"]), ("assemble", "refused", err.strip()))
+
+    def test_a_usage_error_leaves_no_line(self):
+        self.assertEqual(self.assemble()[0], 0)
+        before = self.last()[1]
+        self.assertEqual(run("assemble.py")[0], 2)
+        self.assertEqual(self.last()[1], before)
 
 
 if __name__ == "__main__":

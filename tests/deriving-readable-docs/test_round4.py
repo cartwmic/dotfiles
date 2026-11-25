@@ -575,7 +575,8 @@ class BatchSixDocsTest(unittest.TestCase):
 
     def test_fix_rounds_says_what_to_cut_over_1000_words(self):
         text = self.ref("fix-rounds.md")
-        self.assertRegex(text, r"(?i)over 1,000 words")
+        self.assertRegex(text, r"(?i)over (?:its budget|that budget)")
+        self.assertIn("1,000 words", text)
         self.assertRegex(text, r"(?i)never cut How to start or the Who it is for")
         self.assertIn("--was", text)
 
