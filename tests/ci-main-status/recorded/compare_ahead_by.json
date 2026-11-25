@@ -1,0 +1,39 @@
+{
+  "ahead_by": 3,
+  "behind_by": 0,
+  "commit_commit_keys": [
+    "author",
+    "comment_count",
+    "committer",
+    "message",
+    "tree",
+    "url",
+    "verification"
+  ],
+  "commit_keys": [
+    "author",
+    "comments_url",
+    "commit",
+    "committer",
+    "html_url",
+    "node_id",
+    "parents",
+    "sha",
+    "url"
+  ],
+  "committer_keys": [
+    "date",
+    "email",
+    "name"
+  ],
+  "listed": 3,
+  "status": "ahead",
+  "top_keys": [
+    "ahead_by",
+    "behind_by",
+    "commits",
+    "status",
+    "total_commits"
+  ],
+  "total_commits": 3
+}

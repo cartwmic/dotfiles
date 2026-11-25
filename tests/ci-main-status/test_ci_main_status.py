@@ -2,9 +2,10 @@
 
 The fake gh answers `gh run list` from a fixture and `gh api` from a real git repo: branches/main is the real
 head, commits/SHA is `git rev-list --parents -n 1`, the commit and its parents the commits API returns, and compare
-is kept for the older script the mutation checks run against. Each test states one row of the exit-code table in
+lists oldest first with GitHub's status, ahead_by and cap. Each test states one row of the exit-code table in
 the script's docstring.
 """
+import datetime
 import json
 import os
 import re
@@ -19,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "dot_local/bin/executable_ci-main-status"
 GH_FAKE = textwrap.dedent('''\
     #!/usr/bin/env python3
-    import json, os, subprocess, sys
+    import datetime, json, os, subprocess, sys
     fixture = json.load(open(os.environ["FAKE_GH_FIXTURE"]))
     args = sys.argv[1:]
     with open(os.environ["FAKE_GH_LOG"], "a") as log:
@@ -28,6 +29,18 @@ GH_FAKE = textwrap.dedent('''\
         env_log.write(json.dumps({"args": args, "caller": os.environ.get("GH_CALLER"), "urgent": os.environ.get("GH_URGENT")}) + "\\n")
     def fail(msg):
         print(msg, file=sys.stderr); sys.exit(1)
+    for needle, message in fixture.get("fail_path", {}).items():   # a call whose arguments hold the needle always fails with this message
+        if needle in " ".join(args):
+            fail(message)
+    for needle, raw in fixture.get("reply", {}).items():   # a call whose arguments hold the needle gets this exact output
+        if needle in " ".join(args):
+            print(raw); sys.exit(0)
+    once = os.environ["FAKE_GH_LOG"] + ".once"   # a call whose arguments hold one of these fails once with a 502, then works
+    for needle in fixture.get("fail_once", []):
+        if needle in " ".join(args) and needle not in (open(once).read().split("\\n") if os.path.exists(once) else []):
+            with open(once, "a") as f:
+                f.write(needle + "\\n")
+            fail("HTTP 502 (once)")
     def git(path, *a):
         return subprocess.run(["git", "-C", path, *a], capture_output=True, text=True, check=True).stdout
     if args[:2] == ["run", "list"]:
@@ -40,8 +53,20 @@ GH_FAKE = textwrap.dedent('''\
             rows = [r for r in rows if r["headSha"] == args[args.index("--commit") + 1]]
         if "--event" in args:
             rows = [r for r in rows if r["event"] == args[args.index("--event") + 1]]
+        if "--status" in args:   # failure: a finished run that failed; any other state: the run's status
+            want = args[args.index("--status") + 1]
+            rows = [r for r in rows if (r["status"] == "completed" and r["conclusion"] == "failure" if want == "failure" else r["status"] == want)]
+        if "--created" in args:   # the real filter, on createdAt: ">=TIME" or "TIME..TIME" (both ends in), newest first as GitHub lists
+            spec = args[args.index("--created") + 1]
+            lo, hi = (spec[2:], "9999") if spec.startswith(">=") else spec.split("..")
+            rows = sorted((r for r in rows if lo <= r["createdAt"] <= hi), key=lambda r: (r["createdAt"], r["databaseId"]), reverse=True)
         if "--branch" in args:   # a row with no headBranch is a run on main
             rows = [r for r in rows if r.get("headBranch", "main") == args[args.index("--branch") + 1]]
+        if "--limit" in args:   # with --created, gh returns at most 1,000 runs whatever --limit says; without it, as many as asked (recorded/run_list_ceiling.json)
+            rows = rows[:min(int(args[args.index("--limit") + 1]), 1000 if "--created" in args else 10**9)]
+        if "--json" in args:   # as gh: only the fields asked for. A field the script reads and does not ask for is missing, not silently there.
+            wanted = args[args.index("--json") + 1].split(",")
+            rows = [{k: r[k] for k in wanted if k in r} for r in rows]
         print(json.dumps(rows))
     elif args[:2] == ["run", "view"]:
         attempt = args[args.index("--attempt") + 1] if "--attempt" in args else None
@@ -77,15 +102,28 @@ GH_FAKE = textwrap.dedent('''\
             out = {"commit": {"sha": git(src, "rev-parse", "main").strip()}}
             out.update(bp or {})   # protected + protection, as the real branch response carries them
             print(json.dumps(out))
-        elif "/compare/" in path:
-            base, head = path.split("/compare/")[1].split("...")
-            lines = git(src, "rev-list", "--parents", f"{base}..{head}").split("\\n")
-            commits = []
-            for line in filter(None, lines):
-                sha, *parents = line.split()
-                subject = git(src, "log", "-1", "--format=%s", sha).strip()
-                commits.append({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject}})
-            print(json.dumps({"status": "ahead", "total_commits": len(commits), "commits": commits}))
+        elif "/compare/" in path:   # status, ahead_by, and the commits oldest first, per_page a page, at most compare_cap of them (GitHub's 10,000)
+            spec, _, query = path.split("/compare/")[1].partition("?")
+            base, head = spec.split("...")
+            params = dict(kv.split("=") for kv in query.split("&") if kv)
+            per, page = int(params.get("per_page", 30)), int(params.get("page", 1))
+            def ancestor(a, b):
+                return subprocess.run(["git", "-C", src, "merge-base", "--is-ancestor", a, b]).returncode == 0
+            status = "identical" if base == head else "ahead" if ancestor(base, head) else "behind" if ancestor(head, base) else "diverged"
+            shas = git(src, "rev-list", "--reverse", "--topo-order", f"{base}..{head}").split() if status in ("ahead", "diverged") else []
+            drop = fixture.get("compare_drop", [])
+            listed = [c for c in shas[:fixture.get("compare_cap", 10000)] if c not in drop]
+            rows = [{"sha": c, "commit": {"message": git(src, "log", "-1", "--format=%B", c).rstrip("\\n")}} for c in listed[(page - 1) * per:page * per]]
+            print(json.dumps({"status": status, "ahead_by": len(shas), "total_commits": len(listed), "commits": rows}))
+        elif path.split("?")[0].endswith("/commits"):   # the commits listing: newest first, per_page a page, from `sha`, committer date at or after `since`, side branches included as GitHub does
+            params = dict(kv.split("=") for kv in path.partition("?")[2].split("&") if kv)
+            per, page = int(params["per_page"]), int(params.get("page", 1))
+            def when(c):
+                return datetime.datetime.fromisoformat(git(src, "log", "-1", "--format=%cI", c).strip().replace("Z", "+00:00"))
+            floor = datetime.datetime.fromisoformat(params["since"].replace("Z", "+00:00")) if "since" in params else None
+            shas = [c for c in git(src, "rev-list", "--topo-order", params.get("sha", "main")).split()
+                    if (floor is None or when(c) >= floor) and c not in fixture.get("listing_drop", [])]
+            print(json.dumps([{"sha": c, "commit": {"message": git(src, "log", "-1", "--format=%B", c).rstrip("\\n")}} for c in shas[(page - 1) * per:page * per]]))
         elif "/commits/" in path and "/check-runs" in path.split("/commits/")[1]:
             sha = path.split("/commits/")[1].split("/")[0]
             page = int(path.split("&page=")[1]) if "&page=" in path else 1
@@ -99,8 +137,8 @@ GH_FAKE = textwrap.dedent('''\
         elif "/commits/" in path:
             sha = path.split("/commits/")[1]
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
-            subject = git(src, "log", "-1", "--format=%s", sha).strip()
-            print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}}}))
+            subject = git(src, "log", "-1", "--format=%B", sha).rstrip("\\n")
+            print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}, "committer": {"date": git(src, "log", "-1", "--format=%cI", sha).strip()}}}))
         elif "/check-runs/" in path:
             notes = fixture.get("annotations", {}).get(path.split("/check-runs/")[1].split("/")[0])
             if notes is None:
@@ -150,14 +188,17 @@ GH_FAKE = textwrap.dedent('''\
             attempt = fixture.get("attempts", {}).get(run_id, {}).get(n)
             if attempt is None:
                 fail(f"HTTP 404: no fixture for run {run_id} attempt {n}")
-            print(json.dumps(attempt))
+            made = [r["createdAt"] for rows in fixture["runs"].values() for r in rows if str(r["databaseId"]) == run_id]
+            print(json.dumps({**({"created_at": made[0]} if made else {}), **attempt}))   # a rerun keeps the run's creation time
         else:
             fail("fake gh: unhandled " + path)
     else:
         fail("fake gh: unhandled " + " ".join(args))
 ''')
+COMMIT_TIME = "2026-11-01T00:00:00+00:00"   # every fixture commit is dated here, before every run's createdAt (run() below): the suite does not depend on the clock
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+           "GIT_AUTHOR_DATE": COMMIT_TIME, "GIT_COMMITTER_DATE": COMMIT_TIME}
 
 
 def git(path, *args):
@@ -165,8 +206,10 @@ def git(path, *args):
                           capture_output=True, text=True, check=True, env=GIT_ENV).stdout.strip()
 
 
-def commit(path, msg):
-    git(path, "commit", "--allow-empty", "-q", "-m", msg)
+def commit(path, msg, when=None):
+    """A commit on the checked-out branch, dated COMMIT_TIME unless `when` (an ISO time) says otherwise."""
+    env = {**GIT_ENV, "GIT_AUTHOR_DATE": when or COMMIT_TIME, "GIT_COMMITTER_DATE": when or COMMIT_TIME}
+    subprocess.run(["git", "-C", str(path), "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", msg], capture_output=True, text=True, check=True, env=env)
     return git(path, "rev-parse", "HEAD")
 
 
@@ -181,6 +224,7 @@ def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, a
     return {"databaseId": run_id, "event": event, "headSha": sha, "status": status,
             "conclusion": conclusion if status == "completed" else "", "attempt": attempt,
             "createdAt": f"2026-11-11T10:{age:02d}:00Z", "startedAt": f"2026-11-11T10:{started:02d}:00Z",
+            "updatedAt": f"2026-11-11T10:{age:02d}:30Z",
             "headBranch": branch, "url": f"https://example.invalid/runs/{run_id}"}
 
 
@@ -216,7 +260,10 @@ class Fixture(unittest.TestCase):
         self.env_log = t / "gh.env.jsonl"
         self.env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
                     "FAKE_GH_LOG": str(self.log), "FAKE_GH_ENV_LOG": str(self.env_log), "FAKE_GH_FIXTURE": str(t / "fixture.json"),
-                    "CI_MAIN_STATUS_JOURNAL": str(self.journal), "CI_MAIN_STATUS_LOCK": str(self.lock)}
+                    "CI_MAIN_STATUS_JOURNAL": str(self.journal), "CI_MAIN_STATUS_LOCK": str(self.lock),
+                    "CI_MAIN_STATUS_SINCE": self.c3, "CI_MAIN_STATUS_RETRY_SLEEP": "0",
+                    "XDG_STATE_HOME": str(t / "state"),   # the hidden-red cache and the logs land here, never in the real state folder
+                    "CI_MAIN_STATUS_HIDDEN_LOG": str(t / "hidden-red.jsonl")}   # grandfather every commit by default: a test of the hidden-red rule sets an earlier one
         for name in ("GH_CALLER", "GH_URGENT"):   # each test sets these itself; an inherited value must not leak in
             self.env.pop(name, None)
 
@@ -233,7 +280,10 @@ class Fixture(unittest.TestCase):
              "protection": getattr(self, "protection", {}), "rulesets": getattr(self, "rulesets", {}),
              "branch_rules": getattr(self, "branch_rules", {}), "pr_checks": getattr(self, "pr_checks", {}),
              "branch_protection": getattr(self, "branch_protection", {}),
-             "check_runs": getattr(self, "check_runs", {}), "statuses": getattr(self, "statuses", {})}))
+             "check_runs": getattr(self, "check_runs", {}), "statuses": getattr(self, "statuses", {}),
+             "fail_once": getattr(self, "fail_once", []), "compare_cap": getattr(self, "compare_cap", 10000),
+             "compare_drop": getattr(self, "compare_drop", []), "listing_drop": getattr(self, "listing_drop", []),
+             "fail_path": getattr(self, "fail_path", {}), "reply": getattr(self, "reply", {})}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -245,7 +295,7 @@ class Fixture(unittest.TestCase):
 
     def streams(self, *args):
         self.write_fixture()
-        r = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=self.env, timeout=120)
+        r = subprocess.run([sys.executable, str(getattr(self, "script_path", SCRIPT)), *args], capture_output=True, text=True, env=self.env, timeout=120)
         return r.returncode, r.stdout, r.stderr
 
     def walked_commits(self):
@@ -409,8 +459,8 @@ class GithubStateTable(Fixture):
         self.dotfiles_runs([run(1, self.c2, "success")])
         rc, out = self.status("dotfiles")
         self.assertEqual(rc, 2, out)
-        self.assertEqual(self.walked_commits(), [self.c3, self.m, self.c2],
-                         "the walk reads the tip, M and c2, then stops at the green; c1 is never read")
+        self.assertEqual(self.walked_commits(), [self.c3, self.m, self.c2, self.c3],
+                         "the walk reads the tip, M and c2, then stops at the green; c1 is never read. The last read is the date of `since` (here c3), once, for the hidden-red floor")
 
     def test_among_one_commits_runs_the_highest_run_id_wins(self):
         # Review note dotfiles#323 round 3 n1(a). Listed oldest first so the script must order them itself: run 2 passed,
@@ -426,13 +476,13 @@ class GithubStateTable(Fixture):
         self.dotfiles_runs([run(1, self.c1, "failure", age=1), run(2, self.m, "success", age=2)])
         rc, out = self.status("dotfiles")
         self.assertEqual(rc, 2, out)
-        self.assertEqual(self.walked_commits(), [self.c3, self.m], "the walk stops at the pass on M; c2 and c1 are never read")
+        self.assertEqual(self.walked_commits(), [self.c3, self.m, self.c3], "the walk stops at the pass on M; c2 and c1 are never read. The last read is the date of `since` (here c3)")
 
     def test_no_run_on_main_means_no_commit_walk(self):
         self.dotfiles_runs([])
         rc, out = self.status("dotfiles")
         self.assertEqual(rc, 2, out)
-        self.assertEqual(self.walked_commits(), [], "no run to place, so no commit is read")
+        self.assertEqual(self.walked_commits(), [self.c3], "no run to place, so the walk reads nothing; the one read is the date of `since` (here c3)")
 
     def test_an_unexpected_error_is_one_stdout_line_and_the_traceback_on_stderr(self):
         run_without_attempt = run(1, self.c3, "success")
@@ -547,7 +597,7 @@ class CallerAndCache(Fixture):
         self.status("dotfiles")
         calls = self.log.read_text().splitlines()
         commit_reads = [c for c in calls if "/commits/" in c]
-        self.assertEqual(len(commit_reads), 3, calls)   # c3, M, c2: the walk stops at the green
+        self.assertEqual(len(commit_reads), 4, calls)   # c3, M, c2: the walk stops at the green; then the date of `since` (c3 again)
         for c in commit_reads:
             self.assertRegex(c, r"^api repos/cartwmic/dotfiles/commits/[0-9a-f]{40} --cache 1h$")
         others = [c for c in calls if "/commits/" not in c]
@@ -698,7 +748,7 @@ class MergeGateFlag(Fixture):
             github = REPOS_GITHUB[short]
             for verdict in ("success", "failure"):
                 self.runs = {f"{github}|{workflow}": [run(1, self.c3, verdict)]}
-                for args in (["--merge-gate"], [], ["--tip"], ["--merge-gate", "--pr", "7"]):
+                for args in ((["--merge-gate"], [], ["--tip"], ["--merge-gate", "--pr", "7"]) if short == "dotfiles" else (["--merge-gate"],)):   # the name lookup is the same for every mode: each mode once, on one repo
                     with self.subTest(repo=short, verdict=verdict, args=args):
                         want = self.status(*args, short)
                         self.assertEqual(self.status(*args, github), want)
@@ -1310,7 +1360,9 @@ class NoRunnerCancel(Fixture):
         self.world([run(2, self.c3, "success", age=5), run(1, self.c2, "failure", age=1)])
         rc, out = self.status("dotfiles")
         self.assertEqual(rc, 0, out)
-        self.assertEqual([c for c in self.log.read_text().splitlines() if c.startswith("run view") or "/check-runs/" in c], [])
+        # The walk itself never reads them. The hidden-red rule judges the failed run once, to tell a real red from a no-runner one.
+        self.assertEqual([c for c in self.log.read_text().splitlines() if c.startswith("run view") or "/check-runs/" in c],
+                         ["run view 1 -R cartwmic/dotfiles --attempt 1 --json jobs"])
 
     def test_an_annotation_that_cannot_be_read_is_an_error_not_untested(self):
         self.world([run(1, self.c3, "failure")])
@@ -2437,6 +2489,73 @@ class NoCiRepo(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("loop-engine: RED", out)
         self.assertEqual(self.calls(), [])
+
+
+def is_ancestor(path, a, b):
+    return subprocess.run(["git", "-C", str(path), "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
+
+
+class RecordedSamples(Fixture):
+    """The fake `gh` copies three behaviours of real GitHub. Each is recorded once from real `gh` (recorded/record_samples.py) and the fake must
+    give the same fields and relations, so the fake cannot drift from GitHub between the live smokes."""
+    RECORDED = Path(__file__).resolve().parent / "recorded"
+    RECORDED_FIELDS = "databaseId,attempt,createdAt,startedAt,updatedAt,conclusion,status,event,headSha,headBranch"   # what record_samples.py asks real gh for
+
+    def sample(self, name):
+        return json.loads((self.RECORDED / name).read_text())
+
+    def gh_out(self, *args):
+        self.write_fixture()
+        r = subprocess.run(["gh", *args], capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_a_rerun_keeps_the_runs_created_time_and_the_fields_are_the_real_ones(self):
+        real = self.sample("rerun_keeps_created_at.json")
+        self.assertEqual(real["row"]["createdAt"], real["attempt_1"]["created_at"], "recorded: a rerun keeps createdAt")
+        self.assertNotEqual(real["row"]["startedAt"], real["row"]["createdAt"], "recorded: the rerun started later")
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(1, self.c2, "success", attempt=2, age=1, started_age=9)])
+        row = self.gh_out("run", "list", "-R", "cartwmic/dotfiles", "--workflow", "ci.yml", "--json", self.RECORDED_FIELDS)[0]
+        self.assertEqual(set(row), set(real["row"]), "the fake gives the fields asked for, as real gh does")
+        self.assertEqual({k: type(v) for k, v in row.items()}, {k: type(real["row"][k]) for k in row})
+        gate = PinFixCopiesMatchTheirSources.load("gate_fields_under_test", "dot_local/bin/executable_ci-main-status")
+        self.assertLessEqual(set(gate.RUN_FIELDS.split(",")) - {"url"}, set(real["row"]), "the script asks for a field real gh does not have")
+        self.assertIn("createdAt", gate.RUN_FIELDS.split(","), "the floor and the window are read from createdAt")
+        first = self.gh_out("api", "repos/cartwmic/dotfiles/actions/runs/1/attempts/1")
+        self.assertEqual(first["created_at"], row["createdAt"], "the fake's rerun keeps createdAt as the recorded one does")
+        self.assertNotEqual(row["startedAt"], row["createdAt"])
+        self.assertLessEqual({"created_at", "status", "conclusion"}, set(real["attempt_1"]) | {"status", "conclusion"})
+        self.assertLessEqual({"created_at", "status", "conclusion"}, set(first))
+
+    def test_a_list_with_created_stops_at_1000_rows_and_one_without_does_not(self):
+        real = self.sample("run_list_ceiling.json")
+        self.assertEqual((real["requested"], real["got"], real["got_without_created"]), (1100, 1000, 1100), "recorded")
+        base = datetime.datetime(2026, 11, 1, tzinfo=datetime.timezone.utc)
+        rows = [{**run(n, self.c3, "success"), "createdAt": (base + datetime.timedelta(seconds=n)).strftime("%Y-%m-%dT%H:%M:%SZ")} for n in range(1, 1101)]
+        self.dotfiles_runs(rows)
+        listed = self.gh_out("run", "list", "-R", "cartwmic/dotfiles", "--workflow", "ci.yml", "--created", ">=2020-01-01", "--limit", "1100", "--json", "databaseId,createdAt")
+        self.assertEqual(len(listed), real["got"])
+        self.assertEqual([r["createdAt"] for r in listed], sorted((r["createdAt"] for r in listed), reverse=True), "newest first, as recorded" if real["newest_first"] else "")
+        plain = self.gh_out("run", "list", "-R", "cartwmic/dotfiles", "--workflow", "ci.yml", "--limit", "1100", "--json", "databaseId,createdAt")
+        self.assertEqual(len(plain), real["got_without_created"])
+        self.assertLessEqual(set(listed[0]) & {"databaseId", "createdAt"}, set(real["keys"]))
+
+    def test_compare_says_how_far_ahead_and_lists_commits_with_the_fields_the_script_reads(self):
+        real = self.sample("compare_ahead_by.json")
+        self.assertEqual((real["status"], real["ahead_by"], real["total_commits"], real["listed"]), ("ahead", 3, 3, 3), "recorded: under the cap, ahead_by is the count listed")
+        a = commit(self.src, "extra 1")
+        commit(self.src, "extra 2")
+        b = commit(self.src, "extra 3")
+        self.dotfiles_runs([])
+        got = self.gh_out("api", f"repos/cartwmic/dotfiles/compare/{self.c3}...{b}?per_page=100")
+        self.assertEqual(got["status"], real["status"])
+        self.assertEqual((got["ahead_by"], got["total_commits"], len(got["commits"])), (3, 3, 3))
+        self.assertLessEqual(set(got), set(real["top_keys"]), "the fake gives a field real gh does not")
+        self.assertLessEqual({"status", "ahead_by", "commits"}, set(got))
+        self.assertLessEqual(set(got["commits"][0]), set(real["commit_keys"]))
+        self.assertLessEqual(set(got["commits"][0]["commit"]), set(real["commit_commit_keys"]))
+        self.assertEqual(got["commits"][0]["sha"], a, "oldest first, as real compare lists")
 
 
 if __name__ == "__main__":
