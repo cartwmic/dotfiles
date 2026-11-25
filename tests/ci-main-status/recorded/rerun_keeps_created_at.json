@@ -1,0 +1,21 @@
+{
+  "attempt_1": {
+    "conclusion": "failure",
+    "created_at": "2026-11-24T19:01:23Z",
+    "run_attempt": 1,
+    "run_started_at": "2026-11-24T19:01:23Z",
+    "status": "completed"
+  },
+  "row": {
+    "attempt": 2,
+    "conclusion": "success",
+    "createdAt": "2026-11-24T19:01:23Z",
+    "databaseId": 45465757751,
+    "event": "pull_request",
+    "headBranch": "fix/kgate-quota-flakes",
+    "headSha": "ea577c5d6c1a69cb183afe188a7e3f36987a2d8a",
+    "startedAt": "2026-11-24T20:12:46Z",
+    "status": "completed",
+    "updatedAt": "2026-11-24T20:23:52Z"
+  }
+}
