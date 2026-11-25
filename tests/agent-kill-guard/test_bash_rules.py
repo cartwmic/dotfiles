@@ -1,4 +1,4 @@
-"""The ten bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
+"""The eleven bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, issue body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -530,6 +530,115 @@ class PrBodyNamesPrOpen(unittest.TestCase):
         for text in ["pr-open --title t --body-file /tmp/pr-body.md", "pr-open --edit 5 --body-file /tmp/pr-body.md", "pr-open --title t --body-file - --draft"]:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
+
+
+class IssueBody(unittest.TestCase):
+    """`gh issue create` is refused and names `issue-open`, where the profile's coordinator checkout holds the claims command (src/claims/cli.ts)."""
+    REFUSED = ["gh issue create --title t --body x", "gh issue create -t t -F body.md", "gh issue new --title t", "gh -R cartwmic/x issue create --title t", "gh issue -R cartwmic/x create",
+               "gh issue create --repo cartwmic/x --title t --body-file /tmp/b.md --label bug", "cd /tmp && gh issue create --title t", "echo x | gh issue create --title t --body-file -",
+               "sh -c 'gh issue create --title t'", "sudo gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t -f body=b", "gh api -X POST repos/cartwmic/x/issues --input /tmp/i.json",
+               "gh api --method=POST https://api.github.com/repos/cartwmic/x/issues -F title=t"]
+    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
+              "issue-open --title t --body-file /tmp/b.md", "issue-open --title t --body-file - --dry-run", "echo gh issue create", "grep 'gh issue create' notes.md",
+              "gh api repos/cartwmic/x/issues", "gh api repos/cartwmic/x/issues/5/comments -f body=hi", "gh api -X GET repos/cartwmic/x/issues -f labels=bug", "gh pr list"]
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        (Path(self.repo) / "src/claims").mkdir(parents=True)
+        (Path(self.repo) / "src/claims/cli.ts").write_text("// stub\n")
+
+    def issue_check(self, text, **kw):
+        kw.setdefault("coordinator_repo", self.repo)
+        return check(text, **kw)
+
+    def test_each_form_is_refused_and_names_issue_open(self):
+        for text in self.REFUSED:
+            with self.subTest(text=text):
+                message = self.issue_check(text)
+                self.assertIn("issue-open --title T --body-file F", message or "")
+                self.assertIn("refused in agent sessions", message)
+
+    def test_other_issue_commands_and_issue_open_pass(self):
+        for text in self.PASSES:
+            with self.subTest(text=text):
+                self.assertIsNone(self.issue_check(text))
+
+    def test_the_refusal_does_not_borrow_the_pr_body_text(self):
+        message = self.issue_check("gh issue create --title t")
+        for text in ("pr-body-check --body-file F", "mktemp", "pr-open"):
+            self.assertNotIn(text, message)
+        self.assertIn("`claims ran -- <cmd>`", message)
+
+    def test_both_desktop_profiles_run_it_and_termux_and_no_profile_do_not(self):
+        for profile in ("personal", "axon-work-computer"):
+            self.assertIsNotNone(self.issue_check("gh issue create --title t", profile=profile))
+        for profile in ("termux", None):
+            self.assertIsNone(self.issue_check("gh issue create --title t", profile=profile))
+
+    def test_it_waits_until_the_claims_command_is_in_the_checkout(self):
+        (Path(self.repo) / "src/claims/cli.ts").unlink()
+        for text in ("gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t"):
+            self.assertIsNone(self.issue_check(text))
+        self.assertIsNone(self.issue_check("gh issue create --title t", coordinator_repo=str(Path(self.repo) / "missing")))
+
+    def test_with_no_instance_file_it_looks_in_git_coordinator_under_home(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.assertIsNone(check("gh issue create --title t", env={"HOME": home}))
+        (Path(home) / "git/coordinator/src/claims").mkdir(parents=True)
+        (Path(home) / "git/coordinator/src/claims/cli.ts").write_text("// stub\n")
+        self.assertIn("issue-open", check("gh issue create --title t", env={"HOME": home}))
+
+    def test_the_refusal_writes_a_reason_for_the_guard_log(self):
+        found = bash_rules.refusal("gh issue create --title t", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
+        self.assertEqual(found[0], "issue_body")
+        self.assertEqual(found[1].log, {"reason": "issue created without issue-open"})
+        self.assertEqual(found[2], "gh issue create")
+        api = bash_rules.refusal("gh api repos/cartwmic/x/issues -f title=SECRETVALUE", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
+        self.assertNotIn("SECRETVALUE", json.dumps(api[1].log))
+
+
+class IssueBodyRealHook(unittest.TestCase):
+    """The real hook script, as the Bash tool's JSON payload reaches it, with the coordinator checkout named by AGENT_HARNESS_COORDINATOR_REPO."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.hooks = Path(cls.tmp) / "hooks"
+        shutil.copytree(HOOKS, cls.hooks)
+        (cls.hooks / "profile").write_text("personal\n")
+        cls.repo = Path(cls.tmp) / "coordinator"
+        (cls.repo / "src/claims").mkdir(parents=True)
+        (cls.repo / "src/claims/cli.ts").write_text("// stub\n")
+        cls.log = Path(cls.tmp) / "guard.jsonl"
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command, repo=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_PROFILE", "AGENT_HARNESS_COORDINATOR_REPO")}
+        env.update(AGENT_HARNESS_GUARD_LOG=str(self.log), AGENT_HARNESS_COORDINATOR_REPO=str(repo or self.repo))
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=30)
+
+    def test_a_bare_issue_create_exits_2_naming_issue_open_and_issue_open_exits_0(self):
+        refused = self.run_hook("gh issue create --title t --body-file /tmp/b.md")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("refused in agent sessions", refused.stderr)
+        self.assertIn("issue-open --title T --body-file F", refused.stderr)
+        for allowed in ("issue-open --title t --body-file /tmp/b.md", "gh issue list", "gh issue edit 5 --body-file /tmp/b.md"):
+            self.assertEqual(self.run_hook(allowed).returncode, 0, allowed)
+
+    def test_one_guard_log_line_for_the_refusal(self):
+        self.log.unlink(missing_ok=True)
+        self.run_hook("gh issue create --title t")
+        lines = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([(l["rule"], l["matched"]) for l in lines], [("issue_body", "gh issue create")])
+
+    def test_it_passes_while_the_checkout_has_no_claims_command(self):
+        self.assertEqual(self.run_hook("gh issue create --title t", repo=Path(self.tmp) / "none").returncode, 0)
 
 
 class PrBodyViaApi(unittest.TestCase):
