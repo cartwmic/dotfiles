@@ -3478,18 +3478,23 @@ def report_text(rows, since, days, repo, jobs, bad, path, top=None):
 
 
 def read_job_log(path):
-    """The records of the job log and how many lines could not be read. A missing log is an empty one."""
-    records, bad = [], 0
+    """(records, bad, nul): the records of the job log, how many lines could not be read, and the lines skipped for holding NUL bytes as (line number
+    from 1, NUL count). A torn append leaves NUL bytes in the file (dotfiles#774); such a line is in `nul` and not in `bad`, whatever else is on it.
+    A missing log is an empty one."""
+    records, bad, nul = [], 0, []
     try:
         with open(path) as f:
-            for line in f:
+            for n, line in enumerate(f, 1):
+                if "\0" in line:
+                    nul.append((n, line.count("\0")))
+                    continue
                 try:
                     records.append(json.loads(line))
                 except ValueError:
                     bad += 1
     except FileNotFoundError:
         pass
-    return records, bad
+    return records, bad, nul
 
 
 def report_main(argv):
@@ -3506,7 +3511,8 @@ def report_main(argv):
         print(err.code if isinstance(err.code, str) else USAGE_TEXT, file=sys.stderr)
         return USAGE
     path = os.path.join(state_dir(), "log.jsonl")
-    records, bad = read_job_log(path)
+    records, bad, nul = read_job_log(path)
+    bad += len(nul)   # report counts a line with NUL bytes as one it could not read
     now = datetime.datetime.now(datetime.timezone.utc)
     since = now - datetime.timedelta(days=o.days)
     rows = report_rows(records, now, o.days, o.repo)
@@ -3570,12 +3576,13 @@ def prune_read_running(state):
 
 
 def prune_read_logged(state, now):
-    """(ids, repos, lines): the jobs with a record in the last PRUNE_LOG_DAYS, every `repo` the log names, and how many lines it has."""
+    """(ids, repos, lines, skipped): the jobs with a record in the last PRUNE_LOG_DAYS, every `repo` the log names, how many records it has, and the
+    lines skipped for holding NUL bytes as (line number, NUL count). Any other line that does not parse is a refusal: it could be a recent job."""
     path = os.path.join(state, "log.jsonl")
     if not os.path.exists(path):
         raise PruneRefused("job log %s is missing" % path)
     try:
-        records, bad = read_job_log(path)
+        records, bad, skipped = read_job_log(path)
     except OSError as e:
         raise PruneRefused("job log %s: %s" % (path, e))
     if bad:
@@ -3590,7 +3597,7 @@ def prune_read_logged(state, now):
             ids.add(rec["id"])
         if isinstance(rec.get("repo"), str):
             repos.add(rec["repo"])
-    return ids, repos, len(records)
+    return ids, repos, len(records), skipped
 
 
 def prune_read_journal(path):
@@ -3688,12 +3695,14 @@ def prune_main(argv):
     try:
         folders = prune_folders(state)
         running = prune_read_running(state)
-        logged, names, log_lines = prune_read_logged(state, now)
+        logged, names, log_lines, skipped = prune_read_logged(state, now)
         journal, journal_lines = prune_read_journal(journal_path)
         pr_ids, pr_repos, pr_count, unscanned = prune_read_prs(names)
     except (PruneRefused, OSError) as e:
         print("kgate prune: refused, nothing deleted: %s" % e, file=sys.stderr)
         return UNAVAILABLE
+    for n, count in skipped:
+        print("kgate prune: skipped %s line %d: it holds %d NUL bytes" % (os.path.join(state, "log.jsonl"), n, count), file=sys.stderr)
     delete, kept, young = prune_plan(folders, now, running, logged, journal or set(), pr_ids)
     sizes = {fid: prune_size(os.path.join(state, fid + ".out")) for fid in delete}
     freed = sum(sizes.values())
@@ -3721,7 +3730,8 @@ def prune_main(argv):
         try:
             with open(record, "a") as f:
                 f.write(json.dumps({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "deleted": done, "planned": len(delete), "bytes": freed, "young": young,
-                                    "kept": {k: len(v) for k, v in kept.items()}}) + "\n")
+                                    "kept": {k: len(v) for k, v in kept.items()},
+                                    "skipped_lines": [{"line": n, "nul_bytes": c} for n, c in skipped]}) + "\n")
         except OSError as e:
             print("kgate prune: the folders are removed but the run could not be recorded in %s: %s" % (record, e.strerror or e), file=sys.stderr)
             return UNAVAILABLE
