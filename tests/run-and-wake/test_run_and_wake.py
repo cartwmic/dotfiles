@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1218,6 +1219,283 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual(next(r for r in records if r["event"] == "skip")["reason"], "waited")
         self.assertEqual(self.prompts(), [], "the owner's own wait stood in for the wake")
         self.assertEqual(sorted(r["owner"] for r in self.records_of(job) if r["event"] == "read"), [False, True])
+
+    # --- a watcher that is gone (the pod's container restarted, or it was killed): the job still gets an end and its owner a wake ---
+    def crash(self, job):
+        """What a container restart does: the watcher and the job die together, with no chance to write anything. Returns once both are gone."""
+        start = self.records_of(job)[0]
+        for pid in (start["watcher"], start["pid"]):
+            os.kill(pid, signal.SIGKILL)
+        end = time.monotonic() + 10
+        while time.monotonic() < end and any(Path(f"/proc/{p}/stat").exists() and Path(f"/proc/{p}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+                                             for p in (start["watcher"], start["pid"])):
+            time.sleep(0.02)
+
+    def sweep_by_launching(self, **env):
+        """Any later call runs the sweep: the next agent that starts a job. Returns its job id."""
+        return self.job_id(self.launch("--", "true", env=self.t3_env(**env)))
+
+    def lost_records(self, job):
+        return [r for r in self.records_of(job) if r["event"] in ("end", "wake", "skip")]
+
+    def test_a_job_whose_watcher_and_process_were_killed_gets_a_lost_end_and_a_wake_on_the_next_call(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.assertEqual(self.records_of(job)[0]["pid_start"], Path(f"/proc/{self.records_of(job)[0]['pid']}/stat").read_text().rsplit(")", 1)[1].split()[19] if sys.platform.startswith("linux") else self.records_of(job)[0]["pid_start"])
+        self.crash(job)
+        self.assertEqual([r["event"] for r in self.records_of(job)], ["start"], "nothing wrote an end: the old behaviour")
+        self.sweep_by_launching()
+        end, wake = self.lost_records(job)
+        self.assertEqual([end["event"], end["error"], end["lost"], end["exit"], end["signal"]], ["end", "lost", True, None, None])
+        self.assertEqual([wake["event"], wake["result"], wake["swept"]], ["wake", "sent", True])
+        sends = [s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0]["argv"], ["thread", "send", THREAD, "-"])
+        text = sends[0]["stdin"]
+        self.assertIn(f"[run-and-wake k:{job}] job did NOT finish: its watcher is gone and sent no result", text)
+        self.assertIn("its status is unknown. Rerun it; this is not a result.", text)
+        self.assertNotIn("job finished", text)
+        self.assertNotIn("exit None", text)
+        self.assertFalse((self.state / f"run-and-wake/jobs/{job}.lock").exists(), "settled: nothing left to sweep")
+        self.sweep_by_launching()
+        self.assertEqual(len([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]), 1, "a second sweep sends nothing again")
+
+    def test_a_job_that_finished_normally_leaves_no_lock_and_a_running_one_is_not_swept(self):
+        done = self.job_id(self.launch("--", "true", env=self.t3_env()))
+        self.replay(done)
+        lock = self.state / f"run-and-wake/jobs/{done}.lock"
+        end = time.monotonic() + 10
+        while lock.exists() and time.monotonic() < end:  # the watcher removes it once it has woken
+            time.sleep(0.02)
+        self.assertFalse(lock.exists(), "removed by the watcher itself: no sweep has run since")
+        cmd, release = self.held_job()
+        running = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.assertTrue((self.state / f"run-and-wake/jobs/{running}.lock").exists())
+        self.sweep_by_launching()
+        self.assertEqual([r["event"] for r in self.records_of(running)], ["start"], "a live watcher holds its lock: no end, no wake")
+        release.write_text("go")
+        self.replay(running)
+
+    def test_the_job_does_not_inherit_the_watchers_lock(self):
+        if not sys.platform.startswith("linux"):
+            self.skipTest("reads /proc/<pid>/fd")
+        cmd, release = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        start = self.records_of(job)[0]
+        held = [os.readlink(f"/proc/{start['pid']}/fd/{fd}") for fd in os.listdir(f"/proc/{start['pid']}/fd") if os.path.exists(f"/proc/{start['pid']}/fd/{fd}")]
+        self.assertFalse([h for h in held if h.endswith(f"{job}.lock")], held)
+        release.write_text("go")
+        self.replay(job)
+
+    def test_a_dead_watcher_with_a_live_job_is_left_alone_until_the_job_is_gone_too(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        start = self.records_of(job)[0]
+        os.kill(start["watcher"], signal.SIGKILL)
+        time.sleep(0.3)
+        self.sweep_by_launching()
+        self.assertEqual([r["event"] for r in self.records_of(job)], ["start"], "the job still runs: it is not lost")
+        os.kill(start["pid"], signal.SIGKILL)
+        time.sleep(0.3)
+        self.sweep_by_launching()
+        self.assertEqual([r["event"] for r in self.lost_records(job)], ["end", "wake"])
+
+    def test_a_recycled_pid_is_not_taken_for_the_job(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.crash(job)
+        records = [json.loads(line) for line in self.log.read_text().splitlines()]
+        start = next(r for r in records if r["job"] == job)
+        start["pid"], start["pid_start"] = os.getpid(), "1"  # a live process now holds the old pid, started at another time
+        self.log.write_text("".join(json.dumps(start if r["job"] == job else r) + "\n" for r in records))
+        self.sweep_by_launching()
+        self.assertEqual([r["event"] for r in self.lost_records(job)], ["end", "wake"])
+
+    def test_recover_ends_and_wakes_a_lost_job_and_waits_for_t3(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.crash(job)
+        (self.fake / "t3_down").write_text("2\n")  # the next two sends find no server: T3 is still starting
+        done = self.recover(**{"RUN_AND_WAKE_T3_RETRY": "0.05:5"})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        events = self.lost_records(job)
+        self.assertEqual([e["event"] for e in events], ["end", "wake"])
+        self.assertEqual([events[1]["result"], events[1]["attempts"]], ["sent", 3])
+        self.assertEqual(len([s for s in self.t3_sends() if f"k:{job}] job did NOT finish" in s["stdin"]]), 3, "two tries found no server, the third was delivered")
+
+    def test_a_sweep_that_finds_t3_down_tries_again_on_the_next_call(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.crash(job)
+        (self.fake / "t3_down").write_text("all\n")
+        self.sweep_by_launching()
+        first = self.lost_records(job)
+        self.assertEqual([e["event"] for e in first], ["end", "wake"])
+        self.assertEqual(first[1]["result"], "failed")
+        self.assertTrue((self.state / f"run-and-wake/jobs/{job}.lock").exists(), "still owed: kept for the next sweep")
+        (self.fake / "t3_down").unlink()
+        self.sweep_by_launching()
+        events = [(e["event"], e.get("result")) for e in self.lost_records(job)]
+        self.assertEqual(events, [("end", None), ("wake", "failed"), ("wake", "sent")])
+        self.assertFalse((self.state / f"run-and-wake/jobs/{job}.lock").exists())
+
+    def test_waiting_for_a_lost_job_says_it_did_not_finish_and_the_wake_is_not_repeated(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.crash(job)
+        done = self.wait_for(job, timeout=10)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(f"[run-and-wake k:{job}] job did NOT finish", done.stdout)
+        self.assertNotIn("exit None", done.stdout)
+        self.assertEqual([(e["event"], e.get("reason")) for e in self.lost_records(job)], [("end", None), ("skip", "waited")])
+        self.assertEqual([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]], [], "the owner's own wait stood in for the wake")
+
+    def test_a_lost_pane_job_is_woken_through_herdr(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd))
+        self.crash(job)
+        self.job_id(self.launch("--", "true"))
+        self.assertEqual([e["event"] for e in self.lost_records(job)][:2], ["end", "wake"])
+        self.assertEqual([p["pane"] for p in self.prompts() if f"k:{job}]" in p["text"]], [PANE])
+
+    def unheld_lock(self, job):
+        jobs = self.state / "run-and-wake/jobs"
+        jobs.mkdir(parents=True, exist_ok=True)
+        (jobs / f"{job}.lock").write_text("")  # a watcher that died: its file is still there and nobody holds it
+
+    def test_a_watcher_that_died_between_the_end_and_the_wake_never_sends_its_status_as_a_result(self):
+        job = "20261122T150000Z-aaaaaa"
+        self.seed(job, None, end={"exit": 0, "signal": None})  # no boot id (macOS): nothing says it is an earlier boot
+        self.log.write_text(self.log.read_text().replace('"pid": 4242', f'"pid": {2**22 + 7}'))
+        self.unheld_lock(job)
+        self.sweep_by_launching()
+        sends = [s["stdin"] for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]
+        self.assertEqual(len(sends), 1)
+        self.assertIn("job did NOT finish: its watcher is gone and sent no result", sends[0])
+        self.assertNotIn("job finished", sends[0])
+        self.assertEqual([e["event"] for e in self.records_of(job)], ["start", "end", "wake"], "its own end stays as written; no second end")
+
+    @LINUX_BOOT
+    def test_a_shutdown_cut_job_with_a_clean_exit_gets_recovers_text_from_the_sweep_and_not_a_result(self):
+        # the reviewer's repro: the host rebooted, the wrapper shell wrote exit 0 as the job inside died, the watcher died before its wake; the lock stayed
+        job = "20261115T194000Z-abcdef"
+        self.seed(job, self.ELSEWHERE, end={"exit": 0, "signal": None, "stopped": ["SIGTERM"]})
+        self.unheld_lock(job)
+        self.sweep_by_launching()
+        sends = [s["stdin"] for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]
+        self.assertEqual(len(sends), 1)
+        self.assertIn(f"job did NOT finish: the host restarted at {self.boot_started()} and the job was killed", sends[0])
+        self.assertNotIn("job finished", sends[0])
+        self.assertEqual([e["event"] for e in self.records_of(job)], ["start", "end", "wake"])
+        self.assertTrue(self.records_of(job)[2]["recover"], "recover's wake, the one text for an earlier boot")
+        self.sweep_by_launching()
+        self.assertEqual(len([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]), 1)
+        self.assertFalse((self.state / f"run-and-wake/jobs/{job}.lock").exists(), "settled by recover: the next sweep clears the lock")
+
+    @LINUX_BOOT
+    def test_the_sweeps_recover_wakes_only_the_swept_jobs_and_not_jobs_from_before_the_lock_existed(self):
+        old, swept = "20261118T100000Z-0ld000", "20261115T200510Z-60a37c"
+        self.seed(old, self.ELSEWHERE, start_ts="2026-11-18T10:00:00.000Z")  # an earlier boot, no lock file: recover would wake it, the sweep must not
+        self.seed(swept, self.ELSEWHERE)
+        self.unheld_lock(swept)
+        self.sweep_by_launching()
+        self.assertEqual(len([s for s in self.t3_sends() if f"k:{swept}]" in s["stdin"]]), 1)
+        self.assertEqual([s for s in self.t3_sends() if f"k:{old}]" in s["stdin"]], [], "a job from before the lock existed is left alone")
+        self.assertEqual([r["event"] for r in self.records_of(old)], ["start"])
+
+    @LINUX_BOOT
+    def test_an_earlier_boot_job_with_no_end_is_left_to_recover_and_told_the_restart_text(self):
+        job = "20261115T200510Z-60a37c"  # the pod moved to another node: a new boot id, no systemd to run --recover
+        self.seed(job, self.ELSEWHERE)
+        self.unheld_lock(job)
+        self.sweep_by_launching()
+        sends = [s["stdin"] for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]
+        self.assertEqual(len(sends), 1)
+        self.assertIn("the host restarted at", sends[0])
+        records = self.records_of(job)
+        self.assertEqual([r["event"] for r in records], ["start", "end", "wake"])
+        self.assertEqual([records[1].get("error"), records[1].get("lost")], ["host-restarted", None], "written by recover, not by the sweep")
+
+    @LINUX_BOOT
+    def test_recover_does_not_quote_a_lost_end_as_a_status_after_a_reboot(self):
+        # swept in an earlier boot, its wake found T3 down, then the host rebooted: recover owes it, and must not print the null exit as "exit None"
+        self.seed("20261122T150000Z-cccccc", self.ELSEWHERE, end={"error": "lost", "lost": True}, wake={"result": "failed", "error": f"exit 1: {self.DOWN}"})
+        done = self.recover()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        sends = self.t3_sends()
+        self.assertEqual(len(sends), 1)
+        self.assertIn("job did NOT finish: the host restarted", sends[0]["stdin"])
+        self.assertNotIn("is not a result either", sends[0]["stdin"])
+        self.assertNotIn("exit None", sends[0]["stdin"])
+
+    def test_a_sweep_that_fails_leaves_an_error_record_and_does_not_stop_the_call(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.crash(job)
+        records = [json.loads(line) for line in self.log.read_text().splitlines()]
+        for r in records:
+            if r["job"] == job and r["event"] == "start":
+                r["cmd"] = None  # a record shape the sweep cannot read
+        self.log.write_text("".join(json.dumps(r) + "\n" for r in records))
+        second = self.launch("--", "true", env=self.t3_env())
+        self.assertEqual(second.returncode, 0, second.stderr)
+        errors = [r for r in self.records_of(job) if r["event"] == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["step"], "sweep")
+        self.assertIn("TypeError", errors[0]["error"])
+        self.assertEqual(self.sweep_failed_elsewhere(), [], "the other jobs are not blocked")
+
+    def sweep_failed_elsewhere(self):
+        return [r for r in (json.loads(line) for line in self.log.read_text().splitlines()) if r["event"] == "error" and r["job"] == "run-and-wake"]
+
+    def test_a_sweep_that_cannot_run_at_all_is_logged_too(self):
+        (self.state / "run-and-wake/jobs").mkdir(parents=True)
+        (self.state / "run-and-wake/jobs/20261122T150000Z-dddddd.lock").write_text("")
+        (self.state / "run-and-wake/sweep.lock").mkdir()  # opening it as a file fails: the sweep itself raises
+        self.sweep_by_launching()
+        errors = [r for r in (json.loads(line) for line in self.log.read_text().splitlines()) if r["event"] == "error"]
+        self.assertEqual([(r["job"], r["step"]) for r in errors], [("run-and-wake", "sweep")])
+
+    @LINUX_BOOT
+    def test_a_sweep_that_runs_recover_does_not_wait_for_t3(self):
+        job = "20261115T200510Z-60a37c"
+        self.seed(job, self.ELSEWHERE)
+        self.unheld_lock(job)
+        (self.fake / "t3_down").write_text("all\n")
+        started = time.monotonic()
+        self.sweep_by_launching(RUN_AND_WAKE_T3_RETRY="1:30")  # a 30 s window the call must not sit through
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual([r["result"] for r in self.records_of(job) if r["event"] == "wake"], ["failed"], "one try; the next call tries again")
+        self.assertTrue((self.state / f"run-and-wake/jobs/{job}.lock").exists())
+
+    def test_recover_that_cannot_reach_t3_still_sweeps(self):
+        cmd, _ = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.t3_env()))
+        self.crash(job)
+        self.seed("20261115T200510Z-60a37c", self.ELSEWHERE)  # an earlier-boot job: recover owes it and T3 never answers, so recover itself returns 1
+        (self.fake / "t3_down").write_text("all\n")
+        done = self.recover()
+        self.assertEqual(done.returncode, 1, "T3 never answered")
+        self.assertEqual([e["event"] for e in self.lost_records(job)][:1], ["end"], "the end was written all the same")
+
+    def test_a_job_logged_before_the_lock_existed_is_never_swept(self):
+        self.seed("20261122T150000Z-bbbbbb", "b00t")
+        self.sweep_by_launching()
+        self.assertEqual([e["event"] for e in self.records_of("20261122T150000Z-bbbbbb")], ["start"])
+
+    def test_a_process_stamp_is_read_from_ps_where_there_is_no_proc(self):
+        spec = importlib.machinery.SourceFileLoader("run_and_wake_mod", str(SCRIPT))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("run_and_wake_mod", spec))
+        spec.exec_module(mod)
+        fake = self.root / "psbin"
+        fake.mkdir()
+        (fake / "ps").write_text("#!/bin/sh\n[ \"$4\" = 31337 ] && echo 'Sun Nov 22 12:00:00 2026'\n")
+        (fake / "ps").chmod(0o755)
+        with unittest.mock.patch.dict(os.environ, {"PATH": f"{fake}:{self.path}"}), unittest.mock.patch("os.path.isdir", return_value=False):
+            self.assertEqual(mod.proc_start(31337), "Sun Nov 22 12:00:00 2026")
+            self.assertIsNone(mod.proc_start(31338))
+        self.assertIsNone(mod.proc_start(2**22 + 5), "no such process on Linux")
+        self.assertIsNone(mod.proc_start(0 or 2**22 + 6))
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):

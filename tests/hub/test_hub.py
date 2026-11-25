@@ -338,11 +338,16 @@ class T3Test(unittest.TestCase):
         self.assertEqual(self.modify("off_t3hub_off", FIXTURE), FIXTURE)  # nothing to restore
         self.assertEqual(self.instances(FIXTURE)["codex"], ORIGINAL_CODEX)
 
-    def test_the_work_profile_and_hub_off_restore_and_never_add(self):
+    def test_the_work_profile_leaves_hub_leftovers_alone_and_hub_off_linux_restores(self):
+        # The work mode runs no restore: .t3 was never managed on that profile before, so the hub-on codex instance (and every
+        # other leftover) passes through exactly as the input had it, and no "existing" is added over a file that lacked it.
         on = self.modify("on_t3hub_off", FIXTURE)
-        for case in ("work", "off_linux"):
-            self.assertEqual(self.modify(case, FIXTURE).count('"existing"'), 0, case)
-            self.assertEqual(self.instances(self.modify(case, on))["codex"], ORIGINAL_CODEX, case)
+        self.assertEqual(self.instances(self.modify("work", on))["codex"], self.instances(on)["codex"])
+        self.assertEqual(self.modify("work", on), on)  # nothing to change: the compaction keys are already set
+        self.assertEqual(self.modify("work", FIXTURE).count('"existing"'), 0)
+        # Hub-off Linux restores the codex instance to the original, as before.
+        self.assertEqual(self.instances(self.modify("off_linux", on))["codex"], ORIGINAL_CODEX)
+        self.assertEqual(self.modify("off_linux", FIXTURE).count('"existing"'), 0)
 
     def test_personal_linux_is_on_with_its_own_worktrees_directory(self):
         out = json.loads(self.modify("linux", FIXTURE))
