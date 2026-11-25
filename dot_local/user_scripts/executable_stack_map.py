@@ -933,9 +933,9 @@ def src(repo, path, line):
     return '<sup class="cite"><a title="%s %s:%d" href="%s">L%d</a></sup>' % (repo.name, esc(path), line, repo.url(path, line), line) if line else ""
 
 
-def table(head, rows):
+def table(head, rows, stack=True):
     return '<div class="scroll"><table%s><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (
-        ' class="stack"' if len(head) >= 3 else "", "".join("<th>%s</th>" % esc(h) for h in head),
+        ' class="stack"' if stack and len(head) >= 3 else "", "".join("<th>%s</th>" % esc(h) for h in head),
         "".join("<tr>%s</tr>" % "".join('<td data-label="%s">%s</td>' % (esc(head[i]), c) for i, c in enumerate(row)) for row in rows))
 
 
@@ -1031,7 +1031,7 @@ def kit_engine_html(facts, repos):
 def build_page(facts, repos, content_parts, command, content):
     intro, found, extra = content_parts
     cards = facts["repos"]
-    top = table(["Repository", "Commit of main", "Date"], [[esc(n), '<a href="%s">%s</a>' % (repos[n].commit_url(), esc(cards[n]["sha"])), esc(cards[n]["date"])] for n in REPOS])
+    top = table(["Repository", "Commit of main", "Date"], stack=False, rows=[[esc(n), '<a href="%s">%s</a>' % (repos[n].commit_url(), esc(cards[n]["sha"])), esc(cards[n]["date"])] for n in REPOS])
     secs = {k: found[k] for k in found}
     flow = facts["flow"]
     flow_list = "".join("<li><strong>%s:</strong> %s %s</li>" % (esc(s["actor"]), content.inline(s["what"]), flow_where(s, content)) for s in flow)
