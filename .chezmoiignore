@@ -406,6 +406,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 {{- end }}
 
 {{- if ne .profile "personal" }}
+# finding-sweep reads the review log and PR records of the personal host and runs a script in its coordinator checkout (docs/profiles.md).
+.local/bin/finding-sweep
 # The homelab Connect token seed (agents' op reads through the homelab 1Password Connect server): personal only (docs/profiles.md).
 .local/user_scripts/seed_op_connect_token.sh
 .local/user_scripts/configure_rustdesk.sh

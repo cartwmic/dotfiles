@@ -1,0 +1,11 @@
+#!/bin/sh
+# finding-sweep ITEM FINDING_ID: after you fix a review finding, list every line of the PR's agent record and description source that still shares
+# a six-word run with the text the finding quoted, so no copy of the old claim stays behind (finding-triage.md, "fix the claim, not the line").
+# It prints and judges nothing; exit 0 once the call is understood, 2 on a bad call, 1 on an unreadable file. Runs the script in the deployed
+# coordinator checkout. Personal profile only (docs/profiles.md).
+script="$HOME/git/coordinator/scripts/finding-sweep.ts"
+if [ ! -f "$script" ]; then
+  echo "finding-sweep: $script is missing: pull ~/git/coordinator (the command ships there) and run again" >&2
+  exit 2
+fi
+exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"
