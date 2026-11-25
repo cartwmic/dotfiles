@@ -85,7 +85,7 @@ PRINCIPLES = [
     ("Prior art before building", "n/a", "No new capability; the bundles come from the Loop Engine release."),
     ("Verified from the outside", "pass", "Before the merge the script compared every skill file with the release tag (the PR description's Proven section); after it, it runs verify-deployed on the changed bundles and reads the active mise versions back."),
     ("Resolve intent tensions and preserve design freedom", "n/a", "No promised outcome changes; the owner's standing grant lets the script merge a Loop Engine release bump once its checks pass."),
-    ("Logs that replay the user's experience", "pass", "One JSON line per step, tied by one run id, in ~/.local/state/loop-engine-bump/log.jsonl."),
+    ("Logs that replay the user's experience and show how it is used", "pass", "One JSON line per step with its outcome, UTC time and seconds, tied by one run id, in ~/.local/state/loop-engine-bump/log.jsonl."),
     ("Fast proof", "n/a", "The import runs no journey; the proof is the PR's CI run."),
     ("Built to last", "pass", "The script replaces the pins and shipped skills in place; nothing old is left behind."),
 ]
@@ -333,7 +333,9 @@ def gates(source, pr, log):
         raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, "\n".join(s for s in (main.stdout.strip(), main.stderr.strip()) if s)))
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
-        raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s" % (pr["number"], body.returncode, "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)))
+        shown = "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)
+        why = "an unresolved review thread on the PR refuses it (resolve each thread, then run the bump again): " if "unresolved review thread" in shown else ""   # pr-body-check runs ci-main-status --threads after the body check
+        raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s%s" % (pr["number"], body.returncode, why, shown))
     log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed%s"
                % (pr["number"], pr["number"], " (the agent record was missing; wrote it)" if wrote else ""))
 

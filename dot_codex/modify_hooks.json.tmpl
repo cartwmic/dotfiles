@@ -22,7 +22,7 @@ case $input in *"$nl") end_nl=1 ;; *) end_nl= ;; esac
 warn() { echo "[modify_hooks.json] WARN: $1" >&2; }
 keep() { printf '%s' "$input"; exit 0; }
 
-ours='{matcher: "^Bash$", hooks: [{type: "command", command: $cmd, timeout: 10}]}'
+ours='{matcher: "^Bash$", hooks: [{type: "command", command: $cmd, timeout: 20}]}'
 
 if [ -z "$(printf '%s' "$input" | tr -d '[:space:]')" ]; then
   command -v jq >/dev/null 2>&1 || { warn "jq not found; ~/.codex/hooks.json was not written"; keep; }

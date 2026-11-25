@@ -1,5 +1,6 @@
 """repo_facts.py takes its surface list from deriving-readable-docs/scripts/surfaces.py.
 Run: python3 -I tests/designing-the-smallest-version/test_surface_inventory.py"""
+import atexit
 import json
 import os
 import shutil
@@ -8,6 +9,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the script logs each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 REPO_FACTS = SKILLS / "designing-the-smallest-version/scripts/repo_facts.py"
@@ -86,6 +91,7 @@ class SurfaceInventoryTest(unittest.TestCase):
         script = skills / "designing-the-smallest-version/scripts/repo_facts.py"
         script.parent.mkdir(parents=True)
         shutil.copy(REPO_FACTS, script)
+        shutil.copy(REPO_FACTS.with_name("runlog.py"), script.with_name("runlog.py"))  # the script logs each run through it
         res = run_facts(script, self.repo)
         self.assertEqual(res.returncode, 2)
         self.assertEqual(len(res.stderr.strip().splitlines()), 1)

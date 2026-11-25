@@ -5,8 +5,10 @@ against a fake `kgate` first on PATH: the fake runs the pod command on this mach
 does, and can be told to never start a pod or to hang. The pod worker is the real one: it is fetched from the real queue server over HTTP.
 Ports: every run uses an ephemeral port (KGATE_SPLIT_PORTS=0), never the range the host firewall opens.
 """
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -63,6 +66,7 @@ if os.environ.get("FAKE_KGATE_NOSTART") == pod and not os.path.exists(marker):
     sys.exit(75)
 if os.environ.get("FAKE_KGATE_HANG"):
     child = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    open(os.path.join(state, "hanging-" + kid), "w").write("x")   # the TERM handler is set and the job is up: safe to stop
     child.wait()
     sys.exit(0)
 out = os.path.join(state, kid + ".out")
@@ -295,6 +299,49 @@ class PodWorker(Base):
         self.assertEqual((out / r["log"]).read_text().strip(), "my id my id 3 2")
 
 
+class PodOwnId(Base):
+    """A pod that reaped dead jobs before it named its own is credited with its own results (coordinator main run 74695fd93ae6, pods 5 and 6)."""
+
+    def test_a_pod_that_reaped_dead_jobs_first_gets_its_64_pass_not_lost(self):
+        # fixtures/pod5/output.txt is all 102 lines pod 5 printed in that run: two "kgate: ended ..." reap lines come before its own "kgate: pod ... on"
+        # line. results.jsonl is the file that pod's job wrote to /out (64 results, all exit 0). The queue token, two private IPs and the node name
+        # are replaced; nothing else is cut.
+        fixture = Path(__file__).parent / "fixtures" / "pod5"
+        own, reaped = "kgate-1795467050-28873", ("kgate-1795465837-822040", "kgate-1795466738-1222634")
+        ids = [json.loads(line)["id"] for line in (fixture / "results.jsonl").read_text().splitlines()]
+        self.assertEqual(len(ids), 64)
+        state = self.state / "kgate"
+        state.mkdir(parents=True)
+        with open(state / "log.jsonl", "w") as f:
+            for kid, code in ((reaped[0], 143), (reaped[1], 143), (own, 0)):
+                f.write(json.dumps({"id": kid, "exit": code, "ran": True, "node": "node-1"}) + "\n")
+        for kid in reaped:   # the dead jobs left an output folder with no results
+            (state / f"{kid}.out").mkdir()
+            (state / f"{kid}.out" / "results.jsonl").write_text("")
+        (state / f"{own}.out").mkdir()
+        shutil.copy(fixture / "results.jsonl", state / f"{own}.out" / "results.jsonl")
+        rundir = self.tmp / "split-1-1"
+        (rundir / "pods" / "5").mkdir(parents=True)
+        (rundir / "plan.json").write_text(json.dumps({"run": rundir.name, "repo": "r", "head": "h" * 40, "seed": 1, "ids": sorted(ids), "order": ids, "est": {}, "median": 10,
+                                                      "recorded": 0, "pods": 7, "lanes": 3, "queue": "http://q", "rerun": ["kgate-split", "run"]}))
+        (rundir / "queue.jsonl").write_text("".join(json.dumps({"item": i, "pod": 5}) + "\n" for i in ids))
+
+        class Replay:   # stands for the kgate client: prints what the real one printed
+            def start(self, argv, **kw):
+                return subprocess.Popen(["cat", str(fixture / "output.txt")], **kw)
+
+        with contextlib.redirect_stdout(io.StringIO()):   # run_pod echoes every pod line
+            done = {5: K.run_pod(5, 7, Replay(), [], [], "", io.StringIO(), state, threading.Event())}
+        K.merge_pod_outputs(done, state, rundir)
+        (rundir / "pods.json").write_text(json.dumps({"pods": [done[5]]}))
+        code, text = K.receipt(rundir)
+        self.assertIn("VERDICT: PASS: 64 PASS, 0 FAIL of 64", text)
+        self.assertNotIn("lost", text)
+        self.assertNotIn("INCOMPLETE", text)
+        self.assertEqual(code, 0)
+        self.assertEqual(done[5]["id"], own)
+
+
 class Runs(Base):
     def test_a_green_run_over_two_pods_and_two_lanes_reports_every_id_once(self):
         repo = write_repo(self.tmp, {f"t{i}.sh": "sleep 0.2\n" for i in range(8)}, "pods = 2\nlanes = 2\n")
@@ -398,10 +445,11 @@ class Runs(Base):
     def test_term_stops_every_pod_and_merges_nothing(self):
         repo = write_repo(self.tmp, {"t.sh": "exit 0\n"}, "pods = 2\n")
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "run"], cwd=repo, env=dict(self.env, FAKE_KGATE_HANG="1"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Stop only once both fake pods are up and hold their TERM handler; a pod still starting up would be killed by the default action, unrecorded.
         deadline = time.time() + 20
-        while time.time() < deadline and len(list((self.state / "kgate").glob("split-*/pods/*.console.log"))) < 2:
-            time.sleep(0.1)
-        time.sleep(0.5)
+        while time.time() < deadline and len(list((self.state / "kgate").glob("hanging-*"))) < 2:
+            time.sleep(0.05)
+        self.assertEqual(len(list((self.state / "kgate").glob("hanging-*"))), 2, "both pods should be up before TERM")
         proc.send_signal(signal.SIGTERM)
         out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 143, out + err)

@@ -104,13 +104,22 @@ class PodSpec(unittest.TestCase):
         (side,) = spec["initContainers"]
         self.assertEqual((side["name"], side["image"], side["restartPolicy"]), ("dind", DOCKER_IMG, "Always"), "an init container that keeps running: the job starts when its probe passes")
         self.assertEqual(side["securityContext"], {"privileged": True})
-        self.assertEqual(side["args"], ["dockerd", "--host=tcp://127.0.0.1:2375"], "the image's own entrypoint starts the daemon (args, not command), on the pod's loopback only")
-        self.assertNotIn("command", side)
+        self.assertEqual(side["args"], ["dockerd", "--host=tcp://127.0.0.1:2375"], "the image's own entrypoint starts the daemon from args, on the pod's loopback only")
         env = {e["name"]: e["value"] for e in side["env"]}
         self.assertEqual(env, {"DOCKER_TLS_CERTDIR": "", "DOCKER_HOST": "tcp://127.0.0.1:2375"})
         self.assertEqual(side["startupProbe"]["exec"]["command"], ["docker", "info"])
         self.assertEqual(side["startupProbe"]["failureThreshold"] * side["startupProbe"]["periodSeconds"], 120)
         self.assertEqual(side["resources"], {"requests": {"cpu": "4", "memory": "8Gi", "ephemeral-storage": K.DOCKER_SIDECAR_DISK}, "limits": {"memory": "16Gi", "ephemeral-storage": K.DOCKER_SIDECAR_DISK_LIMIT}})
+
+    def test_the_sidecar_runs_the_image_entrypoint_with_its_own_cgroup_bind_mounted_as_the_cgroup_root_in_a_private_mount_namespace(self):
+        (side,) = self.pod()["initContainers"]
+        command = side["command"]
+        self.assertEqual(command[:4], ["unshare", "--mount", "--propagation", "private"], "a private mount namespace: the bind mount is not seen by kubectl exec's processes or the node")
+        self.assertEqual(command[4:6], ["sh", "-c"])
+        script = command[6]
+        self.assertRegex(script, r'mount --bind "/sys/fs/cgroup\$\(sed -n "s/\^0:://p" /proc/self/cgroup\)" /sys/fs/cgroup', "the sidecar's own cgroup (from /proc/self/cgroup) becomes /sys/fs/cgroup")
+        self.assertTrue(script.endswith('exec dockerd-entrypoint.sh "$@"'), "then the image's own entrypoint, with the args the pod gives")
+        self.assertLess(script.index("mount --bind"), script.index("dockerd-entrypoint.sh"), "the mount comes before the entrypoint's dind script touches the cgroup root")
 
     def test_the_sidecar_has_no_host_path_no_socket_and_only_its_own_data_root(self):
         spec = self.pod()
@@ -198,32 +207,23 @@ class Shape(unittest.TestCase):
 
 
 class SidecarPeak(unittest.TestCase):
-    """The dind sidecar is privileged and shares the node's cgroup namespace: its `/sys/fs/cgroup` is the node's root, so the peak is read from the cgroup /proc/self/cgroup names."""
+    """A sidecar's /sys/fs/cgroup is its own cgroup (the dind sidecar's by a bind mount, see DOCKER_SIDECAR_COMMAND), so the peak is read from its root."""
 
-    def read(self, root_files, container_files, self_cgroup):
+    def read(self, files):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d, "cgroup")
-            for rel, files in (("", root_files), (self_cgroup.lstrip("/"), container_files)):
-                (root / rel).mkdir(parents=True, exist_ok=True)
-                for name, text in files.items():
-                    (root / rel / name).write_text(text)
-            Path(d, "self").write_text("0::%s\n" % self_cgroup)
-            done = subprocess.run(["sh", "-c", K.SIDECAR_PEAK_SH, "sh", str(root), str(Path(d, "self"))], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            for name, text in files.items():
+                Path(d, name).write_text(text)
+            done = subprocess.run(["sh", "-c", K.SIDECAR_PEAK_SH, "sh", d], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             return done.stdout.decode().strip()
 
-    def test_a_shared_cgroup_namespace_reads_the_containers_own_cgroup_not_the_nodes_root(self):
-        path = "/kubepods.slice/pod1/cri-containerd-abc.scope"
-        self.assertEqual(self.read({"memory.peak": "23949156352\n"}, {"memory.peak": "46563328\n"}, path), "46563328", "the node's root counts the whole machine")
+    def test_the_peak_is_the_memory_peak_of_the_sidecars_cgroup(self):
+        self.assertEqual(self.read({"memory.peak": "734003200\n", "memory.current": "1\n"}), "734003200")
 
-    def test_a_node_whose_root_has_no_peak_file_still_gives_the_containers_number(self):
-        path = "/kubepods.slice/pod1/cri-containerd-abc.scope"
-        self.assertEqual(self.read({}, {"memory.current": "20439040\n"}, path), "20439040", "the node root has neither file, the container has memory.current only")
-
-    def test_a_private_cgroup_namespace_reads_its_root_as_before(self):
-        self.assertEqual(self.read({"memory.peak": "734003200\n"}, {}, "/"), "734003200")
+    def test_a_kernel_without_memory_peak_gives_memory_current(self):
+        self.assertEqual(self.read({"memory.current": "20439040\n"}), "20439040")
 
     def test_nothing_readable_prints_nothing(self):
-        self.assertEqual(self.read({}, {}, "/kubepods.slice/pod1/x.scope"), "")
+        self.assertEqual(self.read({}), "")
 
 
 class DockerJobs(unittest.TestCase):

@@ -2,8 +2,13 @@
 # Everything here is a placeholder. The real file stays on your Mac and is never committed
 # (.chezmoiignore keeps chezmoi away from ~/.config/video-rename).
 
-# The page (or API address) for one video. {id} is replaced with the number from the file name.
+# For `video-rename FOLDER`: the page (or API address) for one video. {id} is replaced with the number from the file name.
 url_template = "https://example.invalid/video/{id}"
+
+# For `video-rename --search`: the site's search page. {query} is replaced with the file name (without the extension).
+# With --search, url_template is not needed; without it, search_template is not needed.
+# The command reads the result links of the form /video/<id>/<title-slug> from this page, so the page must list them.
+search_template = "https://example.invalid/search?q={query}"
 
 # Where the title is. One of:
 #   "html"  - the page's <title> (the default, so you can leave this line out)

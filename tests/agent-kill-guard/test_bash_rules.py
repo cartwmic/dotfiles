@@ -1,10 +1,11 @@
-"""The eight bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
+"""The eleven bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, issue body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,16 +19,18 @@ HOOKS = ROOT / "dot_local/share/agent-harness/hooks"
 sys.path.insert(0, str(HOOKS))
 import bash_rules  # noqa: E402
 
+os.environ.setdefault("AGENT_HARNESS_GUARD_LOG", os.devnull)  # the hook logs each refusal; a test run leaves no record in the real state dir
+
 HOMELAB = "kubernetes-admin@kubernetes"
 KUBE = {"/kc/homelab": "current-context: %s\n" % HOMELAB, "/kc/other": "apiVersion: v1\ncurrent-context: axon-aks-prod\n",
         "/kc/none": "apiVersion: v1\ncontexts: []\n"}
 
 
-def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None):
+def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False, coordinator_repo=None):
     files = KUBE if files is None else files
     origins = origins or {}
     return bash_rules.Context(tool=tool, profile=profile, env=env or {}, cwd=cwd, read_file=files.get,
-                              origin_of=lambda directory: origins.get(directory))
+                              origin_of=lambda directory: origins.get(directory), container=container, coordinator_repo=coordinator_repo)
 
 
 def check(text, platform="linux", **kw):
@@ -204,6 +207,8 @@ class Merge(unittest.TestCase):
                 self.assertIn("ecd63156, 385acc43, ccc6c94b and 5a05bfe8", message)
                 self.assertIn("agent record", message)
                 self.assertIn("pr-record path <repo>#N", message)
+                self.assertIn("`Promises:` line", message)
+                self.assertIn("unresolved review thread", message)
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
@@ -216,6 +221,17 @@ class Merge(unittest.TestCase):
         for repo in ("eval-cases", "cartwmic/eval-cases"):
             self.assertIsNone(check(f"ci-main-status --merge-gate {repo} --pr 1 && pr-body-check cartwmic/eval-cases 1 && gh pr merge 1 -R cartwmic/eval-cases --squash --match-head-commit " + "a" * 40))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate eval-cases --pr 1 && gh pr merge 1 -R cartwmic/eval-cases --squash"))
+        # An owner-approved one-time admin merge (Michael's answered ask for this PR) adds `--owner-approved ASK` to both checks; each tool asks the ledger itself, so the hook only
+        # needs to see the real gate shapes. Without the gate shapes the flag does not make a merge pass.
+        self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --squash --admin --match-head-commit " + "a" * 40))
+        self.assertIsNone(check("ci-main-status --merge-gate --owner-approved=12 --pr 5 o/r && pr-body-check o/r 5 --owner-approved=12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("pr-body-check", check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        # The refusal of a merge with no gates tells an agent the owner-approved form exists: that is how a stuck merge finds its supported path.
+        self.assertIn("`--owner-approved ASK`", check("gh pr merge 5 -R o/r --squash"))
+        self.assertIn("ci-main-status", check("pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("A bare `ci-main-status`", check("ci-main-status --tip o/r --owner-approved 12 && pr-body-check o/r 5 && gh pr merge 5 -R o/r"))
+        self.assertIn("`pr-body-check` with `--body-file` is not the merge check", check("ci-main-status --merge-gate o/r && pr-body-check o/r 5 --body-file /tmp/b --owner-approved 12 && gh pr merge 5 -R o/r"))
         self.assertIn("--match-head-commit <head sha>", check("gh pr merge 12"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")
@@ -266,9 +282,7 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 12 && gh pr merge 12"))
 
     def test_both_checks_first_allow_a_repo_that_is_not_the_coordinator(self):
-        for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
-                     "ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
+        for text in ["ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 5 && gh pr merge 5 -R cartwmic/dotfiles --merge",
                      "pr-body-check dotfiles 5 && ci-main-status --merge-gate dotfiles && pr-body-check dotfiles 1 && gh pr merge 5 -R cartwmic/dotfiles --merge",
                      "cd /tmp && ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 --squash",
                      "ci-main-status --merge-gate homelab && pr-body-check homelab 182 &&\n gh pr merge 182",
@@ -304,6 +318,46 @@ class Merge(unittest.TestCase):
                 self.assertIn("~/git/coordinator/scripts/merge-pr.sh", message)
                 self.assertNotIn("coordinator-workspace/bin", message)
 
+    def test_only_a_plain_repo_and_number_is_the_merge_check(self):
+        """`pr-body-check <repo> <pr>` is the merge check; a flag on it (any spelling) or a body-file form is not, and `--` before the words does not hide them."""
+        gate = "ci-main-status --merge-gate x && "
+        for check_text in ["pr-body-check x 5", "pr-body-check -- x 5"]:
+            with self.subTest(check=check_text):
+                self.assertIsNone(check(gate + check_text + " && gh pr merge 5 --squash --repo cartwmic/other"))
+        for check_text in ["pr-body-check x 5 --skip-intent-review", "pr-body-check --skip-intent-review x 5", "pr-body-check --repo x 5", "pr-body-check -Z x 5", "pr-body-check x",
+                           "pr-body-check x 5 6", "pr-body-check x five"]:
+            with self.subTest(check=check_text):
+                self.assertIn("without both gates", check(gate + check_text + " && gh pr merge 5 --squash --repo cartwmic/other") or "")
+
+    def test_the_homelab_repo_is_refused_with_its_script_even_after_both_gates_and_even_without_them(self):
+        for text in ["ci-main-status --merge-gate homelab && pr-body-check homelab 182 && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "pr-body-check homelab 182 && ci-main-status --merge-gate homelab && gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "gh pr merge 182 -R cartwmic/cartwmic-homelab-v2 --squash",
+                     "gh pr merge 182 --repo cartwmic/cartwmic-homelab-v2",
+                     "gh pr merge 182 --repo=cartwmic/cartwmic-homelab-v2.git",
+                     "gh pr merge 182 -R https://github.com/cartwmic/cartwmic-homelab-v2",
+                     "gh -R cartwmic/cartwmic-homelab-v2 pr merge 182",
+                     "sh -c 'gh pr merge 182 -R cartwmic/cartwmic-homelab-v2'"]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA", message)
+                self.assertNotIn("--revert-of", message)
+                self.assertNotIn("--fix-of", message)
+                self.assertNotIn("~/git/coordinator/scripts/merge-pr.sh", message)
+
+    def test_a_repo_that_only_starts_like_the_homelab_repo_is_not_refused_as_homelab(self):
+        for text in ["ci-main-status --merge-gate x && pr-body-check x 5 && gh pr merge 5 -R cartwmic/cartwmic-homelab-v2-old",
+                     "ci-main-status --merge-gate x && pr-body-check x 5 && gh pr merge 5 -R cartwmic/cartwmic-homelab-v22"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_the_homelab_script_and_its_neighbours_are_not_gh_commands_the_hook_sees(self):
+        for text in ["~/git/cartwmic-homelab-v2/scripts/merge-pr.sh 182 abc1234",
+                     "cd ~/git/cartwmic-homelab-v2 && scripts/merge-pr.sh 182 abc1234",
+                     "gh pr view 182 -R cartwmic/cartwmic-homelab-v2", "gh pr checks 182 -R cartwmic/cartwmic-homelab-v2"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
     def test_the_directory_decides_when_there_is_no_repo_flag(self):
         origins = {"/repos/coord": "git@github.com:cartwmic/coordinator.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git",
                    "/work": "https://github.com/cartwmic/coordinator"}
@@ -314,6 +368,11 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=origins))  # -R decides, not the cwd
         self.assertIsNone(check("cd /nowhere && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1", origins=origins))
         self.assertIsNone(check("cd $d && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1", origins=origins))
+        homelab = {"/repos/hl": "git@github.com:cartwmic/cartwmic-homelab-v2.git", "/repos/other": "https://github.com/cartwmic/dotfiles.git"}
+        self.assertIn("cartwmic-homelab-v2/scripts/merge-pr.sh N SHA", check("cd /repos/hl && gh pr merge 1 --squash", origins=homelab))
+        self.assertIn("cartwmic-homelab-v2/scripts/merge-pr.sh N SHA", check("cd /repos/hl && ci-main-status --merge-gate homelab && pr-body-check homelab 1 && gh pr merge 1", origins=homelab))
+        self.assertIsNone(check("cd /repos/hl && ci-main-status --merge-gate x && pr-body-check x 1 && cd /repos/other && gh pr merge 1", origins=homelab))
+        self.assertIsNone(check("cd /repos/hl && ci-main-status --merge-gate x && pr-body-check x 1 && gh pr merge 1 -R cartwmic/dotfiles", origins=homelab))  # -R decides
 
     def test_a_real_checkout_whose_origin_is_the_coordinator(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -334,8 +393,10 @@ class Merge(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
 
-    def test_the_work_profile_and_no_profile_do_not_run_it(self):
-        for profile in ("axon-work-computer", None):
+    def test_the_work_profile_runs_it_and_no_profile_or_termux_does_not(self):
+        self.assertIsNotNone(check("gh pr merge 12", profile="axon-work-computer"))
+        self.assertIsNone(check("ci-main-status --merge-gate acme/app && pr-body-check acme/app 12 && gh pr merge 12 -R acme/app", profile="axon-work-computer"))
+        for profile in ("termux", None):
             self.assertIsNone(check("gh pr merge 12", profile=profile))
 
 
@@ -343,6 +404,47 @@ class PrBody(unittest.TestCase):
     # a name mktemp made: /tmp/pr-N-body.XXXXXX with the six X filled in (a digit or an uppercase letter among them)
     C = "/tmp/pr-new-body.aB3xY9"   # a create: no PR number yet
     E = "/tmp/pr-5-body.aB3xY9"     # an edit of PR 5
+
+    def test_a_title_the_check_was_not_given_is_refused(self):
+        c, e = self.C, self.E
+        for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s --title other && gh pr create --title t --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e)]:
+            with self.subTest(text=text):
+                message = check(text)
+                self.assertIn("was not given", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr", message)
+        # a PR given no --title (an edit that keeps it) needs none on the check
+        self.assertIsNone(check("pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e)))
+
+    def test_gh_short_title_flag_is_read_like_the_long_one(self):
+        c, e = self.C, self.E
+        for form in ("-t 'Fix task-12'", "-t='Fix task-12'", "-t'Fix task-12'", "--title='Fix task-12'"):
+            for verb, f in (("create", c), ("edit 5", e)):
+                text = "pr-body-check --body-file %s && gh pr %s %s --body-file %s" % (f, verb, form, f)
+                with self.subTest(text=text):
+                    self.assertIn("was not given", check(text))
+        for form in ("-t t", "-t=t", "-tt"):
+            text = "pr-body-check --body-file %s --title t && gh pr create %s --body-file %s" % (c, form, c)
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_a_title_only_edit_needs_a_check_that_saw_the_title(self):
+        e = self.E
+        for text in ["gh pr edit 5 --title t", "gh pr edit 5 -t t", "pr-body-check --body-file %s --title other && gh pr edit 5 --title t" % e,
+                     "pr-body-check --body-file %s && gh pr edit 5 -t t" % e]:
+            with self.subTest(text=text):
+                self.assertIn("was not given", check(text))
+        for text in ["pr-body-check --body-file %s --title t && gh pr edit 5 --title t" % e, "pr-body-check --body-file %s --title t && gh pr edit 5 -t t" % e,
+                     "gh pr edit 5 --add-label x"]:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_one_check_must_have_seen_both_the_file_and_the_title(self):
+        c, g = self.C, "/tmp/pr-new-body.zZ9yY8"
+        text = "pr-body-check --body-file %s --title t && pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (g, c, c)
+        self.assertIn("was not given", check(text))
+        self.assertIsNone(check("pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c)))
 
     def test_a_create_or_edit_without_the_check_names_the_chained_form(self):
         for text in ["gh pr create --title t --body-file %s" % self.C, "gh pr edit 5 --body-file %s" % self.E, "gh pr create -F %s" % self.C,
@@ -352,7 +454,7 @@ class PrBody(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("refused in agent sessions", message)
-                self.assertIn("pr-body-check --body-file F && gh pr", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr", message)
                 self.assertIn("agent bookkeeping", message)
                 self.assertIn("the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8)", message)
                 self.assertIn("a Proven section as plain prose, playbook f5a367b5", message)  # the Proven section stays; only its tables and job ids move
@@ -360,7 +462,9 @@ class PrBody(unittest.TestCase):
 
     def test_the_check_chained_with_the_same_file_is_allowed(self):
         c, e = self.C, self.E
-        for text in ["pr-body-check --body-file %s && gh pr create --title t --body-file %s" % (c, c),
+        for text in ["pr-body-check --body-file %s && gh pr create --body-file %s" % (c, c),
+                     "pr-body-check --body-file %s --title t && gh pr create --title t --body-file %s" % (c, c),  # the form the refusal names
+                     "pr-body-check --title t --body-file %s && gh pr edit 5 --title t --body-file %s" % (e, e),
                      "pr-body-check --body-file %s && gh pr edit 5 --body-file %s" % (e, e),
                      "pr-body-check --body-file=%s && gh pr create -F %s" % (c, c),
                      "pr-body-check --body-file %s && gh pr new --body-file=%s" % (c, c),
@@ -394,7 +498,7 @@ class PrBody(unittest.TestCase):
                 self.assertIn("pr-body-check --body-file F", check(text))
 
     def test_an_edit_that_sets_no_body_and_other_pr_commands_pass(self):
-        for text in ["gh pr edit 5 --title t", "gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
+        for text in ["gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
                      "echo gh pr create", "gh issue create --body-file /tmp/pr-body.md", "gh issue edit 5 --body-file /tmp/pr-body.md"]:
             with self.subTest(text=text):
                 self.assertNotIn("pr-body-check --body-file F", check(text) or "")
@@ -405,11 +509,11 @@ class PrBody(unittest.TestCase):
         self.assertIn("pr-body-check --body-file F", check("gh pr create -R cartwmic/coordinator --body-file %s" % c))
         self.assertIsNone(check("pr-body-check --body-file %s && gh pr create -R cartwmic/coordinator --body-file %s" % (c, c)))
 
-    def test_the_work_profile_and_no_profile_do_not_run_it(self):
-        for profile in ("axon-work-computer", None):
-            self.assertIsNone(check("gh pr create --body 'x'", profile=profile))
-            self.assertIsNone(check("gh pr edit 5 --body-file /tmp/pr-body.md", profile=profile))
-            self.assertIsNone(check("gh pr create --body-file /tmp/pr-body.md", profile=profile))
+    def test_the_work_profile_runs_it_and_no_profile_or_termux_does_not(self):
+        for text in ("gh pr create --body 'x'", "gh pr edit 5 --body-file /tmp/pr-body.md", "gh pr create --body-file /tmp/pr-body.md"):
+            self.assertIsNotNone(check(text, profile="axon-work-computer"))
+            for profile in ("termux", None):
+                self.assertIsNone(check(text, profile=profile))
 
 
 class PrBodyNamesPrOpen(unittest.TestCase):
@@ -420,7 +524,9 @@ class PrBodyNamesPrOpen(unittest.TestCase):
             with self.subTest(text=text):
                 message = check(text)
                 self.assertIn("Shortest path: `pr-open --title T --body-file F [--draft]`", message)
-                self.assertIn("pr-body-check --body-file F && gh pr create", message)  # the chained form is still named
+                self.assertIn("never reads the agent record", message)
+                self.assertIn("pr-body-check <owner/repo> <pr> --skip-intent-review", message)
+                self.assertIn("pr-body-check --body-file F --title T && gh pr create --title T", message)  # the chained form is still named
 
     def test_an_edit_refusal_names_the_pr_open_edit_form(self):
         for text in ["gh pr edit 5 --body 'x'", "gh pr edit 5 --body-file /tmp/pr-5-body.md"]:
@@ -437,13 +543,274 @@ class PrBodyNamesPrOpen(unittest.TestCase):
                 self.assertIsNone(check(text))
 
 
+class IssueBody(unittest.TestCase):
+    """`gh issue create` is refused and names `issue-open`, where the profile's coordinator checkout holds the claims command (src/claims/cli.ts)."""
+    REFUSED = ["gh issue create --title t --body x", "gh issue create -t t -F body.md", "gh issue new --title t", "gh -R cartwmic/x issue create --title t", "gh issue -R cartwmic/x create",
+               "gh issue create --repo cartwmic/x --title t --body-file /tmp/b.md --label bug", "cd /tmp && gh issue create --title t", "echo x | gh issue create --title t --body-file -",
+               "sh -c 'gh issue create --title t'", "sudo gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t -f body=b", "gh api -X POST repos/cartwmic/x/issues --input /tmp/i.json",
+               "gh api --method=POST https://api.github.com/repos/cartwmic/x/issues -F title=t"]
+    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
+              "issue-open --title t --body-file /tmp/b.md", "issue-open --title t --body-file - --dry-run", "echo gh issue create", "grep 'gh issue create' notes.md",
+              "gh api repos/cartwmic/x/issues", "gh api repos/cartwmic/x/issues/5/comments -f body=hi", "gh api -X GET repos/cartwmic/x/issues -f labels=bug", "gh pr list"]
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        (Path(self.repo) / "src/claims").mkdir(parents=True)
+        (Path(self.repo) / "src/claims/cli.ts").write_text("// stub\n")
+
+    def issue_check(self, text, **kw):
+        kw.setdefault("coordinator_repo", self.repo)
+        return check(text, **kw)
+
+    def test_each_form_is_refused_and_names_issue_open(self):
+        for text in self.REFUSED:
+            with self.subTest(text=text):
+                message = self.issue_check(text)
+                self.assertIn("issue-open --title T --body-file F", message or "")
+                self.assertIn("refused in agent sessions", message)
+
+    def test_other_issue_commands_and_issue_open_pass(self):
+        for text in self.PASSES:
+            with self.subTest(text=text):
+                self.assertIsNone(self.issue_check(text))
+
+    def test_the_refusal_does_not_borrow_the_pr_body_text(self):
+        message = self.issue_check("gh issue create --title t")
+        for text in ("pr-body-check --body-file F", "mktemp", "pr-open"):
+            self.assertNotIn(text, message)
+        self.assertIn("`claims ran -- <cmd>`", message)
+
+    def test_both_desktop_profiles_run_it_and_termux_and_no_profile_do_not(self):
+        for profile in ("personal", "axon-work-computer"):
+            self.assertIsNotNone(self.issue_check("gh issue create --title t", profile=profile))
+        for profile in ("termux", None):
+            self.assertIsNone(self.issue_check("gh issue create --title t", profile=profile))
+
+    def test_it_waits_until_the_claims_command_is_in_the_checkout(self):
+        (Path(self.repo) / "src/claims/cli.ts").unlink()
+        for text in ("gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t"):
+            self.assertIsNone(self.issue_check(text))
+        self.assertIsNone(self.issue_check("gh issue create --title t", coordinator_repo=str(Path(self.repo) / "missing")))
+
+    def test_with_no_instance_file_it_looks_in_git_coordinator_under_home(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.assertIsNone(check("gh issue create --title t", env={"HOME": home}))
+        (Path(home) / "git/coordinator/src/claims").mkdir(parents=True)
+        (Path(home) / "git/coordinator/src/claims/cli.ts").write_text("// stub\n")
+        self.assertIn("issue-open", check("gh issue create --title t", env={"HOME": home}))
+
+    def test_the_issue_create_flags_are_read_so_a_value_is_not_taken_for_an_operand(self):
+        gh = bash_rules.gh_command(["issue", "new", "--type", "bug", "-t", "T", "-F", "f", "-R", "o/r"])
+        self.assertEqual((gh.group, gh.verb, gh.operands), ("issue", "create", []))
+        self.assertEqual([gh.argv.value(n) for n in ("type", "title", "body-file", "repo")], ["bug", "T", "f", "o/r"])  # `type` is on the issue row only, not the pr one
+
+    def test_the_refusal_writes_a_reason_for_the_guard_log(self):
+        found = bash_rules.refusal("gh issue create --title t", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
+        self.assertEqual(found[0], "issue_body")
+        self.assertEqual(found[1].log, {"reason": "issue created without issue-open"})
+        self.assertEqual(found[2], "gh issue create")
+        api = bash_rules.refusal("gh api repos/cartwmic/x/issues -f title=SECRETVALUE", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
+        self.assertNotIn("SECRETVALUE", json.dumps(api[1].log))
+
+
+class IssueBodyRealHook(unittest.TestCase):
+    """The real hook script, as the Bash tool's JSON payload reaches it, with the coordinator checkout named by AGENT_HARNESS_COORDINATOR_REPO."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.hooks = Path(cls.tmp) / "hooks"
+        shutil.copytree(HOOKS, cls.hooks)
+        (cls.hooks / "profile").write_text("personal\n")
+        cls.repo = Path(cls.tmp) / "coordinator"
+        (cls.repo / "src/claims").mkdir(parents=True)
+        (cls.repo / "src/claims/cli.ts").write_text("// stub\n")
+        cls.log = Path(cls.tmp) / "guard.jsonl"
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command, repo=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_PROFILE", "AGENT_HARNESS_COORDINATOR_REPO")}
+        env.update(AGENT_HARNESS_GUARD_LOG=str(self.log), AGENT_HARNESS_COORDINATOR_REPO=str(repo or self.repo))
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=30)
+
+    def test_a_bare_issue_create_exits_2_naming_issue_open_and_issue_open_exits_0(self):
+        refused = self.run_hook("gh issue create --title t --body-file /tmp/b.md")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("refused in agent sessions", refused.stderr)
+        self.assertIn("issue-open --title T --body-file F", refused.stderr)
+        for allowed in ("issue-open --title t --body-file /tmp/b.md", "gh issue list", "gh issue edit 5 --body-file /tmp/b.md"):
+            self.assertEqual(self.run_hook(allowed).returncode, 0, allowed)
+
+    def test_one_guard_log_line_for_the_refusal(self):
+        self.log.unlink(missing_ok=True)
+        self.run_hook("gh issue create --title t")
+        lines = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([(l["rule"], l["matched"]) for l in lines], [("issue_body", "gh issue create")])
+
+    def test_it_passes_while_the_checkout_has_no_claims_command(self):
+        self.assertEqual(self.run_hook("gh issue create --title t", repo=Path(self.tmp) / "none").returncode, 0)
+
+
+class PrBodyViaApi(unittest.TestCase):
+    """`gh api` on the pulls endpoints sets a PR body without the body check (dotfiles#451): refused, pointing to `pr-open`."""
+    REFUSED = ["gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+               "gh api --method PATCH repos/cartwmic/x/pulls/1 -F body=@/tmp/b",
+               "gh api --method=PATCH repos/cartwmic/x/pulls/1 --raw-field body=hi",
+               "gh api repos/cartwmic/x/pulls -f title=t -f head=h -f base=main -f body=hi",
+               "gh api repos/{owner}/{repo}/pulls --field body=hi",
+               "gh api -X POST /repos/cartwmic/x/pulls --input /tmp/pr.json",
+               "gh api -H 'Accept: application/json' repos/cartwmic/x/pulls/7/ -X PATCH -f body=hi",
+               "sh -c 'gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi'",
+               "echo ok && gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+               # attached shorthand values, which gh reads the same way (round-1 note n3)
+               "gh api -XPATCH repos/cartwmic/x/pulls/1 -fbody=hi",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 -f=body=hi",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 -Fbody=@/tmp/b",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 -F=body=@/tmp/b",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 --field=body=hi",
+               "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field=body=hi",
+               "gh api -X=PATCH repos/cartwmic/x/pulls/1 -f body=hi"]
+    ISSUES_REFUSED = ["gh api -X PATCH repos/cartwmic/x/issues/1 -f body=hi",   # a PR is an issue: this can set a PR body (round-1 note n1)
+                      "gh api repos/cartwmic/x/issues/12 -X PATCH -F body=@/tmp/b",
+                      "gh api -XPATCH repos/cartwmic/x/issues/12 -fbody=hi",
+                      "gh api --method PATCH /repos/cartwmic/x/issues/3/ --input /tmp/i.json"]
+    PASSED = ["gh api repos/cartwmic/x/pulls/1",
+              "gh api -X GET repos/cartwmic/x/pulls/1 -f body=hi", "gh api -XGET repos/cartwmic/x/pulls/1 -f body=hi",
+              "gh api --method=get repos/cartwmic/x/pulls/1 -fbody=hi",
+              "gh api repos/cartwmic/x/pulls/1/comments -f body=hi",
+              "gh api repos/cartwmic/x/issues/1 -X PATCH -f state=closed",
+              "gh api repos/cartwmic/x/issues -f title=t -f body=hi",   # creating an issue
+              "gh api repos/cartwmic/x/issues/1/comments -f body=hi",
+              "gh api repos/cartwmic/x/issues/1 -X GET -f body=hi",
+              "gh api -X PATCH repos/cartwmic/x/issues/1 -f title=t",
+              "gh api repos/cartwmic/x/pulls -f title=t -f head=h -f base=main",
+              "gh api -X PATCH repos/cartwmic/x/pulls/1 -f state=closed",
+              "gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",
+              "gh api repos/cartwmic/x/pulls --jq '.[].number'",
+              "gh pr view 1", "echo gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+              "pr-open --edit 1 --body-file /tmp/pr-1-body.md"]
+
+    def test_a_pulls_call_that_sets_a_body_is_refused_and_names_pr_open(self):
+        for text in self.REFUSED:
+            with self.subTest(text=text):
+                message = check(text) or ""
+                self.assertIn("`gh api` that sets a pull request body (POST, PATCH or PUT", message)
+                self.assertIn("`pr-open --title T --body-file F [--draft]`", message)
+                self.assertIn("`pr-open --edit N --body-file F`", message)
+
+    def test_a_patch_on_an_issue_number_that_sets_a_body_is_refused_for_it_can_set_a_pr_body(self):
+        for text in self.ISSUES_REFUSED:
+            with self.subTest(text=text):
+                message = check(text) or ""
+                self.assertIn("a pull request is an issue too", message)
+                self.assertIn("`pr-open --edit N --body-file F`", message)
+                self.assertIn("gh issue edit N --body-file F", message)
+
+    def test_other_gh_api_calls_pass(self):
+        for text in self.PASSED:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text))
+
+    def test_the_work_profile_runs_it_and_no_profile_or_termux_does_not(self):
+        self.assertIsNotNone(check(self.REFUSED[0], profile="axon-work-computer"))
+        for profile in ("termux", None):
+            self.assertIsNone(check(self.REFUSED[0], profile=profile))
+
+
+class PrBodyViaApiLog(unittest.TestCase):
+    """Each refusal of a gh api body write is one JSON line in the guard log (principle 14): reason, method and endpoint, and the command with every field value redacted. An allowed call writes none."""
+    SECRET = "ghp_notARealToken123456789"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.hooks = Path(self.tmp) / "hooks"
+        shutil.copytree(HOOKS, self.hooks)
+        (self.hooks / "profile").write_text("personal\n")
+        self.log = Path(self.tmp) / "state" / "guard.jsonl"
+
+    def run_hook(self, command):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_GUARD_LOG", "AGENT_HARNESS_PROFILE")}
+        env["AGENT_HARNESS_GUARD_LOG"] = str(self.log)
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    def records(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_a_refusal_writes_one_line_and_an_allowed_call_writes_none(self):
+        for allowed in ("gh api repos/cartwmic/x/pulls/1", "gh api -X PATCH repos/cartwmic/x/pulls/1 -f state=closed", "gh api -X GET repos/cartwmic/x/pulls/1 -f body=hi"):
+            self.assertEqual(self.run_hook(allowed).returncode, 0)
+        self.assertEqual(self.records(), [])
+        run = self.run_hook("gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hello-body-text")
+        self.assertEqual(run.returncode, 2)
+        (record,) = self.records()
+        self.assertEqual((record["action"], record["rule"], record["tool"], record["matched"]), ("refuse", "pr_body", "Bash", "PATCH repos/cartwmic/x/pulls/1"))
+        self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
+        self.assertIn("PATCH", record["reason"])
+        self.assertIn("pulls", record["reason"])
+        self.assertEqual(record["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=<redacted>")
+        self.assertNotIn("hello-body-text", self.log.read_text())
+
+    def test_a_title_refusal_logs_its_reason(self):
+        run = self.run_hook("pr-body-check --body-file /tmp/pr-new-body.aB3xY9 && gh pr create --title t --body-file /tmp/pr-new-body.aB3xY9")
+        self.assertEqual(run.returncode, 2)
+        (record,) = self.records()
+        self.assertEqual((record["rule"], record["reason"]), ("pr_body", "title not given to the check"))
+        self.assertEqual(record["matched"], "gh pr create --title")
+        run = self.run_hook("gh pr create --title t --body-file /tmp/pr-new-body.aB3xY9")  # a missing check is another refusal: no title reason
+        self.assertEqual(run.returncode, 2)
+        self.assertNotIn("reason", self.records()[-1])
+
+    def test_the_record_never_holds_a_body_a_header_a_token_or_a_query(self):
+        for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -H 'Authorization: token %s' -f body=%s -f title=%s" % ((self.SECRET,) * 3),
+                        "GH_TOKEN=%s gh api repos/cartwmic/x/pulls -fbody=%s" % ((self.SECRET,) * 2),
+                        "gh api -XPATCH 'repos/cartwmic/x/issues/4?access_token=%s' -F body=%s" % ((self.SECRET,) * 2)):
+            self.assertEqual(self.run_hook(command).returncode, 2)
+        self.assertNotIn(self.SECRET, self.log.read_text())
+        self.assertEqual(len(self.records()), 3)
+        self.assertEqual([r["matched"] for r in self.records()], ["PATCH repos/cartwmic/x/pulls/1", "POST repos/cartwmic/x/pulls", "PATCH repos/cartwmic/x/issues/4"])
+
+    def test_an_input_file_refusal_names_the_file_and_says_input(self):
+        self.assertEqual(self.run_hook("gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json").returncode, 2)
+        (record,) = self.records()
+        self.assertIn("--input", record["reason"])
+        self.assertEqual(record["command"], "gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json")
+
+
+class PrBodyNamesFileListFlags(unittest.TestCase):
+    """The PR-body refusal names the file-list flags that let a playbook-only PR pass pr-body-check (dotfiles#454)."""
+
+    def test_the_refusal_names_the_flags(self):
+        for text in ["gh pr create --title t --fill", "gh pr edit 5 --body 'x'", "gh pr create --body-file /tmp/pr-body.md"]:
+            with self.subTest(text=text):
+                message = check(text)
+                for flag in ("--files-file F", "--pr N [--repo R]", "--base REF"):
+                    self.assertIn(flag, message)
+
+    def test_the_wrapper_header_and_readme_name_them_too(self):
+        for path in ("dot_local/bin/executable_pr-body-check", "dot_local/share/agent-harness/README.md"):
+            text = (ROOT / path).read_text()
+            with self.subTest(path=path):
+                for flag in ("--files-file", "--pr N", "--base REF"):
+                    self.assertIn(flag, text)
+
+
 class PrBodyFileName(unittest.TestCase):
     """The body file's name: not a fixed shared name, and for an edit it names the PR number (2026-11-15: /tmp/pr-body.md put #347's body on #345)."""
     FIX = "F=$(mktemp /tmp/pr-N-body.XXXXXX)"
     FIXED = ["/tmp/pr-body.md", "/tmp/body.md", "/tmp/pr-5-body.md", "/tmp/pr-5-body.markdown", "pr-body.md", "/tmp/pr345.md", "/tmp/pr-5-body"]
 
     def chained(self, verb, name):
-        return "pr-body-check --body-file %s && gh pr %s --body-file %s" % (name, verb, name)
+        title = " --title t" if "--title t" in verb else ""  # the check gets the title the PR is given
+        return "pr-body-check --body-file %s%s && gh pr %s --body-file %s" % (name, title, verb, name)
 
     def test_a_fixed_name_is_refused_for_create_and_edit_even_when_checked(self):
         for name in self.FIXED:
@@ -453,7 +820,7 @@ class PrBodyFileName(unittest.TestCase):
                     self.assertIn("F=$(mktemp /tmp/pr-%s-body.XXXXXX)" % n, message)
                     self.assertIn("a fixed name like /tmp/pr-body.md can be overwritten by another session", message)
                     self.assertIn("`%s`" % name, message)
-                    self.assertNotIn("pr-body-check --body-file F && gh pr", message)  # the chain is right; only the name is wrong
+                    self.assertNotIn("pr-body-check --body-file F --title T && gh pr", message)  # the chain is right; only the name is wrong
 
     def test_a_name_with_another_number_or_none_is_refused_for_an_edit(self):
         for name in ["/tmp/pr-4-body.aB3xY9", "/tmp/pr-45-body.aB3xY9", "/tmp/pr-55-body.aB3xY9", "/tmp/pr-body.aB3xY9", "/tmp/pr-345-body.aB3xY9"]:
@@ -481,8 +848,8 @@ class PrBodyFileName(unittest.TestCase):
                      'F=$(mktemp --suffix .md /tmp/pr-345-body.XXXXXX); pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
                      'F="$(mktemp /tmp/pr-345-body.XXXXXXXX)"; pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
                      'F=`mktemp /tmp/pr-345-body.XXXXXX`; pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"',
-                     'F=$(mktemp /tmp/pr-new-body.XXXXXX); pr-body-check --body-file "$F" && gh pr create --title t --body-file "$F"',
-                     'F=$(mktemp); pr-body-check --body-file "$F" && gh pr create --title t --body-file "$F"',
+                     'F=$(mktemp /tmp/pr-new-body.XXXXXX); pr-body-check --body-file "$F" --title t && gh pr create --title t --body-file "$F"',
+                     'F=$(mktemp); pr-body-check --body-file "$F" --title t && gh pr create --title t --body-file "$F"',
                      'F=$(mktemp -p /tmp pr-345-body.XXXXXX); pr-body-check --body-file "$F" && gh pr edit 345 --body-file "$F"']:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
@@ -578,6 +945,68 @@ class Docker(unittest.TestCase):
             self.assertTrue(bash_rules.check("docker run alpine", ctx()))
 
 
+class Heavy(unittest.TestCase):
+    """In the agent host pod a test, journey or stress run is refused and kgate is named; kgate runs, light commands and every other machine pass."""
+    REFUSED = [
+        ("npx vitest run", "npx vitest"), ("vitest", "vitest"), ("vitest run --reporter=dot", "vitest"), ("bunx vitest", "bunx vitest"),
+        ("pnpm exec vitest run", "pnpm exec vitest"), ("npm exec vitest", "npm exec vitest"), ("pnpm dlx vitest", "pnpm dlx vitest"),
+        ("npm test", "npm test"), ("npm t", "npm t"), ("npm test -- --run foo", "npm test"), ("npm --prefix web test", "npm test"),
+        ("npm run test", "npm run test"), ("npm run test:unit", "npm run test:unit"), ("npm run-script test", "npm run-script test"),
+        ("npm run journeys", "npm run journeys"), ("npm run stress", "npm run stress"), ("npm run vitest", "npm run vitest"),
+        ("pnpm test", "pnpm test"), ("pnpm run test:unit", "pnpm run test:unit"), ("pnpm test:unit", "pnpm test:unit"),
+        ("yarn test", "yarn test"), ("yarn vitest", "yarn vitest"), ("bun test", "bun test"), ("bun run test", "bun run test"),
+        ("python3 scripts/journeys.py --skip-evals", "python3 scripts/journeys.py"), ("python3 -u scripts/journeys.py", "python3 scripts/journeys.py"),
+        ("stress --cpu 8", "stress"), ("stress-ng --cpu 4 --timeout 60s", "stress-ng"),
+        ("timeout 900 npm test", "npm test"), ("sh -c 'cd x && npm test'", "npm test"), ("cd x && npx vitest run", "npx vitest"),
+        ("run-and-wake -- npm test", "npm test"), ("heavy-gate npm test", "npm test"), ("nohup npm test &", "npm test"),
+        ("sudo npm test", "npm test"), ("env CI=1 npm test", "npm test"), ("x=$(npm test)", "npm test"), ("echo hi; npm test | tail -5", "npm test"),
+        ("find . -name x -exec vitest run {} \\;", "vitest"),
+        ("yarn workspace web test", "yarn test"), ("yarn workspace web run test:unit", "yarn run test:unit"),
+        ("node node_modules/.bin/vitest run", "node vitest"), ("node node_modules/vitest/vitest.mjs run", "node vitest"),
+        ("corepack pnpm test", "pnpm test"), ("corepack npm run test:unit", "npm run test:unit"),
+        ("uv run scripts/journeys.py", "journeys.py"), ("uv run python3 scripts/journeys.py --skip-evals", "python3 scripts/journeys.py"),
+    ]
+    ALLOWED = [
+        "kgate -- npm test", "run-and-wake -- kgate -- npx vitest run", "kgate --cpu 4 -- sh -c 'npm ci && npm test'",
+        "run-and-wake -- scripts/kgate-journeys.sh", "scripts/kgate-journeys.sh", "scripts/main-journeys.sh",
+        "git status", "git log --oneline -5", "npm run typecheck", "npm run lint", "npm ci", "npm install", "npm run build", "npm view vitest version",
+        "npm install vitest", "npx tsc --noEmit src/x.ts", "node scripts/x.ts", "node --experimental-strip-types scripts/check-close-commands.ts",
+        "pnpm install", "pnpm lint", "yarn build", "bun install", "python3 scripts/other.py", "python3 -m unittest tests.x",
+        "echo npm test", "git commit -m 'npm test and vitest'", "grep -rn vitest package.json", "cat vitest.config.ts", "ls scripts/journeys",
+        "ssh kgate-host npm test",
+        "npm run typecheck:test", "npm run lint:test", "pnpm typecheck:test", "pnpm lint:test", "yarn run typecheck:test",  # light checks that mention test
+        "npx playwright test", "make test", "yarn workspace web build", "corepack enable", "corepack pnpm install", "uv run scripts/other.py",
+        "node node_modules/.bin/tsc --noEmit", "node scripts/vitest-notes.ts",
+    ]
+
+    def test_refused_with_kgate_named(self):
+        for text, spelling in self.REFUSED:
+            with self.subTest(text=text):
+                message = check(text, container=True) or ""
+                self.assertIn("`%s` is refused in agent sessions in the agent host pod" % spelling, message)
+                self.assertIn("run-and-wake -- kgate -- <cmd>", message)
+
+    def test_allowed(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(check(text, container=True))
+
+    def test_only_the_pod_runs_it(self):
+        text = "npx vitest run"
+        for profile, container, want in [("personal", True, True), ("axon-work-computer", True, True), (None, True, True),
+                                         ("personal", False, False), ("axon-work-computer", False, False), (None, False, False)]:
+            with self.subTest(profile=profile, container=container):
+                self.assertEqual(bool(check(text, profile=profile, container=container)), want)
+
+    def test_the_rule_is_named_in_the_refusal_record(self):
+        full = bash_rules.Context(**dict(ctx(container=True)._asdict(), platform="linux"))
+        self.assertEqual(bash_rules.refusal("npm test", full)[0], "heavy")
+        self.assertEqual(bash_rules.refusal("docker run x", full)[0], "docker")
+        self.assertIsNone(bash_rules.refusal("git status", full))
+        self.assertEqual(bash_rules.refusal("npx vitest run", full)[2], "npx vitest")   # the matched name, for the guard log
+        self.assertIsNone(bash_rules.refusal("docker run x", full)[2])
+
+
 class LiveGit(unittest.TestCase):
     """Git that changes the live coordinator checkout (the daemon runs from it) is refused on every profile; reads, fetch, the deploy's
     `merge --ff-only <sha>`, the `reset --keep <sha>` rollback and worktrees are not. HOME comes from the Context, not the test machine."""
@@ -647,9 +1076,6 @@ class LiveGit(unittest.TestCase):
         ("cd ~/git/coordinator && git rebase origin/main", "git rebase"),
         ("cd ~/git/coordinator && git cherry-pick abc1234", "git cherry-pick"),
         ("cd ~/git/coordinator && git revert abc1234", "git revert"),
-        ("cd ~/git/coordinator && git stash", "git stash"),
-        ("cd ~/git/coordinator && git stash push -m x", "git stash"),
-        ("cd ~/git/coordinator && git stash pop", "git stash"),
         ("cd ~/git/coordinator && git clean -fd", "git clean"),
         ("cd ~/git/coordinator && git am x.patch", "git am"),
         ("cd ~/git/coordinator && git apply x.patch", "git apply"),
@@ -790,6 +1216,83 @@ class LiveGit(unittest.TestCase):
         self.assertTrue(check("git -C $HOME/git/coordinator merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
 
 
+class Stash(unittest.TestCase):
+    """`git stash` that writes the stash list is refused in any directory and on every profile: every worktree of a repo shares one list
+    (2026-11-24: two builders in coordinator worktrees took each other's stashes). `list` and `show` pass. The refusal names the fix."""
+    REFUSED = [
+        "git stash",
+        "git stash push -m x",
+        "git stash pop",
+        "git stash save x",
+        "git stash apply",
+        "git stash drop",
+        "git stash clear",
+        "git stash store 0123abc",
+        "git stash branch newbranch",
+        "git stash -q",
+        "git stash --keep-index",
+        "git -C ~/tmp-home/x stash push -m x",
+        "git -C ~/git/coordinator stash pop",
+        "git -C ~/git/coordinator stash -Z",  # an unknown flag on a write: the stash rule answers before the flag table
+        "git -C/home/cartwmic/tmp-home/x stash pop",
+        "git --no-pager -C ~/tmp-home/x stash pop",
+        "git --git-dir=/home/cartwmic/tmp-home/x/.git stash pop",
+        "git -c a=b stash",
+        "git --foo stash pop",
+        "cd ~/tmp-home/x && git stash pop",
+        "cd ~/tmp-home/x && git stash push -m x && echo done",
+        "git status; git stash pop",
+        "sh -c 'git stash pop'",
+        "echo $(git stash pop)",
+        "git stash pop || true",
+        "cd ~/git/coordinator && git stash push -m x",
+    ]
+    ALLOWED = [
+        "git stash list",
+        "git stash list --oneline",
+        "git stash show",
+        "git stash show -p",
+        "git stash show stash@{1} --stat",
+        "git -C ~/tmp-home/x stash list",
+        "git --no-pager stash list",
+        "git -C ~/git/coordinator stash show -p",
+        "cd ~/git/coordinator && git stash list",
+        "git show stash@{0}",
+        "git log stash@{0}",
+        "git worktree add ~/tmp-home/x origin/main",
+        "echo git stash pop",  # a word, not a command
+    ]
+    PROFILES = [{"profile": "personal"}, {"profile": "axon-work-computer"}, {"profile": "personal", "container": True}]
+    WORKTREE = {"cwd": "/home/cartwmic/tmp-home/x", "env": {"HOME": "/home/cartwmic"}}
+
+    def stash_refusal(self, text, **kw):
+        return bash_rules.refusal(text, bash_rules.Context(**dict(ctx(**dict(self.WORKTREE, **kw))._asdict(), platform="linux")))
+
+    def test_writes_are_refused_in_any_directory_and_on_every_profile(self):
+        for text in self.REFUSED:
+            for kw in self.PROFILES:
+                with self.subTest(text=text, **kw):
+                    found = self.stash_refusal(text, **kw)
+                    self.assertEqual((found[0], found[2]) if found else None, ("stash", "git stash"))
+
+    def test_read_only_forms_pass(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(self.stash_refusal(text))
+
+    def test_the_refusal_names_the_fix(self):
+        message = check("git -C ~/tmp-home/x stash push -m x", cwd="/x")
+        self.assertIn("`git stash` is refused in agent sessions", message)
+        self.assertIn("Commit your work in progress on your branch", message)
+        self.assertIn("git worktree add <path> origin/main", message)
+        self.assertIn("`git stash list` and `git stash show` are allowed", message)
+
+    def test_the_live_checkout_gets_the_same_refusal(self):
+        message = check("cd ~/git/coordinator && git stash pop", env={"HOME": "/home/cartwmic"}, cwd="/x")
+        self.assertIn("`git stash` is refused in agent sessions", message)
+        self.assertNotIn("live coordinator checkout", message)
+
+
 class Credential(unittest.TestCase):
     """Credential config read raw, or hidden by a line regex, is refused on every profile; the reader and checks that print no value are not.
     REFUSED holds the command shapes of 2026-11-16 (retro proposal 10): RustDesk key and password bytes printed after a regex redaction."""
@@ -884,6 +1387,230 @@ class Credential(unittest.TestCase):
         self.assertIsNone(check("cat peers/1.toml", cwd="/home/u/git/app"))
 
 
+class DoorDelivery(unittest.TestCase):
+    """Rule `door`: a command named by a playbook rule's `At:` line is refused once with the rule text, by asking the coordinator's renderer (here a stub script).
+    The real script and `bash_rules.py` are copied beside a `door.json` that points at the stub and an index of the prefixes the renderer answers for."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.hooks = Path(self.tmp) / "hooks"
+        self.hooks.mkdir()
+        for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+            shutil.copy(HOOKS / name, self.hooks / name)
+        self.state = Path(self.tmp) / "state"
+        (self.state / "t3-hook").mkdir(parents=True)
+        self.calls = Path(self.tmp) / "calls.jsonl"
+        self.log = Path(self.tmp) / "guard.jsonl"
+        self.stub = Path(self.tmp) / "stub.py"
+        self.set_renderer('print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:gh pr create): rule 1234abcd"}))')
+        self.set_index(["gh pr create", "kubectl"])
+        self.set_config({"enabled": True, "command": [sys.executable, str(self.stub)], "state": str(self.state)})
+
+    def set_renderer(self, body):
+        self.stub.write_text("import json, sys\nask = json.load(sys.stdin)\nopen(%r, 'a').write(json.dumps(ask) + '\\n')\n%s\n" % (str(self.calls), body))
+
+    def set_index(self, cmds):
+        (self.state / "t3-hook" / "door-index.json").write_text(json.dumps({"cmds": cmds, "tools": []}))
+
+    def set_config(self, config):
+        (self.hooks / "door.json").write_text(json.dumps(config))
+
+    def asked(self):
+        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+
+    def run_hook(self, command, payload=None, profile=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_DOOR", "AGENT_HARNESS_PROFILE", "COORDINATOR_STATE_DIR")}
+        if profile:
+            env["AGENT_HARNESS_PROFILE"] = profile
+        env["AGENT_HARNESS_GUARD_LOG"] = str(self.log)
+        body = {"tool_name": "Bash", "cwd": self.tmp, "session_id": "run-1", "tool_input": {"command": command}}
+        body.update(payload or {})
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(body), capture_output=True, text=True, env=env, timeout=30)
+
+    def test_a_command_at_a_door_is_refused_with_the_rule_text_and_names_the_run(self):
+        run = self.run_hook("gh pr create --title x")
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("refused in agent sessions", run.stderr)
+        self.assertIn("1234abcd", run.stderr)
+        (ask,) = self.asked()
+        self.assertEqual((ask["run"], ask["kind"], ask["value"], ask["adapter"]), ("run-1", "cmd", "gh pr create --title x", "claude"))
+
+    def test_the_renderer_is_not_started_for_a_command_no_door_names(self):
+        for command in ("ls -la", "gh pr view 3", "git status && echo hi", "gh pr"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command).returncode, 0)
+        self.assertEqual(self.asked(), [])
+
+    def test_a_prefix_matches_by_words_and_through_a_path_a_pipe_and_a_compound(self):
+        for command in ("/usr/bin/kubectl get pods", "echo x | kubectl apply -f -", "cd /tmp && gh pr create"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command).returncode, 2)
+        self.assertEqual(self.run_hook("kubectlx get pods").returncode, 0)
+
+    def test_a_repo_flag_before_the_gh_subcommand_does_not_hide_the_door(self):
+        for command in ("gh -R owner/repo pr create --title x", "gh --repo owner/repo pr create", "gh --repo=owner/repo pr create", "gh -R=owner/repo pr create"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_hook(command, {"session_id": "run-" + str(abs(hash(command)))}).returncode, 2)
+        self.assertEqual([ask["value"] for ask in self.asked()].count("gh pr create --title x"), 1)
+        self.assertEqual({ask["value"] for ask in self.asked()}, {"gh pr create --title x", "gh pr create"})
+        # only the flag straight after gh is dropped: a `-R` elsewhere, and other gh commands, are as typed
+        self.assertEqual(self.run_hook("gh -R owner/repo pr view 3").returncode, 0)
+
+    def test_pr_open_reaches_its_door_on_both_profiles(self):
+        self.set_index(["gh pr create", "pr-open", "kubectl"])
+        self.set_renderer('print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:pr-open): rule 1234abcd"}))')
+        for profile in ("personal", "axon-work-computer"):
+            with self.subTest(profile=profile):
+                run = self.run_hook("pr-open --edit 5 --body-file /tmp/pr-5-body.AbCdEf", {"session_id": "run-" + profile}, profile=profile)
+                self.assertEqual(run.returncode, 2)
+                self.assertIn("door cmd:pr-open", run.stderr)
+        self.assertEqual({ask["value"] for ask in self.asked()}, {"pr-open --edit 5 --body-file /tmp/pr-5-body.AbCdEf"})
+
+    def test_the_told_refusal_writes_no_guard_log_line_of_its_own(self):
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.assertFalse(self.log.exists())
+
+    def test_a_renderer_with_nothing_to_tell_lets_the_command_run(self):
+        self.set_renderer("print('{}')")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(len(self.asked()), 1)
+
+    def test_a_renderer_that_fails_or_prints_rubbish_lets_the_command_run(self):
+        for body in ("sys.exit(3)", "print('not json')", "print(json.dumps({'text': 5}))"):
+            with self.subTest(body=body):
+                self.set_renderer(body)
+                self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+
+    def records(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_a_renderer_that_fails_is_one_door_failed_line_that_names_the_failure_and_never_the_command(self):
+        for body, want in (("sys.exit(3)", "exited 3"), ("print('not json')", "not readable"), ("sys.stderr.write('t3-hook --door: no playbook\\n')", "no playbook"), ("sys.stderr.write('boom\\n'); sys.exit(1)", "exited 1: boom")):
+            with self.subTest(body=body):
+                self.log.unlink(missing_ok=True)
+                self.set_renderer(body)
+                self.assertEqual(self.run_hook("gh pr create --body SECRET-VALUE").returncode, 0)
+                (record,) = self.records()
+                self.assertEqual((record["action"], record["run"], record["adapter"]), ("door-failed", "run-1", "claude"))
+                self.assertIn(want, record["reason"])
+                self.assertNotIn("SECRET-VALUE", self.log.read_text())
+
+    def test_the_callers_wait_longer_than_the_renderer_so_a_hang_is_logged_not_killed(self):
+        # A renderer that hangs is cut off after DOOR_TIMEOUT seconds and logged as a `door-failed` line. The hosts that run this script (Pi's extension, the Codex hook, Cursor's shell_guard) must not stop it first.
+        inner = int(re.search(r"timeout=(\d+),\s*env=dict\(self\.env, COORDINATOR_STATE_DIR", (HOOKS / "refuse_pattern_kill.py").read_text()).group(1))
+        pi = re.search(r"timeout:\s*(\d+)_(\d{3})", (ROOT / "dot_pi/private_agent/extensions/refuse-pattern-kill/index.ts").read_text())
+        codex = re.search(r"timeout:\s*(\d+)\}", (ROOT / "dot_codex/modify_hooks.json.tmpl").read_text())
+        cursor = re.search(r"timeout\s*=\s*(\d+)", (ROOT / "dot_cursor/hooks/executable_shell_guard.py").read_text())
+        for name, outer in (("Pi", int(pi.group(1)) if pi.group(2) == "000" else None), ("Codex", int(codex.group(1))), ("Cursor", int(cursor.group(1)))):
+            self.assertIsNotNone(outer, name)
+            self.assertGreater(outer, inner, "%s stops the classifier after %s s, before its %s s renderer wait" % (name, outer, inner))
+
+    def test_nothing_to_tell_and_a_told_refusal_write_no_failure_line(self):
+        self.set_renderer("print('{}')")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.set_renderer("print(json.dumps({'text': 'This call is refused in agent sessions this once: x'}))")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.set_renderer("pass")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.records(), [])
+
+    def test_no_session_id_no_config_or_a_disabled_config_means_no_door(self):
+        self.assertEqual(self.run_hook("gh pr create", {"session_id": ""}).returncode, 0)
+        self.set_config({"enabled": False, "command": [sys.executable, str(self.stub)], "state": str(self.state)})
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        (self.hooks / "door.json").unlink()
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.asked(), [])
+
+    def test_a_missing_or_broken_index_means_no_door_and_a_broken_one_is_in_the_log(self):
+        (self.state / "t3-hook" / "door-index.json").write_text("{not json")
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        (record,) = self.records()
+        self.assertEqual((record["action"], record["run"]), ("door-failed", "run-1"))
+        self.assertIn("index could not be read", record["reason"])
+        self.log.unlink()
+        (self.state / "t3-hook" / "door-index.json").unlink()
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.asked(), [])
+        self.assertEqual(self.records(), [])  # no index yet is not a failure
+
+    def test_a_door_json_that_is_there_and_broken_is_in_the_log_and_a_missing_one_is_not(self):
+        for text in ("{not json", "[1]", json.dumps({"enabled": True}), json.dumps({"enabled": True, "command": ["x"]})):
+            with self.subTest(text=text):
+                self.log.unlink(missing_ok=True)
+                (self.hooks / "door.json").write_text(text)
+                self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+                (record,) = self.records()
+                self.assertEqual(record["action"], "door-failed")
+                self.assertIn("door.json", record["reason"])
+        self.log.unlink(missing_ok=True)
+        (self.hooks / "door.json").unlink()
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.records(), [])
+
+    def test_cursor_is_named_by_its_conversation_id(self):
+        run = self.run_hook("gh pr create", {"session_id": None, "conversation_id": "conv-9"})
+        self.assertEqual(run.returncode, 2)
+        (ask,) = self.asked()
+        self.assertEqual((ask["run"], ask["adapter"]), ("conv-9", "cursor"))
+
+    def test_the_adapter_is_taken_from_the_payload_when_the_caller_names_it(self):
+        self.assertEqual(self.run_hook("gh pr create", {"adapter": "pi"}).returncode, 2)
+        self.assertEqual(self.asked()[0]["adapter"], "pi")
+
+    def test_another_rule_refuses_first_and_the_renderer_is_not_asked(self):
+        self.set_index(["gh pr create", "gh pr merge"])
+        run = self.run_hook("gh pr merge 3 && gh pr create", profile="personal")
+        self.assertEqual(run.returncode, 2)
+        self.assertNotIn("1234abcd", run.stderr)
+        self.assertEqual(self.asked(), [])
+
+    def render(self, profile, extra=""):
+        home = Path(self.tmp) / ("home-" + profile + str(len(extra)))
+        home.mkdir()
+        config = Path(self.tmp) / (profile + str(len(extra)) + ".yaml")
+        config.write_text("data:\n  profile: %s\n%s" % (profile, extra))
+        run = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination", str(home), "execute-template"],
+                             input=(HOOKS / "door.json.tmpl").read_text(), capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return home, json.loads(run.stdout)
+
+    @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
+    def test_the_rendered_file_names_each_profiles_own_renderer_and_state_directory(self):
+        home, personal = self.render("personal")
+        self.assertEqual(personal["state"], str(home / ".local/share/coordinator"))
+        self.assertEqual(personal["command"][-2:], [str(home / "git/coordinator/src/t3-hook/hook.ts"), "--door"])
+        home, work = self.render("axon-work-computer")
+        self.assertEqual(work["state"], str(home / ".local/share/coordinator-work"))
+        self.assertEqual(work["command"][-2:], [str(home / "coordinator-work/src/t3-hook/hook.ts"), "--door"])
+        for config in (personal, work):
+            self.assertIs(config["enabled"], True)
+
+    @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi is not installed")
+    def test_remove_coordinator_hook_renders_the_door_off(self):
+        _, off = self.render("personal", "  agentHost:\n    removeCoordinatorHook: true\n")
+        self.assertIs(off["enabled"], False)
+        _, on = self.render("personal", "  agentHost:\n    removeCoordinatorHook: false\n")
+        self.assertIs(on["enabled"], True)
+
+    def test_a_renderer_that_tells_once_per_run_lets_the_same_command_pass_the_second_time(self):
+        told = Path(self.tmp) / "told.json"
+        self.set_renderer("""
+import os
+told = %r
+seen = json.load(open(told)) if os.path.exists(told) else []
+if ask["run"] in seen:
+    print("{}")
+else:
+    json.dump(seen + [ask["run"]], open(told, "w"))
+    print(json.dumps({"text": "This call is refused in agent sessions this once (door cmd:gh pr create): rule 1234abcd"}))
+""" % str(told))
+        self.assertEqual(self.run_hook("gh pr create").returncode, 2)
+        self.assertEqual(self.run_hook("gh pr create").returncode, 0)
+        self.assertEqual(self.run_hook("gh pr create", {"session_id": "run-2"}).returncode, 2)
+
+
 class Hook(unittest.TestCase):
     """The real script, copied beside a `profile` file in a temp dir."""
 
@@ -899,11 +1626,12 @@ class Hook(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def run_hook(self, command, tool="Bash", profile=None, argv=None, hooks=None):
+    def run_hook(self, command, tool="Bash", profile=None, argv=None, hooks=None, cwd=None, extra_env=None):
         env = {k: v for k, v in os.environ.items() if k != "AGENT_HARNESS_PROFILE"}
         if profile:
             env["AGENT_HARNESS_PROFILE"] = profile
-        payload = {"tool_name": tool, "cwd": self.tmp, "tool_input": {"command": command}}
+        env.update(extra_env or {})
+        payload = {"tool_name": tool, "cwd": cwd or self.tmp, "tool_input": {"command": command}}
         if tool is None:
             del payload["tool_name"]
         return subprocess.run([sys.executable, str((hooks or self.hooks) / "refuse_pattern_kill.py")] + (argv or []),
@@ -918,17 +1646,17 @@ class Hook(unittest.TestCase):
 
     def test_the_profile_comes_from_the_file_beside_the_script(self):
         merge = "gh pr merge 12"
-        for text, want in [("personal\n", 2), ("axon-work-computer\n", 0), (None, 0), ("", 0)]:
+        for text, want in [("personal\n", 2), ("axon-work-computer\n", 2), ("termux\n", 0), (None, 0), ("", 0)]:
             with self.subTest(profile_file=text):
                 self.set_profile_file(text)
                 self.assertEqual(self.run_hook(merge).returncode, want)
         self.set_profile_file(None)
 
     def test_the_env_var_overrides_the_file(self):
-        self.set_profile_file("axon-work-computer\n")
+        self.set_profile_file("termux\n")
         self.assertEqual(self.run_hook("gh pr merge 12", profile="personal").returncode, 2)
         self.set_profile_file("personal\n")
-        self.assertEqual(self.run_hook("gh pr merge 12", profile="axon-work-computer").returncode, 0)
+        self.assertEqual(self.run_hook("gh pr merge 12", profile="termux").returncode, 0)
         self.set_profile_file(None)
 
     def test_poll_and_heredoc_run_with_no_profile_at_all(self):
@@ -964,12 +1692,101 @@ class Hook(unittest.TestCase):
         broken = Path(self.tmp) / "broken"
         broken.mkdir()
         shutil.copy(HOOKS / "refuse_pattern_kill.py", broken / "refuse_pattern_kill.py")
-        (broken / "bash_rules.py").write_text("def check(text, ctx):\n    raise RuntimeError('boom')\nContext = lambda **kw: None\n")
+        (broken / "bash_rules.py").write_text("def refusal(text, ctx):\n    raise RuntimeError('boom')\nContext = lambda **kw: None\n")
         run = self.run_hook("until ok; do sleep 1; done", hooks=broken)
         self.assertEqual((run.returncode, run.stderr), (0, ""))
         self.assertEqual(self.run_hook("pkill x", hooks=broken).returncode, 2)  # the old check still works
         (broken / "bash_rules.py").unlink()  # a missing sibling allows too
         self.assertEqual(self.run_hook("until ok; do sleep 1; done", hooks=broken).returncode, 0)
+
+    def set_container_file(self, text):
+        path = self.hooks / "container"
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(text)
+
+    def run_pod_hook(self, command, container_env=None, log=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_GUARD_LOG")}
+        if container_env is not None:
+            env["AGENT_HARNESS_CONTAINER"] = container_env
+        env["AGENT_HARNESS_GUARD_LOG"] = str(log or os.devnull)
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                              capture_output=True, text=True, env=env, timeout=30)
+
+    def test_the_pod_comes_from_the_container_file_beside_the_script(self):
+        for text, want in [("true\n", 2), ("false\n", 0), (None, 0), ("", 0)]:
+            with self.subTest(container_file=text):
+                self.set_container_file(text)
+                run = self.run_pod_hook("npx vitest run")
+                self.assertEqual(run.returncode, want)
+                if want:
+                    self.assertIn("kgate", run.stderr)
+        self.set_container_file(None)
+
+    def test_the_container_env_var_overrides_the_file(self):
+        self.set_container_file("false\n")
+        self.assertEqual(self.run_pod_hook("npm test", container_env="true").returncode, 2)
+        self.set_container_file("true\n")
+        self.assertEqual(self.run_pod_hook("npm test", container_env="false").returncode, 0)
+        self.set_container_file(None)
+
+    def test_the_heavy_refusal_carries_the_phrase_the_pi_extension_blocks_on(self):   # refuse-pattern-kill/index.ts REFUSAL_MARK
+        self.set_container_file("true\n")
+        run = self.run_pod_hook("npx vitest run")
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("refused in agent sessions", run.stderr)
+        self.set_container_file(None)
+
+    def test_in_the_pod_kgate_runs_and_light_commands_pass_through_the_real_script(self):
+        self.set_container_file("true\n")
+        for command in ("kgate -- npm test", "run-and-wake -- kgate -- npx vitest run", "git status", "npm run typecheck"):
+            with self.subTest(command=command):
+                self.assertEqual(self.run_pod_hook(command).returncode, 0)
+        self.set_container_file(None)
+
+    def test_a_refusal_is_one_json_line_in_the_guard_log(self):
+        log = Path(self.tmp) / "state" / "guard.jsonl"
+        log.parent.mkdir(exist_ok=True)
+        log.unlink(missing_ok=True)
+        self.assertEqual(self.run_pod_hook("npm test", container_env="true", log=log).returncode, 2)
+        self.assertEqual(self.run_pod_hook("git status", container_env="true", log=log).returncode, 0)  # an allowed command writes nothing
+        self.assertEqual(self.run_pod_hook("npm test", container_env="false", log=log).returncode, 0)
+        records = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(len(records), 1)
+        self.assertEqual((records[0]["action"], records[0]["rule"], records[0]["tool"]), ("refuse", "heavy", "Bash"))
+        self.assertNotIn("command", records[0])  # a refused command can hold a token
+        self.assertRegex(records[0]["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
+
+    def test_the_record_holds_the_matched_command_and_the_directory_but_not_the_rest_of_the_command(self):
+        log = Path(self.tmp) / "state" / "guard.jsonl"
+        log.parent.mkdir(exist_ok=True)
+        log.unlink(missing_ok=True)
+        secret = "ghp_notARealToken123456789"
+        self.assertEqual(self.run_pod_hook("API_KEY=%s npx vitest run --reporter=%s" % (secret, secret), container_env="true", log=log).returncode, 2)
+        self.assertEqual(self.run_pod_hook("npm run test:unit -- --token %s" % secret, container_env="true", log=log).returncode, 2)
+        self.assertEqual(self.run_pod_hook("until ok; do sleep 1; done", container_env="true", log=log).returncode, 2)  # a rule with no fixed list
+        text = log.read_text()
+        self.assertNotIn(secret, text)
+        self.assertNotIn("--reporter", text)
+        self.assertNotIn("--token", text)
+        records = [json.loads(line) for line in text.splitlines()]
+        self.assertEqual([(r["rule"], r["matched"]) for r in records], [("heavy", "npx vitest"), ("heavy", "npm run test:unit"), ("poll", None)])
+        for record in records:
+            self.assertEqual(record["cwd"], self.tmp)
+
+    def test_a_record_without_a_tool_name_is_still_logged(self):   # the Pi extension sends tool_name "bash"; other callers may send none
+        log = Path(self.tmp) / "state" / "guard.jsonl"
+        log.parent.mkdir(exist_ok=True)
+        log.unlink(missing_ok=True)
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_HARNESS_GUARD_LOG"}
+        env.update(AGENT_HARNESS_CONTAINER="true", AGENT_HARNESS_GUARD_LOG=str(log))
+        for payload, tool in (({"tool_name": "bash", "tool_input": {"command": "npm test"}}, "bash"), ({"tool_input": {"command": "npm test"}}, None)):
+            run = subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload),
+                                 capture_output=True, text=True, env=env, timeout=30)
+            self.assertEqual(run.returncode, 2)
+        self.assertEqual([json.loads(line)["tool"] for line in log.read_text().splitlines()], ["bash", None])
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "the docker rule runs on Linux only")
     def test_the_reviewers_real_docker_runs_are_refused_through_the_real_script(self):
@@ -1049,6 +1866,92 @@ class Hook(unittest.TestCase):
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()
         self.assertEqual(text, "{{ .profile }}\n")
+
+    def test_a_stash_write_is_refused_and_a_read_passes_through_the_real_script(self):
+        """The commands of the 2026-11-24 incident, sent to the real script the way Claude Code sends them: JSON on stdin, from a worktree.
+        Three writes are refused with the fix on stderr; `git stash list` passes. Every profile file gives the same answer."""
+        worktree = f"{self.tmp}/wt-a"
+        for profile in (None, "personal", "axon-work-computer"):
+            for command, want in [("git stash", 2), ("git stash pop", 2), ("git -C %s stash push -m x" % worktree, 2), ("git stash list", 0)]:
+                with self.subTest(profile=profile, command=command):
+                    run = self.run_hook(command, profile=profile, cwd=worktree)
+                    self.assertEqual(run.returncode, want, run.stderr)
+                    if want == 2:
+                        self.assertIn("refused in agent sessions", run.stderr)
+                        self.assertIn("git worktree add <path> origin/main", run.stderr)
+
+    def test_a_stash_refusal_writes_one_guard_log_line_naming_the_rule(self):
+        log = Path(self.tmp) / "guard.jsonl"
+        run = self.run_hook("git stash pop", extra_env={"AGENT_HARNESS_GUARD_LOG": str(log)})
+        self.assertEqual(run.returncode, 2, run.stderr)
+        record = json.loads(log.read_text().splitlines()[-1])
+        self.assertEqual((record["action"], record["rule"], record["matched"]), ("refuse", "stash", "git stash"))
+
+
+class LiveGitWorkCheckout(unittest.TestCase):
+    """The work coordinator runs from its own checkout (~/coordinator-work, or the path in local data), which the `coordinator-instance` file names:
+    git that changes it is refused as in ~/git/coordinator, and the same file's other path stays protected."""
+    HOME = {"HOME": "/Users/test"}
+    WORK = "/Users/test/coordinator-work"
+
+    def work(self, text, cwd="/Users/test/tmp-home/x", repo=WORK, **kw):
+        return check(text, env=self.HOME, cwd=cwd, profile="axon-work-computer", coordinator_repo=repo, **kw)
+
+    def test_the_work_checkout_is_refused(self):
+        for text, spelling in [("cd /Users/test/coordinator-work && git merge origin/main", "git merge"),
+                               ("git -C /Users/test/coordinator-work commit -m x", "git commit"),
+                               ("cd ~/coordinator-work && git checkout main", "git checkout"),
+                               ("cd /Users/test/coordinator-work/src && git add -A", "git add")]:
+            with self.subTest(text=text):
+                self.assertIn(spelling, self.work(text) or "")
+
+    def test_gh_pr_checkout_in_the_work_checkout_is_refused(self):
+        self.assertIn("gh pr checkout", self.work("gh pr checkout 5", cwd="/Users/test/coordinator-work") or "")
+        self.assertIsNone(self.work("gh pr checkout 5", cwd="/Users/test/tmp-home/x"))
+
+    def test_a_path_set_in_local_data_is_refused_too(self):
+        self.assertIn("git merge", self.work("git -C /Volumes/Workshop/work/coordinator merge origin/main", repo="/Volumes/Workshop/work/coordinator") or "")
+
+    def test_the_old_path_is_still_refused_on_work(self):
+        self.assertIn("git merge", self.work("git -C /Users/test/git/coordinator merge origin/main") or "")
+
+    def test_the_refusal_names_the_work_checkout_not_git_coordinator(self):
+        msg = self.work("git -C /Users/test/coordinator-work merge origin/main") or ""
+        self.assertIn("(/Users/test/coordinator-work)", msg)
+        self.assertNotIn("~/git/coordinator", msg)
+        self.assertIn("(/Users/test/coordinator-work)", self.work("gh pr checkout 5", cwd="/Users/test/coordinator-work") or "")
+
+    def test_the_merge_refusals_name_the_work_merge_script(self):
+        for text in ["gh pr merge 12 -R cartwmic/coordinator", "gh pr merge 12 -R acme/app"]:
+            with self.subTest(text=text):
+                msg = self.work(text) or ""
+                self.assertIn("/Users/test/coordinator-work/scripts/merge-pr.sh", msg)
+                self.assertNotIn("~/git/coordinator", msg)
+
+    def test_the_other_pr_and_coordinator_merge_refusals_name_the_work_merge_script(self):
+        script = "/Users/test/coordinator-work/scripts/merge-pr.sh"
+        other = self.work("ci-main-status --merge-gate acme/app && pr-body-check acme/app 5 && gh pr merge 12 -R acme/app") or ""
+        self.assertIn(script, other)
+        self.assertNotIn("~/git/coordinator", other)
+        coordinator = self.work("ci-main-status --merge-gate cartwmic/coordinator && pr-body-check cartwmic/coordinator 12 && gh pr merge 12 -R cartwmic/coordinator") or ""
+        self.assertIn(script, coordinator)
+        self.assertNotIn("~/git/coordinator", coordinator)
+
+    def test_personal_refusals_still_name_git_coordinator(self):
+        msg = check("git -C /Users/test/git/coordinator merge origin/main", env=self.HOME, cwd="/Users/test/tmp-home/x", profile="personal") or ""
+        self.assertIn("(~/git/coordinator)", msg)
+        merge = check("gh pr merge 12 -R acme/app", env=self.HOME, cwd="/Users/test/tmp-home/x", profile="personal") or ""
+        self.assertIn("~/git/coordinator/scripts/merge-pr.sh", merge)
+
+    def test_reads_worktrees_and_other_checkouts_pass(self):
+        for text in ["git -C /Users/test/coordinator-work log -3", "git -C /Users/test/coordinator-work fetch",
+                     "git -C /Users/test/coordinator-work worktree add ~/tmp-home/x origin/main",
+                     "git -C /Users/test/coordinator-work-notes commit -m x", "cd /Users/test/tmp-home/x && git commit -m x"]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.work(text))
+
+    def test_without_the_file_the_work_checkout_is_not_known(self):
+        self.assertIsNone(self.work("git -C /Users/test/coordinator-work commit -m x", repo=None))
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ then verify mapping with the `termux` profile.
 Every brief and design for a dotfiles feature targets both the personal and axon-work-computer profiles, or says in one line why one is left out. An agent from the personal side may act on the work machine (including applying dotfiles there) only with Michael's confirmation for that action; a confirmation covers only the action it names. Anything new an employer might care about is asked before it is built.
 [docs/profiles.md](./docs/profiles.md) lists every path that lands on one
 desktop profile and why; `tests/profiles` fails when a gate has no row.
+[docs/gate-coverage.md](./docs/gate-coverage.md) lists each agent guard rail (PR gates, review log, Bash rules) with whether it runs on personal and on work, and the test that proves it; `tests/profiles/test_gate_coverage.py` checks it.
 
 Shell scripts: POSIX where possible, `set -eu`, helpers from `utils.sh`
 (`is_macos`, `is_ubuntu`), log prefix `[script_name] LEVEL: message`, clean

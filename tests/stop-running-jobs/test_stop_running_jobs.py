@@ -42,12 +42,12 @@ class HookTest(unittest.TestCase):
                 p.kill()
             p.wait()
 
-    def hook(self, thread=MINE):
+    def hook(self, thread=MINE, *args):
         env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "STOP_JOBS_THREAD")}
         env.update(RUN_AND_WAKE_STATE=str(self.rw), KGATE_STATE=str(self.kg))
         if thread:
             env["STOP_JOBS_THREAD"] = thread
-        return subprocess.run([sys.executable, str(HOOK)], input="{}", capture_output=True, text=True, env=env, timeout=30)
+        return subprocess.run([sys.executable, str(HOOK), *args], input="{}", capture_output=True, text=True, env=env, timeout=30)
 
     def start_process(self, seconds=120, **env):
         p = subprocess.Popen(["sleep", str(seconds)], env={**os.environ, **env}, start_new_session=True)
@@ -189,6 +189,24 @@ class HookTest(unittest.TestCase):
         self.assertIn("run-and-wake job 20261116T180000Z-aaaaaa", done.stderr)
         self.assertIn("kgate job kgate-1794853578-111", done.stderr)
 
+    # -- count mode (the lead's turn-end check takes the number as a fact)
+
+    def test_count_prints_the_running_jobs_of_this_thread_and_never_refuses(self):
+        self.rw_job("20261116T180000Z-aaaaaa")
+        self.rw_job("20261116T180000Z-bbbbbb", thread=OTHER)
+        self.kgate_entry("kgate-1794853578-111")
+        self.kgate_entry("kgate-1794853578-222", job="20261116T180000Z-aaaaaa")
+        done = self.hook(MINE, "--count")
+        self.assertEqual((done.returncode, done.stdout.strip(), done.stderr), (0, "2", ""))
+
+    def test_count_is_zero_with_nothing_running_with_no_thread_and_on_unreadable_records(self):
+        self.assertEqual(self.hook(MINE, "--count").stdout.strip(), "0")
+        self.rw_job("20261116T180000Z-aaaaaa")
+        self.assertEqual(self.hook(None, "--count").stdout.strip(), "0")
+        (self.rw / "log.jsonl").write_text('{"event": "start", "thread": "thread:me" broken\n')
+        done = self.hook(MINE, "--count")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "0"))
+
     # -- fail open
 
     def test_no_thread_means_no_refusal(self):
@@ -220,9 +238,28 @@ class WaitHintTest(unittest.TestCase):
         self.assertEqual(MOD.wait_hint(7), MOD.wait_hint(7, sys.platform))
 
 
+class CrashTest(unittest.TestCase):
+    """A fault inside main never traps a session: a stop is allowed, and --count prints 0 (the lead's turn-end check then counts no jobs)."""
+
+    def run_broken(self, *args):
+        broken = HOOK.read_text().replace("def main(argv=()):", 'def main(argv=()):\n    raise RuntimeError("boom")\n', 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "broken.py"
+            script.write_text(broken)
+            return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, timeout=30)
+
+    def test_count_prints_zero_when_main_crashes(self):
+        done = self.run_broken("--count")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "0"))
+
+    def test_a_stop_is_allowed_when_main_crashes(self):
+        done = self.run_broken()
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
+
+
 @unittest.skipUnless(shutil.which("chezmoi"), "chezmoi needed")
 class SeatFileTest(unittest.TestCase):
-    """Only the builder's seat file carries the Stop hook; it runs the script and passes its exit 2 through; it fails open."""
+    """Only the builder's seat file carries this Stop hook (the lead's carries lead_turn_end.py, tested in tests/lead-turn-end); it runs the script and passes its exit 2 through; it fails open."""
 
     @staticmethod
     def render(seat, profile):
@@ -235,11 +272,13 @@ class SeatFileTest(unittest.TestCase):
         assert r.returncode == 0, r.stderr
         return json.loads(r.stdout)
 
-    def test_only_the_builder_seat_has_the_stop_hook_on_both_profiles(self):
+    def test_only_the_builder_seat_has_this_stop_hook_on_both_profiles(self):
         for profile in ("personal", "axon-work-computer"):
             for seat in ("builder", "lead", "planner", "reviewer", "scout", "coordinator"):
                 hooks = self.render(seat, profile).get("hooks")
-                if seat == "builder":
+                if seat == "lead":
+                    self.assertNotIn("stop_running_jobs.py", json.dumps(hooks))   # the lead's own Stop hook is lead_turn_end.py
+                elif seat == "builder":
                     self.assertEqual(list(hooks), ["Stop"], (profile, seat))
                     self.assertEqual(len(hooks["Stop"]), 1)
                     self.assertIn("stop_running_jobs.py", hooks["Stop"][0]["hooks"][0]["command"])

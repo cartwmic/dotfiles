@@ -1,11 +1,19 @@
 """assemble.py and slice.py, run as the skill runs them (as scripts), on a small repo and work folder; then the assembled guide is fed to the checks.
 Run: python3 -I tests/deriving-readable-docs/test_assemble.py"""
+import atexit
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
 
@@ -52,6 +60,27 @@ class AssembleTest(unittest.TestCase):
             guide = Path(d, "GUIDE.md")
             clean = Path(d, "GUIDE.clean.md")
             return code, out, err, guide.read_text() if guide.exists() else None, clean.read_text() if clean.exists() else None
+
+    def test_a_section_has_the_same_word_count_in_the_writers_check_and_in_the_assembled_guide(self):
+        """The heading is a word of the section both times: the budget a writer checks against is the budget the guide is held to."""
+        import re
+        def words(path, repo):
+            return int(re.search(r"(\d+) words\n", run("check_citations.py", str(path), repo)[1]).group(1))
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo)
+            self.assertEqual(run("assemble.py", d, repo, "--date", "2026-11-20")[0], 0)
+            guide = Path(d, "GUIDE.md").read_text()
+            start = guide.index("## A4 Tagging")
+            end = guide.index("\n## ", start + 1)
+            Path(d, "section.md").write_text(guide[start:end] + "\n")
+            self.assertEqual(words(Path(d, "section.md"), repo), words(Path(d, "A4.md"), repo))
+            self.assertEqual(words(Path(d, "A4.md"), repo), 14)  # the heading's 2 words are in it
+
+    def test_a_work_folder_without_scout_resolved_says_so_instead_of_counting_zero_names(self):
+        code, out, err, guide, _ = self.assemble(**{"scout.resolved": None})
+        self.assertEqual(code, 0, err)
+        self.assertIn("no scout.resolved in the work folder, so no scout names were read", guide)
+        self.assertNotIn("0 scout names found", guide)
 
     def test_the_guide_is_header_part_1_then_the_appendix_in_order(self):
         code, out, err, guide, _ = self.assemble()
@@ -217,9 +246,65 @@ class SliceTest(unittest.TestCase):
         self.assertEqual(out.splitlines(), ["slice 1: lines 1-%d, 1 claims, 0 flags" % (doc.split("\n").index("# Part 2: Appendix") ),
                                             "slice 2: lines %d-%d, 1 claims, 0 flags" % (doc.split("\n").index("# Part 2: Appendix") + 1, len(doc.splitlines()))])
 
+    def test_a_claim_keeps_no_stray_comma_where_its_citation_was_taken_out(self):
+        doc = ("# Part 2: Appendix\n\n## A4 Reading\n\nIt reads `src/cli.py:2`, then stops. [A4.0001]\n"
+               "It reads `src/cli.py:2`, `src/cli.py:3` and writes `src/cli.py:4`; it stops. [A4.0002]\n")
+        code, out, err, files = self.slices(doc)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l.split(" | ", 2)[2] for l in files["slice-1.claims.txt"].splitlines()],
+                         ["It reads, then stops. [A4.0001]", "It reads, and writes; it stops. [A4.0002]"])
+
     def test_bad_usage_exits_2(self):
         self.assertEqual(run("slice.py")[0], 2)
         self.assertEqual(self.slices(SLICE_DOC, "--max-claims", "zero")[0], 2)
+
+
+class AssembleLogTest(unittest.TestCase):
+    """Each run leaves one JSON line (runlog.py) with its outcome, so how often the guide was assembled or refused can be counted."""
+
+    def setUp(self):
+        # Seven of this folder's test modules set XDG_STATE_HOME at import, so under `unittest discover` the last import
+        # wins; give each test its own state folder so the line it reads is the one its own run wrote.
+        state = tempfile.TemporaryDirectory(prefix="state-")
+        self.addCleanup(state.cleanup)
+        self.state = state.name
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def last(self):
+        lines = Path(self.state, "deriving-readable-docs", "log.jsonl").read_text().splitlines()
+        return json.loads(lines[-1]), len(lines)
+
+    def assemble(self, *extra, **over):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo, **over)
+            return run("assemble.py", d, repo, "--date", "2026-11-20", *extra)
+
+    def test_a_run_that_writes_the_guide_leaves_one_ok_line_with_the_guide_size(self):
+        code, out, err = self.assemble("--clean")
+        self.assertEqual(code, 0, err)
+        row, _ = self.last()
+        self.assertEqual((row["script"], row["action"], row["outcome"], row["clean"]), ("assemble.py", "assemble", "ok", True))
+        self.assertGreater(row["guide_lines"], 10)
+
+    def test_the_index_run_is_its_own_action_with_the_number_of_appendix_lines(self):
+        code, out, err = self.assemble("--index")
+        self.assertEqual(code, 0, err)
+        row, _ = self.last()
+        self.assertEqual((row["action"], row["outcome"], row["appendix_lines"]), ("assemble-index", "ok", len(out.splitlines())))
+
+    def test_a_refusal_leaves_a_refused_line_with_the_reason_it_printed(self):
+        code, out, err = self.assemble(**{"A3.md": None})
+        self.assertEqual(code, 1, out)
+        row, _ = self.last()
+        self.assertEqual((row["action"], row["outcome"], row["reason"]), ("assemble", "refused", err.strip()))
+
+    def test_a_usage_error_leaves_no_line(self):
+        self.assertEqual(self.assemble()[0], 0)
+        before = self.last()[1]
+        self.assertEqual(run("assemble.py")[0], 2)
+        self.assertEqual(self.last()[1], before)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ SEAT_HEADING = "## Agent seats and models"
 SEAT_ROWS = {
     "personal": (
         "| Coordinator | Opus 5.5 medium |",
-        "| Lead | Opus 5.5 medium |",
+        "| Lead | Sonnet 5.5 high |",
         "| Planner | Sonnet 5.5 high |",
         "| Reviewer | Opus 5.5 medium |",
         "| Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |",
@@ -35,11 +35,11 @@ SEAT_ROWS = {
     ),
     "axon-work-computer": (
         "| Coordinator | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
-        "| Lead | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
-        "| Planner | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
+        "| Lead | Sonnet 5.5 high, Claude Code (claude-sonnet-5-5) |",
+        "| Planner | Gemini 4 Neon medium, Cursor (gemini-4-neon) |",
         "| Reviewer | Opus 5.5 medium, Claude Code (claude-opus-5-5) |",
-        "| Builder | GLM 5.3 Flash H200, Pi (work-glm/test-model) |",
-        "| Computer use | Sonnet 5.5 high, Cursor (claude-sonnet-5-5) |",
+        "| Builder | GLM 5.3 Flash H200 high, Pi (work-glm/test-model) |",
+        "| Computer use | Sonnet 5.5 high, Claude Code (claude-sonnet-5-5) |",
     ),
 }
 SCOUT_LINE = "- A scout is for wide reading and searching that needs no judgment. It reports what it found and changes nothing."
@@ -50,9 +50,9 @@ ADVISOR_LIMIT = (
 )
 CLI_PROXY_LINE = "- Computer use runs through my cli proxy, like the other seats."
 WORK_SEAT_BULLETS = (
-    "- Coordinator and leads use Cursor (`gemini-4-neon`, `medium` effort). Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
-    "T3 provider claudeAgent. Planners and builders use Pi (`work-glm/test-model`). Computer use uses Cursor "
-    "(`claude-sonnet-5-5`, `high` effort).",
+    "- Coordinator and the planner use Cursor (`gemini-4-neon`, `medium` effort). Leads use Claude Code (Anthropic, `claude-sonnet-5-5`, `high` effort); T3 provider claudeAgent. Reviewers use Claude Code (Anthropic, `claude-opus-5-5`, `medium` effort); "
+    "T3 provider claudeAgent. Builders use Pi (`work-glm/test-model`, `high` thinking). Computer use uses Claude Code "
+    "(Anthropic, `claude-sonnet-5-5`, `high` effort).",
 )
 SUBAGENTS = (
     "Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start "
@@ -70,7 +70,9 @@ ESCALATION = (
     "the question, run it instead. When you do ask: one question at a time, with your recommendation. The "
     "coordinator, and any session I open myself, ask me directly with your harness's question tool. A lead, planner, "
     "builder or reviewer session does not ask me directly: a worker goes to its lead, and a lead records the decision "
-    "with `ledger open` and stops, so the coordinator asks me. No is an acceptable answer."
+    "with `ledger open` and stops, so the coordinator asks me. `ledger open --question` needs `--because` (one of the fixed "
+    "reasons; the command lists them) and refuses an id with no words beside it, so say what each ask or decision is in plain words. "
+    "No is an acceptable answer."
 )
 OLD_LINES = (
     "At the start of a session, confirm with the user when you will use subagents",
@@ -110,6 +112,8 @@ BAR_ROWS = {
     ),
     "axon-work-computer": ("| `git.example.test/*`, `github.com/axon-*` | shared |",),
 }
+CURSOR = ROOT / "dot_cursor" / "rules" / "agent-harness.mdc.tmpl"
+ENFORCEMENT_HEADING = "## Enforcement: the inverted pyramid (stopgap)"
 
 
 # The local data keys the work profile requires (docs/profiles.md, "Local data keys"); placeholder values.
@@ -254,6 +258,14 @@ class InstructionProfileTests(unittest.TestCase):
             for profile in ("personal", "axon-work-computer", "termux"):
                 with self.subTest(harness=name, profile=profile):
                     self.assertNotIn("Risk tolerance is high", render(template, profile))
+
+    def test_enforcement_heading_renders_for_every_harness_and_profile(self):
+        for name, template in {**TEMPLATES, "cursor": CURSOR}.items():
+            for profile in ("personal", "axon-work-computer"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    self.assertEqual(text.count(ENFORCEMENT_HEADING), 1)
+                    self.assertLess(text.index(ENFORCEMENT_HEADING), text.index(BAR_HEADING))
 
 
 if __name__ == "__main__":

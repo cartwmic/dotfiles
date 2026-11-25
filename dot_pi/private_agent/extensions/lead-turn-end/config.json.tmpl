@@ -1,0 +1,10 @@
+{{- /* Where the coordinator checkout and its state directory are, and the hook that counts a session's running jobs. Same places as the coordinator-helper-gate extension:
+personal: instance_repo "coordinator", state ~/.local/share/coordinator. axon-work-computer: instance_repo "coordinator" (~/coordinator-work), state ~/.local/share/coordinator-work.
+agentHost.removeCoordinatorHook (the coordinator runs elsewhere) turns the check off here as it takes the hook out of Claude's settings. */ -}}
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") -}}
+{{- $state := printf "%s/.local/share/coordinator" .chezmoi.homeDir -}}
+{{- if eq .profile "axon-work-computer" -}}
+{{-   $state = printf "%s/.local/share/coordinator-work" .chezmoi.homeDir -}}
+{{- end -}}
+{{- $enabled := not (includeTemplate "agent_host_config" . | fromJson).removeCoordinatorHook -}}
+{{ dict "enabled" $enabled "coordinatorRepo" $repo "stateDir" $state "jobsHook" (printf "%s/.local/share/agent-harness/hooks/stop_running_jobs.py" .chezmoi.homeDir) | toPrettyJson }}

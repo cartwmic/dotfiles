@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command, then run the eight checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, local docker, git in the live coordinator checkout, credential config).
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the eleven checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, issue body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
   Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
@@ -11,15 +11,19 @@ Input: JSON on stdin with the command at tool_input.command (Claude's and Pi's s
 Output: exit 2 and the reason on stderr when a simple command in the text is pkill or killall, or a bash_rules check refuses it, else exit 0.
 It fails open: input it cannot read is allowed, and an error inside bash_rules allows the command, so a bug never stops an agent from working.
 The bash_rules checks that depend on the profile read AGENT_HARNESS_PROFILE, else the file `profile` beside this script (rendered by chezmoi).
+The heavy-job check runs only in the agent host pod: AGENT_HARNESS_CONTAINER=true, else the file `container` beside this script reads `true` (rendered by chezmoi from container mode).
+Every bash_rules refusal is also written as one JSON line ({ts, action, rule, tool, cwd, matched}; `matched` is the command name the rule found, from its fixed list such as `npx vitest`, else null; never the command text, which can hold a token) to ~/.local/state/agent-harness/guard.jsonl (AGENT_HARNESS_GUARD_LOG overrides the path); a write that fails is ignored.
 
 What counts: the command position of any simple command, found through quotes, `;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `$( )`,
 backticks, `sh -c '...'` (and bash, zsh, dash, ksh; also `-lc`), `eval`, heredocs fed to a shell, and wrappers such as `sudo`, `env`,
 `nohup`, `time`, `xargs`, `find -exec`. A path (/usr/bin/pkill) counts. The word merely appearing as an argument (`grep pkill x`,
 `git commit -m "..pkill.."`, `echo killall`) does not. Not covered: a command built at run time (`$cmd`), a script file, `python -c`.
 """
+import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 
 REFUSED = ("pkill", "killall")
@@ -415,6 +419,95 @@ def hook_fields(raw):
     return tool if isinstance(tool, str) else None, cwd if isinstance(cwd, str) else None
 
 
+def hook_session(raw):
+    """(run id, adapter) from the hook JSON: the harness session id (`session_id`, Cursor's `conversation_id`) and the adapter (`adapter` when the caller names it: the Pi extension does; Cursor's payload carries `conversation_id`; else claude).
+    ("", "claude") when the harness sends none: Pi sent no session before the door rule, so its extension adds one."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return "", "claude"
+    if not isinstance(data, dict):
+        return "", "claude"
+    run = next((data[k] for k in ("session_id", "conversation_id", "sessionId") if isinstance(data.get(k), str) and data[k]), "")
+    adapter = data.get("adapter") if data.get("adapter") in ("claude", "cursor", "pi", "codex") else ("cursor" if "conversation_id" in data else "claude")
+    return run, adapter
+
+
+class DoorSource:
+    """The coordinator's renderer, as the `door_rule` of bash_rules.py asks it (see there). Configured by `door.json` beside this script (chezmoi renders it per profile) or the file
+    named by AGENT_HARNESS_DOOR: {"enabled": bool, "command": [argv of `hook.ts --door`], "state": <the coordinator state dir>}; COORDINATOR_STATE_DIR in the environment wins for `state`.
+    The index of command prefixes is `<state>/t3-hook/door-index.json`, written by the renderer at each session start (and by `hook.ts --door-index`); a missing index means no door: the command runs."""
+
+    def __init__(self, config, env, run, adapter):
+        self.command = config.get("command")
+        self.state = env.get("COORDINATOR_STATE_DIR") or config.get("state")
+        self.run, self.adapter, self.env = run, adapter, env
+
+    def cmds(self):
+        try:
+            with open(os.path.join(self.state, "t3-hook", "door-index.json")) as handle:
+                cmds = json.load(handle).get("cmds")
+            return [c for c in cmds if isinstance(c, str)] if isinstance(cmds, list) else []
+        except FileNotFoundError:
+            return []  # no index yet: no door
+        except (OSError, ValueError, TypeError, AttributeError) as error:
+            log_door_failure(self.env, "the door index could not be read (%s)" % type(error).__name__, self.run, self.adapter)
+            return []
+
+    def render(self, command_text):
+        """The refusal text for this command, or None (nothing to tell, or the renderer could not run: the command runs). A renderer that could not run, or answered with something unreadable, is one `door-failed` line in the guard log,
+        so rules that stop arriving can be traced. The line names the failure, never the command."""
+        try:
+            run = subprocess.run(self.command, input=json.dumps({"run": self.run, "kind": "cmd", "value": command_text, "adapter": self.adapter}),
+                                 capture_output=True, text=True, timeout=15, env=dict(self.env, COORDINATOR_STATE_DIR=self.state))
+        except subprocess.TimeoutExpired:
+            return self.failed("the renderer timed out after 15 s")
+        except Exception as error:
+            return self.failed("the renderer could not start (%s)" % type(error).__name__)
+        stderr = (run.stderr or "").strip().splitlines()
+        if run.returncode != 0:
+            return self.failed("the renderer exited %s%s" % (run.returncode, ": " + stderr[0] if stderr else ""))
+        if not run.stdout.strip():
+            # Nothing to tell is normal and silent. The renderer says why on stderr when it failed open itself (an unreadable playbook), and that is a failure to record.
+            return self.failed("the renderer said: " + stderr[0]) if stderr else None
+        try:
+            text = json.loads(run.stdout).get("text")
+        except (ValueError, AttributeError):
+            return self.failed("the renderer's answer was not readable")
+        return text if isinstance(text, str) and text else None
+
+    def failed(self, reason):
+        log_door_failure(self.env, reason, self.run, self.adapter)
+        return None
+
+
+def load_door(env, directory, run, adapter):
+    """A DoorSource, or None when door delivery is not configured here: no config file (the door is off by design), `enabled` false, no command or state, or no session id.
+    A config file that is there and cannot be read or is not a usable config is one `door-failed` line in the guard log, so a broken file is found."""
+    path = env.get("AGENT_HARNESS_DOOR") or os.path.join(directory, "door.json")
+    try:
+        with open(path) as handle:
+            config = json.load(handle)
+    except FileNotFoundError:
+        return None
+    except Exception as error:
+        log_door_failure(env, "door.json could not be read (%s)" % type(error).__name__, run, adapter)
+        return None
+    if not isinstance(config, dict):
+        log_door_failure(env, "door.json is not a JSON object", run, adapter)
+        return None
+    if config.get("enabled") is False or not run:
+        return None
+    if not isinstance(config.get("command"), list):
+        log_door_failure(env, "door.json has no command list", run, adapter)
+        return None
+    door = DoorSource(config, env, run, adapter)
+    if not door.state:
+        log_door_failure(env, "door.json has no state directory", run, adapter)
+        return None
+    return door
+
+
 def load_profile(env, directory):
     """The chezmoi profile: AGENT_HARNESS_PROFILE, else the `profile` file beside this script; None when neither is there."""
     if env.get("AGENT_HARNESS_PROFILE"):
@@ -426,16 +519,73 @@ def load_profile(env, directory):
         return None
 
 
+def load_coordinator_repo(env, directory):
+    """This profile's coordinator checkout: AGENT_HARNESS_COORDINATOR_REPO, else line 1 of the `coordinator-instance` file one level up (chezmoi renders it per profile); None when neither is there."""
+    if env.get("AGENT_HARNESS_COORDINATOR_REPO"):
+        return env["AGENT_HARNESS_COORDINATOR_REPO"].strip()
+    try:
+        with open(os.path.join(os.path.dirname(directory), "coordinator-instance")) as handle:
+            return handle.readline().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def load_container(env, directory):
+    """True in the agent host pod: AGENT_HARNESS_CONTAINER, else the `container` file beside this script (chezmoi renders it `true` in container mode only)."""
+    value = env.get("AGENT_HARNESS_CONTAINER")
+    if value is None:
+        try:
+            with open(os.path.join(directory, "container")) as handle:
+                value = handle.read()
+        except (OSError, ValueError):
+            return False
+    return value.strip() == "true"
+
+
+def log_door_failure(env, reason, run, adapter):
+    """One JSON line when the door rule could not get an answer from the renderer. Same log as `log_refusal`; a failed write is ignored."""
+    try:
+        path = env.get("AGENT_HARNESS_GUARD_LOG") or os.path.join(env.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "agent-harness", "guard.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), "action": "door-failed", "outcome": "failed", "run": run, "adapter": adapter,
+                  "door": "cmd", "reason": reason[:300]}
+        with open(path, "a") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
+def log_refusal(rule, tool, env, cwd=None, matched=None, extra=None):
+    """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. `extra` adds fields a rule chose to log (the gh api body rule's reason and redacted command). A failed write is ignored."""
+    try:
+        path = env.get("AGENT_HARNESS_GUARD_LOG") or os.path.join(env.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "agent-harness", "guard.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": "refuse", "rule": rule, "tool": tool, "cwd": cwd, "matched": matched}
+        record.update(extra or {})
+        with open(path, "a") as handle:
+            handle.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
 def bash_rules_message(command, raw):
-    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, PR body, local docker, live-checkout git), else None. Any error allows the command."""
+    """The refusal from the bash_rules module (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the pod, git stash, live-checkout git), else None. Any error allows the command."""
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path:
             sys.path.insert(0, here)
         import bash_rules
         tool, cwd = hook_fields(raw)
-        ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd())
-        return bash_rules.check(command, ctx)
+        run_id, adapter = hook_session(raw)
+        ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd(),
+                                 container=load_container(os.environ, here), coordinator_repo=load_coordinator_repo(os.environ, here),
+                                 run=run_id, door=load_door(os.environ, here, run_id, adapter))
+        found = bash_rules.refusal(command, ctx)
+        if not found:
+            return None
+        if found[0] != "door":  # the renderer writes the line for the rules it told
+            log_refusal(found[0], tool, os.environ, ctx.cwd, found[2], getattr(found[1], "log", None))
+        return found[1]
     except Exception:
         return None
 

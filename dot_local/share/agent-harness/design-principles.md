@@ -20,6 +20,8 @@ Within a component, structure the code in layers with dependencies pointing inwa
 
 Inner layers never import outer ones; external concerns are reached only through ports. Domain and use cases are testable without any real storage, network or runtime. Scale the layering to the component: a small component may have a handful of files per layer (§4 applies).
 
+- Give each meaningful value its own type, such as an id. Parse outside data into those types at the boundary and trust them inside. Derive each type from the schema that owns its data. Then the compiler enforces rules that would otherwise be prose.
+
 **Gate:** dependency checks fail the build on any outward import.
 
 ## 4. YAGNI and KISS
@@ -82,10 +84,14 @@ Read intent as a whole before choosing mechanisms. Identify requirements that pu
 
 Record which guarantees the owner required and which mechanisms the agents selected. Agent-selected mechanisms remain open to simplification. Review acceptance does not turn them into owner requirements. Changing a promised outcome still requires owner agreement. Each owner-required guarantee is checked against what is built by a check or reviewer that reads the owner's own words; a guarantee an agent can bypass is not built.
 
-## 14. Logs that replay the user's experience
-Every component that acts for a user records enough to replay one user action: what the user did, the meaningful steps the component took, and what the user saw. A log is a record that survives after the terminal closes; screen output alone does not count. One id per action ties every record together. Records carry a UTC timestamp, duration and, where it matters, memory and cost. When something goes wrong, the logs alone say what and where; if they don't, the logging is a defect. Log meaning, not every call (§4). Never log secrets or tokens. Bodies (prompts, replies) may be kept in local logs for 30 days and are never exported. This applies to new or touched components; do not retrofit the rest.
+## 14. Logs that replay the user's experience and show how it is used
+Every component that acts for a user records enough to replay one user action: what the user did, the meaningful steps the component took, and what the user saw. A log is a record that survives after the terminal closes; screen output, stderr and an exit code alone do not count. One id per action ties every record together. Records carry a UTC timestamp, duration and, where it matters, memory and cost. When something goes wrong, the logs alone say what and where; if they don't, the logging is a defect.
 
-**Test:** from the logs alone, replay one action and name a seeded fault (§12).
+The same records show how the product is used. Each record is one structured line (for example JSON) with a named action and its outcome, so counting records answers usage questions without reading prose: which actions the owner uses, how often, how long they take, how often they fail or are refused, and what they cost. The logs are the metrics; do not build a separate metrics system unless the owner asks for one (§4).
+
+Coverage: every user action a change adds or changes (a command or flag, a refusal, a page, a job or hook step) writes such a record. "No log change" is not a reason to skip this: when the component behind such an action keeps no log yet, it gets one in that change. A change that adds or changes no user action needs no new record. Log meaning, not every call (§4). Never log secrets or tokens. Bodies (prompts, replies) may be kept in local logs for 30 days and are never exported. This applies to new or touched components; do not retrofit untouched ones.
+
+**Test:** from the logs alone, replay one action, name a seeded fault (§12), and answer one usage question: how many times an action ran in a period, and how many of those failed.
 
 ## 15. Fast proof
 Observable proof tests and journeys should be optimized aggressively for time. In practice, wait for a fact when one can be observed instead of sleeping a fixed time, run independent tests and journeys in parallel, measure and report suite time, and treat a slow suite as a defect. Pay a start-up cost once, not once per test: share the compile cache with child processes, call a command's function inside the test process, copy a prepared fixture instead of building it again. Keep at least one test per command that starts it for real.
@@ -105,6 +111,6 @@ The Gate lines in §2, §3 and §7 and items 1 and 2 below apply to new componen
 3. Design review: designs are reviewed against this document before code is written (§1, §3, §4, §8, §9, §10, §11, §12, §13, §14, §16).
 4. Agent instructions: AGENTS.md files should reference this document. Instructions alone do not enforce compliance.
 
-Fix a mistake agents repeat at the highest level that works: architecture, then types, then a check whose error names the fix, then a test. Write an instruction last, because nothing fails when an agent skips it. The `correcting-repeated-mistakes` skill walks this.
+Fix a mistake agents repeat at the highest level that works, aimed at the pattern above the class, not the one case. Tiers, top first, as in the pyramid in the canonical instructions: codebase (API design, architecture, refactoring), static analysis (lints, types, compilers, tests, CI), verification (runtime, formal), prose, human review. Write an instruction late, because nothing fails when an agent skips it. The `correcting-repeated-mistakes` skill walks this.
 
 Use the proportionality and trade-off checks in the existing design and review steps. Do not add separate gates for each check.

@@ -1,12 +1,19 @@
 """The round 3 changes to the general deriving-readable-docs skill, each run as the skill runs it (a script on files). Each test breaks one rule.
 Round 2 data (the khoj-opus slice-4 report, lines of the round 2 guides) are the fixtures: tests/deriving-readable-docs/fixtures/round2/.
 Run: python3 -I tests/deriving-readable-docs/test_round3.py"""
+import atexit
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
@@ -57,6 +64,12 @@ class DepthFloorScoreTest(unittest.TestCase):
         code, out, err = self.score({"part1-1.md": self.P1, "slice-2.md": self.A})
         self.assertEqual(code, 0, err + out)
         self.assertIn("claims checked: 3", out)
+
+    def test_a_slice_with_no_report_fails_and_is_named(self):
+        code, out, err = self.score({"part1-1.md": self.P1})
+        self.assertEqual(code, 1, out)
+        self.assertIn("slice-2", err)
+        self.assertNotIn("slice-1", err)
 
     def test_a_finding_line_headed_by_a_claim_id_is_counted(self):
         found = ("Slice: slice-2\nread | 11.1 | HOLDS | src/cli.py:3\nread | 12.1 | WRONG | src/cli.py:7\n"
