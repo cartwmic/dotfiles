@@ -120,7 +120,8 @@ set -eu
 # no usageLimitSources and no CLAUDE_CODE_FIZZY_GROVE environment entry (that is an open decision for work; docs/profiles.md).
 # It runs no restore: .t3 was never managed on this profile before this file existed, so nothing this script wrote there can
 # need undoing, and a hub leftover (a codex instance in its hub state, a displayName, a usageLimitSources entry) is not ours to
-# delete - the leftovers pass through untouched. A malformed file (not valid UTF-8, holding duplicate keys, not an object, a
+# delete - the leftovers pass through untouched. A malformed file (not valid UTF-8 - two guards, since macOS iconv alone
+# accepts sequences like F4 90 80 80 that jq still rewrites to U+FFFD - holding duplicate keys, not an object, a
 # providerInstances or an instance config that is not an object) is refused with the input unchanged and logged as skipped; behind the guards, a post-condition on the merged
 # document makes the promise hold for every input: the result may differ from the input only at the three compaction paths (an
 # empty config the merge created for a compaction key is forgiven), and any other difference prints the input byte for byte and
@@ -151,7 +152,7 @@ IDLE_COMPACTION='beforeCacheExpires'
 # leaves stdout exact, exit 0 and nothing on stderr; a logging failure never fails the apply.
 log_apply() {
   case ${CHEZMOI_COMMAND:-} in
-    "" | diff | status | cat | verify) return 0 ;;
+    "" | diff | status | cat | verify | dump | archive | merge) return 0 ;;
   esac
   dry=0
   set -f
@@ -164,8 +165,23 @@ log_apply() {
       -*)
         flags=${arg#-}
         case $flags in
-          *[!a-zA-Z]*) ;; # a value path may hold letters; only clusters made solely of letters are flags
-          *n*) dry=1 ;;
+          *=*) # a short flag with a =value: dry only when the flags are all letters, hold n, and the value is true-ish
+            val=${flags#*=}
+            case ${flags%%=*} in
+              *[!a-zA-Z]*) ;;
+              *n*)
+                case $val in
+                  1 | t | T | true | TRUE | True) dry=1 ;;
+                esac
+                ;;
+            esac
+            ;;
+          *)
+            case $flags in
+              *[!a-zA-Z]*) ;; # a value path may hold letters; only clusters made solely of letters are flags
+              *n*) dry=1 ;;
+            esac
+            ;;
         esac
         ;;
     esac
@@ -189,12 +205,26 @@ spool=$(mktemp) || {
   cat
   exit 0
 }
-trap 'rm -f "$spool" "$spool.stream" "$spool.tostream"' EXIT
+trap 'rm -f "$spool" "$spool.stream" "$spool.tostream" "$spool.jq"' EXIT
 cat > "$spool"
 
 # The input must be valid UTF-8: jq replaces every invalid byte with U+FFFD (EF BF BD), so a write would silently alter bytes the
-# file holds; such input is refused with its bytes unchanged. If iconv is missing, skip the guard rather than fail.
+# file holds; such input is refused with its bytes unchanged. If iconv is missing, skip the guard rather than fail. iconv is
+# not enough on its own: macOS iconv accepts sequences that are not valid UTF-8 - code points above U+10FFFF (F4 90 80 80) and
+# the old 5/6-byte forms - and jq rewrites each of their bytes to U+FFFD. So a second guard, independent of iconv: jq re-emits
+# every valid string byte for byte, so its output can hold more U+FFFD characters than the input gave it (the input's own raw
+# EF BF BD plus its \ufffd escapes, which jq decodes to the raw character) only when jq invented replacements - that is, the
+# input was not valid UTF-8. Same refusal, same reason.
 if command -v iconv >/dev/null 2>&1 && ! iconv -f UTF-8 -t UTF-8 < "$spool" >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"input is not valid UTF-8"'
+  cat "$spool"
+  exit 0
+fi
+jq -c . < "$spool" > "$spool.jq" 2>/dev/null || true
+in_fffd=$(( $(LC_ALL=C tr -d -c '\357\277\275' < "$spool" | wc -c) / 3 \
+  + $(LC_ALL=C grep -a -o -F -e '\ufffd' < "$spool" | wc -l) ))
+out_fffd=$(( $(LC_ALL=C tr -d -c '\357\277\275' < "$spool.jq" | wc -c) / 3 ))
+if [ "$out_fffd" -gt "$in_fffd" ]; then
   log_apply skipped ',"reason":"input is not valid UTF-8"'
   cat "$spool"
   exit 0

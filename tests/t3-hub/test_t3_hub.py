@@ -926,7 +926,13 @@ class WorkModeTest(unittest.TestCase):
             '{"a": 1} {"keep": "me"}', '{} {}', '{"a":1,"a":2}',
             '{"x":{"a":1,"a":2},"providerInstances":{}}',  # a duplicate nested in an object
             b'{"s":"\xff\xfe","providerInstances":{}}',  # not valid UTF-8: jq would rewrite the bytes to U+FFFD
+            b'{"s":"\xf4\x90\x80\x80","providerInstances":{}}',  # above U+10FFFF: macOS iconv accepts it, jq still rewrites
+            b'{"s":"\xf8\x88\x80\x80\x80","providerInstances":{}}',  # old 5-byte form
+            b'{"s":"\xfc\x84\x80\x80\x80\x80","providerInstances":{}}',  # old 6-byte form
+            b'{"s":"\xed\xa0\x80","providerInstances":{}}',  # lone surrogate
             '{"a":{"b":1},"providerInstances":{"a":{"b":2}}}',  # a name repeated at different levels is NOT a duplicate
+            '{"s":"\ufffd","providerInstances":{}}',  # a real U+FFFD, raw, is valid and must still merge
+            '{"s":"\\ufffd","providerInstances":{}}',  # so is the \ufffd escape, which jq decodes to the raw character
             '{"providerInstances": {"claudeAgent": {"config": {}}}}',
             '{"idleCompaction": "onReturn"}',
             FIXTURE, json.dumps(set_vals, indent=2), json.dumps(only_claude), json.dumps(only_coord),
@@ -959,11 +965,16 @@ class WorkModeTest(unittest.TestCase):
 
     def test_the_utf8_and_duplicate_key_guards_refuse_before_the_merge(self):
         """The two byte-level guards refuse before jq can rewrite anything: input that is not valid UTF-8 (jq would replace every
-        invalid byte with U+FFFD) and input holding duplicate keys (a write collapses {"a":1,"a":2} to {"a":2,...} and the first
+        invalid byte with U+FFFD - including sequences macOS iconv wrongly accepts, like code points above U+10FFFF and old
+        5/6-byte forms, which is why the U+FFFD-count guard exists beside iconv) and input holding duplicate keys (a write
+collapses {"a":1,"a":2} to {"a":2,...} and the first
         value's bytes are gone) come back byte for byte, logged skipped with their own reason, nothing on stderr - so removing
         either guard fails here, because the post-condition alone would pass the UTF-8 case and refuse the duplicate case only
         with the generic reason. A name repeated at different levels is not a duplicate and is still merged."""
         for shape, reason in ((b'{"s":"\xff\xfe","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xf4\x90\x80\x80","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xf8\x88\x80\x80\x80","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xed\xa0\x80","providerInstances":{}}', "input is not valid UTF-8"),
                               ('{"a":1,"a":2,"providerInstances":{}}', "input has duplicate keys"),
                               ('{"x":{"a":1,"a":2},"providerInstances":{}}', "input has duplicate keys"),
                               ('{"a":[{"k":1,"k":2}],"providerInstances":{}}', "input has duplicate keys")):
@@ -1014,7 +1025,8 @@ class WorkModeTest(unittest.TestCase):
                 record = json.loads(lines[0])
                 self.assertEqual(record["command"], command, command)
                 self.assertEqual(record["action"], "proposed", command)
-        for command, args in (("apply", "chezmoi apply --dry-run=false"), ("apply", "chezmoi apply -- -n")):
+        for command, args in (("apply", "chezmoi apply --dry-run=false"), ("apply", "chezmoi apply -- -n"),
+                              ("apply", "chezmoi apply -n=false"), ("apply", "chezmoi apply -j4")):
             with tempfile.TemporaryDirectory() as tmp:
                 state = Path(tmp)
                 out = self.run_with_command(FIXTURE, command, args, state)
@@ -1024,8 +1036,11 @@ class WorkModeTest(unittest.TestCase):
         for command, args in (("apply", "chezmoi apply --dry-run"), ("apply", "chezmoi apply --dry-run=true"),
                               ("apply", "chezmoi apply --dry-run=1"), ("apply", "chezmoi apply -n"),
                               ("apply", "chezmoi apply -vn"), ("apply", "chezmoi -n apply"),
+                              ("apply", "chezmoi apply -n=true"), ("apply", "chezmoi apply -n=1"),
+                              ("apply", "chezmoi apply -vn=true"),
                               ("update", "chezmoi update -n"), ("diff", "chezmoi diff"), ("status", "chezmoi status"),
-                              ("cat", "chezmoi cat"), ("verify", "chezmoi verify"), (None, None)):
+                              ("cat", "chezmoi cat"), ("verify", "chezmoi verify"), ("dump", "chezmoi dump"),
+                              ("archive", "chezmoi archive"), ("merge", "chezmoi merge"), (None, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 state = Path(tmp)
                 out = self.run_with_command(FIXTURE, command, args, state)
