@@ -9,6 +9,8 @@
 # Reload: bootout, wait until launchd no longer has the job, then bootstrap with a few retries (dot_local/share/launchd-reload).
 # Log: every line this script and launchd_reload.sh print (INFO, WARN, ERROR) is also appended, with a UTC timestamp, to
 # ~/Library/Logs/coordinator-work/pull-main.log, the file the job itself writes, so a quiet job can be told from one that never loaded.
+# Record: each run also appends one JSON line (ts in UTC, action load, outcome loaded or failed, reason, duration_s) to
+# ~/Library/Logs/coordinator-work/pull-main-job.jsonl, so loads and failed loads can be counted without reading the text lines.
 set -eu
 log() { printf '[coordinator_pull_main_launchd] %s: %s\n' "$1" "$2"; }
 
@@ -18,6 +20,7 @@ plist="$HOME/Library/LaunchAgents/$label.plist"
 lib="$HOME/.local/share/launchd-reload/launchd_reload.sh"
 logdir="$HOME/Library/Logs/coordinator-work"
 logfile="$logdir/pull-main.log"
+jsonl="$logdir/pull-main-job.jsonl"
 uid=$(id -u)
 
 load() {
@@ -44,6 +47,7 @@ load() {
 
 # Run it with its output in a file, then print the file and append it to the log with a UTC timestamp per line; the status is kept.
 mkdir -p "$logdir"
+t0=$(date +%s)
 out=$(mktemp "${TMPDIR:-/tmp}/coordinator_pull_main_launchd.XXXXXX")
 trap 'rm -f "$out"' EXIT
 rc=0
@@ -52,4 +56,14 @@ cat "$out"
 while IFS= read -r line; do
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$line"
 done <"$out" >>"$logfile"
+# The structured record: the reason is the last ERROR line of this run (its text after "ERROR: "), JSON-escaped.
+if [ "$rc" = 0 ]; then
+  outcome=loaded reason=loaded
+else
+  outcome=failed
+  reason=$(sed -n 's/^.*ERROR: //p' "$out" | tail -n 1 | tr -d '\000-\037' | cut -c1-300 | sed 's/\\/\\\\/g; s/"/\\"/g')
+  reason=${reason:-failed with status $rc}
+fi
+printf '{"ts":"%s","action":"load","outcome":"%s","reason":"%s","duration_s":%s}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$outcome" "$reason" "$(($(date +%s) - t0))" >>"$jsonl"
 exit "$rc"
