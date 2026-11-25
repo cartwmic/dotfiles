@@ -1,0 +1,66 @@
+{{- /* coordinator_pull_main_plist: the work coordinator's daily pull LaunchAgent (docs/work-coordinator-pull.md). Rendered by Library/LaunchAgents/local.coordinator-pull-main.plist.tmpl and hashed by run_onchange_after_92_coordinator_pull_main_launchd.sh.tmpl. */ -}}
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") -}}
+{{- $home := .chezmoi.homeDir -}}
+{{- $log := printf "%s/Library/Logs/coordinator-work/pull-main.log" $home -}}
+{{- /* The run, as one sh -c script (arguments: repo, log). The log gets a UTC timestamp and the exit status of each run, with what pull-main printed between them. When the run cannot start (no checkout, or no scripts/pull-main.sh yet) it also appends one JSON line to the -job.jsonl file beside the log. cd is here, not WorkingDirectory: a missing checkout then lands in the log instead of failing silently. */ -}}
+{{- $script := `repo=$1; log=$2; jsonl="${2%.log}-job.jsonl"
+mkdir -p "$(dirname "$log")"
+t0=$(date +%s)
+why=
+{
+  printf '%s start %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$repo"
+  if ! cd "$repo"; then
+    echo "cannot enter $repo"
+    why="cannot enter the checkout"
+  elif [ ! -f scripts/pull-main.sh ]; then
+    echo "scripts/pull-main.sh is missing in $repo"
+    why="scripts/pull-main.sh is missing"
+  fi
+  if [ -n "$why" ]; then
+    rc=2
+    printf '{"ts":"%s","action":"run","outcome":"failed","reason":"%s","duration_s":%s}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$why" "$(($(date +%s) - t0))" >> "$jsonl"
+  else
+    sh scripts/pull-main.sh
+    rc=$?
+  fi
+  printf '%s exit %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc"
+} >> "$log" 2>&1
+exit "$rc"` -}}
+{{- /* extraPath: as in local.coordinatord.work.plist, directories the PATH starts with (git, node). */ -}}
+{{- $extra := "" -}}
+{{- with dig "instances" "coordinator" "extraPath" "" . -}}{{- $extra = printf "%s:" (. | html) -}}{{- end -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps the work coordinator's checkout current (cartwmic/coordinator#1083): once a day, `sh scripts/pull-main.sh` in {{ $repo | html }} (docs/deploy.md, Upgrading a running instance).
+     Every run appends a start line and an exit line, each with a UTC timestamp, to {{ $log | html }}; a run that cannot start also appends a JSON line to pull-main-job.jsonl beside it; pull-main's own record is ~/.local/state/coordinator-ci/pull-main.jsonl.
+     Work profile on macOS only (docs/profiles.md). The checkout is instances.coordinator.repo, else ~/coordinator-work (.chezmoitemplates/instance_repo). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.coordinator-pull-main</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>{{ $script | html }}</string>
+    <string>sh</string>
+    <string>{{ $repo | html }}</string>
+    <string>{{ $log | html }}</string>
+  </array>
+  <!-- 07:15 in the Mac's local time. A run missed while the Mac sleeps happens when it wakes. The minute stays clear of :00-:02, which pull-main refuses (the Fleet status run starts at :00). -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>7</integer>
+    <key>Minute</key><integer>15</integer>
+  </dict>
+  <!-- Not at load: an apply or a login does not pull and restart the daemon. -->
+  <key>RunAtLoad</key><false/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>{{ $extra }}{{ $home | html }}/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <!-- The script writes its own log; these catch only what launchd itself reports. -->
+  <key>StandardOutPath</key><string>{{ $home | html }}/Library/Logs/coordinator-work/pull-main.launchd.log</string>
+  <key>StandardErrorPath</key><string>{{ $home | html }}/Library/Logs/coordinator-work/pull-main.launchd.log</string>
+</dict>
+</plist>

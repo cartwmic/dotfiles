@@ -43,6 +43,7 @@ status=0
 python3 scripts/ci-par.py \
   --per-test tests/heavy-gate \
   tests/qmd \
+  tests/coordinator-pull-main \
   tests/pi-idle-rss \
   tests/pi-agents-render \
   tests/coordinator-helper-gate \

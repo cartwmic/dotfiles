@@ -286,6 +286,12 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 61_configure_rustdesk_client.sh
 {{- end }}
 
+{{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
+# The daily pull of the work coordinator's checkout (cartwmic/coordinator#1083) and the script that loads it: work macOS only. Personal hosts upgrade through their own deploy path.
+Library/LaunchAgents/local.coordinator-pull-main.plist
+92_coordinator_pull_main_launchd.sh
+{{- end }}
+
 {{- if ne .chezmoi.os "darwin" }}
 # launchd only.
 .local/user_scripts/instances_reconcile.sh
