@@ -142,6 +142,19 @@ ROWS = [
     ("U7", "gh alias set pe 'pr edit' && gh pe 5 -b x", UNLISTED, gs.REFUSE),
     ("U8", "gh pe 5 -b x", UNLISTED, gs.REFUSE),
     ("U9", "gh pr merge 5 --help=false", "merge", gs.MERGE_GATE),  # `--help=false` runs the command
+    # gh keeps the LAST value of a repeated flag: `--help` then `--help=false` runs the command
+    ("U9a", "gh pr merge 5 --help --help=false", "merge", gs.MERGE_GATE),
+    ("U9b", "gh pr merge 5 --help=false --help", "", gs.ALLOW),
+    ("U9c", "gh pr merge 5 --help=0", "merge", gs.MERGE_GATE),
+    ("U9d", "gh pr merge 5 --help=true", "", gs.ALLOW),
+    ("U9e", "gh pr merge 5 -h --help=false", "merge", gs.MERGE_GATE),
+    ("U9f", "gh pr merge 5 --help=false -h", "", gs.ALLOW),
+    ("U9g", "gh pr merge 5 --help --help=0", "merge", gs.MERGE_GATE),
+    ("U9h", "gh pr merge 5 --help=maybe", "merge", gs.MERGE_GATE),  # gh rejects a value it cannot read; refuse rather than call it help
+    ("U9i", "gh pr merge 5 --help=false --help=true", "", gs.ALLOW),
+    ("U9j", "gh api -X PUT repos/o/r/pulls/5/merge --help --help=false", "merge", gs.REFUSE),
+    ("U9k", "gh pr edit 5 -b x --help --help=false", "body", gs.PR_BODY),
+    ("U9l", "gh api -X PUT repos/o/r/pulls/5/merge --help=false --help", "", gs.ALLOW),
     ("U10", "gh pr revert 5", NEW_PR, gs.REFUSE),
     ("U11", "gh agent create x", "pr-create", gs.REFUSE),
     # the same gh commands behind a wrapper the hook unwraps
@@ -178,7 +191,7 @@ ROWS = [
 ]
 
 # The rows the hook let through before gh_surface (owed #4353): none may be ALLOW, and each is a row the allow-everything stub gets wrong.
-HOLES = {"M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
+HOLES = {"U9a", "U9e", "U9g", "U9j", "U9k", "M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
 # The rows that must stay allowed, whatever else changes: the sanctioned writers and the commands the review skills run.
 STAY_ALLOWED = {"P6", "P7", "P8", "S1", "S2", "S3", "S4", "S6", "B6", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "I2", "I3", "I4", "I5", "I6", "O12", "O13"}
 

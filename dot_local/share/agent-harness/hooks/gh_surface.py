@@ -93,8 +93,13 @@ def _edit_effects(argv):
     return effects | ({TITLE} if "title" in names else set()) | ({BODY} if names & {"body", "body-file", "attach"} else set())
 
 
+HELP_TRUE = frozenset("1 t T TRUE true True".split())  # what gh's flag parser (Go's ParseBool) reads as true; `--help=false`, `=0`, or an unreadable value runs the command
+
+
 def _helping(argv):
-    return any(n == "help" and (v is None or v.lower() == "true") for n, v, _ in argv.flags)  # `--help=false` runs the command
+    """gh keeps the last value of a repeated flag, so `--help --help=false` runs the command and `--help=false --help` prints help."""
+    values = [v for n, v, _ in argv.flags if n == "help"]
+    return bool(values) and (values[-1] is None or values[-1] in HELP_TRUE)
 
 
 def _verb(gh, route):
@@ -177,7 +182,7 @@ def _rest(gh, method, segments):
     return _unlisted(route, "a %s write on %s" % (method, "/".join(rest)))
 
 
-# graphql: mutation name -> (effects, verdict, reason). Any mutation not here is unlisted.
+# graphql: mutation name -> (effects, verdict, reason). Any mutation not here is unlisted. Every name here is a field of GitHub's public schema (type Mutation).
 GRAPHQL = {
     **dict.fromkeys(("mergePullRequest", "enablePullRequestAutoMerge", "enqueuePullRequest"), ({MERGE}, REFUSE, WHY_MERGE)),
     "createPullRequest": (NEW_PR, REFUSE, WHY_PR_TEXT), "updatePullRequest": (SET_TEXT, REFUSE, WHY_PR_TEXT),
