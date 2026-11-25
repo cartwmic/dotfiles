@@ -1108,6 +1108,7 @@ class Stash(unittest.TestCase):
         "git stash --keep-index",
         "git -C ~/tmp-home/x stash push -m x",
         "git -C ~/git/coordinator stash pop",
+        "git -C ~/git/coordinator stash -Z",  # an unknown flag on a write: the stash rule answers before the flag table
         "git -C/home/cartwmic/tmp-home/x stash pop",
         "git --no-pager -C ~/tmp-home/x stash pop",
         "git --git-dir=/home/cartwmic/tmp-home/x/.git stash pop",
