@@ -122,8 +122,21 @@ class HiddenRed(base.Fixture):
                 self.assertEqual(rc, 1, out)
                 self.assertTrue(out.startswith("dotfiles: RED  1 unhandled red(s) on main\n"), out)
                 self.assertIn(f"  run 1 failed on {self.c2[:7]} c2 first parent: no later commit on main links it, no rerun passed", out)
-                self.assertIn("Handles: <full 40-character sha>", out)
+                self.assertIn(f"Handles: {self.c2}", out)
                 self.assertIn("  dotfiles: GREEN", out)   # the line that would have come first follows, indented
+
+    def test_the_red_block_gives_each_red_its_full_sha_a_handles_line_and_a_rerun_command(self):
+        first, second = commit(self.src, "first red"), commit(self.src, "second red")
+        tip = commit(self.src, "tip")
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, "failure", age=2), run(2, first, "failure", age=1)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertTrue(out.startswith("dotfiles: RED  2 unhandled red(s) on main\n"), out)
+        for run_id, sha in ((3, second), (2, first)):
+            self.assertEqual(len(sha), 40)
+            self.assertIn(f"Handles: {sha}", out)
+            self.assertIn(f"gh run rerun {run_id} --repo cartwmic/dotfiles", out)
+        self.assertIn("a short sha does not count", out)
 
     def test_a_later_commit_with_a_handles_line_clears_it_once_its_own_run_is_green_and_not_while_it_is_going(self):
         self.red_below_green()

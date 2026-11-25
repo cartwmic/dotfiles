@@ -156,7 +156,8 @@ commit's message: git's own "This reverts commit <sha>", or "Handles: <sha>" (th
 indent, as a squash body puts it). Only a full 40-digit sha links: a short one clears nothing, so the answer is the same whatever the
 cache holds. The code only reads the line; whoever writes it says the commit fixes or reverts the red one. A rerun that passed clears a red
 without a link (it is the commit's verdict). While any hidden red exists the answer is RED, exit 1, in plain status, --tip and --merge-gate:
-first line "REPO: RED  N unhandled red(s) on main", one line per red (run, short sha, subject), one hint line; an UNTESTED or GREEN line
+first line "REPO: RED  N unhandled red(s) on main", then for each red a line (run, short sha, subject) and under it its own fix (the exact
+"Handles: <full sha>" line to add, and the "gh run rerun <run id> --repo <owner/repo>" command), then a note that a short sha does not count; an UNTESTED or GREEN line
 that would have come first follows, indented. A link clears only a red below the newest conclusive commit: a newest red stays red until a
 newer conclusive pass, whatever names it, and then it is a hidden red if nothing links it. A handler commit is judged by its own run like
 any other commit: red, it is a red itself; untested or still going, it gets the answer the rule above gives that commit, and the red it
@@ -1149,11 +1150,13 @@ def hidden_reds(spec, tip, newest_created, newest_red, note):
 
 
 def hidden_block(name, spec, reds):
-    """The lines that name the hidden reds, first in the output: a count, one line per red, one hint."""
+    """The lines that name the hidden reds, first in the output: a count, then for each red its status line and its own paste-ready fix."""
     where = f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
-    return ([f"{name}: RED  {len(reds)} unhandled red(s) on main"]
-            + [f"  {rec.label} failed on {sha[:7]} {subject}: no later commit on main links it, no rerun passed" for sha, rec, subject in reds]
-            + [f"  to clear one: put `Handles: <full 40-character sha>` in {where}, or rerun the run; a short sha does not count"])
+    lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"]
+    for sha, rec, subject in reds:
+        lines.append(f"  {rec.label} failed on {sha[:7]} {subject}: no later commit on main links it, no rerun passed")
+        lines.append(f"    to clear it, put `Handles: {sha}` in {where}, or rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
+    return lines + ["  a short sha does not count: the gate links only the full 40-character sha"]
 
 
 def pin_files_only(names):
