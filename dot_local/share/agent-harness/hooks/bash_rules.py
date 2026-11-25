@@ -844,7 +844,7 @@ def _api_pr_write(gh):
 def _api_shown(write):
     """The command a log line shows: the parts of a gh api write, with every field value redacted so it never holds a body, a title or a token."""
     shown = ["gh", "api", _spelled(("api", ""), "method"), write["method"], write["endpoint"]]
-    shown += [x for _, f, typed in write["fields"] for x in (typed, f.partition("=")[0] + "=<redacted>")]
+    shown += [x for _, f, typed in write["fields"] for x in (typed.partition("=")[0], f.partition("=")[0] + "=<redacted>")]  # `--field=body=x` is one word: keep the flag, never its value
     if write["input_file"] is not None:
         shown += [_spelled(("api", ""), "input"), write["input_file"]]
     return " ".join(shown)

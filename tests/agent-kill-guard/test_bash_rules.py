@@ -836,11 +836,13 @@ class PrBodyViaApiLog(unittest.TestCase):
     def test_the_record_never_holds_a_body_a_header_a_token_or_a_query(self):
         for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -H 'Authorization: token %s' -f body=%s -f title=%s" % ((self.SECRET,) * 3),
                         "GH_TOKEN=%s gh api repos/cartwmic/x/pulls -fbody=%s" % ((self.SECRET,) * 2),
-                        "gh api -XPATCH 'repos/cartwmic/x/issues/4?access_token=%s' -F body=%s" % ((self.SECRET,) * 2)):
+                        "gh api -XPATCH 'repos/cartwmic/x/issues/4?access_token=%s' -F body=%s" % ((self.SECRET,) * 2),
+                        "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field=body=%s --field=title=%s" % ((self.SECRET,) * 2)):  # attached values: one word each
             self.assertEqual(self.run_hook(command).returncode, 2)
         self.assertNotIn(self.SECRET, self.log.read_text())
-        self.assertEqual(len(self.records()), 3)
-        self.assertEqual([r["matched"] for r in self.records()], ["PATCH repos/cartwmic/x/pulls/1", "POST repos/cartwmic/x/pulls", "PATCH repos/cartwmic/x/issues/4"])
+        self.assertEqual(len(self.records()), 4)
+        self.assertEqual([r["matched"] for r in self.records()], ["PATCH repos/cartwmic/x/pulls/1", "POST repos/cartwmic/x/pulls", "PATCH repos/cartwmic/x/issues/4", "PATCH repos/cartwmic/x/pulls/1"])
+        self.assertEqual(self.records()[-1]["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field body=<redacted> --field title=<redacted>")
 
     def test_an_input_file_refusal_names_the_file_and_says_input(self):
         self.assertEqual(self.run_hook("gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json").returncode, 2)
