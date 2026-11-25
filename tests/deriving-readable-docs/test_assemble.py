@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
@@ -261,8 +262,18 @@ class SliceTest(unittest.TestCase):
 class AssembleLogTest(unittest.TestCase):
     """Each run leaves one JSON line (runlog.py) with its outcome, so how often the guide was assembled or refused can be counted."""
 
+    def setUp(self):
+        # Every test module in this folder sets XDG_STATE_HOME at import, so under `unittest discover` the last import
+        # wins; give each test its own state folder so the line it reads is the one its own run wrote.
+        state = tempfile.TemporaryDirectory(prefix="state-")
+        self.addCleanup(state.cleanup)
+        self.state = state.name
+        patcher = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def last(self):
-        lines = Path(STATE, "deriving-readable-docs", "log.jsonl").read_text().splitlines()
+        lines = Path(self.state, "deriving-readable-docs", "log.jsonl").read_text().splitlines()
         return json.loads(lines[-1]), len(lines)
 
     def assemble(self, *extra, **over):
