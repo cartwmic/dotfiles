@@ -440,9 +440,12 @@ def extract_coordinator(repos):
             m = re.match(r"^  ([a-z][a-z0-9-]*)\b", line)
             if m and m.group(1) not in commands:
                 commands.append(m.group(1))
+    for m in re.finditer(r"(?m)^\s*if \(argv\[0\] === '([a-z][a-z0-9-]*)'", cli or ""):  # commands the dispatch runs that the usage text leaves out (`schedules`, `seats`)
+        if m.group(1) not in commands:
+            commands.append(m.group(1))
     out["cli"] = {"path": "src/coordinatord/cli.ts", "commands": commands, "line": line_of(cli or "", r"^export const USAGE = `usage: coordinator")}
     if cli is not None and not commands:
-        co.fail.add("coordinator", "src/coordinatord/cli.ts", 0, "no commands found in the `USAGE` text")
+        co.fail.add("coordinator", "src/coordinatord/cli.ts", 0, "no commands found in the `USAGE` text or the dispatch")
     journeys = [name for kind, name in co.ls("scripts/journeys") if name.endswith(".journey.ts")]
     out["journeys"] = {"path": "scripts/journeys", "count": len(journeys)}
     if not journeys:
