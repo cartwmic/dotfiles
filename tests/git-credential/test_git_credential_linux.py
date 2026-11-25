@@ -94,6 +94,18 @@ class GitCredentialLinux(unittest.TestCase):
         self.assertEqual(r.stdout + r.stderr, "")
         self.assertEqual((config.read_bytes(), config.stat().st_mtime_ns), before)
 
+    def test_each_key_set_leaves_a_json_record_with_what_it_held_before(self):   # logs that replay
+        self.run_script()
+        self.git("config", "--global", "--replace-all", f"credential.https://{GITEA}.helper", "store")
+        self.run_script()
+        self.run_script()   # nothing to set: no new line
+        log = self.home / ".local/state/agent-harness/git-credential-linux.jsonl"
+        recs = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([r["key"] for r in recs], [f"credential.https://{h}.helper" for h in (*HOSTS, GITEA)] + [f"credential.https://{GITEA}.helper"])
+        self.assertTrue(all(r["event"] == "credential-helper-set" and r["ts"] for r in recs))
+        self.assertEqual((recs[2]["before"], recs[2]["after"]), ("", "gitea-op"))
+        self.assertEqual((recs[3]["before"], recs[3]["after"]), ("store", "gitea-op"))
+
     def test_the_helper_runs_gh_by_name(self):
         self.run_script()
         for host in HOSTS:

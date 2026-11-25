@@ -14,6 +14,14 @@
 # macOS keeps its own setup (not touched); the work profile has no Linux machine, so it is left out (.chezmoiignore).
 set -eu
 log() { printf '[git_credential_linux] %s: %s\n' "$1" "$2"; }
+# One JSON line per key set, in $XDG_STATE_HOME/agent-harness/git-credential-linux.jsonl: a time, the key and what it held before (a helper name or path, never a secret). Best effort.
+record_set() {
+  state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
+  (umask 077 && mkdir -p "$state_dir") 2>/dev/null || return 0
+  esc() { printf '%s' "$1" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  printf '{"ts":"%s","event":"credential-helper-set","key":"%s","before":"%s","after":"%s","script":"76_git_credential_linux"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(esc "$1")" "$(esc "$2")" "$(esc "$3")" >> "$state_dir/git-credential-linux.jsonl" 2>/dev/null || true
+}
 
 [ "$(uname -s)" = Linux ] || exit 0
 command -v git >/dev/null 2>&1 || { log INFO "git is not installed; nothing to set"; exit 0; }
@@ -25,6 +33,7 @@ set_pair() {   # $1 host, $2 the helper value: the pair is empty, then $2
   git config --global --unset-all "$key" 2>/dev/null || true
   git config --global --add "$key" ''
   git config --global --add "$key" "$2"
+  record_set "$key" "$have" "$2"
   log INFO "set $key"
 }
 for host in github.com gist.github.com; do set_pair "$host" '!gh auth git-credential'; done

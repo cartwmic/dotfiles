@@ -2,6 +2,7 @@
 
 No real 1Password and no network. The real op_read_cached.sh is copied into the private HOME where the helper looks for it.
 """
+import json
 import os
 import shutil
 import stat
@@ -87,6 +88,29 @@ class GiteaHelper(Base):
             self.assertEqual(len(r.stderr.splitlines()), 1, r.stderr)
             self.assertIn("git-credential-gitea-op", r.stderr)
             self.assertNotIn(TOKEN, r.stderr)
+
+    def records(self):
+        f = self.home / ".local/state/agent-harness/git-credential-gitea-op.jsonl"
+        return [json.loads(line) for line in f.read_text().splitlines()] if f.exists() else []
+
+    def test_every_get_for_the_host_leaves_a_json_record_and_never_the_token(self):   # logs that replay
+        self.helper()
+        self.helper(drop=("OP_SERVICE_ACCOUNT_TOKEN",))
+        shutil.rmtree(self.cache, ignore_errors=True)
+        self.set_op('echo "denied" >&2\nexit 3\n')
+        self.helper()
+        shutil.rmtree(self.cache, ignore_errors=True)
+        self.set_op("exit 0\n")
+        self.helper()
+        recs = self.records()
+        self.assertEqual([r["event"] for r in recs], ["served", "skipped", "read-failed", "read-failed"])   # an empty read fails in the cache script too
+        self.assertTrue(all(r["host"] == HOST and r["ts"] for r in recs))
+        self.assertEqual(recs[1]["reason"], "no-service-account-token")
+        self.assertNotEqual(recs[2]["exit"], 0)
+        self.assertNotIn(TOKEN, (self.home / ".local/state/agent-harness/git-credential-gitea-op.jsonl").read_text())
+        self.helper("get", "github.com")   # another host writes nothing
+        self.helper("store")
+        self.assertEqual(len(self.records()), 4)
 
     def test_other_actions_and_hosts_are_ignored(self):   # c3
         cases = [("store", HOST), ("erase", HOST), ("get", "github.com"), ("get", HOST + ".evil.example"), ("get", "evil." + HOST), ("get", HOST + ":3000"), ("get", "")]
