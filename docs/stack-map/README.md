@@ -23,8 +23,8 @@ The plain-English text is `docs/stack-map/content.md`. It needs these `##` secti
 
 Two things in it are checked against the code:
 
-- **Citations**: `[[repo:path:LINE|snippet]]`. Line `LINE` of `path` at that repository's `origin/main` must contain `snippet` (a short literal, not a paraphrase). `LINE-LINE2` checks a range. It shows as a small link to the file at that commit. Write the citation after the sentence it supports.
-- **The flow**: a ```` ```flow ```` block, one step per line: `1. Actor | what happens [[repo:path:LINE|snippet]] | where`. Each step must carry a checked citation, so the diagram cannot keep saying something the code stopped saying. The where column is `repo:path` (the path must exist) or a command. It is drawn as the step diagram.
+- **Citations**: `[[repo:path|snippet]]`. `path` at that repository's `origin/main` must have exactly one line that contains `snippet` (a short literal, not a paraphrase). The generator finds that line itself, so a line that moves does not break the build; there is no line number to keep. A snippet that is on no line, or on more than one, fails (lengthen it until one line matches). The old `[[repo:path:LINE|snippet]]` form fails with the fix named. A citation shows as a small link to the file at that commit, at the line found. Write the citation after the sentence it supports. A snippet cannot contain `]]`.
+- **The flow**: a ```` ```flow ```` block, one step per line: `1. Actor | what happens [[repo:path|snippet]] | where`. Each step must carry a checked citation, so the diagram cannot keep saying something the code stopped saying. The where column is `repo:path` (the path must exist) or a command. It is drawn as the step diagram.
 
 Everything else is ordinary markdown: headings, paragraphs, lists, tables, `**bold**`, `` `code` ``, links.
 
@@ -36,11 +36,13 @@ It exits 1, writes nothing, and prints one line per problem as `repo:path:line: 
 |---|---|---|
 | `...:path:0: missing at origin/main` | a file a fact is read from moved or was deleted | change where the generator reads it (`extract_*` in the script), or restore the file |
 | `...: no CREATE TABLE statements found` (or any `no ... found`) | the file is there but its shape changed, so a fact came back empty | update that extractor to the new shape; never let it print a blank |
-| `repo:path:LINE: snippet '...' is not there (line reads ...) (content.md line N)` | a citation is out of date: the code moved or changed | find the new line, update the number and snippet in `content.md` |
+| `repo:path:0: snippet '...' is not in the file ... (content.md line N)` | a citation is out of date: the cited text changed or left the file | find the line that now backs the claim and put its text in the snippet in `content.md` |
 | `dotfiles:docs/stack-map/content.md:N: says where something sits on the page (...)` | the text uses a word of position ("above", "below", "further down", "earlier on this page") outside code and citations, but the generator decides the page order | name the section instead, for example: the tables under "Facts read from the files" |
 | `dotfiles:docs/stack-map/content.md:0: no ## section for ...` | a required section is missing or renamed | restore the heading (see the list above) |
 | `...: flow step N names a path missing` | the flow points at a file that is gone | fix the path |
-| `...: flow step N makes a claim with no checked citation` | a diagram step has no `[[repo:path:LINE\|snippet]]` | add one from the line that backs the step |
+| `dotfiles:docs/stack-map/content.md:N: citation names a line number` | a citation is in the old `[[repo:path:LINE\|snippet]]` form | drop the `:LINE`; the snippet alone finds the line |
+| `repo:path:N: snippet '...' is on K lines (...): lengthen it` | the snippet matches more than one line, so it does not say which line backs the claim | make the snippet longer until one line matches |
+| `...: flow step N makes a claim with no checked citation` | a diagram step has no `[[repo:path\|snippet]]` | add one from the line that backs the step |
 | `...: git fetch origin main failed` | no network, or the remote is unreachable | rerun when it is |
 
 A version mismatch between pins is not a failure: the page flags it in red.
