@@ -24,6 +24,7 @@ CHECK = ROOT / "dot_local/bin/executable_stack-map-merge-check"
 GENERATOR = "dot_local/user_scripts/executable_stack_map.py"
 CONTENT = "docs/stack-map/content.md"
 GOOD_SNIPPET = '"name": "coordinator"'
+RENAMED = '"name": "coordinator-renamed"'
 
 FAKE_GH = """#!/bin/sh
 echo "$*" >> "$FAKE_GH_LOG"
@@ -85,13 +86,13 @@ class MergeCheckTest(unittest.TestCase):
             self.assertIn(word, done.stderr)
 
     def moved_coordinator(self):
-        """Another repository moves: a blank line is added above the cited one, so the page breaks on main with no PR involved."""
-        self.world.change("coordinator", "package.json", "\n" + self.world.read("coordinator", "package.json"))
+        """Another repository changes the line a citation points at, so the page breaks on main with no PR involved."""
+        self.world.change("coordinator", "package.json", self.world.read("coordinator", "package.json").replace(GOOD_SNIPPET, RENAMED))
 
     def test_a_pr_that_breaks_a_snippet_is_refused_with_the_generators_line(self):
         self.pull_request(1, {CONTENT: self.content(GOOD_SNIPPET, '"name": "no such text"')})
         done = self.check(1)
-        self.assertRefused(done, "coordinator:package.json:2: snippet", "page's own files (docs/stack-map/content.md)")
+        self.assertRefused(done, "coordinator:package.json:0: snippet", "page's own files (docs/stack-map/content.md)")
 
     def test_a_good_pr_passes_and_says_how_many_citations_it_verified(self):
         text = self.content(extra="\nOne more plain sentence.\n")
@@ -106,9 +107,9 @@ class MergeCheckTest(unittest.TestCase):
         self.assertEqual(self.check(3).returncode, 0)
 
     def test_a_pr_is_judged_when_it_breaks_the_page_for_a_cited_dotfiles_file(self):
-        """Not only content.md: a PR that moves a line a citation points at in a dotfiles file breaks the page, and main does not."""
-        self.pull_request(4, {"README.md": "\n" + self.world.read("dotfiles", "README.md")})
-        self.assertRefused(self.check(4), "dotfiles:README.md:1: snippet")
+        """Not only content.md: a PR that changes a line a citation points at in a dotfiles file breaks the page, and main does not."""
+        self.pull_request(4, {"README.md": self.world.read("dotfiles", "README.md").replace("# Dotfiles", "# Home")})
+        self.assertRefused(self.check(4), "dotfiles:README.md:0: snippet")
 
     def test_a_break_made_by_another_repository_does_not_block_a_pr_that_touches_no_page_file(self):
         self.moved_coordinator()
@@ -116,16 +117,16 @@ class MergeCheckTest(unittest.TestCase):
         done = self.check(5)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("warning: the stack map page does not build with this PR", done.stderr)
-        self.assertIn("coordinator:package.json:2: snippet", done.stderr)
+        self.assertIn("coordinator:package.json:0: snippet", done.stderr)
 
     def test_a_pr_on_the_page_is_refused_while_main_is_broken_and_the_pr_does_not_fix_it(self):
         self.moved_coordinator()
         self.pull_request(6, {CONTENT: self.content(extra="\nOne more plain sentence.\n")})
-        self.assertRefused(self.check(6), "coordinator:package.json:2: snippet")
+        self.assertRefused(self.check(6), "coordinator:package.json:0: snippet")
 
     def test_a_pr_that_fixes_the_page_passes_while_main_is_broken(self):
         self.moved_coordinator()
-        self.pull_request(7, {CONTENT: self.content(GOOD_SNIPPET, '"name": "coordinator"').replace("package.json:2|", "package.json:3|")})
+        self.pull_request(7, {CONTENT: self.content("[[coordinator:package.json|" + GOOD_SNIPPET, "[[coordinator:package.json|" + RENAMED)})
         done = self.check(7)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("the stack map page builds with this PR", done.stdout)
@@ -183,7 +184,7 @@ class MergeCheckTest(unittest.TestCase):
         self.assertEqual(self.check(19).returncode, 2)
         records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual([(r["pr"], r["outcome"], r["exit"]) for r in records], [(18, "refused", 1), (19, "passed", 0), (19, "error", 2)])
-        self.assertTrue(records[0]["failed"][0].startswith("coordinator:package.json:2: snippet"))
+        self.assertTrue(records[0]["failed"][0].startswith("coordinator:package.json:0: snippet"))
         self.assertGreaterEqual(records[1]["citations"], 1)
         for r in records:
             self.assertRegex(r["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
