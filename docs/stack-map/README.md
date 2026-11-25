@@ -37,6 +37,7 @@ It exits 1, writes nothing, and prints one line per problem as `repo:path:line: 
 | `...:path:0: missing at origin/main` | a file a fact is read from moved or was deleted | change where the generator reads it (`extract_*` in the script), or restore the file |
 | `...: no CREATE TABLE statements found` (or any `no ... found`) | the file is there but its shape changed, so a fact came back empty | update that extractor to the new shape; never let it print a blank |
 | `repo:path:LINE: snippet '...' is not there (line reads ...) (content.md line N)` | a citation is out of date: the code moved or changed | find the new line, update the number and snippet in `content.md` |
+| `dotfiles:docs/stack-map/content.md:N: says where something sits on the page (...)` | the text says "above", "further down" or the like about a table or section, but the generator decides the page order | name the section instead, for example: the tables under "Facts read from the files" |
 | `dotfiles:docs/stack-map/content.md:0: no ## section for ...` | a required section is missing or renamed | restore the heading (see the list above) |
 | `...: flow step N names a path missing` | the flow points at a file that is gone | fix the path |
 | `...: git fetch origin main failed` | no network, or the remote is unreachable | rerun when it is |

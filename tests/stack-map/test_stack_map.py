@@ -212,6 +212,20 @@ class StackMapTest(unittest.TestCase):
         self.assertRegex(done.stderr, r"coordinator:package\.json:2: .*coordinatorX.*content\.md line \d+")
         self.assertFalse(page.exists())
 
+    def test_text_that_says_where_a_section_sits_on_the_page_fails(self):
+        for phrase in ("The tables further down list them.", "See the tables above for the list.", "It is listed earlier on this page."):
+            with self.subTest(phrase=phrase):
+                self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", phrase + "\n\n## Glossary", 1))
+                done, page = self.run_script()
+                self.assertEqual(done.returncode, 1)
+                self.assertRegex(done.stderr, r"content\.md:\d+: says where something sits on the page .*name the section")
+                self.assertFalse(page.exists())
+
+    def test_naming_a_section_is_fine(self):
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", 'The tables under "Glossary" list them.\n\n## Glossary', 1))
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+
     def test_citation_in_a_table_cell_and_in_a_flow_step_keeps_its_pipe(self):
         done, page = self.run_script()
         self.assertEqual(done.returncode, 0, done.stderr)
