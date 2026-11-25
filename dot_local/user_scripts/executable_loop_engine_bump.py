@@ -69,6 +69,7 @@ HARNESS_TOOL = "dot_local/user_scripts/executable_apply_harness_config.sh"
 CONTAINER_TOOLS = "05_container_tools.sh"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 NAME = "loop_engine_bump"
+PIN_FIX_RED = re.compile(r"^  pin-fix-red: ([0-9a-f]{40})$", re.M)  # the line ci-main-status --merge-gate dotfiles --pr N prints for each red the pin fix passes
 
 # The design principles (~/.local/share/agent-harness/design-principles.md), one row each: name, result, evidence.
 PRINCIPLES = [
@@ -326,11 +327,14 @@ def wait_for_checks(source, pr, poll, log):
 
 def gates(source, pr, log):
     """The merge gates the playbook names. A red main stops the merge, and so does a PR whose description or agent record fails the body check.
-    The record is written first when the PR has none (a PR made before this script wrote records, or one resumed)."""
+    The record is written first when the PR has none (a PR made before this script wrote records, or one resumed).
+    Returns the full shas of the reds the pin-fix rule passed: ci-main-status prints one `  pin-fix-red: <40-hex sha>` line for each, and the merge
+    links exactly those (never a red that a test failure made, which the pin bump does not fix)."""
     wrote = ensure_record(source, pr["number"], "gates")
     main = run(["ci-main-status", "--merge-gate", "dotfiles", "--pr", str(pr["number"])], "gates", cwd=source, check=False)
     if main.returncode != 0:
         raise Stop("gates", "ci-main-status --merge-gate dotfiles --pr %d exited %d: %s" % (pr["number"], main.returncode, "\n".join(s for s in (main.stdout.strip(), main.stderr.strip()) if s)))
+    pinned = PIN_FIX_RED.findall(main.stdout)   # stdout only, and only after exit 0
     body = run(["pr-body-check", "dotfiles", str(pr["number"])], "gates", cwd=source, check=False)
     if body.returncode != 0:
         shown = "\n".join(s for s in (body.stdout.strip(), body.stderr.strip()) if s)
@@ -338,11 +342,15 @@ def gates(source, pr, log):
         raise Stop("gates", "pr-body-check dotfiles %d exited %d: %s%s" % (pr["number"], body.returncode, why, shown))
     log.record("gates", "ok", "ci-main-status --merge-gate dotfiles --pr %d and pr-body-check dotfiles %d passed%s"
                % (pr["number"], pr["number"], " (the agent record was missing; wrote it)" if wrote else ""))
+    return pinned
 
 
-def merge(source, pr, log):
-    """Squash-merge, only while the head is still the one the checks ran on, then read the merge SHA back."""
-    run(["gh", "pr", "merge", str(pr["number"]), "--squash", "--match-head-commit", pr["headRefOid"]], "merge", cwd=source)
+def merge(source, pr, pinned, log):
+    """Squash-merge, only while the head is still the one the checks ran on, then read the merge SHA back.
+    The squash body has one `Handles: <sha>` line for each red the pin fix passed, so ci-main-status counts those reds as handled once this merges.
+    With none, there is no --body and the merge is the one it always was."""
+    body = ["--body", "\n".join("Handles: " + sha for sha in pinned)] if pinned else []
+    run(["gh", "pr", "merge", str(pr["number"]), "--squash", "--match-head-commit", pr["headRefOid"], *body], "merge", cwd=source)
     view = json.loads(run(["gh", "pr", "view", str(pr["number"]), "--json", "number,state,url,mergeCommit"],
                           "merge", cwd=source).stdout)
     if view["state"] != "MERGED" or not view.get("mergeCommit"):
@@ -546,8 +554,8 @@ def bump_personal(args, dest, log):
         raise Stop("pr", "PR #%d for %s was closed without merging: %s" % (pr["number"], branch, pr["url"]))
     if pr["state"] == "OPEN":
         wait_for_checks(source, pr, args.poll, log)
-        gates(source, pr, log)
-        pr = merge(source, pr, log)
+        pinned = gates(source, pr, log)
+        pr = merge(source, pr, pinned, log)
     apply(source, dest, pr["mergeCommit"]["oid"], pr, version, log)
     return 0
 

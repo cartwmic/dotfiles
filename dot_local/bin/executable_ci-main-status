@@ -8,7 +8,7 @@ usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, ag
        ci-main-status --merge-gate OWNER/REPO --pr N --owner-approved ASK   (Michael's answered ask for this PR; below)
        ci-main-status --threads REPO PR                (the PR's unresolved review threads, below)
 
---merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
+--merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main, or a red an older push left on it that nothing handled, stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
 
@@ -148,6 +148,61 @@ are conclusive; cancelled, skipped and still-running runs are not, and a run sti
 A red run whose rerun (gh run rerun) is going holds its commit red until the rerun ends. Start and created
 times are never read.
 
+A red run stays visible until it is handled (loop-engine issue 215). A repo with a "since" entry in its table row (a full commit sha:
+main's tip when this rule shipped or was last moved, so no old red freezes anything) has hidden reds: a commit C on main, after `since`,
+whose commit verdict (the rule above: the highest run id with a conclusive attempt, its newest conclusive attempt, a no-runner failure
+untested, a red run whose rerun is going still red) is fail, and that no commit reachable from main's tip links. A link is a line in a later
+commit's message: git's own "This reverts commit <sha>", or "Handles: <sha>" (the key in any case; the line may follow a list bullet or an
+indent, as a squash body puts it). Only a full 40-digit sha links: a short one clears nothing, so the answer is the same whatever the
+cache holds. The code only reads the line; whoever writes it says the commit fixes or reverts the red one. A rerun that passed clears a red
+without a link (it is the commit's verdict). While any hidden red exists the answer is RED, exit 1, in plain status, --tip and --merge-gate:
+first line "REPO: RED  N unhandled red(s) on main", then for each red a line (run, short sha, subject) and under it its own fix (the exact
+"Handles: <full sha>" line to add, and the "gh run rerun <run id> --repo <owner/repo>" command), then a note that a short sha does not count; an UNTESTED or GREEN line
+that would have come first follows, indented. A link clears only a red below the newest conclusive commit: a newest red stays red until a
+newer conclusive pass, whatever names it, and then it is a hidden red if nothing links it. A handler commit is judged by its own run like
+any other commit: red, it is a red itself; untested or still going, it gets the answer the rule above gives that commit, and the red it
+links is not counted. A newest red skips the hidden-red reads (it is RED already), unless --pr is given.
+What a call reads, in order: main's tip; the newest RUN_LIMIT runs and the first-parent walk (above); the cache file; compare cursor...tip,
+a hundred commits a page, for the links in the commits added since the cache was written (every commit reachable from the tip, a branch
+commit inside a merge commit too; the distinct commits seen must equal ahead_by; compare caps at 10,000 commits and says so, then the
+commits list is read from the cursor commit's date); every run of the workflow on main created at or after the floor, any status
+(`gh run list --created >=FLOOR`; a list of exactly 1,000 may be cut, so its created range is split at the middle and both halves are
+read, down to one second, which is an error if it is still full); for each failed run, and each rerun that did not end in success,
+whose commit no link names: that commit's own runs (its verdict) and, for a red one, two compares (is it on main between `since` and the
+tip) and its subject. A gh call that answers HTTP 502, 503 or 504 is asked again, 3 tries in all, 1 s then 2 s apart
+(CI_MAIN_STATUS_RETRY_SLEEP scales the pause; 0 in tests). Any other failure, non-JSON, a missing field, a `since` that is not on main,
+a compare that does not add up, or a second that holds 1,000 runs is an ERROR line, exit 1, and the cache is not written.
+The cache is one JSON file per repo, ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red/OWNER__REPO.json, written to a temp file
+and renamed, so a reader never sees half a file: {"version", "repo", "workflow", "since", "cursor", "floor", "links": [[target, handler]]}.
+It holds no verdict, no run conclusion and no red-ness, so it can never make a verdict stale. `links`: a commit's message never changes,
+so "this handler links that commit" is permanent; it is dropped, with the file, when the cursor (main's tip at the last write) is no
+longer an ancestor of the tip (history rewritten; the next call starts cold), or when the version, repo, workflow or since differ, or the
+file does not parse. `floor`: every failed run created before it has been dealt with. It is at most the newest createdAt GitHub reported
+minus 30 days (GitHub lets a run be rerun for 30 days, so older runs are final), at most the oldest run still going, and at most the
+oldest run of any red on main (so no red is dropped); it passes a run only when its commit is linked, was not red when judged, or has left
+main. A cold call (no file, an unwritable folder, a file that is dropped) reads every commit after `since` and every run since its date:
+the first call on a machine costs more the longer ago `since` is. A cold, a warm and an unwritable-cache call of the same repo state print
+the same stdout and exit code. A hidden red older than 30 days holds the floor, so the run list grows with it until it is handled; a run
+stuck unfinished holds the floor until GitHub gives it up. A red commit that a force-push removed from main and that was merged back more
+than 30 days after its run reads RED cold and GREEN warm: the one known difference.
+--merge-gate --pr N passes the newest red and the hidden reds together, the way it passes a red tip: dotfiles passes each red the pin-fix
+rule passes by that rule and the rest, once, by the full-suite rule against the union of what failed in them; the "merge-gate:" line names
+the run. Where --pr N passes (exit 0), one stdout line "  pin-fix-red: <full 40-digit sha>" follows for each red the pin-fix rule passed
+(not for one the full-suite rule passed): the dotfiles pin bump scripts (agent_kit_bump.py, loop_engine_bump.py; personal profile only)
+put one "Handles: <sha>" line in the squash body for each, so the bump leaves main readable as green. A refusal exits 1 with the same
+stdout as without --pr (no such line).
+Where the line lands: dotfiles, loop-engine, agent-kit, alert-steward and retro squash-merge with the commit messages
+(squash_merge_commit_message COMMIT_MESSAGES), so the line goes in a commit message of the fix PR; storycraft squashes from the PR body, so
+the line goes in the PR description. A plain merge commit also works: the script reads every commit that reaches main, the branch commits a merge brings in included, so the
+line in any of them (or in the merge commit's own message) counts. The coordinator's journal path is not part of
+this rule. A merge driver that passes its own --body must carry the line.
+Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
+(CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
+all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
+attempt of each hidden red), cache (warm, cold, dropped:<why>, unwritable), reads (gh calls made) and skipped ("newest red", when the
+hidden-red reads were skipped). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
+(for tests).
+
 A failed attempt is untested, not red, when the only jobs in it that did not pass or skip were cancelled because no runner
 picked them up (GitHub's annotation on the job's check run: "The job was not acquired by Runner of type hosted even after
 multiple attempts"). No test ran, so it is never green and never red. Any real failure, a timeout after the job started and any
@@ -181,7 +236,7 @@ a flake, with "issue") is not red and not tested: plain mode and --tip both exit
 (start a run), because a deploy needs a pass on the tip. A torn tail (what a crash leaves after the last complete line: NUL
 bytes, a half line) is skipped with one stderr note that names the file and the byte count; a bad line before the last
 complete line is still an unreadable journal (exit 1).
-The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green,
+The first-parent walk reads one commit at a time (repos/R/commits/SHA, parents[0]). It stops at the first green
 or once every commit with a verdict has been reached. WALK_CAP is a backstop. Commit reads use gh's 1-hour cache (a commit
 never changes); run list and branches/main are always read fresh.
 Every gh call carries GH_CALLER=ci-main-status. --merge-gate and --tip also set GH_URGENT=1; plain and --all add nothing.
@@ -203,15 +258,18 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 REPOS = {
-    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml"},
-    "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml"},
-    "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml"},
+    # "since": the grandfather commit, one fixed commit per repo (the date after each is its committer date): red runs on it and its ancestors are
+    # not held against main. Move it forward to main's tip right before this ships, never back.
+    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml", "since": "c666fb34ef3f24c34cb1b6ab7b79334c09df2ef2"},   # 2026-11-24
+    "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml", "since": "2995bb8e774f0b8d21c9e825e243f755fe3fc2f0"},   # 2026-11-23
+    "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml", "since": "9905bd2a3acefe345b8ec2401713d5b16e43ecf6"},   # 2026-11-24
     "coordinator": {"github": "cartwmic/coordinator", "journal": True},
     "homelab": None,
     "amazon-itemizer": None,
-    "alert-steward": {"github": "cartwmic/alert-steward", "workflow": "image.yml"},
-    "storycraft": {"github": "StoryCraftTW/storycraft", "workflow": "ci.yml"},
-    "retro": {"github": "cartwmic/retro", "workflow": "unit.yml"},
+    "alert-steward": {"github": "cartwmic/alert-steward", "workflow": "image.yml", "since": "9b95071dd212360423d2085b1f21098e9612957a"},   # 2026-11-23
+    "storycraft": {"github": "StoryCraftTW/storycraft", "workflow": "ci.yml", "since": "8e81a25fdc1a5c876154ff1294f8dfdf45dec903",   # 2026-11-23
+                  "squash_body": "the PR body"},   # storycraft squashes from the PR body; the other repos squash from the commit messages
+    "retro": {"github": "cartwmic/retro", "workflow": "unit.yml", "since": "2c7f2818121de5513b169f1e3d89fc87de689553"},   # 2026-11-22
     "budget-steward": {"gitea": "cartwmic/budget-steward", "kgate": "budget-steward"},   # on the homelab Gitea: no CI runner; gated on Gitea status or a full-suite kgate run
     "eval-cases": {"github": "cartwmic/eval-cases", "no_ci": True},   # private, no CI, no required checks possible: gated on review verify + pr-body-check
 }
@@ -221,7 +279,7 @@ JOURNAL = Path(os.environ.get("CI_MAIN_STATUS_JOURNAL")
                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/main-journeys.jsonl")
 LOCK = Path(os.environ.get("CI_MAIN_STATUS_LOCK") or "/tmp/coordinator-main-journeys.lock.d")
 RUN_EVENTS = ("push", "workflow_dispatch")
-RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,url"
+RUN_FIELDS = "databaseId,attempt,event,headSha,status,conclusion,url,createdAt"
 RUN_LIMIT = 100
 NO_RUNNER = "was not acquired by Runner"   # the annotation GitHub puts on a job it cancelled because no runner picked it up
 UNPROVEN = ("flake", "untested")   # verdicts that are not red and not tested
@@ -234,6 +292,8 @@ AGENT_KIT_PIN_FILES = {"dot_local/share/agent-kit/package.json", "dot_local/shar
 LOOP_ENGINE_MISE_CONFIG = "dot_config/mise/config.toml"
 LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills/"
 WALK_CAP = 250
+RETRIES = 2                 # a gh call that answers HTTP 502, 503 or 504 is asked again, up to this many more times, 1 s then 2 s apart
+READS = [0]                 # gh calls made by this run; the hidden-red log records the count
 CALLER = "ci-main-status"   # every gh call names its caller (GH_CALLER); the gh wrapper's log records it
 URGENT = False              # set by main(): --merge-gate and --tip reads are urgent (GH_URGENT=1)
 
@@ -261,16 +321,21 @@ class Record:
 
 
 def gh(args, not_found_ok=False):
-    """One gh call's JSON. not_found_ok: a 404 (GitHub answering there is nothing to read, such as an unprotected
+    """One gh call's JSON; a gateway error (HTTP 502, 503, 504) is retried (RETRIES). not_found_ok: a 404 (GitHub answering there is nothing to read, such as an unprotected
     branch) gives None, for the caller to decide. Every other failure, a 403 included (no permission, a rate
     limit), still raises: fail closed."""
     env = {**os.environ, "GH_CALLER": CALLER}
     if URGENT:
         env["GH_URGENT"] = "1"
-    try:
-        r = subprocess.run(["gh", *args], capture_output=True, text=True, env=env)
-    except OSError as e:
-        raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
+    for attempt in range(RETRIES + 1):
+        READS[0] += 1
+        try:
+            r = subprocess.run(["gh", *args], capture_output=True, text=True, env=env)
+        except OSError as e:
+            raise Unreadable(f"gh could not start ({e.strerror}); is it on PATH?")
+        if not (r.returncode and re.search(r"HTTP 50[234]", r.stderr)) or attempt == RETRIES:
+            break
+        time.sleep(float(os.environ.get("CI_MAIN_STATUS_RETRY_SLEEP", "1")) * (attempt + 1))   # a transient gateway error: ask again, after 1 s, then 2 s
     if r.returncode:
         if not_found_ok and "HTTP 404" in r.stderr:
             return None
@@ -728,6 +793,11 @@ def github_verdicts(spec):
     """The commit verdicts for the runs on main, as {sha: Record}, and whether a run is going."""
     runs = gh(["run", "list", "-R", spec["github"], "--workflow", spec["workflow"], "--branch", "main",
                "--limit", str(RUN_LIMIT), "--json", RUN_FIELDS])
+    return verdicts_of(spec, runs)
+
+
+def verdicts_of(spec, runs):
+    """The commit verdicts for `runs` (gh run list rows), as {sha: Record}, and whether a run is going."""
     runs = [r for r in runs if r["event"] in RUN_EVENTS]
     going = any(r["status"] != "completed" for r in runs)
     by_sha = {}
@@ -736,7 +806,9 @@ def github_verdicts(spec):
         first = next(attempts, None)   # a run with no concluded attempt gives its commit no verdict
         if first:
             by_sha.setdefault(r["headSha"], []).append((r, itertools.chain([first], attempts)))
-    return CommitVerdicts(spec["github"], by_sha), going
+    verdicts = CommitVerdicts(spec["github"], by_sha)
+    verdicts.newest_created = max((r.get("createdAt") or "" for r in runs), default="")   # GitHub's own clock, for the hidden-red floor
+    return verdicts, going
 
 
 def is_complete(raw):
@@ -853,6 +925,240 @@ def first_parent_walk(repo, tip, verdicts, trees=None):
     return walked
 
 
+# ---- Hidden reds on main (loop-engine issue 215): a red run that an older push left under a newer green one.
+# A link line in a later commit's message: git's own revert line, or `Handles: <sha>` (the key in any case, after a bullet or an indent). Only a
+# full 40-digit sha links: a short one would clear a red or not depending on how many commits the call listed, so cold and warm would differ.
+LINK = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:(?i:handles:[ \t]*|this reverts commit[ \t]+))([0-9a-f]{40})(?![0-9a-f])", re.M)
+RUN_CEILING = 1000    # gh run list returns at most this many runs, whatever the filter
+COMPARE_CAP = 10000   # compare lists at most this many commits (it still says how many there are: ahead_by)
+COMMITS_PAGE = 100
+RERUN_DAYS = 30       # GitHub lets a run be rerun for this long after it was created; a rerun keeps the run's createdAt
+STATE_VERSION = 1
+
+
+class Rewritten(Exception):
+    """The commit a cache was written at is no longer an ancestor of main's tip: main's history was rewritten."""
+
+
+def hidden_since(spec):
+    """The repo's grandfather commit (a full sha), or None when the repo has none (the journal repo). CI_MAIN_STATUS_SINCE replaces it, for tests."""
+    return (spec or {}).get("since") and (os.environ.get("CI_MAIN_STATUS_SINCE") or spec["since"])
+
+
+def zulu(text):
+    """GitHub's time `text` as UTC `YYYY-MM-DDTHH:MM:SSZ`, which sorts as text."""
+    return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def shifted(text, **delta):
+    return zulu((datetime.datetime.fromisoformat(text.replace("Z", "+00:00")) + datetime.timedelta(**delta)).isoformat())
+
+
+def commit_date(repo, sha):
+    return zulu(gh(["api", f"repos/{repo}/commits/{sha}", "--cache", "1h"])["commit"]["committer"]["date"])
+
+
+def links_in(commits):
+    """{(target sha, handler sha)} for every link line in `commits` (commits API rows)."""
+    return {(target, c["sha"]) for c in commits for target in LINK.findall(c["commit"]["message"])}
+
+
+def listed_commits(repo, cursor, tip, count):
+    """Every commit of main since the cursor commit's date, past compare's cap: the commits list, page by page. At least `count` must come back."""
+    date, seen, page = commit_date(repo, cursor), {}, 1
+    while True:
+        rows = gh(["api", f"repos/{repo}/commits?sha={tip}&since={date}&per_page={COMMITS_PAGE}&page={page}"])
+        seen.update((c["sha"], c) for c in rows)
+        if len(rows) < COMMITS_PAGE:
+            break
+        page += 1
+    if len(seen.keys() - {cursor}) < count:   # the cursor commit itself is in the list (its own date), and is not one of the `count`
+        raise Unreadable(f"the commits list gave {len(seen)} of the {count} commits between {cursor[:7]} and {tip[:7]}; failing closed")
+    return seen.values()
+
+
+def new_links(repo, cursor, tip):
+    """The links in the commits reachable from `tip` and not from `cursor` (every commit, a branch commit inside a merge commit too).
+
+    compare answers `ahead` and lists the commits 100 a page, oldest first; the distinct commits seen must equal ahead_by. `behind` or
+    `diverged` is a rewritten history (Rewritten). Past COMPARE_CAP commits compare lists only the first ones, so the commits list reads them.
+    """
+    first = gh(["api", f"repos/{repo}/compare/{cursor}...{tip}?per_page={COMMITS_PAGE}&page=1"])
+    status = first["status"]
+    if status == "identical":
+        return set()
+    if status in ("behind", "diverged"):
+        raise Rewritten(status)
+    if status != "ahead":
+        raise Unreadable(f"compare {cursor[:7]}...{tip[:7]} says {status!r}; failing closed")
+    count = first["ahead_by"]
+    if count > COMPARE_CAP:
+        return links_in(listed_commits(repo, cursor, tip, count))
+    seen, rows, page = {}, first["commits"], 1
+    while True:
+        seen.update((c["sha"], c) for c in rows)
+        if len(seen) >= count:
+            break
+        page += 1
+        rows = gh(["api", f"repos/{repo}/compare/{cursor}...{tip}?per_page={COMMITS_PAGE}&page={page}"])["commits"]
+        if not rows:
+            raise Unreadable(f"compare {cursor[:7]}...{tip[:7]} page {page} is empty with {len(seen)} of {count} commits seen; failing closed")
+    if len(seen) != count:
+        raise Unreadable(f"compare {cursor[:7]}...{tip[:7]} listed {len(seen)} commits, not the {count} it counts; failing closed")
+    return links_in(seen.values())
+
+
+def state_path(spec):
+    return state_dir() / "hidden-red" / (spec["github"].replace("/", "__") + ".json")
+
+
+def read_state(spec, since):
+    """(state, how) from the repo's cache file. state is None when the call must start cold: how says why (cold: no file or not readable;
+    dropped: another version, repo, workflow or since, or a file that does not parse)."""
+    try:
+        text = state_path(spec).read_text()
+    except OSError:
+        return None, "cold"
+    try:
+        data = json.loads(text)
+        ok = (data["version"] == STATE_VERSION and data["repo"] == spec["github"] and data["workflow"] == spec["workflow"] and data["since"] == since
+              and SHA40.match(data["cursor"]) and zulu(data["floor"]) == data["floor"]
+              and all(len(link) == 2 and all(SHA40.match(sha) for sha in link) for link in data["links"]))
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None, "dropped:unparsable"
+    return (data, "warm") if ok else (None, "dropped:another version, repo, workflow or since")
+
+
+def write_state(spec, state, note):
+    """Keep the state for the next call: a temp file in the folder, then an atomic rename, so a reader never sees half a file. A folder that
+    cannot be written is a stderr note and `unwritable` in the log; the verdict is the same, every call is then a cold one."""
+    path = state_path(spec)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(state))
+        os.replace(tmp, path)
+    except OSError as e:
+        note["cache"] = "unwritable"
+        print(f"ci-main-status: could not write {path}: {e}; every call reads main's history again", file=sys.stderr)
+
+
+def link_state(spec, since, tip, state, note):
+    """(links, floor): every link in main's commits after `since`, up to `tip`, and the time before which every failed run is dealt with.
+
+    Warm: the cache's links and floor, then the links in the commits added since its cursor. Cold: since's own date and every commit after it.
+    A cursor that is no longer an ancestor of the tip drops the cache and starts again cold; `since` itself not being one is an error.
+    """
+    repo = spec["github"]
+    while True:
+        if state:
+            links, cursor, floor = {tuple(link) for link in state["links"]}, state["cursor"], state["floor"]
+        else:
+            links, cursor, floor = set(), since, commit_date(repo, since)
+        try:
+            return (links | new_links(repo, cursor, tip) if cursor != tip else links), floor
+        except Rewritten as e:
+            if cursor == since:
+                raise Unreadable(f"the grandfather commit {since[:7]} is not on main's history ({e}); failing closed")
+            state, note["cache"] = None, "dropped:main's history was rewritten"
+
+
+def window_runs(spec, floor):
+    """Every run of the workflow on main created at or after `floor`, any status: the one list read.
+
+    gh lists at most RUN_CEILING runs; a list of exactly that many may be cut, so it is never read as complete: its created range is split
+    at the middle and both halves are read, down to one second. One second that still fills the ceiling is an error.
+    """
+    rows = gh(window_args(spec) + ["--created", f">={floor}"])
+    return rows if len(rows) < RUN_CEILING else split_window(spec, floor, max(r["createdAt"] for r in rows))
+
+
+def window_args(spec):
+    return ["run", "list", "-R", spec["github"], "--workflow", spec["workflow"], "--branch", "main", "--limit", str(RUN_CEILING), "--json", RUN_FIELDS]
+
+
+def split_window(spec, lo, hi):
+    if lo >= hi:
+        raise Unreadable(f"{RUN_CEILING} runs of {spec['workflow']} were created in the second {lo}: more than gh lists at once; failing closed")
+    mid = shifted(lo, seconds=(datetime.datetime.fromisoformat(hi.replace("Z", "+00:00")) - datetime.datetime.fromisoformat(lo.replace("Z", "+00:00"))).total_seconds() // 2)
+    rows = []
+    for a, b in ((lo, mid), (shifted(mid, seconds=1), hi)):
+        part = gh(window_args(spec) + ["--created", f"{a}..{b}"])
+        rows += part if len(part) < RUN_CEILING else split_window(spec, a, b)
+    return rows
+
+
+def candidate(r):
+    """A run that can make its commit red: one that failed, or any rerun (attempt 2 or more) that did not end in success (still going,
+    cancelled, timed out, skipped...). An attempt-1 run that is not a failure cannot."""
+    done_ok = r["status"] == "completed" and r["conclusion"] == "success"
+    return r["conclusion"] == "failure" or (r["attempt"] >= 2 and not done_ok)
+
+
+def where_on_main(repo, since, sha, tip):
+    """Is commit `sha` a red commit of main between `since` and `tip`? "main"; "left" (not after `since`, or not on main: it can be dropped);
+    or "newer" (pushed after `tip` was read: seen next call)."""
+    if gh(["api", f"repos/{repo}/compare/{since}...{sha}?per_page=1"])["status"] != "ahead":
+        return "left"
+    status = gh(["api", f"repos/{repo}/compare/{sha}...{tip}?per_page=1"])["status"]
+    return "main" if status in ("ahead", "identical") else "newer" if status == "behind" else "left"
+
+
+def hidden_reds(spec, tip, newest_created, newest_red, note):
+    """The hidden reds: [(sha, Record, subject)], newest run first. A hidden red is a commit after the repo's `since` on main, below the newest
+    conclusive commit, whose own verdict (the existing rule, run by CommitVerdicts) is fail and that no commit on main links.
+
+    `newest_red` is the sha of the newest conclusive commit when it is red: it stays red whatever links name it and is not listed here.
+    Reads, in order: the cache (links, cursor, floor), the commits added since the cursor (links), the runs since the floor, and for each
+    failed or rerun commit that no link covers, its own runs (the verdict), then its place on main. Writes the cache when all of it was read.
+    """
+    repo, since = spec["github"], hidden_since(spec)
+    state, note["cache"] = read_state(spec, since)
+    links, floor = link_state(spec, since, tip, state, note)
+    linked = {target for target, _ in links}
+    rows = [r for r in window_runs(spec, floor) if r["event"] in RUN_EVENTS]
+    held = [r["createdAt"] for r in rows if r["status"] != "completed"]   # a run going could still change its commit: the floor stays below it
+    failed = {}
+    for r in rows:
+        if candidate(r):
+            failed.setdefault(r["headSha"], []).append(r)
+    reds = []
+    for sha, runs in failed.items():
+        if sha == newest_red:
+            held += [r["createdAt"] for r in runs]
+            continue
+        if sha in linked:
+            continue
+        runs = gh(["run", "list", "-R", repo, "--workflow", spec["workflow"], "--branch", "main", "--commit", sha, "--limit", "50", "--json", RUN_FIELDS])
+        found = verdicts_of(spec, [r for r in runs if r["headSha"] == sha])[0].get(sha)
+        if not found or found.verdict != "fail":
+            continue
+        place = where_on_main(repo, since, sha, tip)
+        if place == "left":
+            continue
+        held += [r["createdAt"] for r in runs]
+        if place == "main":
+            subject = gh(["api", f"repos/{repo}/commits/{sha}", "--cache", "1h"])["commit"]["message"].split("\n")[0]
+            reds.append((sha, found, subject))
+    seen = [newest_created] + [r["createdAt"] for r in rows]
+    newest = max(seen)
+    ceiling = shifted(newest, days=-RERUN_DAYS) if newest else floor   # older than this, GitHub no longer lets a run be rerun: it is final
+    write_state(spec, {"version": STATE_VERSION, "repo": repo, "workflow": spec["workflow"], "since": since, "cursor": tip,
+                       "floor": max(floor, min([ceiling] + held)), "links": sorted([target, handler] for target, handler in links)}, note)
+    note["hidden"] = [{"sha": sha, "run": rec.run_id, "attempt": rec.attempt} for sha, rec, _ in reds]
+    return sorted(reds, key=lambda red: -red[1].run_id)
+
+
+def hidden_block(name, spec, reds):
+    """The lines that name the hidden reds, first in the output: a count, then for each red its status line and its own paste-ready fix."""
+    where = f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
+    lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"]
+    for sha, rec, subject in reds:
+        lines.append(f"  {rec.label} failed on {sha[:7]} {subject}: no later commit on main links it, no rerun passed")
+        lines.append(f"    to clear it, put `Handles: {sha}` in {where}, or rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
+    return lines + ["  a short sha does not count: the gate links only the full 40-character sha"]
+
+
 def pin_files_only(names):
     """True when `names` (a PR's changed files) are only bump pin files: agent-kit's two, the Loop Engine mise config plus skills, or both (one combined bump PR)."""
     names = set(names)
@@ -918,6 +1224,15 @@ def red_jobs(repo, red):
     return {j["name"]: [s["name"] for s in not_ok(j["steps"])] for j in not_ok(jobs)}
 
 
+def red_jobs_of(repo, reds):
+    """What failed in several reds together: {job name: its failed steps}, the union over `reds`."""
+    wanted = {}
+    for red in reds:
+        for job, step_names in red_jobs(repo, red).items():
+            wanted[job] = wanted.get(job, []) + [n for n in step_names if n not in wanted.get(job, [])]
+    return wanted
+
+
 def judge_run(repo, run, wanted):
     """How one run on the PR's tree answers main's red: ("skipped", why), ("bad", why) or ("good", None).
 
@@ -945,8 +1260,8 @@ def judge_run(repo, run, wanted):
     return "good", None
 
 
-def red_fix_reason(spec, red, pr):
-    """Why PR `pr` may merge into a red main, or None: its own full-suite run on its head tree passed what failed in main.
+def red_fix_reason(spec, reds, pr):
+    """Why PR `pr` may merge into a red main, or None: its own full-suite run on its head tree passed what failed in each of `reds` (Records).
 
     The runs are those of the same workflow on the PR's head commit or on a commit with its tree, newest first. One that skipped a
     job or step that failed in main is passed over; the first one that ran them all decides. Prints why not to stderr. A gh failure
@@ -954,7 +1269,7 @@ def red_fix_reason(spec, red, pr):
     """
     repo = spec["github"]
     try:
-        wanted = red_jobs(repo, red)
+        wanted = red_jobs_of(repo, reds)
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName"])
         head = pull["headRefOid"]
         tree = tree_of(repo, head)
@@ -970,7 +1285,7 @@ def red_fix_reason(spec, red, pr):
             if verdict == "good":
                 same = "" if run["headSha"] == head else f", same tree as its head {head[:7]}"
                 return (f"  merge-gate: PR #{pr} passed as a red-main fix: its own full-suite run {run['databaseId']} ({run['url']}) "
-                        f"on {run['headSha'][:7]}{same} succeeded, and ran and passed every job and step that failed in {red.label} "
+                        f"on {run['headSha'][:7]}{same} succeeded, and ran and passed every job and step that failed in {', '.join(r.label for r in reds)} "
                         f"({', '.join(wanted)}). Allowed.")
             passed_over.append(why)
         return refuse(pr, "no full-suite run of its head tree" + (": " + "; ".join(passed_over) if passed_over
@@ -983,13 +1298,29 @@ def tree_of(repo, sha):
     return gh(["api", f"repos/{repo}/commits/{sha}"])["commit"]["tree"]["sha"]
 
 
-def fix_reason(name, spec, red, pr):
-    """The "merge-gate:" line for PR `pr` as the fix for a red main, or None (the refusal went to stderr)."""
-    if red.run_id is None:
-        return refuse(pr, "the red verdict is not a GitHub run")
-    if name == "dotfiles":   # the pin rule first (its own checks), then the rule every other repo gets
-        return pin_fix_reason(spec, red, pr) or red_fix_reason(spec, red, pr)
-    return red_fix_reason(spec, red, pr)
+def judge_reds(name, spec, reds, pr):
+    """The "merge-gate:" lines for PR `pr` as the fix for the reds on main, and the shas of the reds the pin rule passed; or (None, []) when
+    any red is not passed (the refusals went to stderr). `reds` is [(sha, Record)]: the newest red, if any, and the hidden reds.
+
+    dotfiles: each red the pin rule passes is cleared by it, and the call prints it as "pin-fix-red: <sha>" (the pin bump scripts link
+    exactly those). The rest go to the full-suite rule, once, against the union of what failed in them. Other repos: the full-suite rule.
+    """
+    if any(rec.run_id is None for _, rec in reds):
+        return refuse(pr, "the red verdict is not a GitHub run"), []
+    lines, pinned, rest = [], [], []
+    for sha, rec in reds:
+        reason = pin_fix_reason(spec, rec, pr) if name == "dotfiles" else None
+        if reason:
+            lines.append(reason)
+            pinned.append(sha)
+        else:
+            rest.append(rec)
+    if rest:
+        reason = red_fix_reason(spec, rest, pr)
+        if not reason:
+            return None, []
+        lines.append(reason)
+    return lines, pinned
 
 
 def untested_line(name, sha, rec):
@@ -999,14 +1330,40 @@ def untested_line(name, sha, rec):
             f"no runner picked {'it' if one else 'them'} up. Not a pass.")
 
 
-def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, spec=None, pr=None):
+def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, spec=None, pr=None, log=None):
     """One repo's state. Returns (exit code, output lines). Used by every repo kind.
 
     tip_only (--tip): green below untested commits is 2 even while a run is going.
+
+    The verdict of main's newest conclusive commit comes first (verdict_lines). Then, for a repo with a grandfather commit, every older
+    red that nothing handled (hidden_reds) turns the answer RED, exit 1, in every mode. With --pr, the PR passes the newest red and the
+    hidden reds together (judge_reds). `log` is the hidden-red log record, filled as the reads go.
     """
     tip = main_tip(repo)
     walked = first_parent_walk(repo, tip, verdicts, trees)
     hits = [i for i, (_, _, rec) in enumerate(walked) if rec and rec.verdict not in UNPROVEN]
+    newest = walked[hits[0]] if hits else None
+    newest_red = newest[0] if newest and newest[2].verdict == "fail" else None
+    hidden = []
+    if hidden_since(spec) and log is not None:
+        if newest_red and pr is None:
+            log["skipped"] = "newest red"   # already RED: nothing the hidden reds could add
+        else:
+            hidden = hidden_reds(spec, tip, verdicts.newest_created, newest_red, log)
+    code, lines = verdict_lines(name, tip, walked, hits, going, noun, tip_only)
+    if hidden:
+        lines = hidden_block(name, spec, hidden) + (["  " + lines[0]] + lines[1:] if code != 1 else lines)
+        code = 1
+    reds = ([(newest_red, newest[2])] if newest_red else []) + [(sha, rec) for sha, rec, _ in hidden]
+    if code == 1 and reds and pr is not None:
+        allowed, pinned = judge_reds(name, spec, reds, pr)
+        if allowed:
+            return 0, lines + allowed + [f"  pin-fix-red: {sha}" for sha in pinned]
+    return code, lines
+
+
+def verdict_lines(name, tip, walked, hits, going, noun, tip_only):
+    """(exit code, lines) for main's newest conclusive commit alone: the verdict before the hidden reds and before --pr."""
     unproven = [w for w in walked[:hits[0] if hits else len(walked)] if w[2] and w[2].verdict in UNPROVEN]
     if unproven and not (hits and walked[hits[0]][2].verdict == "fail"):
         # A flake ruling, or a job no runner picked up, is not red and not tested (ask #854: a deploy needs a pass on the tip).
@@ -1029,21 +1386,16 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
     if newest.verdict == "fail":
         note = "  (a rerun is going)" if newest.rerun_going else ("  (a newer run is going)" if going else "")
         lines = [f"{name}: RED  {newest.label} failed on {sha[:7]}{note}"]
-
-        def red():
-            allowed = fix_reason(name, spec, newest, pr) if pr is not None else None
-            return (0, lines + [allowed]) if allowed else (1, lines)
-
         greens = [j for j in hits if walked[j][2].verdict == "pass"]
         if not greens:
             lines.append("  no earlier green run; red range not computed")
-            return red()
+            return 1, lines
         j = greens[0]
         green_sha, _, green = walked[j]
         lines.append(f"  last green: {green_sha[:7]} ({green.label})")
         lines.append("  first-parent commits last green..red tip:")
         lines += [f"    {s[:7]} {subject}" for s, subject, _ in walked[i:j]]
-        return red()
+        return 1, lines
 
     untested = i
     if untested == 0:
@@ -1372,8 +1724,7 @@ def thread_lines(slug, pr, found):
 
 
 def threads_log_path():
-    return Path(os.environ.get("CI_MAIN_STATUS_THREADS_LOG")
-                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ci-main-status/threads.jsonl")
+    return Path(os.environ.get("CI_MAIN_STATUS_THREADS_LOG") or state_dir() / "threads.jsonl")
 
 
 def log_threads(slug, pr, forge, started, code, found, error):
@@ -1382,17 +1733,10 @@ def log_threads(slug, pr, forge, started, code, found, error):
     detail = error or ""
     if _TOKEN and _TOKEN[0]:
         detail = detail.replace(_TOKEN[0], "<token>")
-    row = {"ts": datetime.datetime.fromtimestamp(started, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "duration_ms": round((time.time() - started) * 1000), "repo": slug, "pr": pr, "forge": forge,
-           "result": "error" if error else "refused" if found else "pass", "unresolved": None if error else len(found),
-           "threads": [{"where": t["where"], "url": t["url"]} for t in found or []], "exit": code, "detail": detail[:300]}
-    try:
-        path = threads_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
-            f.write(json.dumps(row) + "\n")
-    except OSError as e:
-        print(f"ci-main-status: could not write {threads_log_path()}: {e}", file=sys.stderr)
+    append_log(threads_log_path(),
+               {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": slug, "pr": pr, "forge": forge,
+                "result": "error" if error else "refused" if found else "pass", "unresolved": None if error else len(found),
+                "threads": [{"where": t["where"], "url": t["url"]} for t in found or []], "exit": code, "detail": detail[:300]})
 
 
 def check_threads(arg, pr):
@@ -1423,18 +1767,51 @@ def check(name, tip_only=False, pr=None, gate=False, rec=None):
     else:
         verdicts, going = github_verdicts(spec)
     trees = passing_trees(verdicts) if "journal" in spec else None
-    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only, trees, spec, pr)
+    code, lines = assess(name, spec["github"], verdicts, going, "journal line" if "journal" in spec else "run", tip_only, trees, spec, pr, rec)
     if "journal" in spec and not verdicts:
         lines.insert(0, f"  (no journal record at {JOURNAL})")
     return code, lines
 
 
 def gitea_log_path():
-    return Path(os.environ.get("CI_MAIN_STATUS_GITEA_LOG")
-                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ci-main-status/gitea.jsonl")
+    return Path(os.environ.get("CI_MAIN_STATUS_GITEA_LOG") or state_dir() / "gitea.jsonl")
 
 
-GITEA_VERDICT = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
+def state_dir():
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "ci-main-status"
+
+
+def append_log(path, row):
+    """One JSON line appended to `path`. A log that cannot be written is a stderr note and never changes the verdict."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"ci-main-status: could not write {path}: {e}", file=sys.stderr)
+
+
+def utc(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def hidden_log_path():
+    return Path(os.environ.get("CI_MAIN_STATUS_HIDDEN_LOG") or state_dir() / "hidden-red.jsonl")
+
+
+def log_hidden(name, spec, action, pr, started, code, lines, rec):
+    """One JSON line per call of a repo with a grandfather commit, kept after the terminal is gone, in hidden-red.jsonl: ts (UTC),
+    duration_ms, repo, action (status, tip or merge-gate), pr, verdict (GREEN, RED, UNTESTED or ERROR: the first line's word), exit, hidden
+    (the sha, run and attempt of each hidden red), cache (warm, cold, dropped:<why> or unwritable), reads (gh calls this call made) and
+    skipped ("newest red" when the newest commit was already red and the older ones were not read)."""
+    m = VERDICT_WORD.match(lines[0]) if lines else None
+    append_log(hidden_log_path(),
+               {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
+                "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
+                "reads": READS[0], "skipped": rec.get("skipped")})
+
+
+VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
 
 
 def log_gitea(name, spec, action, pr, started, code, lines, rec):
@@ -1445,21 +1822,15 @@ def log_gitea(name, spec, action, pr, started, code, lines, rec):
     token = _TOKEN[0] if _TOKEN else None
     if token:
         out = out.replace(token, "<token>")
-    m = GITEA_VERDICT.match(lines[0]) if lines else None
-    row = {"ts": datetime.datetime.fromtimestamp(started, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    m = VERDICT_WORD.match(lines[0]) if lines else None
+    row = {"ts": utc(started),
            "duration_ms": round((time.time() - started) * 1000), "action": action, "repo": spec["gitea"], "pr": pr or None,
            "sha": rec.get("sha"), "tree": rec.get("tree"), "verdict": m.group(1) if m else "ERROR", "exit": code,
            "evidence": rec.get("evidence"), "detail": out.splitlines()[0][:300] if out else ""}
-    try:
-        path = gitea_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
-            f.write(json.dumps(row) + "\n")
-    except OSError as e:
-        print(f"ci-main-status: could not write {gitea_log_path()}: {e}", file=sys.stderr)
+    append_log(gitea_log_path(), row)
 
 
-def describe(name, tip_only=False, pr=None, gate=False):
+def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     spec = REPOS[name]
     rec = {}
@@ -1473,6 +1844,8 @@ def describe(name, tip_only=False, pr=None, gate=False):
         code, lines = 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
     if spec and "gitea" in spec:
         log_gitea(name, spec, "merge-gate" if gate else "tip" if tip_only else "status", pr if gate else None, started, code, lines, rec)
+    if hidden_since(spec):
+        log_hidden(name, spec, "merge-gate" if merge_gate else "tip" if tip_only else "status", pr if gate else None, started, code, lines, rec)   # --all is a merge gate too
     return code, lines
 
 
@@ -1543,7 +1916,7 @@ def main(argv):
     worst = 0
     for name in names:
         if name in REPOS:
-            code, lines = describe(name, tip_only, pr, merge_gate and len(names) == 1)
+            code, lines = describe(name, tip_only, pr, merge_gate and len(names) == 1, merge_gate)
         else:
             code, lines = describe_any(name, pr, waiver)
         print("\n".join(lines))

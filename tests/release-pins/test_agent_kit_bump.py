@@ -108,7 +108,7 @@ if verb == "merge":
     tree = git("rev-parse", "refs/heads/%s^{tree}" % pr["head"])
     sha = git("commit-tree", tree, "-p", "refs/heads/main", "-m", "%s (#%d)" % (pr["title"], pr["number"]))
     git("update-ref", "refs/heads/main", sha)
-    pr.update(state="MERGED", mergeCommit={"oid": sha})
+    pr.update(state="MERGED", mergeCommit={"oid": sha}, merge_args=args)   # the tests read what the merge was asked to do
     out({})
 fail("fake gh: unexpected pr " + verb)
 '''
@@ -122,6 +122,7 @@ if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
   echo "$(basename "$0"): refused by the test" >&2
   exit 1
 fi
+[ "$(basename "$0")" != ci-main-status ] || [ -z "${FAKE_GATE_OUT:-}" ] || printf '%s\n' "$FAKE_GATE_OUT"   # what a passing gate prints on stdout
 exit 0
 '''
 
@@ -387,6 +388,48 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assert_nothing_applied()
         self.assertEqual(self.prs()[0]["state"], "OPEN")
         return result
+
+
+    # The merge links the reds the gate said the pin fix passes. The gate prints `  pin-fix-red: <full sha>` for each; the merge --body
+    # carries one `Handles: <sha>` line for each of those and nothing else.
+    RED_A, RED_B = "a" * 39 + "1", "b" * 39 + "2"
+    GATE_OUT = ("dotfiles: RED  3 unhandled red(s) on main\n"
+                "  run 4 failed on 1111111 first test red: no later commit on main links it\n"
+                "  merge-gate: the test red 1111111 failed in the unit tests and this PR's run did not cover it\n"
+                "  pin-fix-red: " + "a" * 39 + "1" + "\n"
+                "  pin-fix-red: " + "b" * 39 + "2" + "\n"
+                "  pin-fix-red: abc1234\n"                       # a short sha is not a link
+                "pin-fix-red: " + "c" * 40 + "\n"                # not indented: not the gate's line
+                "  pin-fix-red: " + "d" * 41 + "\n"             # too long
+                "  pin-fix-red: " + "E" * 40 + "\n")            # not lower-case hex
+
+    def merge_args(self):
+        return self.prs()[0]["merge_args"]
+
+    def test_the_merge_body_handles_exactly_the_reds_the_gate_printed_as_pin_fix_red(self):
+        self.world()
+        self.git_env = {**self.git_env, "FAKE_GATE_OUT": self.GATE_OUT}
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        args = self.merge_args()
+        self.assertEqual(args[args.index("--body") + 1], "Handles: %s\nHandles: %s" % (self.RED_A, self.RED_B), args)
+        self.assertEqual(args.count("--body"), 1, args)
+        self.assertIn("--squash", args)
+
+    def test_a_gate_that_printed_no_pin_fix_red_leaves_the_merge_without_a_body(self):
+        self.world()
+        self.git_env = {**self.git_env, "FAKE_GATE_OUT": "dotfiles: GREEN  run 3 passed on abcdef1; main tip is tested"}
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("--body", self.merge_args())
+
+    def test_a_pin_fix_red_line_from_a_gate_that_refused_links_nothing(self):
+        self.world()
+        self.refuse = "ci-main-status"
+        self.git_env = {**self.git_env, "FAKE_GATE_SAY": "  pin-fix-red: " + self.RED_A}
+        result = self.bump()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(c.startswith("gh pr merge") for c in self.calls()))
 
     def test_a_red_main_stops_before_the_merge_and_applies_nothing(self):
         self.refused_gate("ci-main-status")
