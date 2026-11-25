@@ -2246,7 +2246,10 @@ class OwnerApproved(AnyRepoFixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("RED  required check(s) failed", out)
         self.assertNotIn("WAIVED", out)
-        self.assertEqual(self.bypass_lines(), [])
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#7", "12"))
+        self.assertIn('RED  required check(s) failed', line["reason"])
+        self.assertNotIn("\n", line["reason"])
 
     def test_a_pending_required_check_stays_untested_with_the_flag(self):
         self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}, {"name": "lint"}]}}
@@ -2254,7 +2257,10 @@ class OwnerApproved(AnyRepoFixture):
         rc, out = self.gate()
         self.assertEqual(rc, 2, out)
         self.assertIn("UNTESTED", out)
-        self.assertEqual(self.bypass_lines(), [])
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#7", "12"))
+        self.assertIn('UNTESTED', line["reason"])
+        self.assertNotIn("\n", line["reason"])
 
     def test_a_rule_type_the_gate_cannot_verify_stays_unreadable_with_the_flag(self):
         self.protected_with_none()
@@ -2262,7 +2268,10 @@ class OwnerApproved(AnyRepoFixture):
         rc, out = self.gate()
         self.assertEqual(rc, 1, out)
         self.assertIn("which this gate cannot verify", out)
-        self.assertEqual(self.bypass_lines(), [])
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#7", "12"))
+        self.assertIn('which this gate cannot verify', line["reason"])
+        self.assertNotIn("\n", line["reason"])
 
     def test_a_required_check_the_computed_set_lacks_stays_unreadable_with_the_flag(self):
         self.protected_with_none()
@@ -2270,7 +2279,32 @@ class OwnerApproved(AnyRepoFixture):
         rc, out = self.gate()
         self.assertEqual(rc, 1, out)
         self.assertIn("failing closed", out)
-        self.assertEqual(self.bypass_lines(), [])
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#7", "12"))
+        self.assertIn('failing closed', line["reason"])
+        self.assertNotIn("\n", line["reason"])
+
+    def test_the_equals_form_is_read_like_the_two_word_form(self):
+        self.protected_with_none()
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7", "--owner-approved=12")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WAIVED", out)
+        self.assertEqual(self.ledger_log.read_text().splitlines(), [f"approves-pr 12 {self.any_repo}#7"])
+        (line,) = self.bypass_lines()
+        self.assertEqual((line["outcome"], line["ask"]), ("waived", "12"))
+
+    def test_a_refused_equals_form_leaves_a_refused_line_too(self):
+        self.protected_with_none()
+        self.prs["8"] = self.prs["7"]
+        self.pr_checks[self.any_repo]["8"] = []
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "8", "--owner-approved=12")
+        self.assertEqual(rc, 1, out)
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#8", "12"))
+        self.bypass_log.unlink()
+        rc, out = self.status("--merge-gate", self.any_repo, "--pr", "7", "--owner-approved=")   # no ask after the equals sign
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.refused_line()["ask"], "")
 
     def test_the_flag_is_for_the_merge_gate_with_a_pr_on_a_repo_outside_the_table_only(self):
         self.protected_with_none()

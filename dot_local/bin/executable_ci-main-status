@@ -40,7 +40,8 @@ refused: <why>"). It waives that one verdict and nothing else: a red or pending 
 and so does an unreadable state (an unknown rule type, a failed read). A waived gate prints one `WAIVED` line, exits 0 and appends one JSON line
 (at, action, gate, pr, head, ask, waived, outcome "waived") to ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/owner-approved.jsonl (OWNER_APPROVED_LOG
 overrides it), the file `pr-body-check --owner-approved` writes to as well. Every refusal of the flag leaves a line there too (at, action, gate, pr
-when known, ask, outcome "refused", reason): the ledger said no, the flag was used in a shape it does not take, the ledger could not run. A log
+when known, ask, outcome "refused", reason): the ledger said no, the flag was used in a shape it does not take, the ledger could not run, or the ledger
+approved and the gate still refused (a red or pending required check, a state it cannot read). A log
 that cannot be written is reported on stderr and never turns a refusal into a pass. Pass the same ASK to `pr-body-check OWNER/REPO N --owner-approved ASK`
 when a non-required workflow is red on the PR head; the merge is then `gh pr merge N --admin --match-head-commit SHA`.
 
@@ -598,7 +599,7 @@ def log_owner_row(row):
 
 
 def owner_row(outcome, **fields):
-    return {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "action": "owner-approved",
+    return {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), "action": "owner-approved",
             "gate": "ci-main-status", **fields, "outcome": outcome}
 
 
@@ -1487,12 +1488,17 @@ def main(argv):
         print("\n".join(lines))
         return code
     owner_ask = None
-    if "--owner-approved" in argv:   # --owner-approved ASK: Michael's answered ask for this one PR waives "no required checks" and nothing else
-        k = argv.index("--owner-approved")
-        owner_ask = argv[k + 1] if k + 1 < len(argv) else ""
-        del argv[k:k + 2]
+    for k, a in enumerate(argv):   # --owner-approved ASK or --owner-approved=ASK: Michael's answered ask for this one PR waives "no required checks" and nothing else
+        if a == "--owner-approved":
+            owner_ask, width = (argv[k + 1] if k + 1 < len(argv) else ""), 2
+        elif a.startswith("--owner-approved="):
+            owner_ask, width = a.split("=", 1)[1], 1
+        else:
+            continue
+        del argv[k:k + width]
         if owner_ask == "" or owner_ask.startswith("-"):
             argv = []   # usage error below
+        break
     tip_only = "--tip" in argv
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
@@ -1541,6 +1547,8 @@ def main(argv):
         else:
             code, lines = describe_any(name, pr, waiver)
         print("\n".join(lines))
+        if waiver is not None and code != 0:   # Michael's ask held, and the gate still refused (red, pending, unreadable): the try leaves its line too
+            owner_refused(waiver[0], f"{name}#{pr}", (lines[0] if lines else "").strip() or f"the gate exited {code}")
         if rank[code] > rank[worst]:
             worst = code
     # UNTESTED passes the merge gate only for the table repos (main is not red). For OWNER/REPO a pending, missing
