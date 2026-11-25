@@ -77,6 +77,7 @@ python3 scripts/ci-par.py \
   tests/launchd-reload \
   tests/profiles \
   tests/stack-map \
+  tests/stack-map-merge-check \
   tests/container-mode \
   tests/design-principles \
   tests/agent-kit \

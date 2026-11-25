@@ -4,7 +4,7 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 
 | Gate | Personal | Work | Where it lands | Test that proves it |
 |---|---|---|---|---|
-| PR body check: `pr-body-check` | yes | yes | `.local/bin/pr-body-check` | `tests/pr-body-check/test_pr_body_check.py`, `tests/profiles/test_gate_coverage.py` |
+| PR body check: `pr-body-check` | yes | yes | `.local/bin/pr-body-check`, `.local/bin/stack-map-merge-check` | `tests/pr-body-check/test_pr_body_check.py`, `tests/stack-map-merge-check/test_stack_map_merge_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Agent record path and import: `pr-record` | yes | yes | `.local/bin/pr-record` | `tests/pr-record/test_pr_record.py`, `tests/profiles/test_gate_coverage.py` |
 | Open or edit a PR through the body check: `pr-open` | yes | yes | `.local/bin/pr-open` | `tests/pr-open/test_pr_open.py`, `tests/profiles/test_gate_coverage.py` |
 | Open an issue through the claims check: `issue-open` | yes | yes | `.local/bin/issue-open`, `.local/bin/claims` | `tests/issue-open/test_issue_open.py`, `tests/profiles/test_gate_coverage.py` |
@@ -35,6 +35,8 @@ The gate wrappers run scripts in the coordinator checkout. Chezmoi renders `~/.l
 ## What `pr-body-check REPO PR` also runs
 
 After the body check passes, `pr-body-check REPO PR` runs `ci-main-status --threads REPO PR`: no unresolved review thread may be left (playbook 580f3e02 step 3). Every merge chain that runs the body check therefore runs the thread check, and an unresolved thread is exit 1, like a broken body rule. An unreadable thread state is also exit 1, never a silent pass. The thread check is not run for a body-only check (`--body-file`), a check made before a review round (`--skip-intent-review`), or the `--pr`/`--repo`/`--base` forms, which have no `REPO PR` pair. `ci-main-status --threads` itself ships on both profiles, in `ci-main-status`.
+
+For a `cartwmic/dotfiles` PR (written `cartwmic/dotfiles` or `dotfiles`), the merge form first runs `stack-map-merge-check REPO PR`, before any body rule: it builds the agent stack map page with the PR's own files and refuses a PR that breaks it (`docs/stack-map/README.md`, "Before a merge"). It ships on both profiles like `pr-body-check`; where the four repositories are not under `~/git` (the work Mac) it refuses with that reason, so a dotfiles PR is merged from the machine that keeps them. A missing `stack-map-merge-check` fails the merge form (exit 127); it is never skipped. The same forms that skip the thread check skip it.
 
 The merge form of `pr-body-check` also refuses a PR whose agent record has no `Promises:` line (the coordinator's `pr-body-check.ts`; both profiles run the same checkout script).
 
