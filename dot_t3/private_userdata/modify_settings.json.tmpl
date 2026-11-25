@@ -124,10 +124,15 @@ set -eu
 # is not an object) is refused with the input unchanged and logged as skipped; behind the guards, a post-condition on the merged
 # document makes the promise hold for every input: the result may differ from the input only at the three compaction paths (an
 # empty config the merge created for a compaction key is forgiven), and any other difference prints the input byte for byte and
-# logs skipped - so no input shape can lose data. Every apply appends one JSON line - the command (apply), the compaction keys
-# that changed and their new values, never any other file content - to ~/.local/state/t3-settings/log.jsonl (XDG_STATE_HOME
-# respected); chezmoi also runs this script for diff, status, cat and verify, and those previews write no log line; a logging
-# failure never fails the apply. The merged document is printed in jq's default pretty
+# logs skipped - so no input shape can lose data. A run that can write the target appends one JSON line - the command, the
+# compaction keys that changed and their new values; the word is proposed, never wrote, because the script cannot see whether
+# chezmoi then wrote the file - to ~/.local/state/t3-settings/log.jsonl (XDG_STATE_HOME respected). The gate is inverted:
+# log_apply stays silent only for the read-only commands (diff, status, cat, verify), for a direct run with CHEZMOI_COMMAND unset
+# or empty, and for a dry run (a --dry-run flag, true-ish or bare, or a short-flag cluster made only of letters that contains n,
+# scanned up to a -- word in CHEZMOI_ARGS); every other command - apply, update, init, edit, ... - logs, and when in doubt the
+# line is true anyway because the word is proposed. The whole logging block is wrapped, so a read-only log file or a state path
+# that is a regular file leaves stdout exact, exit 0 and nothing on stderr; a logging failure never fails the apply. The merged
+# document is printed in jq's default pretty
 # form, the form T3 writes, so over a pretty input the apply differs from the input only on the changed lines; when nothing
 # changes as data the input is printed byte for byte, so chezmoi shows no drift.
 # These two literals duplicate the personal body's AUTO_COMPACT_WINDOWS and IDLE_COMPACTION below: the rendered personal script
@@ -136,16 +141,45 @@ set -eu
 AUTO_COMPACT_WINDOWS='{"claudeAgent":"300000","coordinator":"200000"}'
 IDLE_COMPACTION='beforeCacheExpires'
 
-# One JSON line per real apply (design principle 14): what the apply did. chezmoi renders and runs this script for every command
-# that needs the target file - diff, status, cat, verify too - and those are previews, not applies: log_apply writes nothing
-# unless CHEZMOI_COMMAND (which chezmoi sets per command) is apply, and a direct run with it unset logs nothing either. A
-# logging failure must not fail the apply.
+# One JSON line per run that can write the target (design principle 14): what the script proposed. chezmoi renders and runs
+# this script for every command that needs the target file, and the script cannot see whether chezmoi then wrote the file - so
+# the word is proposed, never wrote. The gate is inverted: log_apply stays silent only for the read-only commands (diff, status,
+# cat, verify), for a direct run with CHEZMOI_COMMAND unset or empty, and for a dry run - a --dry-run flag (true-ish value or
+# bare) or a short-flag cluster made only of letters that contains n, scanned up to a -- word in CHEZMOI_ARGS (set -f first, so
+# no glob expands); every other command - apply, update, init, edit, ... - logs, and when in doubt the line is true anyway
+# because the word is proposed. The logging block is wrapped so a read-only log file or a state path that is a regular file
+# leaves stdout exact, exit 0 and nothing on stderr; a logging failure never fails the apply.
 log_apply() {
-  [ "${CHEZMOI_COMMAND:-}" = "apply" ] || return 0
+  case ${CHEZMOI_COMMAND:-} in
+    "" | diff | status | cat | verify) return 0 ;;
+  esac
+  dry=0
+  set -f
+  for arg in ${CHEZMOI_ARGS:-}; do
+    case $arg in
+      --) break ;;
+      --dry-run | --dry-run=[1tT] | --dry-run=TRUE | --dry-run=True | --dry-run=true) dry=1 ;;
+      --dry-run=*) ;; # --dry-run=false and any other value: not a dry run
+      --*) ;;
+      -*)
+        flags=${arg#-}
+        case $flags in
+          *[!a-zA-Z]*) ;; # a value path may hold letters; only clusters made solely of letters are flags
+          *n*) dry=1 ;;
+        esac
+        ;;
+    esac
+  done
+  set +f
+  if [ "$dry" -eq 1 ]; then
+    return 0
+  fi
   dir="${XDG_STATE_HOME:-$HOME/.local/state}/t3-settings"
-  mkdir -p "$dir" 2>/dev/null || return 0
-  printf '{"utc":"%s","mode":"work","command":"apply","action":"%s"%s}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" \
-    >> "$dir/log.jsonl" 2>/dev/null || true
+  {
+    mkdir -p "$dir" &&
+      printf '{"utc":"%s","mode":"work","command":"%s","action":"%s"%s}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CHEZMOI_COMMAND" "$1" "$2" >>"$dir/log.jsonl"
+  } >/dev/null 2>&1 || true
 }
 
 # Spool stdin to a temp file (removed on exit): every byte-for-byte fallback below must print the input's exact bytes, and a
@@ -258,7 +292,7 @@ if [ "$sorted_in" = "$sorted_out" ]; then
   cat "$spool"
   exit 0
 fi
-log_apply wrote ",\"keys\":$changed,\"values\":$values"
+log_apply proposed ",\"keys\":$changed,\"values\":$values"
 # T3 writes the file as jq's default pretty JSON, so the merged document is printed in that form too: over a pretty input the
 # apply differs from the input only on the changed lines. (jq . adds a trailing newline; the case below re-applies the input's.)
 pretty=$(printf %s "$out" | jq . 2>/dev/null) || pretty=$out

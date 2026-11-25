@@ -932,9 +932,9 @@ class WorkModeTest(unittest.TestCase):
 
     def test_no_input_shape_loses_data(self):
         """Every input shape in the corpus ends in exactly one of two ways: the input comes back byte for byte with the log saying
-        skipped or unchanged, or the log says wrote and the output differs from the input only at the three allowed paths (checked
+        skipped or unchanged, or the log says proposed and the output differs from the input only at the three allowed paths (checked
         here by deleting those paths from both documents, independently of the script's own post-condition). Nothing reaches
-        stderr, and a wrote log names only allowed keys."""
+        stderr, and a proposed log names only allowed keys."""
         for shape in self.corpus():
             with self.subTest(shape=shape[:40]):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -949,24 +949,85 @@ class WorkModeTest(unittest.TestCase):
                     if r.stdout == shape:
                         self.assertIn(record["action"], ("skipped", "unchanged"), shape[:80])
                     else:
-                        self.assertEqual(record["action"], "wrote", shape[:80])
+                        self.assertEqual(record["action"], "proposed", shape[:80])
                         self.assertTrue(set(record["keys"]) <= self.ALLOWED_KEYS, shape[:80])
                         self.assertEqual(self.strip_allowed(json.loads(shape)), self.strip_allowed(json.loads(r.stdout)), shape[:80])
 
-    def test_only_a_real_apply_logs(self):
-        """chezmoi runs the script for diff, status, cat and verify too; those previews change nothing and write no log line, and
-        a direct run with CHEZMOI_COMMAND unset logs nothing either. The output itself is the same merged document either way."""
-        for command in ("diff", "status", "cat", "verify", None):
+    def run_with_command(self, stdin, command, args, state, state_home=None):
+        """Run the rendered script with CHEZMOI_COMMAND and CHEZMOI_ARGS set by hand, the way chezmoi sets them (CHEZMOI_ARGS holds
+        the program name and all arguments joined by spaces), with HOME and XDG_STATE_HOME in the scratch dir."""
+        env = dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state_home or (state / "state")))
+        if command is not None:
+            env["CHEZMOI_COMMAND"] = command
+        if args is not None:
+            env["CHEZMOI_ARGS"] = args
+        return subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30, env=env)
+
+    def test_the_inverted_gate_logs_every_writing_command_and_the_word_is_proposed(self):
+        """The gate is inverted: apply, update, init and edit each log one line naming their command, with the action proposed (the
+        script cannot see whether chezmoi wrote the file); --dry-run=false logs too. A dry run in any spelling - --dry-run,
+        --dry-run=true, --dry-run=1, -n, -vn, a global -n before the subcommand, update -n - logs nothing, a -- word ends the scan
+        (apply -- -n logs), the read-only commands and a direct run log nothing, and a read-only log file or a state path that is
+        a regular file leaves stdout exact, exit 0 and nothing on stderr."""
+        for command in ("apply", "update", "init", "edit"):
             with tempfile.TemporaryDirectory() as tmp:
                 state = Path(tmp)
-                env = dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"))
-                if command is not None:
-                    env["CHEZMOI_COMMAND"] = command
-                out = subprocess.run(["sh", "-c", self.script], input=FIXTURE, capture_output=True, text=True, timeout=30, env=env)
+                out = self.run_with_command(FIXTURE, command, "chezmoi " + command, state)
                 self.assertEqual(out.returncode, 0, command)
                 self.assertEqual(out.stderr, "", command)
-                self.assertEqual(json.loads(out.stdout)["idleCompaction"], IDLE, command)
-                self.assertFalse((state / "state/t3-settings/log.jsonl").exists(), command)
+                lines = self.logged_lines(state)
+                self.assertEqual(len(lines), 1, command)
+                record = json.loads(lines[0])
+                self.assertEqual(record["command"], command, command)
+                self.assertEqual(record["action"], "proposed", command)
+        for command, args in (("apply", "chezmoi apply --dry-run=false"), ("apply", "chezmoi apply -- -n")):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.run_with_command(FIXTURE, command, args, state)
+                self.assertEqual(out.returncode, 0, args)
+                self.assertEqual(len(self.logged_lines(state)), 1, args)
+                self.assertEqual(json.loads(self.logged_lines(state)[0])["command"], "apply", args)
+        for command, args in (("apply", "chezmoi apply --dry-run"), ("apply", "chezmoi apply --dry-run=true"),
+                              ("apply", "chezmoi apply --dry-run=1"), ("apply", "chezmoi apply -n"),
+                              ("apply", "chezmoi apply -vn"), ("apply", "chezmoi -n apply"),
+                              ("update", "chezmoi update -n"), ("diff", "chezmoi diff"), ("status", "chezmoi status"),
+                              ("cat", "chezmoi cat"), ("verify", "chezmoi verify"), (None, None)):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.run_with_command(FIXTURE, command, args, state)
+                self.assertEqual(out.returncode, 0, args)
+                self.assertEqual(out.stderr, "", args)
+                self.assertEqual(json.loads(out.stdout)["idleCompaction"], IDLE, args)
+                self.assertFalse((state / "state/t3-settings/log.jsonl").exists(), args)
+        # a read-only log.jsonl: the second run's stdout is byte for byte the first output, exit 0, nothing on stderr, no new line
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            first = self.run_with_command(FIXTURE, "apply", "chezmoi apply", state).stdout
+            log = state / "state/t3-settings/log.jsonl"
+            log.chmod(0o444)
+            out = self.run_with_command(first, "apply", "chezmoi apply", state)
+            self.assertEqual(out.returncode, 0)
+            self.assertEqual(out.stderr, "")
+            self.assertEqual(out.stdout, first)
+            self.assertEqual(len(self.logged_lines(state)), 1)
+            log.chmod(0o644)
+        # a state path that is a regular file: same stdout as a control run with a writable state dir, nothing on stderr
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            control = self.run_with_command(FIXTURE, "apply", "chezmoi apply", state).stdout
+            blocked = Path(tmp) / "blocked"
+            blocked.write_text("not a directory")
+            out = self.run_with_command(FIXTURE, "apply", "chezmoi apply", state, state_home=blocked)
+            self.assertEqual(out.returncode, 0)
+            self.assertEqual(out.stderr, "")
+            self.assertEqual(out.stdout, control)
+
+    def test_the_trailing_newline_follows_the_input(self):
+        """The output ends with a newline exactly when the input does (jq . always adds one; the script re-applies the input's),
+        so changing the code to always or never add one fails here."""
+        self.assertFalse(FIXTURE.endswith("\n"))
+        self.assertFalse(self.apply(FIXTURE).endswith("\n"))
+        self.assertTrue(self.apply(FIXTURE + "\n").endswith("\n"))
 
     def test_the_helpers_never_touch_the_real_home_log(self):
         """run_script and apply_logged run with a scratch HOME and state dir: a test run neither creates nor appends to the real
@@ -1036,7 +1097,8 @@ class WorkModeTest(unittest.TestCase):
         scratch dir, so the log line lands there. No path may print to stderr: every refusal happens up front, before the merge
         can fail."""
         r = subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30,
-                           env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+                           env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"),
+                                    CHEZMOI_COMMAND="apply", CHEZMOI_ARGS="chezmoi apply"))
         assert r.returncode == 0, r.stderr
         assert r.stderr == "", r.stderr
         return r.stdout
@@ -1048,7 +1110,7 @@ class WorkModeTest(unittest.TestCase):
         return (state / "state/t3-settings/log.jsonl").read_text().splitlines()
 
     def test_the_apply_leaves_one_json_log_line_with_keys_and_values_only(self):
-        """Design principle 14: one line per run - wrote with the compaction keys that changed and their new values, skipped with a
+        """Design principle 14: one line per run - proposed with the compaction keys that changed and their new values, skipped with a
         reason - and no file content in it: sentinels planted in the input (a kept displayName, a kept usage source with its URL, a
         kept 1Password account, a management key, a launchArgs value) appear nowhere, and no removed: or restored: key is ever
         named because the work mode removes and restores nothing. A second run of the same input logs unchanged."""
@@ -1070,7 +1132,7 @@ class WorkModeTest(unittest.TestCase):
             record = json.loads(lines[0])
             self.assertEqual(record["mode"], "work")
             self.assertEqual(record["command"], "apply")
-            self.assertEqual(record["action"], "wrote")
+            self.assertEqual(record["action"], "proposed")
             self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
             self.assertEqual(record["values"], {"idleCompaction": IDLE,
                                                 "claudeAgent.autoCompactWindow": WINDOWS["claudeAgent"],
@@ -1100,7 +1162,7 @@ class WorkModeTest(unittest.TestCase):
             lines = self.logged_lines(state)
             self.assertEqual(len(lines), 1)
             record = json.loads(lines[0])
-            self.assertEqual(record["action"], "wrote")
+            self.assertEqual(record["action"], "proposed")
             self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
             self.assertEqual(record["values"], {"idleCompaction": IDLE,
                                                 "claudeAgent.autoCompactWindow": WINDOWS["claudeAgent"],
