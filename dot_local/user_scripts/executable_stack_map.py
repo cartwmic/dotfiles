@@ -671,6 +671,8 @@ class Content:
             if int(m.group(1)) != len(steps) + 1:
                 self.fail.add("dotfiles", CONTENT_PATH, number, "flow steps must be numbered 1, 2, 3 in order")
             actor, what, where = (part.strip() for part in parts)
+            if not CITE.search(m.group(2)):
+                self.fail.add("dotfiles", CONTENT_PATH, number, "flow step %s makes a claim with no checked citation: add `[[repo:path:LINE|snippet]]` from the line that backs it" % m.group(1))
             target = re.match(r"^([A-Za-z0-9_-]+):(\S+)$", self.masker.plain(where).replace(" ", ""))
             link = None
             if target and target.group(1) in self.repos:

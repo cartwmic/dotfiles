@@ -24,7 +24,7 @@ The plain-English text is `docs/stack-map/content.md`. It needs these `##` secti
 Two things in it are checked against the code:
 
 - **Citations**: `[[repo:path:LINE|snippet]]`. Line `LINE` of `path` at that repository's `origin/main` must contain `snippet` (a short literal, not a paraphrase). `LINE-LINE2` checks a range. It shows as a small link to the file at that commit. Write the citation after the sentence it supports.
-- **The flow**: a ```` ```flow ```` block, one step per line: `1. Actor | what happens | where`. The where column is `repo:path` (the path must exist) or a command. It is drawn as the step diagram.
+- **The flow**: a ```` ```flow ```` block, one step per line: `1. Actor | what happens [[repo:path:LINE|snippet]] | where`. Each step must carry a checked citation, so the diagram cannot keep saying something the code stopped saying. The where column is `repo:path` (the path must exist) or a command. It is drawn as the step diagram.
 
 Everything else is ordinary markdown: headings, paragraphs, lists, tables, `**bold**`, `` `code` ``, links.
 
@@ -40,6 +40,7 @@ It exits 1, writes nothing, and prints one line per problem as `repo:path:line: 
 | `dotfiles:docs/stack-map/content.md:N: says where something sits on the page (...)` | the text uses a word of position ("above", "below", "further down", "earlier on this page") outside code and citations, but the generator decides the page order | name the section instead, for example: the tables under "Facts read from the files" |
 | `dotfiles:docs/stack-map/content.md:0: no ## section for ...` | a required section is missing or renamed | restore the heading (see the list above) |
 | `...: flow step N names a path missing` | the flow points at a file that is gone | fix the path |
+| `...: flow step N makes a claim with no checked citation` | a diagram step has no `[[repo:path:LINE\|snippet]]` | add one from the line that backs the step |
 | `...: git fetch origin main failed` | no network, or the remote is unreachable | rerun when it is |
 
 A version mismatch between pins is not a failure: the page flags it in red.
