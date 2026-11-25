@@ -221,6 +221,16 @@ class StackMapTest(unittest.TestCase):
                 self.assertRegex(done.stderr, r"content\.md:\d+: says where something sits on the page .*name the section")
                 self.assertFalse(page.exists())
 
+    def test_a_section_with_no_fixed_place_gets_an_anchor_and_a_nav_chip(self):
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", "## Notes on tools\n\nSomething extra.\n\n## Notes on tools\n\nAnd again.\n\n## Glossary", 1))
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        html = page.read_text(encoding="utf-8")
+        for key in ("x-notes-on-tools", "x-notes-on-tools-2"):
+            self.assertEqual(len(re.findall(r'<section id="%s">' % key, html)), 1)
+            self.assertEqual(len(re.findall(r'<li><a href="#%s">Notes on tools</a></li>' % key, html)), 1)
+        self.assertLess(html.index('href="#x-notes-on-tools"'), html.index('href="#glossary"'))  # chips follow the page order: extras sit before the glossary
+
     def test_naming_a_section_is_fine(self):
         self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", 'The tables under "Glossary" list them.\n\n## Glossary', 1))
         done, page = self.run_script()

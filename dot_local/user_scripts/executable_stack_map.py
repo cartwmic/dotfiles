@@ -1046,13 +1046,21 @@ def build_page(facts, repos, content_parts, command, content):
     cards = facts["repos"]
     top = table(["Repository", "Commit of main", "Date"], stack=False, rows=[[esc(n), '<a href="%s">%s</a>' % (repos[n].commit_url(), esc(cards[n]["sha"])), esc(cards[n]["date"])] for n in REPOS])
     secs = {k: found[k] for k in found}
+    extra_sections = []  # a `##` section the page has no fixed place for still gets an anchor and a nav chip, so a reader can reach it
+    for title, body in extra:
+        base = "x-" + (re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "section")
+        key, n = base, 2
+        while key in {k for k, _, _ in extra_sections}:
+            key, n = "%s-%d" % (base, n), n + 1
+        extra_sections.append((key, title, body))
     flow = facts["flow"]
     flow_list = "".join("<li><strong>%s:</strong> %s %s</li>" % (esc(s["actor"]), content.inline(s["what"]), flow_where(s, content)) for s in flow)
     pieces = [
         '<p class="eyebrow">Agent stack map</p><h1>How the agent stack works</h1>',
         '<p class="lede">Generated from the main branch of four repositories. If a commit below differs from the repository\'s current main, this page is stale: run the command at the bottom.</p>', top,
         "<nav><ul>%s</ul></nav>" % "".join('<li><a href="#%s">%s</a></li>' % (k, esc(t)) for k, t in (
-            ("start", "Start here"), ("picture", "One-minute picture"), ("arch", "Architecture"), ("repos", "Repositories"), ("flow", "How work moves"), ("facts", "Facts from the files"), ("change", "Where to change X"), ("glossary", "Glossary"))),
+            [("start", "Start here"), ("picture", "One-minute picture"), ("arch", "Architecture"), ("repos", "Repositories"), ("flow", "How work moves"), ("facts", "Facts from the files"), ("change", "Where to change X")]
+            + [(key, title) for key, title, _ in extra_sections] + [("glossary", "Glossary")])),
         intro,
         '<section id="start"><h2>%s</h2>%s</section>' % (esc(secs["start"][0]), secs["start"][1]),
         '<section id="picture"><h2>%s</h2>%s</section>' % (esc(secs["picture"][0]), secs["picture"][1]),
@@ -1069,7 +1077,7 @@ def build_page(facts, repos, content_parts, command, content):
         details("d-kit", "agent-kit and Loop Engine", "What the two libraries expose.", kit_engine_html(facts, repos), [(repos["agent-kit"], "package.json"), (repos["loop-engine"], "Cargo.toml")]),
         "</section>",
         '<section id="change"><h2>%s</h2>%s</section>' % (esc(secs["change"][0]), secs["change"][1]),
-    ] + ['<section><h2>%s</h2>%s</section>' % (esc(t), b) for t, b in extra] + [
+    ] + ['<section id="%s"><h2>%s</h2>%s</section>' % (key, esc(t), b) for key, t, b in extra_sections] + [
         '<section id="glossary"><h2>%s</h2>%s</section>' % (esc(secs["glossary"][0]), secs["glossary"][1]),
         '<footer><p>Built by <code>%s</code> from <code>origin/main</code> of dotfiles, coordinator, agent-kit and loop-engine. The same commits give the same page. To refresh, run the command again (it fetches first).</p></footer>' % esc(command),
     ]
