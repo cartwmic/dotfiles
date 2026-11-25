@@ -31,7 +31,7 @@ cat "$FAKE_GH_SHA_FILE"
 
 
 def git(clone, *args):
-    return subprocess.run(["git", "-C", str(clone), *args], check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-C", str(clone), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 class MergeCheckTest(unittest.TestCase):
