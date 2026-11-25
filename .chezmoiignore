@@ -552,7 +552,7 @@ Library/Preferences/pnpm/**
 {{ $name }}
 {{-   end }}
 {{- end }}
-# Desktop, systemd and launchd.
+# Desktop, systemd and launchd. (session-cost and its code folder stay: `session-cost workstreams` collects and reports by hand on the pod. Its timer units are under .config/systemd, so they and script 86 stay out.)
 .config/systemd
 .config/systemd/**
 .config/hypr
@@ -576,13 +576,10 @@ Library/Preferences/pnpm/**
 .local/bin/ntfy-zellij-notify.sh
 .local/bin/le-verify-clean
 .local/bin/mistakes-report
-.local/bin/session-cost
 .local/share/initramfs-ssh-unlock
 .local/share/initramfs-ssh-unlock/**
 .local/share/mistakes-report
 .local/share/mistakes-report/**
-.local/share/token-efficiency
-.local/share/token-efficiency/**
 # No sshd in the pod, and the jump-host aliases need local data the pod does not have.
 .ssh
 .ssh/**

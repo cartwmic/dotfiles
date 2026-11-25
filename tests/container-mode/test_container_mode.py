@@ -82,6 +82,11 @@ class ContainerHome(Scratch):
         for left in LEFT_OUT:
             self.assertFalse([p for p in self.managed if p == left or p.startswith(left + "/")], left)
 
+    def test_session_cost_command_and_code_are_in_the_pod_but_not_its_timer(self):   # `session-cost workstreams` collects and reports by hand; the pod has no systemd
+        self.assertLessEqual({".local/bin/session-cost", ".local/share/token-efficiency/session_cost.py", ".local/share/token-efficiency/workstreams.py",
+                              ".local/share/token-efficiency/collect.py"}, self.managed)
+        self.assertEqual({p for p in self.managed if "session-cost.service" in p or "session-cost.timer" in p or p == "86_session_cost_systemd.sh"}, set())
+
     def test_the_files_that_stay_verify_clean(self):
         r = chezmoi(self.config, self.home, "verify", "--exclude=scripts,externals")
         self.assertEqual((r.returncode, r.stdout), (0, ""))
