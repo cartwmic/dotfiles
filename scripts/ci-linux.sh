@@ -1,5 +1,5 @@
 #!/bin/sh
-# Linux checks for this repo, the same command the CI `tests` job runs: the five node tests, then every
+# Linux checks for this repo, the same command the CI `tests` job runs: the six node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
 # discover process per suite), then tests/kgate and tests/pi-mcp-lazy alone, as two processes at once.
 #
@@ -35,6 +35,7 @@ node --test tests/pi-patches/pi_select.test.mjs
 node --test tests/pi-patches/apply_no_pi.test.mjs
 node --test tests/pi-patches/patch_failure_chain.test.mjs
 node --test tests/pi-patches/refresh_and_verify.test.mjs
+node --test tests/pi-patches/btw_pi_160.test.mjs
 # A Pi extension is TypeScript: node 22.6 or newer runs it by stripping the types (CI's setup-node step gives it).
 node --experimental-strip-types --disable-warning=ExperimentalWarning --test dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts
 
@@ -42,6 +43,7 @@ status=0
 python3 scripts/ci-par.py \
   --per-test tests/heavy-gate \
   tests/qmd \
+  tests/coordinator-pull-main \
   tests/pi-idle-rss \
   tests/pi-agents-render \
   tests/coordinator-helper-gate \
@@ -84,8 +86,10 @@ python3 scripts/ci-par.py \
   tests/agent-kill-guard \
   tests/config-show \
   tests/disposition-check \
+  tests/log-probe \
   tests/stop-running-jobs \
   tests/homelab-chat \
+  tests/computer-use-seat \
   tests/pi-settings-modify \
   tests/chromium-wrapper \
   tests/shx \
@@ -95,6 +99,7 @@ python3 scripts/ci-par.py \
   tests/cursor \
   tests/agent-host \
   tests/t3-hub \
+  tests/seat-context \
   tests/t3-pin \
   tests/t3-pin-check \
   tests/t3-service \
@@ -122,6 +127,8 @@ python3 scripts/ci-par.py \
   tests/release-pins \
   tests/ci-main-status \
   tests/ci-main-status-any-repo \
+  tests/ci-main-status-gitea \
+  tests/ci-main-status-threads \
   tests/kgate-split \
   tests/test-edit-check \
   tests/untested-hunks-check || status=1

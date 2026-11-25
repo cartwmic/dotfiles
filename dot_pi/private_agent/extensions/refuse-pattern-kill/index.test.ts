@@ -42,3 +42,14 @@ test("the extension registers one tool_call handler", () => {
 	extension({ on: (name: string) => seen.push(name) } as any);
 	assert.deepEqual(seen, ["tool_call"]);
 });
+
+test("the session id and the adapter reach the classifier, so its door rule can tell a rule once per Pi session", () => {
+	const dir = mkdtempSync(join(tmpdir(), "rpk-door-"));
+	const stub = join(dir, "stub.py");
+	writeFileSync(stub, "import json, sys\npayload = json.load(sys.stdin)\nsys.stderr.write('This call is refused in agent sessions this once: ' + json.dumps([payload.get('session_id'), payload.get('adapter')]))\nsys.exit(2)\n");
+	const handler = guard(stub);
+	const blocked = handler({ toolName: "bash", input: { command: "gh pr create" } }, { sessionManager: { getSessionId: () => "pi-session-7" } });
+	assert.ok(blocked?.reason.includes('["pi-session-7", "pi"]'), String(blocked?.reason));
+	const without = handler({ toolName: "bash", input: { command: "gh pr create" } }, { sessionManager: { getSessionId: () => { throw new Error("no session"); } } });
+	assert.ok(without?.reason.includes("[null, \"pi\"]"), String(without?.reason));
+});

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """review-intent: print the "Owner intent" block for a reviewer brief, from the ledger, verbatim.
 
-usage: review-intent [--pr OWNER/REPO#N | --pr REPO#N] [--body-file F ...] [--ask N ...] [--decision N ...] [--state-dir DIR]
+usage: review-intent [--pr OWNER/REPO#N | --pr REPO#N] [--body-file F ...] [--ask N ...] [--decision N ...] [--state-dir DIR] [--skip-record-check]
 
 A reviewer judges a change against the owner's words, not against a lead's restatement of them (findings-contract.md, "The owner-intent block").
 This script collects the ledger ids a change cites and prints one markdown block that quotes each ask and decision exactly, so the driver appends it to the
@@ -12,13 +12,33 @@ Inputs: the PR's agent record (--pr; the file <traces dir>/emitted/review/<repo>
 where `ledger pr-decisions-check` has them listed; the body path is unchanged.
 The traces dir is $AGENT_TRACES_DIR, else ~/.local/share/agent-traces. Read-only: it reads the ledger and prints.
 What it collects (the grammar is in findings-contract.md; agent-traces review add applies the same one to the brief):
-  every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks;
+  every #N on a `Decisions:` line (decisions); every `ask #N` / `asks #N` (with `#N-#M` ranges and `, #M` lists), asks. Text in a fenced code block is skipped, and an
+  `ask #N` inside an inline code span is skipped: quote check output in code spans or fences, and it is not read as a citation (ledger text is read as it is).
+  In the PR's own record (or body) an `ask #N` inside a double-quoted string is skipped too; in a --body-file it is not, because the kit's brief check does not skip it;
   for a PR that touches `leads/<type>.*`, the ask ids in `approved_by` of `leads/<type>.json` at the PR head (when the file has the key; --pr only);
   the ask each collected decision names (its ask_id, and any `ask #N` in its why); and for each collected ask, the ask its workstream's creation why cites.
 An id the ledger does not know is an error (exit 1, each id named): fix the citation, do not drop it. (The one exception: a number found only in a workstream's free-text
 creation why, where `ask 870` needs no `#`, is left out if no such ask exists.)
 For each ask the block also quotes what he wrote in the Other box after answering (his follow-ups), which `ledger show --json` leaves out: they are read from `ledger show ask N --history`.
-Exit 0 the block is printed; 1 an id is unknown; 2 bad arguments, no ledger, or gh failed.
+Record check (--pr only): before anything is read, the PR's agent record is checked with `pr-body-check OWNER/REPO N --skip-intent-review` (the merge check, minus the review
+that has not happened yet). The run is refused (exit 3, nothing on stdout, pr-body-check's own output on stderr) when that check reports a record defect: no record, no complete
+principles table, no Decisions line, or a Decisions line the ledger does not match. Fix the record, then build the brief. A round is not spent on what a tool already finds.
+Only record defects refuse. The check's other findings (ids or bookkeeping in the description, a Proven section that misses the head, a red or running head run) are printed as a
+note and do not stop the run: a review can still find them useful to see, and some cannot pass until the review is done. If `pr-body-check` is not on PATH (neither desktop profile lacks it; a machine such as Termux does),
+cannot reach GitHub or the ledger, or times out, the run goes on with a warning: a broken tool never blocks a review. --skip-record-check turns the check off.
+Merge check (--pr only): after the record check, the repo's own merge script is run in its check-only mode, `scripts/merge-pr.sh N --check-only`, which runs every check the real merge runs except the
+review round (and the main-run state, which is not a defect of the PR) and merges nothing. The coordinator's and the homelab's merge scripts have it (agent-kit, loop-engine and dotfiles have no merge script of their own:
+they merge through pr-body-check, which the record check covers). The script is found at <checkouts>/<repo name>/scripts/merge-pr.sh, where <checkouts> is $REVIEW_INTENT_CHECKOUTS, else ~/git: the checkout the
+repo's pr-body-check already runs from. The run is refused (exit 3, nothing on stdout) when the script exits 1 and says REFUSED: its whole output goes to stderr, then a line saying to fix it before building the
+brief. This goes further than the record check: a red or still-running head run, a Proven section that misses the head, bookkeeping in the description, a missing gate run or RECORD or RED line all refuse here, because the
+merge would refuse them. A script that is not there (a checkout that cannot be found, the work profile), is too old to know the flag (exit 64), exits any other way, or runs over MERGE_CHECK_SECONDS is a warning
+and the run goes on, as for the record check. --skip-record-check turns both checks off.
+Exit 0 the block is printed; 1 an id is unknown; 2 bad arguments, no ledger, or gh failed; 3 the PR's agent record fails pr-body-check, or the repo's merge script refuses it before the review.
+Log: every run appends one JSON line to $XDG_STATE_HOME/review-intent/log.jsonl (else ~/.local/state/review-intent/log.jsonl), written at the one place main() returns, so a
+refusal added later is recorded without more code. Fields: ts, tool ("review-intent"), pr (the --pr value or ""), outcome (done: exit 0; refused: exit 1 or 3; failed: exit 2),
+exit, reason (the first line the run printed to stderr, or ""; when the merge script refuses, "the repo's merge script refused: " and the first line of its output that says REFUSED, the check that failed), record_check (passed, refused, skipped-flag, fail-open-missing, fail-open-error, fail-open-timeout, not-run: no --pr),
+merge_check (the same values, for the repo's merge script), duration_ms.
+A log line that cannot be written never changes the exit code.
 
 The block (one per brief):
     ## Owner intent (generated by review-intent)
@@ -32,8 +52,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 
 HEADER = "## Owner intent (generated by review-intent)"
 END = "<!-- /review-intent -->"
@@ -58,6 +80,14 @@ LOOSE_ITEM_RE = re.compile(r"(?:%s)|(?:%s)" % (LOOSE_FIRST, ITEM))
 
 
 class Usage(Exception):
+    pass
+
+
+class RecordRefused(Exception):
+    pass
+
+
+class MergeRefused(Exception):
     pass
 
 
@@ -86,6 +116,36 @@ def ask_refs(text, loose=False):
 def without_block(text):
     """The text with any earlier generated block cut out, so its ids are not read as citations."""
     return re.sub(r"^%s\n.*?^%s[ \t]*\n?" % (re.escape(HEADER), re.escape(END)), "", text, flags=re.M | re.S)
+
+
+def without_fences(text):
+    """The text with every fenced code block (``` or ~~~, closed by a fence of the same mark at least as long; an unclosed one runs to the end) blanked line by line, so what
+    a record quotes from a check's output (`the pick for ask #1 is accepted (303)`) is not read as a citation."""
+    out, mark = [], None
+    for line in text.split("\n"):
+        m = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if mark is None:
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                mark = m.group(1)
+                out.append("")
+            else:
+                out.append(line)
+        else:
+            if m and m.group(1)[0] == mark[0] and len(m.group(1)) >= len(mark) and not m.group(2).strip():
+                mark = None
+            out.append("")
+    return "\n".join(out)
+
+
+def without_spans(text):
+    """The text with every inline code span (a run of backticks to the next run of the same length, inside one paragraph) blanked, newlines kept."""
+    blank = lambda m: re.sub(r"[^\n]", " ", m.group(0))
+    return re.sub(r"(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n).)+?(?<!`)\1(?!`)", blank, text, flags=re.S)
+
+
+def without_quotes(text):
+    """The text with every double-quoted string (straight or curly, on one line) blanked: what a record quotes from a check or a test ("... as ask #1") is not a citation."""
+    return re.sub(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d', lambda m: " " * len(m.group(0)), text)
 
 
 def quote(text):
@@ -273,8 +333,10 @@ def render_decision(d, why):
     return "\n".join(out)
 
 
-def build(texts, asks_given, decisions_given, ledger, approvals=(), linked=()):
-    """Returns (block, errors). `texts` are the PR body and body files; each id keeps the reasons it was collected for."""
+def build(texts, asks_given, decisions_given, ledger, approvals=(), linked=(), pr_texts=()):
+    """Returns (block, errors). `texts` are the body files and `pr_texts` the PR's agent record (or body); each id keeps the reasons it was collected for.
+    A double-quoted string is skipped for asks in `pr_texts` only: the record is the agent's own account, where quoted test output turns up, while the brief is checked by
+    agent-traces review add with the code-span and fence rules alone."""
     ask_why, dec_why = {}, {}
 
     def add(table, n, reason):
@@ -289,11 +351,12 @@ def build(texts, asks_given, decisions_given, ledger, approvals=(), linked=()):
     for t, ids in approvals:
         for n in ids:
             add(ask_why, n, "approved_by of the lead type %s (leads/%s.json at the PR head)" % (t, t))
-    for t in texts:
-        t = without_block(t)
+    for t, is_pr in [(t, False) for t in texts] + [(t, True) for t in pr_texts]:
+        t = without_fences(without_block(t))  # quoted check output in a fenced block is not a citation; a `Decisions:` line is plain text, so only fences are skipped there
         for n in line_ids(t, "Decisions"):
             add(dec_why, n, "a Decisions: line")
-        for n in ask_refs(t):
+        t = without_spans(t)  # an ask named in a code span is quoted output too
+        for n in ask_refs(without_quotes(t) if is_pr else t):  # and so is one inside a double-quoted string in the PR's record
             add(ask_why, n, "named in the text")
     errors, decisions, asks = [], {}, {}
     for n in sorted(dec_why):
@@ -339,14 +402,89 @@ def build(texts, asks_given, decisions_given, ledger, approvals=(), linked=()):
     return "%s\n%s\n%s%s\n" % (HEADER, marker, body, END), []
 
 
+# The first line of each block pr-body-check prints for a defect in the PR's agent record (scripts/pr-body-check.ts problemBlocks; src/ledger/pr-decisions.ts for the last).
+# Every other block it prints is about the description, the commits, the head or its runs: reported, not refused. test_record_heads_match_pr_body_check keeps these in step.
+RECORD_HEADS = (
+    "the PR has no agent record",
+    "the PR's agent record has no complete principles table",
+    "the PR's agent record has no Decisions line",
+    "pr-decisions-check:",
+)
+CHECK_SECONDS = 180
+LEDGER_SKIPPED = re.compile(r"^\s*decisions not checked against the ledger\b.*$", re.M)
+MERGE_CHECK_SECONDS = 600  # a coordinator check-only run builds the merge result for Bookends and reads the head's runs: minutes, not seconds
+RUN = {"record_check": "not-run", "merge_check": "not-run", "reason": ""}  # what each check did in this run, and a reason that beats the first stderr line; read by the log line in main()
+
+
+def record_precheck(spec):
+    """Runs pr-body-check on the PR's record. Returns the warnings to print; raises RecordRefused (with pr-body-check's output) on a record defect. Sets RUN["record_check"]."""
+    repo, n = pr_ref(spec)
+    exe = shutil.which("pr-body-check")
+    if not exe:
+        RUN["record_check"] = "fail-open-missing"
+        return ["review-intent: warning: pr-body-check is not on PATH, so the PR's agent record was not checked"]
+    try:
+        p = subprocess.run([exe, repo, n, "--skip-intent-review"], capture_output=True, text=True, timeout=CHECK_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        RUN["record_check"] = "fail-open-error" if isinstance(e, OSError) else "fail-open-timeout"
+        return ["review-intent: warning: pr-body-check could not run (%s), so the PR's agent record was not checked" % (e.strerror if isinstance(e, OSError) else "timed out")]
+    if p.returncode not in (0, 1):
+        RUN["record_check"] = "fail-open-error"
+        why = (p.stderr.strip() or p.stdout.strip()).splitlines()
+        return ["review-intent: warning: pr-body-check could not check %s#%s (exit %d: %s), so the PR's agent record was not checked" % (repo, n, p.returncode, why[0] if why else "no output")]
+    if p.returncode == 1 and any(line.startswith(RECORD_HEADS) for line in p.stdout.splitlines()):
+        RUN["record_check"] = "refused"
+        raise RecordRefused(p.stdout.rstrip("\n"))
+    RUN["record_check"] = "passed"
+    warnings = []
+    skipped = LEDGER_SKIPPED.search(p.stdout)
+    if skipped:  # pr-body-check passes (or fails on something else) with the ledger comparison left out: the Decisions line was not checked against the ledger
+        RUN["record_check"] = "fail-open-error"
+        warnings.append("review-intent: warning: pr-body-check: %s" % skipped.group(0).strip())
+    if p.returncode == 1:
+        warnings.append("review-intent: note: pr-body-check also reports the following. It is not about the agent record, so the run goes on:\n%s" % p.stdout.rstrip("\n"))
+    return warnings
+
+
+def merge_check(spec):
+    """Runs the repo's merge script in check-only mode on the PR. Returns the warnings to print; raises MergeRefused (with the script's output) when it refuses. Sets RUN["merge_check"]."""
+    repo, n = pr_ref(spec)
+    root = os.environ.get("REVIEW_INTENT_CHECKOUTS") or os.path.join(os.path.expanduser("~"), "git")
+    script = os.path.join(root, repo.split("/")[1], "scripts", "merge-pr.sh")
+    if not os.path.isfile(script):
+        RUN["merge_check"] = "fail-open-missing"
+        return ["review-intent: warning: %s is not there, so %s#%s was not checked against the repo's merge script" % (script, repo, n)]
+    try:
+        p = subprocess.run(["bash", script, n, "--check-only"], capture_output=True, text=True, timeout=MERGE_CHECK_SECONDS,
+                           env=dict(os.environ, GH_CALLER="review-intent"))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        RUN["merge_check"] = "fail-open-error" if isinstance(e, OSError) else "fail-open-timeout"
+        return ["review-intent: warning: %s --check-only could not run (%s), so %s#%s was not checked against the repo's merge script" % (script, e.strerror if isinstance(e, OSError) else "timed out", repo, n)]
+    out = (p.stdout + p.stderr).rstrip("\n")
+    if p.returncode == 0:
+        RUN["merge_check"] = "passed"
+        return []
+    if p.returncode == 1 and "REFUSED" in out:
+        RUN["merge_check"] = "refused"
+        RUN["reason"] = "the repo's merge script refused: %s" % next(l.strip() for l in out.splitlines() if "REFUSED" in l)  # the first line that says REFUSED: the check that failed
+        raise MergeRefused(out)
+    RUN["merge_check"] = "fail-open-error"
+    why = out.splitlines()
+    return ["review-intent: warning: %s --check-only exited %d without a refusal (%s), so %s#%s was not checked against the repo's merge script" % (script, p.returncode, why[-1] if why else "no output", repo, n)]
+
+
 def parse(argv):
-    opts = {"pr": None, "files": [], "asks": [], "decisions": [], "state": None}
+    opts = {"pr": None, "files": [], "asks": [], "decisions": [], "state": None, "skip_record": False}
     i = 0
     while i < len(argv):
         a = argv[i]
         if a in ("-h", "--help"):
             print(__doc__.strip())
             sys.exit(0)
+        if a == "--skip-record-check":
+            opts["skip_record"] = True
+            i += 1
+            continue
         if a not in ("--pr", "--body-file", "--ask", "--decision", "--state-dir") or i + 1 >= len(argv):
             raise Usage("review-intent: unknown or incomplete option %r (see review-intent --help)" % a)
         v = argv[i + 1]
@@ -364,10 +502,16 @@ def parse(argv):
     return opts
 
 
-def main(argv):
+def run(argv):
     try:
         o = parse(argv)
-        texts = []
+        if o["pr"] and not o["skip_record"]:
+            for check in (record_precheck, merge_check):  # each prints its warnings before the next runs, so a refusal by the second still shows the first's
+                for w in check(o["pr"]):
+                    print(w, file=sys.stderr)
+        elif o["pr"]:
+            RUN["record_check"] = RUN["merge_check"] = "skipped-flag"
+        texts, pr_texts = [], []
         linked_pr = None
         for f in o["files"]:
             try:
@@ -377,13 +521,22 @@ def main(argv):
                 raise Usage("review-intent: cannot read %s: %s" % (f, e.strerror))
         if o["pr"]:
             text, from_record = pr_text(o["pr"])
-            texts.append(text)
+            pr_texts.append(text)
             if from_record:
                 linked_pr = pr_ref(o["pr"])
         approvals = pr_approvals(o["pr"]) if o["pr"] else []
         ledger = Ledger(o["state"] or default_state_dir())
         linked = ledger.decisions_for_pr(*linked_pr) if linked_pr else []
-        block, errors = build(texts, o["asks"], o["decisions"], ledger, approvals, linked)
+        block, errors = build(texts, o["asks"], o["decisions"], ledger, approvals, linked, pr_texts)
+    except RecordRefused as e:
+        print(e, file=sys.stderr)
+        print("review-intent: the PR's agent record fails pr-body-check (above). Fix the record, then build the brief; nothing was printed", file=sys.stderr)
+        return 3
+    except MergeRefused as e:
+        print("review-intent: the repo's merge script refuses this PR before the review (`merge-pr.sh N --check-only`); its output:", file=sys.stderr)
+        print(e, file=sys.stderr)
+        print("review-intent: fix what the merge script names (above) before building the brief; nothing was printed", file=sys.stderr)
+        return 3
     except Usage as e:
         print(e, file=sys.stderr)
         return 2
@@ -394,6 +547,61 @@ def main(argv):
         return 1
     sys.stdout.write(block)
     return 0
+
+
+class Tee:
+    """Passes stderr through and keeps what was written, so the log can name the first line the run printed."""
+
+    def __init__(self, real):
+        self.real, self.seen = real, []
+
+    def write(self, text):
+        self.seen.append(text)
+        return self.real.write(text)
+
+    def flush(self):
+        self.real.flush()
+
+    def first_line(self):
+        return next((l.strip() for l in "".join(self.seen).splitlines() if l.strip()), "")
+
+
+def log_path():
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local/state")
+    return os.path.join(state, "review-intent", "log.jsonl")
+
+
+def log_run(pr, code, reason, started):
+    """Appends one line for this run. Never raises: a log that cannot be written must not change the exit code."""
+    try:
+        path = log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "review-intent", "pr": pr or "",
+               "outcome": "done" if code == 0 else "failed" if code == 2 else "refused", "exit": code, "reason": RUN["reason"] or reason,
+               "record_check": RUN["record_check"], "merge_check": RUN["merge_check"], "duration_ms": int((time.monotonic() - started) * 1000)}
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
+def main(argv):
+    """The one exit point of every run: runs, then logs the exit it is about to return."""
+    started = time.monotonic()
+    RUN["record_check"] = RUN["merge_check"] = "not-run"
+    RUN["reason"] = ""
+    real = sys.stderr
+    tee = sys.stderr = Tee(real)
+    pr = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--pr"), "")
+    code = 2  # what an uncaught error counts as
+    try:
+        code = run(argv)
+    except SystemExit as e:  # --help
+        code = e.code if isinstance(e.code, int) else 0
+    finally:
+        sys.stderr = real
+        log_run(pr, code, tee.first_line(), started)
+    return code
 
 
 if __name__ == "__main__":

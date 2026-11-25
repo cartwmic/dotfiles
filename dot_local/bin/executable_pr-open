@@ -4,23 +4,61 @@
 #   pr-open --title T --body-file F [--base BRANCH] [--repo OWNER/REPO] [--head BRANCH] [--draft]
 #   pr-open --edit N --body-file F [--title T] [--repo OWNER/REPO]
 #
-# F is a file, or `-` for the body on stdin. Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
-# `pr-body-check --body-file COPY --base origin/BASE` (the same check, on the same branch commits and diff, the hook's own form runs), and only if that
-# passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (bare `pr-body-check --body-file COPY`, as the hook's edit form), then
+# F is a file, or `-` for the body on stdin. Both forms first run `known-limits-check` on the body (limits under "## Known limits", each tracked or accepted as
+# permanent), before anything else and before anything is pushed, created or changed. A permanent item needs its decision id on the PR's agent record: on create
+# the PR has no number yet, so the check is told the record is pending (`--record-pending`); on edit it is given the record if `pr-record path` names a file
+# that exists, else pending. Each run of the check leaves one JSON line in its log (${XDG_STATE_HOME:-~/.local/state}/known-limits-check/log.jsonl: outcome, and for a refusal the rule, line and message; pr-open adds the mode, repo, PR number and, on create, the head branch). KNOWN_LIMITS_CHECK names another known-limits-check (the tests use it); the default is the one installed with the agent harness.
+# Create: the body is copied to a private mktemp file (so another session cannot overwrite it), checked with
+# `pr-body-check --body-file COPY --base origin/BASE --title T` (the title is passed so the check reads it for task ids, coordinator#1605; the same check, on the same branch commits and diff, the hook's own form runs), and only if that
+# passes is the branch pushed (when it has no upstream, or is ahead of it) and `gh pr create` run on the same copy. Edit: the same check on the copy (`pr-body-check --body-file COPY`, plus `--title T` when --title is given, as the hook's edit form), then
 # the PR's state is read through `gh api`: a merged or closed PR is refused, so its description is never overwritten. An open PR is PATCHed through `gh api` (`gh pr edit` fails on the agent host).
-# --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes.
+# --repo defaults to the origin of the current directory (stderr names the repo it took), --base to the repo's default branch, --head to the current branch. Prints the PR URL; with `pr-record` on PATH it also prints where the PR's agent record goes and the `pr-body-check <repo> <pr> --skip-intent-review` to run once the record is written (the create-time `--body-file` check does not read it).
+# Create pushes the branch of THIS directory, so it refuses (exit 2, before the body check and any push) when this directory's origin is not --repo, naming both: a PR for one repo is never opened from another repo's checkout.
+# Log: every run, created, edited, refused or failed, appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/pr-open/log.jsonl, written from the EXIT trap so no exit path skips it:
+# {utc, mode (create|edit|""), repo, pr (number or null), outcome (created, edited, refused: a body check or one of the guards above said no, failed: anything else), exit, reason (the last stderr line's
+# message, "" on success), duration_s}. A log that cannot be written never changes the exit code. --help writes none.
 # Exit 0 done; 1 the body check refused (its output comes first); 2 bad arguments, a merged or closed PR, or any other failure. The last line of stderr is `[pr-open] ERROR: <reason>`.
-# Personal profile only: it needs pr-body-check (docs/profiles.md).
+# Both desktop profiles, as pr-body-check is (docs/gate-coverage.md).
 set -eu
+
+repo= base= head= title= body_file= edit= draft=0
+mode= pr= reason= refused=0 copy= keep_log=1 started=$(date +%s)
 
 fail() { # fail CODE REASON
   printf '[pr-open] ERROR: %s\n' "$2" >&2
+  reason=$2
   exit "$1"
 }
 
+refuse() { # refuse CODE REASON: a guard said no (a failure that is not a refusal is `fail`)
+  refused=1
+  fail "$@"
+}
+
+# One line per run in the run log. Never fails: a log that cannot be written must not change the exit code.
+log_run() { # log_run EXIT
+  dir=${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/pr-open
+  if [ "$1" = 0 ]; then if [ "$mode" = edit ]; then outcome=edited; else outcome=created; fi; elif [ "$1" = 1 ] || [ "$refused" = 1 ]; then outcome=refused; else outcome=failed; fi
+  [ "$1" = 0 ] || [ -n "$reason" ] || reason="stopped with exit $1 and no message"
+  esc=$(printf '%s' "$reason" | tr '\n\t' '  ' | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+  case $pr in ''|*[!0-9]*) pr_json=null ;; *) pr_json=$pr ;; esac
+  now=$(date +%s)
+  mkdir -p "$dir" && printf '{"utc":"%s","mode":"%s","repo":"%s","pr":%s,"outcome":"%s","exit":%s,"reason":"%s","duration_s":%s}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$mode" "$(printf '%s' "$repo" | tr -d '"\\')" "$pr_json" "$outcome" "$1" "$esc" "$((now - started))" >> "$dir/log.jsonl"
+}
+
+finish() { # the EXIT trap: the one place every exit path passes through
+  rc=$?
+  trap - EXIT
+  [ -z "$copy" ] || rm -f "$copy"
+  [ "$keep_log" = 0 ] || log_run "$rc" 2>/dev/null || :
+  exit "$rc"
+}
+trap finish EXIT
+trap 'reason="interrupted"; exit 130' INT TERM HUP
+
 usage="usage: pr-open --title T --body-file F [--base BRANCH] [--repo OWNER/REPO] [--head BRANCH] [--draft]   |   pr-open --edit N --body-file F [--title T] [--repo OWNER/REPO]"
 
-repo= base= head= title= body_file= edit= draft=0
 while [ $# -gt 0 ]; do
   case $1 in
     --repo|--base|--head|--title|--body-file|--edit)
@@ -37,7 +75,7 @@ while [ $# -gt 0 ]; do
     --body-file=*) body_file=${1#*=}; shift ;;
     --edit=*) edit=${1#*=}; shift ;;
     --draft) draft=1; shift ;;
-    -h|--help) printf '%s\n' "$usage"; exit 0 ;;
+    -h|--help) printf '%s\n' "$usage"; keep_log=0; exit 0 ;;
     *) fail 2 "unknown argument '$1'. $usage" ;;
   esac
 done
@@ -45,8 +83,10 @@ done
 [ -n "$body_file" ] || fail 2 "--body-file F is required. $usage"
 if [ -n "$edit" ]; then
   case $edit in *[!0-9]*|'') fail 2 "--edit takes a PR number, got '$edit'" ;; esac
+  mode=edit; pr=$edit
   [ -z "$base$head" ] && [ "$draft" = 0 ] || fail 2 "--edit takes only --body-file, --title and --repo. $usage"
 else
+  mode=create
   [ -n "$title" ] || fail 2 "--title T is required to open a PR. $usage"
 fi
 if [ "$body_file" != - ] && [ ! -s "$body_file" ]; then
@@ -54,12 +94,11 @@ if [ "$body_file" != - ] && [ ! -s "$body_file" ]; then
 fi
 
 copy=$(mktemp "${TMPDIR:-/tmp}/pr-open-body.XXXXXX") || fail 2 "cannot make a temporary body file"
-trap 'rm -f "$copy"' EXIT
 if [ "$body_file" = - ]; then cat > "$copy"; else cat < "$body_file" > "$copy"; fi
 [ -s "$copy" ] || fail 2 "the body is empty"
 
 command -v gh >/dev/null 2>&1 || fail 2 "gh is not on PATH"
-command -v pr-body-check >/dev/null 2>&1 || fail 2 "pr-body-check is not on PATH (it ships with the coordinator checkout; personal profile only)"
+command -v pr-body-check >/dev/null 2>&1 || fail 2 "pr-body-check is not on PATH (it ships with the coordinator checkout, on both desktop profiles)"
 export GH_CALLER=pr-open
 
 if [ -z "$repo" ]; then
@@ -69,22 +108,43 @@ if [ -z "$repo" ]; then
 fi
 case $repo in */*) ;; *) fail 2 "cannot read OWNER/REPO from '$repo'" ;; esac
 
+# known-limits-check runs first, on the same copy; its stderr says which line to fix. The record flag is the caller's.
+limits_check() { # limits_check what-was-not-done record-args...
+  what=$1; shift
+  klc=${KNOWN_LIMITS_CHECK:-$HOME/.local/share/agent-harness/bin/known-limits-check}
+  [ -x "$klc" ] || fail 2 "known-limits-check is not at $klc (it ships with the agent harness; set KNOWN_LIMITS_CHECK to use another)"
+  # The check keeps the log (why a body was refused: rule, line, message); pr-open tells it who is asking and which PR or branch.
+  if [ -n "$edit" ]; then lmode=edit; else lmode=create; fi
+  set -- "$@" --context caller=pr-open --context "mode=$lmode" --context "repo=$repo"
+  [ -z "$edit" ] || set -- "$@" --context "pr=$edit"
+  [ -z "$head" ] || set -- "$@" --context "head=$head"
+  if "$klc" --body-file "$copy" "$@"; then return 0; else code=$?; fi
+  case $code in
+    1) refuse 1 "the PR description was refused by known-limits-check (output above): put every limit under a '## Known limits' heading as list items, each ending 'Follow-up: <issue URL>' or 'accepted as permanent' (no decision id in the description; the id goes on the agent record's 'Permanent limits: #id' line); fix the body file and run pr-open again, $what" ;;
+    *) fail 2 "known-limits-check could not run (exit $code, output above)" ;;
+  esac
+}
+
 # The check's own output is the refusal message; pass its exit code through (1 a rule failed, 2 it could not run).
 check() {
   if "$@"; then return 0; else code=$?; fi
-  case $code in 1) fail 1 "the PR description was refused by pr-body-check (output above); fix the body file and run pr-open again, nothing was created" ;;
+  case $code in 1) refuse 1 "the PR description or title was refused by pr-body-check (output above); fix the body file or the title and run pr-open again, nothing was created" ;;
     *) fail 2 "pr-body-check could not run (exit $code, output above)" ;; esac
 }
 
 if [ -n "$edit" ]; then
-  check pr-body-check --body-file "$copy"   # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs
+  record=
+  if command -v pr-record >/dev/null 2>&1; then record=$(pr-record path "$repo#$edit" 2>/dev/null) || record=; fi
+  if [ -n "$record" ] && [ -f "$record" ]; then limits_check "nothing was changed" --record "$record"; else limits_check "nothing was changed" --record-pending; fi
+  # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs. A title being set is passed too, so the check reads it for task ids.
+  if [ -n "$title" ]; then check pr-body-check --body-file "$copy" --title "$title"; else check pr-body-check --body-file "$copy"; fi
   pr_info=$(gh api "repos/$repo/pulls/$edit" --jq '.state + " " + (.merged | tostring)') || fail 2 "could not read the state of $repo#$edit. If you meant another repo, pass --repo OWNER/REPO."
   pr_state=${pr_info%% *}
   pr_merged=${pr_info#* }
   case $pr_state in
     open) ;;
     closed) if [ "$pr_merged" = true ]; then pr_word=merged; else pr_word=closed; fi
-      fail 2 "$repo#$edit is $pr_word, so its description was not changed. If you meant another repo, pass --repo OWNER/REPO." ;;
+      refuse 2 "$repo#$edit is $pr_word, so its description was not changed. If you meant another repo, pass --repo OWNER/REPO." ;;
     *) fail 2 "could not read the state of $repo#$edit (got '$pr_info'). If you meant another repo, pass --repo OWNER/REPO." ;;
   esac
   set -- api -X PATCH "repos/$repo/pulls/$edit" -F "body=@$copy" --jq .html_url
@@ -95,6 +155,11 @@ if [ -n "$edit" ]; then
 fi
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 2 "not inside a git work tree"
+# The push below goes to this directory's origin, whatever --repo says (a builder opened homelab#676 from the coordinator checkout and pushed a stray branch to the coordinator). Refuse first, naming both.
+origin_url=$(git remote get-url origin 2>/dev/null) || refuse 2 "this directory has no git remote named origin, so nothing can be pushed for $repo"
+origin_repo=$(printf '%s\n' "$origin_url" | sed -e 's/\.git$//' -e 's#/*$##' | awk -F'[/:]' 'NF >= 2 { print $(NF-1) "/" $NF }')
+[ "$(printf '%s' "$origin_repo" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')" ] ||
+  refuse 2 "this directory's origin is $origin_repo, not $repo: pr-open pushes the branch of the directory it runs in, so nothing was pushed or created. Run it from a checkout of $repo (git -C <checkout> ...), or fix --repo"
 [ -n "$head" ] || head=$(git symbolic-ref --short -q HEAD) || fail 2 "HEAD is detached: check out the branch to open, or pass --head"
 if [ -z "$base" ]; then
   base=$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##') || base=
@@ -103,10 +168,11 @@ if [ -z "$base" ]; then
 fi
 [ "$head" != "$base" ] || fail 2 "the branch '$head' is the base branch: check out a feature branch first"
 
+limits_check "nothing was created" --record-pending   # a PR that is not open has no number, so no record yet
 if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then
-  check pr-body-check --body-file "$copy" --base "origin/$base"
+  check pr-body-check --body-file "$copy" --base "origin/$base" --title "$title"
 else
-  check pr-body-check --body-file "$copy" --base "$base"
+  check pr-body-check --body-file "$copy" --base "$base" --title "$title"
 fi
 
 # The branch's own upstream (origin/<head>) is pushed when it is ahead. A branch cut from origin/main tracks origin/main, so any other upstream is replaced.
@@ -126,6 +192,8 @@ pr_url=$(printf '%s\n' "$out" | grep -E 'https://[^ ]+/pull/[0-9]+' | tail -n 1)
 [ -n "$pr_url" ] || fail 2 "gh pr create gave no PR URL: $out"
 printf '%s\n' "$pr_url"
 number=${pr_url##*/pull/}
+pr=$number
 if command -v pr-record >/dev/null 2>&1; then
-  record=$(pr-record path "$repo#$number" 2>/dev/null) && printf 'agent record (principles table, Decisions: line, job ids go here): %s\n' "$record" || true
+  record=$(pr-record path "$repo#$number" 2>/dev/null) && { printf 'agent record (principles table, Decisions: line, job ids go here): %s\n' "$record"
+    printf 'before you report, run: pr-body-check %s %s --skip-intent-review (the --body-file form pr-open ran does not check the agent record)\n' "$repo" "$number"; } || true
 fi

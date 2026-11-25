@@ -65,6 +65,26 @@ else:
 """
 
 
+# A stand-in for pr-body-check: prints FAKE_PBC_DIR/out and exits with the code in FAKE_PBC_DIR/code (0 when there is no file), and logs its arguments.
+FAKE_PBC = """#!/bin/sh
+echo "$@" >> "$FAKE_PBC_DIR/args"
+[ -f "$FAKE_PBC_DIR/out" ] && cat "$FAKE_PBC_DIR/out"
+[ -f "$FAKE_PBC_DIR/err" ] && cat "$FAKE_PBC_DIR/err" >&2
+[ -f "$FAKE_PBC_DIR/sleep" ] && exec sleep "$(cat "$FAKE_PBC_DIR/sleep")"
+exit "$(cat "$FAKE_PBC_DIR/code" 2>/dev/null || echo 0)"
+"""
+
+
+# A stand-in for a repo's scripts/merge-pr.sh: logs its arguments, prints FAKE_MERGE_DIR/out (stdout) and err (stderr), and exits with the code in FAKE_MERGE_DIR/mcode (0 when there is no file).
+FAKE_MERGE = """#!/bin/sh
+echo "$@" >> "$FAKE_MERGE_DIR/margs"
+[ -f "$FAKE_MERGE_DIR/mout" ] && cat "$FAKE_MERGE_DIR/mout"
+[ -f "$FAKE_MERGE_DIR/merr" ] && cat "$FAKE_MERGE_DIR/merr" >&2
+[ -f "$FAKE_MERGE_DIR/msleep" ] && exec sleep "$(cat "$FAKE_MERGE_DIR/msleep")"
+exit "$(cat "$FAKE_MERGE_DIR/mcode" 2>/dev/null || echo 0)"
+"""
+
+
 def ask(n, **kw):
     row = {"id": n, "summary": "summary %d" % n, "question": "question %d?" % n, "options": [{"title": "Yes", "consequence": "do it"}, {"title": "No", "consequence": "do not"}],
            "answer_choice": None, "answer": None, "answer_other": None, "answered_at": "2026-01-01T00:00:00.000Z", "workstream": None, "state": "relayed", "updated_at": "T1"}
@@ -88,6 +108,12 @@ class ReviewIntent(unittest.TestCase):
         (self.dir / "bin").mkdir()
         (self.dir / "bin/gh").write_text(FAKE_GH, encoding="utf-8")
         (self.dir / "bin/gh").chmod(0o755)
+        (self.dir / "bin/pr-body-check").write_text(FAKE_PBC, encoding="utf-8")
+        (self.dir / "bin/pr-body-check").chmod(0o755)
+        # The checkouts review-intent finds the repos' merge scripts in (REVIEW_INTENT_CHECKOUTS): a coordinator and a homelab one, each a stand-in that passes unless a test says otherwise.
+        for repo in ("coordinator", "cartwmic-homelab-v2"):
+            (self.dir / "git" / repo / "scripts").mkdir(parents=True)
+            (self.dir / "git" / repo / "scripts/merge-pr.sh").write_text(FAKE_MERGE, encoding="utf-8")
         self.db = {"asks": {}, "decisions": {}, "workstreams": {}}
 
     def put(self, *, asks=(), decisions=(), workstreams=()):
@@ -105,8 +131,12 @@ class ReviewIntent(unittest.TestCase):
             f = self.dir / "body.md"
             f.write_text(text, encoding="utf-8")
             argv += ["--body-file", str(f)]
-        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"))
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), FAKE_MERGE_DIR=str(self.dir), REVIEW_INTENT_CHECKOUTS=str(self.dir / "git"), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        if self.path is not None:
+            env["PATH"] = self.path
         return subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
+
+    path = None
 
     def put_pr(self, *, files, contents, body="", head="abc123", fail=None):
         (self.dir / "gh.json").write_text(json.dumps({"body": body, "files": files, "contents": contents, "head": head, "fail": fail or {}}), encoding="utf-8")
@@ -374,6 +404,59 @@ class ReviewIntent(unittest.TestCase):
         self.put()
         self.assertEqual(self.marker(self.run_script("asks #41").stdout)[2], before)
 
+    def test_ask_ids_quoted_in_code_are_not_citations(self):
+        self.put(asks=[ask(1), ask(2), ask(3)], decisions=[decision(40), decision(41)])
+        quoted = ("Journeys:\n\n```\nthe pick for ask #1 is accepted (303)\nDecisions: #41\n```\n\n"
+                  "Also `the pick for ask #1 is accepted (303)` and ``ask #3 ` still`` here.\nask #2 is the real one.\nDecisions: #40\n")
+        r = self.run_script(quoted)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("2", "40"))
+
+    def test_a_bare_ask_outside_code_still_counts(self):
+        self.put(asks=[ask(1), ask(2)])
+        for text in ("ask #1 is accepted", "```\nask #2\n```\nask #1", "`x` then ask #1 then `y`", "~~~\nask #2\n~~~\nask #1"):
+            with self.subTest(text=text):
+                self.assertEqual(self.marker(self.run_script(text).stdout)[0], "1")
+
+    def test_an_unclosed_fence_or_span_does_not_swallow_the_rest_wrongly(self):
+        self.put(asks=[ask(1), ask(2)])
+        # an unclosed backtick is plain text; an unclosed fence runs to the end (as markdown reads it)
+        self.assertEqual(self.marker(self.run_script("a ` stray\nask #1").stdout)[0], "1")
+        self.assertEqual(self.marker(self.run_script("ask #1\n```\nask #2\n").stdout)[0], "1")
+        # a span does not reach across a blank line
+        self.assertEqual(self.marker(self.run_script("a ` stray\n\nask #1 `x`").stdout)[0], "1")
+
+    def test_a_record_quoting_check_output_does_not_cite_its_asks(self):
+        self.put(asks=[ask(1), ask(7)], decisions=[decision(40, ask_id=7)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("coordinator#1310", "| journeys | pass |\n\n```\nthe pick for ask #1 is accepted (303)\n```\nDecisions: #40\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#1310")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("7", "40"))
+
+    # cartwmic/retro#27's record quoted a test's failure in double quotes, in plain text; review-intent cited the budget steward's ask #1 for it.
+    RETRO_27_LINE = "- RED controls (host): `replay` on #26's code fails \"no channel to post to\"; `checkins` on #26's code fails \"already asked why:101 as ask #1\".\n"
+
+    def test_a_record_quoting_a_test_in_double_quotes_does_not_cite_its_asks(self):
+        self.put(asks=[ask(1), ask(1452)], decisions=[decision(40)])
+        self.put_pr(files=[], contents={}, body="")
+        self.put_record("retro#27", self.RETRO_27_LINE + "Michael approved this on ask #1452.\nDecisions: #40\n")
+        r = self.run_script(None, "--pr", "cartwmic/retro#27")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[:2], ("1452", "40"))  # the quoted ask #1 is out; the true citation stays
+
+    def test_a_pr_body_with_no_record_skips_double_quoted_asks_too(self):
+        self.put(asks=[ask(1), ask(1452)])
+        self.put_pr(files=[], contents={}, body=self.RETRO_27_LINE + "Curly: \u201cthe pick for ask #1 is accepted\u201d, then ask #1452.\n")
+        r = self.run_script(None, "--pr", "cartwmic/retro#27", "--skip-record-check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.marker(r.stdout)[0], "1452")
+
+    def test_a_brief_body_file_is_read_as_the_kit_reads_it(self):
+        # agent-traces review add finds a quoted `ask #1` in a brief and refuses a marker without it, so the body file keeps counting it.
+        self.put(asks=[ask(1)])
+        self.assertEqual(self.marker(self.run_script('the test says "already asked as ask #1"').stdout)[0], "1")
+
     def test_an_earlier_block_in_a_body_file_is_not_read_as_a_citation(self):
         self.put(asks=[ask(50, answer="x"), ask(51)])
         first = self.run_script("asks #50").stdout
@@ -393,8 +476,356 @@ class ReviewIntent(unittest.TestCase):
         r = self.run_script(None, "--ask", "80", "--decision", "81")
         self.assertEqual(self.marker(r.stdout)[:2], ("80", "81"))
 
+    # --- the record check: pr-body-check on the PR's agent record, before any brief is built ---
+
+    def pbc(self, code, out="", err="", sleep=None):
+        for name, text in (("code", str(code)), ("out", out), ("err", err)):
+            (self.dir / name).write_text(text, encoding="utf-8")
+        if sleep is not None:
+            (self.dir / "sleep").write_text(str(sleep), encoding="utf-8")
+
+    def pr_with_decision(self):
+        self.put(asks=[ask(5)])
+        self.put_pr(files=[], contents={}, body="")
+        rec = self.dir / "traces/emitted/review/coordinator#930"
+        rec.mkdir(parents=True, exist_ok=True)
+        (rec / "pr-record.md").write_text("Decisions: none material\n", encoding="utf-8")
+
+    def fail_with(self, head):
+        return "pr-body-check: FAIL cartwmic/coordinator#930\n" + head + "\n  fix: do it\n"
+
+    # --- the merge check: the repo's own `scripts/merge-pr.sh N --check-only`, after the record check ---
+
+    def merge_stub(self, code, out="", err="", sleep=None):
+        for name, text in (("mcode", str(code)), ("mout", out), ("merr", err)):
+            (self.dir / name).write_text(text, encoding="utf-8")
+        if sleep is not None:
+            (self.dir / "msleep").write_text(str(sleep), encoding="utf-8")
+
+    def margs(self):
+        f = self.dir / "margs"
+        return f.read_text().strip().splitlines() if f.exists() else []
+
+    def test_the_repos_merge_script_runs_in_check_only_mode_on_the_prs_number(self):
+        self.pr_with_decision()
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.margs(), ["930 --check-only"])
+        self.assertEqual(r.stderr, "")
+        self.pr_with_decision()
+        self.assertEqual(self.run_script(None, "--pr", "cartwmic/cartwmic-homelab-v2#664").returncode, 0)
+        self.assertEqual(self.margs()[-1], "664 --check-only")
+
+    def test_a_refusal_by_the_merge_script_refuses_with_its_output_and_prints_nothing(self):
+        self.pr_with_decision()
+        self.merge_stub(1, out="pr-gate-runs: REFUSED journey board-close has no GREEN on the head tree\n", err="merge-pr: REFUSED: #930 head abc has no kgate run (named above)\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("journey board-close has no GREEN on the head tree", r.stderr)  # the script's stdout and stderr both come through
+        self.assertIn("merge-pr: REFUSED: #930 head abc has no kgate run", r.stderr)
+        self.assertIn("fix what the merge script names (above) before building the brief; nothing was printed", r.stderr)
+        self.assertTrue(r.stderr.startswith("review-intent: the repo's merge script refuses this PR"), r.stderr)
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["record_check"], row["merge_check"]), ("refused", 3, "passed", "refused"))
+        # the log line names the check that failed (the first REFUSED line of the script's output), not just that the script refused
+        self.assertEqual(row["reason"], "the repo's merge script refused: pr-gate-runs: REFUSED journey board-close has no GREEN on the head tree")
+
+    def test_a_record_defect_is_refused_by_the_record_check_before_the_merge_script_runs(self):
+        self.pr_with_decision()
+        self.pbc(1, self.fail_with("the PR has no agent record (x)"))
+        self.merge_stub(1, err="merge-pr: REFUSED: x\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(self.margs(), [])
+
+    def test_a_script_that_is_missing_too_old_failing_or_hanging_is_a_warning_not_a_refusal(self):
+        self.pr_with_decision()
+        # too old to know the flag (exit 64, no REFUSED): the real old coordinator script says `unknown --check-only`
+        self.merge_stub(64, err="merge-pr: unknown --check-only\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("exited 64 without a refusal (merge-pr: unknown --check-only)", r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+        # exit 1 with no REFUSED (gh or node failed): a broken tool does not block a review
+        self.merge_stub(1, err="gh: HTTP 502\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("exited 1 without a refusal (gh: HTTP 502)", r.stderr)
+        # no checkout of the repo
+        r = self.run_script(None, "--pr", "cartwmic/agent-kit#5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("agent-kit/scripts/merge-pr.sh is not there", r.stderr)
+        self.assertEqual([row["merge_check"] for row in self.log_rows()], ["fail-open-error", "fail-open-error", "fail-open-missing"])
+
+    def test_a_merge_script_that_hangs_does_not_block_the_review(self):
+        self.pr_with_decision()
+        self.merge_stub(0, sleep=30)
+        source = SCRIPT.read_text(encoding="utf-8").replace("MERGE_CHECK_SECONDS = 600", "MERGE_CHECK_SECONDS = 1")
+        patched = self.dir / "review-intent-short"
+        patched.write_text(source, encoding="utf-8")
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), FAKE_MERGE_DIR=str(self.dir),
+                   REVIEW_INTENT_CHECKOUTS=str(self.dir / "git"), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        r = subprocess.run(["python3", str(patched), "--state-dir", str(self.dir), "--pr", "cartwmic/coordinator#930"], capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("could not run (timed out)", r.stderr)
+
+    def test_skip_record_check_skips_the_merge_script_too_and_no_pr_means_no_merge_check(self):
+        self.pr_with_decision()
+        self.merge_stub(1, err="merge-pr: REFUSED: x\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930", "--skip-record-check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.margs(), [])
+        (row,) = self.log_rows()
+        self.assertEqual(row["merge_check"], "skipped-flag")
+        self.assertEqual(self.run_script("plain text", "--ask", "5").returncode, 0)  # no --pr: no merge check
+        self.assertEqual(self.margs(), [])
+
+    def test_a_record_that_passes_the_check_builds_the_brief(self):
+        self.pr_with_decision()
+        self.pbc(0, "pr-body-check: OK cartwmic/coordinator#930\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+        self.assertEqual((self.dir / "args").read_text().strip(), "cartwmic/coordinator 930 --skip-intent-review")
+
+    def test_a_bare_repo_name_is_checked_as_cartwmic_repo(self):
+        self.pr_with_decision()
+        self.run_script(None, "--pr", "coordinator#930")
+        self.assertEqual((self.dir / "args").read_text().strip(), "cartwmic/coordinator 930 --skip-intent-review")
+
+    def test_each_record_defect_refuses_with_the_tools_own_text_and_prints_nothing(self):
+        heads = {
+            "no record": "the PR has no agent record (the principles table, Decisions line and job ids are read from it)",
+            "principles table": "the PR's agent record has no complete principles table (rule ecd63156)",
+            "decisions line": "the PR's agent record has no Decisions line (rule ccc6c94b)",
+            "decisions ledger": "pr-decisions-check: cartwmic/coordinator#930 FAILED: the Decisions line is missing a decision whose ledger record names this PR:",
+        }
+        for name, head in heads.items():
+            with self.subTest(name):
+                self.pr_with_decision()
+                self.pbc(1, self.fail_with(head))
+                r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+                self.assertEqual(r.returncode, 3)
+                self.assertEqual(r.stdout, "")
+                self.assertIn(head, r.stderr)
+                self.assertIn("fix: do it", r.stderr)
+                self.assertIn("Fix the record, then build the brief", r.stderr)
+
+    def test_a_defect_that_is_not_in_the_record_is_reported_and_does_not_refuse(self):
+        self.pr_with_decision()
+        for head in ("the description's Proven section does not name the PR head (playbook rule f5a367b5: the head commit the checks ran on)",
+                     "a GitHub Actions run on the PR head is red or still running (merge rule: head-sha runs)",
+                     "the PR names work by decision-log, mockup or task ids (rule 385acc43)"):
+            with self.subTest(head):
+                self.pbc(1, self.fail_with(head))
+                r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("## Owner intent", r.stdout)
+                self.assertIn(head, r.stderr)
+                self.assertIn("not about the agent record", r.stderr)
+
+    def test_a_record_defect_among_other_failures_still_refuses(self):
+        self.pr_with_decision()
+        self.pbc(1, "pr-body-check: FAIL x\na GitHub Actions run on the PR head is red or still running (merge rule: head-sha runs)\n  run 1\n"
+                    "the PR's agent record has no Decisions line (rule ccc6c94b)\n  fix: add one\n")
+        self.assertEqual(self.run_script(None, "--pr", "cartwmic/coordinator#930").returncode, 3)
+
+    def test_a_check_that_cannot_run_does_not_block_the_review(self):
+        self.pr_with_decision()
+        cases = {"gh failed": (2, "", "could not read the pull request: gh: HTTP 502"), "bad exit": (127, "", "")}
+        for name, (code, out, err) in cases.items():
+            with self.subTest(name):
+                self.pbc(code, out, err)
+                r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("## Owner intent", r.stdout)
+                self.assertIn("warning: pr-body-check could not check cartwmic/coordinator#930", r.stderr)
+                self.assertIn("agent record was not checked", r.stderr)
+
+    def test_a_missing_pr_body_check_does_not_block_the_review(self):
+        self.pr_with_decision()
+        (self.dir / "bin/pr-body-check").unlink()
+        sh = shutil.which("python3")
+        # a PATH with python3 and gh (the fake one) but no pr-body-check
+        tools = self.dir / "tools"
+        tools.mkdir()
+        for name, target in (("python3", sh), ("gh", str(self.dir / "bin/gh"))):
+            (tools / name).symlink_to(target)
+        self.path = str(tools)
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+        self.assertIn("warning: pr-body-check is not on PATH", r.stderr)
+
+    def test_a_check_that_hangs_does_not_block_the_review(self):
+        self.pr_with_decision()
+        self.pbc(0, sleep=30)
+        src = SCRIPT.read_text(encoding="utf-8").replace("CHECK_SECONDS = 180", "CHECK_SECONDS = 1")
+        quick = self.dir / "review-intent-quick"
+        quick.write_text(src, encoding="utf-8")
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        r = subprocess.run(["python3", str(quick), "--state-dir", str(self.dir), "--pr", "cartwmic/coordinator#930"], capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: pr-body-check could not run (timed out)", r.stderr)
+
+    def test_skip_record_check_does_not_run_the_check(self):
+        self.pr_with_decision()
+        self.pbc(1, self.fail_with("the PR has no agent record (x)"))
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930", "--skip-record-check")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.dir / "args").exists())
+
+    def test_no_pr_means_no_record_check(self):
+        self.put(asks=[ask(5)])
+        self.pbc(1, self.fail_with("the PR has no agent record (x)"))
+        r = self.run_script("ask #5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.dir / "args").exists())
+
+    def test_each_run_starts_with_both_checks_not_run(self):
+        """main() resets what the last run left in RUN, so a second run in one process does not log the first one's merge_check."""
+        import contextlib
+        import importlib.machinery
+        import importlib.util
+        import io
+        loader = importlib.machinery.SourceFileLoader("review_intent_inproc", str(SCRIPT))
+        spec = importlib.util.spec_from_loader("review_intent_inproc", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        mod.RUN["record_check"], mod.RUN["merge_check"] = "passed", "refused"
+        old_state = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = str(self.dir / "state")
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                mod.main(["--help"])
+        finally:
+            if old_state is None:
+                os.environ.pop("XDG_STATE_HOME")
+            else:
+                os.environ["XDG_STATE_HOME"] = old_state
+        self.assertEqual((mod.RUN["record_check"], mod.RUN["merge_check"]), ("not-run", "not-run"))
+
+    # --- the run log: one JSON line per run, at $XDG_STATE_HOME/review-intent/log.jsonl ---
+
+    def log_rows(self):
+        path = self.dir / "state/review-intent/log.jsonl"
+        return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+    def test_a_refusal_is_logged(self):
+        self.pr_with_decision()
+        head = "the PR's agent record has no Decisions line (rule ccc6c94b)"
+        self.pbc(1, self.fail_with(head))
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 3)
+        (row,) = self.log_rows()
+        self.assertEqual({k: row[k] for k in ("tool", "pr", "outcome", "exit", "reason", "record_check")},
+                         {"tool": "review-intent", "pr": "cartwmic/coordinator#930", "outcome": "refused", "exit": 3,
+                          "reason": "pr-body-check: FAIL cartwmic/coordinator#930", "record_check": "refused"})
+        self.assertRegex(row["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(row["duration_ms"], int)
+
+    def test_a_pass_is_logged(self):
+        self.pr_with_decision()
+        self.pbc(0, "pr-body-check: OK cartwmic/coordinator#930\n")
+        self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["reason"], row["record_check"]), ("done", 0, "", "passed"))
+
+    def test_the_skip_flag_is_logged(self):
+        self.pr_with_decision()
+        self.pbc(1, self.fail_with("the PR has no agent record (x)"))
+        self.run_script(None, "--pr", "cartwmic/coordinator#930", "--skip-record-check")
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["record_check"]), ("done", 0, "skipped-flag"))
+
+    def test_a_missing_tool_is_logged(self):
+        self.pr_with_decision()
+        (self.dir / "bin/pr-body-check").unlink()
+        tools = self.dir / "tools"
+        tools.mkdir()
+        for name, target in (("python3", shutil.which("python3")), ("gh", str(self.dir / "bin/gh"))):
+            (tools / name).symlink_to(target)
+        self.path = str(tools)
+        self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        (row,) = self.log_rows()
+        self.assertEqual((row["outcome"], row["record_check"]), ("done", "fail-open-missing"))
+        self.assertIn("pr-body-check is not on PATH", row["reason"])
+
+    def test_a_tool_error_and_a_timeout_are_logged(self):
+        self.pr_with_decision()
+        self.pbc(2, "", "could not read the pull request: gh: HTTP 502")
+        self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(self.log_rows()[-1]["record_check"], "fail-open-error")
+        self.pbc(0, sleep=30)
+        quick = self.dir / "review-intent-quick"
+        quick.write_text(SCRIPT.read_text(encoding="utf-8").replace("CHECK_SECONDS = 180", "CHECK_SECONDS = 1"), encoding="utf-8")
+        env = dict(os.environ, PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_DIR=str(self.dir), FAKE_PBC_DIR=str(self.dir), AGENT_TRACES_DIR=str(self.dir / "traces"), XDG_STATE_HOME=str(self.dir / "state"))
+        subprocess.run(["python3", str(quick), "--state-dir", str(self.dir), "--pr", "cartwmic/coordinator#930"], capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(self.log_rows()[-1]["record_check"], "fail-open-timeout")
+
+    def test_an_unknown_id_and_a_usage_error_are_logged_by_outcome(self):
+        self.put(asks=[ask(60)])
+        self.run_script("asks #61")
+        self.run_script(None, "--bogus", "x")
+        one, two = self.log_rows()
+        self.assertEqual((one["outcome"], one["exit"], one["record_check"]), ("refused", 1, "not-run"))
+        self.assertEqual((two["outcome"], two["exit"]), ("failed", 2))
+        self.assertEqual(one["pr"], "")
+
+    def test_the_log_appends_and_creates_its_directory(self):
+        self.put(asks=[ask(5)])
+        self.run_script("ask #5")
+        self.run_script("ask #5")
+        self.assertEqual(len(self.log_rows()), 2)
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_exit(self):
+        self.put(asks=[ask(5)])
+        blocker = self.dir / "state"
+        blocker.write_text("a file where the log directory should be", encoding="utf-8")
+        r = self.run_script("ask #5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+
+    def test_a_ledger_that_pr_body_check_could_not_read_is_warned_about_and_logged(self):
+        self.pr_with_decision()
+        self.pbc(0, "pr-body-check: OK cartwmic/coordinator#930\n  decisions not checked against the ledger: it cannot be read here (no ledger)\n")
+        r = self.run_script(None, "--pr", "cartwmic/coordinator#930")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## Owner intent", r.stdout)
+        self.assertIn("review-intent: warning: pr-body-check: decisions not checked against the ledger: it cannot be read here (no ledger)", r.stderr)
+        (row,) = self.log_rows()
+        self.assertEqual(row["record_check"], "fail-open-error")
+        self.assertTrue(row["reason"].startswith("review-intent: warning: pr-body-check: decisions not checked"))
+
+    @unittest.skipUnless((Path.home() / "git/coordinator/scripts/pr-body-check.ts").is_file() and shutil.which("node"), "needs the coordinator checkout")
+    def test_record_heads_match_pr_body_check(self):
+        """The heads review-intent refuses on are the first lines pr-body-check really prints for those defects (read from the coordinator checkout)."""
+        coord = Path.home() / "git/coordinator"
+        js = """
+import { problemBlocks, decisionsCheck } from './scripts/pr-body-check.ts';
+import { prDecisionsFailure } from './src/ledger/pr-decisions.ts';
+const base = { body: '', commits: [], files: ['a.ts'], diff: '' };
+const blocks = [
+  ...problemBlocks({ ...base, recordProblem: 'none' }, 8),
+  ...problemBlocks({ ...base, record: 'no table, no decisions' }, 8),
+  prDecisionsFailure({ pr: 'cartwmic/x#1', line: null, missing: [{ id: 1, summary: 's' }], notLive: [], ownNumber: [], noChoice: [] }),
+];
+const skipped = decisionsCheck('cartwmic/x', '1', 'rec', { readDecisions: () => { throw new Error('no ledger'); } }).skipped;
+console.log(JSON.stringify({ firsts: blocks.map((b) => b.split('\\n')[0]), skipped }));
+"""
+        r = subprocess.run(["node", "--experimental-strip-types", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", js], cwd=coord, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        printed = json.loads(r.stdout.strip().splitlines()[-1])
+        firsts = printed["firsts"]
+        self.assertRegex("  " + printed["skipped"], re.compile(r"^\s*decisions not checked against the ledger\b"))  # the line review-intent warns about
+        heads = re.search(r"RECORD_HEADS = \((.*?)\n\)", SCRIPT.read_text(encoding="utf-8"), re.S).group(1)
+        heads = [json.loads(l.strip().rstrip(",")) for l in heads.splitlines() if l.strip()]
+        for head in heads:
+            self.assertTrue(any(f.startswith(head) for f in firsts), "no pr-body-check block starts with %r; it prints %r" % (head, firsts))
+
     def test_a_missing_ledger_is_a_usage_error(self):
-        r = subprocess.run(["python3", str(SCRIPT), "--state-dir", str(self.dir / "nope")], capture_output=True, text=True, timeout=60)
+        r = subprocess.run(["python3", str(SCRIPT), "--state-dir", str(self.dir / "nope")], capture_output=True, text=True, timeout=60, env=dict(os.environ, XDG_STATE_HOME=str(self.dir / "state")))
         self.assertEqual(r.returncode, 2)
         self.assertIn("no ledger at", r.stderr)
 

@@ -1,6 +1,6 @@
 # coordinator-helper-gate (Pi extension)
 
-Runs the coordinator's helper gate on a Pi session's `subagent` calls. The gate refuses a helper (a sub-agent) that would run on a model
+Runs the coordinator's helper gate on a Pi session's `subagent` calls, and gives a session's first prompt to the coordinator's door delivery (see below). The gate refuses a helper (a sub-agent) that would run on a model
 stronger than Haiku 5.5 unless the first line of its task declares a matching `Seat: <seat>, <model> <effort>.` Claude Code and Cursor run the
 same gate as hooks; the coordinator daemon's own Pi session runs it from `coordinator-session/index.ts`. This extension covers every other Pi
 session: the ones T3 starts on the `pi` and `pi-lead` instances, and Pi sessions opened in a terminal.
@@ -10,6 +10,9 @@ tool call it loads `<coordinator>/src/coordinator-session/helper-gate.ts` from t
 calls its `helperGateReason(call, env, stateDir)`, which starts `node <coordinator>/src/t3-hook/hook.ts --pi` with the call, the working directory and the session's model on stdin.
 The extension returns `{ block: true, reason }` when that gives a reason. Every other tool passes through (the coordinator's function answers nothing for it).
 
+- **Door delivery for Pi:** the same file also carries two door routes, both the coordinator's own code. A launch tool (`delegate_task`, `t3_thread_launch`) or a tool the door index (`<state>/t3-hook/door-index.json`) names is asked of the hook;
+  any other tool starts nothing. And the extension's `before_agent_start` handler gives the session's first prompt to the coordinator's `firstPromptMessage`: a brief with a `Kind:` line gets that kind's playbook rules as a hidden message, once.
+  An older checkout without `firstPromptMessage` tells nothing. A first prompt whose delivery fails (the file cannot be loaded, or `firstPromptMessage` throws) tells nothing and writes one `door-failed` line (run, adapter `pi`, door `brief`, reason; never the prompt) to the guard log, so a child that never got its rules is not mistaken for a brief with no `Kind:` line.
 - **Where the checkout and state are:** `config.json`, rendered per profile from [config.json.tmpl](./config.json.tmpl), the same places the Claude hook install uses
   (`dot_claude/modify_settings.json.tmpl`): personal `instances.coordinator.repo` (else `~/git/coordinator` on Linux) with state `~/.local/share/coordinator`;
   `axon-work-computer` `~/coordinator-work` with state `~/.local/share/coordinator-work`. `agentHost.removeCoordinatorHook` renders it off, as it takes the hook out of Claude's settings.

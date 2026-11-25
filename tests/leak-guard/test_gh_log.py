@@ -143,6 +143,17 @@ def lines(path):
     return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
 
 
+class UrgentDocs(unittest.TestCase):
+    def test_every_bin_wrapper_that_sets_gh_urgent_is_named_in_who_sets_it(self):
+        """docs/gh-wrapper.md, "Who sets GH_URGENT=1", names each command in dot_local/bin that exports GH_URGENT=1 (dotfiles #690 found two left out)."""
+        para = DOCS.split("**Who sets `GH_URGENT=1`.**", 1)[1].split("\n\n", 1)[0]
+        setters = sorted(f.name.replace("executable_", "", 1) for f in (ROOT / "dot_local/bin").glob("executable_*")
+                         if re.search(r"^export GH_URGENT=1\b", f.read_text(errors="replace"), re.M))
+        self.assertTrue(setters)
+        for name in setters:
+            self.assertIn("`%s`" % name, para, "%s exports GH_URGENT=1 but the docs' list does not name it" % name)
+
+
 class LogFile(WrapperBase):
     """The installed layout with the budget switched on, so the log layer is loaded. The log goes under the throwaway HOME."""
 

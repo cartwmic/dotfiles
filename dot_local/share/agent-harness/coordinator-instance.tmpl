@@ -1,0 +1,7 @@
+{{- /* coordinator-instance: where this profile's coordinator runs. Line 1: the checkout the daemon runs from (the PR gates, pr-record and the live-checkout git rule use it). Line 2 (work only): the state dir of the work coordinator, which the gates use when COORDINATOR_STATE_DIR is unset. Personal: its checkout is ~/git/coordinator and its state dir is the coordinator's own default, so line 2 is empty. */ -}}
+{{- if eq .profile "axon-work-computer" -}}
+{{ includeTemplate "instance_repo" (dict "root" . "name" "coordinator") }}
+{{ .chezmoi.homeDir }}/.local/share/coordinator-work
+{{ else -}}
+{{ .chezmoi.homeDir }}/git/coordinator
+{{ end -}}

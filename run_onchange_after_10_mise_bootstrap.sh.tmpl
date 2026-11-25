@@ -50,17 +50,31 @@ fi
 
 # mise reads GITHUB_TOKEN and ignores GH_TOKEN. Without a token its GitHub release lookups share the 60-requests-an-hour anonymous limit, and a
 # rate-limit error stops a run. Export one for every mise call below and for the tasks they start: GH_TOKEN, else `gh auth token`. With neither,
-# the script runs unauthenticated, as before. The token is never printed.
+# the script runs unauthenticated, as before, and says so below. On a fresh machine gh is not installed yet (mise installs it) and has no login, so
+# `gh auth token` finds nothing: set GH_TOKEN before the first apply. The token is never printed.
+token_source=env
 if [ -z "${GITHUB_TOKEN:-}" ]; then
   gh_token="${GH_TOKEN:-}"
   if [ -z "$gh_token" ] && command -v gh >/dev/null 2>&1; then
     gh_token="$(gh auth token -h github.com 2>/dev/null || true)"
+    [ -n "$gh_token" ] && token_source=gh
   fi
   if [ -n "$gh_token" ]; then
     export GITHUB_TOKEN="$gh_token"
     log_info "using a GitHub token from GH_TOKEN or gh for mise"
+  else
+    token_source=missing
+    log_info "WARN: no GitHub token found (GITHUB_TOKEN, GH_TOKEN or gh); mise is limited to 60 GitHub calls an hour and a tool install can fail with a 403. Set GH_TOKEN before the first apply."
   fi
 fi
+
+# Leave a record that survives the terminal: one JSON line per run with the source the token came from (env, gh or missing), never the token.
+# A failure to write it must not stop the bootstrap.
+token_log="${XDG_STATE_HOME:-$HOME/.local/state}/mise-bootstrap/token.jsonl"
+{
+  mkdir -p "$(dirname "$token_log")" &&
+    printf '{"ts":"%s","action":"mise_bootstrap_token","source":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$token_source" >> "$token_log"
+} 2>/dev/null || log_info "WARN: could not write $token_log"
 
 # mise must be recent enough to install the tools in its config. 2026.3.9 looked for a pnpm asset named pnpm-macos-arm64 and failed the pnpm install;
 # 2026.11.8 is the version that worked, so it is the floor. Nothing runs when mise is already at or above it.
