@@ -108,6 +108,10 @@ class RunTest(unittest.TestCase):
                            timeout=30, env={"PATH": SYS})
         return p, log.read_text().splitlines()
 
+    def records(self):
+        f = self.root / "logs/pull-main-job.jsonl"
+        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+
     def checkout(self, body):
         repo = self.root / "coordinator-work"
         (repo / "scripts").mkdir(parents=True)
@@ -135,6 +139,27 @@ class RunTest(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertTrue(any("cannot enter" in l for l in lines), lines)
         self.assertRegex(lines[-1], r"Z exit 2$")
+
+    def test_a_missing_checkout_leaves_one_failed_run_record(self):
+        self.run_(self.root / "nope")
+        (rec,) = self.records()
+        self.assertRegex(rec.pop("ts"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(rec.pop("duration_s"), int)
+        self.assertEqual(rec, {"action": "run", "outcome": "failed", "reason": "cannot enter the checkout"})
+
+    def test_a_checkout_without_pull_main_leaves_one_failed_run_record(self):
+        repo = self.root / "coordinator-work"
+        repo.mkdir()
+        p, lines = self.run_(repo)
+        self.assertEqual(p.returncode, 2)
+        (rec,) = self.records()
+        self.assertEqual((rec["action"], rec["outcome"], rec["reason"]), ("run", "failed", "scripts/pull-main.sh is missing"))
+        self.assertTrue(any("scripts/pull-main.sh is missing" in l for l in lines), lines)
+
+    def test_a_run_that_starts_leaves_no_job_record(self):
+        """pull-main.sh keeps its own record of a pull (coordinator-ci/pull-main.jsonl); the wrapper adds a line only when it cannot start it."""
+        self.run_(self.checkout("echo ok\n"))
+        self.assertEqual(self.records(), [])
 
     def test_each_run_appends(self):
         repo = self.checkout("echo ok\n")
@@ -209,6 +234,32 @@ class LoaderTest(unittest.TestCase):
         self.assertTrue(any("ERROR: could not load local.coordinator-pull-main" in l for l in lines), lines)
         self.assertTrue(all(re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ \[", l) for l in lines), lines)
         self.assertFalse(any("INFO: loaded" in l for l in lines), lines)
+
+    def records(self, h):
+        f = h / "Library/Logs/coordinator-work/pull-main-job.jsonl"
+        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+
+    def test_a_load_leaves_one_loaded_record(self):
+        _, _, h = self.run_loader()
+        (rec,) = self.records(h)
+        self.assertRegex(rec.pop("ts"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(rec.pop("duration_s"), int)
+        self.assertEqual(rec, {"action": "load", "outcome": "loaded", "reason": "loaded"})
+
+    def test_a_missing_plist_leaves_one_failed_record_with_the_reason(self):
+        _, _, h = self.run_loader(installed=False)
+        (rec,) = self.records(h)
+        self.assertEqual((rec["action"], rec["outcome"]), ("load", "failed"))
+        self.assertIn("local.coordinator-pull-main.plist is not installed", rec["reason"])
+        self.assertNotIn("ERROR", rec["reason"])
+
+    def test_a_failed_bootstrap_leaves_one_record_not_one_per_retry(self):
+        p, _, h = self.run_loader(FAKE_BOOTSTRAP_RC="5")
+        self.assertEqual(p.returncode, 1)
+        self.assertGreater(len(self.log_lines(h)), 1, "the text log keeps the retry lines")
+        (rec,) = self.records(h)
+        self.assertEqual((rec["action"], rec["outcome"]), ("load", "failed"))
+        self.assertIn("could not load local.coordinator-pull-main", rec["reason"])
 
     def test_a_loaded_job_is_booted_out_first(self):
         p, calls, _ = self.run_loader(loaded=True)
