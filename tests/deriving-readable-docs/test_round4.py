@@ -1,12 +1,19 @@
 """Batch 6: what the held-out repos (ntfy, uptime-kuma, lapce) showed the general skill lacked. Each test breaks one rule and fails without its change.
 Run: python3 -I tests/deriving-readable-docs/test_round4.py"""
+import atexit
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"

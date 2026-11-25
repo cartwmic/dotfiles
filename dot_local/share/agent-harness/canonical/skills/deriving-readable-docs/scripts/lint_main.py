@@ -26,6 +26,7 @@ Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `do
   flags             more than 3 distinct `--flag` tokens fails (the same flag twice is one)
   jargon            more than 4 hits per 1,000 words of references/jargon.txt fails; a term counts with a common ending (-s, -es, -ed, -d, -ing), once for each span
   appendix-match    a number, a "quoted" string or a backticked name in a sentence must also be in one of the appendix sentences its tags name
+Log: each run appends one JSON line (runlog.py: script, action `lint-part1`, outcome ok or failed, part1_words, words_limit, fails, warns).
 Stdlib only. Exit 2 on a usage error.
 """
 import json
@@ -36,6 +37,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import SPAN, TAG, appendix_index, doc_lines, line_items, part1_slice, prose_sentences, strip_code, word_count, words_of  # noqa: E402
+from runlog import log_run  # noqa: E402
 
 WORDS_MAX, SENTENCE_MAX, SENTENCE_AVG, NAMES_MAX, FLAGS_MAX, JARGON_PER_1000 = 1000, 18, 14, 8, 3, 4
 # The words that make an appendix sentence conditional, and let a Part 1 sentence say so: one list, used on both sides.
@@ -146,11 +148,11 @@ def section_lines(part1):
 
 
 def lint(guide, repo, rows, terms, fixed=None):
-    """Return (fails, warns) as [(doc_line, kind, detail)]. `fixed` is {tags: sentence}: Part 1 sentences a checker already fixed."""
+    """Return (fails, warns, words): the first two as [(doc_line, kind, detail)], then the Part 1 word count. `fixed` is {tags: sentence}: Part 1 sentences a checker already fixed."""
     fails, warns = [], []
     part1 = part1_slice(guide)
     if not part1:
-        return [(1, "part1", "no heading `Part 1`")], warns
+        return [(1, "part1", "no heading `Part 1`")], warns, 0
     index = appendix_index(guide, repo)
     words = word_count(part1, repo)
     if words > WORDS_MAX:
@@ -202,11 +204,11 @@ def lint(guide, repo, rows, terms, fixed=None):
         bare = TAG.sub(" ", s)
         for t in tags:
             text = index.get(t.strip("[]"), (0, ""))[1]
-            words = appendix_conditions(text)
+            conditions = appendix_conditions(text)
             nxt = sents[i + 1][1] if i + 1 < len(sents) else ""
             carried = t in TAG.findall(nxt) and names_condition(TAG.sub(" ", nxt), text)  # the very next sentence with the same tag carries it
-            if words and not names_condition(bare, text) and not carried:
-                fails.append((n, "condition", "%s holds %s and the sentence names no condition: state it (\"by default\" counts only when the line states a default) | %s" % (t, ", ".join("\"%s\"" % w for w in words), s)))
+            if conditions and not names_condition(bare, text) and not carried:
+                fails.append((n, "condition", "%s holds %s and the sentence names no condition: state it (\"by default\" counts only when the line states a default) | %s" % (t, ", ".join("\"%s\"" % w for w in conditions), s)))
             labels = sorted(set(source_labels(text, repo)))
             if labels and not source_labels(bare, repo):
                 fails.append((n, "label", "%s says its source (%s) and the sentence drops it | %s" % (t, ", ".join(labels), s)))
@@ -245,7 +247,7 @@ def lint(guide, repo, rows, terms, fixed=None):
         now = by_tags.get(tags)
         if now and squash(was) not in now:
             warns.append((1, "fixed", "a sentence a checker already fixed was reworded (%s): was \"%s\" | now \"%s\"" % (tags, was, next(t for n, t in sents if " ".join(sorted(TAG.findall(t))).replace("[", "").replace("]", "") == tags and squash(TAG.sub(" ", t)) == now[0]).replace("\n", " ").strip())))
-    return sorted(set(fails)), warns
+    return sorted(set(fails)), warns, words
 
 
 def main(argv):
@@ -266,13 +268,14 @@ def main(argv):
         terms = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     with open(args[0], encoding="utf-8", errors="replace") as f:
         guide = f.read()
-    fails, warns = lint(guide, os.path.realpath(args[1]), rows, terms, read_fixed(opts["--fixed"]) if opts.get("--fixed") else None)
+    fails, warns, words = lint(guide, os.path.realpath(args[1]), rows, terms, read_fixed(opts["--fixed"]) if opts.get("--fixed") else None)
     for n, kind, detail in warns:
         print("%s:%d: warn %s: %s" % (args[0], n, kind, detail))
     for n, kind, detail in fails:
         print("%s:%d: FAIL %s: %s" % (args[0], n, kind, detail))
-    print("Part 1: %d words (limit %d)" % (word_count(part1_slice(guide), os.path.realpath(args[1])), WORDS_MAX))
+    print("Part 1: %d words (limit %d)" % (words, WORDS_MAX))
     print("%d failed checks, %d warnings" % (len(fails), len(warns)))
+    log_run("lint_main.py", "lint-part1", "failed" if fails else "ok", part1_words=words, words_limit=WORDS_MAX, fails=len(fails), warns=len(warns))
     return 1 if fails else 0
 
 

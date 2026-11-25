@@ -27,6 +27,8 @@ When --slices names a folder that holds fewer claims than the guide (a fix round
 re-checked sentences, not of the whole guide, so the counts compared are alike. The rates use the checkers' claim count. When the script counts the doc's sentences differently, the output adds
 `claim count: checkers N, script M, difference +K`, so the two are never mixed up. Words per claim divides by the script's sentences.
 
+Log: each score run appends one JSON line (runlog.py: script, action `score`, outcome ok or refused; claims, errors and fix_round, or the reason it refused).
+
 --lab. BEHAVIOURS.txt is the scoper's list, one behaviour a line: `ID | path:line | cond, cond, ...` where path:line is the primary line a
 sentence must cite and the conditions are the lines (path:line or path:start-end) a correct sentence must state; the conditions may be empty.
 Prints behaviours kept (their primary line is inside some citation of the draft), condition lines cited (inside some citation), and conditional words
@@ -51,6 +53,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import TAG, doc_lines, line_items, part1_slice, prose_sentences, split_lines, word_count, words_of  # noqa: E402
+from runlog import log_run  # noqa: E402
 
 COUNTS = re.compile(r"^\W*Counts:\s+claims checked\s+(\d+);\s*HOLDS\s+(\d+);\s*WRONG\s+(\d+);\s*OVERSTATED\s+(\d+);\s*UNSUPPORTED\s+(\d+)\s*\.?\s*$", re.M)
 FINDING = re.compile(r"^\s*(?:[-*]\s*)?(?:[^|\s]*?:)?(?:\d+(?:\.\d+)?|A\d+\.\w+)\s*\|\s*(WRONG|OVERSTATED|UNSUPPORTED)\s*\|(?:\s*(MISSING_CONDITION|NAME|COUNT|KIND|OTHER)\s*\|)?", re.M)
@@ -294,9 +297,13 @@ def cmd_score(argv):
         raise ScoreError("usage: score.py [NAME=]REPORTS... [--doc GUIDE.md ... --repo DIR] [--slices DIR] [--out FILE.json]")
     check_out_path(out_path)
     repos = []
-    for spec in specs:
-        name, _, path = spec.partition("=") if "=" in spec else (os.path.basename(os.path.normpath(spec)), "", spec)
-        repos.append(score_repo(name, [path], docs if len(specs) == 1 else [], repo, slices))
+    try:
+        for spec in specs:
+            name, _, path = spec.partition("=") if "=" in spec else (os.path.basename(os.path.normpath(spec)), "", spec)
+            repos.append(score_repo(name, [path], docs if len(specs) == 1 else [], repo, slices))
+    except ScoreError as e:
+        log_run("score.py", "score", "refused", reason=str(e), repos=len(specs), fix_round=slices is not None)
+        raise
     lines = []
     for r in repos:
         lines += render_repo(r) + [""]
@@ -311,6 +318,8 @@ def cmd_score(argv):
     print("\n".join(lines).rstrip())
     if out_path:
         write_out(out_path, json.dumps(result, indent=2), "\n".join(lines).rstrip() + "\n")
+    shown = result.get("pooled", repos[0])
+    log_run("score.py", "score", "ok", repos=len(repos), claims=shown["claims"], errors=shown["errors"], fix_round=slices is not None)
     return 0
 
 

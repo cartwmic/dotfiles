@@ -1,11 +1,18 @@
 """assemble.py and slice.py, run as the skill runs them (as scripts), on a small repo and work folder; then the assembled guide is fed to the checks.
 Run: python3 -I tests/deriving-readable-docs/test_assemble.py"""
+import atexit
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
 
