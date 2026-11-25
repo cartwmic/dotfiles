@@ -83,8 +83,10 @@ GROUP_ALIAS = {"agent-tasks": "agent-task", "agent": "agent-task", "agents": "ag
 # `alias`, `extension` and `copilot` can run what the table cannot read; they stay open (see "Not covered" above). An alias call is refused as an unknown group.
 OFF_SURFACE = frozenset((
     "auth browse codespace discussion gist org project release repo skill cache run workflow alias attestation completion config copilot extension "
-    "gpg-key label licenses preview ruleset search secret ssh-key status variable help co "
+    "gpg-key label licenses preview ruleset search secret ssh-key status variable help co event "
     "cs skills at extensions ext rs").split())  # `co` is `gh pr checkout`, a read; the second line is gh's own aliases (`gh cs`, `gh at`)
+# `event` (gh 2.105.0): `listen` prints a pull request's events as they happen, and `subscription` creates, views, lists and deletes the account's event subscriptions. Neither merges,
+# creates or edits a pull request or issue, or sets any text on one, so it is off the surface.
 
 
 # `gh pr edit` and `gh issue edit`: what each flag does, by its long name (the union of the two commands' flags; a flag the command does not have is unknown to bash_rules first).
