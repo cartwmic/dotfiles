@@ -1177,8 +1177,9 @@ class WorkModeTest(unittest.TestCase):
                 self.assertIn("jq: error", r.stderr, os_name)
 
     def test_the_ignore_list_for_work_vs_personal(self):
-        """Work manages .t3 (the settings file) but not the hub's Claude settings file; personal macOS manages both; termux neither."""
-        for profile, expect_t3, expect_claude in (("axon-work-computer", True, False), ("personal", True, True), ("termux", False, False)):
+        """Work manages .t3 (the settings file) but not the hub's Claude settings file; personal macOS manages both (the hub's
+        Claude settings file is gated to macOS, so personal Linux manages only .t3); termux neither."""
+        for profile, expect_t3, expect_claude in (("axon-work-computer", True, False), ("personal", True, DARWIN), ("termux", False, False)):
             env = Env(profile=profile, codex_active=False)
             try:
                 managed = set(env.chezmoi("managed").split())
