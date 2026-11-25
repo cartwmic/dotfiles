@@ -1,6 +1,6 @@
 # Reader check: can someone learn the product from Part 1 alone
 
-It runs on the shipped guide: the one left after the last fix round (decision #4966), not on round 1's guide. Two fresh sessions, one script. The reader sees Part 1 only, never the repo. The grader sees the reader's answers and the repo, never the reader's reasoning. Why two: the script catches a quote the reader made up; only a grader reading the code can say an answer is wrong.
+It runs on the shipped guide: the one left after the last fix round, not on round 1's guide. Two fresh sessions, one script. The reader sees Part 1 only, never the repo. The grader sees the reader's answers and the repo, never the reader's reasoning. Why two: the script catches a quote the reader made up; only a grader reading the code can say an answer is wrong.
 
 ## Reader
 
@@ -34,4 +34,4 @@ If the bar is missed, a fresh Opus front-writer session fixes Part 1 once (adds 
 
 ## Limit
 
-The reader may know a well-known tool from its training. The quote rule and the grader catch a wrong answer; they cannot prove the reader learned it from Part 1. A repo no model was trained on (Michael's own) is the cleanest test.
+The reader may know a well-known tool from its training. The quote rule and the grader catch a wrong answer; they cannot prove the reader learned it from Part 1. A repo no model was trained on (the caller's own, unpublished) is the cleanest test.

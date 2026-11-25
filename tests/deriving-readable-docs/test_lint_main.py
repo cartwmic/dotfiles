@@ -1,11 +1,18 @@
 """lint_main.py: the Part 1 gate, run as a script on a small GUIDE.md. Each test breaks one rule of a passing guide.
 Run: python3 -I tests/deriving-readable-docs/test_lint_main.py"""
+import atexit
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
 
@@ -143,8 +150,20 @@ class LintMainTest(unittest.TestCase):
         self.assertNotIn("warn part1-words", out)
         self.assertEqual(lint(GUIDE.replace("## What you can do", filler(85) + "\n\n## What you can do"))[0], 0)  # under it
 
+    def test_the_part_1_word_count_is_printed_whether_or_not_a_check_fails(self):
+        import re
+        counts = []
+        for guide in (GUIDE, GUIDE.replace("## What you can do", "\n".join("Notes lets you %s. [A3.1]" % sentence(8) for _ in range(95)) + "\n\n## What you can do")):
+            out = lint(guide)[1]
+            counts.append(int(re.search(r"Part 1: (\d+) words \(limit 1000\)", out).group(1)))
+        self.assertLess(counts[0], 100)
+        self.assertGreater(counts[1], 1000)
+
     def test_a_guide_without_a_part_1_heading_fails(self):
-        self.assertEqual(lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))[0], 1)
+        code, out = lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL part1: no heading `Part 1`", out)
+        self.assertIn("Part 1: 0 words (limit 1000)", out)  # the run finishes: no traceback, the count line is still printed
 
     def test_the_appendix_is_not_judged(self):
         long_appendix = GUIDE + "\nIt stops after 5 notes %s and every one goes `src/cli.py:3`.\n" % sentence(40)
