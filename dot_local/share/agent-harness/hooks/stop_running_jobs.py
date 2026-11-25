@@ -14,6 +14,8 @@ Another thread's jobs, jobs that ended, and jobs whose process is gone never blo
 It fails open: any error reading a record or the input allows the stop, so a fault here never traps an agent.
 
 Input: the hook JSON on stdin (not read; only the environment names the thread). Output: exit 2 and the reason on stderr, else exit 0.
+With `--count` it only counts: it prints the number of this thread's running jobs (run-and-wake and kgate, each job once) and exits 0, and refuses nothing.
+The lead's turn-end check (`coordinator t3 turn-end --jobs N`) takes that number as a fact, so the coordinator holds no run-and-wake or kgate paths.
 Test hooks: RUN_AND_WAKE_STATE and KGATE_STATE override the state folders; STOP_JOBS_THREAD overrides T3CODE_THREAD_ID.
 """
 import json
@@ -165,13 +167,18 @@ def reason(rw, kg):
     return "\n".join(lines)
 
 
-def main():
+def main(argv=()):
     thread = os.environ.get("STOP_JOBS_THREAD") or os.environ.get("T3CODE_THREAD_ID")
     if not thread:
+        if "--count" in argv:
+            print(0)
         return 0
     rw = run_and_wake_jobs(thread)
     seen = {j["job"] for j in rw}
     kg = [j for j in kgate_jobs(thread) if j["job"] not in seen]
+    if "--count" in argv:
+        print(len(rw) + len(kg))
+        return 0
     if not rw and not kg:
         return 0
     sys.stderr.write(reason(rw, kg) + "\n")
@@ -180,6 +187,8 @@ def main():
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        sys.exit(main(sys.argv[1:]))
     except Exception:
+        if "--count" in sys.argv[1:]:
+            print(0)
         sys.exit(0)

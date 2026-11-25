@@ -1,0 +1,11 @@
+{{- /* door.json: how the shell classifier (refuse_pattern_kill.py, rule `door` in bash_rules.py) asks the coordinator's renderer for the playbook rules at a shell command.
+Read with AGENT_HARNESS_DOOR as the override. Same places as the Claude hook install (dot_claude/modify_settings.json.tmpl) and the Pi helper gate (config.json.tmpl):
+personal: instance_repo "coordinator", state ~/.local/share/coordinator. axon-work-computer: instance_repo "coordinator" (~/coordinator-work), state ~/.local/share/coordinator-work.
+agentHost.removeCoordinatorHook (the coordinator runs elsewhere) turns it off here as it takes the hook out of Claude's settings. */ -}}
+{{- $repo := includeTemplate "instance_repo" (dict "root" . "name" "coordinator") -}}
+{{- $state := printf "%s/.local/share/coordinator" .chezmoi.homeDir -}}
+{{- if eq .profile "axon-work-computer" -}}
+{{-   $state = printf "%s/.local/share/coordinator-work" .chezmoi.homeDir -}}
+{{- end -}}
+{{- $enabled := not (includeTemplate "agent_host_config" . | fromJson).removeCoordinatorHook -}}
+{{ dict "enabled" $enabled "command" (list "node" "--experimental-strip-types" "--disable-warning=ExperimentalWarning" (printf "%s/src/t3-hook/hook.ts" $repo) "--door") "state" $state | toPrettyJson }}

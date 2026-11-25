@@ -1,5 +1,6 @@
 """The pkill/killall classifier: what it refuses and what it lets through (dot_local/share/agent-harness/hooks/refuse_pattern_kill.py)."""
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -9,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/share/agent-harness/hooks/refuse_pattern_kill.py"
 sys.path.insert(0, str(SCRIPT.parent))
 import refuse_pattern_kill as guard  # noqa: E402
+
+os.environ.setdefault("AGENT_HARNESS_GUARD_LOG", os.devnull)  # the hook logs each refusal; a test run leaves no record in the real state dir
 
 REFUSED = [
     "pkill -f something-harmless",

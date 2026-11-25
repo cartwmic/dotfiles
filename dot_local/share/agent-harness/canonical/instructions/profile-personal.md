@@ -13,7 +13,7 @@ Each agent seat has a model. This is a rule, not a mechanism: there is no launch
 | Seat | Model |
 |---|---|
 | Coordinator | Opus 5.5 medium |
-| Lead | Opus 5.5 medium |
+| Lead | Sonnet 5.5 high |
 | Planner | Sonnet 5.5 high |
 | Reviewer | Opus 5.5 medium |
 | Builder | Haiku 5.5 xhigh for small mechanical builds; Sonnet 5.5 high for anything long or ambiguous, and on any failure |

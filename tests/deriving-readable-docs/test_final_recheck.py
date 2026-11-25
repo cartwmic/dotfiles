@@ -118,6 +118,12 @@ class ChangedTest(unittest.TestCase):
         self.assertIn("nothing changed", out)
         self.assertEqual(ids, [])
 
+    def test_a_sentence_part_1_says_twice_is_not_a_moved_one_when_nothing_changed(self):
+        """The same sentence and tags in two places have two neighbours; neither place is a move."""
+        twice = GUIDE.replace("## What you can do\n\n", "## What you can do\n\nYou can list notes. [A4.0003]\n").replace(
+            "- You can pin a note. [A4.0004]\n", "- You can pin a note. [A4.0004]\nYou can list notes. [A4.0003]\n")
+        self.assertEqual(self.run_changed(twice, twice)[1], [])
+
     def test_a_cut_sentence_does_not_make_its_neighbour_a_changed_one(self):
         new = GUIDE.replace("It stops after 5 notes. `src/cli.py:7` [A4.0002]\n", "")
         self.assertEqual(self.run_changed(new, GUIDE)[1], [])

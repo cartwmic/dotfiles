@@ -1,12 +1,19 @@
 """Batch 6: what the held-out repos (ntfy, uptime-kuma, lapce) showed the general skill lacked. Each test breaks one rule and fails without its change.
 Run: python3 -I tests/deriving-readable-docs/test_round4.py"""
+import atexit
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
@@ -568,7 +575,8 @@ class BatchSixDocsTest(unittest.TestCase):
 
     def test_fix_rounds_says_what_to_cut_over_1000_words(self):
         text = self.ref("fix-rounds.md")
-        self.assertRegex(text, r"(?i)over 1,000 words")
+        self.assertRegex(text, r"(?i)over (?:its budget|that budget)")
+        self.assertIn("1,000 words", text)
         self.assertRegex(text, r"(?i)never cut How to start or the Who it is for")
         self.assertIn("--was", text)
 
@@ -586,7 +594,7 @@ class BatchSixDocsTest(unittest.TestCase):
     def test_the_reader_check_runs_on_the_shipped_guide(self):
         text = self.ref("reader-check.md")
         self.assertRegex(text, r"(?i)shipped guide")
-        self.assertIn("#4966", text)
+        self.assertIn("after the last fix round", text)
 
     def test_skill_step_2_scout_writes_surface_names_and_groups(self):
         self.assertIn("groups.txt", self.skill)

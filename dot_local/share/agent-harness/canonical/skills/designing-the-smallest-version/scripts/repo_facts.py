@@ -17,8 +17,11 @@ proof_commands lists gate, check and CI files plus test-like package.json script
 surfaces is the surface list (commands, flags, routes, env, config, entry points) of the tree at REV. It comes
 from the sibling skill's deriving-readable-docs/scripts/surfaces.py --json and is not listed here; the script
 exits 2 if that file is missing. --scope does not narrow it: it always lists the whole repo.
+An `import type`, `export type ... from` or `import { type A }` (every name a type) is erased at runtime and makes no edge.
 path_refs maps path strings in config and script files to the files or
 directories they name.
+Log: each run appends one JSON line (runlog.py: script, action `repo-facts`, outcome ok or
+refused, and the file and import-edge counts or the reason it refused).
 """
 import argparse
 import collections
@@ -32,6 +35,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
+sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
+from runlog import log_run  # noqa: E402
 
 TS_EXTS = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs')
 PARSED_EXTS = TS_EXTS + ('.py',)
@@ -55,6 +62,8 @@ TS_IMPORT_RE = re.compile(
     r"""|\brequire\(\s*['"]([^'"\n]+)['"]\s*\)""", re.M)
 PY_FROM_RE = re.compile(r'^\s*from\s+(\.*)([\w.]*)\s+import\s+(.*)$', re.M)
 PY_IMPORT_RE = re.compile(r'^\s*import\s+(.+)$', re.M)
+# `import type ...`, `export type ... from` and `import { type A, type B } from` are erased when TypeScript compiles: no runtime edge.
+TYPE_ONLY_RE = re.compile(r"""^\s*(?:import|export)\s+type\b|^\s*(?:import|export)\s*\{\s*type\s[^}]*\}\s*from""", re.M)
 COMMENT_START = ('/', '#', '*')
 NOTES = {
     'lines': 'raw newline count, as wc -l; binary files count 0',
@@ -101,6 +110,7 @@ SURFACES_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(o
 
 def die(msg):
     sys.stderr.write(f'repo_facts: {msg}\n')
+    log_run('repo_facts.py', 'repo-facts', 'refused', reason=msg)
     sys.exit(2)
 
 
@@ -305,6 +315,14 @@ def py_imports(text):
                 yield 0, mod, []
 
 
+def type_only(statement):
+    """True for an import or re-export that TypeScript erases: `import type`, `export type ... from`, or braces whose every name is `type X`."""
+    if not TYPE_ONLY_RE.match(statement):
+        return False
+    braces = re.match(r'\s*(?:import|export)\s*\{([^}]*)\}', statement)
+    return not braces or all(re.match(r'\s*type\s', n) for n in braces.group(1).split(',') if n.strip())
+
+
 def scan_imports(files, texts):
     """Return (internal file edges, external packages per dir, external import count in test files)."""
     edges = set()
@@ -329,6 +347,8 @@ def scan_imports(files, texts):
             continue
         for m in TS_IMPORT_RE.finditer(text):
             spec = next(g for g in m.groups() if g)
+            if type_only(m.group(0)):
+                continue
             if spec.startswith('.'):
                 t = resolve_ts(path, spec, files)
                 if t and t != path:
@@ -966,6 +986,8 @@ def main(argv=None):
         sys.stdout.write(summarize(facts))
     elif not args.out:
         sys.stdout.write(text)
+    log_run('repo_facts.py', 'repo-facts', 'ok', files=sum(facts['languages'].values()),
+            edges=facts['edge_count'] if args.scope else len(facts['edges']))
     return 0
 
 

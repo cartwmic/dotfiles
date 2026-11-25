@@ -21,6 +21,7 @@ FILES = {
     "Cargo.toml": '[package]\nversion = "1"\n\n[[bin]]\nname = "tool"\npath = "src/main.rs"\n',
     "src/main.rs": 'fn main() {}\n#[derive(Parser)]\nstruct Args {\n    #[arg(long)]\n    pub dry_run: bool,\n    #[arg(short, long = "out-dir")]\n    out: String,\n    #[arg(short)]\n    quiet: bool,\n}\nfn h() { let _ = env::var("TOOL_HOME"); }\n',
     "src/lib.rs": "pub fn run() {}\nfn private() {}\n",
+    "src/web.rs": '#[get("/items")]\nasync fn items() {}\n\n#[post("/items/{id}")]\nasync fn add() {}\n\n#[get("not-a-path")]\nfn x() {}\n',
     "bin/deploy": '#!/bin/sh\ncase "$1" in\n  -v|--verbose) V=1;;\n  --region) shift;;\nesac\necho "${DEPLOY_ENV:-prod}" $OPTARG\nexport REGION=eu\n',
     "Dockerfile": 'FROM alpine\nENTRYPOINT ["x"]\n',
     "Makefile": ".PHONY: all\nall:\n\ttrue\nbuild: all\n\ttrue\nVAR := 1\n",
@@ -124,6 +125,9 @@ class SurfacesTest(unittest.TestCase):
         self.has("flag", "--out-dir", "src/main.rs", "out-dir")
         self.has("flag", "-q", "src/main.rs", "#[arg(short)]")
         self.has("env", "TOOL_HOME", "src/main.rs", "TOOL_HOME")
+        self.has("route", "/items", "src/web.rs", '#[get("/items")]')
+        self.has("route", "/items/{id}", "src/web.rs", '#[post("/items/{id}")]')
+        self.assertFalse([r for r in self.rows if r["kind"] == "route" and r["file"] == "src/web.rs" and "not-a-path" in r["name"]])  # a path with no leading / is not a route
         self.has("export", "run", "src/lib.rs", "pub fn run")
         self.assertFalse([r for r in self.rows if r["name"] == "private"])
 

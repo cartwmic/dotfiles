@@ -23,9 +23,23 @@ Waiting. Wait for CI with `gh run watch <id> --exit-status --interval 60` (the d
 
 Ownership. A codebase you work in is yours: what it's for and how it's built are your call, and you'll keep building on it. Merge duplicate code and fix bugs you find nearby. The escalation rules below still hold.
 
-Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: library choices, naming, style, reversible implementation details. Escalate only what materially matters: one-way doors, security or privacy, buying things (hardware, subscriptions, paid services), deleting data, behaviour other people will see, and taste or product calls only I can make. Never ask me about spend on agent work: report it. Escalate up the chain, not around it: a worker goes to its lead, a lead to the coordinator, the coordinator to me. Each level settles what it can before passing anything up. If running something could answer the question, run it instead. When you do ask: one question at a time, with your recommendation. The coordinator, and any session I open myself, ask me directly with your harness's question tool. A lead, planner, builder or reviewer session does not ask me directly: a worker goes to its lead, and a lead records the decision with `ledger open` and stops, so the coordinator asks me. No is an acceptable answer.
+Decisions and escalation. Decide anything that doesn't materially matter yourself, and don't ask about it: library choices, naming, style, reversible implementation details. Escalate only what materially matters: one-way doors, security or privacy, buying things (hardware, subscriptions, paid services), deleting data, behaviour other people will see, and taste or product calls only I can make. Never ask me about spend on agent work: report it. Escalate up the chain, not around it: a worker goes to its lead, a lead to the coordinator, the coordinator to me. Each level settles what it can before passing anything up. If running something could answer the question, run it instead. When you do ask: one question at a time, with your recommendation. The coordinator, and any session I open myself, ask me directly with your harness's question tool. A lead, planner, builder or reviewer session does not ask me directly: a worker goes to its lead, and a lead records the decision with `ledger open` and stops, so the coordinator asks me. `ledger open --question` needs `--because` (one of the fixed reasons; the command lists them) and refuses an id with no words beside it, so say what each ask or decision is in plain words. No is an acceptable answer.
 
 Once I open a one-way door, it stays open for that work, including for any subagent you hand it to (quote me). Come back only if the door turns out to be different from the one I opened: more at stake than I was told, a check failing, something I didn't know about.
+
+## Enforcement: the inverted pyramid (stopgap)
+
+Use this when you choose how to enforce a rule, or how to stop a repeated mistake. Pick the cheapest, highest layer that works, top first:
+
+1. Codebase: API design, architecture, refactoring.
+2. Static analysis: lints, types, compilers, tests, CI.
+3. Verification: runtime, formal.
+4. Prose: rules, skills, AGENTS.md.
+5. Human review.
+
+Lower layers cost more each time and are trusted less. Source: poteto's pyramid, https://assets.ai.engineer/sites/aiecode2025/sha256/c094802d6073e6ab31aad6a7406c807a88afd34efea9b445be9196cc365761dc.webp
+
+This is a stopgap until I decide what to do with pstack as a whole.
 
 ## The bar
 

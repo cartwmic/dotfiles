@@ -158,13 +158,13 @@ def changed_since(old_text, claims, text, repo):
     old = signatures(old_text, claim_ids(old_text, repo), repo)
     old_set, old_before = set(old), {}
     for prev, cur in zip([None] + old[:-1], old):
-        old_before.setdefault(cur, prev)
+        old_before.setdefault(cur, set()).add(prev)  # a sentence the guide says twice has a neighbour for each place it stands
     sigs = signatures(text, claims, repo)
     now_set, out = set(sigs), set()
     for prev, cur, claim in zip([None] + sigs[:-1], sigs, claims):
         if cur not in old_set:
             out.add(claim[0])
-        elif prev != old_before[cur] and old_before[cur] in now_set:
+        elif prev not in old_before[cur] and any(p in now_set for p in old_before[cur]):
             out.add(claim[0])
     return out
 

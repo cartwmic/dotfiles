@@ -66,6 +66,9 @@ through `reviewing-prs`.
    here.)
 9. **Triage what it finds** by the same four tests, fix what passes and push.
    Its findings have no threads, so put declines and deferrals in the report.
+   A finding whose return carries a `repro` first gets `agent-traces review
+   repro`: a finding whose repro does not reproduce is declined, unless you
+   write why it stands (`finding-triage.md`).
 10. **Go round again** until a round turns up nothing that applies. What goes to
     people must be the head that was reviewed last. If you pushed after that
     review, review just the new commits (`<last reviewed sha>..HEAD`).

@@ -40,6 +40,37 @@ class SkillShapeTest(unittest.TestCase):
         self.assertLess(len(SKILL.split()), 1450)  # 1,400 before the final re-check step
 
 
+class SkillReadsAsGeneralTest(unittest.TestCase):
+    def test_no_skill_file_cites_a_ledger_id_or_names_the_owner(self):
+        found = []
+        for f in sorted(SKILL_DIR.rglob("*")):
+            if f.is_file() and "__pycache__" not in f.parts:
+                for n, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                    if re.search(r"(?i)decision #\d|\bask #?\d|ledger|\bMichael\b|(?<![\w&])#\d{3,}\b", line):
+                        found.append("%s:%d" % (f.relative_to(SKILL_DIR), n))
+        self.assertEqual(found, [])
+
+    def test_the_front_writer_is_told_the_lint_rules_and_that_the_jargon_cap_means_define_not_vaguer(self):
+        for rule in ("average of at most 14", "references/jargon.txt", "define the term", "keep the exact word", "prints the Part 1 word count"):
+            self.assertIn(rule, DRAFTING, rule)
+
+    def test_a_limit_exit_is_a_behaviour_and_never_not_relevant(self):
+        self.assertRegex(DRAFTING, r"rate-limit[^.]*exit is ordinary behaviour[^.]*never mark it `not relevant`")
+
+    def test_a_fix_round_may_add_an_appendix_line_for_a_fact_no_line_holds_and_the_check_brief_keeps_its_seat_line_first(self):
+        rounds = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
+        self.assertIn("in no appendix line", rounds)
+        self.assertIn("adds one appendix line for it first", rounds)
+        self.assertIn("stays the first line of what you send", rounds)
+        self.assertIn("when no appendix line holds the missing answer", READER)
+
+    def test_the_accepted_limits_are_written_down_next_to_the_final_recheck_text(self):
+        text = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^## Accepted limits$")
+        for limit in ("very next line", "reader-check result is from before the final cuts", "cut it by hand", "error macros"):
+            self.assertIn(limit, text, limit)
+
+
 class EveryStepIsAScriptCallTest(unittest.TestCase):
     def test_each_mechanical_script_is_called_by_its_path_and_exists(self):
         for name in CALLED_FROM_SKILL:
@@ -197,6 +228,31 @@ class RoundTwoTest(unittest.TestCase):
     def test_the_check_brief_says_how_to_judge_by_default_in_part_1(self):
         self.assertRegex(CHECK_BRIEF, r"(?i)by default")
         self.assertRegex(CHECK_BRIEF, r"(?i)by default[^.\n]*(default|shows)")
+
+
+class PartOneBudgetGateTest(unittest.TestCase):
+    """Part 1's budget is halved on a small repo, and only `lint_main.py --max-words` holds it: a gate command that drops the flag gates a small repo at 1,000 words."""
+
+    def gate_commands(self):
+        found = {}
+        for path in [SKILL_DIR / "SKILL.md", *sorted((SKILL_DIR / "references").glob("*.md"))]:
+            spans = re.findall(r"`([^`\n]*lint_main\.py GUIDE\.md[^`\n]*)`", path.read_text(encoding="utf-8"))
+            if spans:
+                found[path.name] = spans
+        return found
+
+    def test_every_command_that_runs_the_part_1_gate_passes_max_words(self):
+        found = self.gate_commands()
+        for name, spans in found.items():
+            for span in spans:
+                self.assertIn("--max-words", span, "%s runs lint_main.py without the Part 1 budget: %s" % (name, span))
+
+    def test_the_step_7_gate_and_the_fix_round_and_reader_reruns_each_carry_a_command(self):
+        self.assertEqual(sorted(self.gate_commands()), ["SKILL.md", "fix-rounds.md", "reader-check.md"])
+
+    def test_the_fix_rounds_text_does_not_state_a_fixed_1000_word_budget(self):
+        text = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"Part 1 over 1,000 words|fails Part 1 over 1,000 words")
 
 
 if __name__ == "__main__":

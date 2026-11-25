@@ -6,6 +6,7 @@ write their arguments to a log; the fake check refuses a body that holds the wor
     python3 -m unittest discover -s tests/pr-open -v
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "dot_local/bin/executable_pr-open"
+LIMITS_CHECK = ROOT / "dot_local/share/agent-harness/bin/executable_known-limits-check"  # the real check, not a stand-in
 
 FAKE_GH = r'''#!/bin/sh
 printf 'gh' >> "$FAKE_LOG"; for a in "$@"; do printf ' [%s]' "$a" >> "$FAKE_LOG"; done; printf '\n' >> "$FAKE_LOG"
@@ -30,13 +32,17 @@ esac
 
 FAKE_CHECK = r'''#!/bin/sh
 printf 'pr-body-check' >> "$FAKE_LOG"; for a in "$@"; do printf ' [%s]' "$a" >> "$FAKE_LOG"; done; printf '\n' >> "$FAKE_LOG"
+# the claims form: --claims-out OUT gets the body with each claim token expanded (here, to the word EXPANDED), and only when the check passes
+out=; prev=; for a in "$@"; do [ "$prev" = --claims-out ] && out=$a; prev=$a; done
 while [ $# -gt 0 ]; do [ "$1" = --body-file ] && body=$2; shift; done
 if grep -q REFUSEME "$body"; then echo "pr-body-check: FAIL $body (bookkeeping in the description)"; exit 1; fi
+[ -z "$out" ] || sed 's/{{claim:[0-9a-f]*}}/EXPANDED/g' "$body" > "$out"
 echo "pr-body-check: OK $body"
 '''
 
 FAKE_RECORD = r'''#!/bin/sh
-echo "/records/$2.md"
+[ "$1" != src-path ] || { echo "${FAKE_SRC_DIR:-/srcs}/$2.src.md"; exit 0; }
+echo "${FAKE_RECORD_DIR:-/records}/$2.md"
 '''
 
 
@@ -73,7 +79,9 @@ class PrOpen(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
 
     def run_open(self, *args, stdin=None, extra_env=None):
-        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted)}
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
+               "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
+        env.setdefault("FAKE_SRC_DIR", str(self.dir / "srcs"))
         env.update(extra_env or {})
         return subprocess.run(["sh", str(SCRIPT), *args], cwd=self.repo, env=env, input=stdin, capture_output=True, text=True, timeout=60)
 
@@ -85,6 +93,22 @@ class PrOpen(unittest.TestCase):
 
     def remote_branches(self):
         return self.git(self.origin, "branch", "--list").split()
+
+    def test_create_from_another_repos_checkout_is_refused_before_anything_is_checked_or_pushed(self):
+        """homelab#676: pr-open ran from the coordinator checkout with --repo for homelab pushed the branch to the coordinator."""
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other")
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: this directory's origin is cartwmic/scratch, not cartwmic/other"), last)
+        self.assertNotIn("feature", self.remote_branches())
+        self.assertEqual(self.calls(), [])  # no check, no gh call: nothing else ran either
+        self.assertFalse(self.git(self.origin, "log", "--all", "--oneline").count("second"))
+
+    def test_create_with_the_repo_of_this_origin_still_works_in_any_case_and_url_form(self):
+        self.git(self.repo, "remote", "set-url", "origin", "git@github.com:Cartwmic/Scratch.git")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/scratch")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("feature", self.remote_branches())
 
     def test_a_refused_body_creates_and_pushes_nothing(self):
         self.body.write_text("REFUSEME\n")
@@ -100,9 +124,11 @@ class PrOpen(unittest.TestCase):
         result = self.run_open("--title", "A title", "--body-file", str(self.body))
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.splitlines()
-        self.assertTrue(lines[0].startswith("pr-body-check: OK"))  # the check's own pass line comes first
-        self.assertEqual(lines[1], "https://github.com/cartwmic/scratch/pull/42")
-        self.assertIn("/records/cartwmic/scratch#42.md", lines[2])  # where the agent record goes
+        self.assertTrue(lines[0].startswith("known-limits:"))  # the limits check runs first
+        self.assertTrue(lines[1].startswith("pr-body-check: OK"))  # then the body check's own pass line
+        self.assertEqual(lines[2], "https://github.com/cartwmic/scratch/pull/42")
+        self.assertIn("/records/cartwmic/scratch#42.md", lines[3])  # where the agent record goes
+        self.assertIn("pr-body-check cartwmic/scratch 42 --skip-intent-review", lines[4])  # the form that reads the record; the --body-file form does not
         self.assertIn("feature", self.remote_branches())
         calls = self.calls()
         self.assertTrue(calls[0].startswith("pr-body-check [--body-file] ["), calls)
@@ -113,14 +139,17 @@ class PrOpen(unittest.TestCase):
         self.assertNotIn("--draft", create)
         self.assertEqual(self.posted.read_text(), self.body.read_text())
 
-    def test_the_check_and_the_post_read_the_same_private_copy(self):
+    def test_the_check_reads_a_private_copy_and_the_post_is_the_file_the_check_expanded_it_into(self):
         self.run_open("--title", "T", "--body-file", str(self.body))
         calls = self.calls()
         checked = calls[0].split("[--body-file] [")[1].split("]")[0]
+        expanded = calls[0].split("[--claims-out] [")[1].split("]")[0]
         posted = calls[1].split("[--body-file] [")[1].split("]")[0]
-        self.assertEqual(checked, posted)
+        self.assertEqual(expanded, posted)  # what gh posts is what the check wrote, never the source
         self.assertNotEqual(checked, str(self.body))
-        self.assertFalse(Path(checked).exists())  # removed when the command ends
+        self.assertNotEqual(checked, posted)
+        self.assertFalse(Path(checked).exists())  # both removed when the command ends
+        self.assertFalse(Path(posted).exists())
 
     def test_draft_is_passed_through(self):
         self.assertEqual(self.run_open("--title", "T", "--body-file", str(self.body), "--draft").returncode, 0)
@@ -223,6 +252,20 @@ class PrOpen(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("taken from the origin", result.stderr)
 
+    def test_create_passes_the_title_to_the_body_check(self):
+        self.run_open("--title", "A title", "--body-file", str(self.body))
+        self.assertIn("[--title] [A title]", self.calls()[0])  # call 0 is the check, not gh pr create
+        self.assertTrue(self.calls()[0].startswith("pr-body-check"))
+
+    def test_edit_with_a_title_passes_it_to_the_body_check(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
+        self.assertTrue(self.calls()[0].startswith("pr-body-check"))
+        self.assertIn("[--title] [New title]", self.calls()[0])
+
+    def test_edit_without_a_title_gives_the_body_check_none(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertNotIn("--title", self.calls()[0])
+
     def test_edit_with_a_title_sets_it_too(self):
         self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
         self.assertIn("[-f] [title=New title]", self.patches()[0])
@@ -237,11 +280,281 @@ class PrOpen(unittest.TestCase):
     def test_edit_works_outside_a_git_repo_with_repo_named(self):
         elsewhere = self.dir / "elsewhere"
         elsewhere.mkdir()
-        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted)}
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
+               "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
         result = subprocess.run(["sh", str(SCRIPT), "--edit", "7", "--repo", "cartwmic/other", "--body-file", str(self.body)],
                                 cwd=elsewhere, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("repos/cartwmic/other/pulls/7", self.patches()[0])
+
+    # -- known-limits-check runs on the body at create and at edit, before anything else ------------------------------------------------
+
+    LABELLED = "What changed.\n\nLimits: the font has no emoji.\n\nProven: ran it.\n"  # the past mistake: a limit outside "## Known limits"
+    PERMANENT = "What changed.\n\n## Known limits\n- The font has no emoji, accepted as permanent.\n\n## Proven\nran it.\n"
+
+    def test_a_limit_outside_the_section_is_refused_on_create_before_anything_runs(self):
+        self.body.write_text(self.LABELLED)
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"Limits" written as a label', result.stderr)  # the check's own line says which line to fix
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertIn("[pr-open] ERROR", last)
+        self.assertIn("'## Known limits'", last)
+        self.assertIn("nothing was created", last)
+        self.assertEqual(self.calls(), [])  # not even pr-body-check ran
+        self.assertNotIn("feature", self.remote_branches())
+
+    def test_a_limit_outside_the_section_is_refused_on_edit_before_the_pr_is_read(self):
+        self.body.write_text(self.LABELLED)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nothing was changed", result.stderr)
+        self.assertEqual(self.calls(), [])  # no pr-body-check, no state read, no PATCH
+
+    def test_the_phrase_outside_the_section_is_refused(self):
+        self.body.write_text("What changed.\n\nZero change on the runner (see Known limits).\n\n## Known limits\nNone\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"known limit" appears outside', result.stderr)
+
+    def test_a_decision_id_in_a_limit_is_refused(self):
+        self.body.write_text("What.\n\n## Known limits\n- A gap, accepted as permanent (decision #4).\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Permanent limits: #ID", result.stderr)
+
+    def test_a_permanent_limit_opens_the_pr_with_the_record_pending(self):
+        self.body.write_text(self.PERMANENT)
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record not checked (pending)", result.stdout)
+        self.assertEqual(self.posted.read_text(), self.PERMANENT)
+
+    def test_a_body_with_no_limits_section_passes_the_check(self):
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    # -- the claims form (coordinator rule proof-rendered): the body file is a source with claim tokens; the posted body is its expansion ----
+
+    SOURCE = "What changed.\n\n## Proven\n\n- {{claim:0123456789abcdef}}\n"
+
+    def src_file(self, number):
+        return self.dir / "srcs" / "cartwmic" / ("scratch#%s.src.md" % number)
+
+    def test_create_posts_the_expansion_and_keeps_the_source_beside_the_record(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[--claims-out]", self.calls()[0])
+        self.assertEqual(self.posted.read_text(), "What changed.\n\n## Proven\n\n- EXPANDED\n")  # no token reaches GitHub
+        self.assertEqual(self.src_file(42).read_text(), self.SOURCE)  # the source, once the PR has a number
+
+    def test_a_refused_create_writes_no_source(self):
+        self.body.write_text("REFUSEME {{claim:0123456789abcdef}}\n")
+        self.assertEqual(self.run_open("--title", "T", "--body-file", str(self.body)).returncode, 1)
+        self.assertFalse((self.dir / "srcs").exists())
+
+    def test_a_source_that_cannot_be_written_after_the_pr_is_opened_is_a_failure_that_says_so(self):
+        (self.dir / "blocker").write_text("a file where the folder should be\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), extra_env={"FAKE_SRC_DIR": str(self.dir / "blocker")})
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: cartwmic/scratch#42 was opened, but its description source could not be written"), last)
+        self.assertIn("pr-record src-path cartwmic/scratch#42", last)
+        self.assertTrue([c for c in self.calls() if "[pr] [create]" in c])  # the PR does exist
+
+    def test_edit_of_a_pr_that_has_a_source_uses_the_claims_form_at_the_prs_head(self):
+        self.src_file(7).parent.mkdir(parents=True)
+        self.src_file(7).write_text("the earlier source\n")
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        check = [c for c in self.calls() if c.startswith("pr-body-check")][0]
+        self.assertIn("[--claims-out]", check)
+        self.assertIn("[--head] [cafef00dcafef00dcafef00dcafef00dcafef00d]", check)  # the claims are held to the PR's head, not this directory's
+        self.assertEqual(self.posted.read_text(), "What changed.\n\n## Proven\n\n- EXPANDED\n")
+        self.assertEqual(self.src_file(7).read_text(), self.SOURCE)  # replaced
+
+    def test_edit_that_brings_a_claim_token_opts_a_pr_with_no_source_into_the_claims_form(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.src_file(7).read_text(), self.SOURCE)
+
+    def test_edit_of_a_pr_with_no_source_and_no_token_is_the_plain_check_and_writes_no_source(self):
+        """The cut-over: a PR opened before the claims form is not held to it by an edit."""
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--claims-out", self.calls()[0])
+        self.assertNotIn("[--head]", self.calls()[0])
+        self.assertEqual(self.posted.read_text(), self.body.read_text())
+        self.assertFalse((self.dir / "srcs").exists())
+
+    def test_claims_edit_of_a_merged_pr_is_refused_before_the_check_and_not_patched(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "closed true cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cartwmic/scratch#7 is merged", result.stderr)
+        self.assertEqual(self.patches(), [])
+        self.assertFalse([c for c in self.calls() if c.startswith("pr-body-check")])
+
+    def test_claims_edit_that_cannot_read_the_head_is_a_failure(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))  # the fake state is "open false": no head
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not read the head commit of cartwmic/scratch#7", result.stderr)
+        self.assertEqual(self.patches(), [])
+
+    def test_a_refused_claims_edit_is_not_patched_and_leaves_the_source_alone(self):
+        self.src_file(7).parent.mkdir(parents=True)
+        self.src_file(7).write_text("the earlier source\n")
+        self.body.write_text("REFUSEME {{claim:0123456789abcdef}}\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.patches(), [])
+        self.assertEqual(self.src_file(7).read_text(), "the earlier source\n")
+
+    def record_dir(self, text):
+        records = self.dir / "records"
+        records.mkdir(exist_ok=True)
+        if text is not None:
+            (records / "cartwmic" ).mkdir(exist_ok=True)
+            (records / "cartwmic/scratch#7.md").write_text(text)
+        return {"FAKE_RECORD_DIR": str(records)}
+
+    def test_edit_reads_the_record_when_it_exists(self):
+        self.body.write_text(self.PERMANENT)
+        env = self.record_dir("Permanent limits: #5989\nDecisions: #5989\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("backed by the record", result.stdout)
+        self.assertEqual(len(self.patches()), 1)
+
+    def test_edit_refuses_a_record_that_lacks_the_permanent_line(self):
+        self.body.write_text(self.PERMANENT)
+        env = self.record_dir("Decisions: #5989\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env=env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('no "Permanent limits: #ID" line', result.stderr)
+        self.assertEqual(self.patches(), [])
+
+    def test_edit_with_no_record_file_yet_passes_with_it_pending(self):
+        self.body.write_text(self.PERMANENT)
+        env = self.record_dir(None)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("record not checked (pending)", result.stdout)
+
+    def limits_log(self):
+        log = self.dir / ".local/state/known-limits-check/log.jsonl"  # the check's own log; HOME is the scratch directory
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def test_a_refusal_log_line_says_why_and_on_create_which_branch(self):
+        self.body.write_text(self.LABELLED)
+        self.run_open("--title", "T", "--body-file", str(self.body))
+        (record,) = self.limits_log()
+        self.assertEqual(record["outcome"], "refused")
+        self.assertEqual(record["context"], {"caller": "pr-open", "mode": "create", "repo": "cartwmic/scratch", "head": "feature"})
+        (problem,) = record["problems"]
+        self.assertEqual((problem["rule"], problem["line"]), ("label", 3))
+        self.assertIn('"Limits" written as a label', problem["message"])
+
+    def test_an_edit_log_line_carries_the_pr_and_the_record_mode(self):
+        self.body.write_text(self.LABELLED)
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.body.write_text(self.PERMANENT)
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        refused, ok = self.limits_log()
+        self.assertEqual((refused["outcome"], refused["context"]["pr"], refused["context"]["mode"], "head" in refused["context"]), ("refused", "7", "edit", False))
+        self.assertEqual((ok["outcome"], ok["record"], ok["permanent"], ok["problems"]), ("ok", "pending", 1, []))
+
+    def test_an_unwritable_log_never_changes_the_outcome(self):
+        (self.dir / ".local").write_text("a file where the state directory would be\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_missing_known_limits_check_is_a_could_not_run_error(self):
+        result = self.run_open("--title", "T", "--body-file", str(self.body), extra_env={"KNOWN_LIMITS_CHECK": str(self.dir / "absent")})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("known-limits-check is not at", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    # -- pr-open's own run log: one line per run, written from the EXIT trap, whatever way the run ends ---------------------------------
+
+    def run_rows(self):
+        log = self.dir / ".local/state/pr-open/log.jsonl"  # HOME is the scratch directory
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def test_the_wrong_checkout_refusal_writes_a_log_line_that_names_the_origin_mismatch(self):
+        """f1 on dotfiles#797: the refusal printed to stderr and was gone; the log is how Michael sees whether it still fires, and for which repo pair."""
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other")
+        self.assertEqual(result.returncode, 2)
+        (row,) = self.run_rows()
+        self.assertEqual((row["mode"], row["repo"], row["pr"], row["outcome"], row["exit"]), ("create", "cartwmic/other", None, "refused", 2))
+        self.assertTrue(row["reason"].startswith("this directory's origin is cartwmic/scratch, not cartwmic/other"), row["reason"])
+        self.assertRegex(row["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(row["duration_s"], int)
+
+    def test_a_directory_with_no_origin_is_refused_and_logged(self):
+        self.git(self.repo, "remote", "remove", "origin")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/scratch")
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertEqual(last, "[pr-open] ERROR: this directory has no git remote named origin, so nothing can be pushed for cartwmic/scratch")
+        self.assertEqual(self.calls(), [])  # no check and no gh call
+        self.assertNotIn("feature", self.remote_branches())  # nothing pushed
+        (row,) = self.run_rows()
+        self.assertEqual((row["outcome"], row["exit"], row["reason"]), ("refused", 2, last.split("ERROR: ")[1]))
+
+    def test_a_created_pr_and_an_edit_each_write_a_line(self):
+        self.run_open("--title", "T", "--body-file", str(self.body))
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        created, edited = self.run_rows()
+        self.assertEqual((created["mode"], created["repo"], created["pr"], created["outcome"], created["exit"], created["reason"]),
+                         ("create", "cartwmic/scratch", 42, "created", 0, ""))
+        self.assertEqual((edited["mode"], edited["pr"], edited["outcome"], edited["exit"]), ("edit", 7, "edited", 0))
+
+    def test_every_way_a_run_ends_writes_exactly_one_line(self):
+        self.git(self.repo, "checkout", "-q", "-b", "other-branch")
+        refused_body = self.dir / "refused.md"
+        refused_body.write_text("REFUSEME\n")
+        cases = (
+            ("bad arguments", ("--bogus",), None, "failed", 2, "unknown argument"),
+            ("a refused body", ("--title", "T", "--body-file", str(refused_body)), None, "refused", 1, "description or title was refused by pr-body-check"),
+            ("a gh failure", ("--title", "T", "--body-file", str(self.body)), {"FAKE_GH_FAIL": "1"}, "failed", 2, "gh pr create failed"),
+            ("a merged PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed true"}, "refused", 2, "is merged"),
+            ("a closed PR", ("--edit", "7", "--body-file", str(self.body)), {"FAKE_PR_INFO": "closed false"}, "refused", 2, "is closed"),
+        )
+        for name, args, env, outcome, code, why in cases:
+            with self.subTest(name):
+                before = len(self.run_rows())
+                self.assertEqual(self.run_open(*args, extra_env=env).returncode, code)
+                rows = self.run_rows()
+                self.assertEqual(len(rows), before + 1)
+                self.assertEqual((rows[-1]["outcome"], rows[-1]["exit"]), (outcome, code))
+                self.assertIn(why, rows[-1]["reason"])
+
+    def test_help_and_a_reason_with_quotes_leave_valid_json(self):
+        before = len(self.run_rows())
+        self.assertEqual(self.run_open("--help").returncode, 0)
+        self.assertEqual(len(self.run_rows()), before)  # help is not a run
+        self.run_open("--title", "T", "--body-file", str(self.body), "--repo", 'cartwmic/"odd"\\name')
+        (row,) = self.run_rows()  # json.loads in run_rows would raise on a broken line
+        self.assertEqual(row["outcome"], "refused")
+        self.assertIn('not cartwmic/"odd"\\name:', row["reason"])  # quotes and backslashes in a reason survive the round trip
+
+    def test_the_log_depends_on_the_exit_trap(self):
+        """The refusal tests above must fail if the trap goes: the same refusal, run through a copy of pr-open with the trap line removed, writes nothing."""
+        text = SCRIPT.read_text()
+        self.assertEqual(text.count("\ntrap finish EXIT\n"), 1)
+        mutant = self.dir / "pr-open-no-trap"
+        mutant.write_text(text.replace("\ntrap finish EXIT\n", "\n"))
+        env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
+               "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
+        result = subprocess.run(["sh", str(mutant), "--title", "T", "--body-file", str(self.body), "--repo", "cartwmic/other"],
+                                cwd=self.repo, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.run_rows(), [])
 
 
 if __name__ == "__main__":

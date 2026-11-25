@@ -84,10 +84,13 @@ K = load()
 
 _CACHE_HOME = tempfile.mkdtemp(prefix="kt-cache-")
 os.environ["XDG_CACHE_HOME"] = _CACHE_HOME  # no test reads or writes the real ~/.cache/kgate, even one that calls op_read in this process
+_COORDINATOR_STATE = tempfile.mkdtemp(prefix="kt-coordinator-")
+os.environ["COORDINATOR_STATE_DIR"] = _COORDINATOR_STATE  # no test reads the real coordinator's brake/ folder: a pause that is on there would hold every job
 
 
 def tearDownModule():
     shutil.rmtree(_CACHE_HOME, True)
+    shutil.rmtree(_COORDINATOR_STATE, True)
     if _SCRIPT_DIR:
         shutil.rmtree(_SCRIPT_DIR, True)
 
@@ -312,12 +315,12 @@ class PodSpec(unittest.TestCase):
 
     def test_default_render_is_byte_identical_to_the_one_before_memory_limit(self):
         # the pins moved once, when every pod gained the compile caches and the worker counts (tuning_env), and again when the compile caches moved from /tmp to /var/tmp (the only change: NODE_COMPILE_CACHE and PYTHONPYCACHEPREFIX); a profile without scratch_tmpfs or tmp_tmpfs still renders no memory volume
-        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311)
+        # sha256 of json.dumps(manifests); re-pinned 2026-11-08 for the G14 preference (the only change from the agent-4 overflow render, #263), 2026-11-16 for the 4 h pod bound (the only change: activeDeadlineSeconds 28800 to 14400, dotfiles#479), and 2026-11-16 for the ephemeral-storage request (the only change: requests gain "ephemeral-storage": "4Gi", dotfiles#484), and 2026-11-16 for the default ephemeral-storage limit (the only changes: the request 3Gi to 4Gi, and limits gain "ephemeral-storage": "12Gi"), and 2026-11-16 for the PriorityClass (the only change: the pod spec gains "priorityClassName": "kgate"), and 2026-11-16 for agent-3 (the only change: the NotIn hostname list gains "ubuntu-server-k8s-agent-3", decision #3311), and 2026-11-22 for the agent host pod anti-affinity (the only change: the affinity gains "podAntiAffinity" against app=agent-host in namespace agent-host)
         cases = [
-            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "5f9dd1b59bac033c124d0185acd027ac2d04d90da42d593dc6c1da515bbd76c9"),
+            (K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None), "a2bf19c139183b55625e7ae7313677ee7df21ceece144aecc3de8cad150376de"),
             (K.pod_manifests("kgate-1-2", DIGEST, 2, "1Gi", "ubuntu-server-k8s-agent-1", {"TOK": b"s3cret"}, ("ghcr.io", "u", b"pw")),
-             "13bfbb79b9177ba2fd2f08fa6694d64dea3479e03ecdc0d005337747caf98e38"),
-            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "a0a97fdf70c7380507ff778b3970f1bc55f3a507fbd1866fd5c0170ca870e96c"),
+             "7f90c8c9ec950bfff1a8bb2663a0874f2628a037f5eae3149b2b14beee789f17"),
+            (K.pod_manifests("kgate-9-9", DIGEST, 1, "512Mi", None, {}, None, 1000), "6136bdfc756036beb49c99f084bfd22169c019aa934815cc90c81a3d6b6410b1"),
         ]
         for manifests, want in cases:
             self.assertEqual(hashlib.sha256(json.dumps(manifests).encode()).hexdigest(), want)
@@ -358,6 +361,14 @@ class PodSpec(unittest.TestCase):
         self.assertEqual(exprs, [
             {"key": "kubernetes.io/arch", "operator": "In", "values": ["amd64"]},
             {"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["ubuntu-server-k8s-master-1", "mac-mini-worker", "ubuntu-server-k8s-agent-3"]}])
+
+    def test_keeps_off_the_live_agent_host_node(self):
+        # required, so a busy agent host node never gets a new job; scoped to the live namespace, so the scratch copy does not block a node; pinned jobs too
+        for kw in ({}, {"node": "ubuntu-server-k8s-agent-1"}, {"prefer_nodes": False}):
+            pod, _ = self.pod(**kw)
+            self.assertEqual(pod["spec"]["affinity"]["podAntiAffinity"], {"requiredDuringSchedulingIgnoredDuringExecution": [
+                {"labelSelector": {"matchLabels": {"app": "agent-host"}}, "topologyKey": "kubernetes.io/hostname",
+                 "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "agent-host"}}}]})
 
     def test_prefer_and_overflow_nodes_do_not_overlap(self):
         self.assertFalse(set(K.PREFER_NODES) & set(K.OVERFLOW_NODES))
@@ -736,8 +747,24 @@ if a[:2] == ["get", "pod"]:
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario == "pullfail":
         st = {"phase": "Pending", "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ErrImagePull", "message": "401 unauthorized"}}}]}
+    elif scenario == "slow":   # the first two looks (one when the pod is placed, one when kgate waits for it) find the image still being pulled; later looks find the pod running
+        reads = os.path.join(fake, "slow-reads")
+        n = int(open(reads).read()) + 1 if os.path.exists(reads) else 1
+        open(reads, "w").write(str(n))
+        if n <= 2:
+            st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
+        else:
+            st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario == "pulling":   # scheduled to a node, image still being pulled: not Unschedulable
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
+    elif scenario == "slow":   # image being pulled for the first FAKE_READY_AFTER reads of the pod (the kgate client's own read after the create counts), then running
+        reads = os.path.join(fake, "pod-reads")
+        n = int(open(reads).read()) + 1 if os.path.exists(reads) else 1
+        open(reads, "w").write(str(n))
+        if n > int(os.environ.get("FAKE_READY_AFTER", 2)):
+            st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
+        else:
+            st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}], "containerStatuses": [{"ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}]}
     else:
         st = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/7 nodes are available: 7 Insufficient cpu."}]}
     if os.environ.get("FAKE_DOCKER"):   # the pod has a dind sidecar: a native sidecar reports under initContainerStatuses
@@ -828,6 +855,16 @@ while True:
 '''
 
 
+def read_jsonl(path):
+    """The records of a JSON-lines file that a fake or the client may be appending to as it is read. Only whole lines count: a line with no newline yet is half written
+    (a write that crosses a page is seen in two parts), and the next read has all of it."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return []
+    return [json.loads(line) for line in data[:data.rfind(b"\n") + 1].splitlines()]
+
+
 def stub_launcher(tmp, name, text):
     """The command that runs the client through a stub script. A test calls launcher() again for each client it starts, and a client that has just started is still reading
     the stub: writing the file in place truncates it first, and a client that reads it then runs an empty script, exits 0 and prints nothing. The new text goes to
@@ -848,6 +885,19 @@ class StubLauncher(unittest.TestCase):
             stub_launcher(tmp, "s.py", "print('second')\n")
             self.assertEqual(reading.read(), "print('first')\n" * 1000)
         self.assertEqual(Path(command[1]).read_text(), "print('second')\n", "the next client runs the new text")
+
+
+class ReadJsonl(unittest.TestCase):
+    def test_a_line_that_is_still_being_written_is_left_for_the_next_read(self):
+        path = Path(tempfile.mkdtemp(prefix="kt-jsonl-")).resolve() / "calls.jsonl"
+        self.addCleanup(shutil.rmtree, path.parent, True)
+        self.assertEqual(read_jsonl(path), [], "no file yet")
+        line = json.dumps({"manifest": {"data": "x" * 500}}) + "\n"
+        path.write_text(json.dumps({"probe": "u@host"}) + "\n" + line[:300])   # a writer that has put down the first 300 bytes of its second line
+        self.assertEqual(read_jsonl(path), [{"probe": "u@host"}])
+        with open(path, "a") as f:
+            f.write(line[300:])
+        self.assertEqual(read_jsonl(path), [{"probe": "u@host"}, {"manifest": {"data": "x" * 500}}])
 
 
 class Black(unittest.TestCase):
@@ -903,12 +953,10 @@ class Black(unittest.TestCase):
         return subprocess.Popen([*self.launcher(), *args], cwd=self.repo, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
 
     def records(self):
-        path = self.state / "kgate" / "log.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.state / "kgate" / "log.jsonl")
 
     def calls(self):
-        path = self.fake / "calls.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.fake / "calls.jsonl")
 
     def op_token_checks(self):
         """What each fake `op` run saw in OP_SERVICE_ACCOUNT_TOKEN: ok (the token), unset, or wrong."""
@@ -2227,8 +2275,8 @@ if a[:2] == ["create", "-f"]:
         side = lambda vals: ",".join("%s=%s" % (k, v) for k, v in zip(names, vals))
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "kgate-1794437863-45437" is forbidden: exceeded quota: jobs-quota-qqqq, requested: %s, used: %s, limited: %s\n'
                          % (side(["8", "10Gi", "2", "8Gi"]), side(["96", "160Gi", "24", "100Gi"]), side(["96", "160Gi", "24", "100Gi"]))); sys.exit(1)
-    if quota and not quota.startswith("long:") and quota != "impossible" and (quota == "always" or n <= int(quota)):
-        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (8 if n == 1 else 6)); sys.exit(1)
+    if quota and not quota.startswith("long:") and quota != "impossible" and (not os.path.exists(os.path.join(fake, "lifted")) if quota == "always" else n <= int(quota)):   # "always" ends when <fake>/lifted exists
+        sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: %s, requested: requests.cpu=2, used: requests.cpu=%d, limited: requests.cpu=8\n' % (os.environ.get("FAKE_QUOTA_NAME", "jobs"), 8 if n == 1 else 6)); sys.exit(1)
     if quota == "impossible":   # asks for more than the namespace's own limit: waiting cannot help
         sys.stderr.write('Error from server (Forbidden): error when creating "STDIN": pods "x" is forbidden: exceeded quota: jobs, requested: limits.cpu=16,requests.cpu=2, used: limits.cpu=0,requests.cpu=0, limited: limits.cpu=8,requests.cpu=8\n'); sys.exit(1)
     if os.environ.get("FAKE_CREATE_ECHO_PW"):   # a refusal that echoes the pod spec's SA password back, as an API error might
@@ -2255,7 +2303,7 @@ if a[:2] == ["get", "pod"]:
     last = json.load(open(os.path.join(fake, "last_manifest.json"))) if os.path.exists(os.path.join(fake, "last_manifest.json")) else {"items": [{"spec": {"volumes": []}}]}
     has_claim = any("persistentVolumeClaim" in v for i in last["items"] for v in i["spec"]["volumes"])
     rwop = "0/3 nodes are available: 3 node has pod using PersistentVolumeClaim with the same name and ReadWriteOncePod access mode. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod."
-    if scenario == "ready" or (scenario == "queued" and n > 3) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-r2" and not (has_claim and last["items"][0]["metadata"]["name"].endswith("-r2"))) \
+    if scenario == "ready" or (scenario == "queued" and n > int(os.environ.get("FAKE_READY_AFTER", 3))) or (scenario == "rwop" and not has_claim) or (scenario == "rwop-r2" and not (has_claim and last["items"][0]["metadata"]["name"].endswith("-r2"))) \
             or (scenario == "rwop-r1" and not (has_claim and not last["items"][0]["metadata"]["name"].endswith("-r2"))) or (scenario == "rwop-gone" and n > 1):
         st = {"phase": "Running", "containerStatuses": [{"ready": True, "state": {"running": {}}}]}
     elif scenario in ("rwop", "rwop-gone", "rwop-r2", "rwop-r1"):   # another pod holds the ReadWriteOncePod claim (rwop-gone: it lets go before the second poll)
@@ -2574,7 +2622,7 @@ class KubectlPodSpec(unittest.TestCase):
                 K.tree_roots_for(KCFG, bad)
 
     def test_homelab_render_is_unchanged_by_the_kubectl_adapter(self):
-        want = "5f9dd1b59bac033c124d0185acd027ac2d04d90da42d593dc6c1da515bbd76c9"  # the same pin as test_default_render_is_byte_identical
+        want = "a2bf19c139183b55625e7ae7313677ee7df21ceece144aecc3de8cad150376de"  # the same pin as test_default_render_is_byte_identical
         self.assertEqual(hashlib.sha256(json.dumps(K.pod_manifests("kgate-1-2", DIGEST, 3, "6Gi", None, {}, None)).encode()).hexdigest(), want)
 
 
@@ -3342,6 +3390,52 @@ class Archive(unittest.TestCase):
         self.assertNotIn(victim.lstrip("/"), names)
         self.assertIn((common + "/config").lstrip("/"), names)
 
+    def test_a_git_file_that_shrinks_between_stat_and_read_ships_with_the_bytes_it_had_when_read(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(common, "HEAD")
+        real_open = open
+
+        def shrinking_open(path, *a, **k):
+            if os.fspath(path) == victim:
+                with real_open(path, "wb") as f:   # shorter than the size tar stat'ed a moment ago
+                    f.write(b"x\n")
+            return real_open(path, *a, **k)
+        with mock.patch.dict(K.__dict__, {"open": shrinking_open}):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            self.assertEqual(tar.extractfile(victim.lstrip("/")).read(), b"x\n")
+            self.assertIn((common + "/config").lstrip("/"), tar.getnames())
+
+    def test_a_git_file_over_the_read_limit_is_streamed_whole(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(common, "HEAD")
+        want = Path(victim).read_bytes()
+        with mock.patch.dict(K.__dict__, {"GIT_FILE_READ_LIMIT": 0}):
+            data = K.archive(wt, common, files, {}, history=True)
+        import io, tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            self.assertEqual(tar.extractfile(victim.lstrip("/")).read(), want)
+
+    def test_a_worktree_file_that_shrinks_while_it_is_read_still_fails_the_job(self):
+        main, linked = self.repo_and_linked()
+        wt, common, files = K.worktree(str(main))
+        victim = os.path.join(wt, "f")
+        with open(victim, "wb") as f:
+            f.write(b"long enough to shrink\n")
+        real_open = __import__("tarfile").bltn_open
+
+        def shrinking_open(path, *a, **k):
+            if os.fspath(path) == victim:
+                with real_open(path, "wb") as f:
+                    f.write(b"x")
+            return real_open(path, *a, **k)
+        with mock.patch("tarfile.bltn_open", shrinking_open):
+            with self.assertRaises(OSError):
+                K.archive(wt, common, files, {}, history=True)
+
     def test_a_git_folder_deleted_while_it_is_read_is_left_out_with_what_it_held(self):
         # 2026-11-16 01:51Z: a job died on `.git/worktrees/proof-main-old`, a linked worktree's folder removed between the stat and the listing
         main, linked = self.repo_and_linked()
@@ -3482,6 +3576,92 @@ class RepoName(unittest.TestCase):
         self.assertEqual(self.repo("some-folder", "/"), "some-folder")
 
 
+class QuotaWaitHold(unittest.TestCase):
+    """QuotaWait's hold clock, without a cluster: the time between two kgate-hold refusals is added to the deadline, any other refusal adds none."""
+
+    def wait(self):
+        job = mock.Mock()
+        job.rec, job.o.wait, job.hold_s = {}, 60, 0.0
+        return K.QuotaWait(job)
+
+    refusal = "exceeded quota: %s, requested: pods=1, used: pods=1, limited: pods=1"
+
+    def refuse(self, qw, name, at):
+        with mock.patch("time.time", return_value=at):
+            return qw.refused(self.refusal % name)
+
+    def test_the_time_between_two_hold_refusals_is_added_to_the_deadline(self):
+        qw = self.wait()
+        self.refuse(qw, K.HOLD_QUOTA, 1000)
+        why, _ = self.refuse(qw, K.HOLD_QUOTA, 1030)
+        self.assertEqual(qw.job.hold_s, 30)
+        self.assertIn("not counted against --wait", why)
+
+    def test_another_quota_adds_nothing_and_ends_a_hold_stretch(self):
+        qw = self.wait()
+        self.refuse(qw, "scratch-cpu", 1000)
+        self.refuse(qw, "scratch-cpu", 1030)
+        self.assertEqual(qw.job.hold_s, 0)
+        self.refuse(qw, K.HOLD_QUOTA, 1040)
+        self.refuse(qw, "scratch-cpu", 1050)   # the stretch ends: the 10 s after the last hold refusal are not held
+        self.refuse(qw, K.HOLD_QUOTA, 1060)    # a new one starts here, adding nothing yet
+        self.assertEqual(qw.job.hold_s, 0)
+
+
+class QuotaWaitHoldRecord(unittest.TestCase):
+    """The hold's own record field and the limit the timeout text states."""
+
+    def refuse(self, qw, name, at):
+        with mock.patch("time.time", return_value=at):
+            return qw.refused("exceeded quota: %s, requested: pods=1, used: pods=1, limited: pods=1" % name)
+
+    def job(self):
+        job = mock.Mock()
+        job.rec, job.o.wait, job.hold_s = {}, 60, 0.0
+        return job
+
+    def test_hold_time_is_its_own_field_apart_from_quota_wait(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        self.refuse(qw, "scratch-cpu", 1000)
+        self.refuse(qw, K.HOLD_QUOTA, 1010)
+        self.refuse(qw, K.HOLD_QUOTA, 1040)
+        self.assertEqual(job.rec["hold_wait_s"], 30)
+        self.assertIn("quota_wait_s", job.rec)
+
+    def test_no_hold_leaves_no_hold_field(self):
+        job = self.job()
+        self.refuse(K.QuotaWait(job), "scratch-cpu", 1000)
+        self.assertNotIn("hold_wait_s", job.rec)
+
+    def test_the_create_that_goes_through_counts_the_stretch_since_the_last_hold_refusal(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        self.refuse(qw, K.HOLD_QUOTA, 1000)
+        self.refuse(qw, K.HOLD_QUOTA, 1030)
+        with mock.patch("time.time", return_value=1050):
+            qw.made()
+        self.assertEqual(job.hold_s, 50)
+        self.assertEqual(job.rec["hold_wait_s"], 50)
+
+    def test_a_look_at_a_neighbour_being_placed_neither_ends_nor_adds_to_a_hold(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        self.refuse(qw, K.HOLD_QUOTA, 1000)
+        qw.hold_tick(None)   # "another job is being placed": neither a hold nor a look that ends it
+        with mock.patch("time.time", return_value=1010):
+            qw.hold_tick(True)
+        self.assertEqual(job.hold_s, 10)
+
+    def test_the_timeout_names_the_real_limit_after_a_hold(self):
+        job = self.job()
+        qw = K.QuotaWait(job)
+        qw.msg = "exceeded quota: jobs"
+        self.assertEqual(str(qw.timeout()), "quota not available within 60s: exceeded quota: jobs")
+        job.hold_s = 100.4
+        self.assertEqual(str(qw.timeout()), "quota not available within 160s (--wait 60s plus 100s held by the cluster): exceeded quota: jobs")
+
+
 class KubectlBlack(unittest.TestCase):
     """The kubectl adapter through the real script as a process against a fake kubectl: the same contract as the homelab journeys."""
     for _name in ("kgate", "records", "calls", "op_token_checks", "op_env", "active", "add_entry", "dead_entry"):
@@ -3494,7 +3674,7 @@ class KubectlBlack(unittest.TestCase):
                              "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
                              "loader.exec_module(K)\n"
                              "K.QUOTA_FIRST_DELAY = 0.2\n"
-                             "K.CACHE_BUSY_S = 0.6\n"
+                             "K.CACHE_BUSY_S = 0.6\n" + getattr(self, "stub_extra", "") +
                              "sys.exit(K.main(sys.argv[2:]))\n")
 
     def setUp(self):
@@ -3527,8 +3707,7 @@ class KubectlBlack(unittest.TestCase):
         return self.kgate(*args, host="", env={**self.cmd_env, **(env or {})})
 
     def kcalls(self):
-        path = self.fake / "kcalls.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.fake / "kcalls.jsonl")
 
     def kubectl_args(self):
         return [c["argv"][6:] for c in self.kcalls() if "argv" in c and c["argv"][2:3] != ["config"]]
@@ -3772,8 +3951,46 @@ class KubectlBlack(unittest.TestCase):
         self.assertEqual(done.returncode, 69, done.stdout)
         rec = self.records()[-1]
         self.assertRegex(rec["reason"], r"^quota not available within 2s: exceeded quota: jobs, requested: requests.cpu=2, used: requests.cpu=\d+, limited: requests.cpu=8$")
-        self.assertGreaterEqual(rec["quota_wait_s"], 1.5)
+        # --wait counts from the job's start, and the quota's own clock (quota_wait_s) from the first refusal, which comes after the start-up, the tree hash and the
+        # shipping. Under load that first stretch is most of a second, so quota_wait_s is --wait minus it and can be well under --wait. What kgate promises is that it
+        # does not give up before --wait has passed since the job started: duration_s is measured from that same start.
+        self.assertGreaterEqual(rec["duration_s"], 2)
+        self.assertGreater(rec["quota_wait_s"], 0)   # it did wait for the quota
         self.assertTrue(rec["cleanup"])
+
+    def lift_after(self, seconds):
+        timer = threading.Timer(seconds, lambda: (self.fake / "lifted").write_text("x"))
+        timer.start()
+        self.addCleanup(timer.cancel)
+
+    def test_a_cluster_hold_longer_than_wait_is_waited_out_not_counted_against_it(self):
+        self.lift_after(5)   # the hold lasts longer than --wait 3
+        done = self.run_kgate("--wait", "3", "--", "sh", "-c", "echo ran-after-the-hold", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-hold"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-after-the-hold", done.stdout)
+        self.assertIn("exceeded quota: kgate-hold", done.stdout)
+        self.assertIn("a cluster hold: not counted against --wait", done.stdout)
+
+    def test_a_held_job_still_has_its_wait_for_a_pod_that_takes_several_polls(self):
+        self.lift_after(7)   # the hold lasts longer than --wait 6; the pod then needs three reads (about 4 s) to run, as a real pod does (ContainerCreating, image pull)
+        done = self.run_kgate("--wait", "6", "--", "sh", "-c", "echo ran-after-the-hold", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-hold", "FAKE_POD": "queued", "FAKE_READY_AFTER": "2"})
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ran-after-the-hold", done.stdout)
+        rec = self.records()[-1]
+        self.assertGreaterEqual(rec["hold_wait_s"], 6)   # the whole held stretch, to the create that went through
+        self.assertGreaterEqual(rec["quota_wait_s"], rec["hold_wait_s"])
+
+    def test_a_held_job_whose_pod_never_starts_says_the_real_limit(self):
+        self.lift_after(5)
+        done = self.run_kgate("--wait", "3", "--", "true", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-hold", "FAKE_POD": "pending"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within \d+s \(--wait 3s plus \d+s held by the cluster\): ")
+
+    def test_a_full_quota_that_is_not_a_hold_still_ends_at_wait(self):
+        self.lift_after(5)
+        done = self.run_kgate("--wait", "3", "--", "true", env={"FAKE_QUOTA": "always", "FAKE_QUOTA_NAME": "kgate-holdish"})
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertRegex(self.records()[-1]["reason"], r"^quota not available within 3s: exceeded quota: kgate-holdish, ")
 
     def test_a_request_above_the_namespace_limit_is_69_at_once_not_a_wait(self):
         done = self.run_kgate("--wait", "600", "--", "true", env={"FAKE_QUOTA": "impossible"})
@@ -3833,6 +4050,41 @@ class KubectlBlack(unittest.TestCase):
         rec = [r for r in self.records() if r["id"] == job_id][0]
         self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"], rec["cluster"]), (143, "cancelled by kgate cancel", True, True, "example"))
         self.assertIn(["delete", "pod/" + job_id, "--ignore-not-found", "--grace-period=0", "--wait=true"], self.kubectl_args())
+        self.assertEqual(list((self.state / "kgate" / "active").glob("*.json")), [])
+
+    def test_kgate_cancel_ends_a_client_whose_first_stop_python_dropped(self):
+        """Python drops an exception raised inside a __del__, and every finished kubectl call frees a Popen whose __del__ runs. A stop that lands there is lost, and a client
+        whose handler had gone deaf at that first signal ran on until its --wait was out: `kgate cancel` waited its whole --wait and gave up, the way it did in CI. Here the
+        first stop is sent from inside a __del__ after the first refused create; kgate cancel then asks again until the client ends."""
+        self.stub_extra = ("import os, signal\n"
+                           "class Dropped:\n"
+                           "    def __del__(self):\n"
+                           "        os.kill(os.getpid(), signal.SIGTERM)\n"
+                           "once = []\n"
+                           "run = K.KubectlCluster.run\n"
+                           "def run_then_lose_a_stop(self, kargs, stdin=b'', timeout=None):\n"
+                           "    done = run(self, kargs, stdin, timeout)\n"
+                           "    if kargs[:1] == ['create'] and not once:\n"
+                           "        once.append(1)\n"
+                           "        Dropped()\n"
+                           "    return done\n"
+                           "K.KubectlCluster.run = run_then_lose_a_stop\n")
+        env = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state), "KGATE_SSH": "",
+               "KGATE_SSH_KEY": "/dev/null", **self.op_env(), "FAKE_QUOTA": "always"}
+        proc = subprocess.Popen([*self.launcher(), "--wait", "300", "--", "true"], cwd=self.repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: (proc.poll() is None and proc.kill(), proc.wait(), proc.stdout.close()))
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if "waiting for quota" in line:
+                break
+        self.assertIsNone(proc.poll(), "the client lost the first stop and goes on waiting for quota")
+        job_id = next(json.loads(p.read_text())["id"] for p in (self.state / "kgate" / "active").glob("*.json"))
+        done = self.run_kgate("cancel", "--wait", "20", job_id)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(proc.wait(timeout=30), 143)
+        rec = [r for r in self.records() if r["id"] == job_id][0]
+        self.assertEqual((rec["exit"], rec["reason"], rec["cancelled"], rec["cleanup"]), (143, "cancelled by kgate cancel", True, True))
         self.assertEqual(list((self.state / "kgate" / "active").glob("*.json")), [])
 
     def test_any_other_create_error_is_an_immediate_69(self):
@@ -4876,6 +5128,213 @@ class GiveUpKubectl(GiveUpDeletesThePod, unittest.TestCase):
 
 # ---------------------------------------------------------------- a job waits in a local queue while the cluster is full (dotfiles: kgate queue)
 
+class BrakeHomelab(unittest.TestCase):
+    """The coordinator's pause: while `$COORDINATOR_STATE_DIR/brake/` holds any file, no pod is made. The job names every reason, looks again on a short poll, and goes on when the
+    folder is empty or missing. It does not know what a reason is: the tests use made-up names."""
+    for _name in ("kgate", "kgate_popen", "launcher", "records", "calls", "op_env", "profile", "setUp"):
+        locals()[_name] = getattr(Black, _name)
+
+    def brake(self, **reasons):
+        folder = self.tmp / "coordinator" / "brake"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name, text in reasons.items():
+            (folder / name).write_text(text + "\n")
+        return folder
+
+    def env(self):
+        return {"COORDINATOR_STATE_DIR": str(self.tmp / "coordinator"), "KGATE_BRAKE_POLL_S": "0.2"}
+
+    def creates(self):
+        return sum(1 for c in self.calls() if "manifest" in c)
+
+    def read_until(self, proc, text):
+        seen = ""
+        for line in proc.stdout:
+            seen += line
+            if text in line:
+                break
+        self.assertIn(text, seen)
+        return seen
+
+    def start(self, *args, env=None, host="fake"):
+        proc = self.kgate_popen(*args, env=env, host=host)
+        self.addCleanup(lambda: (proc.poll() is None and os.killpg(proc.pid, 9), proc.wait(), proc.stdout.close()))
+        return proc
+
+    def test_a_job_waits_while_the_folder_holds_a_file_then_runs_when_it_is_empty(self):
+        folder = self.brake(lag="2026-11-22T10:00:00.000Z Michael's oldest unanswered message has waited 90 s (limit 60 s)")
+        proc = self.start("--", "sh", "-c", "echo ran-after-the-pause", env=self.env())
+        seen = self.read_until(proc, "paused: ")
+        time.sleep(1)
+        self.assertIsNone(proc.poll())
+        self.assertEqual(self.creates(), 0, "no pod while the pause is on")
+        self.assertEqual(self.calls(), [], "not even a look at the cluster")
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("lag: Michael's oldest unanswered message has waited 90 s (limit 60 s)", seen)
+        self.assertNotIn("2026-11-22T10:00", seen, "the words are shown without the file's time")
+        self.assertIn("the pause lifted after", seen)
+        self.assertIn("ran-after-the-pause", seen)
+        self.assertEqual(self.creates(), 1)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (0, True))
+        self.assertGreater(rec["brake_wait_s"], 0.5)
+
+    def test_a_pause_longer_than_wait_does_not_use_up_the_jobs_wait(self):
+        # --wait 3, the pause holds for 5 s, and the pod still needs a second look to be running: without the pause time added to --wait the job
+        # would make its pod and then fail "pod did not start within 3s" the moment the pause lifts.
+        folder = self.brake(lag="2026-11-22T10:00:00.000Z the inbox is late")
+        proc = self.start("--wait", "3", "--", "sh", "-c", "echo ran-after-a-long-pause", env={**self.env(), "FAKE_POD": "slow"})
+        seen = self.read_until(proc, "paused: ")
+        time.sleep(5)
+        self.assertIsNone(proc.poll())
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertNotIn("did not start", seen)
+        self.assertIn("ran-after-a-long-pause", seen)
+        rec = self.records()[-1]
+        self.assertEqual((rec["exit"], rec["ran"]), (0, True))
+        self.assertGreater(rec["brake_wait_s"], 4.5)
+
+    def test_every_reason_is_named_on_one_line_and_the_job_waits_for_the_last_to_go(self):
+        folder = self.brake(lag="2026-11-22T10:00:00Z the inbox is late", cpu="2026-11-22T10:00:01Z the host is at 95 percent cpu")
+        proc = self.start("--", "true", env=self.env())
+        seen = self.read_until(proc, "paused: ")
+        line = next(l for l in seen.splitlines() if "paused: " in l)
+        self.assertIn("cpu: the host is at 95 percent cpu; lag: the inbox is late", line)
+        (folder / "lag").unlink()
+        time.sleep(1)
+        self.assertIsNone(proc.poll(), "one reason left: still paused")
+        self.assertEqual(self.creates(), 0)
+        (folder / "cpu").unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+        self.assertEqual(self.creates(), 1)
+
+    def test_a_reason_no_one_has_heard_of_holds_the_job_and_a_new_reason_is_named_again(self):
+        folder = self.brake(**{"something-new": "2026-11-22T10:00:00Z a trigger kgate has never seen"})
+        proc = self.start("--", "true", env=self.env())
+        seen = self.read_until(proc, "something-new: a trigger kgate has never seen")
+        self.brake(**{"another-one": "2026-11-22T10:00:05Z a second trigger"})
+        seen += self.read_until(proc, "another-one: a second trigger")
+        for name in ("something-new", "another-one"):
+            (folder / name).unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+
+    def test_an_empty_or_missing_folder_does_not_hold_the_job(self):
+        self.assertEqual(self.kgate("--", "true", env=self.env()).returncode, 0)   # no folder
+        self.brake()
+        folder = self.tmp / "coordinator" / "brake"
+        (folder / ".hidden").write_text("not a reason\n")
+        (folder / "sub").mkdir()
+        done = self.kgate("--", "true", env=self.env())
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("paused", done.stdout)
+        self.assertNotIn("brake_wait_s", self.records()[-1])
+
+    def test_the_state_dir_defaults_to_the_coordinators_folder_under_home(self):
+        folder = self.home / ".local" / "share" / "coordinator" / "brake"
+        folder.mkdir(parents=True)
+        (folder / "lag").write_text("2026-11-22T10:00:00Z held\n")
+        env = {"COORDINATOR_STATE_DIR": "", "KGATE_BRAKE_POLL_S": "0.2"}
+        proc = self.start("--", "true", env=env)
+        self.read_until(proc, "lag: held")
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out)
+
+    def test_the_default_folder_is_the_profiles_own_coordinator_state(self):
+        """With COORDINATOR_STATE_DIR unset, each profile reads its own coordinator's folder: personal `~/.local/share/coordinator`, work `~/.local/share/coordinator-work`
+        (the work coordinator's state, README.md "work profile"). The script is rendered for each profile by real chezmoi."""
+        for profile, name in (("personal", "coordinator"), ("work", "coordinator-work")):
+            with self.subTest(profile):
+                path = self.tmp / ("kgate-" + profile)
+                path.write_text(render_script(profile))
+                loader = importlib.machinery.SourceFileLoader("kgate_" + profile, str(path))
+                spec = importlib.util.spec_from_loader("kgate_" + profile, loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                with mock.patch.dict(os.environ, {"HOME": str(self.home), "COORDINATOR_STATE_DIR": ""}):
+                    self.assertEqual(module.brake_dir(), str(self.home / ".local" / "share" / name / "brake"))
+                with mock.patch.dict(os.environ, {"HOME": str(self.home), "COORDINATOR_STATE_DIR": str(self.tmp / "set")}):
+                    self.assertEqual(module.brake_dir(), str(self.tmp / "set" / "brake"), "an explicit folder wins on both profiles")
+
+    def test_a_stop_while_paused_ends_the_job_with_no_pod(self):
+        self.brake(lag="2026-11-22T10:00:00Z held")
+        proc = self.start("--", "true", env=self.env())
+        self.read_until(proc, "paused: ")
+        os.killpg(proc.pid, signal.SIGTERM)
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 128 + signal.SIGTERM, out)
+        self.assertEqual(self.creates(), 0)
+
+
+class BrakeRerun(unittest.TestCase):
+    """The rerun of an evicted pod (`<id>-r2`) makes a pod, so it waits for the coordinator's pause like the first one."""
+    for _name in ("kgate", "records", "calls", "op_env", "launcher", "setUp", "write_cluster", "profile", "run_kgate", "kcalls", "pods_created"):
+        locals()[_name] = getattr(KubectlBlack, _name)
+    kgate_popen = Black.kgate_popen
+    read_until = BrakeHomelab.read_until
+    start = BrakeHomelab.start
+
+    def test_an_evicted_pod_is_not_rerun_while_the_pause_is_on_and_is_rerun_when_it_lifts(self):
+        folder = self.tmp / "coordinator" / "brake"
+        env = {**self.cmd_env, "FAKE_LOST": "1:event", "FAKE_LOST_DELAY": "4", "COORDINATOR_STATE_DIR": str(self.tmp / "coordinator"), "KGATE_BRAKE_POLL_S": "0.2"}
+        proc = self.start("--", "sh", "-c", "echo ran-attempt", host="", env=env)
+        for _ in range(100):   # the first pod is made before the pause starts
+            if self.pods_created():
+                break
+            time.sleep(0.1)
+        self.assertEqual(len(self.pods_created()), 1)
+        folder.mkdir(parents=True)
+        (folder / "lag").write_text("2026-11-22T10:00:00Z the inbox is late\n")
+        seen = self.read_until(proc, "paused: ")   # the pod is evicted 4 s in; the rerun then stops at the pause
+        self.assertIn("lag: the inbox is late", seen)
+        time.sleep(1)
+        self.assertIsNone(proc.poll())
+        self.assertEqual(len(self.pods_created()), 1, "no second pod while the pause is on")
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, seen + out)
+        rec = self.records()[-1]
+        self.assertEqual([p["metadata"]["name"] for p in self.pods_created()], [rec["id"], rec["id"] + "-r2"])
+        self.assertEqual((rec["attempts"], rec["exit"]), (2, 0))
+        self.assertGreater(rec["brake_wait_s"], 0.5)
+
+    def test_a_pause_before_the_first_pod_and_another_before_the_rerun_add_up_and_neither_uses_up_wait(self):
+        # --wait 6: the first pause (2 s) and the eviction (4 s into the pod) already take the job to 6 s, and the second pause (2 s) to 8 s. The rerun is still
+        # allowed because the 4 s of pause are added to --wait, and brake_wait_s is the sum of the two waits, not the last one.
+        folder = self.tmp / "coordinator" / "brake"
+        folder.mkdir(parents=True)
+        (folder / "lag").write_text("2026-11-22T10:00:00Z the inbox is late\n")
+        env = {**self.cmd_env, "FAKE_LOST": "1:event", "FAKE_LOST_DELAY": "4", "COORDINATOR_STATE_DIR": str(self.tmp / "coordinator"), "KGATE_BRAKE_POLL_S": "0.2"}
+        proc = self.start("--wait", "6", "--", "sh", "-c", "echo ran-attempt", host="", env=env)
+        seen = self.read_until(proc, "paused: ")
+        time.sleep(2)
+        (folder / "lag").unlink()
+        seen += self.read_until(proc, "the pause lifted after")
+        for _ in range(100):
+            if self.pods_created():
+                break
+            time.sleep(0.1)
+        self.assertEqual(len(self.pods_created()), 1)
+        (folder / "lag").write_text("2026-11-22T10:00:10Z the inbox is late again\n")
+        seen += self.read_until(proc, "paused: ")   # the pod is evicted 4 s in; the rerun then stops at the second pause
+        time.sleep(2)
+        (folder / "lag").unlink()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        rec = self.records()[-1]
+        self.assertEqual((rec["attempts"], rec["exit"]), (2, 0))
+        self.assertGreater(rec["brake_wait_s"], 3.8, "the two waits add up; the second did not overwrite the first")
+
+
 QUEUE_LAUNCH = ("import importlib.machinery, importlib.util, sys\n"
                 "loader = importlib.machinery.SourceFileLoader('kg', sys.argv[1])\n"
                 "K = importlib.util.module_from_spec(importlib.util.spec_from_loader('kg', loader))\n"
@@ -5074,6 +5533,45 @@ class QueueHomelab(unittest.TestCase):
         done = self.kgate("--wait", "30", "--", "true")   # the grace is added to the deadline: the ticket is stale in 1.5 s
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertEqual((self.creates(), foreign.exists()), (1, False))
+
+    # --- a client in another pid namespace: gone with its namespace, or still running in a live one (dotfiles#786)
+
+    GONE_NAMESPACE = "pid:[4026539999]"
+
+    def queued_client_seen_from_another_namespace(self):
+        """A real client waiting in the queue for a full cluster, as a client in another pid namespace looks to this one: its entry and ticket name a namespace
+        this test is not in, and a pid that is nothing here. Returns (the client, its job id)."""
+        proc = self.start("--", "true", env=self.full(self.waiting()))
+        self.read_until(proc, "queued: ")
+        (ticket,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        entry = self.state / "kgate" / "active" / ticket.name
+        for path in (ticket, entry):
+            path.write_text(json.dumps({**json.loads(path.read_text()), "pidns": self.GONE_NAMESPACE, "pid": 4194000}))
+        return proc, ticket.stem
+
+    def test_the_entry_and_ticket_of_a_client_killed_in_a_pid_namespace_that_is_gone_are_ended_by_the_next_job(self):
+        proc, gone = self.queued_client_seen_from_another_namespace()
+        os.killpg(proc.pid, signal.SIGKILL)   # the container restart: every client in the namespace dies with no end line
+        proc.wait()
+        done = self.kgate("--wait", "5", "--", "true")
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertNotIn("queued", done.stdout, "the dead client's ticket must not hold the queue")
+        (end,) = [r for r in self.records() if r["id"] == gone]
+        self.assertEqual((end["exit"], end["cancelled"], end["reaped_by"]), (143, True, self.records()[-1]["id"]))
+        self.assertIn("kgate: ended %s: its client" % gone, done.stdout)
+        self.assertEqual(list((self.state / "kgate" / "queue").glob("kgate-*.json")), [])
+        self.assertEqual(list((self.state / "kgate" / "active").glob("kgate-*.json")), [])
+
+    def test_the_entry_and_ticket_of_a_client_still_running_in_another_pid_namespace_are_left_alone(self):
+        proc, alive = self.queued_client_seen_from_another_namespace()
+        done = self.kgate("--wait", "2", "--", "true")
+        self.assertEqual(done.returncode, 69, done.stdout)
+        self.assertIn("queued: behind %s" % alive, done.stdout)
+        self.assertNotIn(alive, [r["id"] for r in self.records()], "the running client's job was not ended")
+        self.assertEqual([c for c in self.calls() if alive in json.dumps(c.get("kubectl", []))], [], "no kubectl call touched the running client's pod")
+        self.assertTrue((self.state / "kgate" / "active" / (alive + ".json")).exists())
+        self.assertTrue((self.state / "kgate" / "queue" / (alive + ".json")).exists())
+        self.assertIsNone(proc.poll())
 
     def test_a_job_ticket_carries_its_own_wait_deadline(self):
         proc = self.start("--wait", "100", "--", "true", env=self.full(self.waiting()))
@@ -5302,6 +5800,53 @@ class QuotaHomelab(unittest.TestCase):
         self.assertEqual(done.returncode, 69, done.stdout)
         self.assertRegex(self.records()[-1]["reason"], r"^pod did not start within 2s: Unschedulable \(queued, behind kgate-[^,]+, which the quota refused and was first\)$")
         self.assertEqual(self.created(), 0)
+
+    def hold(self):
+        return {**self.full(used=12), "FAKE_QUOTA_NAME": "kgate-hold"}
+
+    def test_a_cluster_hold_longer_than_wait_is_waited_out_not_counted_against_it(self):
+        proc = self.start("--wait", "3", "--cpu", "4", "--", "sh", "-c", "echo ran-after-the-hold", env=self.hold())
+        seen = self.read_until(proc, "a cluster hold: not counted against --wait")
+        time.sleep(5)   # past --wait 3
+        self.assertIsNone(proc.poll(), "the hold does not end the job at --wait")
+        (path,) = (self.state / "kgate" / "queue").glob("kgate-*.json")
+        ticket = json.loads(path.read_text())
+        self.assertGreater(ticket["deadline"], time.time() - 1, "the ticket's deadline moves with the hold; a later client would otherwise forget it as stale")
+        self.room()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("ran-after-the-hold", seen)
+
+    def test_a_held_job_still_has_its_wait_for_a_pod_that_takes_several_polls(self):
+        env = {**self.hold(), "FAKE_POD": "slow", "FAKE_READY_AFTER": "2"}   # the pod needs three reads, as a real pod does (ContainerCreating, image pull)
+        proc = self.start("--wait", "3", "--cpu", "4", "--", "sh", "-c", "echo ran-after-the-hold", env=env)
+        seen = self.read_until(proc, "a cluster hold: not counted against --wait")
+        time.sleep(5)   # past --wait 3
+        self.room()
+        out, _ = proc.communicate(timeout=60)
+        seen += out
+        self.assertEqual(proc.returncode, 0, seen)
+        self.assertIn("ran-after-the-hold", seen)
+        self.assertGreaterEqual(self.records()[-1]["hold_wait_s"], 5)
+
+    def test_a_job_behind_a_held_job_does_not_run_out_its_wait_either(self):
+        env = self.hold()
+        first = self.start("--wait", "3", "--cpu", "4", "--", "sh", "-c", "echo first-ran", env=env)
+        seen_first = self.read_until(first, "a cluster hold: not counted against --wait")
+        second = self.start("--wait", "3", "--cpu", "1", "--", "sh", "-c", "echo second-ran", env=env)
+        seen_second = self.read_until(second, "queued: behind ")
+        time.sleep(5)   # past --wait 3, for both
+        self.assertIsNone(first.poll())
+        self.assertIsNone(second.poll(), "the job ordered after a held job keeps waiting")
+        self.room()
+        out1, _ = first.communicate(timeout=60)
+        out2, _ = second.communicate(timeout=60)
+        self.assertEqual((first.returncode, second.returncode), (0, 0), (seen_first + out1, seen_second + out2))
+        self.assertIn("first-ran", seen_first + out1)
+        self.assertIn("second-ran", seen_second + out2)
+        for rec in self.records():
+            self.assertGreaterEqual(rec["hold_wait_s"], 5, rec)   # the held job, and the one queued behind it
 
     def test_a_request_above_the_quotas_own_limit_fails_at_once(self):
         done = self.kgate("--wait", "600", "--cpu", "16", "--", "true", env={"FAKE_QUOTA_CPU": "12"})
@@ -5608,8 +6153,7 @@ class SshMux:
         return stub_launcher(self.tmp, "orphan_launch.py", ORPHAN_LAUNCH)
 
     def ssh_calls(self):
-        path = self.fake / "ssh-argv.jsonl"
-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(self.fake / "ssh-argv.jsonl")
 
     def control_paths(self, calls):
         return {a[1].partition("=")[2] for c in calls for a in zip(c, c[1:]) if a[0] == "-o" and a[1].startswith("ControlPath=")}
