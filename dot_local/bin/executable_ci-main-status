@@ -38,8 +38,10 @@ for a repo whose main has no required status check to verify (protected with non
 and his answer must name this PR; an ask reused for another PR, an open ask or a missing ledger refuses (exit 1, "--owner-approved ASK is
 refused: <why>"). It waives that one verdict and nothing else: a red or pending required check still exits 1 or 2 exactly as without the flag,
 and so does an unreadable state (an unknown rule type, a failed read). A waived gate prints one `WAIVED` line, exits 0 and appends one JSON line
-(at, action, gate, pr, head, ask, waived) to ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/owner-approved.jsonl (OWNER_APPROVED_LOG
-overrides it), the file `pr-body-check --owner-approved` writes to as well. Pass the same ASK to `pr-body-check OWNER/REPO N --owner-approved ASK`
+(at, action, gate, pr, head, ask, waived, outcome "waived") to ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/owner-approved.jsonl (OWNER_APPROVED_LOG
+overrides it), the file `pr-body-check --owner-approved` writes to as well. Every refusal of the flag leaves a line there too (at, action, gate, pr
+when known, ask, outcome "refused", reason): the ledger said no, the flag was used in a shape it does not take, the ledger could not run. A log
+that cannot be written is reported on stderr and never turns a refusal into a pass. Pass the same ASK to `pr-body-check OWNER/REPO N --owner-approved ASK`
 when a non-required workflow is red on the PR head; the merge is then `gh pr merge N --admin --match-head-commit SHA`.
 
 --threads REPO PR is the per-PR check the repo-wide gate cannot be: PR PR must have no unresolved review thread (playbook 580f3e02
@@ -582,20 +584,35 @@ def owner_waiver(ask, slug, pr):
     return True, out
 
 
+def log_owner_row(row):
+    """Append one JSON line to owner-approved.jsonl. Returns True when it was written; on failure says so on stderr and returns False."""
+    path = owner_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"ci-main-status: could not write {path}: {e}", file=sys.stderr)
+        return False
+    return True
+
+
+def owner_row(outcome, **fields):
+    return {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "action": "owner-approved",
+            "gate": "ci-main-status", **fields, "outcome": outcome}
+
+
+def owner_refused(ask, pr, reason):
+    """A refused --owner-approved leaves its line too (who tried which ask for which PR, and why it was refused). The caller still refuses."""
+    log_owner_row(owner_row("refused", **({"pr": pr} if pr else {}), ask=ask, reason=reason))
+
+
 def waived_none(repo, pr, sha, where, why, waiver):
     """The merge gate's one waiver: the branch was read in full and nothing requires a status check on it, and Michael's answered ask names this PR.
     Red or pending required checks never get here. Leaves one JSON line in owner-approved.jsonl (the same file pr-body-check writes)."""
     ask, text = waiver
     waived = f"no required status check ({why})"
-    row = {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "action": "owner-approved",
-           "gate": "ci-main-status", "pr": f"{repo}#{pr}", "head": sha, "ask": ask, "waived": [waived]}
-    try:
-        path = owner_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as f:
-            f.write(json.dumps(row) + "\n")
-    except OSError as e:
-        print(f"ci-main-status: could not write {owner_log_path()}: {e}", file=sys.stderr)
+    log_owner_row(owner_row("waived", pr=f"{repo}#{pr}", head=sha, ask=ask, waived=[waived]))
     return 0, [f"{repo}: WAIVED  {waived} on {where}; owner-approved: {text}"]
 
 
@@ -1499,15 +1516,20 @@ def main(argv):
     elif len(argv) == 1 and "/" in argv[0] and not tip_only:
         names = argv   # OWNER/REPO: a GitHub repo not in the table; --tip is not for these repos
     else:
+        if owner_ask is not None:
+            owner_refused(owner_ask, None, "usage: --owner-approved ASK goes with --merge-gate OWNER/REPO --pr N and nothing else")
         print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N] | --threads REPO PR  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases, budget-steward)", file=sys.stderr)
         return 1
     waiver = None
     if owner_ask is not None:
         if not (pr and merge_gate and len(names) == 1 and names[0] not in REPOS):   # only OWNER/REPO --merge-gate --pr N: a table repo has no "no required checks" gap to waive
+            owner_refused(owner_ask, f"{names[0]}#{pr}" if pr and len(names) == 1 else None,
+                          "--owner-approved ASK goes only with --merge-gate OWNER/REPO --pr N (a repo outside the table)")
             print("ci-main-status: --owner-approved ASK goes only with --merge-gate OWNER/REPO --pr N (a repo outside the table)", file=sys.stderr)
             return 1
         ok, text = owner_waiver(owner_ask, names[0], pr)
         if not ok:
+            owner_refused(owner_ask, f"{names[0]}#{pr}", text)
             print(f"{names[0]}: ERROR  --owner-approved {owner_ask} is refused: {text}")
             return 1
         waiver = (owner_ask, text)

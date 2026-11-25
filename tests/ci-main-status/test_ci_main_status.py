@@ -2026,6 +2026,9 @@ LEDGER_FAKE = textwrap.dedent('''\
         print("ledger: unknown command " + (sys.argv[1] if len(sys.argv) > 1 else ""), file=sys.stderr)
         sys.exit(1)
     ask, pr = sys.argv[2], sys.argv[3]
+    if os.environ.get("FAKE_LEDGER_SAYS"):
+        print(os.environ["FAKE_LEDGER_SAYS"], file=sys.stderr)
+        sys.exit(1)
     if os.environ.get("FAKE_LEDGER_APPROVES") == ask + " " + pr:
         print("approves-pr: ask #" + ask + " holds Michael's go-ahead for " + pr)
         sys.exit(0)
@@ -2087,6 +2090,107 @@ class OwnerApproved(AnyRepoFixture):
         self.assertEqual(len(line["waived"]), 1)
         self.assertIn("no required status check", line["waived"][0])
 
+    def test_the_waiver_line_says_it_was_waived(self):
+        self.protected_with_none()
+        self.gate()
+        (line,) = self.bypass_lines()
+        self.assertEqual(line["outcome"], "waived")
+        self.assertRegex(line["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+
+    def refused_line(self):
+        (line,) = self.bypass_lines()
+        self.assertEqual({k: line[k] for k in ("action", "gate", "outcome")},
+                         {"action": "owner-approved", "gate": "ci-main-status", "outcome": "refused"})
+        self.assertRegex(line["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+        self.assertNotIn("waived", line)
+        return line
+
+    def test_a_refused_ask_for_another_pr_leaves_a_refused_line_with_the_ledgers_reason(self):
+        self.protected_with_none()
+        self.prs["8"] = self.prs["7"]
+        self.pr_checks[self.any_repo]["8"] = []
+        rc, out = self.gate(pr="8")
+        self.assertEqual(rc, 1, out)
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#8", "12"))
+        self.assertIn(f"do not name {self.any_repo}#8", line["reason"])
+        self.assertNotIn("\n", line["reason"])
+
+    def test_each_answer_the_ledger_refuses_with_leaves_a_refused_line(self):
+        self.protected_with_none()
+        for says in ("approves-pr: ask #12 was answered by the coordinator, not by Michael.",
+                     "approves-pr: ask #12 is still open.",
+                     "approves-pr: no ask #12."):
+            with self.subTest(says=says):
+                self.bypass_log.unlink(missing_ok=True)
+                self.env["FAKE_LEDGER_SAYS"] = says + "\nsecond line"
+                rc, out = self.gate()
+                self.assertEqual(rc, 1, out)
+                line = self.refused_line()
+                self.assertEqual((line["pr"], line["ask"], line["reason"]), (f"{self.any_repo}#7", "12", says))
+
+    def test_a_ledger_that_cannot_run_or_has_no_approves_pr_leaves_a_refused_line(self):
+        self.protected_with_none()
+        missing = Path(self.tmp.name) / "no-such-ledger"
+        old_ledger = Path(self.tmp.name) / "old-ledger"
+        old_ledger.write_text("#!/bin/sh\nexit 2\n")   # exits non-zero with no message: an older coordinator
+        old_ledger.chmod(0o755)
+        for bin_, words in ((missing, "could not run"), (old_ledger, "exited 2 with no message")):
+            with self.subTest(ledger=bin_.name):
+                self.bypass_log.unlink(missing_ok=True)
+                self.env["LEDGER_BIN"] = str(bin_)
+                rc, out = self.gate()
+                self.assertEqual(rc, 1, out)
+                line = self.refused_line()
+                self.assertEqual(line["ask"], "12")
+                self.assertIn(words, line["reason"])
+
+    def test_an_ask_that_is_not_a_number_leaves_a_refused_line(self):
+        self.protected_with_none()
+        rc, out = self.gate(ask="michael")
+        self.assertEqual(rc, 1, out)
+        line = self.refused_line()
+        self.assertEqual((line["pr"], line["ask"]), (f"{self.any_repo}#7", "michael"))
+        self.assertIn("takes the id of an answered ledger ask", line["reason"])
+
+    def test_the_flag_in_a_shape_it_does_not_take_leaves_a_refused_line(self):
+        self.protected_with_none()
+        for args, pr in ((["--merge-gate", self.any_repo, "--owner-approved", "12"], None),                         # no --pr
+                         ([self.any_repo, "--pr", "7", "--owner-approved", "12"], None),                                         # no --merge-gate
+                         (["--merge-gate", "dotfiles", "--pr", "7", "--owner-approved", "12"], "dotfiles#7"),         # a table repo
+                         (["--merge-gate", self.any_repo, "--pr", "7", "--owner-approved"], None)):                   # no ask
+            with self.subTest(args=args):
+                self.bypass_log.unlink(missing_ok=True)
+                rc, out = self.status(*args)
+                self.assertEqual(rc, 1, f"{args}: {out}")
+                line = self.refused_line()
+                self.assertEqual(line.get("pr"), pr)
+                self.assertEqual(line["ask"], "12" if "12" in args else "")
+                self.assertTrue(line["reason"])
+        self.assertFalse(self.ledger_log.exists())
+
+    def test_a_refusal_whose_log_cannot_be_written_is_still_a_refusal(self):
+        self.protected_with_none()
+        blocker = Path(self.tmp.name) / "a-file"
+        blocker.write_text("")
+        self.env["OWNER_APPROVED_LOG"] = str(blocker / "owner-approved.jsonl")   # its folder is a file
+        self.prs["8"] = self.prs["7"]
+        self.pr_checks[self.any_repo]["8"] = []
+        rc, out = self.gate(pr="8")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("is refused", out)
+        self.assertNotIn("WAIVED", out)
+
+    def test_a_waiver_whose_log_cannot_be_written_says_so_on_stderr(self):
+        self.protected_with_none()
+        blocker = Path(self.tmp.name) / "a-file"
+        blocker.write_text("")
+        self.env["OWNER_APPROVED_LOG"] = str(blocker / "owner-approved.jsonl")
+        rc, out = self.gate()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WAIVED", out)
+        self.assertIn("could not write", out)
+
     def test_an_unprotected_main_passes_the_same_way(self):
         self.unprotected()
         rc, out = self.gate()
@@ -2103,7 +2207,7 @@ class OwnerApproved(AnyRepoFixture):
         self.assertEqual(rc, 1, out)
         self.assertIn(f"--owner-approved 12 is refused: approves-pr: Michael's words on ask #12 do not name {self.any_repo}#8.", out)
         self.assertNotIn("WAIVED", out)
-        self.assertEqual(self.bypass_lines(), [])
+        self.assertEqual([l["outcome"] for l in self.bypass_lines()], ["refused"])
 
     def test_an_ask_that_is_not_a_number_is_refused_without_calling_the_ledger(self):
         self.protected_with_none()
@@ -2133,7 +2237,7 @@ class OwnerApproved(AnyRepoFixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("could not run", out)
         self.assertIn("nothing was approved", out)
-        self.assertEqual(self.bypass_lines(), [])
+        self.assertEqual([l["outcome"] for l in self.bypass_lines()], ["refused"])
 
     def test_a_failing_required_check_stays_red_with_the_flag(self):
         self.pr_checks = {self.any_repo: {"7": [{"name": "tests"}, {"name": "lint"}]}}
