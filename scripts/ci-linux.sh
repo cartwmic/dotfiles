@@ -79,6 +79,7 @@ python3 scripts/ci-par.py \
   tests/session-keepalive \
   tests/mistakes-report \
   tests/le-verify-clean \
+  tests/finding-sweep \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \
