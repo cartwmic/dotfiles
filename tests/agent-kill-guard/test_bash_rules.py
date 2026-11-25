@@ -221,6 +221,15 @@ class Merge(unittest.TestCase):
         for repo in ("eval-cases", "cartwmic/eval-cases"):
             self.assertIsNone(check(f"ci-main-status --merge-gate {repo} --pr 1 && pr-body-check cartwmic/eval-cases 1 && gh pr merge 1 -R cartwmic/eval-cases --squash --match-head-commit " + "a" * 40))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate eval-cases --pr 1 && gh pr merge 1 -R cartwmic/eval-cases --squash"))
+        # An owner-approved one-time admin merge (Michael's answered ask for this PR) adds `--owner-approved ASK` to both checks; each tool asks the ledger itself, so the hook only
+        # needs to see the real gate shapes. Without the gate shapes the flag does not make a merge pass.
+        self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --squash --admin --match-head-commit " + "a" * 40))
+        self.assertIsNone(check("ci-main-status --merge-gate --owner-approved=12 --pr 5 o/r && pr-body-check o/r 5 --owner-approved=12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("pr-body-check", check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("ci-main-status", check("pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("A bare `ci-main-status`", check("ci-main-status --tip o/r --owner-approved 12 && pr-body-check o/r 5 && gh pr merge 5 -R o/r"))
+        self.assertIn("`pr-body-check` with `--body-file` is not the merge check", check("ci-main-status --merge-gate o/r && pr-body-check o/r 5 --body-file /tmp/b --owner-approved 12 && gh pr merge 5 -R o/r"))
         self.assertIn("--match-head-commit <head sha>", check("gh pr merge 12"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")

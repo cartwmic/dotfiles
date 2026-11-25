@@ -133,6 +133,7 @@ MERGE_BARE = (
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
     "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
     "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
+    "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 PR_BODY = (
@@ -375,9 +376,10 @@ def _resolve(target, cwd, home):
 
 
 def _is_merge_gate(args):
-    """True for `--merge-gate <repo>` with an optional `--pr N` (the words after ci-main-status): one repo, no `--tip`, no `--all`, no other flag."""
+    """True for `--merge-gate <repo>` with an optional `--pr N` and `--owner-approved ASK` (the words after ci-main-status): one repo, no `--tip`, no `--all`, no other flag.
+    `--owner-approved` is Michael's answered ask for the PR: the tool asks the ledger and refuses unless that ask names this PR, so the hook needs no check of its own."""
     read = normalise([("ci-main-status", "")], args)
-    if not read.has("merge-gate") or read.unknown or set(read.names()) - {"merge-gate", "pr"}:
+    if not read.has("merge-gate") or read.unknown or set(read.names()) - {"merge-gate", "pr", "owner-approved"}:
         return False
     if read.has("pr") and not (read.value("pr") or "").isdigit():
         return False
@@ -385,9 +387,9 @@ def _is_merge_gate(args):
 
 
 def _is_pr_check(args):
-    """The PR number of a real `pr-body-check <repo> <pr>` (the words after pr-body-check: two plain words, no flag), else None."""
+    """The PR number of a real `pr-body-check <repo> <pr>` (the words after pr-body-check: two plain words, and at most `--owner-approved ASK`), else None."""
     read = normalise([("pr-body-check", "")], args)
-    if not read.flags and len(read.positional) == 2 and read.positional[1].isdigit():
+    if not read.unknown and set(read.names()) <= {"owner-approved"} and len(read.positional) == 2 and read.positional[1].isdigit():
         return str(int(read.positional[1]))
     return None
 
@@ -407,7 +409,7 @@ FLAG_ROWS = {
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
     ("pr", "merge"): "admin,A:author-email=,auto,b:body=,F:body-file=,d:delete-branch,disable-auto,match-head-commit=,m:merge,r:rebase,s:squash,t:subject=,h:help,R:repo=",
     ("api", ""): "allow-escape-sequences,cache=,F:field=,H:header=,hostname=,i:include,input=,q:jq=,X:method=,paginate,p:preview=,f:raw-field=,silent,slurp,t:template=,verbose,h:help",
-    ("pr-body-check", ""): "body-file=,commits-file=,diff-file=,files-file=,pr=,repo=,base=,skip-intent-review,title=",  # a node script: long flags only (node parseArgs)
+    ("pr-body-check", ""): "body-file=,commits-file=,diff-file=,files-file=,pr=,repo=,base=,skip-intent-review,title=,owner-approved=",  # a node script: long flags only (node parseArgs)
     ("git", ""): "C:=,c:=,git-dir=,work-tree=,namespace=,super-prefix=,config-env=,exec-path?,html-path,man-path,info-path,p:paginate,P:no-pager,no-replace-objects,bare,"
                  "literal-pathspecs,glob-pathspecs,noglob-pathspecs,icase-pathspecs,no-optional-locks,no-lazy-fetch,list-cmds=,v:version,h:help",
     ("git", "merge"): "n:,stat,summary,log?,squash,commit,e:edit,cleanup=,ff,ff-only,rerere-autoupdate,verify-signatures,s:strategy=,X:strategy-option=,m:message=,F:file=,"
@@ -427,7 +429,7 @@ FLAG_ROWS = {
     ("kubectl", ""): "context=,kubeconfig=",
     ("k9s", ""): "context=,kubeconfig=",
     ("helm", ""): "kube-context=,kubeconfig=",
-    ("ci-main-status", ""): "merge-gate,pr=,tip,all",
+    ("ci-main-status", ""): "merge-gate,pr=,tip,all,owner-approved=",
     ("mktemp", ""): "p:tmpdir=,suffix=",
     ("js", ""): "C:cwd=,F:filter=,w:workspace=,prefix=,dir=",  # npm, pnpm, yarn, bun: the options before the subcommand that take a value
     # grep, rg, sed, awk, jq, yq: only the flags that take a value are listed (any other is read as one that does not), because the file reader needs to know which
