@@ -5,6 +5,7 @@ usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, ag
        ci-main-status [--tip | --merge-gate] --all
        ci-main-status --merge-gate REPO --pr N         (the fix for a red main, below; for eval-cases and budget-steward the PR being merged, below)
        ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
+       ci-main-status --merge-gate OWNER/REPO --pr N --owner-approved ASK   (Michael's answered ask for this PR; below)
        ci-main-status --threads REPO PR                (the PR's unresolved review threads, below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main stops a
@@ -30,6 +31,19 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+
+--owner-approved ASK (only with --merge-gate OWNER/REPO --pr N, a repo outside the table) is the one-time admin merge Michael has approved
+for a repo whose main has no required status check to verify (protected with none, or not protected: without the flag both exit 1,
+"nothing for this gate to verify"). It runs `ledger approves-pr ASK OWNER/REPO#N`: ask ASK must be answered by Michael himself (not an agent)
+and his answer must name this PR; an ask reused for another PR, an open ask or a missing ledger refuses (exit 1, "--owner-approved ASK is
+refused: <why>"). It waives that one verdict and nothing else: a red or pending required check still exits 1 or 2 exactly as without the flag,
+and so does an unreadable state (an unknown rule type, a failed read). A waived gate prints one `WAIVED` line, exits 0 and appends one JSON line
+(at, action, gate, pr, head, ask, waived, outcome "waived") to ${XDG_STATE_HOME:-~/.local/state}/coordinator-ci/owner-approved.jsonl (OWNER_APPROVED_LOG
+overrides it), the file `pr-body-check --owner-approved` writes to as well. Every refusal of the flag leaves a line there too (at, action, gate, pr
+when known, ask, outcome "refused", reason): the ledger said no, the flag was used in a shape it does not take, the ledger could not run, or the ledger
+approved and the gate still refused (a red or pending required check, a state it cannot read). A log
+that cannot be written is reported on stderr and never turns a refusal into a pass. Pass the same ASK to `pr-body-check OWNER/REPO N --owner-approved ASK`
+when a non-required workflow is red on the PR head; the merge is then `gh pr merge N --admin --match-head-commit SHA`.
 
 --threads REPO PR is the per-PR check the repo-wide gate cannot be: PR PR must have no unresolved review thread (playbook 580f3e02
 step 3, "resolve the threads", as a gate; the idea is poteto's watch-pr). REPO is a table name, OWNER/REPO, or a bare name taken as
@@ -177,6 +191,7 @@ import itertools
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -225,6 +240,11 @@ URGENT = False              # set by main(): --merge-gate and --tip reads are ur
 
 class Unreadable(Exception):
     """The state cannot be read: exit 1, never 0."""
+
+
+class NoRequiredChecks(Unreadable):
+    """The branch was read in full and nothing requires a status check on it (protected with no required checks, or not protected).
+    Refused like any unreadable state, unless an owner-approved ask for this PR waives exactly this (--owner-approved)."""
 
 
 class Record:
@@ -395,8 +415,8 @@ def required_checks(repo, branch, pr=None):
         return required
     if not protected:
         return set()   # row 8: proven -- nothing is required
-    raise Unreadable(f"{branch} is protected, but no required checks in protection or rulesets: "
-                     f"nothing for this gate to verify")
+    raise NoRequiredChecks(f"{branch} is protected, but no required checks in protection or rulesets: "
+                           f"nothing for this gate to verify")
 
 
 def pr_rollup(repo, pr):
@@ -488,7 +508,7 @@ def check_verdicts(repo, sha, contexts):
     return verdicts
 
 
-def check_any(repo, pr=None):
+def check_any(repo, pr=None, waiver=None):
     """One GitHub repo not in the table: the required checks on its default branch's tip, or on PR `pr`'s head with --pr.
 
     The required set is the one required_checks computes for the branch (or, with --pr, for the PR's base), and
@@ -503,11 +523,19 @@ def check_any(repo, pr=None):
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,baseRefName"])
         sha, base = pull["headRefOid"], pull["baseRefName"]
         where = f"PR #{pr} head {sha[:7]}"
-        contexts = sorted(required_checks(repo, None, pr))
+        none = None   # why nothing is required, when the branch was read in full and nothing is
+        try:
+            contexts = sorted(required_checks(repo, None, pr))
+        except NoRequiredChecks as e:
+            if waiver is None:
+                raise
+            contexts, none = [], str(e)
         extra = sorted({c["name"] for c in pr_rollup(repo, pr)} - set(contexts))
         if extra:
             raise Unreadable(f"GitHub's required checks for PR #{pr} include {', '.join(extra)}, which {base}'s "
                              f"computed required set does not; failing closed")
+        if not contexts and waiver is not None:   # empty: an unprotected branch (proven) or a protected one with no required check; red or pending required checks never get here
+            return waived_none(repo, pr, sha, where, none or f"nothing requires a status check on {base}", waiver)
     else:
         branch = gh(["api", f"repos/{repo}"])["default_branch"]
         sha = gh(["api", f"repos/{repo}/branches/{quote(branch, safe='')}"])["commit"]["sha"]
@@ -526,10 +554,73 @@ def check_any(repo, pr=None):
     return 0, [f"{repo}: GREEN  all {len(contexts)} required checks passed on {where}: {', '.join(sorted(contexts))}"]
 
 
-def describe_any(repo, pr=None):
+def owner_log_path():
+    return Path(os.environ.get("OWNER_APPROVED_LOG")
+                or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "coordinator-ci/owner-approved.jsonl")
+
+
+def ledger_bin():
+    """The ledger CLI: LEDGER_BIN, else COORDINATOR_STATE_DIR's pane-bin/ledger, else `ledger` on PATH, else the personal default."""
+    if os.environ.get("LEDGER_BIN"):
+        return os.environ["LEDGER_BIN"]
+    if os.environ.get("COORDINATOR_STATE_DIR"):
+        return str(Path(os.environ["COORDINATOR_STATE_DIR"]) / "pane-bin/ledger")
+    return shutil.which("ledger") or str(Path.home() / ".local/share/coordinator/pane-bin/ledger")
+
+
+def owner_waiver(ask, slug, pr):
+    """Ask the ledger whether answered ask `ask` holds Michael's go-ahead for PR `slug#pr` (`ledger approves-pr`; the code that decides it
+    is in the coordinator, so there is one rule for every gate). Returns (ok, first line of its answer). A ledger that cannot run, or has no
+    approves-pr, is a refusal: never a pass."""
+    if not ask.isdigit() or int(ask) < 1:
+        return False, f"--owner-approved takes the id of an answered ledger ask (a number), got {ask!r}"
+    bin_ = ledger_bin()
+    try:
+        r = subprocess.run([bin_, "approves-pr", ask, f"{slug}#{pr}"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"the ledger ({bin_}) could not run: {e}; nothing was approved"
+    out = ((r.stdout if r.returncode == 0 else (r.stderr or r.stdout)).strip().split("\n") or [""])[0]
+    if r.returncode != 0:
+        return False, out or f"the ledger ({bin_}) exited {r.returncode} with no message (is it a coordinator that has `ledger approves-pr`?); nothing was approved"
+    return True, out
+
+
+def log_owner_row(row):
+    """Append one JSON line to owner-approved.jsonl. Returns True when it was written; on failure says so on stderr and returns False."""
+    path = owner_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"ci-main-status: could not write {path}: {e}", file=sys.stderr)
+        return False
+    return True
+
+
+def owner_row(outcome, **fields):
+    return {"at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), "action": "owner-approved",
+            "gate": "ci-main-status", **fields, "outcome": outcome}
+
+
+def owner_refused(ask, pr, reason):
+    """A refused --owner-approved leaves its line too (who tried which ask for which PR, and why it was refused). The caller still refuses."""
+    log_owner_row(owner_row("refused", **({"pr": pr} if pr else {}), ask=ask, reason=reason))
+
+
+def waived_none(repo, pr, sha, where, why, waiver):
+    """The merge gate's one waiver: the branch was read in full and nothing requires a status check on it, and Michael's answered ask names this PR.
+    Red or pending required checks never get here. Leaves one JSON line in owner-approved.jsonl (the same file pr-body-check writes)."""
+    ask, text = waiver
+    waived = f"no required status check ({why})"
+    log_owner_row(owner_row("waived", pr=f"{repo}#{pr}", head=sha, ask=ask, waived=[waived]))
+    return 0, [f"{repo}: WAIVED  {waived} on {where}; owner-approved: {text}"]
+
+
+def describe_any(repo, pr=None, waiver=None):
     """Run one GitHub repo that is not in the table. A state it cannot read is one ERROR line and exit 1."""
     try:
-        return check_any(repo, pr)
+        return check_any(repo, pr, waiver)
     except Unreadable as e:
         return 1, [f"{repo}: ERROR  cannot read state: {e}"]
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
@@ -1396,6 +1487,18 @@ def main(argv):
         code, lines = check_threads(rest[0], int(rest[1]))
         print("\n".join(lines))
         return code
+    owner_ask = None
+    for k, a in enumerate(argv):   # --owner-approved ASK or --owner-approved=ASK: Michael's answered ask for this one PR waives "no required checks" and nothing else
+        if a == "--owner-approved":
+            owner_ask, width = (argv[k + 1] if k + 1 < len(argv) else ""), 2
+        elif a.startswith("--owner-approved="):
+            owner_ask, width = a.split("=", 1)[1], 1
+        else:
+            continue
+        del argv[k:k + width]
+        if owner_ask == "" or owner_ask.startswith("-"):
+            argv = []   # usage error below
+        break
     tip_only = "--tip" in argv
     merge_gate = "--merge-gate" in argv
     URGENT = tip_only or merge_gate
@@ -1419,16 +1522,33 @@ def main(argv):
     elif len(argv) == 1 and "/" in argv[0] and not tip_only:
         names = argv   # OWNER/REPO: a GitHub repo not in the table; --tip is not for these repos
     else:
+        if owner_ask is not None:
+            owner_refused(owner_ask, None, "usage: --owner-approved ASK goes with --merge-gate OWNER/REPO --pr N and nothing else")
         print(__doc__.split("\n\n")[0] + "\n\nusage: ci-main-status [--tip | --merge-gate] REPO | [--tip | --merge-gate] --all | --merge-gate REPO --pr N | [--merge-gate] OWNER/REPO [--pr N] | --threads REPO PR  (REPO: dotfiles, loop-engine, agent-kit, coordinator, homelab, amazon-itemizer, alert-steward, storycraft, retro, eval-cases, budget-steward)", file=sys.stderr)
         return 1
+    waiver = None
+    if owner_ask is not None:
+        if not (pr and merge_gate and len(names) == 1 and names[0] not in REPOS):   # only OWNER/REPO --merge-gate --pr N: a table repo has no "no required checks" gap to waive
+            owner_refused(owner_ask, f"{names[0]}#{pr}" if pr and len(names) == 1 else None,
+                          "--owner-approved ASK goes only with --merge-gate OWNER/REPO --pr N (a repo outside the table)")
+            print("ci-main-status: --owner-approved ASK goes only with --merge-gate OWNER/REPO --pr N (a repo outside the table)", file=sys.stderr)
+            return 1
+        ok, text = owner_waiver(owner_ask, names[0], pr)
+        if not ok:
+            owner_refused(owner_ask, f"{names[0]}#{pr}", text)
+            print(f"{names[0]}: ERROR  --owner-approved {owner_ask} is refused: {text}")
+            return 1
+        waiver = (owner_ask, text)
     rank = {0: 0, 2: 1, 1: 2}   # 1 beats 2 beats 0
     worst = 0
     for name in names:
         if name in REPOS:
             code, lines = describe(name, tip_only, pr, merge_gate and len(names) == 1)
         else:
-            code, lines = describe_any(name, pr)
+            code, lines = describe_any(name, pr, waiver)
         print("\n".join(lines))
+        if waiver is not None and code != 0:   # Michael's ask held, and the gate still refused (red, pending, unreadable): the try leaves its line too
+            owner_refused(waiver[0], f"{name}#{pr}", (lines[0] if lines else "").strip() or f"the gate exited {code}")
         if rank[code] > rank[worst]:
             worst = code
     # UNTESTED passes the merge gate only for the table repos (main is not red). For OWNER/REPO a pending, missing
