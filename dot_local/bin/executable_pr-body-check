@@ -8,9 +8,23 @@
 # After the body check passes on `pr-body-check REPO PR`, it also runs `ci-main-status --threads REPO PR`: no unresolved review thread may be left (playbook 580f3e02 step 3). So every merge chain
 # that runs this check runs the thread check too, and an unresolved thread is exit 1 like a broken body rule. It is not run for a body-only check (--body-file), a check made before a review round
 # (--skip-intent-review: threads are rarely there yet and a PR owes them only at merge), or the --pr/--repo/--base forms (no REPO PR pair). An unreadable thread state is also exit 1: no silent pass.
+# For a cartwmic/dotfiles PR (`cartwmic/dotfiles` or `dotfiles`), the merge form first runs `stack-map-merge-check REPO PR`: it builds the agent stack map page
+# with the PR's own files and refuses (exit 1) a PR that would break it, before any body rule is read (docs/stack-map/README.md, "Before a merge"). A missing
+# stack-map-merge-check is a failure too (exit 127), never a skip. It is not run for the same forms the thread check skips.
 # The gh calls are made by pr-body-check.ts, started below, so they inherit these. They are merge-chain reads: GH_URGENT=1 keeps the
 # gh budget guard from refusing them, and GH_CALLER names this check in the gh wrapper's log.
 export GH_URGENT=1 GH_CALLER=pr-body-check
+# The merge form is `pr-body-check REPO PR` with no --skip-intent-review or --body-file: both checks that belong to a merge (the stack map build, the thread check) run only then.
+merge_form=0
+if [ -n "${1:-}" ] && [ "${1#-}" = "$1" ]; then
+  case "${2:-}" in ''|*[!0-9]*) ;; *) merge_form=1 ;; esac
+  for arg in "$@"; do
+    case "$arg" in --skip-intent-review|--body-file) merge_form=0 ;; esac
+  done
+fi
+if [ "$merge_form" = 1 ]; then
+  case "$1" in cartwmic/dotfiles|dotfiles) stack-map-merge-check "$1" "$2" || exit $? ;; esac
+fi
 # The coordinator checkout: COORDINATOR_REPO, else line 1 of ~/.local/share/agent-harness/coordinator-instance (chezmoi renders it per profile: personal
 # ~/git/coordinator, work the work coordinator's checkout), else ~/git/coordinator. On the work profile line 2 is the work coordinator's state dir; it is used
 # only when COORDINATOR_STATE_DIR is unset and that dir holds pane-bin/ledger, so the ledger read is the work instance's, never the personal default.
@@ -30,9 +44,5 @@ if [ ! -f "$script" ]; then
   exit 2
 fi
 node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@" || exit $?
-[ -n "${1:-}" ] && [ "${1#-}" = "$1" ] || exit 0
-case "${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
-for arg in "$@"; do
-  case "$arg" in --skip-intent-review|--body-file) exit 0 ;; esac
-done
+[ "$merge_form" = 1 ] || exit 0
 exec ci-main-status --threads "$1" "$2"

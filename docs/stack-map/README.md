@@ -47,6 +47,26 @@ It exits 1, writes nothing, and prints one line per problem as `repo:path:line: 
 
 A version mismatch between pins is not a failure: the page flags it in red.
 
+## Before a merge
+
+A dotfiles PR that breaks the page build is refused at merge time. `pr-body-check cartwmic/dotfiles N` (the merge form, the second step of the chain the Bash hook requires before `gh pr merge`) first runs `stack-map-merge-check cartwmic/dotfiles N`, on the agent host. No token or secret is needed in GitHub CI.
+
+How it runs: it reads the PR's head commit with `gh pr view`, fetches it into `~/git/dotfiles` (the clone is fetched into, never checked out), fetches `origin/main` of the four clones, and builds the page in a scratch folder under `~/tmp` with the PR's head standing in for dotfiles `origin/main`, using the PR's own generator. It writes nothing to `~/.local/state/stack-map`, and removes the scratch folder.
+
+What it decides:
+
+| The PR head build | And | Result |
+|---|---|---|
+| passes | | passes, one line with the citation count |
+| fails | the same build of `origin/main` passes | refused (exit 1), with the generator's `repo:path:line: reason` lines |
+| fails | the PR changes `docs/stack-map/`, the generator or `tests/stack-map/` | refused |
+| fails | main fails too and the PR changes none of those paths | a warning, passes: some other repository moved, not this PR |
+
+It cannot check (exit 2, which also stops the chain) when `gh` or a `git fetch` fails, the PR head moved while it ran, or `~/git` lacks one of the four clones.
+
+The fix for a refusal is the one for any run that fails (the table above): correct `content.md`, the generator, or the cited code, and push. If main has already fixed the break, update the PR's branch from main first, since the check builds the PR head as it is.
+
 ## Tests
 
-`python3 -m unittest discover -s tests/stack-map -v`. They build four small scratch repositories and run the real script against them.
+
+`python3 -m unittest discover -s tests/stack-map -v`. They build four small scratch repositories and run the real script against them. The merge-time check has its own suite: `python3 -m unittest discover -s tests/stack-map-merge-check -v`.
