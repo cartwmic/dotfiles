@@ -12,7 +12,7 @@ Picture a small software factory with one front desk.
 - **The roles.** Each agent holds a seat, a role such as lead, builder or reviewer [[coordinator:docs/glossary.md:30|a role an agent session holds]]. One table says which AI model each seat runs on [[dotfiles:dot_local/share/agent-harness/canonical/instructions/profile-personal.md:11|Each agent seat has a model.]]. Every agent's first instruction names its seat and model, and the coordinator refuses to start an agent whose first instruction omits them [[coordinator:src/t3-hook/launch-check.ts:1|must have a brief whose first line names its seat and model]].
 - **The line.** A builder changes the code in its own copy of the repository and opens a pull request (a proposed change). A reviewer, a fresh agent that did not write the change, reads it and does not edit it [[dotfiles:dot_local/share/agent-harness/reviewer-brief.md:3|You review one change in fresh context. You do not edit it.]].
 - **The gate.** A merge script runs the final checks and merges only if they pass [[coordinator:scripts/merge-pr.sh:2|Merge one coordinator PR, but only past the red-main freeze]].
-- **The shipping dock.** After a batch of merges, a "main run" tests the newest commit [[coordinator:scripts/main-journeys.sh:2|The two journey receipts on the current origin/main tip]]. Only a commit that passed is deployed [[coordinator:scripts/pull-main.sh:7|The pass exists: the ref names a commit the personal main run passed]].
+- **The shipping dock.** After a batch of merges, a "main run" tests the newest commit [[coordinator:scripts/main-journeys.sh:2|The three receipts on the current origin/main tip]]. Only a commit that passed is deployed [[coordinator:scripts/pull-main.sh:7|The pass exists: the ref names a commit the personal main run passed]].
 
 Which repo holds which part:
 
@@ -40,7 +40,7 @@ The part that matters for agents is `agent-harness`, the folder that holds the a
 
 ### coordinator
 
-The coordinator is a program that runs all the time plus an agent session. The agent makes the judgments; code handles storage, delivery and the kill switch [[coordinator:README.md:9|The agent makes the judgments]]. The program is `coordinatord`, the daemon, a Node program (Node runs JavaScript outside a browser) that wires four modules together: an inbox of events, the ledger, outgoing messages (reach) and the playbook [[coordinator:README.md:9|is a Node program that wires four modules together]]. In the live T3 setup the daemon has no pane to supervise, because the coordinator is a thread in T3 itself [[coordinator:src/coordinatord/daemon.ts:1236|there is no Pi pane to supervise]]. You would see these parts:
+The coordinator is a program that runs all the time plus an agent session. The agent makes the judgments; code handles storage, delivery and the kill switch [[coordinator:README.md:9|The agent makes the judgments]]. The program is `coordinatord`, the daemon, a Node program (Node runs JavaScript outside a browser) that wires four modules together: an inbox of events, the ledger, outgoing messages (reach) and the playbook [[coordinator:README.md:9|is a Node program that wires four modules together]]. In the live T3 setup the daemon has no pane to supervise, because the coordinator is a thread in T3 itself [[coordinator:src/coordinatord/daemon.ts:1237|there is no Pi pane to supervise]]. You would see these parts:
 
 - **The coordinator itself, in "T3 mode".** On the live setup the coordinator is one Claude thread in T3, and Michael talks to it there [[coordinator:src/t3-coordinator/README.md:3|The coordinator as a Claude thread in T3 Code.]]. The older way runs it in Pi (a coding-agent program) inside Herdr (a terminal-pane manager) with Discord (a chat app); the two are either-or [[coordinator:src/t3-coordinator/README.md:5|Discord and T3 are either-or.]]. In T3 mode there is no Herdr [[coordinator:src/t3-coordinator/README.md:7|## No Herdr in t3 mode]].
 - **The ledger.** `ledger open` records an ask, `ledger bearings` lists everything open [[coordinator:README.md:75|List open asks, grants and workstreams]].
@@ -80,7 +80,7 @@ Each of Michael's machines keeps a local setting called its profile, and the pro
 7. Reviewer | A fresh session reviews the change and returns findings | dotfiles:dot_local/share/agent-harness/reviewer-brief.md
 8. Lead | Triages each finding on four tests, fixes the real ones | dotfiles:dot_local/share/agent-harness/finding-triage.md
 9. Merge gate | Runs every check on the pull request head, then merges | coordinator:scripts/merge-pr.sh
-10. Driver | Starts the main run: cluster journeys and Bookends on the new tip | coordinator:scripts/main-journeys.sh
+10. Driver | Starts the main run: cluster journeys, Bookends and the unit gate on the new tip | coordinator:scripts/main-journeys.sh
 11. Driver | Reads the result; a red main freezes further merges | coordinator:docs/red-main.md
 12. Driver | Deploys the passing commit and the daemon restarts itself | coordinator:scripts/pull-main.sh
 ```
@@ -94,7 +94,7 @@ Each of Michael's machines keeps a local setting called its profile, and the pro
 7. **Review.** The reviewer works in fresh context and does not edit [[dotfiles:dot_local/share/agent-harness/reviewer-brief.md:3|You review one change in fresh context.]].
 8. **Triage.** Whoever acts on findings runs the same four tests on each one, whoever raised it [[dotfiles:dot_local/share/agent-harness/finding-triage.md:3|runs these four tests on every finding]].
 9. **Merge gate.** The script refuses unless a review round passed on the head [[coordinator:scripts/merge-pr.sh:17|every PR is refused unless a review round passed on its head]], the kgate unit run passed on exactly that tree [[coordinator:scripts/merge-pr.sh:26|the kgate log must hold an exit-0 unit gate]], and no review thread is open [[coordinator:scripts/merge-pr.sh:21|refuses while a review thread is unresolved]]. Then it merges pinned to the head it checked [[coordinator:scripts/merge-pr.sh:25|gh pr merge --merge --match-head-commit]].
-10. **Main run.** Once per batch of merges, two receipts run on the newest tip: every journey on kgate, and Bookends [[coordinator:AGENTS.md:44|The journeys gate is two receipts, both required]]. A pass moves a marker (`refs/ci/main-pass`) to that commit [[coordinator:scripts/main-journeys.sh:16|published as the ref refs/ci/main-pass]].
+10. **Main run.** Once per batch of merges, three receipts run on the newest tip: every journey on kgate, Bookends, and the unit gate [[coordinator:scripts/main-journeys.sh:2|The three receipts on the current origin/main tip (the cluster journeys, Bookends and the unit gate)]]. A pass moves a marker (`refs/ci/main-pass`) to that commit [[coordinator:scripts/main-journeys.sh:18|published as the ref refs/ci/main-pass]].
 11. **Result.** On a fail, main is red and the merge script refuses most merges [[coordinator:docs/merging.md:15|main is red and the script refuses]].
 12. **Deploy.** `sh scripts/pull-main.sh` moves the live checkout to the passing commit and leaves a newer, untested tip alone [[coordinator:docs/deploy.md:225|the target is the commit the pass ref names, not main's tip]], and the daemon installs and restarts itself [[coordinator:docs/deploy.md:211|the daemon installs and restarts itself]].
 
@@ -143,7 +143,7 @@ The other repos ship differently. agent-kit publishes on a push to main once its
 - **state directory**: the folder where the coordinator keeps its ledger, config and generated command wrappers; `pane-bin` is the folder of those wrappers.
 - **dashboard**: the status page that shows Michael what needs him; a separate hub program makes it reachable at another address.
 - **journey**: a black-box test that drives a real public path to a finished outcome.
-- **main run**: the journey receipts, run on the main branch once per batch of merges; a red result freezes merges.
+- **main run**: the three receipts (journeys, Bookends, unit gate), run on the main branch once per batch of merges; a red result freezes merges.
 - **merge gate**: the script, `scripts/merge-pr.sh`, that runs every check and then merges.
 - **red main**: main has a failing main run, so most merges are refused until it is fixed.
 - **flake**: a test that fails at random. The merge script has a flag to merge past a named, ruled flake [[coordinator:scripts/merge-pr.sh:3|--flake-only NAME]].
