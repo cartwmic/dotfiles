@@ -607,9 +607,10 @@ def lost_message(job, start, end, restarted):
     return text
 
 
-def recover(wait=None, quiet=False):
+def recover(wait=None, quiet=False, only=None):
     """Send the wake of every job that owes one. Idempotent: a job with a delivered wake is skipped, and a lock keeps two runs apart.
-    `wait`: seconds to wait for T3 (default: the retry window). `quiet`: print nothing (a sweep runs it inside another call)."""
+    `wait`: seconds to wait for T3 (default: the retry window). `quiet`: print nothing (a sweep runs it inside another call).
+    `only`: a set of job ids, the only jobs to wake (a sweep passes the jobs it found, so jobs logged before the lock existed stay quiet)."""
     say = (lambda *_: None) if quiet else globals()["say"]
     boot = boot_id()
     if not boot:
@@ -622,7 +623,7 @@ def recover(wait=None, quiet=False):
             say("INFO", "another --recover is running")
             return 0
         jobs = read_jobs()
-        todo = sorted(((rs[0]["ts"], job, rs, kind) for job, rs in jobs.items() if (kind := owed(rs, boot))), key=lambda t: t[0])
+        todo = sorted(((rs[0]["ts"], job, rs, kind) for job, rs in jobs.items() if (only is None or job in only) and (kind := owed(rs, boot))), key=lambda t: t[0])
         deadline = time.monotonic() + (T3_RETRY[1] if wait is None else wait)  # one wait for T3 for the whole run, not one per job
         undelivered = 0
         for _, job, rs, kind in todo:
@@ -757,7 +758,7 @@ def sweep(wait=0.0):
     """End and wake every job whose watcher is gone. A watcher holds jobs/<job>.lock until it has woken, then removes it, so a lock file nobody holds is a dead watcher
     (a container restart kills the watcher with the rest: the pod's pid 1 exiting takes every process). The job's own process must be gone too, or it is left running.
     No `end` yet: write one (error "lost", exit and signal null: its status is not known). Then one did-not-finish wake is sent, trying T3 for `wait` seconds (0: once,
-    and the next sweep tries again); a recorded status is never sent as a result. A job from an earlier boot is left to --recover, which the sweep runs for it (once, quietly).
+    and the next sweep tries again); a recorded status is never sent as a result. A job from an earlier boot is left to --recover, which the sweep runs for the jobs it found and no others (once, quietly).
     A job whose sweep raises gets an `error` record and the others go on. Returns how many wakes are still owed because T3 was unreachable."""
     try:
         names = sorted(n[:-5] for n in os.listdir(os.path.join(STATE, "jobs")) if n.endswith(".lock"))
@@ -766,7 +767,7 @@ def sweep(wait=0.0):
     if not names:
         return 0
     deadline = time.monotonic() + wait
-    left, for_recover = 0, False
+    left, for_recover = 0, set()
     with open(SWEEP_LOCK, "a") as guard:
         try:
             fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -779,9 +780,10 @@ def sweep(wait=0.0):
                 record_error(job, error)
                 continue
             left += outcome == "owed"
-            for_recover = for_recover or outcome == "recover"
+            if outcome == "recover":
+                for_recover.add(job)
     if for_recover:
-        left += recover(wait, quiet=True)
+        left += recover(wait, quiet=True, only=for_recover)
     return left
 
 

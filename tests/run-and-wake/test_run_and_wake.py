@@ -1393,6 +1393,17 @@ class RunAndWake(unittest.TestCase):
         self.assertFalse((self.state / f"run-and-wake/jobs/{job}.lock").exists(), "settled by recover: the next sweep clears the lock")
 
     @LINUX_BOOT
+    def test_the_sweeps_recover_wakes_only_the_swept_jobs_and_not_jobs_from_before_the_lock_existed(self):
+        old, swept = "20261118T100000Z-0ld000", "20261115T200510Z-60a37c"
+        self.seed(old, self.ELSEWHERE, start_ts="2026-11-18T10:00:00.000Z")  # an earlier boot, no lock file: recover would wake it, the sweep must not
+        self.seed(swept, self.ELSEWHERE)
+        self.unheld_lock(swept)
+        self.sweep_by_launching()
+        self.assertEqual(len([s for s in self.t3_sends() if f"k:{swept}]" in s["stdin"]]), 1)
+        self.assertEqual([s for s in self.t3_sends() if f"k:{old}]" in s["stdin"]], [], "a job from before the lock existed is left alone")
+        self.assertEqual([r["event"] for r in self.records_of(old)], ["start"])
+
+    @LINUX_BOOT
     def test_an_earlier_boot_job_with_no_end_is_left_to_recover_and_told_the_restart_text(self):
         job = "20261115T200510Z-60a37c"  # the pod moved to another node: a new boot id, no systemd to run --recover
         self.seed(job, self.ELSEWHERE)
