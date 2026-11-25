@@ -221,20 +221,23 @@ class Process(unittest.TestCase):
         (self.state / "log.jsonl").unlink()
         self.assertIn("is missing", self.refused("no log").stderr)
 
-    # The two shapes of the bad line seen in the real log (dotfiles#774): 2,992 NUL bytes, and 1,278 NUL bytes in front of a whole record
-    # (a torn append). The record's job has no folder here and no other line names it.
+    # The two shapes of the NUL line seen in the real log (dotfiles#774): 2,992 NUL bytes and nothing else, and 1,278 NUL bytes in front of a whole record
+    # (a torn append). With the NULs taken out the first is empty and the second is the record. This one's job has no folder here and no other line names it.
     NUL_LINES = {
-        "only NULs": b"\0" * 2992,
-        "NULs then a record": b"\0" * 1278 + json.dumps({"id": jid(2, 777), "start": iso(2), "repo": "coordinator", "exit": 0}).encode(),
+        "only NULs": (b"\0" * 2992, "skipped"),
+        "NULs then a record": (b"\0" * 1278 + json.dumps({"id": jid(2, 777), "start": iso(2), "repo": "coordinator", "exit": 0}).encode(), "record kept"),
     }
 
-    def test_a_nul_line_in_the_job_log_is_skipped_and_named_and_the_dry_run_still_lists_the_same_folders(self):
+    def nul_report(self, line, outcome, n=2):
+        return "kgate prune: %s line %d holds %d NUL bytes: %s\n" % (self.state / "log.jsonl", n, line.count(b"\0"), outcome)
+
+    def test_a_nul_line_in_the_job_log_is_named_and_the_dry_run_still_lists_the_same_folders(self):
         rows = [(self.ids["logged"], 5, "coordinator"), (self.ids["other"], 2, "coordinator")]   # "other" is logged after the NUL line
         self.write_log(rows)
         clean = self.prune()
         self.assertEqual(clean.returncode, 0, clean.stderr)
         self.assertEqual(clean.stderr, "")
-        for shape, line in self.NUL_LINES.items():
+        for shape, (line, outcome) in self.NUL_LINES.items():
             with self.subTest(shape):
                 self.write_log(rows, nul_line=line)
                 before = tree_digest(self.state)
@@ -243,12 +246,12 @@ class Process(unittest.TestCase):
                 self.assertEqual(tree_digest(self.state), before)
                 self.assertEqual([l for l in r.stdout.splitlines() if l.startswith("would delete kgate-")],
                                  [l for l in clean.stdout.splitlines() if l.startswith("would delete kgate-")])
-                self.assertEqual(r.stderr, "kgate prune: skipped %s line 2: it holds %d NUL bytes\n" % (self.state / "log.jsonl", line.count(b"\0")))
+                self.assertEqual(r.stderr, self.nul_report(line, outcome))
 
     def test_delete_with_a_nul_line_removes_the_old_folder_and_keeps_what_the_log_protects(self):
         # "logged" is recorded before the NUL line, "other" after it, both inside the 7 days: both stay. "old" is in no source: it goes.
         rows = [(self.ids["logged"], 5, "coordinator"), (self.ids["other"], 2, "coordinator")]
-        for shape, line in self.NUL_LINES.items():
+        for shape, (line, _) in self.NUL_LINES.items():
             with self.subTest(shape):
                 for fid in self.ids.values():
                     if not (self.state / (fid + ".out")).exists():
@@ -260,24 +263,52 @@ class Process(unittest.TestCase):
                 self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "other", "young"})
                 self.assertIn("deleted 1 folders", r.stdout)
 
-    def test_the_run_record_names_the_skipped_line(self):
+    def nul_line_for(self, name, days):
+        """The real line's shape: 1,278 NULs, then the whole record of job `name`, started `days` ago."""
+        rec = {"id": self.ids[name], "start": iso(days), "end": iso(days), "repo": "coordinator", "exit": 0}
+        return b"\0" * 1278 + json.dumps(rec).encode()
+
+    def test_a_job_whose_only_record_is_on_a_nul_line_in_the_window_is_kept(self):
+        # "old" is older than 3 days and in no other source: only the record behind the NULs protects it.
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.nul_line_for("old", 2))
+        for args in ((), ("--delete",)):
+            r = self.prune(*args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn(self.ids["old"], r.stdout)
+            self.assertIn("would delete 1 folders" if not args else "deleted 1 folders", r.stdout)   # only "other" goes
+        self.assertEqual(self.present(), {"old", "running", "logged", "cited", "pr", "young"})
+
+    def test_a_record_behind_nul_bytes_that_is_older_than_the_window_does_not_keep_its_job(self):
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.nul_line_for("old", 12))
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "young"})
+
+    def test_the_run_record_names_the_nul_lines(self):
         rows = [(self.ids["logged"], 5, "coordinator")]
-        line = self.NUL_LINES["NULs then a record"]
-        self.write_log(rows, nul_line=line)
+        self.write_log(rows, nul_line=self.NUL_LINES["NULs then a record"][0])
         self.assertEqual(self.prune("--delete").returncode, 0)
         rec = json.loads((self.state / "prune.jsonl").read_text())
-        self.assertEqual(rec["skipped_lines"], [{"line": 2, "nul_bytes": 1278}])
-        # a run with nothing to skip says so
+        self.assertEqual(rec["nul_lines"], [{"line": 2, "nul_bytes": 1278, "record_kept": True}])
+        self.write_log(rows, nul_line=self.NUL_LINES["only NULs"][0])
+        (self.state / "prune.jsonl").unlink()
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["nul_lines"], [{"line": 2, "nul_bytes": 2992, "record_kept": False}])
+        # a run with no NUL line says so
         self.write_log(rows)
         (self.state / "prune.jsonl").unlink()
         self.assertEqual(self.prune("--delete").returncode, 0)
-        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["skipped_lines"], [])
+        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["nul_lines"], [])
 
     def test_other_text_that_does_not_parse_still_refuses_even_beside_a_nul_line(self):
-        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.NUL_LINES["only NULs"])
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.NUL_LINES["only NULs"][0])
         with open(self.state / "log.jsonl", "ab") as f:
             f.write(b"{broken\n")
         r = self.refused("a broken line beside a NUL line")
+        self.assertIn("1 lines that do not parse", r.stderr)
+
+    def test_text_that_does_not_parse_behind_nul_bytes_still_refuses(self):
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=b"\0" * 40 + b"{broken")
+        r = self.refused("NULs in front of text that is not JSON")
         self.assertIn("1 lines that do not parse", r.stderr)
 
     def test_a_running_jobs_folder_that_cannot_be_read_deletes_nothing(self):
