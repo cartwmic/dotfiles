@@ -51,6 +51,7 @@ SECTIONS = (
 )
 
 CITE = re.compile(r"\[\[([A-Za-z0-9_-]+):([^:\]|]+):(\d+)(?:-(\d+))?\|(.+?)\]\]")
+PAGE_POSITION = re.compile(r"\b(above|below|(?:further|farther|lower|higher) (?:up|down)|(?:earlier|later|elsewhere) (?:on|in) (?:the|this) (?:page|map|document))\b", re.I)  # where the page puts a section is the generator's choice, so the text must not say it; this bans the vocabulary of position, not a list of phrases
 CODE_SPAN = re.compile(r"`([^`]+)`")
 
 
@@ -628,6 +629,10 @@ class Content:
                 continue
             for m in CITE.finditer(line):
                 self._check(m, number)
+            if fenced is None:
+                where = PAGE_POSITION.search(CODE_SPAN.sub("", CITE.sub("", line)))
+                if where:
+                    self.fail.add("dotfiles", "docs/stack-map/content.md", number, "says where something sits on the page (%r), but the generator decides the page order; name the section instead (content.md line %d)" % (where.group(0), number))
 
     def render_cite(self, m):
         """A small numbered marker in the text; the sources are listed once under the section (flush_notes)."""
