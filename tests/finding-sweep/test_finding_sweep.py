@@ -59,7 +59,7 @@ class Shim(unittest.TestCase):
         other.write_text("// stand-in\n", encoding="utf-8")
         instance = self.home / ".local/share/agent-harness/coordinator-instance"
         instance.parent.mkdir(parents=True)
-        instance.write_text("%s\n\n" % other.parent.parent, encoding="utf-8")
+        instance.write_text("%s\n%s\n" % (other.parent.parent, self.dir / "work-state"), encoding="utf-8")  # line 2 is the state directory on the work profile
         result = self.run_shim("x#1", "r1.y")
         self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
         self.assertIn("arg:%s" % other, result.stdout)
@@ -78,6 +78,9 @@ class Shim(unittest.TestCase):
         self.assertIn("finding-sweep.ts is missing: pull the coordinator checkout", result.stderr)
         lines = (self.dir / "state/agent-harness/finding-sweep.jsonl").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(lines), 1)
+        again = self.run_shim("coordinator#1741", "r1.some-finding")  # a second run adds a line: the file is appended to, never rewritten
+        self.assertEqual(again.returncode, 2)
+        self.assertEqual(len((self.dir / "state/agent-harness/finding-sweep.jsonl").read_text(encoding="utf-8").splitlines()), 2)
         record = json.loads(lines[0])
         self.assertEqual((record["event"], record["script"], record["path"]), ("script-missing", "finding-sweep", str(self.script)))
 
