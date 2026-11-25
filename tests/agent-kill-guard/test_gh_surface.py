@@ -142,7 +142,8 @@ ROWS = [
     ("U7", "gh alias set pe 'pr edit' && gh pe 5 -b x", UNLISTED, gs.REFUSE),
     ("U8", "gh pe 5 -b x", UNLISTED, gs.REFUSE),
     ("U9", "gh pr merge 5 --help=false", "merge", gs.MERGE_GATE),  # `--help=false` runs the command
-    # gh keeps the LAST value of a repeated flag: `--help` then `--help=false` runs the command
+    # gh keeps the LAST value of a repeated `--help`: `--help` then `--help=false` runs the command. A `-h` anywhere is help to gh, so U9e is a help read the module
+    # refuses (the safe direction); it stays a row to pin that the module never reads help where gh runs the command.
     ("U9a", "gh pr merge 5 --help --help=false", "merge", gs.MERGE_GATE),
     ("U9b", "gh pr merge 5 --help=false --help", "", gs.ALLOW),
     ("U9c", "gh pr merge 5 --help=0", "merge", gs.MERGE_GATE),

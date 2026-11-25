@@ -97,7 +97,9 @@ HELP_TRUE = frozenset("1 t T TRUE true True".split())  # what gh's flag parser (
 
 
 def _helping(argv):
-    """gh keeps the last value of a repeated flag, so `--help --help=false` runs the command and `--help=false --help` prints help."""
+    """gh keeps the last value of a repeated `--help`, so `--help --help=false` runs the command and `--help=false --help` prints help. A `-h` anywhere prints
+    help in gh whatever else follows (`-h --help=false`, `-h=0`); this reads `-h` by the same last-value rule, so those spellings come back as the command: a refusal
+    of a help read, which fails closed. No spelling that gh runs is read as help."""
     values = [v for n, v, _ in argv.flags if n == "help"]
     return bool(values) and (values[-1] is None or values[-1] in HELP_TRUE)
 
