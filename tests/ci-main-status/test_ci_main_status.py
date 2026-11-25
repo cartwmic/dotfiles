@@ -2112,6 +2112,20 @@ class OwnerApproved(AnyRepoFixture):
         self.assertIn("takes the id of an answered ledger ask", out)
         self.assertFalse(self.ledger_log.exists())
 
+    def test_the_ledger_is_found_on_PATH_when_no_variable_names_one(self):
+        self.protected_with_none()
+        bin_dir = Path(self.tmp.name) / "path-bin"
+        bin_dir.mkdir()
+        (bin_dir / "ledger").write_text(LEDGER_FAKE)
+        (bin_dir / "ledger").chmod(0o755)
+        del self.env["LEDGER_BIN"]
+        self.env.pop("COORDINATOR_STATE_DIR", None)
+        self.env["PATH"] = f"{bin_dir}{os.pathsep}{self.env.get('PATH', '')}"
+        rc, out = self.gate()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WAIVED", out)
+        self.assertIn("approves-pr 12 " + self.any_repo + "#7", self.ledger_log.read_text())
+
     def test_a_ledger_that_cannot_run_or_has_no_approves_pr_is_a_refusal_never_a_pass(self):
         self.protected_with_none()
         self.env["LEDGER_BIN"] = str(Path(self.tmp.name) / "no-such-ledger")

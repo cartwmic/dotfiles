@@ -227,6 +227,8 @@ class Merge(unittest.TestCase):
         self.assertIsNone(check("ci-main-status --merge-gate --owner-approved=12 --pr 5 o/r && pr-body-check o/r 5 --owner-approved=12 && gh pr merge 5 -R o/r --admin"))
         self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        # The refusal of a merge with no gates tells an agent the owner-approved form exists: that is how a stuck merge finds its supported path.
+        self.assertIn("`--owner-approved ASK`", check("gh pr merge 5 -R o/r --squash"))
         self.assertIn("ci-main-status", check("pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
         self.assertIn("A bare `ci-main-status`", check("ci-main-status --tip o/r --owner-approved 12 && pr-body-check o/r 5 && gh pr merge 5 -R o/r"))
         self.assertIn("`pr-body-check` with `--body-file` is not the merge check", check("ci-main-status --merge-gate o/r && pr-body-check o/r 5 --body-file /tmp/b --owner-approved 12 && gh pr merge 5 -R o/r"))
