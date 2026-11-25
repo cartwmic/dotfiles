@@ -71,18 +71,18 @@ Each of Michael's machines keeps a local setting called its profile, and the pro
 ## How a piece of work moves
 
 ```flow
-1. Michael | Asks for something in the coordinator's T3 thread | coordinator:src/t3-coordinator/README.md
-2. Coordinator | Records the work and any decision it needs in the ledger | coordinator:src/ledger/cli.ts
-3. Coordinator | Starts or wakes a lead with a brief that names the seat and model | coordinator:src/t3-hook/launch-check.ts
-4. Lead | Plans the change; a lean-change run holds the intent and the checks | loop-engine:crates/lean-change-provider/README.md
-5. Builder | Changes the code in its own worktree and runs the unit gate on kgate | coordinator:kgate.toml
-6. Builder | Opens a pull request with a plain description and an agent record | coordinator:AGENTS.md
-7. Reviewer | A fresh session reviews the change and returns findings | dotfiles:dot_local/share/agent-harness/reviewer-brief.md
-8. Lead | Triages each finding on four tests, fixes the real ones | dotfiles:dot_local/share/agent-harness/finding-triage.md
-9. Merge gate | Runs every check on the pull request head, then merges | coordinator:scripts/merge-pr.sh
-10. Driver | Starts the main run: cluster journeys, Bookends and the unit gate on the new tip | coordinator:scripts/main-journeys.sh
-11. Driver | Reads the result; a red main freezes further merges | coordinator:docs/red-main.md
-12. Driver | Deploys the passing commit and the daemon restarts itself | coordinator:scripts/pull-main.sh
+1. Michael | Asks for something in the coordinator's T3 thread [[coordinator:src/t3-coordinator/README.md:3|Michael talks to the coordinator in its T3 thread]] | coordinator:src/t3-coordinator/README.md
+2. Coordinator | Records the work and any decision it needs in the ledger [[coordinator:README.md:43|node --experimental-strip-types src/ledger/cli.ts open]] | coordinator:src/ledger/cli.ts
+3. Coordinator | Starts or wakes a lead with a brief that names the seat and model [[coordinator:src/t3-hook/launch-check.ts:4|reads the seat table from $HOME/.claude/CLAUDE.md]] | coordinator:src/t3-hook/launch-check.ts
+4. Lead | Plans the change; a lean-change run holds the intent and the checks [[loop-engine:crates/lean-change-provider/README.md:9|The intent names an executable check for each criterion.]] | loop-engine:crates/lean-change-provider/README.md
+5. Builder | Changes the code in its own worktree and runs the unit gate on kgate [[coordinator:AGENTS.md:33|run-and-wake -- kgate -- sh -c 'npm ci && npm run typecheck && npm test']] | coordinator:kgate.toml
+6. Builder | Opens a pull request with a plain description and an agent record [[coordinator:scripts/merge-pr.sh:13|The bookkeeping a PR carries lives in its agent record]] | coordinator:AGENTS.md
+7. Reviewer | A fresh session reviews the change and returns findings [[dotfiles:dot_local/share/agent-harness/reviewer-brief.md:3|You review one change in fresh context.]] | dotfiles:dot_local/share/agent-harness/reviewer-brief.md
+8. Lead | Triages each finding on four tests, fixes the real ones [[dotfiles:dot_local/share/agent-harness/finding-triage.md:3|runs these four tests on every finding]] | dotfiles:dot_local/share/agent-harness/finding-triage.md
+9. Merge gate | Runs every check on the pull request head, then merges [[coordinator:scripts/merge-pr.sh:17|every PR is refused unless a review round passed on its head]] | coordinator:scripts/merge-pr.sh
+10. Driver | Starts the main run: cluster journeys, Bookends and the unit gate on the new tip [[coordinator:scripts/main-journeys.sh:2|The three receipts on the current origin/main tip]] | coordinator:scripts/main-journeys.sh
+11. Driver | Reads the result; a red main freezes further merges [[coordinator:docs/merging.md:15|main is red and the script refuses]] | coordinator:docs/red-main.md
+12. Driver | Deploys the passing commit and the daemon restarts itself [[coordinator:docs/deploy.md:225|the target is the commit the pass ref names, not main's tip]] | coordinator:scripts/pull-main.sh
 ```
 
 1. **Ask.** Michael writes to the coordinator in its T3 thread.

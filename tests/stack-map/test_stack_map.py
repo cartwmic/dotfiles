@@ -102,8 +102,8 @@ The **coordinator** runs `ledger open` for you.
 
 ```flow
 1. Michael | asks [[coordinator:README.md:1|# coordinator]] | coordinator:README.md
-2. Coordinator | opens a ledger ask `ledger open` | coordinator:docs
-3. Builder | opens a pull request | gh pr create
+2. Coordinator | opens a ledger ask `ledger open` [[coordinator:README.md:1|# coordinator]] | coordinator:docs
+3. Builder | opens a pull request [[coordinator:README.md:1|# coordinator]] | gh pr create
 ```
 
 ## Where do I change X?
@@ -184,7 +184,7 @@ class StackMapTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         html = page.read_text(encoding="utf-8")
         self.assertIn("facts: seats=2", done.stdout)
-        self.assertIn("citations verified: 5", done.stdout)
+        self.assertIn("citations verified: 7", done.stdout)
         for want in ("Opus 5.5 medium", "seat-reviewer", "5-minute prompt cache", "deepseek-v4-pro", "bookends-check", "no-ai-slop", "run_once_after_00_install_mise.sh", "Second step, runs later.",
                      "personal, axon-work-computer, termux", "loop-engine"):
             self.assertIn(want, html)
@@ -271,6 +271,15 @@ class StackMapTest(unittest.TestCase):
         done, _ = self.run_script()
         self.assertEqual(done.returncode, 1)
         self.assertIn("coordinator:docs/nope.md:0: flow step 2 names a path missing", done.stderr)
+
+    def test_a_flow_step_with_no_checked_citation_fails(self):
+        """A drawn step is a claim about the code; no check reads its words unless it cites a line (a diagram step once kept saying two receipts after the code said three)."""
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace(" [[coordinator:README.md:1|# coordinator]] | coordinator:docs", " | coordinator:docs", 1))
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("docs/stack-map/content.md:", done.stderr)
+        self.assertIn("flow step 2 makes a claim with no checked citation", done.stderr)
+        self.assertFalse(page.exists())
 
     def test_missing_section_fails(self):
         self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", "## Notes"))
