@@ -78,6 +78,12 @@ class ContainerHome(Scratch):
         for name in SCRIPTS:   # run_onchange: recorded after the first success, so `chezmoi verify` is clean after it
             self.assertTrue(list(ROOT.glob("run_onchange_after_" + name.removesuffix(".sh") + ".sh*")), name)
 
+    def test_the_gitea_credential_helper_is_in_the_pod_beside_the_five_scripts(self):   # the pod's git finds `git credential-gitea-op` on PATH; script 76 (kept) names it
+        self.assertIn(".local/bin/git-credential-gitea-op", self.managed)
+        helper = self.home / ".local/bin/git-credential-gitea-op"
+        self.assertTrue(os.access(helper, os.X_OK))
+        self.assertIn(".local/user_scripts/op_read_cached.sh", self.managed)   # the cache script the helper calls
+
     def test_desktop_systemd_launchd_and_unused_tool_files_are_left_out(self):
         for left in LEFT_OUT:
             self.assertFalse([p for p in self.managed if p == left or p.startswith(left + "/")], left)

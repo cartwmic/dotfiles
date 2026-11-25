@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "run_onchange_after_76_git_credential_linux.sh"
 HOSTS = ("github.com", "gist.github.com")
 PORTABLE = ["", "!gh auth git-credential"]
+GITEA = "gitea.internal.cartwmic.com"
+GITEA_PAIR = ["", "gitea-op"]
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
@@ -77,6 +79,20 @@ class GitCredentialLinux(unittest.TestCase):
         self.assertEqual(self.values("gist.github.com"), PORTABLE)
         self.assertIn("set credential.https://gist.github.com.helper", r.stdout)
         self.assertNotIn("set credential.https://github.com.helper", r.stdout)
+
+    def test_gitea_key_is_set_once_replaced_and_idempotent(self):
+        self.run_script()
+        self.assertEqual(self.values(GITEA), GITEA_PAIR)
+        self.git("config", "--global", "--replace-all", f"credential.https://{GITEA}.helper", "store")   # any other value is replaced
+        r = self.run_script()
+        self.assertEqual(self.values(GITEA), GITEA_PAIR)
+        self.assertIn(f"set credential.https://{GITEA}.helper", r.stdout)
+        self.assertNotIn("github.com", r.stdout)
+        config = next(p for p in (self.home / ".gitconfig", self.home / ".config/git/config") if p.exists())
+        before = (config.read_bytes(), config.stat().st_mtime_ns)
+        r = self.run_script()
+        self.assertEqual(r.stdout + r.stderr, "")
+        self.assertEqual((config.read_bytes(), config.stat().st_mtime_ns), before)
 
     def test_the_helper_runs_gh_by_name(self):
         self.run_script()
