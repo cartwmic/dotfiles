@@ -212,18 +212,20 @@ cat > "$spool"
 # file holds; such input is refused with its bytes unchanged. If iconv is missing, skip the guard rather than fail. iconv is
 # not enough on its own: macOS iconv accepts sequences that are not valid UTF-8 - code points above U+10FFFF (F4 90 80 80) and
 # the old 5/6-byte forms - and jq rewrites each of their bytes to U+FFFD. So a second guard, independent of iconv: jq re-emits
-# every valid string byte for byte, so its output can hold more U+FFFD characters than the input gave it (the input's own raw
-# EF BF BD plus its \ufffd escapes, which jq decodes to the raw character) only when jq invented replacements - that is, the
-# input was not valid UTF-8. Same refusal, same reason.
+# every valid string byte for byte, so its output can hold more U+FFFD characters than the input gave it - the input's own
+# U+FFFD characters, counted as raw EF BF BD sequences plus \ufffd escapes in any hex case (jq decodes both to the raw
+# character; a \\ufffd escape only errs toward more input count, the safe side) - unless jq invented replacements, which means
+# the input was not valid UTF-8. Same refusal, same reason.
 if command -v iconv >/dev/null 2>&1 && ! iconv -f UTF-8 -t UTF-8 < "$spool" >/dev/null 2>&1; then
   log_apply skipped ',"reason":"input is not valid UTF-8"'
   cat "$spool"
   exit 0
 fi
 jq -c . < "$spool" > "$spool.jq" 2>/dev/null || true
-in_fffd=$(( $(LC_ALL=C tr -d -c '\357\277\275' < "$spool" | wc -c) / 3 \
-  + $(LC_ALL=C grep -a -o -F -e '\ufffd' < "$spool" | wc -l) ))
-out_fffd=$(( $(LC_ALL=C tr -d -c '\357\277\275' < "$spool.jq" | wc -c) / 3 ))
+raw=$(printf '\357\277\275')
+in_fffd=$(( $(LC_ALL=C grep -a -o -F -e "$raw" < "$spool" | wc -l) \
+  + $(LC_ALL=C grep -a -o -i -F -e '\ufffd' < "$spool" | wc -l) ))
+out_fffd=$(LC_ALL=C grep -a -o -F -e "$raw" < "$spool.jq" | wc -l)
 if [ "$out_fffd" -gt "$in_fffd" ]; then
   log_apply skipped ',"reason":"input is not valid UTF-8"'
   cat "$spool"

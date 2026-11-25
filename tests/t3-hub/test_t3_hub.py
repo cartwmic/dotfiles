@@ -930,9 +930,11 @@ class WorkModeTest(unittest.TestCase):
             b'{"s":"\xf8\x88\x80\x80\x80","providerInstances":{}}',  # old 5-byte form
             b'{"s":"\xfc\x84\x80\x80\x80\x80","providerInstances":{}}',  # old 6-byte form
             b'{"s":"\xed\xa0\x80","providerInstances":{}}',  # lone surrogate
+            b'{"s":"\xf4\xbf\xbf\xbf","providerInstances":{}}',  # F4 BF BF BF: raw BF bytes a byte-count guard miscounts
             '{"a":{"b":1},"providerInstances":{"a":{"b":2}}}',  # a name repeated at different levels is NOT a duplicate
             '{"s":"\ufffd","providerInstances":{}}',  # a real U+FFFD, raw, is valid and must still merge
             '{"s":"\\ufffd","providerInstances":{}}',  # so is the \ufffd escape, which jq decodes to the raw character
+            '{"s":"\\u00bf","e":"\\uFFFD","providerInstances":{}}',  # other escapes and any hex case must not be refused
             '{"providerInstances": {"claudeAgent": {"config": {}}}}',
             '{"idleCompaction": "onReturn"}',
             FIXTURE, json.dumps(set_vals, indent=2), json.dumps(only_claude), json.dumps(only_coord),
@@ -973,6 +975,7 @@ collapses {"a":1,"a":2} to {"a":2,...} and the first
         with the generic reason. A name repeated at different levels is not a duplicate and is still merged."""
         for shape, reason in ((b'{"s":"\xff\xfe","providerInstances":{}}', "input is not valid UTF-8"),
                               (b'{"s":"\xf4\x90\x80\x80","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xf4\xbf\xbf\xbf","providerInstances":{}}', "input is not valid UTF-8"),
                               (b'{"s":"\xf8\x88\x80\x80\x80","providerInstances":{}}', "input is not valid UTF-8"),
                               (b'{"s":"\xed\xa0\x80","providerInstances":{}}', "input is not valid UTF-8"),
                               ('{"a":1,"a":2,"providerInstances":{}}', "input has duplicate keys"),
