@@ -407,6 +407,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/user_scripts/loop_engine_bump.py
 # The T3 pin check reads the personal coordinator's inbox and the budget-steward checkout and runs from the personal Linux schedules-check unit (docs/profiles.md).
 .local/user_scripts/t3_pin_check.py
+# The stack map generator reads origin/main of the personal checkouts (~/git/dotfiles, coordinator, agent-kit, loop-engine), which the work Mac does not keep: personal only (docs/profiles.md).
+.local/user_scripts/stack_map.py
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).
 .local/bin/coordinator
 # kgate-split serves a work queue from this host's LAN address to pods on the personal homelab cluster: personal only (docs/profiles.md).

@@ -76,6 +76,7 @@ python3 scripts/ci-par.py \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \
+  tests/stack-map \
   tests/container-mode \
   tests/design-principles \
   tests/agent-kit \
