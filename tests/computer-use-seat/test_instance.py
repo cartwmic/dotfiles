@@ -106,15 +106,15 @@ class SeatComputerInstanceTest(unittest.TestCase):
         finally:
             h.close()
 
-    def test_the_work_profile_gets_no_t3_settings_file_and_no_instance(self):
+    def test_the_work_profile_gets_only_the_restricted_t3_settings_file_and_no_instance(self):
         h = Home(profile="axon-work-computer")
         try:
-            managed = set(h.chezmoi("managed", "--include=files").split())
-            self.assertFalse([p for p in managed if p.startswith(".t3")], "the work profile has no T3 settings from this source")
-            # and if the template were rendered there, the gate keeps the instance out
-            want, owned = h.settings("darwin")
-            self.assertNotIn("seat-computer", want)
-            self.assertNotIn("seat-computer", owned)
+            managed = set(h.chezmoi("managed").split())
+            # the restricted work mode (docs/profiles.md): the settings file only, no other .t3 file
+            self.assertEqual({p for p in managed if p.startswith(".t3")}, {".t3", ".t3/userdata", ".t3/userdata/settings.json"})
+            # the work mode creates no provider instance at all, so the gate keeps seat-computer out of the code that runs
+            script = h.render("dot_t3/private_userdata/modify_settings.json.tmpl", "darwin")
+            self.assertNotIn("seat-computer", script[script.index("\nset -eu\n") + 1:], "seat-computer reached the work mode's code")
         finally:
             h.close()
 
