@@ -891,7 +891,7 @@ class WorkModeTest(unittest.TestCase):
 
     def corpus(self):
         """Input shapes: the bad ones the guards name, the ones only the post-condition can catch, and the good ones that must
-        still write."""
+        still write. Shapes may be str or bytes (the invalid-UTF-8 shape is bytes: it has no valid UTF-8 spelling)."""
         f = json.loads(FIXTURE)
         set_vals = json.loads(json.dumps(f))
         set_vals["providerInstances"]["claudeAgent"].setdefault("config", {})["autoCompactWindow"] = WINDOWS["claudeAgent"]
@@ -924,6 +924,9 @@ class WorkModeTest(unittest.TestCase):
             '{"providerInstances": {"claudeAgent": {"driver": "c", "config": []}}}',
             '{"providerInstances": {"claudeAgent": {"driver": "c", "config": "x"}}}',
             '{"a": 1} {"keep": "me"}', '{} {}', '{"a":1,"a":2}',
+            '{"x":{"a":1,"a":2},"providerInstances":{}}',  # a duplicate nested in an object
+            b'{"s":"\xff\xfe","providerInstances":{}}',  # not valid UTF-8: jq would rewrite the bytes to U+FFFD
+            '{"a":{"b":1},"providerInstances":{"a":{"b":2}}}',  # a name repeated at different levels is NOT a duplicate
             '{"providerInstances": {"claudeAgent": {"config": {}}}}',
             '{"idleCompaction": "onReturn"}',
             FIXTURE, json.dumps(set_vals, indent=2), json.dumps(only_claude), json.dumps(only_coord),
@@ -939,10 +942,11 @@ class WorkModeTest(unittest.TestCase):
             with self.subTest(shape=shape[:40]):
                 with tempfile.TemporaryDirectory() as tmp:
                     state = Path(tmp)
-                    r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=True, timeout=30,
+                    binary = isinstance(shape, bytes)
+                    r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=not binary, timeout=30,
                                        env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
                     self.assertEqual(r.returncode, 0, shape[:80])
-                    self.assertEqual(r.stderr, "", shape[:80])
+                    self.assertEqual(r.stderr, b"" if binary else "", shape[:80])
                     lines = self.logged_lines(state)
                     self.assertEqual(len(lines), 1, shape[:80])
                     record = json.loads(lines[0])
@@ -952,6 +956,36 @@ class WorkModeTest(unittest.TestCase):
                         self.assertEqual(record["action"], "proposed", shape[:80])
                         self.assertTrue(set(record["keys"]) <= self.ALLOWED_KEYS, shape[:80])
                         self.assertEqual(self.strip_allowed(json.loads(shape)), self.strip_allowed(json.loads(r.stdout)), shape[:80])
+
+    def test_the_utf8_and_duplicate_key_guards_refuse_before_the_merge(self):
+        """The two byte-level guards refuse before jq can rewrite anything: input that is not valid UTF-8 (jq would replace every
+        invalid byte with U+FFFD) and input holding duplicate keys (a write collapses {"a":1,"a":2} to {"a":2,...} and the first
+        value's bytes are gone) come back byte for byte, logged skipped with their own reason, nothing on stderr - so removing
+        either guard fails here, because the post-condition alone would pass the UTF-8 case and refuse the duplicate case only
+        with the generic reason. A name repeated at different levels is not a duplicate and is still merged."""
+        for shape, reason in ((b'{"s":"\xff\xfe","providerInstances":{}}', "input is not valid UTF-8"),
+                              ('{"a":1,"a":2,"providerInstances":{}}', "input has duplicate keys"),
+                              ('{"x":{"a":1,"a":2},"providerInstances":{}}', "input has duplicate keys"),
+                              ('{"a":[{"k":1,"k":2}],"providerInstances":{}}', "input has duplicate keys")):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                binary = isinstance(shape, bytes)
+                r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=not binary, timeout=30,
+                                   env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+                self.assertEqual(r.returncode, 0, reason)
+                self.assertEqual(r.stderr, b"" if binary else "", reason)
+                self.assertEqual(r.stdout, shape, reason)
+                record = json.loads(self.logged_lines(state)[0])
+                self.assertEqual((record["action"], record["reason"]), ("skipped", reason), reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            shape = '{"a":{"b":1},"providerInstances":{"a":{"b":2}}}'
+            r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stderr, "", r.stderr)
+            self.assertNotEqual(r.stdout, shape, "a name repeated at different levels was refused as a duplicate")
+            self.assertEqual(json.loads(self.logged_lines(state)[0])["action"], "proposed")
 
     def run_with_command(self, stdin, command, args, state, state_home=None):
         """Run the rendered script with CHEZMOI_COMMAND and CHEZMOI_ARGS set by hand, the way chezmoi sets them (CHEZMOI_ARGS holds

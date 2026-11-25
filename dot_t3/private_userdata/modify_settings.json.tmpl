@@ -120,8 +120,8 @@ set -eu
 # no usageLimitSources and no CLAUDE_CODE_FIZZY_GROVE environment entry (that is an open decision for work; docs/profiles.md).
 # It runs no restore: .t3 was never managed on this profile before this file existed, so nothing this script wrote there can
 # need undoing, and a hub leftover (a codex instance in its hub state, a displayName, a usageLimitSources entry) is not ours to
-# delete - the leftovers pass through untouched. A malformed file (not an object, a providerInstances or an instance config that
-# is not an object) is refused with the input unchanged and logged as skipped; behind the guards, a post-condition on the merged
+# delete - the leftovers pass through untouched. A malformed file (not valid UTF-8, holding duplicate keys, not an object, a
+# providerInstances or an instance config that is not an object) is refused with the input unchanged and logged as skipped; behind the guards, a post-condition on the merged
 # document makes the promise hold for every input: the result may differ from the input only at the three compaction paths (an
 # empty config the merge created for a compaction key is forgiven), and any other difference prints the input byte for byte and
 # logs skipped - so no input shape can lose data. A run that can write the target appends one JSON line - the command, the
@@ -189,8 +189,26 @@ spool=$(mktemp) || {
   cat
   exit 0
 }
-trap 'rm -f "$spool"' EXIT
+trap 'rm -f "$spool" "$spool.stream" "$spool.tostream"' EXIT
 cat > "$spool"
+
+# The input must be valid UTF-8: jq replaces every invalid byte with U+FFFD (EF BF BD), so a write would silently alter bytes the
+# file holds; such input is refused with its bytes unchanged. If iconv is missing, skip the guard rather than fail.
+if command -v iconv >/dev/null 2>&1 && ! iconv -f UTF-8 -t UTF-8 < "$spool" >/dev/null 2>&1; then
+  log_apply skipped ',"reason":"input is not valid UTF-8"'
+  cat "$spool"
+  exit 0
+fi
+# The input must not hold duplicate keys: a write collapses {"a":1,"a":2} to {"a":2,...} and the first value's bytes are gone.
+# The --stream and tostream event counts differ exactly when a key is duplicated (verified on top-level, nested and
+# array-element duplicates; equal counts for a name repeated at different levels, NaN and deep nesting). If either jq call
+# errors, the guard steps aside and lets the existing guards and the post-condition decide; stderr is discarded either way.
+if jq --stream -c . < "$spool" > "$spool.stream" 2>/dev/null && jq -c 'tostream' < "$spool" > "$spool.tostream" 2>/dev/null &&
+  [ "$(wc -l < "$spool.stream")" != "$(wc -l < "$spool.tostream")" ]; then
+  log_apply skipped ',"reason":"input has duplicate keys"'
+  cat "$spool"
+  exit 0
+fi
 
 # The file must be exactly one JSON value and it must be an object: a guard that judged only the last value has already let a
 # second value be dropped (the merge below keeps only the first), so anything else is refused with the input unchanged. Empty
