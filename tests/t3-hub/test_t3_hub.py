@@ -4,6 +4,7 @@ Everything runs through chezmoi against the real source with a minimal personal 
 chezmoi and jq but no 1Password and no network to the hub. settings.live-shape.json is a copy of the real
 ~/.t3/userdata/settings.json (three instances, no trailing newline).
 """
+import copy
 import difflib
 import json
 import re
@@ -148,7 +149,10 @@ def run_script(script, stdin, want=None, window=None, idle=None, envvars=None):
         script = "".join("IDLE_COMPACTION='%s'\n" % idle if l.startswith("IDLE_COMPACTION=") else l for l in script.splitlines(keepends=True))
     if envvars is not None:
         script = "".join("ENV_VARS='%s'\n" % envvars if l.startswith("ENV_VARS=") else l for l in script.splitlines(keepends=True))
-    r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30)
+    # A scratch HOME and state dir: a modify script that logs (the work mode) must never write to the real user's log.
+    with tempfile.TemporaryDirectory() as tmp:
+        r = subprocess.run(["sh", "-c", script], input=stdin, capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, HOME=tmp, XDG_STATE_HOME=os.path.join(tmp, "state")))
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -492,7 +496,8 @@ class ProfileGateTest(unittest.TestCase):
 
     def test_only_personal_macos_manages_the_hub_files(self):
         for profile in ("axon-work-computer", "termux"):
-            self.assertEqual(self.hub_paths(profile), set(), profile)
+            # work manages the settings file in the restricted work mode (WorkModeTest); termux gets no .t3 at all
+            self.assertEqual(self.hub_paths(profile), set() if profile == "termux" else {".t3", ".t3/userdata", ".t3/userdata/settings.json"}, profile)
         if DARWIN:
             self.assertEqual(self.hub_paths("personal"), {".t3", ".t3/userdata", ".t3/userdata/settings.json", CLAUDE_FILE})
         elif sys.platform.startswith("linux"):
@@ -621,15 +626,16 @@ class LinuxSettingsTest(unittest.TestCase):
         none = json.loads(run_script(script, json.dumps({"providerInstances": out}), want="{}"))["providerInstances"]
         self.assertEqual(list(none), list(json.loads(FIXTURE)["providerInstances"]))
 
-    def test_the_work_profile_has_no_t3_settings_file_and_no_wrapper(self):
-        """Work keeps neither the T3 settings file nor the wrapper: both are ignored on axon-work-computer, on either OS."""
+    def test_the_work_profile_keeps_the_settings_file_but_not_the_wrapper(self):
+        """Work manages the T3 settings file (the restricted work mode, WorkModeTest) on either OS, and still no wrapper."""
         for os_name in ("linux", "darwin"):
             env = Env(profile="axon-work-computer", codex_active=False)
             try:
                 managed = env.chezmoi("managed", "--override-data", json.dumps({"chezmoi": {"os": os_name}})).split()
             finally:
                 env.close()
-            self.assertEqual([m for m in managed if m.startswith(".t3") or m.endswith("pi_lead.sh")], [], os_name)
+            self.assertEqual([m for m in managed if m.endswith("pi_lead.sh")], [], os_name)
+            self.assertEqual([m for m in managed if m.startswith(".t3")], [".t3", ".t3/userdata", ".t3/userdata/settings.json"], os_name)
 
     def test_personal_linux_manages_the_wrapper_and_the_mac_does_not(self):
         for os_name, expect in (("linux", True), ("darwin", False)):
@@ -667,6 +673,635 @@ class LinuxSettingsTest(unittest.TestCase):
         self.assertEqual(out["pi"], {"driver": "pi", "enabled": False})
         self.assertNotIn("pi", json.loads(run_script(script, FIXTURE))["providerInstances"])
         self.assertNotIn("pi-lead", json.loads(run_script(script, FIXTURE))["providerInstances"])
+
+
+class WorkModeTest(unittest.TestCase):
+    """The work profile's restricted mode (docs/profiles.md): a small standalone script that owns no provider instance and writes
+    only the compaction keys.
+
+    claudeAgent and coordinator keep their autoCompactWindow (the same values as personal), each only when the instance is already
+    there, and idleCompaction goes to beforeCacheExpires. It adds no seat-*, no pi, no hub instance, no worktreesDirectory, no
+    displayName, no usageLimitSources and no CLAUDE_CODE_FIZZY_GROVE environment entry, and it runs no restore: .t3 was never
+    managed on the work profile before, so nothing this script wrote there can need undoing and hub leftovers (a codex instance in
+    its hub state, a displayName, a usageLimitSources entry) are not ours to delete - they pass through untouched. Everything else
+    passes through byte for byte. The chezmoi OS cannot be faked here, but the work mode has no OS branch, so one run covers it."""
+
+    @classmethod
+    def setUpClass(cls):
+        env = Env(profile="axon-work-computer", codex_active=False)
+        try:
+            cls.script = env.chezmoi("execute-template", stdin=(REPO / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text())
+        finally:
+            env.close()
+
+    def apply(self, stdin):
+        assert "Work mode (axon-work-computer)" in self.script and "log_apply" in self.script, "the render is not the work mode"
+        assert "WANT=" not in self.script and "worktreesDirectory = $worktrees" not in self.script, "the render is not the standalone work script"
+        return run_script(self.script, stdin)
+
+    def test_sets_exactly_the_three_keys_on_a_realistic_file(self):
+        before = json.loads(FIXTURE)
+        out = json.loads(self.apply(FIXTURE))
+        expected = json.loads(json.dumps(before))
+        expected["providerInstances"]["claudeAgent"]["config"] = dict(expected["providerInstances"]["claudeAgent"].get("config", {}), autoCompactWindow=WINDOWS["claudeAgent"])
+        expected["providerInstances"]["coordinator"]["config"] = dict(expected["providerInstances"]["coordinator"]["config"], autoCompactWindow=WINDOWS["coordinator"])
+        expected["idleCompaction"] = IDLE
+        self.assertEqual(out, expected)
+        self.assertEqual(out["providerInstances"]["claudeAgent"]["config"]["autoCompactWindow"], "300000")
+        self.assertEqual(out["providerInstances"]["coordinator"]["config"]["autoCompactWindow"], "200000")
+
+    def test_a_present_claude_agent_keeps_its_other_config_fields(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["claudeAgent"]["config"] = {"launchArgs": "--x", "binaryPath": "/b/claude"}
+        inst = json.loads(self.apply(json.dumps(data, indent=2)))["providerInstances"]
+        self.assertEqual(inst["claudeAgent"]["config"], {"launchArgs": "--x", "binaryPath": "/b/claude", "autoCompactWindow": WINDOWS["claudeAgent"]})
+
+    def test_an_absent_coordinator_is_not_created(self):
+        data = json.loads(FIXTURE)
+        del data["providerInstances"]["coordinator"]
+        out = json.loads(self.apply(json.dumps(data, indent=2)))
+        self.assertNotIn("coordinator", out["providerInstances"])
+        self.assertEqual(out["providerInstances"]["claudeAgent"]["config"]["autoCompactWindow"], WINDOWS["claudeAgent"])
+        self.assertEqual(json.loads(self.apply('{"a": 1}')), {"a": 1, "idleCompaction": IDLE})
+
+    def test_idle_compaction_on_return_becomes_before_cache_expires(self):
+        self.assertEqual(json.loads(FIXTURE)["idleCompaction"], "onReturn")
+        self.assertEqual(json.loads(self.apply(FIXTURE))["idleCompaction"], IDLE)
+        data = json.loads(FIXTURE)
+        del data["idleCompaction"]
+        self.assertEqual(json.loads(self.apply(json.dumps(data, indent=2)))["idleCompaction"], IDLE)
+
+    def test_no_seat_pi_hub_worktrees_displayname_usage_or_fizzy_keys_appear(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["seat-lead"] = {"driver": "claudeAgent", "displayName": "Claude (lead)", "enabled": True,
+                                                 "config": {"autoCompactWindow": "999999"}, "environment": [FIZZY]}
+        data["providerInstances"]["pi"] = {"driver": "pi", "enabled": False}
+        data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub", "enabled": True}}
+        del data["worktreesDirectory"]
+        text = json.dumps(data, indent=2)
+        out = json.loads(self.apply(text))
+        self.assertNotIn("worktreesDirectory", out)
+        self.assertEqual(out["providerInstances"]["seat-lead"], data["providerInstances"]["seat-lead"], "a seat instance is touched")
+        self.assertEqual(out["providerInstances"]["pi"], {"driver": "pi", "enabled": False}, "pi is touched")
+        self.assertEqual(out["usageLimitSources"], data["usageLimitSources"], "usageLimitSources is touched")
+        for i in ("claudeAgent", "coordinator"):
+            self.assertNotIn("displayName", out["providerInstances"][i])
+            self.assertNotIn("environment", out["providerInstances"][i])
+        self.assertEqual(json.dumps(out).count("CLAUDE_CODE_FIZZY_GROVE"), json.dumps(data).count("CLAUDE_CODE_FIZZY_GROVE"), "a FIZZY entry was added or removed")
+        self.assertNotIn("seat-", json.dumps({k: v for k, v in out["providerInstances"].items() if k not in data["providerInstances"]}))
+
+    def test_a_hub_leftover_file_keeps_every_leftover_and_gets_the_three_keys(self):
+        """The hub-on state: the codex instance stays EXACTLY as the input had it (no restore - the work mode never managed .t3
+        before, so the leftovers are not ours to delete), the displayNames, usageLimitSources and secretProviders entries stay,
+        and only the three compaction keys are set on top."""
+        data = json.loads(FIXTURE)
+        inst = data["providerInstances"]
+        hub_codex = {"driver": "codex", "enabled": True, "displayName": "Codex",
+                     "config": {"setupMode": "existing", "binaryPath": "/opt/codex/bin/codex", "launchArgs": "-c model_provider=cliproxy"}}
+        inst["codex"] = hub_codex
+        inst["claudeAgent"]["displayName"] = "Claude"
+        inst["coordinator"]["displayName"] = "Claude (coordinator)"
+        data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub",
+                                                      "url": "https://cliproxy.internal.cartwmic.com", "enabled": True,
+                                                      "managementKey": "cpa_x"}}
+        data["secretProviders"] = {"onepassword": {"kind": "one_password", "label": "1Password", "config": {"account": "my"}}}
+        text = json.dumps(data, indent=2)
+        out = json.loads(self.apply(text))
+        self.assertEqual(out["providerInstances"]["codex"], hub_codex, "the codex instance was touched")
+        for i in ("claudeAgent", "coordinator"):
+            self.assertEqual(out["providerInstances"][i]["displayName"], data["providerInstances"][i]["displayName"])
+        self.assertEqual(out["usageLimitSources"], data["usageLimitSources"])
+        self.assertEqual(out["secretProviders"], data["secretProviders"])
+        self.assertEqual(out["providerInstances"]["claudeAgent"]["config"]["autoCompactWindow"], WINDOWS["claudeAgent"])
+        self.assertEqual(out["providerInstances"]["coordinator"]["config"]["autoCompactWindow"], WINDOWS["coordinator"])
+        self.assertEqual(out["idleCompaction"], IDLE)
+        self.assertEqual(out["worktreesDirectory"], data["worktreesDirectory"], "worktreesDirectory is touched")
+
+    def test_a_file_without_hub_leftovers_still_changes_only_the_three_keys(self):
+        """Nothing to restore: the codex instance T3 wrote itself (setupMode managed) is left alone, and the diff is the three keys."""
+        before = json.loads(FIXTURE)
+        self.assertEqual(before["providerInstances"]["codex"], {"driver": "codex", "enabled": True, "config": {"setupMode": "managed"}})
+        out = json.loads(self.apply(FIXTURE))
+        expected = json.loads(json.dumps(before))
+        expected["providerInstances"]["claudeAgent"]["config"] = dict(expected["providerInstances"]["claudeAgent"].get("config", {}), autoCompactWindow=WINDOWS["claudeAgent"])
+        expected["providerInstances"]["coordinator"]["config"] = dict(expected["providerInstances"]["coordinator"]["config"], autoCompactWindow=WINDOWS["coordinator"])
+        expected["idleCompaction"] = IDLE
+        self.assertEqual(out, expected)
+
+    def test_the_output_stays_pretty_and_diffs_only_on_the_changed_lines(self):
+        """The work script prints jq's default pretty JSON (the form T3 writes), so over the pretty fixture the apply differs
+        from the input only on the changed lines: the idleCompaction value and the two instance blocks gaining their
+        autoCompactWindow. No line carrying any other key or value is removed or added."""
+        out = self.apply(FIXTURE)
+        r = subprocess.run(["jq", "."], input=out, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, r.stderr
+        self.assertEqual(r.stdout.rstrip("\n"), out.rstrip("\n"))  # the output is jq's own pretty form
+        diff = list(difflib.unified_diff(FIXTURE.splitlines(), out.splitlines(), lineterm=""))
+        minus = [l[1:] for l in diff if l.startswith("-") and not l.startswith("---")]
+        plus = [l[1:] for l in diff if l.startswith("+") and not l.startswith("+++")]
+        self.assertIn('  "idleCompaction": "onReturn",', minus)
+        self.assertIn('  "idleCompaction": "beforeCacheExpires",', plus)
+        self.assertIn('        "autoCompactWindow": "300000"', plus)
+        self.assertIn('        "autoCompactWindow": "200000"', plus)
+        for line in minus + plus:
+            for key in ("driver", "favorites", "worktreesDirectory", "linkedEnvironments", "sidebar",
+                        "projectSettingsFolded", "codex", "setupMode", "defaultModelSelection", "instanceId"):
+                self.assertNotIn(key, line, line)
+
+    def test_a_second_run_is_idempotent_over_a_hub_leftover_file(self):
+        data = json.loads(FIXTURE)
+        data["providerInstances"]["codex"] = {"driver": "codex", "enabled": True, "displayName": "Codex",
+                                              "config": {"setupMode": "existing", "binaryPath": "/opt/codex/bin/codex"}}
+        once = self.apply(json.dumps(data, indent=2))
+        self.assertEqual(self.apply(once), once)
+
+    def test_an_input_already_holding_the_values_prints_unchanged(self):
+        once = self.apply(FIXTURE)
+        self.assertEqual(self.apply(once), once)
+
+    def test_empty_and_non_object_input_print_unchanged(self):
+        self.assertEqual(self.apply(""), "")
+        self.assertEqual(self.apply("not json"), "not json")
+        self.assertEqual(self.apply("[]"), "[]")
+
+    def test_a_non_object_provider_instances_is_refused_unchanged(self):
+        """An array or a string where the object should be: the input passes through unchanged, so one apply cannot wipe the file."""
+        for bad in ('{"providerInstances": [1, 2], "x": 1}', '{"providerInstances": "oops", "x": 1}'):
+            self.assertEqual(self.apply(bad), bad)
+
+    def test_a_non_object_config_is_refused_unchanged(self):
+        bad = '{"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "config": "oops"}}}'
+        self.assertEqual(self.apply(bad), bad)
+
+    def test_a_multi_value_input_is_refused_unchanged(self):
+        """Two JSON values in one file: a guard that judged only the last value has already let the merge drop the first, so the
+        input is refused unless it is exactly one JSON object, and passes through byte for byte (both values kept). Empty input is
+        refused by the same guard and logged as skipped with the same reason."""
+        for bad in ('{"a": 1} {"keep": "me"}', '{} {}', '{"a": 1} {"keep": "me"}\n', '{} {}\n'):
+            self.assertEqual(self.apply(bad), bad)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            out = self.apply_logged('{"a": 1} {"keep": "me"}', state)
+            self.assertEqual(out, '{"a": 1} {"keep": "me"}')
+            record = json.loads(self.logged_lines(state)[0])
+            self.assertEqual(record["action"], "skipped")
+            self.assertEqual(record["reason"], "input is not a single JSON object")
+
+    def test_a_non_object_instance_is_refused_unchanged(self):
+        """An instance entry that is a string, null or false, or a config that is false: refused up front with a clean skip and
+        the input unchanged, not through a failing merge (apply_logged asserts nothing reaches stderr)."""
+        for bad in ('{"providerInstances": {"claudeAgent": "oops"}}',
+                    '{"providerInstances": {"claudeAgent": null}}',
+                    '{"providerInstances": {"claudeAgent": false}}',
+                    '{"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "config": false}}}'):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.apply_logged(bad, state)
+                self.assertEqual(out, bad)
+                record = json.loads(self.logged_lines(state)[0])
+                self.assertEqual(record["action"], "skipped")
+                self.assertIn(record["reason"], ("an instance is not an object", "an instance config is not an object"), bad)
+
+    ALLOWED_PATHS = [["idleCompaction"],
+                     ["providerInstances", "claudeAgent", "config", "autoCompactWindow"],
+                     ["providerInstances", "coordinator", "config", "autoCompactWindow"]]
+    ALLOWED_KEYS = {"idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"}
+
+    @classmethod
+    def strip_allowed(cls, doc):
+        """The test's own check, independent of the script's post-condition: delete the three allowed paths, then an empty config
+        object under a provider instance (the merge creates one only to hold a compaction key), and return what must be equal."""
+        doc = copy.deepcopy(doc)
+
+        def delpath(d, path):
+            if isinstance(d, dict) and path[0] in d:
+                if len(path) == 1:
+                    del d[path[0]]
+                else:
+                    delpath(d[path[0]], path[1:])
+
+        for path in cls.ALLOWED_PATHS:
+            delpath(doc, path)
+        instances = doc.get("providerInstances")
+        if isinstance(instances, dict):
+            for inst in instances.values():
+                if isinstance(inst, dict) and inst.get("config") == {}:
+                    del inst["config"]
+        return doc
+
+    def corpus(self):
+        """Input shapes: the bad ones the guards name, the ones only the post-condition can catch, and the good ones that must
+        still write. Shapes may be str or bytes (the invalid-UTF-8 shape is bytes: it has no valid UTF-8 spelling)."""
+        f = json.loads(FIXTURE)
+        set_vals = json.loads(json.dumps(f))
+        set_vals["providerInstances"]["claudeAgent"].setdefault("config", {})["autoCompactWindow"] = WINDOWS["claudeAgent"]
+        set_vals["providerInstances"]["coordinator"]["config"]["autoCompactWindow"] = WINDOWS["coordinator"]
+        set_vals["idleCompaction"] = IDLE
+        only_claude = {"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "enabled": True}}}
+        only_coord = {"providerInstances": {"coordinator": {"driver": "claudeAgent", "enabled": True, "config": {"launchArgs": "--x"}}}}
+        leftovers = json.loads(json.dumps(f))
+        leftovers["providerInstances"]["codex"] = {"driver": "codex", "displayName": "Codex (hub)", "enabled": True,
+                                                   "config": {"setupMode": "managed"}}
+        leftovers["providerInstances"]["seat-lead"] = {"driver": "claudeAgent", "displayName": "Claude (lead)", "enabled": True}
+        leftovers["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "hub", "enabled": True}}
+        deep = current = {}
+        for _ in range(300):
+            current["a"] = {}
+            current = current["a"]
+        return [
+            "", "   ", "\n", "not json", "[]", '"x"', "42", "null", "true", "{}",
+            '{"a": NaN, "keep": 1}', json.dumps(deep),
+            '{"a": "x"}\x00\n', '{"a": "x"}\x00',
+            '{"providerInstances": false}', '{"providerInstances": null}', '{"providerInstances": 0}',
+            '{"providerInstances": ""}', '{"providerInstances": []}', '{"providerInstances": "x"}', '{"providerInstances": 3.5}',
+            '{"providerInstances": {"claudeAgent": false}}', '{"providerInstances": {"claudeAgent": null}}',
+            '{"providerInstances": {"claudeAgent": 0}}', '{"providerInstances": {"claudeAgent": ""}}',
+            '{"providerInstances": {"claudeAgent": []}}', '{"providerInstances": {"claudeAgent": "x"}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": false}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": null}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": 0}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": ""}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": []}}}',
+            '{"providerInstances": {"claudeAgent": {"driver": "c", "config": "x"}}}',
+            '{"a": 1} {"keep": "me"}', '{} {}', '{"a":1,"a":2}',
+            '{"x":{"a":1,"a":2},"providerInstances":{}}',  # a duplicate nested in an object
+            b'{"s":"\xff\xfe","providerInstances":{}}',  # not valid UTF-8: jq would rewrite the bytes to U+FFFD
+            b'{"s":"\xf4\x90\x80\x80","providerInstances":{}}',  # above U+10FFFF: macOS iconv accepts it, jq still rewrites
+            b'{"s":"\xf8\x88\x80\x80\x80","providerInstances":{}}',  # old 5-byte form
+            b'{"s":"\xfc\x84\x80\x80\x80\x80","providerInstances":{}}',  # old 6-byte form
+            b'{"s":"\xed\xa0\x80","providerInstances":{}}',  # lone surrogate
+            b'{"s":"\xf4\xbf\xbf\xbf","providerInstances":{}}',  # F4 BF BF BF: raw BF bytes a byte-count guard miscounts
+            '{"a":{"b":1},"providerInstances":{"a":{"b":2}}}',  # a name repeated at different levels is NOT a duplicate
+            '{"s":"\ufffd","providerInstances":{}}',  # a real U+FFFD, raw, is valid and must still merge
+            '{"s":"\\ufffd","providerInstances":{}}',  # so is the \ufffd escape, which jq decodes to the raw character
+            '{"s":"\\u00bf","e":"\\uFFFD","providerInstances":{}}',  # other escapes and any hex case must not be refused
+            '{"providerInstances": {"claudeAgent": {"config": {}}}}',
+            '{"idleCompaction": "onReturn"}',
+            FIXTURE, json.dumps(set_vals, indent=2), json.dumps(only_claude), json.dumps(only_coord),
+            json.dumps(leftovers, indent=2),
+        ]
+
+    def test_no_input_shape_loses_data(self):
+        """Every input shape in the corpus ends in exactly one of two ways: the input comes back byte for byte with the log saying
+        skipped or unchanged, or the log says proposed and the output differs from the input only at the three allowed paths (checked
+        here by deleting those paths from both documents, independently of the script's own post-condition). Nothing reaches
+        stderr, and a proposed log names only allowed keys."""
+        for shape in self.corpus():
+            with self.subTest(shape=shape[:40]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    state = Path(tmp)
+                    binary = isinstance(shape, bytes)
+                    r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=not binary, timeout=30,
+                                       env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+                    self.assertEqual(r.returncode, 0, shape[:80])
+                    self.assertEqual(r.stderr, b"" if binary else "", shape[:80])
+                    lines = self.logged_lines(state)
+                    self.assertEqual(len(lines), 1, shape[:80])
+                    record = json.loads(lines[0])
+                    if r.stdout == shape:
+                        self.assertIn(record["action"], ("skipped", "unchanged"), shape[:80])
+                    else:
+                        self.assertEqual(record["action"], "proposed", shape[:80])
+                        self.assertTrue(set(record["keys"]) <= self.ALLOWED_KEYS, shape[:80])
+                        self.assertEqual(self.strip_allowed(json.loads(shape)), self.strip_allowed(json.loads(r.stdout)), shape[:80])
+
+    def test_the_utf8_and_duplicate_key_guards_refuse_before_the_merge(self):
+        """The two byte-level guards refuse before jq can rewrite anything: input that is not valid UTF-8 (jq would replace every
+        invalid byte with U+FFFD - including sequences macOS iconv wrongly accepts, like code points above U+10FFFF and old
+        5/6-byte forms, which is why the U+FFFD-count guard exists beside iconv) and input holding duplicate keys (a write
+collapses {"a":1,"a":2} to {"a":2,...} and the first
+        value's bytes are gone) come back byte for byte, logged skipped with their own reason, nothing on stderr - so removing
+        either guard fails here, because the post-condition alone would pass the UTF-8 case and refuse the duplicate case only
+        with the generic reason. A name repeated at different levels is not a duplicate and is still merged."""
+        for shape, reason in ((b'{"s":"\xff\xfe","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xf4\x90\x80\x80","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xf4\xbf\xbf\xbf","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xf8\x88\x80\x80\x80","providerInstances":{}}', "input is not valid UTF-8"),
+                              (b'{"s":"\xed\xa0\x80","providerInstances":{}}', "input is not valid UTF-8"),
+                              ('{"a":1,"a":2,"providerInstances":{}}', "input has duplicate keys"),
+                              ('{"x":{"a":1,"a":2},"providerInstances":{}}', "input has duplicate keys"),
+                              ('{"a":[{"k":1,"k":2}],"providerInstances":{}}', "input has duplicate keys")):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                binary = isinstance(shape, bytes)
+                r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=not binary, timeout=30,
+                                   env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+                self.assertEqual(r.returncode, 0, reason)
+                self.assertEqual(r.stderr, b"" if binary else "", reason)
+                self.assertEqual(r.stdout, shape, reason)
+                record = json.loads(self.logged_lines(state)[0])
+                self.assertEqual((record["action"], record["reason"]), ("skipped", reason), reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            shape = '{"a":{"b":1},"providerInstances":{"a":{"b":2}}}'
+            r = subprocess.run(["sh", "-c", self.script], input=shape, capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stderr, "", r.stderr)
+            self.assertNotEqual(r.stdout, shape, "a name repeated at different levels was refused as a duplicate")
+            self.assertEqual(json.loads(self.logged_lines(state)[0])["action"], "proposed")
+
+    def run_with_command(self, stdin, command, args, state, state_home=None):
+        """Run the rendered script with CHEZMOI_COMMAND and CHEZMOI_ARGS set by hand, the way chezmoi sets them (CHEZMOI_ARGS holds
+        the program name and all arguments joined by spaces), with HOME and XDG_STATE_HOME in the scratch dir."""
+        env = dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state_home or (state / "state")))
+        if command is not None:
+            env["CHEZMOI_COMMAND"] = command
+        if args is not None:
+            env["CHEZMOI_ARGS"] = args
+        return subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30, env=env)
+
+    def test_the_inverted_gate_logs_every_writing_command_and_the_word_is_proposed(self):
+        """The gate is inverted: apply, update, init and edit each log one line naming their command, with the action proposed (the
+        script cannot see whether chezmoi wrote the file); --dry-run=false logs too. A dry run in any spelling - --dry-run,
+        --dry-run=true, --dry-run=1, -n, -vn, a global -n before the subcommand, update -n - logs nothing, a -- word ends the scan
+        (apply -- -n logs), the read-only commands and a direct run log nothing, and a read-only log file or a state path that is
+        a regular file leaves stdout exact, exit 0 and nothing on stderr."""
+        for command in ("apply", "update", "init", "edit"):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.run_with_command(FIXTURE, command, "chezmoi " + command, state)
+                self.assertEqual(out.returncode, 0, command)
+                self.assertEqual(out.stderr, "", command)
+                lines = self.logged_lines(state)
+                self.assertEqual(len(lines), 1, command)
+                record = json.loads(lines[0])
+                self.assertEqual(record["command"], command, command)
+                self.assertEqual(record["action"], "proposed", command)
+        for command, args in (("apply", "chezmoi apply --dry-run=false"), ("apply", "chezmoi apply -- -n"),
+                              ("apply", "chezmoi apply -n=false"), ("apply", "chezmoi apply -j4")):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.run_with_command(FIXTURE, command, args, state)
+                self.assertEqual(out.returncode, 0, args)
+                self.assertEqual(len(self.logged_lines(state)), 1, args)
+                self.assertEqual(json.loads(self.logged_lines(state)[0])["command"], "apply", args)
+        for command, args in (("apply", "chezmoi apply --dry-run"), ("apply", "chezmoi apply --dry-run=true"),
+                              ("apply", "chezmoi apply --dry-run=1"), ("apply", "chezmoi apply -n"),
+                              ("apply", "chezmoi apply -vn"), ("apply", "chezmoi -n apply"),
+                              ("apply", "chezmoi apply -n=true"), ("apply", "chezmoi apply -n=1"),
+                              ("apply", "chezmoi apply -vn=true"),
+                              ("update", "chezmoi update -n"), ("diff", "chezmoi diff"), ("status", "chezmoi status"),
+                              ("cat", "chezmoi cat"), ("verify", "chezmoi verify"), ("dump", "chezmoi dump"),
+                              ("archive", "chezmoi archive"), ("merge", "chezmoi merge"), (None, None)):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                out = self.run_with_command(FIXTURE, command, args, state)
+                self.assertEqual(out.returncode, 0, args)
+                self.assertEqual(out.stderr, "", args)
+                self.assertEqual(json.loads(out.stdout)["idleCompaction"], IDLE, args)
+                self.assertFalse((state / "state/t3-settings/log.jsonl").exists(), args)
+        # a read-only log.jsonl: the second run's stdout is byte for byte the first output, exit 0, nothing on stderr, no new line
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            first = self.run_with_command(FIXTURE, "apply", "chezmoi apply", state).stdout
+            log = state / "state/t3-settings/log.jsonl"
+            log.chmod(0o444)
+            out = self.run_with_command(first, "apply", "chezmoi apply", state)
+            self.assertEqual(out.returncode, 0)
+            self.assertEqual(out.stderr, "")
+            self.assertEqual(out.stdout, first)
+            self.assertEqual(len(self.logged_lines(state)), 1)
+            log.chmod(0o644)
+        # a state path that is a regular file: same stdout as a control run with a writable state dir, nothing on stderr
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            control = self.run_with_command(FIXTURE, "apply", "chezmoi apply", state).stdout
+            blocked = Path(tmp) / "blocked"
+            blocked.write_text("not a directory")
+            out = self.run_with_command(FIXTURE, "apply", "chezmoi apply", state, state_home=blocked)
+            self.assertEqual(out.returncode, 0)
+            self.assertEqual(out.stderr, "")
+            self.assertEqual(out.stdout, control)
+
+    def test_the_trailing_newline_follows_the_input(self):
+        """The output ends with a newline exactly when the input does (jq . always adds one; the script re-applies the input's),
+        so changing the code to always or never add one fails here."""
+        self.assertFalse(FIXTURE.endswith("\n"))
+        self.assertFalse(self.apply(FIXTURE).endswith("\n"))
+        self.assertTrue(self.apply(FIXTURE + "\n").endswith("\n"))
+
+    def test_the_helpers_never_touch_the_real_home_log(self):
+        """run_script and apply_logged run with a scratch HOME and state dir: a test run neither creates nor appends to the real
+        user's apply log."""
+        real_log = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")) / "t3-settings" / "log.jsonl"
+        before = real_log.read_text() if real_log.exists() else ""
+        self.apply_logged(FIXTURE, Path(tempfile.mkdtemp()))
+        run_script(self.script, FIXTURE)
+        after = real_log.read_text() if real_log.exists() else ""
+        self.assertEqual(before, after)
+
+    def test_the_corpus_would_catch_a_broken_post_condition(self):
+        """Mutation check that test_no_input_shape_loses_data exercises the post-condition: with the post-condition's skip forced
+        off (the simplest honest mutant - `if false; then` in place of its ok test), a shape the guards let through but the merge
+        corrupts (a NaN value, which jq reprints as null) reaches the output changed, and the corpus check - output equal to the
+        input once the allowed paths are deleted from both documents - fails on it."""
+        mutant = self.script.replace('if [ "$ok" != "true" ]; then', 'if false; then')
+        self.assertNotEqual(mutant, self.script, "the post-condition's ok test was not found")
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            r = subprocess.run(["sh", "-c", mutant], input='{"a": NaN, "keep": 1}', capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(r.stdout, '{"a": NaN, "keep": 1}', "the mutant printed the input unchanged")
+            with self.assertRaises(AssertionError):
+                self.assertEqual(self.strip_allowed(json.loads('{"a": NaN, "keep": 1}')),
+                                 self.strip_allowed(json.loads(r.stdout)), "the corpus check passed on a corrupted output")
+
+        # A second injected fault: the merge itself deletes a non-allowed key. With the post-condition intact the script refuses
+        # the wrong merge (output byte for byte, logged skipped); with the post-condition also forced off the corruption reaches
+        # stdout, and the corpus check fails on it.
+        wrong_merge = self.script.replace("  | $new, $log'", "  | ($new | del(.theme)), $log'")
+        self.assertNotEqual(wrong_merge, self.script, "the merge's emit line was not found")
+        for script, expect_input_back in ((wrong_merge, True), (wrong_merge.replace('if [ "$ok" != "true" ]; then', 'if false; then'), False)):
+            with tempfile.TemporaryDirectory() as tmp:
+                state = Path(tmp)
+                r = subprocess.run(["sh", "-c", script], input='{"theme": "dark", "keep": 1}', capture_output=True, text=True,
+                                   timeout=30,
+                                   env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"), CHEZMOI_COMMAND="apply"))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(r.stderr, "", r.stderr)
+                if expect_input_back:
+                    self.assertEqual(r.stdout, '{"theme": "dark", "keep": 1}', "the post-condition did not refuse the wrong merge")
+                    self.assertEqual(json.loads(self.logged_lines(state)[0])["action"], "skipped")
+                else:
+                    self.assertNotEqual(r.stdout, '{"theme": "dark", "keep": 1}', "the corruption did not reach stdout")
+                    with self.assertRaises(AssertionError):
+                        self.assertEqual(self.strip_allowed(json.loads('{"theme": "dark", "keep": 1}')),
+                                         self.strip_allowed(json.loads(r.stdout)), "the corpus check passed on a corrupted output")
+
+    def test_the_work_literals_equal_the_personal_ones(self):
+        """The work branch duplicates the personal body's two literals (the personal body must stay byte for byte what main has,
+        so the work branch cannot read the values from there); this test keeps the copies equal."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            personal = self.render_personal(REPO, "darwin", home)
+        for name in ("AUTO_COMPACT_WINDOWS=", "IDLE_COMPACTION="):
+            w = [line for line in self.script.splitlines() if line.startswith(name)]
+            p = [line for line in personal.splitlines() if line.startswith(name)]
+            self.assertEqual(len(w), 1, name)
+            self.assertEqual(len(p), 1, name)
+            self.assertEqual(w[0], p[0], name)
+
+    def apply_logged(self, stdin, state):
+        """Run the rendered script as a real apply (CHEZMOI_COMMAND=apply, as chezmoi sets it) with HOME and XDG_STATE_HOME in the
+        scratch dir, so the log line lands there. No path may print to stderr: every refusal happens up front, before the merge
+        can fail."""
+        r = subprocess.run(["sh", "-c", self.script], input=stdin, capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, HOME=str(state), XDG_STATE_HOME=str(state / "state"),
+                                    CHEZMOI_COMMAND="apply", CHEZMOI_ARGS="chezmoi apply"))
+        assert r.returncode == 0, r.stderr
+        assert r.stderr == "", r.stderr
+        return r.stdout
+
+    # Sentinels planted in an input file: file content that must never reach the log, whether the merge keeps it or deletes it.
+    SENTINELS = ("sentinel-display-name", "https://sentinel.example/url", "sentinel-account", "cpa_sentinel-key", "sentinel-launch-arg")
+
+    def logged_lines(self, state):
+        return (state / "state/t3-settings/log.jsonl").read_text().splitlines()
+
+    def test_the_apply_leaves_one_json_log_line_with_keys_and_values_only(self):
+        """Design principle 14: one line per run - proposed with the compaction keys that changed and their new values, skipped with a
+        reason - and no file content in it: sentinels planted in the input (a kept displayName, a kept usage source with its URL, a
+        kept 1Password account, a management key, a launchArgs value) appear nowhere, and no removed: or restored: key is ever
+        named because the work mode removes and restores nothing. A second run of the same input logs unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            data = json.loads(FIXTURE)
+            data["providerInstances"]["claudeAgent"]["displayName"] = "sentinel-display-name"
+            data["providerInstances"]["claudeAgent"]["config"] = {"launchArgs": "sentinel-launch-arg"}
+            data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub",
+                                                          "url": "https://cliproxy.internal.cartwmic.com", "enabled": True,
+                                                          "managementKey": "cpa_sentinel-key"},
+                                          "sentinel-hub": {"kind": "cliproxy", "label": "sentinel", "enabled": True,
+                                                           "url": "https://sentinel.example/url"}}
+            data["secretProviders"] = {"onepassword": {"kind": "one_password", "label": "1Password",
+                                                       "config": {"account": "sentinel-account"}}}
+            out = self.apply_logged(json.dumps(data, indent=2), state)
+            lines = self.logged_lines(state)
+            self.assertEqual(len(lines), 1)
+            record = json.loads(lines[0])
+            self.assertEqual(record["mode"], "work")
+            self.assertEqual(record["command"], "apply")
+            self.assertEqual(record["action"], "proposed")
+            self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
+            self.assertEqual(record["values"], {"idleCompaction": IDLE,
+                                                "claudeAgent.autoCompactWindow": WINDOWS["claudeAgent"],
+                                                "coordinator.autoCompactWindow": WINDOWS["coordinator"]})
+            self.assertIn("utc", record)
+            for sentinel in self.SENTINELS:
+                for line in lines:
+                    self.assertNotIn(sentinel, line)
+            self.apply_logged('{"providerInstances": [1]}', state)
+            skipped = json.loads(self.logged_lines(state)[1])
+            self.assertEqual((skipped["action"], skipped["reason"]), ("skipped", "providerInstances is not an object"))
+            self.apply_logged(out, state)  # the first output already holds the values
+            self.assertEqual(json.loads(self.logged_lines(state)[2])["action"], "unchanged")
+
+    def test_the_log_names_only_the_compaction_keys_when_hub_leftovers_are_present(self):
+        """A hub-leftover file: the leftovers are kept, so the log names the three compaction keys and nothing else - no
+        removed:displayName, no removed:usageLimitSources, no restored:codex."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            data = json.loads(FIXTURE)
+            inst = data["providerInstances"]
+            inst["codex"] = {"driver": "codex", "enabled": True, "displayName": "Codex",
+                             "config": {"setupMode": "existing", "binaryPath": "/opt/codex/bin/codex"}}
+            inst["claudeAgent"]["displayName"] = "Claude"
+            data["usageLimitSources"] = {"cliproxy-hub": {"kind": "cliproxy", "label": "CLIProxy hub", "enabled": True}}
+            self.apply_logged(json.dumps(data, indent=2), state)
+            lines = self.logged_lines(state)
+            self.assertEqual(len(lines), 1)
+            record = json.loads(lines[0])
+            self.assertEqual(record["action"], "proposed")
+            self.assertEqual(record["keys"], ["idleCompaction", "claudeAgent.autoCompactWindow", "coordinator.autoCompactWindow"])
+            self.assertEqual(record["values"], {"idleCompaction": IDLE,
+                                                "claudeAgent.autoCompactWindow": WINDOWS["claudeAgent"],
+                                                "coordinator.autoCompactWindow": WINDOWS["coordinator"]})
+            for name in ("removed:", "restored:", "Codex", "cliproxy"):
+                self.assertNotIn(name, lines[0])
+
+
+    def render_personal(self, source, os_name, home):
+        """Render the template from `source` for the personal profile with the hub off, pretending to be os_name."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "c.yaml"
+            cfg.write_text("""data:
+  profile: personal
+  hub:
+    enabled: false
+""")
+            r = subprocess.run(["chezmoi", "--source", str(source), "--config", str(cfg), "--config-format", "yaml",
+                                "--destination", str(home), "execute-template", "--override-data",
+                                json.dumps({"chezmoi": {"os": os_name}})],
+                               input=(Path(source) / "dot_t3/private_userdata/modify_settings.json.tmpl").read_text(),
+                               capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=str(home)))
+            assert r.returncode == 0, r.stderr
+            return r.stdout
+
+    def merge_base_source(self):
+        """A scratch copy of origin/main's source tree, for rendering the merge-base template. Skips when origin/main is absent."""
+        r = subprocess.run(["git", "rev-parse", "--verify", "origin/main"], cwd=REPO, capture_output=True)
+        if r.returncode:
+            self.skipTest("origin/main is not available")
+        base = Path(tempfile.mkdtemp()) / "base"
+        base.mkdir()
+        subprocess.run("git -C " + str(REPO) + " archive origin/main | tar -x -C " + str(base), shell=True, check=True)
+        self.addCleanup(shutil.rmtree, base.parent, ignore_errors=True)
+        return base
+
+    def run_personal_over_malformed(self, script, bad='{"usageLimitSources": "x"}'):
+        """Run a personal script over a malformed section and return the result."""
+        return subprocess.run(["sh", "-c", script], input=bad, capture_output=True, text=True,
+                              timeout=30, env=dict(os.environ, HOME="/nonexistent-home-for-test"))
+
+    def test_the_personal_renders_match_the_merge_base(self):
+        """The personal script is untouched by this PR: from `set -eu` on (the header comments above it may change), the personal
+        macOS and Linux renders are byte-identical to a render of origin/main's template, and a personal run over a malformed
+        usageLimitSources prints the same stdout and return code as the merge base."""
+        base = self.merge_base_source()
+        for os_name in ("darwin", "linux"):
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                home.mkdir()
+                head = self.render_personal(REPO, os_name, home)
+                base_script = self.render_personal(base, os_name, home)
+            self.assertIn("WANT=", head, os_name)  # sanity: this is the unrestricted personal script
+            self.assertNotIn("Work mode (axon-work-computer)", head, os_name)
+            marker = "\nset -eu\n"
+            self.assertEqual(head[head.index(marker) + 1:], base_script[base_script.index(marker) + 1:], os_name)
+            r = self.run_personal_over_malformed(head)
+            base_r = self.run_personal_over_malformed(base_script)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (base_r.returncode, base_r.stdout, base_r.stderr), os_name)
+
+    def test_the_personal_stderr_matches_the_merge_base_on_a_malformed_section(self):
+        """The personal script over a malformed section prints exactly what the merge base printed: over a bad usageLimitSources
+        both run to completion with nothing on stderr, and over a string providerInstances both fail with the same jq error."""
+        base = self.merge_base_source()
+        for os_name in ("darwin", "linux"):
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                home.mkdir()
+                for bad in ('{"usageLimitSources": "x"}', '{"providerInstances": "x"}'):
+                    outs = [self.run_personal_over_malformed(self.render_personal(source, os_name, home), bad) for source in (REPO, base)]
+                    self.assertEqual((outs[0].returncode, outs[0].stdout, outs[0].stderr),
+                                     (outs[1].returncode, outs[1].stdout, outs[1].stderr), os_name)
+                r = self.run_personal_over_malformed(self.render_personal(REPO, os_name, home), '{"providerInstances": "x"}')
+                self.assertIn("jq: error", r.stderr, os_name)
+
+    def test_the_ignore_list_for_work_vs_personal(self):
+        """Work manages .t3 (the settings file) but not the hub's Claude settings file; personal macOS manages both (the hub's
+        Claude settings file is gated to macOS, so personal Linux manages only .t3); termux neither."""
+        for profile, expect_t3, expect_claude in (("axon-work-computer", True, False), ("personal", True, DARWIN), ("termux", False, False)):
+            env = Env(profile=profile, codex_active=False)
+            try:
+                managed = set(env.chezmoi("managed").split())
+            finally:
+                env.close()
+            t3 = {m for m in managed if m == ".t3" or m.startswith(".t3/")}
+            self.assertEqual(bool(t3), expect_t3, profile)
+            self.assertEqual((CLAUDE_FILE in managed), expect_claude, profile)
 
 
 if __name__ == "__main__":
