@@ -95,17 +95,46 @@ ROWS = [
     ("G1", graphql('mutation M{updatePullRequest(input:{pullRequestId:"X",body:"x"}){clientMutationId}}'), "title body", gs.REFUSE),
     # issues
     ("I1", "gh issue create -t T -b x", NEW_ISSUE, gs.ISSUE_OPEN),
-    ("I2", "gh issue edit 5 -b x", "body", gs.ALLOW),  # until issue-open can edit: no checker exists
-    ("I3", "gh issue edit 5 -F " + F, "body", gs.ALLOW),
-    ("I4", "gh issue edit 5 -t T", "title", gs.ALLOW),
+    ("I2", "gh issue edit 5 -b x", "body", gs.REFUSE),  # gh sends updatePullRequest for a PR number: the hook cannot tell, and no checked route to an issue's text exists yet
+    ("I3", "gh issue edit 5 -F " + F, "body", gs.REFUSE),
+    ("I4", "gh issue edit 5 -t T", "title", gs.REFUSE),
     ("I5", "gh issue comment 5 -b x", "comment", gs.ALLOW),
     ("I6", "gh issue close 5", "other", gs.ALLOW),
     ("I7", "gh api repos/o/r/issues -f title=t -f body=x", NEW_ISSUE, gs.ISSUE_OPEN),
     ("I8", graphql('mutation{createIssue(input:{repositoryId:"R",title:"t"}){clientMutationId}}'), NEW_ISSUE, gs.ISSUE_OPEN),
-    ("I9", "gh issue -R o/r edit 5 -b x", "body", gs.ALLOW),
+    ("I9", "gh issue -R o/r edit 5 -b x", "body", gs.REFUSE),
     ("I11", "gh api -X PATCH repos/o/r/issues/5 --input " + F, "title body", gs.REFUSE),
     ("I12", graphql('mutation{updateIssue(input:{id:"X",body:"x"}){clientMutationId}}'), "title body", gs.REFUSE),
     ("I13", "gh issue edit 5 --newflag x", UNLISTED, gs.REFUSE),
+    # `gh issue edit`: text in any spelling is refused, whatever the number; only the label, assignee, milestone, project and link flags pass
+    ("IE1", "gh issue edit 5 -tT", "title", gs.REFUSE),
+    ("IE2", "gh issue edit 5 --title=T", "title", gs.REFUSE),
+    ("IE3", "gh issue edit 5 --title T", "title", gs.REFUSE),
+    ("IE4", "gh issue edit 5 --body=x", "body", gs.REFUSE),
+    ("IE5", "gh issue edit 5 -bx", "body", gs.REFUSE),
+    ("IE6", "gh issue edit 5 --body-file=f", "body", gs.REFUSE),
+    ("IE7", "gh issue edit 5 -F -", "body", gs.REFUSE),
+    ("IE8", "gh issue edit 5 --attach p.png", "body", gs.REFUSE),
+    ("IE9", "gh issue edit 5 --attach=p.png", "body", gs.REFUSE),
+    ("IE10", "gh -R o/r issue edit 5 -b x", "body", gs.REFUSE),
+    ("IE11", "gh issue edit 5 6 -t T", "title", gs.REFUSE),
+    ("IE12", "gh issue edit 5 --add-label x -b y", "other body", gs.REFUSE),  # one text flag refuses the whole command
+    ("IE13", "gh issue edit 5 --title T --body-file " + F, "title body", gs.REFUSE),
+    ("IE14", "gh issue edit https://github.com/o/r/pull/5 -b x", "body", gs.REFUSE),
+    ("IE15", "gh issue edit 5 -b x --help --help=false", "body", gs.REFUSE),  # the last --help is false: the command runs
+    ("IE16", "env gh issue edit 5 -b x", "body", gs.REFUSE),
+    ("IE17", "bash -c 'gh issue edit 5 -b x'", "body", gs.REFUSE),
+    ("IE18", "echo 5 | xargs gh issue edit -b x", "body", gs.REFUSE),
+    ("IE19", "gh issue ed 5 -b x", UNLISTED, gs.REFUSE),
+    ("IE20", "gh issue edit 5 --add-reviewer r", UNLISTED, gs.REFUSE),  # a pr edit flag, which gh issue edit does not have
+    ("IE21", "gh issue edit 5 --add-label x --add-assignee a -m v --add-project p", "other", gs.ALLOW),
+    ("IE22", "gh issue edit 5 -R o/r --remove-label x --remove-assignee a --remove-milestone --remove-project p", "other", gs.ALLOW),
+    ("IE23", "gh issue edit 5 --parent 7 --add-sub-issue 8 --add-blocked-by 9 --type bug", "other", gs.ALLOW),
+    ("IE24", "gh issue edit 888", "", gs.ALLOW),  # no flags: gh asks on a terminal, and an agent shell has none
+    ("IE25", "gh issue edit 5 -- -t x", "", gs.ALLOW),  # after `--` the words are operands, not flags
+    ("IE26", "gh issue edit 5 -t x --help", "", gs.ALLOW),  # a help read
+    ("IE27", "gh issue edit 5 -h", "", gs.ALLOW),
+    ("IE28", "gh pr edit 5 --add-label x --add-reviewer r --base main", "other", gs.ALLOW),
     ("I14", "gh issue delete 5", "other", gs.REFUSE),
     # comments and reviews: no check exists for them, and the review skills post them
     ("C1", "gh pr comment 5 -b x", "comment", gs.ALLOW),
@@ -192,9 +221,9 @@ ROWS = [
 ]
 
 # The rows the hook let through before gh_surface (owed #4353): none may be ALLOW, and each is a row the allow-everything stub gets wrong.
-HOLES = {"U9a", "U9e", "U9g", "U9j", "U9k", "M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
+HOLES = {"I2", "I3", "I4", "I9", "IE1", "IE2", "IE3", "IE4", "IE5", "IE6", "IE7", "IE8", "IE9", "IE10", "IE11", "IE12", "IE13", "IE14", "IE15", "IE16", "IE17", "IE18", "U9a", "U9e", "U9g", "U9j", "U9k", "M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
 # The rows that must stay allowed, whatever else changes: the sanctioned writers and the commands the review skills run.
-STAY_ALLOWED = {"P6", "P7", "P8", "S1", "S2", "S3", "S4", "S6", "B6", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "I2", "I3", "I4", "I5", "I6", "O12", "O13"}
+STAY_ALLOWED = {"P6", "P7", "P8", "S1", "S2", "S3", "S4", "S6", "B6", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "I5", "I6", "IE21", "IE22", "IE23", "IE24", "IE25", "IE26", "IE27", "IE28", "O12", "O13"}
 
 
 def classify(command, surface=gs.surface):
@@ -298,6 +327,73 @@ class Reader(unittest.TestCase):
                 self.assertIsNone(gs.mutation_fields(text))
 
 
+def verdict_of(*words):
+    return gs.surface(bash_rules.gh_command(list(words)))
+
+
+class EditFlags(unittest.TestCase):
+    """`gh issue edit` and `gh pr edit` read every flag from one table (EDIT_FLAGS), and the table follows the flags the hook's FLAG_ROWS name."""
+
+    @staticmethod
+    def long_names(*keys):
+        return set(bash_rules._table(*keys)[0]) - gs.EDIT_IGNORED
+
+    def test_edit_flags_cover_the_flag_rows(self):
+        """A flag added to either edit row and not to the table fails here, instead of passing as a no-effect flag."""
+        self.assertEqual(set(gs.EDIT_FLAGS), self.long_names(("issue", "edit"), ("pr", "edit")))
+
+    def test_a_flag_the_table_lacks_is_refused_not_passed(self):
+        """Every flag of both rows is listed; one that is dropped from the table comes back unlisted (the check can fail)."""
+        smaller = {k: v for k, v in gs.EDIT_FLAGS.items() if k != "add-label"}
+        original = gs.EDIT_FLAGS
+        try:
+            gs.EDIT_FLAGS = smaller
+            got = verdict_of("issue", "edit", "5", "--add-label", "x")
+        finally:
+            gs.EDIT_FLAGS = original
+        self.assertEqual((got.verdict, got.listed), (gs.REFUSE, False))
+
+    def test_the_report_names_each_flag_once_with_its_verdict(self):
+        lines = edit_flags_report()
+        self.assertEqual(sorted(line.split()[0] for line in lines), sorted("--" + k for k in gs.EDIT_FLAGS))
+        by_flag = {line.split()[0]: line.split() for line in lines}
+        self.assertEqual(by_flag["--body"][2:], ["refuse", "pr-body"])
+        self.assertEqual(by_flag["--add-label"][2:], ["allow", "allow"])
+        self.assertEqual(by_flag["--add-reviewer"][2:], ["-", "allow"])  # a flag `gh issue edit` does not have
+
+
+class Reasons(unittest.TestCase):
+    """A refusal text must not send an agent to a command the module refuses."""
+
+    @staticmethod
+    def reasons():
+        texts = [v for k, v in vars(gs).items() if k.startswith("WHY_") and isinstance(v, str)]
+        for table in (gs.PR_VERBS, gs.ISSUE_VERBS, gs.AGENT_TASK_VERBS):
+            texts += [row[2] for row in table.values() if len(row) > 2]
+        return texts
+
+    def test_commands_named_in_reasons_are_allowed(self):
+        named = []
+        for text in self.reasons():
+            for span in re.findall(r"`([^`]+)`", text):
+                if span.startswith("gh ") and "%s" not in span:
+                    named.append(span)
+                    with self.subTest(command=span):
+                        got = gs.surface(bash_rules.gh_command(span.split()[1:]))
+                        self.assertTrue(got.listed and got.verdict != gs.REFUSE, "%s is named in a refusal text but the module refuses it: %s" % (span, got.verdict))
+        self.assertTrue(named, "no gh command is named in any refusal text, so this test reads nothing")
+
+    def test_the_check_can_fail(self):
+        """The old texts sent agents to `gh issue edit N --body-file F`, which is refused now."""
+        got = gs.surface(bash_rules.gh_command("issue edit N --body-file F".split()))
+        self.assertEqual(got.verdict, gs.REFUSE)
+
+    def test_no_reason_sends_an_agent_to_gh_issue_edit_for_text(self):
+        for text in self.reasons():
+            with self.subTest(text=text[:50]):
+                self.assertNotIn("gh issue edit", text)
+
+
 class Skills(unittest.TestCase):
     """Every gh command the two review skills tell an agent to run passes (verdict ALLOW, and the module lists it), so the skills and the allow table cannot drift apart."""
     SKILLS = ["dot_local/share/agent-harness/canonical/skills/triaging-automated-review/SKILL.md", "dot_local/share/agent-harness/canonical/skills/reviewing-prs/SKILL.md.tmpl"]
@@ -324,5 +420,23 @@ class Skills(unittest.TestCase):
         self.assertTrue(any("graphql" in c for c in seen) and any("replies" in c for c in seen) and any("pr comment" in c for c in seen), seen)
 
 
+def edit_flags_report():
+    """One line per EDIT_FLAGS key: the flag, its effect, and the verdict of `gh issue edit` and of `gh pr edit` carrying just that flag (`-` where the command does not have it)."""
+    table = bash_rules._table(("issue", "edit"), ("pr", "edit"))[0]
+    lines = []
+    for name, effect in gs.EDIT_FLAGS.items():
+        shown = []
+        for group in ("issue", "pr"):
+            got = verdict_of(group, "edit", "5", "--" + name, *(["x"] if table[name][1] else []))
+            shown.append(got.verdict if got.listed else "-")
+        lines.append("%-22s %-6s %-7s %s" % ("--" + name, effect, shown[0], shown[1]))
+    return lines
+
+
 if __name__ == "__main__":
-    unittest.main()
+    import sys
+    if "--edit-flags" in sys.argv:
+        print("%-22s %-6s %-7s %s" % ("flag", "effect", "issue", "pr"))
+        print("\n".join(edit_flags_report()))
+    else:
+        unittest.main()

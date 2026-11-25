@@ -63,6 +63,19 @@ def aliases_listed(text):
     return found
 
 
+def flags_listed(text):
+    """The long names of the flags under the FLAGS heading of a help page."""
+    found, section = set(), None
+    for line in text.splitlines():
+        if re.match(r"^[A-Z][A-Z ]+$", line):
+            section = line
+        elif section == "FLAGS":
+            match = re.match(r"^\s+(?:-\w, )?--([a-z][\w-]*)", line)
+            if match:
+                found.add(match.group(1))
+    return found
+
+
 @unittest.skipUnless(installed_gh(), "needs the real gh")
 class EveryGhVerbIsOnTheTable(unittest.TestCase):
     @classmethod
@@ -96,6 +109,15 @@ class EveryGhVerbIsOnTheTable(unittest.TestCase):
                     self.assertListed([group, verb])
                     for alias in aliases_listed(help_text(self.gh, group, verb)):
                         self.assertListed(alias)
+
+    def test_the_edit_flags_are_the_flags_gh_lists(self):
+        """`gh pr edit --help` and `gh issue edit --help` name the flags FLAG_ROWS has, and so EDIT_FLAGS: a gh upgrade that adds a text flag fails here, whatever the wrapper's table says."""
+        for group in ("pr", "issue"):
+            with self.subTest(group=group):
+                listed = flags_listed(help_text(self.gh, group, "edit")) - gs.EDIT_IGNORED
+                self.assertGreater(len(listed), 10, listed)
+                self.assertEqual(listed, set(bash_rules._table((group, "edit"))[0]) - gs.EDIT_IGNORED, "gh %s edit --help and FLAG_ROWS differ" % group)
+                self.assertLessEqual(listed, set(gs.EDIT_FLAGS), "gh %s edit has a flag that EDIT_FLAGS does not name" % group)
 
     def test_a_verb_gh_does_not_have_is_not_on_the_table(self):
         """The check can fail: a verb no row names is refused, not read as a no-op."""

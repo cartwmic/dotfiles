@@ -10,8 +10,9 @@
   reason   for a REFUSE, the sentence to show the agent. Empty otherwise.
   route    the command as the module read it (`gh api PUT pulls/5/merge`), for a log line. Tests do not read it.
 
-The same effect can have different verdicts by route: `gh issue edit -b` is ALLOW (no checker exists for an issue body yet) while graphql `updateIssue`, which sets the
-same body, is REFUSE. The tables below are the only place that is decided; a rule must not read a gh verb, endpoint or mutation name itself.
+The same effect can have different verdicts by route: `gh pr edit -b` is PR_BODY (allowed through `pr-open`), while `gh issue edit -b`, which sets the same text when the number
+is a pull request, is REFUSE: the hook cannot tell a PR number from an issue number, and no checked route to an issue's text exists yet (issue-open --edit). The tables below
+are the only place that is decided; a rule must not read a gh verb, endpoint or mutation name itself.
 
 Covered: `gh pr`, `gh issue`, `gh agent-task`, and `gh api` on REST paths under `pulls` and `issues` (including `repositories/<id>/...`, a full URL, a trailing slash, a query
 string, and `merges` / `merge-upstream`) and on graphql (every operation in the query is read by one tokenizer that skips comments and strings). Every other gh command is off the
@@ -34,8 +35,8 @@ SET_TEXT = frozenset({TITLE, BODY})
 WHY_MERGE = "`%s` merges a pull request without the merge gates. Merge with `gh pr merge` behind both gates, or `merge-pr.sh`."
 WHY_PR_TEXT = "`%s` sets the title or body of a pull request without the check that `pr-open` runs. Use `pr-open` (`pr-open --edit N --body-file F` for a PR that exists)."
 WHY_PR_OR_ISSUE = ("`%s` sets the title or body of an issue or pull request without a check, and the hook cannot tell a PR number from an issue number. "
-                  "For a pull request use `pr-open --edit`; for an issue `gh issue edit N --body-file F`.")
-WHY_ISSUE = "`%s` sets the body of an issue that nothing checked. Use `gh issue edit N --body-file F`."
+                  "For a pull request use `pr-open --edit N --body-file F [--title T]`. For an issue there is no checked route yet (follow-up: `issue-open --edit`, owed #4493).")
+WHY_ISSUE = "`%s` sets the title or body of an issue that nothing checked. There is no checked route to an issue's text yet (follow-up: `issue-open --edit`, owed #4493)."
 WHY_UNLISTED = ("`%s` is not on the allow table in dot_local/share/agent-harness/hooks/gh_surface.py, so the hook cannot tell what it does to a pull request or issue and refuses it "
                 "(%s). Add a row there for it, then run the command again.")
 
@@ -86,11 +87,21 @@ OFF_SURFACE = frozenset((
     "cs skills at extensions ext rs").split())  # `co` is `gh pr checkout`, a read; the second line is gh's own aliases (`gh cs`, `gh at`)
 
 
+# `gh pr edit` and `gh issue edit`: what each flag does, by its long name (the union of the two commands' flags; a flag the command does not have is unknown to bash_rules first).
+# A flag that is not in this table is unlisted, so a flag gh adds refuses until someone decides what it does (tests/agent-kill-guard/test_gh_surface.py checks the keys against
+# FLAG_ROWS and gh's own help). `python3 tests/agent-kill-guard/test_gh_surface.py --edit-flags` prints the table with the verdict of each flag.
+EDIT_FLAGS = {
+    "title": TITLE, "body": BODY, "body-file": BODY, "attach": BODY,  # text: a pull request's goes through `pr-open`; an issue has no checked route
+    **dict.fromkeys(("add-label", "remove-label", "add-assignee", "remove-assignee", "milestone", "remove-milestone", "add-project", "remove-project", "add-reviewer", "remove-reviewer", "base",
+                     "type", "remove-type", "parent", "remove-parent", "add-sub-issue", "remove-sub-issue", "add-blocked-by", "remove-blocked-by", "add-blocking", "remove-blocking"), OTHER),
+}
+EDIT_IGNORED = frozenset({"repo", "help"})  # carry no effect: the repository the command names, and help
+
+
 def _edit_effects(argv):
-    """The flags a pr/issue edit carries, as effects: title, body (a body file and an attachment are body), anything else other."""
-    names = {n for n, _, _ in argv.flags} - {"repo", "help"}
-    effects = {OTHER} if names - {"title", "body", "body-file", "attach"} else set()
-    return effects | ({TITLE} if "title" in names else set()) | ({BODY} if names & {"body", "body-file", "attach"} else set())
+    """The effects of the flags an edit carries, or None when a flag is not in EDIT_FLAGS."""
+    names = {n for n, _, _ in argv.flags} - EDIT_IGNORED
+    return None if names - set(EDIT_FLAGS) else {EDIT_FLAGS[n] for n in names}
 
 
 HELP_TRUE = frozenset("1 t T TRUE true True".split())  # what gh's flag parser (Go's ParseBool) reads as true; `--help=false`, `=0`, or an unreadable value runs the command
@@ -118,11 +129,16 @@ def _verb(gh, route):
 
 
 def _edit(gh, route):
-    """`gh pr edit` and `gh issue edit` by the flags they carry. An issue edit is ALLOW (no checker for an issue body yet); a PR edit that sets text goes through the check."""
+    """`gh pr edit` and `gh issue edit` by the flags they carry. Text (title, body, body file, attachment) on a pull request goes through the check (PR_BODY); on `gh issue edit` it is
+    refused, because gh sends `updatePullRequest` when the number is a pull request and the hook cannot tell. A flag that is not in EDIT_FLAGS is unlisted."""
     if gh.argv.unknown:
         return _unlisted(route, "a flag the hook's table does not know: `%s`" % gh.argv.unknown[0])
     effects = _edit_effects(gh.argv)
-    return _surface(effects, PR_BODY if gh.group == "pr" and effects & SET_TEXT else ALLOW, route)
+    if effects is None:
+        return _unlisted(route, "a flag that is not in EDIT_FLAGS: `%s`" % sorted({n for n, _, _ in gh.argv.flags} - EDIT_IGNORED - set(EDIT_FLAGS))[0])
+    if effects & SET_TEXT:
+        return _surface(effects, PR_BODY, route) if gh.group == "pr" else _surface(effects, REFUSE, route, WHY_PR_OR_ISSUE)
+    return _surface(effects, ALLOW, route)
 
 
 # --- gh api
