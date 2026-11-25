@@ -26,11 +26,11 @@ A fresh Opus session gets `answers.md` and the repo (at the commit), not the rea
 
 ## Pass bar
 
-5 of 5 CORRECT, no WRONG, every quote found, and `python3 -I <skill dir>/scripts/lint_main.py GUIDE.md <repo> --surfaces surfaces.json` passes. The unknown-word list does not gate. When the README and the code state no limit, Q5 may be NOT IN TEXT, and the bar is then 4 of 4 CORRECT among Q1 to Q4.
+5 of 5 CORRECT, no WRONG, every quote found, and `python3 -I <skill dir>/scripts/lint_main.py GUIDE.md <repo> --surfaces surfaces.json --max-words <the Part 1 budget from step 4>` passes. The unknown-word list does not gate. When the README and the code state no limit, Q5 may be NOT IN TEXT, and the bar is then 4 of 4 CORRECT among Q1 to Q4.
 
 ## One fix round
 
-If the bar is missed, a fresh Opus front-writer session fixes Part 1 once (adds the missing answer or defines a word; when no appendix line holds the missing answer, the lead adds that line first, as `fix-rounds.md` says), without rewording a sentence in `fixed-ids.txt` (`lint_main.py --fixed fixed-ids.txt` warns when it does). The guide is linted again (`lint_main.py`), and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round. The sentences the fix changed are checked in the final re-check (`fix-rounds.md`), with the lead's cuts; a cut there can change Part 1 after the reader saw it, so say so in the report.
+If the bar is missed, a fresh Opus front-writer session fixes Part 1 once (adds the missing answer or defines a word; when no appendix line holds the missing answer, the lead adds that line first, as `fix-rounds.md` says), without rewording a sentence in `fixed-ids.txt` (`lint_main.py --fixed fixed-ids.txt` warns when it does). The guide is linted again with the same command, and a fresh reader and grader run once more. Then report the result, pass or fail. There is no second fix round. The sentences the fix changed are checked in the final re-check (`fix-rounds.md`), with the lead's cuts; a cut there can change Part 1 after the reader saw it, so say so in the report.
 
 ## Limit
 

@@ -45,7 +45,7 @@ One row per requirement. Ids `R-1`, `R-2`, ... never reused.
 
 ## 2. State machines
 
-One subsection per machine, `### SM-<n>: <name>`, then these fields, each a bullet that starts `- ` (`check_shape.py` refuses `writers:` or `where:` without it):
+One subsection per machine, `### SM-<n>: <name>`, then these fields, each a bullet that starts `- ` (`check_shape.py` refuses a `writers:` line without it):
 
 - `where:` the `path:line` of the state field or enum
 - States: a table `| state | meaning | evidence |`

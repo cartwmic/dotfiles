@@ -93,13 +93,13 @@ class ScoreLogTest(unittest.TestCase):
 
 
 class LintLogTest(unittest.TestCase):
-    def lint(self, state, guide):
+    def lint(self, state, guide, *extra):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "src").mkdir()
             Path(d, "src/cli.py").write_text("x\n" * 10)
             Path(d, "GUIDE.md").write_text(guide)
             Path(d, "surfaces.json").write_text(json.dumps(SURFACES))
-            return run(state, "lint_main.py", Path(d, "GUIDE.md"), d, "--surfaces", Path(d, "surfaces.json"))
+            return run(state, "lint_main.py", Path(d, "GUIDE.md"), d, "--surfaces", Path(d, "surfaces.json"), *extra)
 
     def test_a_run_leaves_the_part_1_word_count_it_printed(self):
         with tempfile.TemporaryDirectory() as state:
@@ -109,6 +109,14 @@ class LintLogTest(unittest.TestCase):
             printed = int(out.split("Part 1: ")[1].split(" words")[0])
             self.assertEqual((row["script"], row["action"], row["outcome"], row["part1_words"], row["words_limit"]), ("lint_main.py", "lint-part1", "ok", printed, 1000))
             self.assertGreater(printed, 10)
+
+    def test_a_halved_budget_is_logged_as_the_limit_the_run_used(self):
+        with tempfile.TemporaryDirectory() as state:
+            code, out, err = self.lint(state, GUIDE, "--max-words", "20")
+            self.assertEqual(code, 1, out + err)
+            (row,) = records(state)
+            self.assertEqual((row["words_limit"], row["outcome"]), (20, "failed"))
+            self.assertIn("(limit 20)", out)
 
     def test_a_guide_that_fails_a_check_is_logged_as_failed_with_the_count(self):
         with tempfile.TemporaryDirectory() as state:

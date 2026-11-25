@@ -168,6 +168,10 @@ class LintMainTest(unittest.TestCase):
         self.assertEqual(lint(GUIDE, "--max-words", "500")[0], 0)
         self.assertEqual(lint(GUIDE, "--max-words", "many")[0], 2)
 
+    def test_a_trailing_option_with_no_value_exits_2_instead_of_using_a_default(self):
+        for option in ("--max-words", "--jargon", "--fixed"):
+            self.assertEqual(lint(GUIDE, option)[0], 2, option)
+
     def test_a_guide_without_a_part_1_heading_fails(self):
         self.assertEqual(lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))[0], 1)
 

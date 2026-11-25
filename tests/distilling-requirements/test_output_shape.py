@@ -1,5 +1,6 @@
 """output-shape.md and check_shape.py: the shape the skill tells writers to follow is the shape the checker holds them to.
 Run: python3 -I tests/distilling-requirements/test_output_shape.py"""
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,13 @@ class OutputShapeTest(unittest.TestCase):
         self.assertIn("each a bullet that starts `- `", SHAPE)
         self.assertIn("state machine has no '- writers:' line", check("writers: the CLI\n"))
         self.assertNotIn("state machine has no", check("- writers: the CLI\n"))
+
+    def test_every_field_the_shape_says_the_checker_refuses_without_a_dash_is_refused(self):
+        said = re.search(r"\(`check_shape\.py` refuses ([^)]*) without it\)", SHAPE)
+        fields = re.findall(r"`(\w+):`", said.group(1))
+        self.assertIn("writers", fields)
+        for field in fields:
+            self.assertIn("state machine has no '- %s:' line" % field, check("- writers: the CLI\n%s: x\n" % field if field != "writers" else "%s: x\n" % field), field)
 
     def test_an_incidental_surface_still_gets_a_row_so_coverage_can_reach_zero(self):
         self.assertIn("still gets a row marked `incidental` that cites it", SHAPE)

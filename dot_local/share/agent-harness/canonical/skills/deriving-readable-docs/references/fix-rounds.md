@@ -10,9 +10,9 @@ Round 1 is the checkers' reports on the whole guide. Each later round re-checks 
 - When the fact a finding needs is in no appendix line (an install step, say), Part 1 cannot state it. The lead adds one appendix line for it first: a fresh Opus writer reads the code and writes one cited sentence, the lead runs `stamp.py` on the section, and the front-writer fix then tags that line. The new line and the Part 1 sentence are new claims, so the final re-check lists and checks them.
 - After fix round 2 the lead cuts, or narrows to what the code shows, each sentence that still fails, a Part 1 sentence included. Nothing re-checks those edits until the final re-check below.
 
-## Part 1 over 1,000 words
+## Part 1 over its budget
 
-`lint_main.py` fails Part 1 over 1,000 words at every step, fix rounds included. A fix that adds a condition grows a sentence: cut to fit in this order. First shorten or merge the sentences a fix narrowed (a merged sentence keeps every condition its tags state, and the 18-word limit). Then drop a What you can do line the appendix covers in full. Never cut How to start or the Who it is for sentence.
+`lint_main.py --max-words <the Part 1 budget from step 4>` fails Part 1 over that budget (1,000 words, or half that under 30k lines) at every step, fix rounds included. A fix that adds a condition grows a sentence: cut to fit in this order. First shorten or merge the sentences a fix narrowed (a merged sentence keeps every condition its tags state, and the 18-word limit). Then drop a What you can do line the appendix covers in full. Never cut How to start or the Who it is for sentence.
 
 ## The commands, in order
 
@@ -29,7 +29,7 @@ The lead's cuts and narrowings, and the reader check's front-writer fix, change 
 1. `python3 -I <skill>/scripts/final_recheck.py changed GUIDE.md <repo> --was <the guide as last cut> --out changed.txt` lists every claim whose sentence, tags or cited lines differ from that copy, or that moved (the same test as `slice.py --was`). If it says nothing changed, stop: the step is done.
 2. `slice.py GUIDE.md <repo> --ids changed.txt --was <the guide as last cut> --out slices-final`, one fresh Opus checker per slice with `references/check-brief.md`, reports into `reports-final`, then `score.py <name>=reports-final --doc GUIDE.md --repo <repo> --slices slices-final`. Score before cutting: a claim the checker skipped shows there, and `final_recheck.py cut` refuses it.
 3. `python3 -I <skill>/scripts/final_recheck.py cut GUIDE.md <repo> --ids changed.txt --reports reports-final --clean` cuts every claim that is not HOLDS. An appendix claim loses its line and a Part 1 claim its sentence. A Part 1 sentence tagged to a cut line loses that tag, and is cut when it has no tag left. A sentence that keeps another tag stays, and the output lists it. Nothing is reworded, and there is no further round. It writes GUIDE.md in place and `GUIDE.clean.md`.
-4. Rerun `check_citations.py` and `lint_main.py`. A failure now, such as a Part 1 left without How to start, goes in the report: it is not rewritten. Do not run `assemble.py` again, because it builds the guide from the section files and would bring the cut text back.
+4. Rerun `check_citations.py` and `python3 -I <skill>/scripts/lint_main.py GUIDE.md <repo> --surfaces surfaces.json --max-words <the Part 1 budget from step 4>`. A failure now, such as a Part 1 left without How to start, goes in the report: it is not rewritten. Do not run `assemble.py` again, because it builds the guide from the section files and would bring the cut text back.
 
 ## Accepted limits
 

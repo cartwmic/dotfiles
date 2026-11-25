@@ -230,5 +230,30 @@ class RoundTwoTest(unittest.TestCase):
         self.assertRegex(CHECK_BRIEF, r"(?i)by default[^.\n]*(default|shows)")
 
 
+class PartOneBudgetGateTest(unittest.TestCase):
+    """Part 1's budget is halved on a small repo, and only `lint_main.py --max-words` holds it: a gate command that drops the flag gates a small repo at 1,000 words."""
+
+    def gate_commands(self):
+        found = {}
+        for path in [SKILL_DIR / "SKILL.md", *sorted((SKILL_DIR / "references").glob("*.md"))]:
+            spans = re.findall(r"`([^`\n]*lint_main\.py GUIDE\.md[^`\n]*)`", path.read_text(encoding="utf-8"))
+            if spans:
+                found[path.name] = spans
+        return found
+
+    def test_every_command_that_runs_the_part_1_gate_passes_max_words(self):
+        found = self.gate_commands()
+        for name, spans in found.items():
+            for span in spans:
+                self.assertIn("--max-words", span, "%s runs lint_main.py without the Part 1 budget: %s" % (name, span))
+
+    def test_the_step_7_gate_and_the_fix_round_and_reader_reruns_each_carry_a_command(self):
+        self.assertEqual(sorted(self.gate_commands()), ["SKILL.md", "fix-rounds.md", "reader-check.md"])
+
+    def test_the_fix_rounds_text_does_not_state_a_fixed_1000_word_budget(self):
+        text = (SKILL_DIR / "references/fix-rounds.md").read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"Part 1 over 1,000 words|fails Part 1 over 1,000 words")
+
+
 if __name__ == "__main__":
     unittest.main()

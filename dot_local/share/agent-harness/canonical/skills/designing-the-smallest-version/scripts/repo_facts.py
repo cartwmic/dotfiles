@@ -20,6 +20,8 @@ exits 2 if that file is missing. --scope does not narrow it: it always lists the
 An `import type`, `export type ... from` or `import { type A }` (every name a type) is erased at runtime and makes no edge.
 path_refs maps path strings in config and script files to the files or
 directories they name.
+Log: each run appends one JSON line (runlog.py: script, action `repo-facts`, outcome ok or
+refused, and the file and import-edge counts or the reason it refused).
 """
 import argparse
 import collections
@@ -33,6 +35,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
+sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
+from runlog import log_run  # noqa: E402
 
 TS_EXTS = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs')
 PARSED_EXTS = TS_EXTS + ('.py',)
@@ -104,6 +110,7 @@ SURFACES_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(o
 
 def die(msg):
     sys.stderr.write(f'repo_facts: {msg}\n')
+    log_run('repo_facts.py', 'repo-facts', 'refused', reason=msg)
     sys.exit(2)
 
 
@@ -979,6 +986,8 @@ def main(argv=None):
         sys.stdout.write(summarize(facts))
     elif not args.out:
         sys.stdout.write(text)
+    log_run('repo_facts.py', 'repo-facts', 'ok', files=sum(facts['languages'].values()),
+            edges=facts['edge_count'] if args.scope else len(facts['edges']))
     return 0
 
 

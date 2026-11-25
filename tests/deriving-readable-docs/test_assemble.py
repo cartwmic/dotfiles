@@ -258,5 +258,43 @@ class SliceTest(unittest.TestCase):
         self.assertEqual(self.slices(SLICE_DOC, "--max-claims", "zero")[0], 2)
 
 
+class AssembleLogTest(unittest.TestCase):
+    """Each run leaves one JSON line (runlog.py) with its outcome, so how often the guide was assembled or refused can be counted."""
+
+    def last(self):
+        lines = Path(STATE, "deriving-readable-docs", "log.jsonl").read_text().splitlines()
+        return json.loads(lines[-1]), len(lines)
+
+    def assemble(self, *extra, **over):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as repo:
+            setup(d, repo, **over)
+            return run("assemble.py", d, repo, "--date", "2026-11-20", *extra)
+
+    def test_a_run_that_writes_the_guide_leaves_one_ok_line_with_the_guide_size(self):
+        code, out, err = self.assemble("--clean")
+        self.assertEqual(code, 0, err)
+        row, _ = self.last()
+        self.assertEqual((row["script"], row["action"], row["outcome"], row["clean"]), ("assemble.py", "assemble", "ok", True))
+        self.assertGreater(row["guide_lines"], 10)
+
+    def test_the_index_run_is_its_own_action_with_the_number_of_appendix_lines(self):
+        code, out, err = self.assemble("--index")
+        self.assertEqual(code, 0, err)
+        row, _ = self.last()
+        self.assertEqual((row["action"], row["outcome"], row["appendix_lines"]), ("assemble-index", "ok", len(out.splitlines())))
+
+    def test_a_refusal_leaves_a_refused_line_with_the_reason_it_printed(self):
+        code, out, err = self.assemble(**{"A3.md": None})
+        self.assertEqual(code, 1, out)
+        row, _ = self.last()
+        self.assertEqual((row["action"], row["outcome"], row["reason"]), ("assemble", "refused", err.strip()))
+
+    def test_a_usage_error_leaves_no_line(self):
+        self.assertEqual(self.assemble()[0], 0)
+        before = self.last()[1]
+        self.assertEqual(run("assemble.py")[0], 2)
+        self.assertEqual(self.last()[1], before)
+
+
 if __name__ == "__main__":
     unittest.main()

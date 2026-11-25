@@ -19,7 +19,8 @@ read it as claims or count it as words.
             points.json; the ones never named are listed
 --clean also writes the guide without tags and printed markers, next to -o as GUIDE.clean.md.
 --index prints every appendix line as `A4.3f9a | sentences` (the id the line carries, citations taken out with the space before a stop or comma) and writes nothing: it is what the front writer tags from.
-Exit 1 when a part is missing or misnumbered, a prose line has no id or an id is on two lines, or a not-read path does not exist; 2 on bad usage. Stdlib only.
+Exit 1 when a part is missing or misnumbered, a prose line has no id or an id is on two lines, or a not-read path does not exist; 2 on bad usage.
+Log: each run appends one JSON line (runlog.py: script, action `assemble` or `assemble-index`, outcome ok or refused, and the guide's line count or the reason it refused). Stdlib only.
 """
 import datetime
 import json
@@ -31,6 +32,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import PRINTED_BEGIN, PRINTED_END, TAG, appendix_index, appendix_lines, appendix_problems, multi_sentence_lines  # noqa: E402
+from runlog import log_run  # noqa: E402
 
 SECTION_FILE = re.compile(r"^A(\d+)\.md$")
 NAMED_KINDS = ("command", "flag", "route", "event", "env")
@@ -99,7 +101,7 @@ def build(work, repo, date, need_part1=True):
     named, never = named_in_tests(repo, rows, test_files)
     per = {k: sum(1 for r in rows if r["kind"] == k) for k in KINDS}
     scout_present = os.path.isfile(os.path.join(work, "scout.resolved"))
-    scout = [l.strip() for l in read(os.path.join(work, "scout.resolved")).splitlines() if l.strip()] if os.path.isfile(os.path.join(work, "scout.resolved")) else []
+    scout = [l.strip() for l in read(os.path.join(work, "scout.resolved")).splitlines() if l.strip()] if scout_present else []
     scout_weak = [l for l in scout if "| WEAK MATCH " in l]
     scout_found = [l for l in scout if not l.endswith("| NOT FOUND") and l not in scout_weak]
     part1 = ""
@@ -168,14 +170,18 @@ def main(argv):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     work, repo = args[0], os.path.realpath(args[1])
+    action = "assemble-index" if "--index" in flags else "assemble"
     try:
         text = build(work, repo, date, need_part1="--index" not in flags)
     except AssembleError as e:
         print(e, file=sys.stderr)
+        log_run("assemble.py", action, "refused", reason=str(e))
         return 1
     if "--index" in flags:
-        for tag, (_, sentence, _) in appendix_index(text, repo).items():
+        index = appendix_index(text, repo)
+        for tag, (_, sentence, _) in index.items():
             print("%s | %s" % (tag, sentence))
+        log_run("assemble.py", action, "ok", appendix_lines=len(index))
         return 0
     out = out or os.path.join(work, "GUIDE.md")
     with open(out, "w", encoding="utf-8") as f:
@@ -185,6 +191,7 @@ def main(argv):
         with open(clean_path(out), "w", encoding="utf-8") as f:
             f.write(clean(text))
         print("wrote %s" % clean_path(out))
+    log_run("assemble.py", action, "ok", guide_lines=text.count("\n"), clean="--clean" in flags)
     return 0
 
 
