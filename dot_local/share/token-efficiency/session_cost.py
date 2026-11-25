@@ -211,7 +211,7 @@ def workstreams_main(argv):
     ap.add_argument('--no-collect', action='store_true', help='use the usage database as it is; by default collect.py runs first')
     a = ap.parse_args(argv)
     state_dir = os.path.dirname(os.path.abspath(a.db))
-    run_id, started, outcome, rep = uuid.uuid4().hex[:12], time.time(), 'failed', None
+    run_id, started, outcome, rep, error = uuid.uuid4().hex[:12], time.time(), 'failed', None, None
     try:
         if not a.no_collect:
             with contextlib.redirect_stdout(sys.stderr):   # collect prints its own counts; keep stdout for the report
@@ -225,9 +225,14 @@ def workstreams_main(argv):
         mtime = datetime.fromtimestamp(os.path.getmtime(a.db), timezone.utc).strftime('%Y-%m-%dT%H:%MZ')
         print(workstreams.render(rep, a.db, mtime))
         outcome = 'ok'
+    except BaseException as e:   # say why in the log, then let the failure go on as it was
+        error = str(e) if isinstance(e, SystemExit) else '%s: %s' % (type(e).__name__, e)
+        raise
     finally:
         record = dict(ts=iso(datetime.now(timezone.utc)), run=run_id, action='workstreams', outcome=outcome, collected=not a.no_collect,
-                      seconds=round(time.time() - started, 1))
+                      seconds=round(time.time() - started, 1), asked_since=a.since, asked_until=a.until)
+        if error:
+            record['error'] = error
         if rep:
             record.update(since=rep['since'], until=rep['until'], sessions=rep['sessions'], requests=rep['total']['requests'],
                           list_usd=round(rep['total']['usd'], 2), unmapped_share=round(workstreams.unmapped_share(rep), 4))

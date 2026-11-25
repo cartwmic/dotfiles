@@ -14,6 +14,7 @@ Costs are analyze.py's: list price per token kind, not subscription billing.
 """
 import json
 import sqlite3
+import urllib.parse
 from collections import defaultdict
 
 import analyze
@@ -24,7 +25,7 @@ UNMAPPED = (NO_THREAD, NO_WORKSTREAM)
 
 
 def readonly(path):
-    return sqlite3.connect('file:%s?mode=ro' % path, uri=True)
+    return sqlite3.connect('file:%s?mode=ro' % urllib.parse.quote(path), uri=True)
 
 
 def load_t3(path):

@@ -183,6 +183,13 @@ class WorkstreamsTest(unittest.TestCase):
         self.assertIn("ledger not found", r.stderr)
         rec = json.loads((self.home / ".local/state/token-efficiency/log.jsonl").read_text().splitlines()[-1])
         self.assertEqual((rec["action"], rec["outcome"]), ("workstreams", "failed"))
+        self.assertIn("ledger not found at " + str(self.tmp / "nope.sqlite"), rec["error"])   # why, and which input
+        self.assertEqual((rec["asked_since"], rec["asked_until"]), ("2026-11-15", "2026-11-16"))   # and the window asked for
+
+    def test_a_database_path_with_a_question_mark_still_opens(self):
+        odd = self.tmp / "odd?name#1.sqlite"
+        odd.write_bytes(self.ledger.read_bytes())
+        self.assertTrue(workstreams.load_ledger(str(odd)))
 
     def test_the_databases_are_opened_read_only(self):
         before = (self.t3.stat().st_mtime_ns, self.ledger.stat().st_mtime_ns)
