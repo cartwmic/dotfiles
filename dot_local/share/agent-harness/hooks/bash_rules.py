@@ -31,7 +31,8 @@
               `pr-body-check --body-file F --title T && gh pr create --title T ... --body-file F`, so bookkeeping in the description (the principles table,
               a table in a Proven section, a Decisions: line, ledger or job ids; it belongs in the PR's agent record, playbook 5a05bfe8; a
               Proven section as plain prose stays, playbook f5a367b5) fails when the body is written, not at merge. `gh pr edit` with no
-              body flag and no title (labels, reviewers) passes; one that sets only a title needs the chained check given the same title. One check must see both the file and the title. No repo is exempt: unlike the merge rule, nothing else runs this check at create time.
+              body flag and no title (labels, reviewers) passes; one that sets only a title needs the chained check given the same title. One check must see both the file and the title. `gh api` on `repos/<o>/<r>/pulls[/<n>]` (POST, PATCH, PUT) or a PATCH on `issues/<n>` (a PR is an issue) with a `title` field is held to the same rule:
+              every `title` must have been given to an earlier `pr-body-check --body-file F --title T` in the and-list, and a `-F title=@file` is always refused (its text cannot be seen). No repo is exempt: unlike the merge rule, nothing else runs this check at create time.
               The body file must also be a mktemp name, so another session cannot overwrite it (2026-11-15: a shared /tmp/pr-body.md put
               one PR's body on another): `F=$(mktemp /tmp/pr-N-body.XXXXXX)` earlier in the same command and `--body-file "$F"`, or the
               literal name mktemp made (last dot-part 6+ letters and digits with a digit or capital). A fixed name is refused for create and
@@ -167,6 +168,16 @@ PR_API_BODY = (
 PR_API_ISSUE_BODY = (
     "`gh api` PATCH on `repos/<owner>/<repo>/issues/<n>` with a `body` field or `--input` is refused in agent sessions: a pull request is an issue too, so this can set a pull request body "
     "and skip the body check, and the hook cannot tell a PR number from an issue number without a lookup. For a PR: %s. For an issue: `gh issue edit N --body-file F`."
+)
+PR_API_TITLE = (
+    "`gh api` that sets a pull request title (POST, PATCH or PUT on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `title` field) sets a title that `pr-body-check` was not given: "
+    "the check reads the title for task ids, which become part of the commit text on main, and it can only read the one it is passed. "
+    "Pass the same title to both: `pr-body-check --body-file F --title T && gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f title=T`, or use `pr-open --edit N --body-file F --title T`."
+)
+PR_API_ISSUE_TITLE = (
+    "`gh api` PATCH on `repos/<owner>/<repo>/issues/<n>` with a `title` field sets a title that `pr-body-check` was not given: a pull request is an issue too, so this can rename a pull request, "
+    "and the hook cannot tell a PR number from an issue number without a lookup. For a PR: `pr-body-check --body-file F --title T && gh api -X PATCH repos/<owner>/<repo>/issues/<n> -f title=T`, "
+    "or `pr-open --edit N --body-file F --title T`. For an issue: `gh issue edit N --title T`."
 )
 PR_API_ENDPOINT = re.compile(r"(?:https://[^/]+/(?:api/v3/)?|/)?(?P<path>repos/[^/]+/[^/]+/(?P<kind>pulls|issues)(?:/\d+)?/?)(?:\?.*)?")
 ISSUE_OPEN_CLI = "src/claims/cli.ts"  # the coordinator file `claims` (so `issue-open`) runs: the issue rule refuses only where it exists
@@ -811,29 +822,58 @@ def _body_file_problem(body_file, verb, number, mktemps):
     return None
 
 
-def _api_sets_pr_body(gh):
-    """The record of a `gh api` call (a GhCommand) that sets a PR body, else None: a POST/PATCH/PUT on a pulls endpoint (or a PATCH on `issues/<n>`, which can set a PR body)
-    with a `body` field or an input file (whose JSON the hook cannot see). Every spelling gh reads (`-fbody=x`, `-f=body=x`, `-XPATCH`) is read by the normaliser.
-    The record is {method, endpoint, reason, command}; `command` is rebuilt from the parsed parts with every field value redacted, so it never holds a body or a token."""
+def _api_pr_write(gh):
+    """The record of a `gh api` call (a GhCommand) that writes to a pull request, else None: a POST/PATCH/PUT on a pulls endpoint, or a PATCH on `issues/<n>` (a PR is an issue too,
+    so it can set a PR's body or title). {method, endpoint, kind, fields, input_file}, `fields` as (name of the flag, value, spelling typed) for each `-f`/`-F` field. Every spelling gh reads
+    (`-fbody=x`, `-f=body=x`, `-XPATCH`, a leading slash, a full URL) is read by the normaliser and PR_API_ENDPOINT."""
     read = gh.argv
     endpoint = gh.operands[0] if gh.operands else None
-    fields = [(typed, v) for n, v, typed in read.flags if n in ("field", "raw-field") and v is not None]
-    method = read.value("method")
-    method = method.upper() if method is not None else None
-    input_file = read.value("input")
     found = PR_API_ENDPOINT.fullmatch(endpoint) if endpoint else None
     if not found:
         return None
-    has_body = input_file is not None or any(f.partition("=")[0] == "body" for _, f in fields)
-    method = method or ("POST" if fields or input_file is not None else "GET")
+    fields = [(n, v, typed) for n, v, typed in read.flags if n in ("field", "raw-field") and v is not None]
+    input_file = read.value("input")
+    method = read.value("method")
+    method = method.upper() if method is not None else ("POST" if fields or input_file is not None else "GET")
     pulls = found.group("kind") == "pulls"
-    if not has_body or not (method in ("POST", "PATCH", "PUT") if pulls else method == "PATCH" and re.search(r"/\d+/?$", found.group("path"))):
+    if not (method in ("POST", "PATCH", "PUT") if pulls else method == "PATCH" and re.search(r"/\d+/?$", found.group("path"))):
         return None
-    shown = ["gh", "api", _spelled(("api", ""), "method"), method, found.group("path")] + [x for flag, f in fields for x in (flag, f.partition("=")[0] + "=<redacted>")]
-    if input_file is not None:
-        shown += [_spelled(("api", ""), "input"), input_file]
-    reason = "%s on the %s endpoint sets a body (%s)" % (method, found.group("kind"), _spelled(("api", ""), "input") if input_file is not None else "a body field")
-    return {"method": method, "endpoint": found.group("path"), "reason": reason, "command": " ".join(shown), "kind": found.group("kind")}
+    return {"method": method, "endpoint": found.group("path"), "kind": found.group("kind"), "fields": fields, "input_file": input_file}
+
+
+def _api_shown(write):
+    """The command a log line shows: the parts of a gh api write, with every field value redacted so it never holds a body, a title or a token."""
+    shown = ["gh", "api", _spelled(("api", ""), "method"), write["method"], write["endpoint"]]
+    shown += [x for _, f, typed in write["fields"] for x in (typed, f.partition("=")[0] + "=<redacted>")]
+    if write["input_file"] is not None:
+        shown += [_spelled(("api", ""), "input"), write["input_file"]]
+    return " ".join(shown)
+
+
+def _api_sets_pr_body(gh):
+    """The record of a `gh api` call that sets a PR body, else None: `_api_pr_write` with a `body` field or an input file (whose JSON the hook cannot see).
+    The record is {method, endpoint, reason, command, kind}; `command` is rebuilt from the parsed parts with every field value redacted."""
+    write = _api_pr_write(gh)
+    if not write:
+        return None
+    if write["input_file"] is None and not any(f.partition("=")[0] == "body" for _, f, _ in write["fields"]):
+        return None
+    reason = "%s on the %s endpoint sets a body (%s)" % (write["method"], write["kind"], _spelled(("api", ""), "input") if write["input_file"] is not None else "a body field")
+    return {"method": write["method"], "endpoint": write["endpoint"], "reason": reason, "command": _api_shown(write), "kind": write["kind"]}
+
+
+def _api_sets_pr_title(gh, gated):
+    """The record of a `gh api` call that sets a PR title the body check was not given, else None: `_api_pr_write` with a `title` field whose text is not in `gated` (a
+    `pr-body-check --title T` joined to it by `&&`, as for `gh pr edit --title`). Every title field counts. A `-F title=@file` (or `@-`) reads its text from a file or stdin, which no
+    check can have been given, so it is always refused; `-f` sends the text as it is. An input file is already refused as a body."""
+    write = _api_pr_write(gh)
+    if not write:
+        return None
+    titles = [(n, f.partition("=")[2]) for n, f, _ in write["fields"] if f.partition("=")[0] == "title"]
+    from_file = any(n == "field" and t.startswith("@") for n, t in titles)
+    if not titles or (not from_file and all(BODY_TITLE + t in gated for _, t in titles)):
+        return None
+    return {"method": write["method"], "endpoint": write["endpoint"], "kind": write["kind"], "from_file": from_file, "command": _api_shown(write)}
 
 
 def pr_body_rule(walk, ctx):
@@ -852,6 +892,11 @@ def pr_body_rule(walk, ctx):
                 message = Matched(template % ((PR_OPEN["create"], PR_OPEN["edit"]) if api_body["kind"] == "pulls" else (PR_OPEN["edit"],)),
                                   "%s %s" % (api_body["method"], api_body["endpoint"]))
                 message.log = {"reason": api_body["reason"], "command": api_body["command"]}
+                return message
+            api_title = _api_sets_pr_title(gh, cmd.gated)
+            if api_title:
+                message = Matched(_api_title_message(api_title), "%s %s" % (api_title["method"], api_title["endpoint"]))
+                message.log = {"reason": "title not given to the check", "command": api_title["command"]}
                 return message
             endpoint = gh.operands[0] if gh.operands else ""
             if PR_API_ENDPOINT.fullmatch(endpoint):  # a call on a PR or issue endpoint: its flags must all be known, or a body flag could hide in one
@@ -931,6 +976,12 @@ def issue_body_rule(walk, ctx):
                 message.log = {"reason": "POST on the issues endpoint creates an issue", "command": "gh api -X POST " + created["endpoint"]}
                 return message
     return None
+
+
+def _api_title_message(record):
+    """The refusal text for a `gh api` title write: PR_API_TITLE (or the issue-number form), and a line on `-F title=@file` when the title is read from a file."""
+    message = PR_API_TITLE if record["kind"] == "pulls" else PR_API_ISSUE_TITLE
+    return message + (" The title in this command is read from a file or stdin (`-F title=@...`), which no check can have been given: pass it as text with `-f title=T`." if record["from_file"] else "")
 
 
 def _title_refusal(verb, title, message=None):
