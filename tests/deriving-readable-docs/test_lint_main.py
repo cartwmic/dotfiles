@@ -160,7 +160,10 @@ class LintMainTest(unittest.TestCase):
         self.assertGreater(counts[1], 1000)
 
     def test_a_guide_without_a_part_1_heading_fails(self):
-        self.assertEqual(lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))[0], 1)
+        code, out = lint(GUIDE.replace("# Part 1: In plain English", "# Overview"))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL part1: no heading `Part 1`", out)
+        self.assertIn("Part 1: 0 words (limit 1000)", out)  # the run finishes: no traceback, the count line is still printed
 
     def test_the_appendix_is_not_judged(self):
         long_appendix = GUIDE + "\nIt stops after 5 notes %s and every one goes `src/cli.py:3`.\n" % sentence(40)
