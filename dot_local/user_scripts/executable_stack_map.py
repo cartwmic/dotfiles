@@ -44,10 +44,10 @@ STATE_LAYOUT = (
 SECTIONS = (
     ("start", "Start here", ("start here",)),
     ("picture", "The one-minute picture", ("one-minute", "one minute")),
-    ("repos", "What each repository is for", ("repo",)),
     ("flow", "How a piece of work moves", ("moves", "flow")),
     ("change", "Where do I change X?", ("where do i change", "change x")),
     ("glossary", "Glossary", ("glossary",)),
+    ("repos", "What each repository is for", ("repo",)),  # last: the bare word "repo" also turns up in the other headings
 )
 
 CITE = re.compile(r"\[\[([A-Za-z0-9_-]+):([^:\]|]+):(\d+)(?:-(\d+))?\|(.+?)\]\]")
@@ -107,6 +107,9 @@ class Repo:
                 meta, name = entry.split("\t", 1)
                 found.append((meta.split()[1], name.rsplit("/", 1)[-1]))
         return found
+
+    def is_dir(self, path):
+        return bool(self.sha) and (self.git("cat-file", "-t", "%s:%s" % (self.sha, path)) or "").strip() == "tree"
 
     def exists(self, path):
         return bool(self.sha) and self.git("cat-file", "-e", "%s:%s" % (self.sha, path)) is not None
@@ -540,6 +543,7 @@ class Masker:
             self.store.append(value)
             return "\x00%d\x00" % (len(self.store) - 1)
 
+        text = re.sub(r" +(?=\[\[)", "", text)  # a citation marker hugs the words it supports
         text = CITE.sub(lambda m: keep(self.render_cite(m)), text)
         return CODE_SPAN.sub(lambda m: keep("<code>%s</code>" % esc(m.group(1))), text)
 
@@ -559,6 +563,7 @@ def inline(masked, masker):
     """Inline markdown of already-hidden text: escapes HTML, then links, bold and italic, then restores the hidden parts."""
     text = esc(masked)
     text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+|#[^)\s]*)\)", lambda m: '<a href="%s">%s</a>' % (m.group(2), m.group(1)), text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)  # a link to a repository file has nowhere to go on this page: keep its words
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\w*])\*([^*\s][^*]*?)\*(?![\w*])", r"<em>\1</em>", text)
     return masker.show(text)
@@ -575,6 +580,7 @@ class Content:
         self.lines = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S).split("\n")  # comments vanish, line numbers stay
         self.citations = 0
         self.checked = {}
+        self.notes = {}  # (repo, path, line) -> footnote number, for the section being rendered
         self.masker = Masker(self.render_cite)
         self.flow = None  # the parsed flow steps
         self._scan()
@@ -586,7 +592,7 @@ class Content:
 
         def bad(reason):
             self.fail.add(repo_name, path, first, "%s (content.md line %d)" % (reason, number))
-            self.checked[key] = '<sup class="cite bad">%s:%s:%d</sup>' % (esc(repo_name), esc(path), first)
+            self.checked[key] = '<sup class="cite bad">%s:%s:%d</sup>' % (esc(repo_name), esc(path), first)  # never shown: the run fails
 
         repo = self.repos.get(repo_name)
         if repo is None:
@@ -602,7 +608,7 @@ class Content:
         if snippet not in "\n".join(lines[first - 1:last]):
             seen = lines[first - 1].strip()[:100] if first == last else "lines %d-%d" % (first, last)
             return bad("snippet %r is not there (%s)" % (snippet, "line reads %r" % seen if first == last else seen))
-        self.checked[key] = repo.cite(path, first)
+        self.checked[key] = (repo, path, first)
 
     def _scan(self):
         fenced = None
@@ -616,7 +622,22 @@ class Content:
                 self._check(m, number)
 
     def render_cite(self, m):
-        return self.checked.get(m.group(0)) or '<sup class="cite bad">%s</sup>' % esc(m.group(0))
+        """A small numbered marker in the text; the sources are listed once under the section (flush_notes)."""
+        found = self.checked.get(m.group(0))
+        if not isinstance(found, tuple):
+            return found or '<sup class="cite bad">%s</sup>' % esc(m.group(0))
+        repo, path, line = found
+        number = self.notes.setdefault((repo, path, line), len(self.notes) + 1)
+        return '<sup class="cite"><a href="%s" title="%s %s:%d">%d</a></sup>' % (repo.url(path, line), repo.name, esc(path), line, number)
+
+    def flush_notes(self):
+        """The sources of the section just rendered, collapsed under one line, numbered as their markers are."""
+        if not self.notes:
+            return ""
+        items = "".join('<li><a href="%s">%s %s:%d</a></li>' % (repo.url(path, line), repo.name, esc(path), line) for (repo, path, line) in self.notes)
+        out = '<details class="notes"><summary>Sources (%d)</summary><ol>%s</ol></details>' % (len(self.notes), items)
+        self.notes = {}
+        return out
 
     def inline(self, text):
         return inline(self.masker.hide(text), self.masker)
@@ -721,8 +742,9 @@ class Content:
         head = cells(rows[0])
         body = [cells(row) for row in rows[2:]]
         th = "".join("<th>%s</th>" % inline(c, self.masker) for c in head)
-        tr = "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % inline(c, self.masker) for c in row) for row in body)
-        return '<div class="scroll"><table><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (th, tr)
+        labels = [esc(self.masker.plain(c)) for c in head]
+        tr = "".join("<tr>%s</tr>" % "".join('<td data-label="%s">%s</td>' % (labels[i] if i < len(labels) else "", inline(c, self.masker)) for i, c in enumerate(row)) for row in body)
+        return '<div class="scroll"><table%s><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (' class="stack"' if len(head) >= 3 else "", th, tr)
 
     def list(self, rows, first_number):
         ordered = bool(re.match(r"^\s*\d+\.", rows[0]))
@@ -746,12 +768,13 @@ class Content:
         """Split the content at its `##` headings: (intro html, {key: (title, html)}, extra [(title, html)])."""
         starts = [i for i, line in enumerate(self.lines) if re.match(r"^##\s+", line) and not self._in_fence(i)]
         intro_lines = self.lines[: starts[0]] if starts else self.lines
-        intro = self.render([row for row in intro_lines if not re.match(r"^#\s", row)], 1)
+        intro = self.render([row for row in intro_lines if not re.match(r"^#\s", row)], 1) + self.flush_notes()
         found, extra, used = {}, [], set()
         for n, start in enumerate(starts):
             stop = starts[n + 1] if n + 1 < len(starts) else len(self.lines)
             title = re.sub(r"^##\s+", "", self.lines[start]).strip()
             body = self.render(self.lines[start + 1:stop], start + 2, headings=True)
+            body += self.flush_notes()
             key = next((k for k, _, words in SECTIONS if k not in used and any(w in title.lower() for w in words)), None)
             if key:
                 used.add(key)
@@ -843,7 +866,7 @@ def flow_svg(steps):
     body = []
     for step in steps:
         color = actors.index(step["actor"]) % 6
-        what = wrap(step["what_plain"], 36)
+        what = wrap(step["what_plain"], 41)
         where = wrap(step["where_plain"], 40)
         height = 34 + len(what) * 19 + (len(where) * 16 + 8 if where else 0)
         if body:
@@ -881,9 +904,10 @@ pre{background:var(--dark);color:var(--on-dark);padding:16px;border-radius:12px;
 .lede{font-size:19px;color:var(--ink)}.muted{color:var(--muted)}.scroll{overflow-x:auto}
 table{border-collapse:collapse;width:100%;font-size:15px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--hair);vertical-align:top}th{color:var(--ink);font-weight:600}
 td{overflow-wrap:anywhere}td:first-child{min-width:7em}
-.cite{font-size:11px;margin-left:2px;line-height:0}.cite a{text-decoration:none;color:var(--muted)}.cite{white-space:nowrap}.cite.bad{color:var(--bad)}
+.cite{font-size:11px;margin-left:1px;line-height:0;white-space:nowrap}.cite a{text-decoration:none;color:var(--muted);padding:0 2px}.cite.bad{color:var(--bad)}
+details.notes{border:0;background:none;margin:8px 0}details.notes summary{padding:4px 0;font-size:14px;color:var(--muted)}details.notes>ol{margin:4px 0 12px;padding-left:28px;font-size:14px}
 nav ul{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:8px}nav a{display:inline-block;padding:6px 12px;background:var(--card);border-radius:999px;color:var(--ink);text-decoration:none;font-size:14px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:12px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:12px 0}
 .card{background:var(--card);border-radius:12px;padding:16px}.card h3{margin:0 0 4px;font-size:24px}.card p{margin:6px 0}.card .meta{font-size:14px;color:var(--muted)}
 .ver{display:inline-block;background:var(--strong);color:var(--ink);border-radius:999px;padding:1px 10px;font-size:13px;margin-right:6px}
 details{border:1px solid var(--hair);border-radius:12px;margin:12px 0;background:var(--soft)}summary{cursor:pointer;padding:14px 16px;font:500 18px var(--sans);color:var(--ink)}
@@ -897,7 +921,9 @@ details>div{padding:0 16px 16px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad
 .diagram .stripe.c3,.diagram .num.c3{fill:var(--c3)}.diagram .stripe.c4,.diagram .num.c4{fill:var(--c4)}.diagram .stripe.c5,.diagram .num.c5{fill:var(--c5)}
 ol.steps li{margin:8px 0}footer{margin-top:64px;padding:24px;background:var(--dark);color:var(--on-dark);border-radius:12px;font-size:14px}footer code{background:#2b2826;color:var(--on-dark)}
 blockquote{margin:12px 0;padding:4px 16px;border-left:3px solid var(--hair);color:var(--muted)}
-@media(max-width:600px){body{font-size:18px}main{padding:20px 14px 48px}th,td{padding:8px 6px}}
+@media(max-width:600px){table.stack thead{display:none}table.stack tr{display:block;border:1px solid var(--hair);border-radius:10px;margin:10px 0;padding:6px 12px;background:var(--canvas)}
+table.stack td{display:block;border:0;padding:4px 0}table.stack td::before{content:attr(data-label);display:block;color:var(--muted);font-size:12px;letter-spacing:1px;text-transform:uppercase}table.stack td:first-child{font-weight:600;color:var(--ink)}
+body{font-size:18px}main{padding:20px 14px 48px}th,td{padding:8px 6px}}
 @media print{details{border:0}}
 """
 
@@ -908,8 +934,9 @@ def src(repo, path, line):
 
 
 def table(head, rows):
-    return '<div class="scroll"><table><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (
-        "".join("<th>%s</th>" % esc(h) for h in head), "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % c for c in row) for row in rows))
+    return '<div class="scroll"><table%s><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (
+        ' class="stack"' if len(head) >= 3 else "", "".join("<th>%s</th>" % esc(h) for h in head),
+        "".join("<tr>%s</tr>" % "".join('<td data-label="%s">%s</td>' % (esc(head[i]), c) for i, c in enumerate(row)) for row in rows))
 
 
 def chips(names):
@@ -1041,7 +1068,7 @@ def build_page(facts, repos, content_parts, command, content):
 def flow_where(step, content):
     if step["link"]:
         repo, path = step["link"]
-        return '<code><a href="%s">%s:%s</a></code>' % (repo.url(path, tree=repo.show(path) is None), esc(repo.name), esc(path))
+        return '<code><a href="%s">%s:%s</a></code>' % (repo.url(path, tree=repo.is_dir(path)), esc(repo.name), esc(path))
     return content.inline(step["where"])
 
 

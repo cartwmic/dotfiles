@@ -212,9 +212,10 @@ class StackMapTest(unittest.TestCase):
         done, page = self.run_script()
         self.assertEqual(done.returncode, 0, done.stderr)
         html = page.read_text(encoding="utf-8")
-        self.assertEqual(len(re.findall(r"<td>the machines", html)), 1)
+        self.assertEqual(len(re.findall(r'<td data-label="Job">the machines', html)), 1)
         self.assertIn("libraries", html)
-        self.assertRegex(html, r'<tr><td>dotfiles</td><td>the machines <sup class="cite"><a href="[^"]+">dotfiles README\.md:1</a></sup></td></tr>')
+        self.assertRegex(html, r'<tr><td data-label="Repo">dotfiles</td><td data-label="Job">the machines<sup class="cite"><a href="[^"]+" title="dotfiles README\.md:1">\d+</a></sup></td></tr>')
+        self.assertRegex(html, r'<summary>Sources \(2\)</summary><ol><li><a href="[^"]+">dotfiles README\.md:1</a></li><li><a href="[^"]+">agent-kit package\.json:3</a></li></ol>')  # one list per section, in marker order
         self.assertIn("coordinator:README.md", html)  # the flow step's where-cell survived the split
 
     def test_missing_fact_source_is_a_hard_failure(self):
@@ -241,6 +242,22 @@ class StackMapTest(unittest.TestCase):
         done, _ = self.run_script()
         self.assertEqual(done.returncode, 1)
         self.assertIn("no `## ` section for 'Glossary'", done.stderr)
+
+    def test_headings_with_the_word_repo_still_find_their_own_section(self):
+        content = CONTENT.replace("## How a piece of work moves", "## How a piece of work moves through the repos").replace("## Where do I change X?", "## Where do I change X in each repo?")
+        content = content.replace("Five plain sentences live here.", "See [the glossary](docs/glossary.md) and [the web](https://example.com/x).")
+        self.world.change("dotfiles", "docs/stack-map/content.md", content)
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        html = page.read_text(encoding="utf-8")
+        self.assertIn("See the glossary and", html)  # a link to a repository file keeps only its words
+        self.assertIn('<a href="https://example.com/x">the web</a>', html)
+        self.assertIn("<h2>How a piece of work moves through the repos</h2>", html)
+
+    def test_a_flow_step_naming_a_folder_links_to_the_tree(self):
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(page.read_text(encoding="utf-8"), r'github\.com/cartwmic/coordinator/tree/[0-9a-f]{40}/docs"')
 
     def test_no_content_file_at_origin_main_fails(self):
         self.world.change("dotfiles", "docs/stack-map/content.md", None)
