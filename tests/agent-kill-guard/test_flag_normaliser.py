@@ -152,7 +152,7 @@ class Tables(unittest.TestCase):
     def test_the_gh_rows_are_the_gh_wrappers_rows(self):
         """The hook cannot import scripts/gh-wrapper (an extensionless script, installed apart from the hooks), so its rows are copied and this compares them."""
         wrapper = ast.literal_eval(re.search(r"^FLAGS = (\{.*?^\})", (ROOT / "scripts/gh-wrapper").read_text(), re.M | re.S).group(1))
-        for key in [("pr", ""), ("pr", "create"), ("pr", "edit"), ("pr", "merge"), ("api", "")]:
+        for key in [("pr", ""), ("pr", "create"), ("pr", "edit"), ("pr", "merge"), ("api", ""), ("issue", "edit")]:
             with self.subTest(row=key):
                 self.assertEqual(bash_rules.FLAG_ROWS[key], wrapper[key])
 
