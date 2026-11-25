@@ -13,14 +13,18 @@ Refuse (exit 1) when the head build fails and either the base build passes or th
 fails because another repository moved (the base fails too, and the PR touches none of the page's files) is a warning, exit 0. Exit 2:
 the check could not run (gh, a fetch or a missing clone). Nothing is written under ~/.local/state/stack-map, no network is used beyond
 `gh pr view` and `git fetch`, and the primary clone is only fetched into: never checked out or changed in its working tree.
+Every run adds one JSON line to $XDG_STATE_HOME/stack-map-merge-check/log.jsonl (default ~/.local/state): the PR, its head, the outcome and the failure lines.
 """
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPOS = ("coordinator", "agent-kit", "loop-engine")
@@ -90,7 +94,8 @@ def generator_at(clone, rev):
     return done.stdout if done.returncode == 0 else None
 
 
-def check(pr):
+def check(pr, record):
+    """Run the check; returns the exit code and fills `record` (sha, outcome, failed) for the run log."""
     home = Path.home()
     repos_dir = home / "git"
     primary = repos_dir / "dotfiles"
@@ -98,6 +103,7 @@ def check(pr):
         if not (repos_dir / name / ".git").exists():
             raise Stop(2, "stack-map-merge-check: %s is not a git clone, and the page build reads the four repositories there (dotfiles, coordinator, agent-kit, loop-engine): merge this PR from the machine that keeps them" % (repos_dir / name))
     sha = head_sha(pr)
+    record["head"] = sha[:7]
     private = "refs/stack-map-merge-check/pr-%s" % pr
     git(primary, "fetch", "-q", "origin", "+refs/pull/%s/head:%s" % (pr, private))
     try:
@@ -116,21 +122,35 @@ def check(pr):
             ok, lines, count = build("head", generator_at(primary, sha), sha, primary, repos_dir, work)
             if ok:
                 print("stack-map-merge-check: the stack map page builds with this PR (%s), %d citations verified" % (sha[:7], count))
+                record.update(outcome="passed", citations=count)
                 return 0
             base_ok, base_lines, _ = build("base", generator_at(primary, base), base, primary, repos_dir, work)
         finally:
             shutil.rmtree(work, ignore_errors=True)
     finally:
         git(primary, "update-ref", "-d", private, check=False)
+    record["failed"] = [line[:200] for line in lines]
     if base_ok or touched:
+        record["outcome"] = "refused"
         for line in lines:
             print(line, file=sys.stderr)
         print("stack-map-merge-check: %s" % FIX, file=sys.stderr)
         if touched:
             print("stack-map-merge-check: this PR changes the page's own files (%s)" % ", ".join(touched), file=sys.stderr)
         return 1
+    record["outcome"] = "warned"
     print("stack-map-merge-check: warning: the stack map page does not build with this PR (%s), and does not build on main either; the PR changes none of the page's files, so it is not blocked. First failure: %s" % (sha[:7], lines[0]), file=sys.stderr)
     return 0
+
+
+def write_log(record):
+    path = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "stack-map-merge-check" / "log.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:
+        print("stack-map-merge-check: could not write the run log %s: %s" % (path, error), file=sys.stderr)
 
 
 def main(argv):
@@ -139,11 +159,17 @@ def main(argv):
         return 2
     os.environ.setdefault("GH_URGENT", "1")
     os.environ.setdefault("GH_CALLER", "stack-map-merge-check")
+    began = time.monotonic()
+    record = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "stack-map-merge-check", "pr": int(argv[1]), "outcome": "error"}
     try:
-        return check(argv[1])
+        code = check(argv[1], record)
     except Stop as stop:
         print(stop, file=sys.stderr)
-        return stop.code
+        record["failed"] = [str(stop)[:200]]
+        code = stop.code
+    record.update(exit=code, duration_ms=round((time.monotonic() - began) * 1000))
+    write_log(record)
+    return code
 
 
 if __name__ == "__main__":

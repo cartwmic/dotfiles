@@ -7,6 +7,7 @@ PR's head commit. Nothing reaches GitHub or the real ~/git.
     python3 -m unittest discover -s tests/stack-map-merge-check -v
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -169,6 +170,22 @@ class MergeCheckTest(unittest.TestCase):
         self.assertEqual(git(self.dotfiles, "for-each-ref", "refs/stack-map-merge-check"), "")
         self.assertEqual(sorted((self.home / "tmp").iterdir()), [], "the scratch directory is removed")
         self.assertFalse((self.home / ".local/state/stack-map").exists(), "the real run log is not written")
+
+    def test_every_run_adds_one_record_to_its_own_log(self):
+        log = self.home / ".local/state/stack-map-merge-check/log.jsonl"
+        self.pull_request(18, {CONTENT: self.content(GOOD_SNIPPET, '"name": "no such text"')})
+        self.assertEqual(self.check(18).returncode, 1)
+        self.pull_request(19, {})
+        self.assertEqual(self.check(19).returncode, 0)
+        self.sha_file.write_text("not a sha\n", encoding="utf-8")
+        self.assertEqual(self.check(19).returncode, 2)
+        records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(r["pr"], r["outcome"], r["exit"]) for r in records], [(18, "refused", 1), (19, "passed", 0), (19, "error", 2)])
+        self.assertTrue(records[0]["failed"][0].startswith("coordinator:package.json:2: snippet"))
+        self.assertEqual(records[1]["citations"], 5)
+        for r in records:
+            self.assertRegex(r["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertIn("duration_ms", r)
 
     def test_a_fetch_that_fails_cannot_pass(self):
         self.pull_request(14, {})

@@ -51,7 +51,7 @@ A version mismatch between pins is not a failure: the page flags it in red.
 
 A dotfiles PR that breaks the page build is refused at merge time. `pr-body-check cartwmic/dotfiles N` (the merge form, the second step of the chain the Bash hook requires before `gh pr merge`) first runs `stack-map-merge-check cartwmic/dotfiles N`, on the agent host. No token or secret is needed in GitHub CI.
 
-How it runs: it reads the PR's head commit with `gh pr view`, fetches it into `~/git/dotfiles` (the clone is fetched into, never checked out), fetches `origin/main` of the four clones, and builds the page in a scratch folder under `~/tmp` with the PR's head standing in for dotfiles `origin/main`, using the PR's own generator. It writes nothing to `~/.local/state/stack-map`, and removes the scratch folder.
+How it runs: it reads the PR's head commit with `gh pr view`, fetches it into `~/git/dotfiles` (the clone is fetched into, never checked out), fetches `origin/main` of the four clones, and builds the page in a scratch folder under `~/tmp` with the PR's head standing in for dotfiles `origin/main`, using the PR's own generator. It writes nothing to `~/.local/state/stack-map` and removes the scratch folder. Each run adds one JSON line (PR, head, outcome, failure lines, duration) to `~/.local/state/stack-map-merge-check/log.jsonl`.
 
 What it decides:
 
