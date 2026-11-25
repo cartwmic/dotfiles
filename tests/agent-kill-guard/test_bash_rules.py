@@ -1,4 +1,4 @@
-"""The nine bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
+"""The ten bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -951,9 +951,6 @@ class LiveGit(unittest.TestCase):
         ("cd ~/git/coordinator && git rebase origin/main", "git rebase"),
         ("cd ~/git/coordinator && git cherry-pick abc1234", "git cherry-pick"),
         ("cd ~/git/coordinator && git revert abc1234", "git revert"),
-        ("cd ~/git/coordinator && git stash", "git stash"),
-        ("cd ~/git/coordinator && git stash push -m x", "git stash"),
-        ("cd ~/git/coordinator && git stash pop", "git stash"),
         ("cd ~/git/coordinator && git clean -fd", "git clean"),
         ("cd ~/git/coordinator && git am x.patch", "git am"),
         ("cd ~/git/coordinator && git apply x.patch", "git apply"),
@@ -1092,6 +1089,82 @@ class LiveGit(unittest.TestCase):
         self.assertIsNone(check("cd /home/cartwmic/git/coordinator && git merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
         self.assertTrue(check("cd /Users/mac/git/coordinator && git merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
         self.assertTrue(check("git -C $HOME/git/coordinator merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
+
+
+class Stash(unittest.TestCase):
+    """`git stash` that writes the stash list is refused in any directory and on every profile: every worktree of a repo shares one list
+    (2026-11-24: two builders in coordinator worktrees took each other's stashes). `list` and `show` pass. The refusal names the fix."""
+    REFUSED = [
+        "git stash",
+        "git stash push -m x",
+        "git stash pop",
+        "git stash save x",
+        "git stash apply",
+        "git stash drop",
+        "git stash clear",
+        "git stash store 0123abc",
+        "git stash branch newbranch",
+        "git stash -q",
+        "git stash --keep-index",
+        "git -C ~/tmp-home/x stash push -m x",
+        "git -C ~/git/coordinator stash pop",
+        "git -C/home/cartwmic/tmp-home/x stash pop",
+        "git --no-pager -C ~/tmp-home/x stash pop",
+        "git --git-dir=/home/cartwmic/tmp-home/x/.git stash pop",
+        "git -c a=b stash",
+        "git --foo stash pop",
+        "cd ~/tmp-home/x && git stash pop",
+        "cd ~/tmp-home/x && git stash push -m x && echo done",
+        "git status; git stash pop",
+        "sh -c 'git stash pop'",
+        "echo $(git stash pop)",
+        "git stash pop || true",
+        "cd ~/git/coordinator && git stash push -m x",
+    ]
+    ALLOWED = [
+        "git stash list",
+        "git stash list --oneline",
+        "git stash show",
+        "git stash show -p",
+        "git stash show stash@{1} --stat",
+        "git -C ~/tmp-home/x stash list",
+        "git --no-pager stash list",
+        "git -C ~/git/coordinator stash show -p",
+        "cd ~/git/coordinator && git stash list",
+        "git show stash@{0}",
+        "git log stash@{0}",
+        "git worktree add ~/tmp-home/x origin/main",
+        "echo git stash pop",  # a word, not a command
+    ]
+    PROFILES = [{"profile": "personal"}, {"profile": "axon-work-computer"}, {"profile": "personal", "container": True}]
+    WORKTREE = {"cwd": "/home/cartwmic/tmp-home/x", "env": {"HOME": "/home/cartwmic"}}
+
+    def stash_refusal(self, text, **kw):
+        return bash_rules.refusal(text, bash_rules.Context(**dict(ctx(**dict(self.WORKTREE, **kw))._asdict(), platform="linux")))
+
+    def test_writes_are_refused_in_any_directory_and_on_every_profile(self):
+        for text in self.REFUSED:
+            for kw in self.PROFILES:
+                with self.subTest(text=text, **kw):
+                    found = self.stash_refusal(text, **kw)
+                    self.assertEqual((found[0], found[2]) if found else None, ("stash", "git stash"))
+
+    def test_read_only_forms_pass(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(self.stash_refusal(text))
+
+    def test_the_refusal_names_the_fix(self):
+        message = check("git -C ~/tmp-home/x stash push -m x", cwd="/x")
+        self.assertIn("`git stash` is refused in agent sessions", message)
+        self.assertIn("Commit your work in progress on your branch", message)
+        self.assertIn("git worktree add <path> origin/main", message)
+        self.assertIn("`git stash list` and `git stash show` are allowed", message)
+
+    def test_the_live_checkout_gets_the_same_refusal(self):
+        message = check("cd ~/git/coordinator && git stash pop", env={"HOME": "/home/cartwmic"}, cwd="/x")
+        self.assertIn("`git stash` is refused in agent sessions", message)
+        self.assertNotIn("live coordinator checkout", message)
 
 
 class Credential(unittest.TestCase):
@@ -1427,11 +1500,12 @@ class Hook(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def run_hook(self, command, tool="Bash", profile=None, argv=None, hooks=None):
+    def run_hook(self, command, tool="Bash", profile=None, argv=None, hooks=None, cwd=None, extra_env=None):
         env = {k: v for k, v in os.environ.items() if k != "AGENT_HARNESS_PROFILE"}
         if profile:
             env["AGENT_HARNESS_PROFILE"] = profile
-        payload = {"tool_name": tool, "cwd": self.tmp, "tool_input": {"command": command}}
+        env.update(extra_env or {})
+        payload = {"tool_name": tool, "cwd": cwd or self.tmp, "tool_input": {"command": command}}
         if tool is None:
             del payload["tool_name"]
         return subprocess.run([sys.executable, str((hooks or self.hooks) / "refuse_pattern_kill.py")] + (argv or []),
@@ -1666,6 +1740,26 @@ class Hook(unittest.TestCase):
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()
         self.assertEqual(text, "{{ .profile }}\n")
+
+    def test_a_stash_write_is_refused_and_a_read_passes_through_the_real_script(self):
+        """The commands of the 2026-11-24 incident, sent to the real script the way Claude Code sends them: JSON on stdin, from a worktree.
+        Three writes are refused with the fix on stderr; `git stash list` passes. Every profile file gives the same answer."""
+        worktree = f"{self.tmp}/wt-a"
+        for profile in (None, "personal", "axon-work-computer"):
+            for command, want in [("git stash", 2), ("git stash pop", 2), ("git -C %s stash push -m x" % worktree, 2), ("git stash list", 0)]:
+                with self.subTest(profile=profile, command=command):
+                    run = self.run_hook(command, profile=profile, cwd=worktree)
+                    self.assertEqual(run.returncode, want, run.stderr)
+                    if want == 2:
+                        self.assertIn("refused in agent sessions", run.stderr)
+                        self.assertIn("git worktree add <path> origin/main", run.stderr)
+
+    def test_a_stash_refusal_writes_one_guard_log_line_naming_the_rule(self):
+        log = Path(self.tmp) / "guard.jsonl"
+        run = self.run_hook("git stash pop", extra_env={"AGENT_HARNESS_GUARD_LOG": str(log)})
+        self.assertEqual(run.returncode, 2, run.stderr)
+        record = json.loads(log.read_text().splitlines()[-1])
+        self.assertEqual((record["action"], record["rule"], record["matched"]), ("refuse", "stash", "git stash"))
 
 
 class LiveGitWorkCheckout(unittest.TestCase):

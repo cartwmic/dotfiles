@@ -91,7 +91,7 @@ CASES = [
     ("git: list branches", LIVE_KW, "git -C %s branch --all" % LIVE,
      ["git -C %s branch -a" % LIVE, "git -C%s branch -a" % LIVE, "git -C %s branch -ar" % LIVE, "git -C %s branch --remotes --all" % LIVE, "git -C %s branch --verbose --all" % LIVE,
       "git -C %s branch -avv" % LIVE, "git -C %s branch --list" % LIVE, "git -C %s branch -l" % LIVE], None),
-    ("git: stash", LIVE_KW, "git -C %s stash" % LIVE, ["git -C%s stash" % LIVE, "git -C %s stash push" % LIVE], "live_git"),
+    ("git: stash", LIVE_KW, "git -C %s stash" % LIVE, ["git -C%s stash" % LIVE, "git -C %s stash push" % LIVE], "stash"),
     ("git: stash list", LIVE_KW, "git -C %s stash list" % LIVE, ["git -C%s stash list" % LIVE, "git -C %s stash show" % LIVE, "git -C %s stash list --oneline" % LIVE], None),
     ("git: a read, and the same reset in a scratch checkout", LIVE_KW, "git -C %s log --oneline" % LIVE,
      ["git -C%s log -1" % LIVE, "git -C /tmp/scratch reset --hard", "git -C/tmp/scratch reset --hard", "git --git-dir=/tmp/scratch/.git reset --hard"], None),
