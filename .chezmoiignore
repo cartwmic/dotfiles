@@ -132,6 +132,11 @@ bin/**
 {{- end }}
 
 {{- if ne .profile "personal" }}
+# The Gitea credential helper names the homelab Gitea host and a 1Password item: personal infrastructure, kept off the work machine (script 76 is what points git at it).
+.local/bin/git-credential-gitea-op
+{{- end }}
+
+{{- if ne .profile "personal" }}
 # creating-formal-verification: personal only (docs/profiles.md). It tells agents to install and run statechart (a third-party tool that
 # fetches Java and a TLA+ jar), which is asked about before it goes on the employer's machine; Termux has no Java. The statechart external
 # itself (.chezmoiexternal.toml) is gated the same way, so there is nothing to ignore for it here.
@@ -526,7 +531,7 @@ Library/Preferences/pnpm/**
 .local/user_scripts/install_t3.sh
 # The Pi wrapper behind the T3 pi-lead instance (personal Linux, where modify_settings.json.tmpl owns that instance).
 .local/user_scripts/pi_lead.sh
-# The portable GitHub credential helper for git (personal Linux). macOS keeps its own setup; the work profile has no Linux machine.
+# The portable git credential helpers (personal Linux): GitHub through gh, and the homelab Gitea through git-credential-gitea-op. macOS keeps its own setup; the work profile has no Linux machine.
 76_git_credential_linux.sh
 # The git author identity (personal Linux). macOS keeps its own setup; the work profile has no Linux machine and its identity is not in this source.
 77_git_identity_linux.sh
