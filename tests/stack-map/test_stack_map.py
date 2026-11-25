@@ -85,7 +85,7 @@ CONTENT = """<!-- fixture content -->
 
 ## Start here
 
-Five plain sentences live here.[[coordinator:package.json:2|"name": "coordinator"]]
+Five plain sentences live here.[[coordinator:package.json|"name": "coordinator"]]
 
 ## The one-minute picture
 
@@ -95,22 +95,22 @@ The **coordinator** runs `ledger open` for you.
 
 | Repo | Job |
 |---|---|
-| dotfiles | the machines [[dotfiles:README.md:1|# Dotfiles]] |
-| agent-kit | libraries [[agent-kit:package.json:3|"version": "0.72.0"]] |
+| dotfiles | the machines [[dotfiles:README.md|# Dotfiles]] |
+| agent-kit | libraries [[agent-kit:package.json|"version": "0.72.0"]] |
 
 ## How a piece of work moves
 
 ```flow
-1. Michael | asks [[coordinator:README.md:1|# coordinator]] | coordinator:README.md
-2. Coordinator | opens a ledger ask `ledger open` [[coordinator:README.md:1|# coordinator]] | coordinator:docs
-3. Builder | opens a pull request [[coordinator:README.md:1|# coordinator]] | gh pr create
+1. Michael | asks [[coordinator:README.md|# coordinator]] | coordinator:README.md
+2. Coordinator | opens a ledger ask `ledger open` [[coordinator:README.md|# coordinator]] | coordinator:docs
+3. Builder | opens a pull request [[coordinator:README.md|# coordinator]] | gh pr create
 ```
 
 ## Where do I change X?
 
 | Change | Where |
 |---|---|
-| bump agent-kit | `dot_local/share/agent-kit/package.json` [[dotfiles:dot_local/share/agent-kit/package.json:4|"@cartwmic/agent-kit"]] |
+| bump agent-kit | `dot_local/share/agent-kit/package.json` [[dotfiles:dot_local/share/agent-kit/package.json|"@cartwmic/agent-kit"]] |
 
 ## Glossary
 
@@ -209,7 +209,32 @@ class StackMapTest(unittest.TestCase):
         self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace('"name": "coordinator"', '"name": "coordinatorX"'))
         done, page = self.run_script()
         self.assertEqual(done.returncode, 1)
-        self.assertRegex(done.stderr, r"coordinator:package\.json:2: .*coordinatorX.*content\.md line \d+")
+        self.assertRegex(done.stderr, r"coordinator:package\.json:0: snippet .*coordinatorX.* is not in the file.*content\.md line \d+")
+        self.assertFalse(page.exists())
+
+    def test_a_line_number_citation_fails_and_names_the_fix(self):
+        """The old `[[repo:path:LINE|snippet]]` form broke the build four times when code moved; it is refused so nobody copies it back."""
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("[[coordinator:package.json|", "[[coordinator:package.json:2|", 1))
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 1)
+        self.assertRegex(done.stderr, r"content\.md:\d+: citation names a line number: write `\[\[repo:path\|snippet\]\]`")
+        self.assertFalse(page.exists())
+
+    def test_moving_a_cited_line_does_not_break_the_build(self):
+        """The failure the line-number form made: lines added above a cited line moved it and the build failed. The snippet form finds the line itself."""
+        self.world.change("agent-kit", "package.json", '{\n  "private": true,\n  "keywords": [],\n  "name": "@cartwmic/agent-kit",\n  "version": "0.72.0",\n  "exports": {\n    ".": {},\n    "./chat": {},\n    "./chat/discord-order": {},\n    "./inbox": {}\n  }\n}\n')
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("citations verified: 7", done.stdout)
+        html = page.read_text(encoding="utf-8")
+        self.assertRegex(html, r'<sup class="cite"><a href="[^"]+/package\.json#L5" title="agent-kit package\.json:5">')  # the marker links to the line where the snippet is now (the facts links write the same title, so the marker is matched by its own tag)
+        self.assertRegex(html, r'<li><a href="[^"]+/package\.json#L5">agent-kit package\.json:5</a></li>')  # and so does the Sources list
+
+    def test_a_snippet_on_two_lines_fails_asking_for_a_longer_one(self):
+        self.world.change("agent-kit", "package.json", self.world.read("agent-kit", "package.json").replace('"./inbox": {}', '"./inbox": {},\n    "version": "0.72.0"'))
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 1)
+        self.assertRegex(done.stderr, r"agent-kit:package\.json:\d+: snippet .*is on 2 lines \(3, 9\): lengthen it until one line matches")
         self.assertFalse(page.exists())
 
     def test_text_that_says_where_a_section_sits_on_the_page_fails(self):
@@ -238,7 +263,7 @@ class StackMapTest(unittest.TestCase):
 
     def test_position_words_inside_code_and_cited_snippets_are_not_page_text(self):
         self.world.change("dotfiles", "README.md", "# Dotfiles below\n\nPersonal dotfiles.\n")
-        text = CONTENT.replace("[[dotfiles:README.md:1|# Dotfiles]]", "[[dotfiles:README.md:1|# Dotfiles below]]").replace("## Glossary", "The file `above.txt` is real.\n\n## Glossary", 1)
+        text = CONTENT.replace("[[dotfiles:README.md|# Dotfiles]]", "[[dotfiles:README.md|# Dotfiles below]]").replace("## Glossary", "The file `above.txt` is real.\n\n## Glossary", 1)
         self.world.change("dotfiles", "docs/stack-map/content.md", text)
         done, page = self.run_script()
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -274,7 +299,7 @@ class StackMapTest(unittest.TestCase):
 
     def test_a_flow_step_with_no_checked_citation_fails(self):
         """A drawn step is a claim about the code; no check reads its words unless it cites a line (a diagram step once kept saying two receipts after the code said three)."""
-        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace(" [[coordinator:README.md:1|# coordinator]] | coordinator:docs", " | coordinator:docs", 1))
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace(" [[coordinator:README.md|# coordinator]] | coordinator:docs", " | coordinator:docs", 1))
         done, page = self.run_script()
         self.assertEqual(done.returncode, 1)
         self.assertIn("docs/stack-map/content.md:", done.stderr)

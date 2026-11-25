@@ -6,7 +6,7 @@
 The script reads each repository at `origin/main` with `git show` and `git ls-tree`, never the working tree. Facts (versions, pins, seats,
 providers, skills, setup scripts, coordinator tables, agent-kit exports, Loop Engine crates) are parsed from files and drawn with the line
 they came from. The plain-English text is docs/stack-map/content.md (dotfiles, origin/main, or --content FILE); its citations
-`[[repo:path:LINE|snippet]]` are checked against the files and its ```flow block is drawn as a diagram.
+`[[repo:path|snippet]]` are checked against the files (the generator finds the one line that holds the snippet) and its ```flow block is drawn as a diagram.
 
 Exit 0 only when every extractor found what it expects and every citation holds. Otherwise exit 1, nothing is written, and each failure is
 printed as `repo:path:line: reason` (line 0 when no line applies). The same commits always give the same bytes: no clock, no absolute paths.
@@ -50,7 +50,8 @@ SECTIONS = (
     ("repos", "What each repository is for", ("repo",)),  # last: the bare word "repo" also turns up in the other headings
 )
 
-CITE = re.compile(r"\[\[([A-Za-z0-9_-]+):([^:\]|]+):(\d+)(?:-(\d+))?\|(.+?)\]\]")
+CITE = re.compile(r"\[\[([A-Za-z0-9_-]+):([^:\]|]+)\|(.+?)\]\]")  # [[repo:path|snippet]]: the generator finds the line, so no line number to keep
+LINE_CITE = re.compile(r"\[\[[A-Za-z0-9_-]+:[^\]|]*:\d+(?:-\d+)?\|")  # the old [[repo:path:LINE|snippet]] form, refused with the fix
 PAGE_POSITION = re.compile(r"\b(above|below|(?:further|farther|lower|higher) (?:up|down)|(?:earlier|later|elsewhere) (?:on|in) (?:the|this) (?:page|map|document))\b", re.I)  # where the page puts a section is the generator's choice, so the text must not say it; this bans the vocabulary of position, not a list of phrases
 CODE_SPAN = re.compile(r"`([^`]+)`")
 
@@ -596,12 +597,12 @@ class Content:
 
     def _check(self, m, number):
         key = m.group(0)
-        repo_name, path, first, last, snippet = m.group(1), m.group(2), int(m.group(3)), int(m.group(4) or m.group(3)), m.group(5).strip()
+        repo_name, path, snippet = m.group(1), m.group(2), m.group(3).strip()
         self.citations += 1
 
-        def bad(reason):
-            self.fail.add(repo_name, path, first, "%s (content.md line %d)" % (reason, number))
-            self.checked[key] = '<sup class="cite bad">%s:%s:%d</sup>' % (esc(repo_name), esc(path), first)  # never shown: the run fails
+        def bad(reason, line=0):
+            self.fail.add(repo_name, path, line, "%s (content.md line %d)" % (reason, number))
+            self.checked[key] = '<sup class="cite bad">%s:%s</sup>' % (esc(repo_name), esc(path))  # never shown: the run fails
 
         repo = self.repos.get(repo_name)
         if repo is None:
@@ -609,15 +610,14 @@ class Content:
         body = repo.show(path)
         if body is None:
             return bad("cited file is missing at origin/main")
-        lines = body.split("\n")
         if not snippet:
             return bad("citation has an empty snippet")
-        if first < 1 or last < first or last > len(lines):
-            return bad("cited line is outside the file (it has %d lines)" % len(lines))
-        if snippet not in "\n".join(lines[first - 1:last]):
-            seen = lines[first - 1].strip()[:100] if first == last else "lines %d-%d" % (first, last)
-            return bad("snippet %r is not there (%s)" % (snippet, "line reads %r" % seen if first == last else seen))
-        self.checked[key] = (repo, path, first)
+        found = [n for n, text in enumerate(body.split("\n"), 1) if snippet in text]
+        if not found:
+            return bad("snippet %r is not in the file: it moved or changed; cite the line that backs the claim now" % snippet)
+        if len(found) > 1:
+            return bad("snippet %r is on %d lines (%s): lengthen it until one line matches" % (snippet, len(found), ", ".join(map(str, found[:6]))), found[0])
+        self.checked[key] = (repo, path, found[0])
 
     def _scan(self):
         fenced = None
@@ -627,6 +627,8 @@ class Content:
                 continue
             if fenced is not None and fenced != "flow":
                 continue
+            for m in LINE_CITE.finditer(line):
+                self.fail.add("dotfiles", CONTENT_PATH, number, "citation names a line number: write `[[repo:path|snippet]]`; the generator finds the line, so a moved line cannot break the build")
             for m in CITE.finditer(line):
                 self._check(m, number)
             if fenced is None:
@@ -672,7 +674,7 @@ class Content:
                 self.fail.add("dotfiles", CONTENT_PATH, number, "flow steps must be numbered 1, 2, 3 in order")
             actor, what, where = (part.strip() for part in parts)
             if not CITE.search(m.group(2)):
-                self.fail.add("dotfiles", CONTENT_PATH, number, "flow step %s makes a claim with no checked citation: add `[[repo:path:LINE|snippet]]` from the line that backs it" % m.group(1))
+                self.fail.add("dotfiles", CONTENT_PATH, number, "flow step %s makes a claim with no checked citation: add `[[repo:path|snippet]]` from the line that backs it" % m.group(1))
             target = re.match(r"^([A-Za-z0-9_-]+):(\S+)$", self.masker.plain(where).replace(" ", ""))
             link = None
             if target and target.group(1) in self.repos:
