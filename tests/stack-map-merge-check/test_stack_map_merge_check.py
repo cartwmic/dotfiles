@@ -163,6 +163,16 @@ class MergeCheckTest(unittest.TestCase):
         self.assertEqual(self.check(1, "acme/app").returncode, 2)
         self.assertEqual(self.check("x").returncode, 2)
 
+    def test_a_usage_error_is_written_to_the_log(self):
+        """Every run adds a record, a usage error included: a caller that passes the wrong arguments leaves a trace."""
+        log = self.home / ".local/state/stack-map-merge-check/log.jsonl"
+        self.assertEqual(self.check(1, "acme/app").returncode, 2)
+        self.assertEqual(self.check("x").returncode, 2)
+        records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(r["pr"], r["outcome"], r["exit"]) for r in records], [(1, "error", 2), (None, "error", 2)])
+        for r in records:
+            self.assertTrue(r["failed"][0].startswith("usage: stack-map-merge-check cartwmic/dotfiles PR"), r)
+
     def test_it_leaves_the_clone_the_log_and_the_scratch_directory_as_they_were(self):
         self.pull_request(13, {CONTENT: self.content(GOOD_SNIPPET, '"name": "no such text"')})
         main = git(self.dotfiles, "rev-parse", "main")

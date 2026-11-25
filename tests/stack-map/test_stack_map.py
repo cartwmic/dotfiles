@@ -220,6 +220,38 @@ class StackMapTest(unittest.TestCase):
         self.assertRegex(done.stderr, r"content\.md:\d+: citation names a line number: write `\[\[repo:path\|snippet\]\]`")
         self.assertFalse(page.exists())
 
+    def test_a_line_number_citation_is_one_failure_not_two(self):
+        """The old form is refused once, with its fix: it is not also reported as text that only looks like a citation."""
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("[[coordinator:package.json|", "[[coordinator:package.json:2|", 1))
+        done, _ = self.run_script()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("1 failure(s)", done.stderr)
+
+    def test_text_that_looks_like_a_citation_but_is_not_one_fails(self):
+        """A citation with a typo in it used to pass unchecked, so its claim went unverified: any `[[` outside code that is not a real citation fails."""
+        for lookalike in ("[[dotfiles:a:b|x]]", "[[dotfiles:README.md:L3|# Dotfiles]]", "[[dotfiles:README.md:3 |x]]", "[[Dot files:README.md|x]]", "[[dotfiles:README.md]]"):
+            with self.subTest(lookalike=lookalike):
+                self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("The **coordinator** runs", "The **coordinator** %s runs" % lookalike, 1))
+                done, page = self.run_script()
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertRegex(done.stderr, r"content\.md:\d+: looks like a citation but is not one: write `\[\[repo:path\|snippet\]\]`")
+                self.assertIn("1 failure(s)", done.stderr)
+                self.assertFalse(page.exists())
+
+    def test_a_lookalike_citation_in_a_flow_step_fails(self):
+        self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("opens a pull request [[coordinator:README.md|# coordinator]]", "opens a pull request [[coordinator:README.md|# coordinator]] [[coordinator:README.md:x|y]]", 1))
+        done, _ = self.run_script()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("looks like a citation but is not one", done.stderr)
+
+    def test_citation_text_inside_a_code_span_is_prose_not_a_citation(self):
+        """A page that explains the citation forms quotes them in code: the old form and a lookalike there are words, and render as code."""
+        text = CONTENT.replace("The **coordinator** runs", "The old form `[[repo:path:12|snippet]]` and the typo `[[Dot files:README.md|x]]` are prose; **coordinator** runs", 1)
+        self.world.change("dotfiles", "docs/stack-map/content.md", text)
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("<code>[[repo:path:12|snippet]]</code>", page.read_text(encoding="utf-8"))
+
     def test_moving_a_cited_line_does_not_break_the_build(self):
         """The failure the line-number form made: lines added above a cited line moved it and the build failed. The snippet form finds the line itself."""
         self.world.change("agent-kit", "package.json", '{\n  "private": true,\n  "keywords": [],\n  "name": "@cartwmic/agent-kit",\n  "version": "0.72.0",\n  "exports": {\n    ".": {},\n    "./chat": {},\n    "./chat/discord-order": {},\n    "./inbox": {}\n  }\n}\n')

@@ -41,6 +41,7 @@ It exits 1, writes nothing, and prints one line per problem as `repo:path:line: 
 | `dotfiles:docs/stack-map/content.md:0: no ## section for ...` | a required section is missing or renamed | restore the heading (see the list above) |
 | `...: flow step N names a path missing` | the flow points at a file that is gone | fix the path |
 | `dotfiles:docs/stack-map/content.md:N: citation names a line number` | a citation is in the old `[[repo:path:LINE\|snippet]]` form | drop the `:LINE`; the snippet alone finds the line |
+| `dotfiles:docs/stack-map/content.md:N: looks like a citation but is not one` | text with `[[` outside a code span that is not a well-formed `[[repo:path\|snippet]]` (a typo in the repo name, a stray colon in the path, a space before the `\|`), so no check read it | fix the citation; to show the form as words, put it in a code span |
 | `repo:path:N: snippet '...' is on K lines (...): lengthen it` | the snippet matches more than one line, so it does not say which line backs the claim | make the snippet longer until one line matches |
 | `...: flow step N makes a claim with no checked citation` | a diagram step has no `[[repo:path\|snippet]]` | add one from the line that backs the step |
 | `...: git fetch origin main failed` | no network, or the remote is unreachable | rerun when it is |
@@ -62,7 +63,7 @@ What it decides:
 | fails | the PR changes `docs/stack-map/`, the generator or `tests/stack-map/` | refused |
 | fails | main fails too and the PR changes none of those paths | a warning, passes: some other repository moved, not this PR |
 
-It cannot check (exit 2, which also stops the chain) when `gh` or a `git fetch` fails, the PR head moved while it ran, or `~/git` lacks one of the four clones.
+It cannot check (exit 2, which also stops the chain) when any `git` command or `gh` fails or cannot start (a fetch, the head read), the PR head moved while it ran, `~/git` lacks one of the four clones, the scratch clone fails, or the page build runs over 600 seconds. A wrong call (not `cartwmic/dotfiles` and a PR number) is also exit 2, and is logged too.
 
 The fix for a refusal is the one for any run that fails (the table above): correct `content.md`, the generator, or the cited code, and push. If main has already fixed the break, update the PR's branch from main first, since the check builds the PR head as it is.
 
