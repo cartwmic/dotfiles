@@ -263,7 +263,7 @@ class AssembleLogTest(unittest.TestCase):
     """Each run leaves one JSON line (runlog.py) with its outcome, so how often the guide was assembled or refused can be counted."""
 
     def setUp(self):
-        # Every test module in this folder sets XDG_STATE_HOME at import, so under `unittest discover` the last import
+        # Seven of this folder's test modules set XDG_STATE_HOME at import, so under `unittest discover` the last import
         # wins; give each test its own state folder so the line it reads is the one its own run wrote.
         state = tempfile.TemporaryDirectory(prefix="state-")
         self.addCleanup(state.cleanup)
