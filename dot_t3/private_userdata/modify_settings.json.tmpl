@@ -128,9 +128,10 @@ set -eu
 # logs skipped - so no input shape can lose data. A run that can write the target appends one JSON line - the command, the
 # compaction keys that changed and their new values; the word is proposed, never wrote, because the script cannot see whether
 # chezmoi then wrote the file - to ~/.local/state/t3-settings/log.jsonl (XDG_STATE_HOME respected). The gate is inverted:
-# log_apply stays silent only for the read-only commands (diff, status, cat, verify), for a direct run with CHEZMOI_COMMAND unset
-# or empty, and for a dry run (a --dry-run flag, true-ish or bare, or a short-flag cluster made only of letters that contains n,
-# scanned up to a -- word in CHEZMOI_ARGS); every other command - apply, update, init, edit, ... - logs, and when in doubt the
+# log_apply stays silent only for the read-only commands (diff, status, cat, verify, dump, archive and merge), for a direct run
+# with CHEZMOI_COMMAND unset or empty, and for a dry run (a --dry-run flag, true-ish or bare, or a short-flag cluster made only
+# of letters that contains n, with or without a =true-ish value, scanned up to a -- word in CHEZMOI_ARGS); every other command -
+# apply, update, init, edit, ... - logs, and when in doubt the
 # line is true anyway because the word is proposed. The whole logging block is wrapped, so a read-only log file or a state path
 # that is a regular file leaves stdout exact, exit 0 and nothing on stderr; a logging failure never fails the apply. The merged
 # document is printed in jq's default pretty
@@ -145,8 +146,9 @@ IDLE_COMPACTION='beforeCacheExpires'
 # One JSON line per run that can write the target (design principle 14): what the script proposed. chezmoi renders and runs
 # this script for every command that needs the target file, and the script cannot see whether chezmoi then wrote the file - so
 # the word is proposed, never wrote. The gate is inverted: log_apply stays silent only for the read-only commands (diff, status,
-# cat, verify), for a direct run with CHEZMOI_COMMAND unset or empty, and for a dry run - a --dry-run flag (true-ish value or
-# bare) or a short-flag cluster made only of letters that contains n, scanned up to a -- word in CHEZMOI_ARGS (set -f first, so
+# cat, verify, dump, archive and merge), for a direct run with CHEZMOI_COMMAND unset or empty, and for a dry run - a --dry-run
+# flag (true-ish value or bare) or a short-flag cluster made only of letters that contains n, with or without a =true-ish value,
+# scanned up to a -- word in CHEZMOI_ARGS (set -f first, so
 # no glob expands); every other command - apply, update, init, edit, ... - logs, and when in doubt the line is true anyway
 # because the word is proposed. The logging block is wrapped so a read-only log file or a state path that is a regular file
 # leaves stdout exact, exit 0 and nothing on stderr; a logging failure never fails the apply.
