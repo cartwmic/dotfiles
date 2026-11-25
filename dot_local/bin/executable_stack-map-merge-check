@@ -11,7 +11,8 @@ It builds the real page twice at most (docs/stack-map/README.md, "Before a merge
 
 Refuse (exit 1) when the head build fails and either the base build passes or the PR touches the page's own files. A head build that
 fails because another repository moved (the base fails too, and the PR touches none of the page's files) is a warning, exit 0. Exit 2:
-the check could not run (gh, a fetch or a missing clone). Nothing is written under ~/.local/state/stack-map, no network is used beyond
+the check could not run (gh or any git command fails or cannot start, a clone or the scratch clone is missing, the head moved while
+checking, the page build ran over 600 seconds, or the call was wrong: the usage error). Nothing is written under ~/.local/state/stack-map, no network is used beyond
 `gh pr view` and `git fetch`, and the primary clone is only fetched into: never checked out or changed in its working tree.
 Every run adds one JSON line to $XDG_STATE_HOME/stack-map-merge-check/log.jsonl (default ~/.local/state): the PR, its head, the outcome and the failure lines.
 """
@@ -154,15 +155,15 @@ def write_log(record):
 
 
 def main(argv):
-    if len(argv) != 2 or argv[0] not in ("cartwmic/dotfiles", "dotfiles") or not argv[1].isdigit():
-        print("usage: stack-map-merge-check cartwmic/dotfiles PR   (the repo may also be written dotfiles)", file=sys.stderr)
-        return 2
     os.environ.setdefault("GH_URGENT", "1")
     os.environ.setdefault("GH_CALLER", "stack-map-merge-check")
     began = time.monotonic()
-    record = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "stack-map-merge-check", "pr": int(argv[1]), "outcome": "error"}
+    number = argv[1] if len(argv) == 2 and argv[1].isdigit() else None
+    record = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "stack-map-merge-check", "pr": int(number) if number else None, "outcome": "error"}
     try:
-        code = check(argv[1], record)
+        if len(argv) != 2 or argv[0] not in ("cartwmic/dotfiles", "dotfiles") or number is None:
+            raise Stop(2, "usage: stack-map-merge-check cartwmic/dotfiles PR   (the repo may also be written dotfiles)")
+        code = check(number, record)
     except Stop as stop:
         print(stop, file=sys.stderr)
         record["failed"] = [str(stop)[:200]]

@@ -627,10 +627,13 @@ class Content:
                 continue
             if fenced is not None and fenced != "flow":
                 continue
-            for m in LINE_CITE.finditer(line):
-                self.fail.add("dotfiles", CONTENT_PATH, number, "citation names a line number: write `[[repo:path|snippet]]`; the generator finds the line, so a moved line cannot break the build")
             for m in CITE.finditer(line):
                 self._check(m, number)
+            prose = CODE_SPAN.sub("\x00", CITE.sub("\x00", line))  # what the renderer treats as page text: real citations and code spans are not
+            for m in LINE_CITE.finditer(prose):
+                self.fail.add("dotfiles", CONTENT_PATH, number, "citation names a line number: write `[[repo:path|snippet]]`; the generator finds the line, so a moved line cannot break the build")
+            if "[[" in LINE_CITE.sub("\x00", prose):
+                self.fail.add("dotfiles", CONTENT_PATH, number, "looks like a citation but is not one: write `[[repo:path|snippet]]` (repo name, then a path with no colon, then `|`, then the snippet), or put the text in a code span")
             if fenced is None:
                 where = PAGE_POSITION.search(CODE_SPAN.sub("", CITE.sub("", line)))
                 if where:
