@@ -311,6 +311,98 @@ class Process(unittest.TestCase):
         r = self.refused("NULs in front of text that is not JSON")
         self.assertIn("1 lines that do not parse", r.stderr)
 
+    # Receipts of a run made on another machine (dotfiles#774: the first journal line on the agent host names /home/cartwmic/..., made on a Mac). A receipt that
+    # does not exist and whose run folder is absent, or that is outside this host's home, cites nothing and is named; every other missing or unreadable one refuses.
+    FOREIGN_HOME = "/home/kgate-test-nobody/.local/state/coordinator-ci/runs"
+
+    def foreign_line(self, run, home=None):
+        base = "%s/%s" % (home or self.FOREIGN_HOME, run)
+        return json.dumps({"tip": "c" * 40, "verdict": "pass", "receipts": {k: "%s/%s.log" % (base, k) for k in ("cluster", "host", "bookends")}}) + "\n"
+
+    def prepend_to_journal(self, *lines):
+        self.journal.write_text("".join(lines) + self.journal.read_text())
+
+    def foreign_report(self, line, run, reason="run folder absent", home=None):
+        base = "%s/%s" % (home or self.FOREIGN_HOME, run)
+        return "kgate prune: journal %s line %d: receipt %s is from another machine (%s): cites nothing\n" % (
+            self.journal, line, ", ".join("%s/%s.log" % (base, k) for k in ("cluster", "host", "bookends")), reason)
+
+    def test_a_receipt_from_another_machine_cites_nothing_and_is_named(self):
+        self.prepend_to_journal(self.foreign_line("r1"))
+        before = tree_digest(self.state)
+        r = self.prune()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, self.foreign_report(1, "r1"))
+        self.assertEqual(tree_digest(self.state), before)
+        # old and unnamed anywhere: listed. cited by the readable second line: kept (ids come only from receipts that were read).
+        self.assertEqual([l.split()[2] for l in r.stdout.splitlines() if l.startswith("would delete kgate-")], [self.ids[n] + ".out" for n in ("old", "other")])
+        self.assertIn("journal %s: 3 lines, 1 job ids" % self.journal, r.stdout)   # the foreign line still counts as a journal line
+
+    def test_a_missing_receipt_in_a_run_folder_that_is_here_still_refuses(self):
+        run = self.xdg / "coordinator-ci" / "runs" / "r1"
+        run.mkdir(parents=True)   # the folder is here, so the file was lost
+        self.prepend_to_journal(json.dumps({"receipts": {"cluster": str(run / "cluster.log")}}) + "\n")
+        r = self.refused("receipt lost from a run folder that is here")
+        self.assertIn("main-journeys.jsonl line 1: receipt file %s" % (run / "cluster.log"), r.stderr)
+
+    def test_a_receipt_that_exists_but_cannot_be_read_still_refuses(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode 000 file")
+        receipt = self.xdg / "coordinator-ci" / "cited-cluster.log"
+        receipt.chmod(0)
+        r = self.refused("receipt not readable")
+        self.assertIn("main-journeys.jsonl line 1: receipt file %s: [Errno 13]" % receipt, r.stderr)
+
+    def test_a_receipt_that_is_not_a_file_name_still_refuses(self):
+        self.prepend_to_journal(json.dumps({"receipts": {"cluster": None}}) + "\n")
+        r = self.refused("null receipt")
+        self.assertIn("line 1: receipt file None is not a file name", r.stderr)
+
+    def test_a_receipt_under_this_hosts_home_whose_run_folder_is_absent_is_from_another_machine(self):
+        home = self.tmp / "home"
+        (home / ".local").mkdir(parents=True)
+        mine = str(home / ".local" / "state" / "coordinator-ci" / "runs")   # no runs/ folder here
+        self.prepend_to_journal(self.foreign_line("r1", home=mine))
+        r = self.prune(HOME=str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, self.foreign_report(1, "r1", home=mine))
+
+    def test_a_missing_receipt_outside_this_hosts_home_is_from_another_machine_even_when_its_folder_is_here(self):
+        home = self.tmp / "home"
+        home.mkdir()
+        elsewhere = self.tmp / "elsewhere" / "runs"
+        (elsewhere / "r1").mkdir(parents=True)   # a folder at that path exists, the file does not, and the path is not this host's
+        self.prepend_to_journal(self.foreign_line("r1", home=str(elsewhere)))
+        r = self.prune(HOME=str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, self.foreign_report(1, "r1", "not under this host's home", home=str(elsewhere)))
+        # the same file under this host's home, in a run folder that is here, is a lost receipt
+        mine = home / "runs"
+        (mine / "r1").mkdir(parents=True)
+        self.prepend_to_journal(self.foreign_line("r1", home=str(mine)))
+        self.assertEqual(self.prune(HOME=str(home)).returncode, 69)
+
+    def test_delete_records_the_receipts_from_another_machine_and_a_dry_run_records_nothing(self):
+        self.prepend_to_journal(self.foreign_line("r1"), self.foreign_line("r2"))
+        self.assertEqual(self.prune().returncode, 0)
+        self.assertFalse((self.state / "prune.jsonl").exists())
+        r = self.prune("--delete")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rec = json.loads((self.state / "prune.jsonl").read_text())
+        self.assertEqual(rec["foreign_receipts"], [{"line": n, "receipt": "%s/r%d/%s.log" % (self.FOREIGN_HOME, n, k)} for n in (1, 2) for k in ("cluster", "host", "bookends")])
+        self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "young"})
+        (self.state / "prune.jsonl").unlink()   # a run with none says so
+        self.write_journal({"cited": [self.ids["cited"]]})
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["foreign_receipts"], [])
+
+    def test_many_lines_from_another_machine_are_three_lines_and_a_summary(self):
+        self.prepend_to_journal(*[self.foreign_line("r%d" % n) for n in range(1, 11)])
+        r = self.prune()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "".join(self.foreign_report(n, "r%d" % n) for n in (1, 2, 3))
+                         + "kgate prune: 21 more journal receipts on other machines cite nothing (first: line 4)\n")
+
     def test_a_running_jobs_folder_that_cannot_be_read_deletes_nothing(self):
         # active/ is there but is not a folder that can be listed: it is not the same as no active/ at all, which means nothing is running
         subprocess.run(["rm", "-rf", str(self.state / "active")], check=True)
