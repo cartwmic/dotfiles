@@ -1,14 +1,21 @@
 """Appendix ids, stamp.py, and the Part 1 gates that keep an appendix sentence's conditions and its source label (lint_main.py).
 Each test breaks one rule of a passing guide, or runs the two round-1 guides through the gate.
 Run: python3 -I tests/deriving-readable-docs/test_ids_and_part1.py"""
+import atexit
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from collections import defaultdict
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"

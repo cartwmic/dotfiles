@@ -1,12 +1,19 @@
 """The round 3 changes to the general deriving-readable-docs skill, each run as the skill runs it (a script on files). Each test breaks one rule.
 Round 2 data (the khoj-opus slice-4 report, lines of the round 2 guides) are the fixtures: tests/deriving-readable-docs/fixtures/round2/.
 Run: python3 -I tests/deriving-readable-docs/test_round3.py"""
+import atexit
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
