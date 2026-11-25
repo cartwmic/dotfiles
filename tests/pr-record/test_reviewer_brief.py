@@ -29,6 +29,14 @@ class WorkProfileTextTests(unittest.TestCase):
         self.assertIn("on a machine with no `pr-record`, which neither desktop profile is, the `Decisions:` line stays in the handoff", contract)
 
 
+class ClaimsSentenceTests(unittest.TestCase):
+    """The one judgment the claims tool leaves to the reviewer: whether a claim's record supports it, and which true statements carry no claim."""
+
+    def test_the_brief_asks_whether_each_claims_record_supports_it(self):
+        brief = (HARNESS / "reviewer-brief.md").read_text(encoding="utf-8")
+        self.assertIn("for each claim, does its record support it; list true statements that have none.", brief)
+
+
 class NoteFixDecisionTests(unittest.TestCase):
     """A fix made for a review finding or note that changes a design choice is itself a choice, and is logged."""
 

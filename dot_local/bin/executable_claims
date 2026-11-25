@@ -1,0 +1,23 @@
+#!/bin/sh
+# claims ran|read|live|said|none ... | claims expand FILE|-: make a claim a tool observed, and expand the {{claim:ID}} tokens in a text (the coordinator's src/claims/CONTRACT.md).
+# A claim made prints its token, {{claim:ID}}, alone on stdout. `expand` prints the text with each token replaced and the Sources footer, or says why it refuses (exit 1).
+# Exit 0 done, 1 refused or failed, 2 bad arguments or the command is not installed. Runs src/claims/cli.ts in the deployed coordinator checkout. Both desktop profiles (docs/gate-coverage.md).
+# The coordinator checkout: COORDINATOR_REPO, else line 1 of ~/.local/share/agent-harness/coordinator-instance (chezmoi renders it per profile: personal
+# ~/git/coordinator, work the work coordinator's checkout), else ~/git/coordinator. On the work profile line 2 is the work coordinator's state dir; it is used
+# only when COORDINATOR_STATE_DIR is unset and that dir holds pane-bin/ledger, so the ledger read is the work instance's, never the personal default.
+instance="$HOME/.local/share/agent-harness/coordinator-instance"
+repo="${COORDINATOR_REPO:-}"
+if [ -z "$repo" ] && [ -f "$instance" ]; then
+  repo="$(sed -n 1p "$instance")"
+  if [ -z "${COORDINATOR_STATE_DIR:-}" ]; then
+    state="$(sed -n 2p "$instance")"
+    [ -z "$state" ] || [ ! -e "$state/pane-bin/ledger" ] || export COORDINATOR_STATE_DIR="$state"
+  fi
+fi
+[ -n "$repo" ] || repo="$HOME/git/coordinator"
+script="$repo/src/claims/cli.ts"
+if [ ! -f "$script" ]; then
+  echo "claims: $script is missing: pull ~/git/coordinator (the command ships there; on the work profile, the coordinator checkout named in ~/.local/share/agent-harness/coordinator-instance) and run again" >&2
+  exit 2
+fi
+exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"

@@ -52,6 +52,7 @@ python3 scripts/ci-par.py \
   tests/release-skills \
   tests/pr-body-check \
   tests/pr-open \
+  tests/issue-open \
   tests/intent-review-check \
   tests/review-intent \
   tests/known-limits-check \

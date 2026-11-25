@@ -394,6 +394,9 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/bin/pr-record
 .local/bin/pr-open
 .local/bin/intent-review-check
+# issue-open runs claims, which runs the coordinator checkout's claims command.
+.local/bin/issue-open
+.local/bin/claims
 {{- end }}
 
 {{- if ne .profile "personal" }}

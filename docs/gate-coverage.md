@@ -7,10 +7,12 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 | PR body check: `pr-body-check` | yes | yes | `.local/bin/pr-body-check` | `tests/pr-body-check/test_pr_body_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Agent record path and import: `pr-record` | yes | yes | `.local/bin/pr-record` | `tests/pr-record/test_pr_record.py`, `tests/profiles/test_gate_coverage.py` |
 | Open or edit a PR through the body check: `pr-open` | yes | yes | `.local/bin/pr-open` | `tests/pr-open/test_pr_open.py`, `tests/profiles/test_gate_coverage.py` |
+| Open an issue through the claims check: `issue-open` | yes | yes | `.local/bin/issue-open`, `.local/bin/claims` | `tests/issue-open/test_issue_open.py`, `tests/profiles/test_gate_coverage.py` |
 | Review-record merge rule: `intent-review-check` | yes | yes | `.local/bin/intent-review-check` | `tests/intent-review-check/test_intent_review_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Merge gate: `ci-main-status --merge-gate` | yes | yes | `.local/bin/ci-main-status` | `tests/ci-main-status/test_ci_main_status.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: `gh pr merge` only after both gates | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/hooks/refuse_pattern_kill.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: PR body only from a checked body file | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
+| Bash rule: `gh issue create` only through `issue-open` | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: poll loops (`sleep` in a `while` or `until`) | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: unquoted heredoc with a backtick | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: credential config read raw | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/bin/config-show` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
@@ -35,6 +37,12 @@ The gate wrappers run scripts in the coordinator checkout. Chezmoi renders `~/.l
 After the body check passes, `pr-body-check REPO PR` runs `ci-main-status --threads REPO PR`: no unresolved review thread may be left (playbook 580f3e02 step 3). Every merge chain that runs the body check therefore runs the thread check, and an unresolved thread is exit 1, like a broken body rule. An unreadable thread state is also exit 1, never a silent pass. The thread check is not run for a body-only check (`--body-file`), a check made before a review round (`--skip-intent-review`), or the `--pr`/`--repo`/`--base` forms, which have no `REPO PR` pair. `ci-main-status --threads` itself ships on both profiles, in `ci-main-status`.
 
 The merge form of `pr-body-check` also refuses a PR whose agent record has no `Promises:` line (the coordinator's `pr-body-check.ts`; both profiles run the same checkout script).
+
+## `issue-open` and the `gh issue create` rule
+
+`issue-open --title T --body-file F` expands the `{{claim:ID}}` tokens in F through `claims expand` (the coordinator's `src/claims/`), adds the Sources footer and runs `gh issue create`; `--dry-run` shows the expanded body and creates nothing. `claims` is a wrapper like `pr-record`: it runs `src/claims/cli.ts` in the checkout the `coordinator-instance` file names, so the work profile uses the work coordinator's checkout and personal uses `~/git/coordinator`. Both are installed on both desktop profiles and on neither Termux.
+
+The Bash rule refuses a bare `gh issue create` (also `gh issue new`, a `-R` before the verb, and a `gh api` POST on `repos/<o>/<r>/issues`) and names `issue-open`. It refuses only where `src/claims/cli.ts` exists in the profile's coordinator checkout, so a machine that applies this before it pulls the coordinator is not left with no way to file an issue. A `gh api graphql` mutation and an issue made through another tool are not seen.
 
 ## `agent-traces` on work
 
