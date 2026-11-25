@@ -430,14 +430,19 @@ def extract_coordinator(repos):
             co.fail.add("coordinator", "src/coordinatord/config.ts", 0, "no CONFIG_KEYS table found")
     out["config_keys"] = {"path": "src/coordinatord/config.ts", "line": start or 0, "count": len(keys)}
     cli = co.need("src/coordinatord/cli.ts")
-    commands = []
+    commands, in_usage = [], False
     for line in (cli or "").split("\n"):
-        m = re.match(r"^//   coordinator ([a-z][a-z-]*)", line)
-        if m and m.group(1) not in commands:
-            commands.append(m.group(1))
-    out["cli"] = {"path": "src/coordinatord/cli.ts", "commands": commands}
+        if line.startswith("export const USAGE = `usage: coordinator"):
+            in_usage = True
+        elif in_usage and line.startswith("`"):
+            break
+        elif in_usage:
+            m = re.match(r"^  ([a-z][a-z0-9-]*)\b", line)
+            if m and m.group(1) not in commands:
+                commands.append(m.group(1))
+    out["cli"] = {"path": "src/coordinatord/cli.ts", "commands": commands, "line": line_of(cli or "", r"^export const USAGE = `usage: coordinator")}
     if cli is not None and not commands:
-        co.fail.add("coordinator", "src/coordinatord/cli.ts", 0, "no `// coordinator <command>` usage lines found")
+        co.fail.add("coordinator", "src/coordinatord/cli.ts", 0, "no commands found in the `USAGE` text")
     journeys = [name for kind, name in co.ls("scripts/journeys") if name.endswith(".journey.ts")]
     out["journeys"] = {"path": "scripts/journeys", "count": len(journeys)}
     if not journeys:
@@ -990,7 +995,7 @@ def seats_html(facts, repos):
             notes.append("advisor on")
         notes += (["helpers on Haiku"] if i["helpers_on_haiku"] else []) + (["5-minute prompt cache"] if i["five_minute_cache"] else []) + (["tool list: " + i["mcp_file"]] if i["mcp_file"] else [])
         rows.append([esc(i["id"]) + src(dot, t3["path"], i["line"]), esc(i["window"] or "-"), esc(", ".join(notes) or "-")])
-    return a + "<h4>T3 seat instances on this machine</h4>" + table(["Instance", "Window", "Notes"], rows)
+    return a + "<h4>T3 seat instances the template can create</h4>" + table(["Instance", "Window", "Notes"], rows)
 
 
 def providers_html(facts, repos):
@@ -1014,7 +1019,7 @@ def coordinator_html(facts, repos):
     stats = [["playbook rules", "%d (%s)" % (c["playbook"]["rules"], ", ".join("%s %d" % kv for kv in c["playbook"]["by_tag"].items())) + src(co, c["playbook"]["path"], 1)],
              ["ledger tables", "%d: %s" % (len(c["ledger_tables"]["tables"]), ", ".join(t["name"] for t in c["ledger_tables"]["tables"])) + src(co, c["ledger_tables"]["path"], c["ledger_tables"]["tables"][0]["line"] if c["ledger_tables"]["tables"] else 0)],
              ["settings keys (CONFIG_KEYS)", "%d" % c["config_keys"]["count"] + src(co, c["config_keys"]["path"], c["config_keys"]["line"])],
-             ["`coordinator` commands", ", ".join(c["cli"]["commands"]) + src(co, c["cli"]["path"], 1)],
+             ["`coordinator` commands", ", ".join(c["cli"]["commands"]) + src(co, c["cli"]["path"], c["cli"]["line"] or 1)],
              ["black-box journeys", "%d files in %s" % (c["journeys"]["count"], c["journeys"]["path"])],
              ["product requirements", "%d `### LE-` headings" % c["prd"]["requirements"] + src(co, c["prd"]["path"], 1)]]
     layout = table(["In the state directory", "What it is (as documented)"], [[esc(x["name"]) + src(co, x["path"], x["line"]), esc(x["about"]).replace("`", "")] for x in c["state_layout"]])
@@ -1075,6 +1080,11 @@ def flow_where(step, content):
 # --- main ----------------------------------------------------------------------------------------------------------------------------
 
 
+def short(item, limit=200):
+    """A failure line as the log keeps it: `repo:path:line: reason`, cut to `limit` characters."""
+    return item if len(item) <= limit else item[:limit - 1] + "…"
+
+
 def write_log(entry):
     path = Path(os.environ.get("STACK_MAP_LOG") or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "stack-map" / "log.jsonl")
     try:
@@ -1121,7 +1131,8 @@ def main(argv=None):
         print(json.dumps({k: v for k, v in facts.items() if k != "flow"}, indent=2, sort_keys=True))
     shas = {n: r.sha[:7] for n, r in repos.items()}
     write_log({"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "stack-map", "outcome": "failed" if fail.items else "ok", "failures": len(fail.items),
-               "duration_ms": round((time.monotonic() - began) * 1000), "shas": shas, "wrote": bool(page)})
+               "duration_ms": round((time.monotonic() - began) * 1000), "shas": shas, "wrote": bool(page),
+               "failed": [short(item) for item in fail.items], "args": {"out": args.out, "content": args.content, "fetch": args.fetch, "facts_json": args.facts_json, "repos_root": str(root)}})
     if fail.items:
         for item in fail.items:
             print(item, file=sys.stderr)

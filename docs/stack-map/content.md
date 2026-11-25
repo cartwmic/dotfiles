@@ -12,7 +12,7 @@ Picture a small software factory with one front desk.
 - **The roles.** Each agent holds a seat, a role such as lead, builder or reviewer [[coordinator:docs/glossary.md:30|a role an agent session holds]]. One table says which AI model each seat runs on [[dotfiles:dot_local/share/agent-harness/canonical/instructions/profile-personal.md:11|Each agent seat has a model.]]. Every agent's first instruction names its seat and model, and the coordinator refuses to start an agent whose first instruction omits them [[coordinator:src/t3-hook/launch-check.ts:1|must have a brief whose first line names its seat and model]].
 - **The line.** A builder changes the code in its own copy of the repository and opens a pull request (a proposed change). A reviewer, a fresh agent that did not write the change, reads it and does not edit it [[dotfiles:dot_local/share/agent-harness/reviewer-brief.md:3|You review one change in fresh context. You do not edit it.]].
 - **The gate.** A merge script runs the final checks and merges only if they pass [[coordinator:scripts/merge-pr.sh:2|Merge one coordinator PR, but only past the red-main freeze]].
-- **The shipping dock.** After each merge, a "main run" tests the newest commit [[coordinator:scripts/main-journeys.sh:2|The two journey receipts on the current origin/main tip]]. Only a commit that passed is deployed [[coordinator:scripts/pull-main.sh:7|The pass exists: the ref names a commit the personal main run passed]].
+- **The shipping dock.** After a batch of merges, a "main run" tests the newest commit [[coordinator:scripts/main-journeys.sh:2|The two journey receipts on the current origin/main tip]]. Only a commit that passed is deployed [[coordinator:scripts/pull-main.sh:7|The pass exists: the ref names a commit the personal main run passed]].
 
 Which repo holds which part:
 
@@ -40,7 +40,7 @@ The part that matters for agents is `agent-harness`, the folder that holds the a
 
 ### coordinator
 
-The coordinator is a program that runs all the time plus an agent session it keeps alive. The agent makes the judgments; code handles storage, delivery and the kill switch [[coordinator:README.md:9|The agent makes the judgments]]. The program is `coordinatord`, the daemon, a Node program (Node runs JavaScript outside a browser) that wires four modules together: an inbox of events, the ledger, outgoing messages (reach) and the playbook [[coordinator:README.md:9|is a Node program that wires four modules together]]. A supervisor checks on every tick that the coordinator's session is running and starts it when it is missing [[coordinator:src/coordinatord/supervisor.ts:1|make sure the coordinator's Pi session]]. You would see these parts:
+The coordinator is a program that runs all the time plus an agent session it keeps alive. The agent makes the judgments; code handles storage, delivery and the kill switch [[coordinator:README.md:9|The agent makes the judgments]]. The program is `coordinatord`, the daemon, a Node program (Node runs JavaScript outside a browser) that wires four modules together: an inbox of events, the ledger, outgoing messages (reach) and the playbook [[coordinator:README.md:9|is a Node program that wires four modules together]]. In the live T3 setup the daemon has no pane to supervise, because the coordinator is a thread in T3 itself [[coordinator:src/coordinatord/daemon.ts:1236|there is no Pi pane to supervise]]. You would see these parts:
 
 - **The coordinator itself, in "T3 mode".** On the live setup the coordinator is one Claude thread in T3, and Michael talks to it there [[coordinator:src/t3-coordinator/README.md:3|The coordinator as a Claude thread in T3 Code.]]. The older way runs it in Pi (a coding-agent program) inside Herdr (a terminal-pane manager) with Discord (a chat app); the two are either-or [[coordinator:src/t3-coordinator/README.md:5|Discord and T3 are either-or.]]. In T3 mode there is no Herdr [[coordinator:src/t3-coordinator/README.md:7|## No Herdr in t3 mode]].
 - **The ledger.** `ledger open` records an ask, `ledger bearings` lists everything open [[coordinator:README.md:75|List open asks, grants and workstreams]].
@@ -133,7 +133,7 @@ The other repos ship differently. agent-kit publishes on a push to main once its
 - **state directory**: the folder where the coordinator keeps its ledger, config and generated command wrappers; `pane-bin` is the folder of those wrappers.
 - **dashboard**: the status page that shows Michael what needs him; a separate hub program makes it reachable at another address.
 - **journey**: a black-box test that drives a real public path to a finished outcome.
-- **main run**: the journey receipts, run on the main branch after each merge; a red result freezes merges.
+- **main run**: the journey receipts, run on the main branch once per batch of merges; a red result freezes merges.
 - **merge gate**: the script, `scripts/merge-pr.sh`, that runs every check and then merges.
 - **red main**: main has a failing main run, so most merges are refused until it is fixed.
 - **flake**: a test that fails at random. The merge script has a flag to merge past a named, ruled flake [[coordinator:scripts/merge-pr.sh:3|--flake-only NAME]].

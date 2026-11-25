@@ -57,7 +57,10 @@ FILES = {
         "playbook.md": "# Playbook\n\n## aaaaaaaa · both\n\nrule\n\n## bbbbbbbb · personal\n\nrule\n\n## cccccccc\n\nold rule\n",
         "src/ledger/index.ts": "const SQL = `\nCREATE TABLE IF NOT EXISTS asks (\n  id TEXT\n);\nCREATE TABLE IF NOT EXISTS decisions (\n  id TEXT\n);\n`;\n",
         "src/coordinatord/config.ts": "export const CONFIG_KEYS = {\n  pane_cwd: {\n    doc: 'x',\n  },\n  t3_cli: {\n    doc: 'y',\n  },\n} as const;\n",
-        "src/coordinatord/cli.ts": "//   coordinator config get KEY\n//   coordinator kill [--why T]   create $COORDINATOR_STATE_DIR/KILL\n//   coordinator config set KEY V\n// the rank file is <state dir>/rank\n",
+        "src/coordinatord/cli.ts": (
+            "//   coordinator config get KEY\n//   coordinator kill [--why T]   create $COORDINATOR_STATE_DIR/KILL\n// the rank file is <state dir>/rank\n"  # a stale header: it lacks `jobs`
+            "export const USAGE = `usage: coordinator <command>\n  config get [KEY]   print one value\n  config set KEY V   store a value\n  kill [--why T]   stop sends\n"
+            "  jobs list|add   the kit's jobs\n\nconfig keys:\n  not_a_command   x\n`;\n"),
         "src/config-file.ts": "export const configPathOf = (s: string) => join(s, 'config.json');\n",
         "scripts/journeys/010-a.journey.ts": "x\n",
         "scripts/journeys/020-b.journey.ts": "x\n",
@@ -295,7 +298,7 @@ class StackMapTest(unittest.TestCase):
         self.assertEqual(facts["providers"]["pi"]["providers"][0]["models"], ["deepseek-v4-pro"])
         self.assertEqual(facts["coordinator"]["playbook"]["rules"], 3)
         self.assertEqual(facts["coordinator"]["config_keys"]["count"], 2)
-        self.assertEqual(facts["coordinator"]["cli"]["commands"], ["config", "kill"])
+        self.assertEqual(facts["coordinator"]["cli"]["commands"], ["config", "kill", "jobs"])  # read from USAGE, not the stale header comment
         self.assertEqual(facts["agent_kit"]["groups"], {"chat": ["chat", "chat/discord-order"], "inbox": ["inbox"]})
         self.assertEqual(facts["pins"]["loop_engine"]["tools"][0], {"name": "bookends-check", "version": "0.71.2", "line": 8})
         self.assertEqual(facts["loop_engine"]["members"][0], {"path": "crates/cli", "bins": ["loop-engine"]})
@@ -318,6 +321,11 @@ class StackMapTest(unittest.TestCase):
         lines = [json.loads(line) for line in (self.state / "stack-map" / "log.jsonl").read_text().splitlines()]
         self.assertEqual([(r["action"], r["outcome"]) for r in lines], [("stack-map", "ok"), ("stack-map", "failed")])
         self.assertEqual(lines[1]["failures"], 1)
+        # a failed run's record says which failure it was and what the run was asked to do, so a failed refresh can be located from the log alone
+        self.assertEqual(len(lines[1]["failed"]), 1)
+        self.assertRegex(lines[1]["failed"][0], r"^dotfiles:dot_config/mise/config\.toml:")
+        self.assertEqual(lines[1]["args"]["fetch"], False)
+        self.assertTrue(lines[1]["args"]["out"].endswith(".html"))
 
 
 if __name__ == "__main__":
