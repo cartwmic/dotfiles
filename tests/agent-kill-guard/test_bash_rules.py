@@ -590,6 +590,11 @@ class IssueBody(unittest.TestCase):
         (Path(home) / "git/coordinator/src/claims/cli.ts").write_text("// stub\n")
         self.assertIn("issue-open", check("gh issue create --title t", env={"HOME": home}))
 
+    def test_the_issue_create_flags_are_read_so_a_value_is_not_taken_for_an_operand(self):
+        gh = bash_rules.gh_command(["issue", "new", "--type", "bug", "-t", "T", "-F", "f", "-R", "o/r"])
+        self.assertEqual((gh.group, gh.verb, gh.operands), ("issue", "create", []))
+        self.assertEqual([gh.argv.value(n) for n in ("type", "title", "body-file", "repo")], ["bug", "T", "f", "o/r"])  # `type` is on the issue row only, not the pr one
+
     def test_the_refusal_writes_a_reason_for_the_guard_log(self):
         found = bash_rules.refusal("gh issue create --title t", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
         self.assertEqual(found[0], "issue_body")
