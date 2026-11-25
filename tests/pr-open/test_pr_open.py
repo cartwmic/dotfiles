@@ -32,12 +32,16 @@ esac
 
 FAKE_CHECK = r'''#!/bin/sh
 printf 'pr-body-check' >> "$FAKE_LOG"; for a in "$@"; do printf ' [%s]' "$a" >> "$FAKE_LOG"; done; printf '\n' >> "$FAKE_LOG"
+# the claims form: --claims-out OUT gets the body with each claim token expanded (here, to the word EXPANDED), and only when the check passes
+out=; prev=; for a in "$@"; do [ "$prev" = --claims-out ] && out=$a; prev=$a; done
 while [ $# -gt 0 ]; do [ "$1" = --body-file ] && body=$2; shift; done
 if grep -q REFUSEME "$body"; then echo "pr-body-check: FAIL $body (bookkeeping in the description)"; exit 1; fi
+[ -z "$out" ] || sed 's/{{claim:[0-9a-f]*}}/EXPANDED/g' "$body" > "$out"
 echo "pr-body-check: OK $body"
 '''
 
 FAKE_RECORD = r'''#!/bin/sh
+[ "$1" != src-path ] || { echo "${FAKE_SRC_DIR:-/srcs}/$2.src.md"; exit 0; }
 echo "${FAKE_RECORD_DIR:-/records}/$2.md"
 '''
 
@@ -77,6 +81,7 @@ class PrOpen(unittest.TestCase):
     def run_open(self, *args, stdin=None, extra_env=None):
         env = {"PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "HOME": str(self.dir), "FAKE_LOG": str(self.log), "FAKE_POSTED": str(self.posted),
                "KNOWN_LIMITS_CHECK": str(LIMITS_CHECK)}
+        env.setdefault("FAKE_SRC_DIR", str(self.dir / "srcs"))
         env.update(extra_env or {})
         return subprocess.run(["sh", str(SCRIPT), *args], cwd=self.repo, env=env, input=stdin, capture_output=True, text=True, timeout=60)
 
@@ -134,14 +139,17 @@ class PrOpen(unittest.TestCase):
         self.assertNotIn("--draft", create)
         self.assertEqual(self.posted.read_text(), self.body.read_text())
 
-    def test_the_check_and_the_post_read_the_same_private_copy(self):
+    def test_the_check_reads_a_private_copy_and_the_post_is_the_file_the_check_expanded_it_into(self):
         self.run_open("--title", "T", "--body-file", str(self.body))
         calls = self.calls()
         checked = calls[0].split("[--body-file] [")[1].split("]")[0]
+        expanded = calls[0].split("[--claims-out] [")[1].split("]")[0]
         posted = calls[1].split("[--body-file] [")[1].split("]")[0]
-        self.assertEqual(checked, posted)
+        self.assertEqual(expanded, posted)  # what gh posts is what the check wrote, never the source
         self.assertNotEqual(checked, str(self.body))
-        self.assertFalse(Path(checked).exists())  # removed when the command ends
+        self.assertNotEqual(checked, posted)
+        self.assertFalse(Path(checked).exists())  # both removed when the command ends
+        self.assertFalse(Path(posted).exists())
 
     def test_draft_is_passed_through(self):
         self.assertEqual(self.run_open("--title", "T", "--body-file", str(self.body), "--draft").returncode, 0)
@@ -325,6 +333,86 @@ class PrOpen(unittest.TestCase):
     def test_a_body_with_no_limits_section_passes_the_check(self):
         result = self.run_open("--title", "T", "--body-file", str(self.body))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    # -- the claims form (coordinator rule proof-rendered): the body file is a source with claim tokens; the posted body is its expansion ----
+
+    SOURCE = "What changed.\n\n## Proven\n\n- {{claim:0123456789abcdef}}\n"
+
+    def src_file(self, number):
+        return self.dir / "srcs" / "cartwmic" / ("scratch#%s.src.md" % number)
+
+    def test_create_posts_the_expansion_and_keeps_the_source_beside_the_record(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--title", "T", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[--claims-out]", self.calls()[0])
+        self.assertEqual(self.posted.read_text(), "What changed.\n\n## Proven\n\n- EXPANDED\n")  # no token reaches GitHub
+        self.assertEqual(self.src_file(42).read_text(), self.SOURCE)  # the source, once the PR has a number
+
+    def test_a_refused_create_writes_no_source(self):
+        self.body.write_text("REFUSEME {{claim:0123456789abcdef}}\n")
+        self.assertEqual(self.run_open("--title", "T", "--body-file", str(self.body)).returncode, 1)
+        self.assertFalse((self.dir / "srcs").exists())
+
+    def test_a_source_that_cannot_be_written_after_the_pr_is_opened_is_a_failure_that_says_so(self):
+        (self.dir / "blocker").write_text("a file where the folder should be\n")
+        result = self.run_open("--title", "T", "--body-file", str(self.body), extra_env={"FAKE_SRC_DIR": str(self.dir / "blocker")})
+        self.assertEqual(result.returncode, 2)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertTrue(last.startswith("[pr-open] ERROR: cartwmic/scratch#42 was opened, but its description source could not be written"), last)
+        self.assertIn("pr-record src-path cartwmic/scratch#42", last)
+        self.assertTrue([c for c in self.calls() if "[pr] [create]" in c])  # the PR does exist
+
+    def test_edit_of_a_pr_that_has_a_source_uses_the_claims_form_at_the_prs_head(self):
+        self.src_file(7).parent.mkdir(parents=True)
+        self.src_file(7).write_text("the earlier source\n")
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        check = [c for c in self.calls() if c.startswith("pr-body-check")][0]
+        self.assertIn("[--claims-out]", check)
+        self.assertIn("[--head] [cafef00dcafef00dcafef00dcafef00dcafef00d]", check)  # the claims are held to the PR's head, not this directory's
+        self.assertEqual(self.posted.read_text(), "What changed.\n\n## Proven\n\n- EXPANDED\n")
+        self.assertEqual(self.src_file(7).read_text(), self.SOURCE)  # replaced
+
+    def test_edit_that_brings_a_claim_token_opts_a_pr_with_no_source_into_the_claims_form(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.src_file(7).read_text(), self.SOURCE)
+
+    def test_edit_of_a_pr_with_no_source_and_no_token_is_the_plain_check_and_writes_no_source(self):
+        """The cut-over: a PR opened before the claims form is not held to it by an edit."""
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--claims-out", self.calls()[0])
+        self.assertNotIn("[--head]", self.calls()[0])
+        self.assertEqual(self.posted.read_text(), self.body.read_text())
+        self.assertFalse((self.dir / "srcs").exists())
+
+    def test_claims_edit_of_a_merged_pr_is_refused_before_the_check_and_not_patched(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "closed true cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cartwmic/scratch#7 is merged", result.stderr)
+        self.assertEqual(self.patches(), [])
+        self.assertFalse([c for c in self.calls() if c.startswith("pr-body-check")])
+
+    def test_claims_edit_that_cannot_read_the_head_is_a_failure(self):
+        self.body.write_text(self.SOURCE)
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))  # the fake state is "open false": no head
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not read the head commit of cartwmic/scratch#7", result.stderr)
+        self.assertEqual(self.patches(), [])
+
+    def test_a_refused_claims_edit_is_not_patched_and_leaves_the_source_alone(self):
+        self.src_file(7).parent.mkdir(parents=True)
+        self.src_file(7).write_text("the earlier source\n")
+        self.body.write_text("REFUSEME {{claim:0123456789abcdef}}\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), extra_env={"FAKE_PR_INFO": "open false cafef00dcafef00dcafef00dcafef00dcafef00d"})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.patches(), [])
+        self.assertEqual(self.src_file(7).read_text(), "the earlier source\n")
 
     def record_dir(self, text):
         records = self.dir / "records"

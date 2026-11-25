@@ -286,6 +286,12 @@ Library/LaunchAgents/local.heavy-gate-watchdog.plist
 61_configure_rustdesk_client.sh
 {{- end }}
 
+{{- if or (ne .profile "axon-work-computer") (ne .chezmoi.os "darwin") }}
+# The daily pull of the work coordinator's checkout (cartwmic/coordinator#1083) and the script that loads it: work macOS only. Personal hosts upgrade through their own deploy path.
+Library/LaunchAgents/local.coordinator-pull-main.plist
+92_coordinator_pull_main_launchd.sh
+{{- end }}
+
 {{- if ne .chezmoi.os "darwin" }}
 # launchd only.
 .local/user_scripts/instances_reconcile.sh
@@ -383,11 +389,15 @@ Library/LaunchAgents/local.session-keepalive.plist
 
 {{- if not (or (eq .profile "personal") (eq .profile "axon-work-computer")) }}
 # The PR gates land on both desktop profiles (docs/gate-coverage.md); any other profile (Termux) has no coordinator checkout for them to run.
-# pr-body-check, pr-record and intent-review-check run scripts in the coordinator checkout; pr-open runs pr-body-check.
+# pr-body-check, pr-record and intent-review-check run scripts in the coordinator checkout; pr-open runs pr-body-check; pr-body-check runs stack-map-merge-check.
 .local/bin/pr-body-check
+.local/bin/stack-map-merge-check
 .local/bin/pr-record
 .local/bin/pr-open
 .local/bin/intent-review-check
+# issue-open runs claims, which runs the coordinator checkout's claims command.
+.local/bin/issue-open
+.local/bin/claims
 {{- end }}
 
 {{- if ne .profile "personal" }}
@@ -398,6 +408,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/user_scripts/loop_engine_bump.py
 # The T3 pin check reads the personal coordinator's inbox and the budget-steward checkout and runs from the personal Linux schedules-check unit (docs/profiles.md).
 .local/user_scripts/t3_pin_check.py
+# The stack map generator reads origin/main of the personal checkouts (~/git/dotfiles, coordinator, agent-kit, loop-engine), which the work Mac does not keep: personal only (docs/profiles.md).
+.local/user_scripts/stack_map.py
 # The coordinator on PATH for the homelab chat seat's post (`coordinator lead post HomelabChat`): personal only (docs/profiles.md).
 .local/bin/coordinator
 # kgate-split serves a work queue from this host's LAN address to pods on the personal homelab cluster: personal only (docs/profiles.md).
@@ -543,7 +555,7 @@ Library/Preferences/pnpm/**
 {{ $name }}
 {{-   end }}
 {{- end }}
-# Desktop, systemd and launchd.
+# Desktop, systemd and launchd. (session-cost and its code folder stay: `session-cost workstreams` collects and reports by hand on the pod. Its timer units are under .config/systemd, so they and script 86 stay out.)
 .config/systemd
 .config/systemd/**
 .config/hypr
@@ -567,13 +579,10 @@ Library/Preferences/pnpm/**
 .local/bin/ntfy-zellij-notify.sh
 .local/bin/le-verify-clean
 .local/bin/mistakes-report
-.local/bin/session-cost
 .local/share/initramfs-ssh-unlock
 .local/share/initramfs-ssh-unlock/**
 .local/share/mistakes-report
 .local/share/mistakes-report/**
-.local/share/token-efficiency
-.local/share/token-efficiency/**
 # No sshd in the pod, and the jump-host aliases need local data the pod does not have.
 .ssh
 .ssh/**

@@ -41,6 +41,8 @@ When a command can show a finding's defect, put it in the finding's `repro` in `
 
 In a design or plan review, check every sentence that says how existing code behaves (for example "as today", "already", "currently"). Open that code at the commit the design names, or else at the tip of the repo's default branch, and say which commit you read. Say whether the sentence is true or false, with path:line. When the sentence names several tools or files, check each one. A false sentence is a blocking finding when the design relies on it.
 
+Where the description, record or an issue holds claims (a `{{claim:ID}}` token, or the text a token expanded to), check each against its record: for each claim, does its record support it; list true statements that have none.
+
 ## 4. Report everything at once
 
 Find every problem in one pass. Do not hold findings back for a later round.

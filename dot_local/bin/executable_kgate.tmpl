@@ -3478,18 +3478,31 @@ def report_text(rows, since, days, repo, jobs, bad, path, top=None):
 
 
 def read_job_log(path):
-    """The records of the job log and how many lines could not be read. A missing log is an empty one."""
-    records, bad = [], 0
+    """(records, bad, nul): the records of the job log, how many lines could not be read, and the lines that hold NUL bytes. A torn append leaves NUL
+    bytes in the file (dotfiles#774). Such a line is read with the NULs taken out: `nul` has (line number from 1, NUL count, the record or None) for each,
+    the record when what is left parses as JSON and None when nothing is left. Text that is left and does not parse is `bad`, as on any other line.
+    The records recovered from NUL lines are only in `nul`, not in `records`. A missing log is an empty one."""
+    records, bad, nul = [], 0, []
     try:
         with open(path) as f:
-            for line in f:
+            for n, line in enumerate(f, 1):
+                if "\0" in line:
+                    rest = line.replace("\0", "")
+                    if not rest.strip():
+                        nul.append((n, len(line) - len(rest), None))
+                        continue
+                    try:
+                        nul.append((n, len(line) - len(rest), json.loads(rest)))
+                    except ValueError:
+                        bad += 1
+                    continue
                 try:
                     records.append(json.loads(line))
                 except ValueError:
                     bad += 1
     except FileNotFoundError:
         pass
-    return records, bad
+    return records, bad, nul
 
 
 def report_main(argv):
@@ -3506,7 +3519,8 @@ def report_main(argv):
         print(err.code if isinstance(err.code, str) else USAGE_TEXT, file=sys.stderr)
         return USAGE
     path = os.path.join(state_dir(), "log.jsonl")
-    records, bad = read_job_log(path)
+    records, bad, nul = read_job_log(path)
+    bad += len(nul)   # report does not read the NUL lines: it counts each as one it could not read
     now = datetime.datetime.now(datetime.timezone.utc)
     since = now - datetime.timedelta(days=o.days)
     rows = report_rows(records, now, o.days, o.repo)
@@ -3524,6 +3538,7 @@ def report_main(argv):
 # each and raise PruneRefused when they cannot, so a source that cannot be read deletes nothing (a dry run refuses the same way).
 PRUNE_AGE_DAYS = 3   # a job folder younger than this is never touched
 PRUNE_LOG_DAYS = 7   # a job with a log.jsonl record this recent is kept
+PRUNE_FOREIGN_LISTED = 3   # journal lines with receipts from another machine that are each named on stderr; the rest get one summary line
 PRUNE_DIR = re.compile(r"kgate-(\d+)-\d+\.out")
 PRUNE_JOB_ID = re.compile(r"kgate-\d+-\d+")
 PRUNE_KEEP = (("running", "running (active/ entry)"), ("logged", "log.jsonl record in the last %d days" % PRUNE_LOG_DAYS),
@@ -3570,18 +3585,21 @@ def prune_read_running(state):
 
 
 def prune_read_logged(state, now):
-    """(ids, repos, lines): the jobs with a record in the last PRUNE_LOG_DAYS, every `repo` the log names, and how many lines it has."""
+    """(ids, repos, lines, nul_lines): the jobs with a record in the last PRUNE_LOG_DAYS, every `repo` the log names, how many records it has, and the
+    lines that hold NUL bytes as (line number, NUL count, record kept). A NUL line's record, when it has one, counts like any other. A line with nothing
+    but NULs is skipped. Any other line that does not parse is a refusal: it could be a recent job."""
     path = os.path.join(state, "log.jsonl")
     if not os.path.exists(path):
         raise PruneRefused("job log %s is missing" % path)
     try:
-        records, bad = read_job_log(path)
+        records, bad, nul = read_job_log(path)
     except OSError as e:
         raise PruneRefused("job log %s: %s" % (path, e))
     if bad:
         raise PruneRefused("job log %s has %d lines that do not parse; one of them could be a recent job" % (path, bad))
     since = now - datetime.timedelta(days=PRUNE_LOG_DAYS)
     ids, repos = set(), set()
+    records += [rec for _, _, rec in nul if rec is not None]
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -3590,15 +3608,29 @@ def prune_read_logged(state, now):
             ids.add(rec["id"])
         if isinstance(rec.get("repo"), str):
             repos.add(rec["repo"])
-    return ids, repos, len(records)
+    return ids, repos, len(records), [(n, count, rec is not None) for n, count, rec in nul]
 
 
-def prune_read_journal(path):
-    """(ids, lines): the job ids named in the receipt files of each line of the coordinator's main-run journal. No journal at all (a machine that runs no
-    main run) is no citations; a journal that is there but cannot be read in full is a refusal."""
+def prune_foreign_reason(receipt, local_roots):
+    """Why a receipt file that does not exist cites nothing on this host: its run folder (the file's parent) is absent, or the path is outside every
+    local root (this host's home and the state home the journal was read from). None when neither holds: the folder is here, so the receipt was lost."""
+    if not os.path.isdir(os.path.dirname(receipt)):
+        return "run folder absent"
+    full = os.path.abspath(receipt)
+    if not any(full.startswith(root.rstrip(os.sep) + os.sep) for root in local_roots):
+        return "not under this host's home"
+    return None
+
+
+def prune_read_journal(path, local_roots):
+    """(ids, lines, foreign): the job ids named in the receipt files of each line of the coordinator's main-run journal, how many lines it has, and the
+    receipts from another machine as (line number, [(receipt, reason)]), one entry per journal line that has any. No journal at all (a machine that
+    runs no main run) is no citations; a journal that is there but cannot be read in full is a refusal. A receipt that does not exist and is from another
+    machine (prune_foreign_reason) cites nothing here and is not a refusal; a receipt that is missing from a run folder that is here, or exists and
+    cannot be read, or is not a file name, still is."""
     if not os.path.exists(path):
-        return None, 0
-    ids, lines = set(), 0
+        return None, 0, []
+    ids, lines, foreign = set(), 0, []
     try:
         with open(path) as f:
             for n, line in enumerate(f, 1):
@@ -3610,15 +3642,23 @@ def prune_read_journal(path):
                     files = list(receipts.values())
                 except (ValueError, AttributeError):
                     raise PruneRefused("journal %s line %d does not parse" % (path, n))
+                gone = []
                 for rf in files:
+                    if not isinstance(rf, str):
+                        raise PruneRefused("journal %s line %d: receipt file %r is not a file name" % (path, n, rf))
                     try:
                         with open(rf, errors="replace") as r:
                             ids.update(PRUNE_JOB_ID.findall(r.read()))
-                    except (OSError, TypeError) as e:
-                        raise PruneRefused("journal %s line %d: receipt file %s: %s" % (path, n, rf, e))
+                    except OSError as e:
+                        reason = prune_foreign_reason(rf, local_roots) if isinstance(e, FileNotFoundError) else None
+                        if reason is None:
+                            raise PruneRefused("journal %s line %d: receipt file %s: %s" % (path, n, rf, e))
+                        gone.append((rf, reason))
+                if gone:
+                    foreign.append((n, gone))
     except OSError as e:
         raise PruneRefused("journal %s: %s" % (path, e))
-    return ids, lines
+    return ids, lines, foreign
 
 
 def prune_gh(*args):
@@ -3684,16 +3724,25 @@ def prune_main(argv):
         return USAGE
     state = state_dir()
     now = datetime.datetime.now(datetime.timezone.utc)
-    journal_path = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "coordinator-ci", "main-journeys.jsonl")
+    state_home = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    journal_path = os.path.join(state_home, "coordinator-ci", "main-journeys.jsonl")
     try:
         folders = prune_folders(state)
         running = prune_read_running(state)
-        logged, names, log_lines = prune_read_logged(state, now)
-        journal, journal_lines = prune_read_journal(journal_path)
+        logged, names, log_lines, nul_lines = prune_read_logged(state, now)
+        journal, journal_lines, foreign = prune_read_journal(journal_path, (os.path.expanduser("~"), state_home))
         pr_ids, pr_repos, pr_count, unscanned = prune_read_prs(names)
     except (PruneRefused, OSError) as e:
         print("kgate prune: refused, nothing deleted: %s" % e, file=sys.stderr)
         return UNAVAILABLE
+    for n, count, kept_record in nul_lines:
+        print("kgate prune: %s line %d holds %d NUL bytes: %s" % (os.path.join(state, "log.jsonl"), n, count, "record kept" if kept_record else "skipped"), file=sys.stderr)
+    for n, gone in foreign[:PRUNE_FOREIGN_LISTED]:
+        print("kgate prune: journal %s line %d: receipt %s is from another machine (%s): cites nothing"
+              % (journal_path, n, ", ".join(rf for rf, _ in gone), " and ".join(sorted({why for _, why in gone}))), file=sys.stderr)
+    if foreign[PRUNE_FOREIGN_LISTED:]:
+        print("kgate prune: %d more journal receipts on other machines cite nothing (first: line %d)"
+              % (sum(len(g) for _, g in foreign[PRUNE_FOREIGN_LISTED:]), foreign[PRUNE_FOREIGN_LISTED][0]), file=sys.stderr)
     delete, kept, young = prune_plan(folders, now, running, logged, journal or set(), pr_ids)
     sizes = {fid: prune_size(os.path.join(state, fid + ".out")) for fid in delete}
     freed = sum(sizes.values())
@@ -3721,7 +3770,9 @@ def prune_main(argv):
         try:
             with open(record, "a") as f:
                 f.write(json.dumps({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "deleted": done, "planned": len(delete), "bytes": freed, "young": young,
-                                    "kept": {k: len(v) for k, v in kept.items()}}) + "\n")
+                                    "kept": {k: len(v) for k, v in kept.items()},
+                                    "nul_lines": [{"line": n, "nul_bytes": c, "record_kept": k} for n, c, k in nul_lines],
+                                    "foreign_receipts": [{"line": n, "receipt": rf} for n, gone in foreign for rf, _ in gone]}) + "\n")
         except OSError as e:
             print("kgate prune: the folders are removed but the run could not be recorded in %s: %s" % (record, e.strerror or e), file=sys.stderr)
             return UNAVAILABLE

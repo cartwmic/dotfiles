@@ -1,13 +1,20 @@
 """The defects the round 3 runs (khoj, agent-kit) tripped on, each run as the skill runs it (a script on files). Each test breaks one rule.
 The fixtures are excerpts of the round 3 data: tests/deriving-readable-docs/fixtures/round3/.
 Run: python3 -I tests/deriving-readable-docs/test_round3_defects.py"""
+import atexit
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs"

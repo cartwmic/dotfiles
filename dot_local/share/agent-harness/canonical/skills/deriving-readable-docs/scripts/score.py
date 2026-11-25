@@ -19,13 +19,15 @@ checker actually opened (`outside` for a glossary entry with no tag, which has n
 judged), a row names no path:line (a HOLDS row too), the rows are not as many as claims checked or do not add up to the Counts line, or two rows share an id.
 With --slices, a report that read fewer than one distinct line for every three claims also prints a depth warning (it never changes the exit code); the report records the
 lines read, not the tool calls, so tool calls are not judged. With --repo, a path:line must be a line of a file in the repo. With --slices DIR (the folder slice.py wrote), the report's line `Slice: slice-K` names
-DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only.
+DIR/slice-K.claims.txt, and the report must hold a row for every id of that file and for no other; `outside` is for the entries marked outside only. Exit 1 too when a slice of DIR has no report (no report's `Slice:` line names it).
 Prints per repo, and pooled over all repos: claims, the four verdicts, errors, the rate (errors / claims) for all, the appendix and Part 1,
 and claims by cause. With --doc (repeatable) and --repo it adds words, errors per 1,000 words and words per claim, counted as
 check_citations.py counts them. With --out FILE.json it writes the numbers there and the printed text beside it as FILE.txt (a path, never a folder: a folder or a name that does not end in .json is a usage error).
 When --slices names a folder that holds fewer claims than the guide (a fix round), the words, the words per claim and the errors per 1,000 words are those of the
 re-checked sentences, not of the whole guide, so the counts compared are alike. The rates use the checkers' claim count. When the script counts the doc's sentences differently, the output adds
 `claim count: checkers N, script M, difference +K`, so the two are never mixed up. Words per claim divides by the script's sentences.
+
+Log: each score run appends one JSON line (runlog.py: script, action `score`, outcome ok or refused; claims, errors and fix_round, or the reason it refused).
 
 --lab. BEHAVIOURS.txt is the scoper's list, one behaviour a line: `ID | path:line | cond, cond, ...` where path:line is the primary line a
 sentence must cite and the conditions are the lines (path:line or path:start-end) a correct sentence must state; the conditions may be empty.
@@ -51,6 +53,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from claims import TAG, doc_lines, line_items, part1_slice, prose_sentences, split_lines, word_count, words_of  # noqa: E402
+from runlog import log_run  # noqa: E402
 
 COUNTS = re.compile(r"^\W*Counts:\s+claims checked\s+(\d+);\s*HOLDS\s+(\d+);\s*WRONG\s+(\d+);\s*OVERSTATED\s+(\d+);\s*UNSUPPORTED\s+(\d+)\s*\.?\s*$", re.M)
 FINDING = re.compile(r"^\s*(?:[-*]\s*)?(?:[^|\s]*?:)?(?:\d+(?:\.\d+)?|A\d+\.\w+)\s*\|\s*(WRONG|OVERSTATED|UNSUPPORTED)\s*\|(?:\s*(MISSING_CONDITION|NAME|COUNT|KIND|OTHER)\s*\|)?", re.M)
@@ -201,6 +204,12 @@ def slice_sentences(slices, reports):
 
 def score_repo(name, specs, docs, repo, slices=None):
     reports = [parse_report(f, {"repo": os.path.realpath(repo) if repo else None, "slices": slices}) for s in specs for f in report_files(s)]
+    if slices:
+        named = {r["slice"] for r in reports}
+        absent = sorted((f[:-len(".claims.txt")] for f in os.listdir(slices) if f.endswith(".claims.txt")), key=lambda s: (len(s), s))
+        absent = [s for s in absent if s not in named]
+        if absent:
+            raise ScoreError("%s: no report names %s: a slice nobody checked is not scored" % (name, ", ".join(absent)))
     out = totals(reports)
     out["name"] = name
     out["warnings"] = [w for r in reports for w in r["warnings"]]
@@ -288,9 +297,13 @@ def cmd_score(argv):
         raise ScoreError("usage: score.py [NAME=]REPORTS... [--doc GUIDE.md ... --repo DIR] [--slices DIR] [--out FILE.json]")
     check_out_path(out_path)
     repos = []
-    for spec in specs:
-        name, _, path = spec.partition("=") if "=" in spec else (os.path.basename(os.path.normpath(spec)), "", spec)
-        repos.append(score_repo(name, [path], docs if len(specs) == 1 else [], repo, slices))
+    try:
+        for spec in specs:
+            name, _, path = spec.partition("=") if "=" in spec else (os.path.basename(os.path.normpath(spec)), "", spec)
+            repos.append(score_repo(name, [path], docs if len(specs) == 1 else [], repo, slices))
+    except ScoreError as e:
+        log_run("score.py", "score", "refused", reason=str(e), repos=len(specs), fix_round=slices is not None)
+        raise
     lines = []
     for r in repos:
         lines += render_repo(r) + [""]
@@ -305,6 +318,8 @@ def cmd_score(argv):
     print("\n".join(lines).rstrip())
     if out_path:
         write_out(out_path, json.dumps(result, indent=2), "\n".join(lines).rstrip() + "\n")
+    shown = result.get("pooled", repos[0])
+    log_run("score.py", "score", "ok", repos=len(repos), claims=shown["claims"], errors=shown["errors"], fix_round=slices is not None)
     return 0
 
 

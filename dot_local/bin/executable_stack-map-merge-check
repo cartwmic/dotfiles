@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""stack-map-merge-check REPO PR: refuse a cartwmic/dotfiles PR whose merge would break the agent stack map page build.
+
+REPO is `cartwmic/dotfiles` or `dotfiles`. Run by `pr-body-check REPO PR` (the merge form) before the coordinator's body checks, so a page
+break is refused for its own reason and the `&&` merge chain stops.
+
+It builds the real page twice at most (docs/stack-map/README.md, "Before a merge"):
+  head  the PR's head commit stands in for dotfiles origin/main, with the PR's own generator, content.md and fact files; the other three
+        repositories are read at their origin/main after a fetch;
+  base  dotfiles origin/main as it is now, built the same way. Built only when the head build fails.
+
+Refuse (exit 1) when the head build fails and either the base build passes or the PR touches the page's own files. A head build that
+fails because another repository moved (the base fails too, and the PR touches none of the page's files) is a warning, exit 0. Exit 2:
+the check could not run (gh, a fetch or a missing clone). Nothing is written under ~/.local/state/stack-map, no network is used beyond
+`gh pr view` and `git fetch`, and the primary clone is only fetched into: never checked out or changed in its working tree.
+Every run adds one JSON line to $XDG_STATE_HOME/stack-map-merge-check/log.jsonl (default ~/.local/state): the PR, its head, the outcome and the failure lines.
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPOS = ("coordinator", "agent-kit", "loop-engine")
+GENERATOR = "dot_local/user_scripts/executable_stack_map.py"
+# The PR's own page files: a change to any of these is judged by the head build alone, even when main's page is already broken.
+PAGE_PATHS = ("docs/stack-map/", GENERATOR, "tests/stack-map/")
+FIX = "this PR breaks the stack map page build: fix content.md or the generator, or the cited code"
+BUILD_SECONDS = 600
+
+
+class Stop(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def run(args, **kw):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", **kw)
+    except subprocess.TimeoutExpired:
+        raise Stop(2, "stack-map-merge-check: %s took over %d seconds" % (" ".join(map(str, args[:4])), kw.get("timeout", 0)))
+    except OSError as error:
+        raise Stop(2, "stack-map-merge-check: could not run %s: %s" % (args[0], error))
+
+
+def git(clone, *args, check=True):
+    done = run(["git", "-C", str(clone), *args])
+    if check and done.returncode != 0:
+        raise Stop(2, "stack-map-merge-check: git %s failed in %s: %s" % (" ".join(a for a in args if a != "-q"), clone, " ".join(done.stderr.split()) or "no output"))
+    return done.stdout.strip()
+
+
+def head_sha(pr):
+    done = run(["gh", "pr", "view", pr, "--repo", "cartwmic/dotfiles", "--json", "headRefOid", "--jq", ".headRefOid"])
+    sha = done.stdout.strip()
+    if done.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise Stop(2, "stack-map-merge-check: could not read the head commit of cartwmic/dotfiles#%s with gh: %s" % (pr, (done.stderr.strip().splitlines() or [sha or "no output"])[-1]))
+    return sha
+
+
+def build(label, generator_text, dotfiles_sha, home_clone, repos_dir, work):
+    """Build the page with dotfiles origin/main set to dotfiles_sha. Returns (ok, failure lines, citation count)."""
+    root = work / label
+    root.mkdir()
+    shared = root / "dotfiles"
+    cloned = run(["git", "clone", "-q", "--shared", "--no-checkout", str(home_clone), str(shared)])
+    if cloned.returncode != 0:
+        raise Stop(2, "stack-map-merge-check: could not make the scratch clone: %s" % (cloned.stderr.strip().splitlines() or ["no output"])[-1])
+    git(shared, "update-ref", "refs/remotes/origin/main", dotfiles_sha)
+    for name in REPOS:
+        (root / name).symlink_to(repos_dir / name)
+    if generator_text is None:
+        return False, ["dotfiles:%s:0: missing at %s (the generator is gone)" % (GENERATOR, dotfiles_sha[:7])], 0
+    script = work / ("generator-%s.py" % label)
+    script.write_text(generator_text, encoding="utf-8")
+    env = dict(os.environ, STACK_MAP_LOG=str(work / ("log-%s.jsonl" % label)))
+    done = run([sys.executable, str(script), "--repos-root", str(root), "--out", str(work / ("page-%s.html" % label))], env=env, timeout=BUILD_SECONDS)
+    if done.returncode == 0:
+        found = re.search(r"citations verified: (\d+)", done.stdout)
+        return True, [], int(found.group(1)) if found else 0
+    lines = [line for line in done.stderr.splitlines() if line.strip()] or ["stack_map exited %d with no message" % done.returncode]
+    return False, lines, 0
+
+
+def generator_at(clone, rev):
+    done = run(["git", "-C", str(clone), "show", "%s:%s" % (rev, GENERATOR)])
+    return done.stdout if done.returncode == 0 else None
+
+
+def check(pr, record):
+    """Run the check; returns the exit code and fills `record` (sha, outcome, failed) for the run log."""
+    home = Path.home()
+    repos_dir = home / "git"
+    primary = repos_dir / "dotfiles"
+    for name in ("dotfiles",) + REPOS:
+        if not (repos_dir / name / ".git").exists():
+            raise Stop(2, "stack-map-merge-check: %s is not a git clone, and the page build reads the four repositories there (dotfiles, coordinator, agent-kit, loop-engine): merge this PR from the machine that keeps them" % (repos_dir / name))
+    sha = head_sha(pr)
+    record["head"] = sha[:7]
+    private = "refs/stack-map-merge-check/pr-%s" % pr
+    git(primary, "fetch", "-q", "origin", "+refs/pull/%s/head:%s" % (pr, private))
+    try:
+        if git(primary, "rev-parse", "--verify", "-q", private + "^{commit}") != sha:
+            raise Stop(2, "stack-map-merge-check: the head of cartwmic/dotfiles#%s on GitHub moved while checking (refs/pull/%s/head is not %s): run it again" % (pr, pr, sha[:7]))
+        git(primary, "fetch", "-q", "origin", "main")
+        for name in REPOS:
+            git(repos_dir / name, "fetch", "-q", "origin", "main")
+        base = git(primary, "rev-parse", "--verify", "origin/main^{commit}")
+        changed = git(primary, "diff", "--name-only", "origin/main..." + sha).splitlines()
+        touched = sorted(path for path in changed if path.startswith(PAGE_PATHS))
+        work_parent = home / "tmp"
+        work_parent.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix="stack-map-merge-check-", dir=str(work_parent)))
+        try:
+            ok, lines, count = build("head", generator_at(primary, sha), sha, primary, repos_dir, work)
+            if ok:
+                print("stack-map-merge-check: the stack map page builds with this PR (%s), %d citations verified" % (sha[:7], count))
+                record.update(outcome="passed", citations=count)
+                return 0
+            base_ok, base_lines, _ = build("base", generator_at(primary, base), base, primary, repos_dir, work)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    finally:
+        git(primary, "update-ref", "-d", private, check=False)
+    record["failed"] = [line[:200] for line in lines]
+    if base_ok or touched:
+        record["outcome"] = "refused"
+        for line in lines:
+            print(line, file=sys.stderr)
+        print("stack-map-merge-check: %s" % FIX, file=sys.stderr)
+        if touched:
+            print("stack-map-merge-check: this PR changes the page's own files (%s)" % ", ".join(touched), file=sys.stderr)
+        return 1
+    record["outcome"] = "warned"
+    print("stack-map-merge-check: warning: the stack map page does not build with this PR (%s), and does not build on main either; the PR changes none of the page's files, so it is not blocked. First failure: %s" % (sha[:7], lines[0]), file=sys.stderr)
+    return 0
+
+
+def write_log(record):
+    path = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "stack-map-merge-check" / "log.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:
+        print("stack-map-merge-check: could not write the run log %s: %s" % (path, error), file=sys.stderr)
+
+
+def main(argv):
+    if len(argv) != 2 or argv[0] not in ("cartwmic/dotfiles", "dotfiles") or not argv[1].isdigit():
+        print("usage: stack-map-merge-check cartwmic/dotfiles PR   (the repo may also be written dotfiles)", file=sys.stderr)
+        return 2
+    os.environ.setdefault("GH_URGENT", "1")
+    os.environ.setdefault("GH_CALLER", "stack-map-merge-check")
+    began = time.monotonic()
+    record = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "stack-map-merge-check", "pr": int(argv[1]), "outcome": "error"}
+    try:
+        code = check(argv[1], record)
+    except Stop as stop:
+        print(stop, file=sys.stderr)
+        record["failed"] = [str(stop)[:200]]
+        code = stop.code
+    record.update(exit=code, duration_ms=round((time.monotonic() - began) * 1000))
+    write_log(record)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

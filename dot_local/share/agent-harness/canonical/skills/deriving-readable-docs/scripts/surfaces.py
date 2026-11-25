@@ -11,7 +11,7 @@ the tests), so it is a safe `path:line` to cite. Kinds: entry, command, flag, ro
   JS, TS   package.json bin, main, exports and every script; .command(, .option(, app.get( and router.use(, socket.on(, process.env.X;
            in a file that reads argv (process.argv, parseArgs, yargs, commander): a default `program = 'name'`, a `usage: name` string, `case 'cmd':` arms,
            `command === 'cmd'` tests and the option names of a parseArgs table, as --name
-  Rust     [[bin]], fn main in src/main.rs and src/bin/, clap #[arg(...)] with its field name, #[command(...)], env::var, pub items of lib.rs
+  Rust     [[bin]], fn main in src/main.rs and src/bin/, clap #[arg(...)] with its field name, #[command(...)], attribute routes (#[get("/x")] of actix and rocket), env::var, pub items of lib.rs
   Shell    a #! file, the -x|--long) arms of a case, ${VAR:-default} and export VAR=
   Any      Dockerfile ENTRYPOINT and CMD, compose services, Makefile and Taskfile targets, CI `run:` steps,
            *.toml *.yml *.yaml *.ini *.conf *.cfg and *.example files at most two folders deep, README and docs/
@@ -65,6 +65,7 @@ PATTERNS = [
     ("env", r"\.go$", r"os\.(?:Getenv|LookupEnv)\(\"(\w+)\"", 1),
     # Rust
     ("command", r"\.rs$", r"#\[command\(([^)]*)\)\]", 1),
+    ("route", r"\.rs$", r"#\[(?:get|post|put|delete|patch|head|options)\(\s*\"(/[^\"]*)\"", 1),
     ("env", r"\.rs$", r"env::var(?:_os)?\(\"(\w+)\"", 1),
     # JS, TS
     ("command", JS, r"\.command\(\s*[\"']([^\"']+)", 1),

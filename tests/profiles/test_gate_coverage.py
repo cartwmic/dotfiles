@@ -106,7 +106,7 @@ class TableTest(unittest.TestCase):
 
     def test_every_work_gate_wrapper_that_personal_has_is_on_work(self):
         wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/intent-review-check",
-                    ".local/bin/ci-main-status", ".local/bin/agent-traces"}
+                    ".local/bin/ci-main-status", ".local/bin/agent-traces", ".local/bin/issue-open", ".local/bin/claims"}
         self.assertEqual(wrappers - self.managed[WORK], set())
         self.assertEqual(wrappers - self.managed[PERSONAL], set())
 
@@ -115,6 +115,7 @@ class TableTest(unittest.TestCase):
 SAMPLES = {
     "`gh pr merge` only after both gates": "gh pr merge 12 -R acme/app",
     "PR body only from a checked body file": "gh pr create --title t --body 'x'",
+    "`gh issue create` only through": "gh issue create --title t --body 'x'",
     "poll loops": "until test -f /tmp/x; do sleep 2; done",
     "unquoted heredoc": "cat <<EOF\n`date`\nEOF",
     "credential config": "cat ~/.netrc",
@@ -122,6 +123,7 @@ SAMPLES = {
     "heavy jobs": "npm test",
     "kubectl on a context": "kubectl --context axon-aks-prod get pods",
     "local `docker run`": "docker run alpine",
+    "`git stash` that writes the stash list": "git stash pop",
 }
 CLEAN = ["git status", "ls -la", "gh pr list", "ci-main-status --merge-gate acme/app && pr-body-check acme/app 12 && gh pr merge 12 -R acme/app"]
 
@@ -137,6 +139,9 @@ class WorkHookTest(Base):
             shutil.copy(HOOK_SRC / name, self.hooks / name)
         (self.hooks / "profile").write_text(self.render_file(".local/share/agent-harness/hooks/profile", work_data()))
         (self.hooks.parent / "coordinator-instance").write_text(self.render_file(".local/share/agent-harness/coordinator-instance", work_data()))
+        # the issue rule refuses only where the profile's coordinator checkout holds the claims command, which `issue-open` runs
+        (self.home / "coordinator-work/src/claims").mkdir(parents=True)
+        (self.home / "coordinator-work/src/claims/cli.ts").write_text("// stub\n")
 
     def hook(self, command, tool="Bash"):
         env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_PROFILE", "AGENT_HARNESS_CONTAINER", "KUBECONFIG")}
@@ -175,7 +180,7 @@ class WorkHookTest(Base):
 class WrapperTest(Base):
     """pr-body-check, pr-record and intent-review-check run scripts in the coordinator checkout. A fake `node` records which script and which
     state directory the wrapper chose."""
-    WRAPPERS = {"pr-body-check": "pr-body-check.ts", "pr-record": "pr-record.ts", "intent-review-check": "intent-review-check.ts"}
+    WRAPPERS = {"pr-body-check": "scripts/pr-body-check.ts", "pr-record": "scripts/pr-record.ts", "intent-review-check": "scripts/intent-review-check.ts", "claims": "src/claims/cli.ts"}
 
     def setUp(self):
         super().setUp()
@@ -199,8 +204,8 @@ class WrapperTest(Base):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(self.render_file(".local/share/agent-harness/coordinator-instance", data))
         for script in self.WRAPPERS.values():
-            (Path(repo) / "scripts").mkdir(parents=True, exist_ok=True)
-            (Path(repo) / "scripts" / script).write_text("// stub\n")
+            (Path(repo) / script).parent.mkdir(parents=True, exist_ok=True)
+            (Path(repo) / script).write_text("// stub\n")
         if state:
             (Path(state) / "pane-bin").mkdir(parents=True, exist_ok=True)
             (Path(state) / "pane-bin/ledger").write_text("#!/bin/sh\n")
@@ -218,7 +223,7 @@ class WrapperTest(Base):
             with self.subTest(wrapper=name):
                 r = self.run_wrapper(name)
                 self.assertEqual(r.returncode, 0, r.stderr)
-                self.assertEqual(r.stdout.split(), ["script=%s/scripts/%s" % (repo, script), "state=%s" % state])
+                self.assertEqual(r.stdout.split(), ["script=%s/%s" % (repo, script), "state=%s" % state])
 
     def test_the_work_pr_body_check_also_runs_the_thread_check(self):
         repo, state = self.home / "coordinator-work", self.home / ".local/share/coordinator-work"
@@ -249,7 +254,7 @@ class WrapperTest(Base):
         for name, script in self.WRAPPERS.items():
             with self.subTest(wrapper=name):
                 r = self.run_wrapper(name)
-                self.assertEqual(r.stdout.split(), ["script=%s/scripts/%s" % (repo, script), "state=unset"])
+                self.assertEqual(r.stdout.split(), ["script=%s/%s" % (repo, script), "state=unset"])
 
     def test_without_the_instance_file_the_default_is_git_coordinator(self):
         repo = self.home / "git/coordinator"

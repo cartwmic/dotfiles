@@ -43,6 +43,7 @@ status=0
 python3 scripts/ci-par.py \
   --per-test tests/heavy-gate \
   tests/qmd \
+  tests/coordinator-pull-main \
   tests/pi-idle-rss \
   tests/pi-agents-render \
   tests/coordinator-helper-gate \
@@ -51,6 +52,7 @@ python3 scripts/ci-par.py \
   tests/release-skills \
   tests/pr-body-check \
   tests/pr-open \
+  tests/issue-open \
   tests/intent-review-check \
   tests/review-intent \
   tests/known-limits-check \
@@ -74,6 +76,8 @@ python3 scripts/ci-par.py \
   tests/instances \
   tests/launchd-reload \
   tests/profiles \
+  tests/stack-map \
+  tests/stack-map-merge-check \
   tests/container-mode \
   tests/design-principles \
   tests/agent-kit \

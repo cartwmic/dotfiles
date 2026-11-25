@@ -120,11 +120,14 @@ class Process(unittest.TestCase):
         d.mkdir()
         (d / "journeys.log").write_bytes(os.urandom(2**20))
 
-    def write_log(self, rows):
-        with open(self.state / "log.jsonl", "w") as f:
-            for fid, days, repo in rows:
-                f.write(json.dumps({"id": fid, "start": iso(days), "repo": repo, "exit": 0}) + "\n")
-            f.write(json.dumps({"id": jid(30, 99), "start": iso(30), "repo": "scratch-clone", "exit": 0}) + "\n")
+    def write_log(self, rows, nul_line=None):
+        """log.jsonl with one record per row; `nul_line` (bytes, no newline) goes in as line 2, after the first row."""
+        with open(self.state / "log.jsonl", "wb") as f:
+            for n, (fid, days, repo) in enumerate(rows):
+                f.write(json.dumps({"id": fid, "start": iso(days), "repo": repo, "exit": 0}).encode() + b"\n")
+                if n == 0 and nul_line is not None:
+                    f.write(nul_line + b"\n")
+            f.write(json.dumps({"id": jid(30, 99), "start": iso(30), "repo": "scratch-clone", "exit": 0}).encode() + b"\n")
 
     def write_journal(self, runs):
         self.journal.parent.mkdir(parents=True, exist_ok=True)
@@ -217,6 +220,188 @@ class Process(unittest.TestCase):
         self.assertIn("1 lines that do not parse", self.refused("garbled log").stderr)
         (self.state / "log.jsonl").unlink()
         self.assertIn("is missing", self.refused("no log").stderr)
+
+    # The two shapes of the NUL line seen in the real log (dotfiles#774): 2,992 NUL bytes and nothing else, and 1,278 NUL bytes in front of a whole record
+    # (a torn append). With the NULs taken out the first is empty and the second is the record. This one's job has no folder here and no other line names it.
+    NUL_LINES = {
+        "only NULs": (b"\0" * 2992, "skipped"),
+        "NULs then a record": (b"\0" * 1278 + json.dumps({"id": jid(2, 777), "start": iso(2), "repo": "coordinator", "exit": 0}).encode(), "record kept"),
+    }
+
+    def nul_report(self, line, outcome, n=2):
+        return "kgate prune: %s line %d holds %d NUL bytes: %s\n" % (self.state / "log.jsonl", n, line.count(b"\0"), outcome)
+
+    def test_a_nul_line_in_the_job_log_is_named_and_the_dry_run_still_lists_the_same_folders(self):
+        rows = [(self.ids["logged"], 5, "coordinator"), (self.ids["other"], 2, "coordinator")]   # "other" is logged after the NUL line
+        self.write_log(rows)
+        clean = self.prune()
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertEqual(clean.stderr, "")
+        for shape, (line, outcome) in self.NUL_LINES.items():
+            with self.subTest(shape):
+                self.write_log(rows, nul_line=line)
+                before = tree_digest(self.state)
+                r = self.prune()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(tree_digest(self.state), before)
+                self.assertEqual([l for l in r.stdout.splitlines() if l.startswith("would delete kgate-")],
+                                 [l for l in clean.stdout.splitlines() if l.startswith("would delete kgate-")])
+                self.assertEqual(r.stderr, self.nul_report(line, outcome))
+
+    def test_delete_with_a_nul_line_removes_the_old_folder_and_keeps_what_the_log_protects(self):
+        # "logged" is recorded before the NUL line, "other" after it, both inside the 7 days: both stay. "old" is in no source: it goes.
+        rows = [(self.ids["logged"], 5, "coordinator"), (self.ids["other"], 2, "coordinator")]
+        for shape, (line, _) in self.NUL_LINES.items():
+            with self.subTest(shape):
+                for fid in self.ids.values():
+                    if not (self.state / (fid + ".out")).exists():
+                        self.job_dir(fid)
+                self.write_log(rows, nul_line=line)
+                (self.state / "prune.jsonl").unlink(missing_ok=True)
+                r = self.prune("--delete")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "other", "young"})
+                self.assertIn("deleted 1 folders", r.stdout)
+
+    def nul_line_for(self, name, days):
+        """The real line's shape: 1,278 NULs, then the whole record of job `name`, started `days` ago."""
+        rec = {"id": self.ids[name], "start": iso(days), "end": iso(days), "repo": "coordinator", "exit": 0}
+        return b"\0" * 1278 + json.dumps(rec).encode()
+
+    def test_a_job_whose_only_record_is_on_a_nul_line_in_the_window_is_kept(self):
+        # "old" is older than 3 days and in no other source: only the record behind the NULs protects it.
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.nul_line_for("old", 2))
+        for args in ((), ("--delete",)):
+            r = self.prune(*args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn(self.ids["old"], r.stdout)
+            self.assertIn("would delete 1 folders" if not args else "deleted 1 folders", r.stdout)   # only "other" goes
+        self.assertEqual(self.present(), {"old", "running", "logged", "cited", "pr", "young"})
+
+    def test_a_record_behind_nul_bytes_that_is_older_than_the_window_does_not_keep_its_job(self):
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.nul_line_for("old", 12))
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "young"})
+
+    def test_the_run_record_names_the_nul_lines(self):
+        rows = [(self.ids["logged"], 5, "coordinator")]
+        self.write_log(rows, nul_line=self.NUL_LINES["NULs then a record"][0])
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        rec = json.loads((self.state / "prune.jsonl").read_text())
+        self.assertEqual(rec["nul_lines"], [{"line": 2, "nul_bytes": 1278, "record_kept": True}])
+        self.write_log(rows, nul_line=self.NUL_LINES["only NULs"][0])
+        (self.state / "prune.jsonl").unlink()
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["nul_lines"], [{"line": 2, "nul_bytes": 2992, "record_kept": False}])
+        # a run with no NUL line says so
+        self.write_log(rows)
+        (self.state / "prune.jsonl").unlink()
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["nul_lines"], [])
+
+    def test_other_text_that_does_not_parse_still_refuses_even_beside_a_nul_line(self):
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=self.NUL_LINES["only NULs"][0])
+        with open(self.state / "log.jsonl", "ab") as f:
+            f.write(b"{broken\n")
+        r = self.refused("a broken line beside a NUL line")
+        self.assertIn("1 lines that do not parse", r.stderr)
+
+    def test_text_that_does_not_parse_behind_nul_bytes_still_refuses(self):
+        self.write_log([(self.ids["logged"], 5, "coordinator")], nul_line=b"\0" * 40 + b"{broken")
+        r = self.refused("NULs in front of text that is not JSON")
+        self.assertIn("1 lines that do not parse", r.stderr)
+
+    # Receipts of a run made on another machine (dotfiles#774: the first journal line on the agent host names /home/cartwmic/..., made on a Mac). A receipt that
+    # does not exist and whose run folder is absent, or that is outside this host's home, cites nothing and is named; every other missing or unreadable one refuses.
+    FOREIGN_HOME = "/home/kgate-test-nobody/.local/state/coordinator-ci/runs"
+
+    def foreign_line(self, run, home=None):
+        base = "%s/%s" % (home or self.FOREIGN_HOME, run)
+        return json.dumps({"tip": "c" * 40, "verdict": "pass", "receipts": {k: "%s/%s.log" % (base, k) for k in ("cluster", "host", "bookends")}}) + "\n"
+
+    def prepend_to_journal(self, *lines):
+        self.journal.write_text("".join(lines) + self.journal.read_text())
+
+    def foreign_report(self, line, run, reason="run folder absent", home=None):
+        base = "%s/%s" % (home or self.FOREIGN_HOME, run)
+        return "kgate prune: journal %s line %d: receipt %s is from another machine (%s): cites nothing\n" % (
+            self.journal, line, ", ".join("%s/%s.log" % (base, k) for k in ("cluster", "host", "bookends")), reason)
+
+    def test_a_receipt_from_another_machine_cites_nothing_and_is_named(self):
+        self.prepend_to_journal(self.foreign_line("r1"))
+        before = tree_digest(self.state)
+        r = self.prune()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, self.foreign_report(1, "r1"))
+        self.assertEqual(tree_digest(self.state), before)
+        # old and unnamed anywhere: listed. cited by the readable second line: kept (ids come only from receipts that were read).
+        self.assertEqual([l.split()[2] for l in r.stdout.splitlines() if l.startswith("would delete kgate-")], [self.ids[n] + ".out" for n in ("old", "other")])
+        self.assertIn("journal %s: 3 lines, 1 job ids" % self.journal, r.stdout)   # the foreign line still counts as a journal line
+
+    def test_a_missing_receipt_in_a_run_folder_that_is_here_still_refuses(self):
+        run = self.xdg / "coordinator-ci" / "runs" / "r1"
+        run.mkdir(parents=True)   # the folder is here, so the file was lost
+        self.prepend_to_journal(json.dumps({"receipts": {"cluster": str(run / "cluster.log")}}) + "\n")
+        r = self.refused("receipt lost from a run folder that is here")
+        self.assertIn("main-journeys.jsonl line 1: receipt file %s" % (run / "cluster.log"), r.stderr)
+
+    def test_a_receipt_that_exists_but_cannot_be_read_still_refuses(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode 000 file")
+        receipt = self.xdg / "coordinator-ci" / "cited-cluster.log"
+        receipt.chmod(0)
+        r = self.refused("receipt not readable")
+        self.assertIn("main-journeys.jsonl line 1: receipt file %s: [Errno 13]" % receipt, r.stderr)
+
+    def test_a_receipt_that_is_not_a_file_name_still_refuses(self):
+        self.prepend_to_journal(json.dumps({"receipts": {"cluster": None}}) + "\n")
+        r = self.refused("null receipt")
+        self.assertIn("line 1: receipt file None is not a file name", r.stderr)
+
+    def test_a_receipt_under_this_hosts_home_whose_run_folder_is_absent_is_from_another_machine(self):
+        home = self.tmp / "home"
+        (home / ".local").mkdir(parents=True)
+        mine = str(home / ".local" / "state" / "coordinator-ci" / "runs")   # no runs/ folder here
+        self.prepend_to_journal(self.foreign_line("r1", home=mine))
+        r = self.prune(HOME=str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, self.foreign_report(1, "r1", home=mine))
+
+    def test_a_missing_receipt_outside_this_hosts_home_is_from_another_machine_even_when_its_folder_is_here(self):
+        home = self.tmp / "home"
+        home.mkdir()
+        elsewhere = self.tmp / "elsewhere" / "runs"
+        (elsewhere / "r1").mkdir(parents=True)   # a folder at that path exists, the file does not, and the path is not this host's
+        self.prepend_to_journal(self.foreign_line("r1", home=str(elsewhere)))
+        r = self.prune(HOME=str(home))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, self.foreign_report(1, "r1", "not under this host's home", home=str(elsewhere)))
+        # the same file under this host's home, in a run folder that is here, is a lost receipt
+        mine = home / "runs"
+        (mine / "r1").mkdir(parents=True)
+        self.prepend_to_journal(self.foreign_line("r1", home=str(mine)))
+        self.assertEqual(self.prune(HOME=str(home)).returncode, 69)
+
+    def test_delete_records_the_receipts_from_another_machine_and_a_dry_run_records_nothing(self):
+        self.prepend_to_journal(self.foreign_line("r1"), self.foreign_line("r2"))
+        self.assertEqual(self.prune().returncode, 0)
+        self.assertFalse((self.state / "prune.jsonl").exists())
+        r = self.prune("--delete")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rec = json.loads((self.state / "prune.jsonl").read_text())
+        self.assertEqual(rec["foreign_receipts"], [{"line": n, "receipt": "%s/r%d/%s.log" % (self.FOREIGN_HOME, n, k)} for n in (1, 2) for k in ("cluster", "host", "bookends")])
+        self.assertEqual(self.present(), {"running", "logged", "cited", "pr", "young"})
+        (self.state / "prune.jsonl").unlink()   # a run with none says so
+        self.write_journal({"cited": [self.ids["cited"]]})
+        self.assertEqual(self.prune("--delete").returncode, 0)
+        self.assertEqual(json.loads((self.state / "prune.jsonl").read_text())["foreign_receipts"], [])
+
+    def test_many_lines_from_another_machine_are_three_lines_and_a_summary(self):
+        self.prepend_to_journal(*[self.foreign_line("r%d" % n) for n in range(1, 11)])
+        r = self.prune()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "".join(self.foreign_report(n, "r%d" % n) for n in (1, 2, 3))
+                         + "kgate prune: 21 more journal receipts on other machines cite nothing (first: line 4)\n")
 
     def test_a_running_jobs_folder_that_cannot_be_read_deletes_nothing(self):
         # active/ is there but is not a folder that can be listed: it is not the same as no active/ at all, which means nothing is running

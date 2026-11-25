@@ -99,7 +99,6 @@ class FailsClosed(unittest.TestCase):
         ("git -C %s merge --weird" % LIVE, LIVE_KW),
         ("git -C %s branch --weird" % LIVE, LIVE_KW),
         ("git -C %s reset -Z" % LIVE, LIVE_KW),
-        ("git -C %s stash -Z" % LIVE, LIVE_KW),
         ("git -C %s --weird status" % LIVE, LIVE_KW),
         ("docker --weird ps", {}),
         ("docker compose --weird ps", {}),

@@ -172,6 +172,19 @@ class ReportCommand(unittest.TestCase):
         d = json.loads(r.stdout)
         self.assertEqual((d["jobs"], d["unreadable_lines"]), (8, 1))
 
+    def test_a_line_of_nul_bytes_is_counted_as_unreadable(self):
+        r = self.run_report(FIXTURE.read_text() + "\0" * 2992 + "\n", ["--days", "36500", "--json"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual((d["jobs"], d["unreadable_lines"]), (8, 1))
+
+    def test_a_record_behind_nul_bytes_is_not_read_by_report_and_is_counted_as_unreadable(self):
+        line = "\0" * 1278 + json.dumps({"id": "kgate-1-1", "start": "2026-11-22T10:41:40Z", "end": "2026-11-22T11:30:44Z", "duration_s": 5, "cmd": "x", "exit": 0})
+        r = self.run_report(FIXTURE.read_text() + line + "\n", ["--days", "36500", "--json"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual((d["jobs"], d["unreadable_lines"]), (8, 1))
+
     def test_bad_arguments_exit_64(self):
         for args in (["--days", "0"], ["--bogus"]):
             r = self.run_report(FIXTURE.read_text(), args)

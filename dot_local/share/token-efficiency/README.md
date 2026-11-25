@@ -7,15 +7,28 @@ session-cost                         # list-price $/day per seat: last 7 days ne
 session-cost --days 3                # windows of 3 days
 session-cost --refresh               # run collect.py first (about 10 seconds), so the last hour is in
 session-cost --since ISO --until ISO # one window, e.g. the published baseline below
+session-cost workstreams --since 2026-11-21   # list-price spend per coordinator workstream (below)
 ```
 
 "List price" is what the tokens would cost at public per-token rates (the table at the top of `analyze.py`). It is a weight for comparing seats and windows, not the subscription bill.
+
+## Spend per workstream
+
+`session-cost workstreams --since DATE [--until DATE]` prints, for every coordinator workstream, requests, input, output, cache-read and cache-write tokens and list-price dollars, by model, with each row's share of the total. `DATE` is a day (UTC midnight) or an ISO UTC time; `--until` defaults to now. It runs `collect.py` first (`--no-collect` skips that), so one run by hand or from any scheduler is enough: this is the way to get fresh numbers on the agent host pod, which has no systemd and so no timer. No model is called.
+
+How a request gets its workstream: its transcript file belongs to a Claude session (a helper file belongs to its parent's session); T3's database says which thread owns that session; the nearest thread at or above it (lineage parent) that a ledger workstream names as its `pane` or `conversation` is the workstream. A thread named by two workstreams shows under both names ("A / B"). Requests with no T3 thread, and threads with no workstream above them, have their own `(unmapped)` rows, each with its share and what is inside it (the project folder, or the root thread's title). Nothing is dropped: the rows add up to the `TOTAL`, which equals `session-cost --since X --until Y` over the same window.
+
+- `--t3-db` and `--ledger` default to `~/.t3/userdata/statev2.sqlite` and `~/.local/share/coordinator/ledger.sqlite`. Both are opened read-only.
+- Collection rebuilds `usage.sqlite` from the logs this host still has. On the agent host pod that is everything since the pod's first session (2026-11-21T14:06Z); older rows came from the omarchy desktop and live in that desktop's copy of the database.
+- Threads that ran on another host are not in this host's T3 database and show as unmapped. Pi, Codex and advisor-tool calls are not counted.
+- Every run appends one JSON line to `~/.local/state/token-efficiency/log.jsonl` (run id, window, outcome, seconds, sessions, requests, list $, unmapped share).
 
 ## What runs when
 
 - `session-cost.timer` (systemd user timer, daily at midnight PST = 08:00 UTC, `Persistent`) runs `session-cost.service`: `collect.py`, then `session_cost.py --snapshot`.
 - `collect.py` reads the logs (read-only) and rebuilds `~/.local/state/token-efficiency/usage.sqlite` (numbers only).
 - `session_cost.py --snapshot` writes `~/.local/share/token-efficiency-snapshots/YYYY-MM-DD.json` (PST day). Snapshots are never deleted or rewritten except a rerun on the same day, which replaces that day's file. Each holds the two windows per seat and a per-day, per-seat table, so two dates compare with `jq` even after Claude Code prunes old logs.
+- On the agent host pod there is no systemd user manager, so the timer and units are left out (`docs/container-mode.md`); the command and code folder are installed there.
 - The unit logs to the journal: `journalctl --user -u session-cost`. Run it now: `systemctl --user start session-cost.service`.
 
 ## Counting rules
@@ -50,4 +63,4 @@ python3 rereads.py --json rereads.json > rereads.md  # cache read split by what 
 
 ## Tests
 
-`tests/session-cost` (run: `python3 -m unittest discover -s tests/session-cost`) builds a small hand-written set of Claude Code logs, runs `collect.py` and `session-cost` on it and checks hand-computed dollars.
+`tests/session-cost` (run: `python3 -m unittest discover -s tests/session-cost`) builds a small hand-written set of Claude Code logs, runs `collect.py` and `session-cost` on it and checks hand-computed dollars. `test_workstreams.py` adds a small T3 database and ledger and checks which workstream each session lands on; its red control runs the same check against the old rule (the workstream of the lineage root) and expects it to fail.

@@ -1,4 +1,4 @@
-"""Nine refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Eleven refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -38,6 +38,12 @@
               edit; for `gh pr edit N` the name must also contain N. A `$VAR` the command does not assign from mktemp is refused. A name
               is checked even when the chain is right; when both are wrong the refusal gives both fixes.
 
+  issue-body  (personal and work)  `gh issue create` (`gh issue new`, a `-R` before the verb) and a `gh api` POST on `repos/<o>/<r>/issues` with a field or `--input`: use
+              `issue-open --title T --body-file F`, which expands the `{{claim:ID}}` tokens in F (`claims ran|read|said|none` print them), adds the Sources footer, then runs
+              `gh issue create` as a child process the hook never sees. `gh issue edit|comment|close|view|list` pass. The rule refuses only where `src/claims/cli.ts` exists in
+              the profile's coordinator checkout (the file `claims` runs), so a machine that has this hook before it has the coordinator pull is not left unable to file an issue.
+              Not seen: a `gh api graphql` mutation, or an issue made through another tool.
+
   heavy       (agent host pod only)  a test, journey or stress run in the pod itself: `npm test` / `npm t` / `npm run test*` (and pnpm, yarn, bun,
               `yarn workspace <x> test`, `corepack pnpm test`), `vitest` (also `npx`, `bunx`, `pnpx`, `pnpm exec`, `npm exec`, `node .../vitest`),
               `python3 scripts/journeys.py` (also `uv run scripts/journeys.py`), `stress` and `stress-ng`: the pod is shared
@@ -52,13 +58,18 @@
               names kgate and a throwaway namespace on the homelab cluster (ledger grant 21). Read-only commands (`docker ps`, `images`,
               `inspect`, `manifest inspect`, `compose ps`) pass, and so does anything after `kgate`. Other personal hosts (the Mac, which
               has Docker Desktop for agents) are untouched, since Docker is provisioned there on purpose.
+  stash       (both profiles)  `git stash` that writes the stash list, in any directory (`git -C <dir>` too): push, save, pop, apply, drop, clear,
+              store, branch, `-q`, a bare `git stash`, and every other form but `list` and `show`. Every worktree of a repo shares one stash list, so a
+              pop from one worktree takes another worktree's work (2026-11-24: twice in coordinator worktrees, once as a swap between two builders).
+              Read-only `stash list` and `stash show` pass. The refusal names the fix: commit the work in progress on your branch, or make a throwaway
+              worktree with `git worktree add <path> origin/main`.
   live git    (both profiles)  git that changes the working tree, index, HEAD or a branch of the live coordinator checkout, ~/git/coordinator (and the profile's own checkout when it is another path: line 1 of the `coordinator-instance` file chezmoi renders, ~/coordinator-work on work),
               which the coordinator daemon runs from (2026-11-11: a reviewer checked out PR #438 there and the daemon restarted onto PR code;
               2026-11-16: a builder ran `git merge origin/main` there). Refused: merge, pull, reset, checkout, switch, restore, commit, rebase,
-              cherry-pick, revert, stash, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames), and
+              cherry-pick, revert, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames), and
               `gh pr checkout` / `gh pr co` run in the live checkout.
               Allowed there: `merge --abort`, `merge --ff-only <sha>` (the deploy; 7 to 40 hex, never a ref), `reset --keep <sha>` (the rollback in
-              docs/deploy.md), fetch, `stash list|show`, worktree add/remove/prune, every read-only git. The place is the command's directory
+              docs/deploy.md), fetch, worktree add/remove/prune, every read-only git. The place is the command's directory
               (the session's, a `cd` or `pushd`, each `-C`) or a `--git-dir`, `--work-tree`, GIT_DIR, GIT_WORK_TREE; `~`, `$HOME` and `${HOME}`
               are the Context's HOME. The refusal names `git worktree add ~/tmp-home/<name> origin/main`.
   credential  (both profiles)  a command that reads credential config raw, or hides its secrets with a line regex. Credential config is a path
@@ -81,7 +92,7 @@ whatever the flag is, unless it is `-R owner/repo` / `--repo`, `-h`/`--help` or 
 (a flag after the verb is read against the verb's row, as above).
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
-wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
+wrappers, `find -exec`, heredocs fed to a shell. Not covered: a git alias, a git option the table does not list that takes a separate value (it hides the subcommand), a command built at run time (`$cmd`), a script file, `python -c`, a command
 in an ssh remote string, a kubeconfig path or `cd` target that holds a shell variable (`$HOME` aside), a `cd` in `( )` (it counts for the commands after the `)`). The rules are pure functions on the text and a
 Context; the file reads and the git call are the Context's `read_file` and `origin_of`. The caller treats any exception as "allow".
 """
@@ -133,6 +144,7 @@ MERGE_BARE = (
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
     "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
     "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
+    "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
 PR_BODY = (
@@ -157,6 +169,18 @@ PR_API_ISSUE_BODY = (
     "and skip the body check, and the hook cannot tell a PR number from an issue number without a lookup. For a PR: %s. For an issue: `gh issue edit N --body-file F`."
 )
 PR_API_ENDPOINT = re.compile(r"(?:https://[^/]+/(?:api/v3/)?|/)?(?P<path>repos/[^/]+/[^/]+/(?P<kind>pulls|issues)(?:/\d+)?/?)(?:\?.*)?")
+ISSUE_OPEN_CLI = "src/claims/cli.ts"  # the coordinator file `claims` (so `issue-open`) runs: the issue rule refuses only where it exists
+ISSUE_BODY = (
+    "`gh issue create` is refused in agent sessions: an issue body typed by hand states facts (a count, a state, a line of code) with no source, and nothing checks them before a person reads it. "
+    "Use `issue-open --title T --body-file F [--repo OWNER/REPO] [--label L ...]` (F is the body file, `-` reads it from stdin). Put each fact in the body as the token a tool printed: "
+    "`claims ran -- <cmd>` or `claims read <repo>:<path>:<a>-<b>` print `{{claim:ID}}`; where nothing can be observed, `claims said <text>` or `claims none <reason>` print one that shows as unsourced. "
+    "`issue-open` expands the tokens, refuses an unknown or stale one, adds the Sources footer and then creates the issue. `issue-open --dry-run ...` shows the expanded body and creates nothing. "
+    "`gh issue edit|comment|close|view|list` are not affected."
+)
+ISSUE_API_BODY = (
+    "`gh api` that creates an issue (POST on `repos/<owner>/<repo>/issues` with a field or `--input`) is refused in agent sessions: it skips the source check that `issue-open` gives an issue body. "
+    "Use `issue-open --title T --body-file F [--repo OWNER/REPO]`: it expands the `{{claim:ID}}` tokens that `claims ran|read|said|none` print, then creates the issue."
+)
 PR_TITLE = (
     "`gh pr %s --title %s` sets a title that `pr-body-check` was not given: the check reads the title for task ids, which become part of the commit text on main, and it can only read the one it is passed. "
     "Pass the same title to both: `pr-body-check --body-file F --title T && gh pr %s --title T ... --body-file F`, or use %s."
@@ -190,6 +214,13 @@ GIT_LIVE = (
     "Use a git worktree (git worktree add ~/tmp-home/<name> origin/main); the live checkout runs the daemon; only fetch and the deploy's "
     "`git merge --ff-only <sha>` are allowed there (and the rollback `git reset --keep <sha>`). "
     "See coordinator AGENTS.md, \"The live checkout\" (docs/deploy.md#the-live-checkout)."
+)
+
+
+STASH = (
+    "`%s` is refused in agent sessions: git keeps one stash list for every worktree of a repo, so this takes or drops another worktree's stash. "
+    "Commit your work in progress on your branch, or make a throwaway worktree for a clean tree: `git worktree add <path> origin/main`. "
+    "`git stash list` and `git stash show` are allowed."
 )
 
 
@@ -375,9 +406,10 @@ def _resolve(target, cwd, home):
 
 
 def _is_merge_gate(args):
-    """True for `--merge-gate <repo>` with an optional `--pr N` (the words after ci-main-status): one repo, no `--tip`, no `--all`, no other flag."""
+    """True for `--merge-gate <repo>` with an optional `--pr N` and `--owner-approved ASK` (the words after ci-main-status): one repo, no `--tip`, no `--all`, no other flag.
+    `--owner-approved` is Michael's answered ask for the PR: the tool asks the ledger and refuses unless that ask names this PR, so the hook needs no check of its own."""
     read = normalise([("ci-main-status", "")], args)
-    if not read.has("merge-gate") or read.unknown or set(read.names()) - {"merge-gate", "pr"}:
+    if not read.has("merge-gate") or read.unknown or set(read.names()) - {"merge-gate", "pr", "owner-approved"}:
         return False
     if read.has("pr") and not (read.value("pr") or "").isdigit():
         return False
@@ -385,9 +417,9 @@ def _is_merge_gate(args):
 
 
 def _is_pr_check(args):
-    """The PR number of a real `pr-body-check <repo> <pr>` (the words after pr-body-check: two plain words, no flag), else None."""
+    """The PR number of a real `pr-body-check <repo> <pr>` (the words after pr-body-check: two plain words, and at most `--owner-approved ASK`), else None."""
     read = normalise([("pr-body-check", "")], args)
-    if not read.flags and len(read.positional) == 2 and read.positional[1].isdigit():
+    if not read.unknown and set(read.names()) <= {"owner-approved"} and len(read.positional) == 2 and read.positional[1].isdigit():
         return str(int(read.positional[1]))
     return None
 
@@ -403,11 +435,13 @@ FLAG_ROWS = {
     ("gh", ""): "R:repo=,h:help,version",  # before the group: `gh -R o/r pr merge`, `gh --version`. The only flags read there: gh takes any other flag before the verb
                                           # with a value this table cannot size, so the verb cannot be told (see `gh_command`, `_flag_before_verb`)
     ("pr", ""): "R:repo=,h:help",
+    ("issue", ""): "R:repo=,h:help",
+    ("issue", "create"): "a:assignee=,attach=,blocked-by=,blocking=,b:body=,F:body-file=,e:editor,l:label=,m:milestone=,parent=,p:project=,recover=,T:template=,t:title=,type=,w:web,h:help,R:repo=",
     ("pr", "create"): "a:assignee=,attach=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
     ("pr", "merge"): "admin,A:author-email=,auto,b:body=,F:body-file=,d:delete-branch,disable-auto,match-head-commit=,m:merge,r:rebase,s:squash,t:subject=,h:help,R:repo=",
     ("api", ""): "allow-escape-sequences,cache=,F:field=,H:header=,hostname=,i:include,input=,q:jq=,X:method=,paginate,p:preview=,f:raw-field=,silent,slurp,t:template=,verbose,h:help",
-    ("pr-body-check", ""): "body-file=,commits-file=,diff-file=,files-file=,pr=,repo=,base=,skip-intent-review,title=",  # a node script: long flags only (node parseArgs)
+    ("pr-body-check", ""): "body-file=,commits-file=,diff-file=,files-file=,pr=,repo=,base=,skip-intent-review,title=,owner-approved=",  # a node script: long flags only (node parseArgs)
     ("git", ""): "C:=,c:=,git-dir=,work-tree=,namespace=,super-prefix=,config-env=,exec-path?,html-path,man-path,info-path,p:paginate,P:no-pager,no-replace-objects,bare,"
                  "literal-pathspecs,glob-pathspecs,noglob-pathspecs,icase-pathspecs,no-optional-locks,no-lazy-fetch,list-cmds=,v:version,h:help",
     ("git", "merge"): "n:,stat,summary,log?,squash,commit,e:edit,cleanup=,ff,ff-only,rerere-autoupdate,verify-signatures,s:strategy=,X:strategy-option=,m:message=,F:file=,"
@@ -427,7 +461,7 @@ FLAG_ROWS = {
     ("kubectl", ""): "context=,kubeconfig=",
     ("k9s", ""): "context=,kubeconfig=",
     ("helm", ""): "kube-context=,kubeconfig=",
-    ("ci-main-status", ""): "merge-gate,pr=,tip,all",
+    ("ci-main-status", ""): "merge-gate,pr=,tip,all,owner-approved=",
     ("mktemp", ""): "p:tmpdir=,suffix=",
     ("js", ""): "C:cwd=,F:filter=,w:workspace=,prefix=,dir=",  # npm, pnpm, yarn, bun: the options before the subcommand that take a value
     # grep, rg, sed, awk, jq, yq: only the flags that take a value are listed (any other is read as one that does not), because the file reader needs to know which
@@ -578,17 +612,17 @@ def gh_command(args):
     keys, verb, before = [("gh", "")], "", list(first.unknown)
     if group == "api":
         keys.append(("api", ""))
-    elif group == "pr":
-        second = normalise([("gh", ""), ("pr", "")], first.tail, until_positional=True)
+    elif group in ("pr", "issue"):
+        second = normalise([("gh", ""), (group, "")], first.tail, until_positional=True)
         verb = GH_VERB_ALIAS.get(second.positional[0], second.positional[0]) if second.positional else ""
         before += second.unknown
-        keys += [("pr", "")] + ([("pr", verb)] if ("pr", verb) in FLAG_ROWS else [])
+        keys += [(group, "")] + ([(group, verb)] if (group, verb) in FLAG_ROWS else [])
     argv = normalise(keys, first.tail)
     argv.flags, argv.unknown = first.flags + argv.flags, first.unknown + argv.unknown
     if group == "api":
         return GhCommand(group, "", argv, argv.positional, before[0] if before else None)
-    if group == "pr":
-        return GhCommand(group, verb, argv, argv.positional[1:], before[0] if before else None)
+    if group in ("pr", "issue"):  # gh itself fails on an `issue` flag it does not know before the verb, so only `pr` reports one (`before_verb`)
+        return GhCommand(group, verb, argv, argv.positional[1:], before[0] if before and group == "pr" else None)
     verb = argv.positional[0] if argv.positional else ""
     return GhCommand(group, verb, argv, argv.positional[1:], before[0] if before else None)
 
@@ -857,6 +891,48 @@ def pr_body_rule(walk, ctx):
     return None
 
 
+def _issue_open_armed(ctx):
+    """True when this machine can run `issue-open`: the coordinator checkout (ctx.coordinator_repo, else ~/git/coordinator) holds the claims command. Until it does, a refusal
+    would leave an agent with no way to file an issue, so the rule waits for it, whatever order the dotfiles apply and the coordinator pull land in."""
+    home = (ctx.env or {}).get("HOME") or os.path.expanduser("~")
+    repo = ctx.coordinator_repo or os.path.join(home, LIVE_CHECKOUT)
+    return os.path.isfile(os.path.join(repo, ISSUE_OPEN_CLI))
+
+
+def _api_creates_issue(gh):
+    """The record of a `gh api` call (a GhCommand) that creates an issue, else None: a POST (the default when it has a field or an input file) on `repos/<o>/<r>/issues`
+    with no issue number. A PATCH on `issues/<n>` is `pr_body_rule`'s, since a PR is an issue too."""
+    read = gh.argv
+    endpoint = gh.operands[0] if gh.operands else None
+    found = PR_API_ENDPOINT.fullmatch(endpoint) if endpoint else None
+    if not found or found.group("kind") != "issues" or re.search(r"/\d+/?$", found.group("path")):
+        return None
+    has_input = read.value("input") is not None or any(n in ("field", "raw-field") and v is not None for n, v, _ in read.flags)
+    method = read.value("method")
+    method = method.upper() if method is not None else ("POST" if has_input else "GET")
+    return {"method": method, "endpoint": found.group("path")} if method == "POST" else None
+
+
+def issue_body_rule(walk, ctx):
+    if ctx.profile not in GATE_PROFILES or not _issue_open_armed(ctx):
+        return None
+    for cmd in walk.cmds:
+        gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
+        if gh is None:
+            continue
+        if gh.group == "issue" and gh.verb == "create":
+            message = Matched(ISSUE_BODY, "gh issue create")
+            message.log = {"reason": "issue created without issue-open"}
+            return message
+        if gh.group == "api":
+            created = _api_creates_issue(gh)
+            if created:
+                message = Matched(ISSUE_API_BODY, "gh api POST " + created["endpoint"])
+                message.log = {"reason": "POST on the issues endpoint creates an issue", "command": "gh api -X POST " + created["endpoint"]}
+                return message
+    return None
+
+
 def _title_refusal(verb, title, message=None):
     """The refusal for a title the body check was not given, with the reason the guard log counts it by (principle 14)."""
     refusal = Matched(message or PR_TITLE % (verb, shlex.quote(title), verb, PR_OPEN[verb]), "gh pr %s --title" % verb)
@@ -1033,6 +1109,18 @@ def _merge_pr(ctx):
     """merge-pr.sh in this profile's coordinator checkout (the work Mac has no ~/git/coordinator)."""
     own = _own_checkout(ctx)
     return os.path.join(own, "scripts/merge-pr.sh") if own else MERGE_PR
+
+
+def stash_rule(walk, ctx):
+    """A `git stash` that writes the stash list, in any directory: every worktree of a repo shares that list, so the place does not matter.
+    `_git_change` decides what writes (every form but `list` and `show`)."""
+    for cmd in walk.cmds:
+        if _base(cmd.words[0]) != "git":
+            continue
+        _, sub, read = _git_parts(cmd.words)
+        if sub == "stash" and _git_change(sub, read)[0]:
+            return Matched(STASH % "git stash", "git stash")
+    return None
 
 
 def live_git_rule(walk, ctx):
@@ -1247,7 +1335,7 @@ def door_rule(walk, ctx):
     return None
 
 
-RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, heavy_rule, live_git_rule, credential_rule, door_rule)
+RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, issue_body_rule, docker_rule, heavy_rule, stash_rule, live_git_rule, credential_rule, door_rule)
 
 
 def refusal(text, ctx):

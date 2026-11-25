@@ -6,25 +6,33 @@
   session-cost --since ISO --until ISO    one window, e.g. the published baseline
   session-cost --refresh            run collect.py first (about 10 seconds) so the last hour is in
   session-cost --snapshot [DIR]     write today's snapshot (JSON) to DIR and say where; the daily timer does this
+  session-cost workstreams --since DATE [--until DATE]
+                                    list-price spend per coordinator workstream (collects first; see workstreams.py)
 
 Seats, list prices and request counting are analyze.py's (one source). List price is what the tokens would cost
 at public per-token rates; it is not subscription billing.
 """
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
 import sys
 import tempfile
+import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import collect  # noqa: E402
+import workstreams  # noqa: E402
 from analyze import COMPLETE_FROM, fmt, load_files, load_requests, parse_ts  # noqa: E402
 
 SNAPSHOT_DIR = os.path.expanduser('~/.local/share/token-efficiency-snapshots')
+T3_DB = os.path.expanduser('~/.t3/userdata/statev2.sqlite')
+LEDGER_DB = os.path.expanduser('~/.local/share/coordinator/ledger.sqlite')
 PST = timedelta(hours=8)   # the harness counts days in PST (UTC-8), all year
 
 
@@ -179,7 +187,62 @@ def write_snapshot(rep, directory):
     return path
 
 
+def when(text):
+    """A date (UTC midnight) or an ISO time, as the ISO shape usage.sqlite uses."""
+    return iso(parse_ts(text if 'T' in text else text + 'T00:00:00Z'))
+
+
+def log_action(state_dir, record):
+    """One JSON line per run in state_dir/log.jsonl: what ran, over which window, how it ended. A failure to write it is ignored."""
+    try:
+        with open(os.path.join(state_dir, 'log.jsonl'), 'a') as fh:
+            fh.write(json.dumps(record) + '\n')
+    except OSError:
+        pass
+
+
+def workstreams_main(argv):
+    ap = argparse.ArgumentParser(prog='session-cost workstreams', description='List-price spend per coordinator workstream.')
+    ap.add_argument('--since', required=True, help='start: a date (UTC midnight) or an ISO UTC time')
+    ap.add_argument('--until', default=None, help='end (default: now)')
+    ap.add_argument('--db', default=os.path.join(collect.STATE_DIR, 'usage.sqlite'))
+    ap.add_argument('--t3-db', default=T3_DB, help='T3 database, opened read-only (default %s)' % T3_DB)
+    ap.add_argument('--ledger', default=LEDGER_DB, help='coordinator ledger, opened read-only (default %s)' % LEDGER_DB)
+    ap.add_argument('--no-collect', action='store_true', help='use the usage database as it is; by default collect.py runs first')
+    a = ap.parse_args(argv)
+    state_dir = os.path.dirname(os.path.abspath(a.db))
+    run_id, started, outcome, rep, error = uuid.uuid4().hex[:12], time.time(), 'failed', None, None
+    try:
+        if not a.no_collect:
+            with contextlib.redirect_stdout(sys.stderr):   # collect prints its own counts; keep stdout for the report
+                collect.main(state_dir)
+        for label, path in (('usage database', a.db), ('T3 database', a.t3_db), ('ledger', a.ledger)):
+            if not os.path.exists(path):
+                sys.exit('session-cost workstreams: %s not found at %s' % (label, path))
+        since = when(a.since)
+        until = when(a.until) if a.until else iso(datetime.now(timezone.utc))
+        rep = workstreams.build(a.db, workstreams.load_t3(a.t3_db), workstreams.load_ledger(a.ledger), since, until)
+        mtime = datetime.fromtimestamp(os.path.getmtime(a.db), timezone.utc).strftime('%Y-%m-%dT%H:%MZ')
+        print(workstreams.render(rep, a.db, mtime))
+        outcome = 'ok'
+    except BaseException as e:   # say why in the log, then let the failure go on as it was
+        error = str(e) if isinstance(e, SystemExit) else '%s: %s' % (type(e).__name__, e)
+        raise
+    finally:
+        record = dict(ts=iso(datetime.now(timezone.utc)), run=run_id, action='workstreams', outcome=outcome, collected=not a.no_collect,
+                      seconds=round(time.time() - started, 1), asked_since=a.since, asked_until=a.until)
+        if error:
+            record['error'] = error
+        if rep:
+            record.update(since=rep['since'], until=rep['until'], sessions=rep['sessions'], requests=rep['total']['requests'],
+                          list_usd=round(rep['total']['usd'], 2), unmapped_share=round(workstreams.unmapped_share(rep), 4))
+        log_action(state_dir, record)
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == 'workstreams':
+        return workstreams_main(argv[1:])
     ap = argparse.ArgumentParser(description='List-price cost per agent seat, two windows side by side.')
     ap.add_argument('--days', type=int, default=7, help='window length in days (default 7)')
     ap.add_argument('--now', default=None, help='end of the last window, ISO UTC (default: now)')

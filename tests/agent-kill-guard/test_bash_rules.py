@@ -1,4 +1,4 @@
-"""The nine bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, local docker, heavy jobs in the agent host pod, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
+"""The eleven bash_rules checks (sleep-poll, heredoc, kube context, merge, PR body, issue body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config): what each refuses and what it lets through.
 
 Most cases call bash_rules.check with a Context (pure); the profile file, the Monitor tool, fail-open and the message the Pi extension
 looks for go through the real hook script in a temp copy. Nothing here writes inside the repo.
@@ -221,6 +221,17 @@ class Merge(unittest.TestCase):
         for repo in ("eval-cases", "cartwmic/eval-cases"):
             self.assertIsNone(check(f"ci-main-status --merge-gate {repo} --pr 1 && pr-body-check cartwmic/eval-cases 1 && gh pr merge 1 -R cartwmic/eval-cases --squash --match-head-commit " + "a" * 40))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate eval-cases --pr 1 && gh pr merge 1 -R cartwmic/eval-cases --squash"))
+        # An owner-approved one-time admin merge (Michael's answered ask for this PR) adds `--owner-approved ASK` to both checks; each tool asks the ledger itself, so the hook only
+        # needs to see the real gate shapes. Without the gate shapes the flag does not make a merge pass.
+        self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --squash --admin --match-head-commit " + "a" * 40))
+        self.assertIsNone(check("ci-main-status --merge-gate --owner-approved=12 --pr 5 o/r && pr-body-check o/r 5 --owner-approved=12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIsNone(check("ci-main-status --merge-gate o/r --pr 5 && pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("pr-body-check", check("ci-main-status --merge-gate o/r --pr 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        # The refusal of a merge with no gates tells an agent the owner-approved form exists: that is how a stuck merge finds its supported path.
+        self.assertIn("`--owner-approved ASK`", check("gh pr merge 5 -R o/r --squash"))
+        self.assertIn("ci-main-status", check("pr-body-check o/r 5 --owner-approved 12 && gh pr merge 5 -R o/r --admin"))
+        self.assertIn("A bare `ci-main-status`", check("ci-main-status --tip o/r --owner-approved 12 && pr-body-check o/r 5 && gh pr merge 5 -R o/r"))
+        self.assertIn("`pr-body-check` with `--body-file` is not the merge check", check("ci-main-status --merge-gate o/r && pr-body-check o/r 5 --body-file /tmp/b --owner-approved 12 && gh pr merge 5 -R o/r"))
         self.assertIn("--match-head-commit <head sha>", check("gh pr merge 12"))
         self.assertIn("pr-body-check", check("ci-main-status --merge-gate X && gh pr merge 5"))
         message = check("ci-main-status X; [ $? -le 2 ] && gh pr merge 5")
@@ -530,6 +541,120 @@ class PrBodyNamesPrOpen(unittest.TestCase):
         for text in ["pr-open --title t --body-file /tmp/pr-body.md", "pr-open --edit 5 --body-file /tmp/pr-body.md", "pr-open --title t --body-file - --draft"]:
             with self.subTest(text=text):
                 self.assertIsNone(check(text))
+
+
+class IssueBody(unittest.TestCase):
+    """`gh issue create` is refused and names `issue-open`, where the profile's coordinator checkout holds the claims command (src/claims/cli.ts)."""
+    REFUSED = ["gh issue create --title t --body x", "gh issue create -t t -F body.md", "gh issue new --title t", "gh -R cartwmic/x issue create --title t", "gh issue -R cartwmic/x create",
+               "gh issue create --repo cartwmic/x --title t --body-file /tmp/b.md --label bug", "cd /tmp && gh issue create --title t", "echo x | gh issue create --title t --body-file -",
+               "sh -c 'gh issue create --title t'", "sudo gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t -f body=b", "gh api -X POST repos/cartwmic/x/issues --input /tmp/i.json",
+               "gh api --method=POST https://api.github.com/repos/cartwmic/x/issues -F title=t"]
+    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
+              "issue-open --title t --body-file /tmp/b.md", "issue-open --title t --body-file - --dry-run", "echo gh issue create", "grep 'gh issue create' notes.md",
+              "gh api repos/cartwmic/x/issues", "gh api repos/cartwmic/x/issues/5/comments -f body=hi", "gh api -X GET repos/cartwmic/x/issues -f labels=bug", "gh pr list"]
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        (Path(self.repo) / "src/claims").mkdir(parents=True)
+        (Path(self.repo) / "src/claims/cli.ts").write_text("// stub\n")
+
+    def issue_check(self, text, **kw):
+        kw.setdefault("coordinator_repo", self.repo)
+        return check(text, **kw)
+
+    def test_each_form_is_refused_and_names_issue_open(self):
+        for text in self.REFUSED:
+            with self.subTest(text=text):
+                message = self.issue_check(text)
+                self.assertIn("issue-open --title T --body-file F", message or "")
+                self.assertIn("refused in agent sessions", message)
+
+    def test_other_issue_commands_and_issue_open_pass(self):
+        for text in self.PASSES:
+            with self.subTest(text=text):
+                self.assertIsNone(self.issue_check(text))
+
+    def test_the_refusal_does_not_borrow_the_pr_body_text(self):
+        message = self.issue_check("gh issue create --title t")
+        for text in ("pr-body-check --body-file F", "mktemp", "pr-open"):
+            self.assertNotIn(text, message)
+        self.assertIn("`claims ran -- <cmd>`", message)
+
+    def test_both_desktop_profiles_run_it_and_termux_and_no_profile_do_not(self):
+        for profile in ("personal", "axon-work-computer"):
+            self.assertIsNotNone(self.issue_check("gh issue create --title t", profile=profile))
+        for profile in ("termux", None):
+            self.assertIsNone(self.issue_check("gh issue create --title t", profile=profile))
+
+    def test_it_waits_until_the_claims_command_is_in_the_checkout(self):
+        (Path(self.repo) / "src/claims/cli.ts").unlink()
+        for text in ("gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t"):
+            self.assertIsNone(self.issue_check(text))
+        self.assertIsNone(self.issue_check("gh issue create --title t", coordinator_repo=str(Path(self.repo) / "missing")))
+
+    def test_with_no_instance_file_it_looks_in_git_coordinator_under_home(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.assertIsNone(check("gh issue create --title t", env={"HOME": home}))
+        (Path(home) / "git/coordinator/src/claims").mkdir(parents=True)
+        (Path(home) / "git/coordinator/src/claims/cli.ts").write_text("// stub\n")
+        self.assertIn("issue-open", check("gh issue create --title t", env={"HOME": home}))
+
+    def test_the_issue_create_flags_are_read_so_a_value_is_not_taken_for_an_operand(self):
+        gh = bash_rules.gh_command(["issue", "new", "--type", "bug", "-t", "T", "-F", "f", "-R", "o/r"])
+        self.assertEqual((gh.group, gh.verb, gh.operands), ("issue", "create", []))
+        self.assertEqual([gh.argv.value(n) for n in ("type", "title", "body-file", "repo")], ["bug", "T", "f", "o/r"])  # `type` is on the issue row only, not the pr one
+
+    def test_the_refusal_writes_a_reason_for_the_guard_log(self):
+        found = bash_rules.refusal("gh issue create --title t", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
+        self.assertEqual(found[0], "issue_body")
+        self.assertEqual(found[1].log, {"reason": "issue created without issue-open"})
+        self.assertEqual(found[2], "gh issue create")
+        api = bash_rules.refusal("gh api repos/cartwmic/x/issues -f title=SECRETVALUE", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
+        self.assertNotIn("SECRETVALUE", json.dumps(api[1].log))
+
+
+class IssueBodyRealHook(unittest.TestCase):
+    """The real hook script, as the Bash tool's JSON payload reaches it, with the coordinator checkout named by AGENT_HARNESS_COORDINATOR_REPO."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.hooks = Path(cls.tmp) / "hooks"
+        shutil.copytree(HOOKS, cls.hooks)
+        (cls.hooks / "profile").write_text("personal\n")
+        cls.repo = Path(cls.tmp) / "coordinator"
+        (cls.repo / "src/claims").mkdir(parents=True)
+        (cls.repo / "src/claims/cli.ts").write_text("// stub\n")
+        cls.log = Path(cls.tmp) / "guard.jsonl"
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def run_hook(self, command, repo=None):
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HARNESS_CONTAINER", "AGENT_HARNESS_PROFILE", "AGENT_HARNESS_COORDINATOR_REPO")}
+        env.update(AGENT_HARNESS_GUARD_LOG=str(self.log), AGENT_HARNESS_COORDINATOR_REPO=str(repo or self.repo))
+        payload = {"tool_name": "Bash", "cwd": self.tmp, "tool_input": {"command": command}}
+        return subprocess.run([sys.executable, str(self.hooks / "refuse_pattern_kill.py")], input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=30)
+
+    def test_a_bare_issue_create_exits_2_naming_issue_open_and_issue_open_exits_0(self):
+        refused = self.run_hook("gh issue create --title t --body-file /tmp/b.md")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("refused in agent sessions", refused.stderr)
+        self.assertIn("issue-open --title T --body-file F", refused.stderr)
+        for allowed in ("issue-open --title t --body-file /tmp/b.md", "gh issue list", "gh issue edit 5 --body-file /tmp/b.md"):
+            self.assertEqual(self.run_hook(allowed).returncode, 0, allowed)
+
+    def test_one_guard_log_line_for_the_refusal(self):
+        self.log.unlink(missing_ok=True)
+        self.run_hook("gh issue create --title t")
+        lines = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([(l["rule"], l["matched"]) for l in lines], [("issue_body", "gh issue create")])
+
+    def test_it_passes_while_the_checkout_has_no_claims_command(self):
+        self.assertEqual(self.run_hook("gh issue create --title t", repo=Path(self.tmp) / "none").returncode, 0)
 
 
 class PrBodyViaApi(unittest.TestCase):
@@ -951,9 +1076,6 @@ class LiveGit(unittest.TestCase):
         ("cd ~/git/coordinator && git rebase origin/main", "git rebase"),
         ("cd ~/git/coordinator && git cherry-pick abc1234", "git cherry-pick"),
         ("cd ~/git/coordinator && git revert abc1234", "git revert"),
-        ("cd ~/git/coordinator && git stash", "git stash"),
-        ("cd ~/git/coordinator && git stash push -m x", "git stash"),
-        ("cd ~/git/coordinator && git stash pop", "git stash"),
         ("cd ~/git/coordinator && git clean -fd", "git clean"),
         ("cd ~/git/coordinator && git am x.patch", "git am"),
         ("cd ~/git/coordinator && git apply x.patch", "git apply"),
@@ -1092,6 +1214,83 @@ class LiveGit(unittest.TestCase):
         self.assertIsNone(check("cd /home/cartwmic/git/coordinator && git merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
         self.assertTrue(check("cd /Users/mac/git/coordinator && git merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
         self.assertTrue(check("git -C $HOME/git/coordinator merge origin/main", env={"HOME": "/Users/mac"}, cwd="/x"))
+
+
+class Stash(unittest.TestCase):
+    """`git stash` that writes the stash list is refused in any directory and on every profile: every worktree of a repo shares one list
+    (2026-11-24: two builders in coordinator worktrees took each other's stashes). `list` and `show` pass. The refusal names the fix."""
+    REFUSED = [
+        "git stash",
+        "git stash push -m x",
+        "git stash pop",
+        "git stash save x",
+        "git stash apply",
+        "git stash drop",
+        "git stash clear",
+        "git stash store 0123abc",
+        "git stash branch newbranch",
+        "git stash -q",
+        "git stash --keep-index",
+        "git -C ~/tmp-home/x stash push -m x",
+        "git -C ~/git/coordinator stash pop",
+        "git -C ~/git/coordinator stash -Z",  # an unknown flag on a write: the stash rule answers before the flag table
+        "git -C/home/cartwmic/tmp-home/x stash pop",
+        "git --no-pager -C ~/tmp-home/x stash pop",
+        "git --git-dir=/home/cartwmic/tmp-home/x/.git stash pop",
+        "git -c a=b stash",
+        "git --foo stash pop",
+        "cd ~/tmp-home/x && git stash pop",
+        "cd ~/tmp-home/x && git stash push -m x && echo done",
+        "git status; git stash pop",
+        "sh -c 'git stash pop'",
+        "echo $(git stash pop)",
+        "git stash pop || true",
+        "cd ~/git/coordinator && git stash push -m x",
+    ]
+    ALLOWED = [
+        "git stash list",
+        "git stash list --oneline",
+        "git stash show",
+        "git stash show -p",
+        "git stash show stash@{1} --stat",
+        "git -C ~/tmp-home/x stash list",
+        "git --no-pager stash list",
+        "git -C ~/git/coordinator stash show -p",
+        "cd ~/git/coordinator && git stash list",
+        "git show stash@{0}",
+        "git log stash@{0}",
+        "git worktree add ~/tmp-home/x origin/main",
+        "echo git stash pop",  # a word, not a command
+    ]
+    PROFILES = [{"profile": "personal"}, {"profile": "axon-work-computer"}, {"profile": "personal", "container": True}]
+    WORKTREE = {"cwd": "/home/cartwmic/tmp-home/x", "env": {"HOME": "/home/cartwmic"}}
+
+    def stash_refusal(self, text, **kw):
+        return bash_rules.refusal(text, bash_rules.Context(**dict(ctx(**dict(self.WORKTREE, **kw))._asdict(), platform="linux")))
+
+    def test_writes_are_refused_in_any_directory_and_on_every_profile(self):
+        for text in self.REFUSED:
+            for kw in self.PROFILES:
+                with self.subTest(text=text, **kw):
+                    found = self.stash_refusal(text, **kw)
+                    self.assertEqual((found[0], found[2]) if found else None, ("stash", "git stash"))
+
+    def test_read_only_forms_pass(self):
+        for text in self.ALLOWED:
+            with self.subTest(text=text):
+                self.assertIsNone(self.stash_refusal(text))
+
+    def test_the_refusal_names_the_fix(self):
+        message = check("git -C ~/tmp-home/x stash push -m x", cwd="/x")
+        self.assertIn("`git stash` is refused in agent sessions", message)
+        self.assertIn("Commit your work in progress on your branch", message)
+        self.assertIn("git worktree add <path> origin/main", message)
+        self.assertIn("`git stash list` and `git stash show` are allowed", message)
+
+    def test_the_live_checkout_gets_the_same_refusal(self):
+        message = check("cd ~/git/coordinator && git stash pop", env={"HOME": "/home/cartwmic"}, cwd="/x")
+        self.assertIn("`git stash` is refused in agent sessions", message)
+        self.assertNotIn("live coordinator checkout", message)
 
 
 class Credential(unittest.TestCase):
@@ -1427,11 +1626,12 @@ class Hook(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def run_hook(self, command, tool="Bash", profile=None, argv=None, hooks=None):
+    def run_hook(self, command, tool="Bash", profile=None, argv=None, hooks=None, cwd=None, extra_env=None):
         env = {k: v for k, v in os.environ.items() if k != "AGENT_HARNESS_PROFILE"}
         if profile:
             env["AGENT_HARNESS_PROFILE"] = profile
-        payload = {"tool_name": tool, "cwd": self.tmp, "tool_input": {"command": command}}
+        env.update(extra_env or {})
+        payload = {"tool_name": tool, "cwd": cwd or self.tmp, "tool_input": {"command": command}}
         if tool is None:
             del payload["tool_name"]
         return subprocess.run([sys.executable, str((hooks or self.hooks) / "refuse_pattern_kill.py")] + (argv or []),
@@ -1666,6 +1866,26 @@ class Hook(unittest.TestCase):
     def test_the_rendered_profile_file_is_just_the_profile_name(self):
         text = (HOOKS / "profile.tmpl").read_text()
         self.assertEqual(text, "{{ .profile }}\n")
+
+    def test_a_stash_write_is_refused_and_a_read_passes_through_the_real_script(self):
+        """The commands of the 2026-11-24 incident, sent to the real script the way Claude Code sends them: JSON on stdin, from a worktree.
+        Three writes are refused with the fix on stderr; `git stash list` passes. Every profile file gives the same answer."""
+        worktree = f"{self.tmp}/wt-a"
+        for profile in (None, "personal", "axon-work-computer"):
+            for command, want in [("git stash", 2), ("git stash pop", 2), ("git -C %s stash push -m x" % worktree, 2), ("git stash list", 0)]:
+                with self.subTest(profile=profile, command=command):
+                    run = self.run_hook(command, profile=profile, cwd=worktree)
+                    self.assertEqual(run.returncode, want, run.stderr)
+                    if want == 2:
+                        self.assertIn("refused in agent sessions", run.stderr)
+                        self.assertIn("git worktree add <path> origin/main", run.stderr)
+
+    def test_a_stash_refusal_writes_one_guard_log_line_naming_the_rule(self):
+        log = Path(self.tmp) / "guard.jsonl"
+        run = self.run_hook("git stash pop", extra_env={"AGENT_HARNESS_GUARD_LOG": str(log)})
+        self.assertEqual(run.returncode, 2, run.stderr)
+        record = json.loads(log.read_text().splitlines()[-1])
+        self.assertEqual((record["action"], record["rule"], record["matched"]), ("refuse", "stash", "git stash"))
 
 
 class LiveGitWorkCheckout(unittest.TestCase):
