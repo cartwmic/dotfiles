@@ -213,7 +213,7 @@ class StackMapTest(unittest.TestCase):
         self.assertFalse(page.exists())
 
     def test_text_that_says_where_a_section_sits_on_the_page_fails(self):
-        for phrase in ("The tables further down list them.", "See the tables above for the list.", "It is listed earlier on this page."):
+        for phrase in ("The tables further down list them.", "See the tables above for the list.", "It is listed earlier on this page.", "See above.", "The above tables list them.", "Listed earlier on the page.", "The tables lower down name them."):
             with self.subTest(phrase=phrase):
                 self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", phrase + "\n\n## Glossary", 1))
                 done, page = self.run_script()
@@ -223,6 +223,13 @@ class StackMapTest(unittest.TestCase):
 
     def test_naming_a_section_is_fine(self):
         self.world.change("dotfiles", "docs/stack-map/content.md", CONTENT.replace("## Glossary", 'The tables under "Glossary" list them.\n\n## Glossary', 1))
+        done, page = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_position_words_inside_code_and_cited_snippets_are_not_page_text(self):
+        self.world.change("dotfiles", "README.md", "# Dotfiles below\n\nPersonal dotfiles.\n")
+        text = CONTENT.replace("[[dotfiles:README.md:1|# Dotfiles]]", "[[dotfiles:README.md:1|# Dotfiles below]]").replace("## Glossary", "The file `above.txt` is real.\n\n## Glossary", 1)
+        self.world.change("dotfiles", "docs/stack-map/content.md", text)
         done, page = self.run_script()
         self.assertEqual(done.returncode, 0, done.stderr)
 
