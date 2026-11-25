@@ -80,7 +80,7 @@ Each of Michael's machines keeps a local setting called its profile, and the pro
 7. Reviewer | A fresh session reviews the change and returns findings | dotfiles:dot_local/share/agent-harness/reviewer-brief.md
 8. Lead | Triages each finding on four tests, fixes the real ones | dotfiles:dot_local/share/agent-harness/finding-triage.md
 9. Merge gate | Runs every check on the pull request head, then merges | coordinator:scripts/merge-pr.sh
-10. Driver | Starts the main run: cluster journeys and Bookends on the new tip | coordinator:scripts/main-journeys.sh
+10. Driver | Starts the main run: cluster journeys, Bookends and the unit gate on the new tip | coordinator:scripts/main-journeys.sh
 11. Driver | Reads the result; a red main freezes further merges | coordinator:docs/red-main.md
 12. Driver | Deploys the passing commit and the daemon restarts itself | coordinator:scripts/pull-main.sh
 ```
