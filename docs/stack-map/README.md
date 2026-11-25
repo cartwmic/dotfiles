@@ -19,7 +19,7 @@ The page is one self-contained file: inline styles, inline diagrams, no scripts,
 
 ## Change the text
 
-The plain-English text is `docs/stack-map/content.md`. It needs these `##` sections (the generator finds each by words in its heading): *Start here*, *The one-minute picture*, something with *repo* in it for the per-repository notes, *How a piece of work moves* (holds the flow block), *Where do I change X?* and *Glossary*. Any other `##` section is shown before the glossary.
+The plain-English text is `docs/stack-map/content.md`. It needs these `##` sections (the generator finds each by words in its heading): *Start here*, *The one-minute picture*, something with *repo* in it for the per-repository notes, *How a piece of work moves* (holds the flow block), *Where do I change X?* and *Glossary*. Any other `##` section is shown before the glossary, with its own anchor and a chip in the top nav.
 
 Two things in it are checked against the code:
 
