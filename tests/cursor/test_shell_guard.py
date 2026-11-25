@@ -47,7 +47,7 @@ class CursorShellGuard(unittest.TestCase):
         (cls.home / ".cursor/hooks").mkdir(parents=True)
         shutil.copy(ADAPTER, cls.home / ".cursor/hooks/shell_guard.py")
         (cls.home / ".local/share/agent-harness/hooks").mkdir(parents=True)
-        for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+        for name in ("refuse_pattern_kill.py", "bash_rules.py", "gh_surface.py"):
             shutil.copy(HARNESS / name, cls.home / ".local/share/agent-harness/hooks" / name)
         cls.commands = {p: guard_command(p) for p in PROFILES}
 
@@ -109,7 +109,7 @@ class CursorShellGuard(unittest.TestCase):
             hooks.mkdir(parents=True)
             (home / ".cursor/hooks").mkdir(parents=True)
             shutil.copy(ADAPTER, home / ".cursor/hooks/shell_guard.py")
-            for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+            for name in ("refuse_pattern_kill.py", "bash_rules.py", "gh_surface.py"):
                 shutil.copy(HARNESS / name, hooks / name)
             state = home / "state"
             (state / "t3-hook").mkdir(parents=True)

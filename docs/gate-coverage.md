@@ -44,7 +44,7 @@ The merge form of `pr-body-check` also refuses a PR whose agent record has no `P
 
 `issue-open --title T --body-file F` expands the `{{claim:ID}}` tokens in F through `claims expand` (the coordinator's `src/claims/`), adds the Sources footer and runs `gh issue create`; `--dry-run` shows the expanded body and creates nothing. `claims` is a wrapper like `pr-record`: it runs `src/claims/cli.ts` in the checkout the `coordinator-instance` file names, so the work profile uses the work coordinator's checkout and personal uses `~/git/coordinator`. Both are installed on both desktop profiles and on neither Termux.
 
-The Bash rule refuses a bare `gh issue create` (also `gh issue new`, a `-R` before the verb, and a `gh api` POST on `repos/<o>/<r>/issues`) and names `issue-open`. It refuses only where `src/claims/cli.ts` exists in the profile's coordinator checkout, so a machine that applies this before it pulls the coordinator is not left with no way to file an issue. A `gh api graphql` mutation and an issue made through another tool are not seen.
+The Bash rule refuses a bare `gh issue create` (also `gh issue new`, a `-R` before the verb, a `gh api` POST on `repos/<o>/<r>/issues` and the graphql `createIssue`) and names `issue-open`. It refuses only where `src/claims/cli.ts` exists in the profile's coordinator checkout, so a machine that applies this before it pulls the coordinator is not left with no way to file an issue. An issue made through another tool (a script, `curl`) is not seen. `gh issue edit` with text is refused for now (dotfiles issue 890).
 
 ## `agent-traces` on work
 

@@ -77,11 +77,13 @@ CASES = [
       "gh api repos/o/r/pulls/5 -XPATCH -Ftitle=T", "gh api repos/o/r/pulls/5 -XPATCH -F=title=T", "gh api repos/o/r/pulls/5 -X PATCH --field title=T",
       "gh api repos/o/r/pulls/5 -X PATCH --field=title=T", "gh api repos/o/r/pulls/5 -X=PATCH --raw-field=title=T", "gh api repos/o/r/pulls/5 -iXPATCH -ftitle=T",
       "gh api -XPATCH repos/o/r/pulls/5 -f title=T", "gh api -f title=T repos/o/r/pulls/5 -X PATCH", "gh api repos/o/r/pulls/5 --method patch -f title=T",
-      "gh api repos/o/r/pulls/5 -X PUT -f title=T", "gh api repos/o/r/pulls/5 -f state=open -f title=T -X PATCH", "gh api -H 'Accept: application/json' repos/o/r/pulls/5 -X PATCH -f title=T"], "pr_body"),
+      "gh api repos/o/r/pulls/5 -f state=open -f title=T -X PATCH", "gh api -H 'Accept: application/json' repos/o/r/pulls/5 -X PATCH -f title=T"], "pr_body"),
+    ("api: a title by PUT", {}, "gh api repos/o/r/pulls/5 -X PUT -f title=T", ["gh api repos/o/r/pulls/5 -XPUT -ftitle=T", "gh api repos/o/r/pulls/5 --method=put -f title=T"], "pr_body"),
     ("api: a title, the endpoint spelled another way", {}, "gh api repos/o/r/pulls/5 -X PATCH -f title=T",
      ["gh api /repos/o/r/pulls/5 -X PATCH -f title=T", "gh api repos/o/r/pulls/5/ -X PATCH -f title=T", "gh api https://api.github.com/repos/o/r/pulls/5 -X PATCH -f title=T",
       "gh api https://ghe.example.com/api/v3/repos/o/r/pulls/5 -X PATCH -f title=T", "gh api 'repos/o/r/pulls/5?per_page=1' -X PATCH -f title=T",
-      "gh api repos/{owner}/{repo}/pulls/5 -X PATCH -f title=T", "gh api --hostname ghe.example.com repos/o/r/pulls/5 -X PATCH -f title=T"], "pr_body"),
+      "gh api --hostname ghe.example.com repos/o/r/pulls/5 -X PATCH -f title=T"], "pr_body"),
+    ("api: a title, the endpoint with a placeholder", {}, "gh api repos/{owner}/{repo}/pulls/5 -X PATCH -f title=T", ["gh api repos/{owner}/{repo}/pulls/5 -XPATCH -ftitle=T"], "pr_body"),
     ("api: a title with no method (a field makes it a POST)", {}, "gh api repos/o/r/pulls/5 -f title=T", ["gh api repos/o/r/pulls/5 -ftitle=T", "gh api repos/o/r/pulls/5 -F title=T"], "pr_body"),
     ("api: a title on a new PR", {}, "gh api repos/o/r/pulls -f title=T -f head=h -f base=main",
      ["gh api repos/o/r/pulls -X POST -f title=T -f head=h -f base=main", "gh api /repos/o/r/pulls -XPOST -ftitle=T -fhead=h -fbase=main", "gh api repos/o/r/pulls --field title=T -F head=h -f base=main",
@@ -91,18 +93,19 @@ CASES = [
     ("api: a title read from a file or stdin is never a title the check saw", {}, "pr-body-check --body-file /tmp/pr-5-body.aB3xY9 --title @/tmp/t && gh api repos/o/r/pulls/5 -X PATCH -F title=@/tmp/t",
      ["pr-body-check --body-file /tmp/pr-5-body.aB3xY9 --title @/tmp/t && gh api repos/o/r/pulls/5 -X PATCH -Ftitle=@/tmp/t",
       "pr-body-check --body-file /tmp/pr-5-body.aB3xY9 --title @- && gh api repos/o/r/pulls/5 -X PATCH --field title=@-"], "pr_body"),
-    ("api: a title the check saw", {}, "pr-body-check --body-file %s --title T && gh api repos/o/r/pulls/5 -X PATCH -f title=T" % EDIT_FILE,
+    # A title set through `gh api` is refused whether or not a check saw it: the only checked route is `pr-open --edit N --body-file F --title T`.
+    ("api: a title the check saw is still refused", {}, "pr-body-check --body-file %s --title T && gh api repos/o/r/pulls/5 -X PATCH -f title=T" % EDIT_FILE,
      ["pr-body-check --body-file %s --title T && gh api repos/o/r/pulls/5 --method=PATCH -ftitle=T" % EDIT_FILE, "pr-body-check --body-file %s --title=T && gh api -XPATCH /repos/o/r/pulls/5 -F title=T" % EDIT_FILE,
       "pr-body-check --body-file %s --title T && gh api https://api.github.com/repos/o/r/pulls/5 -X PATCH --raw-field=title=T" % EDIT_FILE,
-      "pr-body-check --body-file %s --title T && gh api repos/o/r/pulls -f title=T -f head=h -f base=main" % EDIT_FILE,
-      "pr-body-check --body-file %s --title T && gh api repos/o/r/issues/5 -X PATCH -f title=T" % EDIT_FILE], None),
-    ("api: a title the check did not see", {}, "pr-body-check --body-file %s --title other && gh api repos/o/r/pulls/5 -X PATCH -f title=T" % EDIT_FILE,
-     ["pr-body-check --body-file %s && gh api repos/o/r/pulls/5 -X PATCH -f title=T" % EDIT_FILE, "pr-body-check --body-file %s --title other && gh api repos/o/r/pulls/5 -XPATCH -Ftitle=T" % EDIT_FILE,
-      "pr-body-check --body-file %s --title other && gh api repos/o/r/pulls -f title=T -f head=h -f base=main" % EDIT_FILE], "pr_body"),
+      "pr-body-check --body-file %s --title other && gh api repos/o/r/pulls/5 -X PATCH -f title=T" % EDIT_FILE, "pr-body-check --body-file %s && gh api repos/o/r/pulls/5 -X PATCH -f title=T" % EDIT_FILE], "pr_body"),
+    ("api: a title the check saw, on a new PR", {}, "pr-body-check --body-file %s --title T && gh api repos/o/r/pulls -f title=T -f head=h -f base=main" % EDIT_FILE,
+     ["pr-body-check --body-file %s --title other && gh api repos/o/r/pulls -f title=T -f head=h -f base=main" % EDIT_FILE], "pr_body"),
+    ("api: a title the check saw, on an issue number", {}, "pr-body-check --body-file %s --title T && gh api repos/o/r/issues/5 -X PATCH -f title=T" % EDIT_FILE,
+     ["pr-body-check --body-file %s --title T && gh api repos/o/r/issues/5 -XPATCH -ftitle=T" % EDIT_FILE], "pr_body"),
     ("api: no title is set", {}, "gh api repos/o/r/pulls/5 --method PATCH -f state=closed",
      ["gh api repos/o/r/pulls/5 -XPATCH -fstate=closed", "gh api repos/o/r/pulls/5 -X PATCH -f base=main", "gh api repos/o/r/pulls/5 -X GET -f title=T", "gh api repos/o/r/pulls/5 -XGET -ftitle=T",
-      "gh api repos/o/r/pulls/5/comments -X POST -f title=T", "gh api repos/o/r/issues/5 -X GET -f title=T", "gh api repos/o/r/issues/5 -X PATCH -f state=closed",
-      "gh api repos/o/r/pulls/5 -X PATCH -f subtitle=T"], None),
+      "gh api repos/o/r/pulls/5/comments -X POST -f title=T", "gh api repos/o/r/issues/5 -X GET -f title=T", "gh api repos/o/r/issues/5 -X PATCH -f state=closed"], None),
+    ("api: a field the table does not know is refused", {}, "gh api repos/o/r/pulls/5 -X PATCH -f subtitle=T", ["gh api repos/o/r/pulls/5 -XPATCH -fsubtitle=T"], "merge"),
     ("api: a read", {}, "gh api repos/o/r/pulls/5 --jq .title", ["gh api repos/o/r/pulls/5 -q .title", "gh api repos/o/r/pulls/5 --jq=.title", "gh api repos/o/r/pulls/5 -q.title"], None),
     # git in the live coordinator checkout
     ("git: reset --hard in the live checkout", LIVE_KW, "git -C %s reset --hard" % LIVE,
@@ -194,7 +197,7 @@ class FlagBeforeTheVerb(unittest.TestCase):
                 found = verdict(text)
                 self.assertIsNotNone(found)
                 self.assertEqual(found[0], "merge")
-                self.assertIn("before its subcommand", found[1])
+                self.assertIn("before the subcommand", found[1])
                 self.assertIn("cannot tell", found[1])
 
     def test_a_flag_gh_lists_before_the_verb_is_read(self):
@@ -203,7 +206,7 @@ class FlagBeforeTheVerb(unittest.TestCase):
                 found = verdict(text)
                 self.assertEqual(found[0] if found else None, rule)
                 if found:
-                    self.assertNotIn("before its subcommand", found[1])
+                    self.assertNotIn("before the subcommand", found[1])
 
     def test_a_flag_after_the_verb_is_not_a_flag_before_it(self):
         for text in ["gh pr view 5 -t x", "gh pr list --weird", "gh issue list --weird", "gh pr checks 5 -x", "gh issue --weird list", "gh repo -x view"]:
@@ -212,7 +215,8 @@ class FlagBeforeTheVerb(unittest.TestCase):
 
     def test_the_log_line_names_the_flag_without_a_value(self):
         found = base.bash_rules.refusal("gh pr --title=secret edit 5", base.ctx())
-        self.assertEqual(found[1].log, {"reason": "flag before the gh subcommand", "flag": "--title"})
+        self.assertEqual(found[1].log, {"reason": "not on the gh_surface table", "effects": ""})
+        self.assertIn("`--title`", str(found[1]))
         self.assertNotIn("secret", str(found[1]))
 
     def test_the_refusal_applies_on_both_profiles_and_not_elsewhere(self):

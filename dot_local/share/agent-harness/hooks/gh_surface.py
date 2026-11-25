@@ -33,20 +33,28 @@ NEW_ISSUE = frozenset({ISSUE_CREATE, TITLE, BODY})
 SET_TEXT = frozenset({TITLE, BODY})
 
 WHY_MERGE = "`%s` merges a pull request without the merge gates. Merge with `gh pr merge` behind both gates, or `merge-pr.sh`."
-WHY_PR_TEXT = "`%s` sets the title or body of a pull request without the check that `pr-open` runs. Use `pr-open` (`pr-open --edit N --body-file F` for a PR that exists)."
+WHY_PR_TEXT = ("`%s` sets the title or body of a pull request without the check that `pr-open` runs. "
+               "Use `pr-open --title T --body-file F [--draft]` for a new pull request and `pr-open --edit N --body-file F [--title T]` for one that exists.")
 WHY_PR_OR_ISSUE = ("`%s` sets the title or body of an issue or pull request without a check, and the hook cannot tell a PR number from an issue number. "
-                  "For a pull request use `pr-open --edit N --body-file F [--title T]`. For an issue there is no checked route yet (follow-up: `issue-open --edit`, owed #4493).")
-WHY_ISSUE = "`%s` sets the title or body of an issue that nothing checked. There is no checked route to an issue's text yet (follow-up: `issue-open --edit`, owed #4493)."
-WHY_UNLISTED = ("`%s` is not on the allow table in dot_local/share/agent-harness/hooks/gh_surface.py, so the hook cannot tell what it does to a pull request or issue and refuses it "
-                "(%s). Add a row there for it, then run the command again.")
+                  "For a pull request use `pr-open --edit N --body-file F [--title T]`. For an issue there is no checked route yet (follow-up: `issue-open --edit`, dotfiles issue 890).")
+WHY_ISSUE = "`%s` sets the title or body of an issue that nothing checked. There is no checked route to an issue's text yet (follow-up: `issue-open --edit`, dotfiles issue 890)."
+WHY_UNLISTED = "`%s` is not on the allow table in dot_local/share/agent-harness/hooks/gh_surface.py, so the hook cannot tell what it does to a pull request or issue and refuses it (%s). %s"
+FIX_ROW = "Add a row there for it, then run the command again."
+FIX_FLAG = ("Add the flag to the matching row of FLAG_ROWS in dot_local/share/agent-harness/hooks/bash_rules.py (scripts/leak-guard-gh-flags regenerates the gh rows), "
+            "and a flag of `gh pr edit` or `gh issue edit` to EDIT_FLAGS here, then run the command again.")
+FIX_BEFORE = "Put the flag after the subcommand (`gh pr edit 5 -t T`); only `-R owner/repo` / `--repo` may come before it."
 
 
 def _surface(effects, verdict, route, reason=""):
     return Surface(frozenset(effects), verdict, True, reason % route if "%s" in reason else reason, route)
 
 
-def _unlisted(route, why):
-    return Surface(frozenset(), REFUSE, False, WHY_UNLISTED % (route, why), route)
+def _unlisted(route, why, fix=FIX_ROW):
+    return Surface(frozenset(), REFUSE, False, WHY_UNLISTED % (route, why, fix), route)
+
+
+def _unknown_flag(route, flag):
+    return _unlisted(route, "a flag the hook's table does not know: `%s`" % flag, FIX_FLAG)
 
 
 def _join(parts, route):
@@ -108,9 +116,11 @@ HELP_TRUE = frozenset("1 t T TRUE true True".split())  # what gh's flag parser (
 
 
 def _helping(argv):
-    """gh keeps the last value of a repeated `--help`, so `--help --help=false` runs the command and `--help=false --help` prints help. A `-h` anywhere prints
-    help in gh whatever else follows (`-h --help=false`, `-h=0`); this reads `-h` by the same last-value rule, so those spellings come back as the command: a refusal
-    of a help read, which fails closed. No spelling that gh runs is read as help."""
+    """True when gh would print help instead of running the command. gh keeps the last value of a repeated `--help`: `--help --help=false` runs the command and
+    `--help=false --help` prints help. This reads the last `--help` value the same way: bare or one of HELP_TRUE is help (ALLOW); any other value, one gh cannot parse
+    as a boolean included, is read as the command, so a gated command is refused. A `-h` is read as a bare `--help` by the normaliser (it splits `-h=0` into `-h`, `-=`
+    and `-0`), so `-h` anywhere is help, as gh also prints it; `-h --help=false` is the one spelling where that reading refuses a help read (the last value is false),
+    and it fails closed."""
     values = [v for n, v, _ in argv.flags if n == "help"]
     return bool(values) and (values[-1] is None or values[-1] in HELP_TRUE)
 
@@ -124,7 +134,7 @@ def _verb(gh, route):
     if row is None:
         return _unlisted(route, "gh %s has no verb `%s` in the table" % (gh.group, gh.verb))
     if gh.verb in ("create", "new", "merge") and gh.argv.unknown:
-        return _unlisted(route, "a flag the hook's table does not know: `%s`" % gh.argv.unknown[0])
+        return _unknown_flag(route, gh.argv.unknown[0])
     return _surface(*row[:2], route, row[2] if len(row) > 2 else "")
 
 
@@ -132,10 +142,10 @@ def _edit(gh, route):
     """`gh pr edit` and `gh issue edit` by the flags they carry. Text (title, body, body file, attachment) on a pull request goes through the check (PR_BODY); on `gh issue edit` it is
     refused, because gh sends `updatePullRequest` when the number is a pull request and the hook cannot tell. A flag that is not in EDIT_FLAGS is unlisted."""
     if gh.argv.unknown:
-        return _unlisted(route, "a flag the hook's table does not know: `%s`" % gh.argv.unknown[0])
+        return _unknown_flag(route, gh.argv.unknown[0])
     effects = _edit_effects(gh.argv)
     if effects is None:
-        return _unlisted(route, "a flag that is not in EDIT_FLAGS: `%s`" % sorted({n for n, _, _ in gh.argv.flags} - EDIT_IGNORED - set(EDIT_FLAGS))[0])
+        return _unlisted(route, "a flag that is not in EDIT_FLAGS: `%s`" % sorted({n for n, _, _ in gh.argv.flags} - EDIT_IGNORED - set(EDIT_FLAGS))[0], FIX_FLAG)
     if effects & SET_TEXT:
         return _surface(effects, PR_BODY, route) if gh.group == "pr" else _surface(effects, REFUSE, route, WHY_PR_OR_ISSUE)
     return _surface(effects, ALLOW, route)
@@ -271,7 +281,7 @@ def _graphql(gh):
 def _api(gh):
     argv = gh.argv
     if argv.unknown:
-        return _unlisted("gh api", "a flag the hook's table does not know: `%s`" % argv.unknown[0])
+        return _unknown_flag("gh api", argv.unknown[0])
     if len(gh.operands) != 1:
         return _unlisted("gh api", "it names %d endpoints" % len(gh.operands))
     segments = _segments(gh.operands[0])
@@ -287,7 +297,8 @@ def surface(gh):
         return _surface((), ALLOW, "gh")
     route = "gh " + gh.group
     if gh.before_verb is not None:
-        return _unlisted(route, "a flag before the subcommand (`%s`), which gh may take the next word as the value of" % gh.before_verb)
+        flag = gh.before_verb.partition("=")[0]  # the name only: a value after `=` is not shown
+        return _unlisted(route, "a flag before the subcommand (`%s`), which gh may take the next word as the value of, so the hook cannot tell the subcommand" % flag, FIX_BEFORE)
     if _helping(gh.argv):
         return _surface((), ALLOW, route)
     if gh.group == "api":
