@@ -1,4 +1,4 @@
-"""Nine refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Ten refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -52,13 +52,18 @@
               names kgate and a throwaway namespace on the homelab cluster (ledger grant 21). Read-only commands (`docker ps`, `images`,
               `inspect`, `manifest inspect`, `compose ps`) pass, and so does anything after `kgate`. Other personal hosts (the Mac, which
               has Docker Desktop for agents) are untouched, since Docker is provisioned there on purpose.
+  stash       (both profiles)  `git stash` that writes the stash list, in any directory (`git -C <dir>` too): push, save, pop, apply, drop, clear,
+              store, branch, `-q`, a bare `git stash`, and every other form but `list` and `show`. Every worktree of a repo shares one stash list, so a
+              pop from one worktree takes another worktree's work (2026-11-24: twice in coordinator worktrees, once as a swap between two builders).
+              Read-only `stash list` and `stash show` pass. The refusal names the fix: commit the work in progress on your branch, or make a throwaway
+              worktree with `git worktree add <path> origin/main`.
   live git    (both profiles)  git that changes the working tree, index, HEAD or a branch of the live coordinator checkout, ~/git/coordinator (and the profile's own checkout when it is another path: line 1 of the `coordinator-instance` file chezmoi renders, ~/coordinator-work on work),
               which the coordinator daemon runs from (2026-11-11: a reviewer checked out PR #438 there and the daemon restarted onto PR code;
               2026-11-16: a builder ran `git merge origin/main` there). Refused: merge, pull, reset, checkout, switch, restore, commit, rebase,
-              cherry-pick, revert, stash, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames), and
+              cherry-pick, revert, clean, am, apply, add, rm, mv, update-ref, symbolic-ref, branch (that creates, deletes or renames), and
               `gh pr checkout` / `gh pr co` run in the live checkout.
               Allowed there: `merge --abort`, `merge --ff-only <sha>` (the deploy; 7 to 40 hex, never a ref), `reset --keep <sha>` (the rollback in
-              docs/deploy.md), fetch, `stash list|show`, worktree add/remove/prune, every read-only git. The place is the command's directory
+              docs/deploy.md), fetch, worktree add/remove/prune, every read-only git. The place is the command's directory
               (the session's, a `cd` or `pushd`, each `-C`) or a `--git-dir`, `--work-tree`, GIT_DIR, GIT_WORK_TREE; `~`, `$HOME` and `${HOME}`
               are the Context's HOME. The refusal names `git worktree add ~/tmp-home/<name> origin/main`.
   credential  (both profiles)  a command that reads credential config raw, or hides its secrets with a line regex. Credential config is a path
@@ -81,7 +86,7 @@ whatever the flag is, unless it is `-R owner/repo` / `--repo`, `-h`/`--help` or 
 (a flag after the verb is read against the verb's row, as above).
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
-wrappers, `find -exec`, heredocs fed to a shell. Not covered: a command built at run time (`$cmd`), a script file, `python -c`, a command
+wrappers, `find -exec`, heredocs fed to a shell. Not covered: a git alias, a git option the table does not list that takes a separate value (it hides the subcommand), a command built at run time (`$cmd`), a script file, `python -c`, a command
 in an ssh remote string, a kubeconfig path or `cd` target that holds a shell variable (`$HOME` aside), a `cd` in `( )` (it counts for the commands after the `)`). The rules are pure functions on the text and a
 Context; the file reads and the git call are the Context's `read_file` and `origin_of`. The caller treats any exception as "allow".
 """
@@ -190,6 +195,13 @@ GIT_LIVE = (
     "Use a git worktree (git worktree add ~/tmp-home/<name> origin/main); the live checkout runs the daemon; only fetch and the deploy's "
     "`git merge --ff-only <sha>` are allowed there (and the rollback `git reset --keep <sha>`). "
     "See coordinator AGENTS.md, \"The live checkout\" (docs/deploy.md#the-live-checkout)."
+)
+
+
+STASH = (
+    "`%s` is refused in agent sessions: git keeps one stash list for every worktree of a repo, so this takes or drops another worktree's stash. "
+    "Commit your work in progress on your branch, or make a throwaway worktree for a clean tree: `git worktree add <path> origin/main`. "
+    "`git stash list` and `git stash show` are allowed."
 )
 
 
@@ -1035,6 +1047,18 @@ def _merge_pr(ctx):
     return os.path.join(own, "scripts/merge-pr.sh") if own else MERGE_PR
 
 
+def stash_rule(walk, ctx):
+    """A `git stash` that writes the stash list, in any directory: every worktree of a repo shares that list, so the place does not matter.
+    `_git_change` decides what writes (every form but `list` and `show`)."""
+    for cmd in walk.cmds:
+        if _base(cmd.words[0]) != "git":
+            continue
+        _, sub, read = _git_parts(cmd.words)
+        if sub == "stash" and _git_change(sub, read)[0]:
+            return Matched(STASH % "git stash", "git stash")
+    return None
+
+
 def live_git_rule(walk, ctx):
     for cmd in walk.cmds:
         name = _base(cmd.words[0])
@@ -1247,7 +1271,7 @@ def door_rule(walk, ctx):
     return None
 
 
-RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, heavy_rule, live_git_rule, credential_rule, door_rule)
+RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, docker_rule, heavy_rule, stash_rule, live_git_rule, credential_rule, door_rule)
 
 
 def refusal(text, ctx):
