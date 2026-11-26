@@ -108,6 +108,7 @@ BAR_TABLE_HEADING = "## Bar table"
 BAR_ROWS = {
     "personal": (
         "| `github.com/StoryCraftTW/storycraft` | shared |",
+        "| `github.com/cartwmic/loop-engine`, `gitea.internal.cartwmic.com/cartwmic/loop-engine` | shared |",
         "| `github.com/cartwmic/*`, `gitea.internal.cartwmic.com/cartwmic/*` | personal |",
     ),
     "axon-work-computer": ("| `git.example.test/*`, `github.com/axon-*` | shared |",),
