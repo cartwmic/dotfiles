@@ -14,6 +14,7 @@ note names a code comment, gets that source in its sentence ("(README)", "(doc)"
 The checker then runs from the sibling skill, by path, unchanged: see references/truth-check.md.
 verdicts reads the checker reports in REPORTS_DIR (the `read | N.k | VERDICT | path:line` rows) and prints one verdict per R-row, the worst of its claims. A row with
 no verdict counts as a failure. Exit 0 when every checked row HOLDS, 1 otherwise, 2 on bad usage. Stdlib only.
+Log: each run appends one JSON line (runlog.py: script, action `check-truth`, outcome ok, failed or refused; step prepare or verdicts, and the row counts).
 """
 import importlib.util
 import json
@@ -25,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
 from check_shape import R_COLS, evidence_parts, tables  # noqa: E402
+from logged import logged  # noqa: E402
 
 CITE = re.compile(r"([^\s:`,;()'\"]+):(\d+)(?:-(\d+))?")  # a path:line or path:start-end anywhere in a part: backticked or before a remark
 DOC_PATH = re.compile(r"(^|/)(readme[^/]*|agents\.md|claude\.md)$|\.(md|rst|adoc)$|^docs?/", re.I)
@@ -84,11 +86,12 @@ def to_doc(rows):
     return "\n".join(out) + "\n", mapped, skipped, failed
 
 
-def prepare(path, out):
+def prepare(path, out, stats):
     with open(path, encoding="utf-8") as f:
         rows = register_rows(f.read())
     if not rows:
         print("%s: no register rows (no table with the R columns)" % path, file=sys.stderr)
+        stats["reason"] = "no register rows"
         return 1
     doc, mapped, skipped, failed = to_doc(rows)
     os.makedirs(out, exist_ok=True)
@@ -96,13 +99,14 @@ def prepare(path, out):
         f.write(doc)
     with open(os.path.join(out, "rows.json"), "w", encoding="utf-8") as f:
         json.dump({"source": os.path.abspath(path), "rows": mapped, "not_checked": skipped, "failed": failed}, f, indent=2)
+    stats.update(rows=len(mapped), not_checked=len(skipped), failed=len(failed))
     print("%d rows to check, %d not checked: %s" % (len(mapped), len(skipped), ", ".join("%s (%s)" % (s["id"], s["reason"]) for s in skipped) or "none"))
     for f in failed:
         print("%s FAILED %s" % (f["id"], f["reason"]))
     return 1 if failed else 0
 
 
-def verdicts(folder, reports):
+def verdicts(folder, reports, stats):
     with open(os.path.join(folder, "rows.json"), encoding="utf-8") as f:
         meta = json.load(f)
     by_claim = load_slice().read_verdicts(reports)  # {"N.k": VERDICT}
@@ -120,18 +124,22 @@ def verdicts(folder, reports):
     failed = meta["failed"]
     for s in failed:
         print("%s FAILED %s" % (s["id"], s["reason"]))
+    stats.update(rows=len(meta["rows"]), holding=len(meta["rows"]) - bad, not_checked=len(meta["not_checked"]), failed=len(failed))
     print("%d of %d checked rows HOLD; %d not checked; %d failed before any checker" % (len(meta["rows"]) - bad, len(meta["rows"]), len(meta["not_checked"]), len(failed)))
     return 1 if bad or failed else 0
 
 
-def main(argv):
+def cli(argv, stats):
     if len(argv) == 5 and argv[1] == "prepare" and argv[3] == "--out" and os.path.isfile(argv[2]):
-        return prepare(argv[2], argv[4])
+        stats["step"] = "prepare"
+        return prepare(argv[2], argv[4], stats)
     if len(argv) == 4 and argv[1] == "verdicts" and os.path.isfile(os.path.join(argv[2], "rows.json")) and os.path.isdir(argv[3]):
-        return verdicts(argv[2], argv[3])
+        stats["step"] = "verdicts"
+        return verdicts(argv[2], argv[3], stats)
     print(__doc__.split("\n\n")[0], file=sys.stderr)
+    stats["reason"] = "usage"
     return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(logged("check_truth.py", "check-truth", cli, sys.argv))

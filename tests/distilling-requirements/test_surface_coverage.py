@@ -1,5 +1,6 @@
 """surface_coverage.py lists the surfaces (from surfaces.py) that no R-row of a REQUIREMENTS.md cites.
 Run: python3 -I tests/distilling-requirements/test_surface_coverage.py"""
+import atexit
 import os
 import shutil
 import subprocess
@@ -7,6 +8,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
+os.environ["XDG_STATE_HOME"] = STATE
+atexit.register(shutil.rmtree, STATE, True)
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 COVERAGE = SKILLS / "distilling-requirements/scripts/surface_coverage.py"
@@ -83,10 +88,7 @@ class SurfaceCoverageTest(unittest.TestCase):
 
     def test_missing_surfaces_py_gives_a_clear_error(self):
         script = self.tmp / "skills/distilling-requirements/scripts/surface_coverage.py"
-        script.parent.mkdir(parents=True)
-        shutil.copy(COVERAGE, script)
-        shutil.copy(COVERAGE.parent / "check_shape.py", script.parent / "check_shape.py")  # surface_coverage.py reads evidence cells through it
-        shutil.copy(COVERAGE.parent / "scopes.py", script.parent / "scopes.py")  # and reads --scope through scopes.py
+        shutil.copytree(COVERAGE.parent, script.parent, ignore=shutil.ignore_patterns("__pycache__"))  # the skill's own scripts, without the sibling skill that holds surfaces.py
         md = self.tmp / "R.md"
         md.write_text(register(self.head, []))
         res = subprocess.run([sys.executable, "-I", str(script), str(md), str(self.repo)], capture_output=True, text=True)

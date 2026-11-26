@@ -12,6 +12,7 @@ A pr or issue that gh says does not exist, or that fails those tests, is UNRESOL
 and the output says why; that alone does not fail the run. Then one line lists the rows whose refs all resolved: "resolved, claim not read-checked". A ref that resolves
 proves the commit, PR or issue exists, not that it says what the row says.
 Exit 1 when any ref is UNRESOLVED (a commit that is missing or not an ancestor, a PR or issue gh says is not there or that fails the tests above), 0 otherwise, 2 on bad usage. Stdlib only.
+Log: each run appends one JSON line (runlog.py: script, action `check-history-refs`, outcome ok, failed or refused; rows, resolved_rows, unresolved, not_checked).
 """
 import datetime
 import json
@@ -25,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
 from check_shape import evidence_parts  # noqa: E402
+from logged import logged  # noqa: E402
 from check_truth import register_rows  # noqa: E402
 
 
@@ -84,7 +86,7 @@ def resolve_gh(repo, ref, snapshot=None):
     return "resolved", title
 
 
-def main(argv):
+def cli(argv, stats):
     args, snapshot, it = [], None, iter(argv[1:])
     for a in it:
         if a == "--commit":
@@ -93,6 +95,7 @@ def main(argv):
             args.append(a)
     if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or snapshot == "":
         print(__doc__.split("\n\n")[0], file=sys.stderr)
+        stats["reason"] = "usage"
         return 2
     repo = args[1]
     with open(args[0], encoding="utf-8") as f:
@@ -102,6 +105,7 @@ def main(argv):
         snapshot = m.group(1) if m else None
     if snapshot and run(["git", "-C", repo, "cat-file", "-e", snapshot + "^{commit}"])[0]:
         print("snapshot commit %s is not in %s" % (snapshot, repo), file=sys.stderr)
+        stats["reason"] = "snapshot commit not in repo"
         return 2
     print("snapshot commit: %s" % (snapshot or "none (archive): commits are checked for existence only"))
     rows = register_rows(text)
@@ -121,8 +125,9 @@ def main(argv):
     print("resolved, claim not read-checked: %s" % (", ".join(clean) or "none"))
     print("unresolved: %s" % (", ".join(unresolved) or "none"))
     print("not checked (gh could not run): %s" % (", ".join(unchecked) or "none"))
+    stats.update(rows=len(rows), resolved_rows=len(clean), unresolved=len(unresolved), not_checked=len(unchecked))
     return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(logged("check_history_refs.py", "check-history-refs", cli, sys.argv))

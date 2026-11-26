@@ -5,10 +5,15 @@ Usage: python3 check_shape.py REQUIREMENTS.md [REPO]
 Exit 0 and "ok" when clean; exit 1 and one problem per line otherwise.
 Checks structure only (columns, ids, enums, evidence present, counts, dangling refs, the snapshot line),
 not whether a requirement is true. A `path:line` citation into docs/snapshots/ is an error; with REPO, so is one into any file that holds the snapshot line on a line of its own (`Snapshot of <name> at <sha7|no-git> on <date>. Not maintained: ...`, in the first 60 lines). A file with `shape: requirements/1` is refused: rerun the skill.
+Log: each run appends one JSON line (runlog.py: script, action `check-shape`, outcome ok, failed or refused; rows and problems, or the reason it refused).
 """
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
+sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
+from logged import logged  # noqa: E402
 
 R_COLS = ["id", "lens", "kind", "durability", "status", "requirement", "evidence", "check", "fit", "enforced", "note"]
 U_COLS = ["id", "invariant relied on", "relied on at", "missing guard", "violation reachable", "evidence"]
@@ -91,16 +96,19 @@ def is_snapshot_file(path, repo):
     return False
 
 
-def main(path, repo=None):
+def main(path, repo=None, stats=None):
+    stats = {} if stats is None else stats
     text = open(path, encoding="utf-8").read()
     lines = text.splitlines()
     if not text.lstrip().startswith("```text"):
         print("file must start with the header fence (```text); put the title below it")
+        stats["reason"] = "no header fence"
         return 1
     errs = []
     hdr = dict(re.findall(r"^(\w[\w-]*):\s*(.+)$", text.split("```", 2)[1], re.M))
     if hdr.get("shape") == "requirements/1":
         print("shape requirements/1 is the old shape: rerun the distilling-requirements skill to write requirements/2")
+        stats["reason"] = "old shape requirements/1"
         return 1
     if hdr.get("shape") != SHAPE:
         errs.append(f"header: shape must be {SHAPE}")
@@ -198,6 +206,7 @@ def main(path, repo=None):
     for sec in ("## 1.", "## 2.", "## 3.", "## 4.", "## 5.", "## Run log"):
         if not any(l.startswith(sec) for l in lines):
             errs.append(f"missing section {sec}")
+    stats.update(rows=len(ids["R"]), problems=len(set(errs)), with_repo=repo is not None)
     if errs:
         print("\n".join(sorted(set(errs))))
         return 1
@@ -205,5 +214,13 @@ def main(path, repo=None):
     return 0
 
 
+def cli(argv, stats):
+    if len(argv) not in (2, 3):
+        print(__doc__)
+        stats["reason"] = "usage"
+        return 2
+    return main(*argv[1:], stats=stats)
+
+
 if __name__ == "__main__":
-    sys.exit(main(*sys.argv[1:]) if len(sys.argv) in (2, 3) else print(__doc__) or 2)
+    sys.exit(logged("check_shape.py", "check-shape", cli, sys.argv))

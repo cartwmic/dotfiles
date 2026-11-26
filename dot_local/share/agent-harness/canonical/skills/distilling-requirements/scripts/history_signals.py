@@ -14,6 +14,7 @@ reports "no git history" (to --out when given) and exits 0. `docs/snapshots/` is
 GitHub search returns at most 1,000 results, so a search that returns that many is split by date and repeated until every window is under the cap (--gh-limit, at most 1,000 per search). The PR and issue lists say how many gh returned and whether one day alone still hit the cap. With no `gh`, a failing gh or --no-gh the section says why.
 No list is cut by default (`--limit 0` is the same). With `--limit N` each list is cut to its N newest rows and says "(M more rows cut by --limit)". With `--out FILE` the report is
 written to FILE and stdout gets one line saying where and how many lines: use it when the report is long, and read the file in parts. Exit 0, 2 on bad usage, an unknown REV or a scope that is not in REV. Stdlib only.
+Log: each run appends one JSON line (runlog.py: script, action `history-signals`, outcome ok or refused; signal_commits, churn_files, prs, issues, or the reason it refused).
 """
 import datetime
 import json
@@ -25,6 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
+from logged import logged  # noqa: E402
 from scopes import parse_scopes  # noqa: E402
 SIGNALS = {
     "fix": r"\bfix(?:e[sd]|ing)?\b|\bbug ?fix|\bregression\b|\bhotfix\b",
@@ -245,7 +247,7 @@ def emit(text, out):
     return 0
 
 
-def main(argv):
+def cli(argv, stats):
     args, scope, opts, flags, it = [], [], {"--rev": "HEAD", "--format": "md", "--limit": "0", "--out": "", "--churn-min": "4", "--gh-limit": "1000"}, set(), iter(argv[1:])
     for a in it:
         if a == "--scope":
@@ -258,24 +260,31 @@ def main(argv):
             args.append(a)
     if len(args) != 1 or not os.path.isdir(args[0]) or opts["--format"] not in ("md", "json") or not all(opts[k].isdigit() for k in ("--limit", "--churn-min", "--gh-limit")) or int(opts["--gh-limit"]) < 1:
         print(__doc__.split("\n\n")[0], file=sys.stderr)
+        stats["reason"] = "usage"
         return 2
     scope = parse_scopes(args[0], scope)  # `.` gives [], the whole repo
     if scope is None:
         print(__doc__.split("\n\n")[0], file=sys.stderr)
+        stats["reason"] = "bad scope"
         return 2
     if subprocess.run(["git", "-C", args[0], "rev-parse", "--git-dir"], capture_output=True).returncode:
+        stats.update(no_git=True, out=bool(opts["--out"]))
         return emit("no git history\n" if opts["--format"] == "md" else json.dumps({"history": "no git history"}) + "\n", opts["--out"])
     try:
         report = build(args[0], opts["--rev"], scope, int(opts["--limit"]), int(opts["--churn-min"]), int(opts["--gh-limit"]), "--no-gh" not in flags)
     except (RuntimeError, ValueError) as e:
         print("history_signals: %s" % e, file=sys.stderr)
+        stats["reason"] = str(e)
         return 2
     if report is None:
         print("history_signals: %s is not a revision of %s" % (opts["--rev"], args[0]), file=sys.stderr)
+        stats["reason"] = "unknown rev"
         return 2
     text = json.dumps(report, indent=2) + "\n" if opts["--format"] == "json" else markdown(report)
+    stats.update(signal_commits=report["signal_commits"]["total"], churn_files=report["churn"]["total"], prs=report["merged_prs"]["total"], issues=report["issues"]["total"],
+                 gh_available=report["merged_prs"]["available"], scoped=bool(scope), out=bool(opts["--out"]))
     return emit(text, opts["--out"])
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(logged("history_signals.py", "history-signals", cli, sys.argv))
