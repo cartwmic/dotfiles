@@ -95,6 +95,19 @@ class NoCutTest(unittest.TestCase):
         self.assertNotIn("repo_facts", (SKILL / "scripts/history_signals.py").read_text())
 
 
+class NoGitOutTest(unittest.TestCase):
+    def test_out_in_a_folder_with_no_git_still_writes_the_file_and_says_no_git(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "src").mkdir()
+            dest = Path(d, "h.md")
+            code, out, err = T.script("history_signals.py", Path(d, "src"), "--out", dest)
+            self.assertEqual((code, err), (0, ""))
+            self.assertEqual(dest.read_text(), "no git history\n")
+            self.assertIn("wrote 1 lines to %s" % dest, out)
+            code, out, _ = T.script("history_signals.py", Path(d, "src"))
+            self.assertEqual((code, out), (0, "no git history\n"))
+
+
 class SkillTextTest(unittest.TestCase):
     def text(self, *rel):
         return (SKILL.joinpath(*rel)).read_text(encoding="utf-8")

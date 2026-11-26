@@ -5,7 +5,7 @@ usage: history_signals.py REPO [--scope PATH ...] [--rev REV] [--format md|json]
 
 Everything is read from REV (default HEAD, resolved to a full sha and printed), never from the working tree. With --scope, only history that touches those
 repo-relative paths (a file or a folder, repeatable or comma-separated; `./src` is `src`, an absolute path inside the repo is made relative, `.` is the whole repo) is listed, and a scope that does not exist at REV is an error; with none, the whole repo. A folder with no git
-prints "no git history" and exits 0. `docs/snapshots/` is skipped: a snapshot is never evidence.
+reports "no git history" (to --out when given) and exits 0. `docs/snapshots/` is skipped: a snapshot is never evidence.
   signal commits   a commit whose subject matches fix, revert, perf, security, race, timeout, crash or flaky; sha, date, subject, the files it touched (inside the scope).
                    The match is on keywords only: it picks leads, not requirements
   high churn       files that exist at REV and were touched by at least --churn-min commits (default 4), most first
@@ -234,6 +234,17 @@ def build(repo, rev, scope, limit, churn_min, gh_limit, with_gh):
     return report
 
 
+def emit(text, out):
+    """Print the report, or with --out write it to that file and print one line saying where. Returns the exit code, 0."""
+    if out:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(text)
+        print("wrote %d lines to %s" % (text.count("\n"), out))
+    else:
+        print(text, end="")
+    return 0
+
+
 def main(argv):
     args, scope, opts, flags, it = [], [], {"--rev": "HEAD", "--format": "md", "--limit": "0", "--out": "", "--churn-min": "4", "--gh-limit": "1000"}, set(), iter(argv[1:])
     for a in it:
@@ -253,8 +264,7 @@ def main(argv):
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     if subprocess.run(["git", "-C", args[0], "rev-parse", "--git-dir"], capture_output=True).returncode:
-        print("no git history" if opts["--format"] == "md" else json.dumps({"history": "no git history"}))
-        return 0
+        return emit("no git history\n" if opts["--format"] == "md" else json.dumps({"history": "no git history"}) + "\n", opts["--out"])
     try:
         report = build(args[0], opts["--rev"], scope, int(opts["--limit"]), int(opts["--churn-min"]), int(opts["--gh-limit"]), "--no-gh" not in flags)
     except (RuntimeError, ValueError) as e:
@@ -264,13 +274,7 @@ def main(argv):
         print("history_signals: %s is not a revision of %s" % (opts["--rev"], args[0]), file=sys.stderr)
         return 2
     text = json.dumps(report, indent=2) + "\n" if opts["--format"] == "json" else markdown(report)
-    if opts["--out"]:
-        with open(opts["--out"], "w", encoding="utf-8") as f:
-            f.write(text)
-        print("wrote %d lines to %s" % (text.count("\n"), opts["--out"]))
-    else:
-        print(text, end="")
-    return 0
+    return emit(text, opts["--out"])
 
 
 if __name__ == "__main__":
