@@ -1,5 +1,5 @@
 """output-shape.md and check_shape.py: the shape the skill tells writers to follow is the shape the checker holds them to.
-Run: python3 -I tests/distilling-requirements/test_output_shape.py"""
+Run: python3 -m unittest discover -s tests/distilling-requirements"""
 import runlog_support  # first: keeps the run out of the real log
 import atexit
 import os

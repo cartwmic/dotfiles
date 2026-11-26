@@ -1,5 +1,5 @@
 """surface_coverage.py lists the surfaces (from surfaces.py) that no R-row of a REQUIREMENTS.md cites.
-Run: python3 -I tests/distilling-requirements/test_surface_coverage.py"""
+Run: python3 -m unittest discover -s tests/distilling-requirements"""
 import runlog_support  # first: keeps the run out of the real log
 import atexit
 import os

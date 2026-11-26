@@ -6,7 +6,7 @@ The fixture register has four rows that check_shape.py passes:
   so two claims. Another fixture adds R-3, which cites a line the file does not have (check_citations.py catches it before any checker runs).
 No model session runs here: the checker's report is recorded in the test, in the form check-brief.md asks for, and score.py ties it to the claims
 file the adapter and slice.py really made.
-Run: python3 -I tests/distilling-requirements/test_check_truth.py"""
+Run: python3 -m unittest discover -s tests/distilling-requirements"""
 import runlog_support  # first: keeps the run out of the real log
 import atexit
 import json
