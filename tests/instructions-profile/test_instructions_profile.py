@@ -243,6 +243,9 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertLess(text.index(BAR_HEADING), text.index(BAR_TABLE_HEADING))
                     for row in BAR_ROWS[profile]:
                         self.assertEqual(text.count(row), 1)
+                    # First match wins: the rows must stay in BAR_ROWS order.
+                    places = [text.index(row) for row in BAR_ROWS[profile]]
+                    self.assertEqual(places, sorted(places))
                     other = "axon-work-computer" if profile == "personal" else "personal"
                     for row in BAR_ROWS[other]:
                         self.assertNotIn(row, text)
