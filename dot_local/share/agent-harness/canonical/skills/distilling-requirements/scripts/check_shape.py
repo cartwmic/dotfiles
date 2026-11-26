@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Check a REQUIREMENTS.md against references/output-shape.md.
 
-Usage: python3 check_shape.py REQUIREMENTS.md
+Usage: python3 check_shape.py REQUIREMENTS.md [REPO]
 Exit 0 and "ok" when clean; exit 1 and one problem per line otherwise.
 Checks structure only (columns, ids, enums, evidence present, counts, dangling refs, the snapshot line),
-not whether a requirement is true. A file with `shape: requirements/1` is refused: rerun the skill.
+not whether a requirement is true. A `path:line` citation into docs/snapshots/ is an error; with REPO, so is one into any file whose first lines carry the snapshot's "Not maintained" line. A file with `shape: requirements/1` is refused: rerun the skill.
 """
+import os
 import re
 import sys
 
@@ -71,7 +72,21 @@ def tables(lines):
             i += 1
 
 
-def main(path):
+def is_snapshot_file(path, repo):
+    """True when `path` is inside docs/snapshots/, or (with REPO) a file whose first lines carry the snapshot's "Not maintained" line: a snapshot is never evidence."""
+    norm = os.path.normpath(path).lstrip("/")
+    if norm == "docs/snapshots" or norm.startswith("docs/snapshots/") or "/docs/snapshots/" in "/" + norm:
+        return True
+    if repo:
+        try:
+            with open(os.path.join(repo, norm), encoding="utf-8", errors="replace") as f:
+                return any(SNAPSHOT_FIXED in next(f, "") for _ in range(8))
+        except OSError:
+            return False
+    return False
+
+
+def main(path, repo=None):
     text = open(path, encoding="utf-8").read()
     lines = text.splitlines()
     if not text.lstrip().startswith("```text"):
@@ -142,6 +157,10 @@ def main(path):
                 for k, part in parts:
                     if k == "bad":
                         errs.append(f"line {ln}: evidence {part!r} is not commit:<7+ hex>, pr:<number> or issue:<number>")
+                for k, part in parts:
+                    cited = re.match(r"(.+?):\d", part) if k == "cite" else None
+                    if cited and is_snapshot_file(cited.group(1), repo):
+                        errs.append(f"line {ln}: evidence {part!r} cites a snapshot (docs/snapshots/ or a file marked 'Not maintained'): a snapshot is never evidence, cite the code")
                 if not any(k in ("owner", "commit", "pr", "issue") or re.search(r"\S+:\d+", t) for k, t in parts):
                     errs.append(f"line {ln}: evidence needs path:line, commit:<sha>, pr:<n>, issue:<n> or owner:<source>")
                 if kind == "R" and r["status"] == "accepted" and not any(k == "owner" for k, _ in parts):
@@ -178,4 +197,4 @@ def main(path):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1]) if len(sys.argv) == 2 else print(__doc__) or 2)
+    sys.exit(main(*sys.argv[1:]) if len(sys.argv) in (2, 3) else print(__doc__) or 2)

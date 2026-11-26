@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """List the surfaces of a repo that no requirement row cites: a coverage check of a REQUIREMENTS.md against surfaces.py.
 
-usage: surface_coverage.py REQUIREMENTS.md REPO [--all] [--scope PATH ...]
+usage: surface_coverage.py REQUIREMENTS.md REPO [--all] [--scope PATH]...
 
 Runs deriving-readable-docs/scripts/surfaces.py (the sibling skill, called by path) on REPO and prints `kind | name | path:line`
 for each surface that no R-row covers. Default kinds: entry, command, flag, route, event, env, config; --all adds manifest,
@@ -10,7 +10,7 @@ every line in it), or, failing that, when the row's requirement or note text hol
 is the real test; the name fallback only saves a row that cites the surface's neighbour line.
 Evidence lines are valid at the register's `commit:`. If REPO's HEAD is a different commit, one warning line is printed first
 and every moved line will show here as not covered. Exit 0 whatever is listed (it is a reading aid, not a gate); exit 2 on bad
-usage or a missing surfaces.py. With --scope, only surfaces in those repo-relative files or folders are listed (a scoped run answers only for its scope). It checks citation, not truth: it cannot tell that a row is right.
+usage or a missing surfaces.py. With --scope (repeatable, or comma-separated; `.` is the whole repo; an absolute path inside the repo is accepted), only surfaces in those files or folders are listed (a scoped run answers only for its scope). It checks citation, not truth: it cannot tell that a row is right.
 """
 import json
 import os
@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
 from check_shape import evidence_parts  # noqa: E402
+from scopes import parse_scopes  # noqa: E402
 
 SURFACES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
                         "deriving-readable-docs", "scripts", "surfaces.py")
@@ -69,17 +70,14 @@ def uncovered(rows, surfaces, kinds):
 
 
 def main(argv):
-    argv = list(argv)
-    scope = []
-    if "--scope" in argv:
-        i = argv.index("--scope")
-        scope = [os.path.normpath(a) for a in argv[i + 1:] if not a.startswith("--")]
-        if not scope:
-            print(__doc__.split("\n\n")[0], file=sys.stderr)
-            return 2
-        argv = argv[:i] + [a for a in argv[i + 1:] if a.startswith("--")]
-    args = [a for a in argv[1:] if a != "--all"]
-    if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]):
+    args, raw, it = [], [], iter(argv[1:])
+    for a in it:
+        if a == "--scope":
+            raw.append(next(it, ""))
+        elif a != "--all":
+            args.append(a)
+    scope = parse_scopes(args[1], raw) if len(args) == 2 and os.path.isdir(args[1]) else None
+    if len(args) != 2 or not os.path.isfile(args[0]) or scope is None:
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     if not os.path.isfile(SURFACES):

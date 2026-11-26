@@ -86,6 +86,7 @@ class SurfaceCoverageTest(unittest.TestCase):
         script.parent.mkdir(parents=True)
         shutil.copy(COVERAGE, script)
         shutil.copy(COVERAGE.parent / "check_shape.py", script.parent / "check_shape.py")  # surface_coverage.py reads evidence cells through it
+        shutil.copy(COVERAGE.parent / "scopes.py", script.parent / "scopes.py")  # and reads --scope through scopes.py
         md = self.tmp / "R.md"
         md.write_text(register(self.head, []))
         res = subprocess.run([sys.executable, "-I", str(script), str(md), str(self.repo)], capture_output=True, text=True)

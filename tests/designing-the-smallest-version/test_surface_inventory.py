@@ -86,6 +86,13 @@ class SurfaceInventoryTest(unittest.TestCase):
         new = run_facts(REPO_FACTS, repo)
         self.assertEqual([r["name"] for r in json.loads(new.stdout)["surfaces"]], ["NEW_ENV"])
 
+    def test_docs_found_skips_docs_snapshots_because_a_snapshot_is_never_evidence(self):
+        repo = self.tmp / "with-snapshot"
+        make_repo(repo, {"a.py": "x = 1\n", "docs/PRD.md": "# prd\n", "docs/snapshots/2026-01-01-aaaaaaa/REQUIREMENTS.md": "# old\n", "docs/snapshots/2026-01-01-aaaaaaa/DESIGN.md": "# old\n"})
+        res = run_facts(REPO_FACTS, repo)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual([d["path"] for d in json.loads(res.stdout)["docs_found"]], ["docs/PRD.md"])
+
     def test_missing_surfaces_py_gives_a_clear_error(self):
         skills = self.tmp / "skills-without-codemap"
         script = skills / "designing-the-smallest-version/scripts/repo_facts.py"

@@ -4,13 +4,13 @@
 usage: history_signals.py REPO [--scope PATH ...] [--rev REV] [--format md|json] [--limit N] [--churn-min N] [--gh-limit N] [--no-gh]
 
 Everything is read from REV (default HEAD, resolved to a full sha and printed), never from the working tree. With --scope, only history that touches those
-repo-relative paths (a file or a folder; `./src` is `src`) is listed, and a scope that does not exist at REV is an error; with none, the whole repo. A folder with no git
+repo-relative paths (a file or a folder, repeatable or comma-separated; `./src` is `src`, an absolute path inside the repo is made relative, `.` is the whole repo) is listed, and a scope that does not exist at REV is an error; with none, the whole repo. A folder with no git
 prints "no git history" and exits 0. `docs/snapshots/` is skipped: a snapshot is never evidence.
   signal commits   a commit whose subject matches fix, revert, perf, security, race, timeout, crash or flaky; sha, date, subject, the files it touched (inside the scope).
                    The match is on keywords only: it picks leads, not requirements
   high churn       files that exist at REV and were touched by at least --churn-min commits (default 4), most first
-  merged PRs       from `gh pr list --state merged --search "merged:A..B"`, kept only when the PR's merge commit is an ancestor of REV: number, title, labels
-  issues           from `gh issue list --state all --search "created:A..B"`; with a scope, only those whose title or body names a scope path
+  merged PRs       from `gh pr list --state merged --search "merged:A..B"` with no upper date (GitHub dates are UTC), kept only when the PR's merge commit is an ancestor of REV: number, title, labels
+  issues           from `gh issue list --state all --search "created:A..B"` up to the UTC day after the commit, then only those created by the commit time; with a scope, only those whose title or body names a scope path
 GitHub search returns at most 1,000 results, so a search that returns that many is split by date and repeated until every window is under the cap (--gh-limit, at most 1,000 per search). The PR and issue lists say how many gh returned and whether one day alone still hit the cap. With no `gh`, a failing gh or --no-gh the section says why.
 Each list is cut to --limit rows (default 40) and says how many it cut. The git helper is repo_facts.py's, loaded by path from the sibling skill
 designing-the-smallest-version. Exit 0, 2 on bad usage, an unknown REV or a scope that is not in REV. Stdlib only.
@@ -24,7 +24,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
+from scopes import parse_scopes  # noqa: E402
 REPO_FACTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "designing-the-smallest-version", "scripts", "repo_facts.py")
 SIGNALS = {
     "fix": r"\bfix(?:e[sd]|ing)?\b|\bbug ?fix|\bregression\b|\bhotfix\b",
@@ -100,7 +102,7 @@ def gh_query(repo, kind, field, lo, hi, fields, limit):
 
 
 def gh_list(repo, kind, field, until, fields, limit):
-    """(rows, reason, fetched, cap_hit) for everything from FIRST_DAY to `until` (YYYY-MM-DD): a search that returns `limit` rows may be cut off, so its date window is
+    """(rows, reason, fetched, cap_hit) for everything from FIRST_DAY to `until` (YYYY-MM-DD; None means no upper bound): a search that returns `limit` rows may be cut off, so its date window is
     split in two and each half searched again, until every window returns fewer. A single day that still returns `limit` rows is cap_hit. rows is None with the reason when gh is absent or fails."""
     if not shutil.which("gh"):
         return None, "gh is not available", 0, False
@@ -120,7 +122,8 @@ def gh_list(repo, kind, field, until, fields, limit):
             seen.update((r["number"], r) for r in rows)
 
     try:
-        window(FIRST_DAY, datetime.date.fromisoformat(until))
+        top = datetime.date.fromisoformat(until) if until else datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1)  # no upper bound: tomorrow covers every UTC date
+        window(FIRST_DAY, top)
     except RuntimeError as e:
         return None, str(e), 0, False
     return sorted(seen.values(), key=lambda r: -r["number"]), "", len(seen), state["hit"]
@@ -141,8 +144,8 @@ def commit_files(repo, oid):
     return subprocess.run(cmd, capture_output=True, text=True).stdout.splitlines()
 
 
-def merged_prs(repo, sha, scope, date, limit):
-    rows, reason, fetched, hit = gh_list(repo, "pr", "merged", date, "number,title,labels,mergedAt,mergeCommit", limit)
+def merged_prs(repo, sha, scope, limit):
+    rows, reason, fetched, hit = gh_list(repo, "pr", "merged", None, "number,title,labels,mergedAt,mergeCommit", limit)
     if rows is None:
         return gh_section(None, reason, 0, min(limit, SEARCH_MAX), False, [])
     reachable = set(subprocess.run(["git", "-C", repo, "rev-list", sha], capture_output=True, text=True).stdout.split())
@@ -157,12 +160,21 @@ def merged_prs(repo, sha, scope, date, limit):
     return gh_section(rows, "", fetched, min(limit, SEARCH_MAX), hit, kept)
 
 
-def issues(repo, scope, date, limit):
-    rows, reason, fetched, hit = gh_list(repo, "issue", "created", date, "number,title,state,labels,createdAt,body", limit)
+def created_by(stamp, committed):
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp() <= committed
+    except (AttributeError, ValueError):
+        return True
+
+
+def issues(repo, scope, committed, limit):
+    # GitHub search dates are UTC: search up to the UTC day after the commit, then keep only issues created by the commit's own time
+    until = (datetime.datetime.fromtimestamp(committed, datetime.timezone.utc).date() + datetime.timedelta(days=1)).isoformat()
+    rows, reason, fetched, hit = gh_list(repo, "issue", "created", until, "number,title,state,labels,createdAt,body", limit)
     if rows is None:
         return gh_section(None, reason, 0, min(limit, SEARCH_MAX), False, [])
     kept = [{"number": i["number"], "title": i["title"], "state": i["state"].lower(), "labels": [l["name"] for l in i.get("labels") or []], "created": (i.get("createdAt") or "")[:10]}
-            for i in rows if not scope or any(s in i["title"] + " " + (i.get("body") or "") for s in scope)]
+            for i in rows if created_by(i.get("createdAt"), committed) and (not scope or any(s in i["title"] + " " + (i.get("body") or "") for s in scope))]
     return gh_section(rows, "", fetched, min(limit, SEARCH_MAX), hit, kept)
 
 
@@ -205,6 +217,7 @@ def build(repo, rev, scope, limit, churn_min, gh_limit, with_gh):
         if not git(repo, "ls-tree", sha, "--", s).strip():
             raise ValueError("scope %s does not exist at %s" % (s, sha[:7]))
     date = git(repo, "log", "-1", "--format=%cs", sha).strip()
+    committed = int(git(repo, "log", "-1", "--format=%ct", sha).strip())
     present = set(git(repo, "-c", "core.quotepath=off", "ls-tree", "-r", "--name-only", sha).splitlines())
     commits = parse_log(git(repo, "-c", "core.quotepath=off", "log", sha, "-M", "--name-only", "--format=@@%H%x09%cs%x09%s", "--", *(scope or ["."]), ":(exclude)" + SNAPSHOTS))
     report = {"repo": os.path.basename(os.path.realpath(repo)), "rev": sha, "date": date, "scope": scope}
@@ -212,7 +225,7 @@ def build(repo, rev, scope, limit, churn_min, gh_limit, with_gh):
         shown, extra = cut(rows, limit)
         report[key] = {"total": len(rows), "rows": shown, "cut": extra}
     off = {"available": False, "reason": "--no-gh", "fetched": 0, "cap": gh_limit, "cap_hit": False, "total": 0, "rows": []}
-    for key, sec in (("merged_prs", merged_prs(repo, sha, scope, date, gh_limit) if with_gh else off), ("issues", issues(repo, scope, date, gh_limit) if with_gh else off)):
+    for key, sec in (("merged_prs", merged_prs(repo, sha, scope, gh_limit) if with_gh else off), ("issues", issues(repo, scope, committed, gh_limit) if with_gh else off)):
         shown, extra = cut(sec["rows"], limit)
         report[key] = dict(sec, rows=shown, cut=extra)
     return report
@@ -222,15 +235,18 @@ def main(argv):
     args, scope, opts, flags, it = [], [], {"--rev": "HEAD", "--format": "md", "--limit": "40", "--churn-min": "4", "--gh-limit": "1000"}, set(), iter(argv[1:])
     for a in it:
         if a == "--scope":
-            path = os.path.normpath((next(it, "") or "").strip() or ".")
-            scope.append("" if path == "." else path.strip("/"))
+            scope.append(next(it, ""))
         elif a in opts:
             opts[a] = next(it, "")
         elif a == "--no-gh":
             flags.add(a)
         else:
             args.append(a)
-    if len(args) != 1 or not os.path.isdir(args[0]) or opts["--format"] not in ("md", "json") or not all(opts[k].isdigit() for k in ("--limit", "--churn-min", "--gh-limit")) or "" in scope or int(opts["--gh-limit"]) < 1:
+    if len(args) != 1 or not os.path.isdir(args[0]) or opts["--format"] not in ("md", "json") or not all(opts[k].isdigit() for k in ("--limit", "--churn-min", "--gh-limit")) or int(opts["--gh-limit"]) < 1:
+        print(__doc__.split("\n\n")[0], file=sys.stderr)
+        return 2
+    scope = parse_scopes(args[0], scope)  # `.` gives [], the whole repo
+    if scope is None:
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
     if subprocess.run(["git", "-C", args[0], "rev-parse", "--git-dir"], capture_output=True).returncode:

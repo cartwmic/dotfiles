@@ -1,6 +1,6 @@
 # Interview: non-functional requirements
 
-Optional. Run it only in a session that can ask the owner, or when an answers file is given. It runs after the history step (so the proposals have leads) and before the rest of the distilling, in the session that can ask. A subagent that cannot ask takes the answers file as an input and sets `interview:` to its path.
+Optional. Run it only in a session that can ask the owner, or when an answers file is given. Before asking, the session that asks runs `history_signals.py` and skims the code for timeouts, limits, retries, retention and auth settings; when a caller runs the interview and hands the file to a subagent, the caller does this. It runs after the history step and before the rest of the distilling, in the session that can ask. A subagent that cannot ask takes the answers file as an input and sets `interview:` to its path.
 
 ## How to ask
 

@@ -8,9 +8,9 @@ Mandatory. It has a script half and a skill half. It runs before the interview, 
 
 - commits whose subject says fix, revert, perf, security, race, timeout, crash or flaky: sha, date, subject, files. The keyword match only picks leads; a commit it misses may matter, and one it picks may not;
 - high-churn files that still exist;
-- merged PRs, kept only when their merge commit is an ancestor of the rev, and issues created up to the rev's date, via `gh` (the section says why when `gh` does not work, and how many `gh` returned and whether its cap was hit; GitHub search returns at most 1,000 per query, so the script splits the date range until each query is under it, and the cap is hit only when a single day holds that many).
+- merged PRs, kept only when their merge commit is an ancestor of the rev, and issues created by the rev's commit time, via `gh` (PRs have no date cut: ancestry is the filter) (the section says why when `gh` does not work, and how many `gh` returned and whether its cap was hit; GitHub search returns at most 1,000 per query, so the script splits the date range until each query is under it, and the cap is hit only when a single day holds that many).
 
-In a scoped run pass the scope paths: only history that touches them is listed. A `repo-wide: yes` run also reads history that touches no other scope. A folder with no git prints "no git history". `docs/snapshots/` is skipped.
+In a scoped run pass the scope paths: only history that touches them is listed. The `repo-wide: yes` run gets the other runs' scope lists from the caller, runs the script unscoped, and also takes the signals that touch none of those scopes. `--scope .` means the whole repo; an absolute path inside the repo is accepted. A folder with no git prints "no git history". `docs/snapshots/` is skipped.
 
 Whether a row's code still exists is decided by today's code at the snapshot commit, not by the signals: drop a row whose code is gone and say so.
 
@@ -20,7 +20,7 @@ Read the list as leads, not rows. Before writing a row, open the commit diff or 
 
 - one row per behaviour, not per commit;
 - when a signal belongs to a behaviour you already have a row for, add its ref to that row's `evidence`; do not write a new row;
-- write a row only when you conclude the behaviour should be an obligation (kind `inferred`; see the kind rule in SKILL.md). If a doc, test or issue states it as an obligation, the row is `explicit` and the signal is extra evidence.
+- write a row only when you conclude the behaviour should be an obligation. Its kind comes from the kind rule in output-shape.md: when a doc, test, issue or the owner states it, the row is `explicit` and the signal is extra evidence.
 
 Patterns worth a row:
 

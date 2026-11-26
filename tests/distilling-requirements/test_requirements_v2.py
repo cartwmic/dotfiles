@@ -27,8 +27,9 @@ GH = """#!%s
 import json, os, sys
 a = sys.argv[1:]
 if a[:2] in (["pr", "view"], ["issue", "view"]):
-    if a[2] == "12":
-        print("Retry the upload on timeout")
+    views = json.load(open(os.environ["FAKE_GH_VIEWS"])) if os.environ.get("FAKE_GH_VIEWS") else {}
+    if a[0] + ":" + a[2] in views:
+        print(json.dumps(views[a[0] + ":" + a[2]]))
         sys.exit(0)
     if a[2] == "77":
         print("To get started with GitHub CLI, please run:  gh auth login", file=sys.stderr)
@@ -91,7 +92,7 @@ def commit(repo, files, msg, remove=()):
     return git(repo, "rev-parse", "HEAD")
 
 
-def fake_gh(tmp, prs=None, issues=None):
+def fake_gh(tmp, prs=None, issues=None, views=None):
     """A bin folder with a fake gh first, and one with git only (gh absent); returns (with_gh PATH, without_gh PATH, env for the PR list)."""
     with_gh, without = Path(tmp, "with-gh"), Path(tmp, "no-gh")
     for d in (with_gh, without):
@@ -103,7 +104,8 @@ def fake_gh(tmp, prs=None, issues=None):
     gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
     Path(tmp, "prs.json").write_text(json.dumps(prs or []))
     Path(tmp, "issues.json").write_text(json.dumps(issues or []))
-    return str(with_gh), str(without), dict(os.environ, FAKE_GH_PRS=str(Path(tmp, "prs.json")), FAKE_GH_ISSUES=str(Path(tmp, "issues.json")), FAKE_GH_LOG=str(Path(tmp, "gh.log")))
+    Path(tmp, "views.json").write_text(json.dumps(views or {}))
+    return str(with_gh), str(without), dict(os.environ, FAKE_GH_VIEWS=str(Path(tmp, "views.json")), FAKE_GH_PRS=str(Path(tmp, "prs.json")), FAKE_GH_ISSUES=str(Path(tmp, "issues.json")), FAKE_GH_LOG=str(Path(tmp, "gh.log")))
 
 
 class ShapeTest(unittest.TestCase):
@@ -111,6 +113,22 @@ class ShapeTest(unittest.TestCase):
         rows = [row(1, lens="quality", kind="inferred", evidence="src/a.py:1; commit:abcdef1; pr:12; issue:7"), row(2, lens="quality", kind="inferred", evidence="commit:abcdef1234567"),
                 row(3, kind="explicit", status="accepted", evidence="owner:interview 2026-11-26 Q1")]
         self.assertEqual(shape(doc(rows, {"interview": "interview.md"})), (0, "ok\n"))
+
+    def test_a_citation_into_a_snapshot_is_an_error_by_folder_and_by_the_not_maintained_line(self):
+        self.assertIn("cites a snapshot", shape(doc([row(1, evidence="docs/snapshots/2026-01-01-aaaaaaa/REQUIREMENTS.md:3")]))[1])
+        self.assertIn("cites a snapshot", shape(doc([row(1, evidence="src/a.py:1; ./docs/snapshots/x/GUIDE.md:9-12")]))[1])
+        self.assertEqual(shape(doc([row(1, evidence="docs/snapshots-notes.md:3")])), (0, "ok\n"))  # a look-alike name is not the folder
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "kept").mkdir()
+            Path(d, "kept", "OLD.md").write_text("# T\n\n" + LINE + "\n\nbody\n")
+            Path(d, "kept", "LIVE.md").write_text("# T\n\nbody\n")
+            Path(d, "R.md").write_text(doc([row(1, evidence="kept/OLD.md:5"), row(2, evidence="kept/LIVE.md:3")]))
+            code, out, _ = script("check_shape.py", Path(d, "R.md"), d)
+            self.assertEqual(code, 1)
+            self.assertIn("line", out)
+            self.assertEqual(out.count("cites a snapshot"), 1)
+            self.assertIn("kept/OLD.md:5", out)
+            self.assertEqual(script("check_shape.py", Path(d, "R.md"))[0], 0)  # without REPO only the folder rule can fire
 
     def test_requirements_1_is_refused_with_a_message_to_rerun_the_skill(self):
         code, out = shape(doc([row(1)], {"shape": "requirements/1"}))
@@ -200,6 +218,17 @@ class SurfaceCoverageTest(unittest.TestCase):
         self.assertIn("--alpha", scoped)
         self.assertNotIn("--beta", scoped)
         self.assertEqual(script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope")[0], 2)
+        _, both, _ = script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope", "a", "--scope", "b")
+        self.assertTrue("--alpha" in both and "--beta" in both)  # repeatable
+        _, comma, _ = script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope", "a,b")
+        self.assertTrue("--alpha" in comma and "--beta" in comma)  # comma-separated
+        _, whole, _ = script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope", ".")
+        self.assertTrue("--alpha" in whole and "--beta" in whole)  # `.` is the whole repo
+        _, absolute, _ = script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope", str(repo / "b"))
+        self.assertTrue("--beta" in absolute and "--alpha" not in absolute)  # an absolute path inside the repo
+        self.assertEqual(script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope", tmp)[0], 2)  # outside the repo
+        _, after, _ = script("surface_coverage.py", Path(tmp, "R.md"), "--scope", "a", repo)  # --scope takes one value, not the positionals after it
+        self.assertTrue("--alpha" in after and "--beta" not in after)
 
 
 class HistoryRefsTest(unittest.TestCase):
@@ -211,7 +240,13 @@ class HistoryRefsTest(unittest.TestCase):
         git(self.repo, "init", "-q", "-b", "main")
         self.sha = commit(self.repo, {"a.py": "x\n"}, "fix: retry the upload on timeout")
         self.later = commit(self.repo, {"a.py": "y\n"}, "after the snapshot")
-        self.with_gh, self.no_gh, self.env = fake_gh(self.tmp)
+        T = "Retry the upload on timeout"
+        pr = lambda state, oid, n: {"title": T, "state": state, "mergeCommit": {"oid": oid} if oid else None, "url": "https://github.com/o/r/pull/%d" % n}
+        views = {"pr:12": pr("MERGED", self.sha, 12), "pr:229": pr("MERGED", self.later, 229), "pr:225": pr("CLOSED", None, 225),
+                 "issue:12": {"title": T, "createdAt": "2000-01-01T00:00:00Z", "url": "https://github.com/o/r/issues/12"},
+                 "issue:229": {"title": T, "createdAt": "2000-01-01T00:00:00Z", "url": "https://github.com/o/r/pull/229"},
+                 "issue:300": {"title": T, "createdAt": "2999-01-01T00:00:00Z", "url": "https://github.com/o/r/issues/300"}}
+        self.with_gh, self.no_gh, self.env = fake_gh(self.tmp, views=views)
 
     def resolve(self, evidence, path=None, header=None, *extra):
         Path(self.tmp, "R.md").write_text(doc([row(1, kind="inferred", evidence=evidence)], header or {"commit": self.later}))
@@ -246,6 +281,23 @@ class HistoryRefsTest(unittest.TestCase):
         code, out, _ = self.resolve("pr:12; issue:12")
         self.assertEqual(code, 0)
         self.assertEqual(out.count("| resolved | Retry the upload on timeout"), 2)
+
+    def test_a_pr_must_be_merged_with_its_merge_commit_an_ancestor_of_the_snapshot(self):
+        code, out, _ = self.resolve("pr:229", None, None, "--commit", self.sha)
+        self.assertEqual(code, 1)
+        self.assertIn("R-1 | pr:229 | UNRESOLVED | pull request 229 was merged at %s, which is not an ancestor of the snapshot commit %s" % (self.later[:7], self.sha[:7]), out)
+        code, out, _ = self.resolve("pr:225", None, None, "--commit", self.later)
+        self.assertEqual(code, 1)
+        self.assertIn("R-1 | pr:225 | UNRESOLVED | pull request 225 is closed, not merged", out)
+        self.assertEqual(self.resolve("pr:229", None, None, "--commit", self.later)[0], 0)  # merged at the snapshot commit itself: fine
+
+    def test_an_issue_must_be_an_issue_and_created_by_the_snapshot_commit_time(self):
+        code, out, _ = self.resolve("issue:229")
+        self.assertEqual(code, 1)
+        self.assertIn("R-1 | issue:229 | UNRESOLVED | 229 is a pull request, not an issue (cite it as pr:229)", out)
+        code, out, _ = self.resolve("issue:300")
+        self.assertEqual(code, 1)
+        self.assertIn("R-1 | issue:300 | UNRESOLVED | issue 300 was created 2999-01-01T00:00:00Z, after the snapshot commit", out)
 
     def test_a_pr_gh_says_does_not_exist_is_unresolved_and_fails_the_run(self):
         code, out, _ = self.resolve("pr:99")
@@ -286,6 +338,38 @@ class HistorySignalsTest(unittest.TestCase):
         code, out, err = script("history_signals.py", self.repo, "--rev", self.head, *args, env=env or self.env, path=path or self.no_gh)
         self.assertEqual(code, 0, err)
         return json.loads(out) if "json" in args else out
+
+    def test_scope_dot_is_the_whole_repo_and_an_absolute_path_inside_the_repo_is_accepted(self):
+        whole = self.signals("--format", "json")
+        self.assertEqual(self.signals("--format", "json", "--scope", ".")["scope"], [])
+        self.assertEqual(self.signals("--format", "json", "--scope", ".")["signal_commits"], whole["signal_commits"])
+        self.assertEqual(self.signals("--format", "json", "--scope", str(self.repo / "web"))["scope"], ["web"])
+        self.assertEqual(self.signals("--format", "json", "--scope", "core", "--scope", "web")["scope"], ["core", "web"])
+        for bad in (self.tmp, ""):
+            self.assertEqual(script("history_signals.py", self.repo, "--scope", bad, path=self.no_gh)[0], 2, bad)
+
+    def test_a_pr_and_an_issue_around_the_commit_are_found_whatever_timezone_it_was_committed_in(self):
+        # Committed 2020-01-01 17:04 -0800 = 2020-01-02 01:04 UTC. GitHub search dates are UTC, so a PR merged at 01:05 UTC on 2020-01-02 (this commit's own PR) must be found:
+        # the committer's local date (2020-01-01) would have cut it off.
+        repo = Path(self.tmp, "tz")
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        (repo / "a.py").write_text("1\n")
+        git(repo, "add", "-A")
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "fix: a"], check=True, env=dict(ENV, GIT_COMMITTER_DATE="2020-01-01T17:04:00-08:00", GIT_AUTHOR_DATE="2020-01-01T17:04:00-08:00"))
+        sha = git(repo, "rev-parse", "HEAD")
+        self.assertEqual(git(repo, "log", "-1", "--format=%cs"), "2020-01-01")
+        prs = [{"number": 229, "title": "Own PR", "labels": [], "mergedAt": "2020-01-02T01:05:00Z", "mergeCommit": {"oid": sha}}]
+        issues = [{"number": n, "title": "I%d" % n, "state": "OPEN", "labels": [], "createdAt": at, "body": ""}
+                  for n, at in ((1, "2020-01-02T00:30:00Z"), (2, "2020-01-02T02:00:00Z"), (3, "2020-01-04T00:00:00Z"))]
+        with_gh, _, env = fake_gh(self.tmp, prs, issues)
+        code, out, err = script("history_signals.py", repo, "--format", "json", env=env, path=with_gh)
+        self.assertEqual(code, 0, err)
+        r = json.loads(out)
+        self.assertEqual([p["number"] for p in r["merged_prs"]["rows"]], [229])
+        self.assertEqual([i["number"] for i in r["issues"]["rows"]], [1])  # #2 was created after the commit, #3 is outside the UTC-day-plus-one window
+        issue_call = next(json.loads(l) for l in Path(self.tmp, "gh.log").read_text().splitlines() if json.loads(l)[0] == "issue")
+        self.assertEqual(issue_call[issue_call.index("--search") + 1].split("..")[1], "2020-01-03")
 
     def test_a_two_parent_merge_commit_is_scoped_by_the_branch_changes_only(self):
         git(self.repo, "checkout", "-q", "-b", "feat", self.head)
@@ -355,7 +439,8 @@ class HistorySignalsTest(unittest.TestCase):
         self.assertEqual(self.signals("--no-gh", "--format", "json", path=with_gh, env=env)["merged_prs"]["reason"], "--no-gh")
         calls = [json.loads(l) for l in Path(self.tmp, "gh.log").read_text().splitlines()]
         pr_call = next(c for c in calls if c[0] == "pr")
-        self.assertIn("merged:2008-01-01.." + git(self.repo, "log", "-1", "--format=%cs", self.head), pr_call)
+        self.assertIn("merged:2008-01-01..", pr_call[pr_call.index("--search") + 1])
+        self.assertGreater(pr_call[pr_call.index("--search") + 1].split("..")[1], git(self.repo, "log", "-1", "--format=%cs", self.head))  # no cut at the commit's date
         self.assertIn("number,title,labels,mergedAt,mergeCommit", pr_call)
         self.assertNotIn("files", pr_call[-1])  # a scope is matched on the files git reports for the merge commit, not on gh's
 
@@ -433,7 +518,9 @@ class SkillDocsTest(unittest.TestCase):
              "with regression tests and keep the document updated.")
 
     def test_check_history_refs_runs_in_the_write_step_not_only_in_the_truth_check(self):
-        step10 = next(l for l in self.TEXT.splitlines() if l.startswith("10. "))
+        lines = self.TEXT.splitlines()
+        step10 = "\n".join(lines[next(i for i, l in enumerate(lines) if l.startswith("10. ")):][:4])
+        self.assertEqual(sum(1 for l in lines[:next(i for i, l in enumerate(lines) if l.startswith("11. "))] if l.startswith("    - `python3 -I")), 3)  # three scripts, three sub-bullets
         self.assertIn("check_history_refs.py", step10)
         self.assertIn("only checker rounds count", (self.SKILL / "references" / "truth-check.md").read_text())
         self.assertNotIn("SKILL.md step 9", (self.SKILL / "scripts" / "check_truth.py").read_text())
@@ -474,11 +561,17 @@ class SkillDocsTest(unittest.TestCase):
 
     def test_a_row_is_classified_by_what_told_you_with_one_precedence_in_the_skill_and_the_shape(self):
         shape_md = (self.SKILL / "references/output-shape.md").read_text(encoding="utf-8")
-        for text in (self.TEXT, shape_md):
-            self.assertIn("A fix commit for behaviour the code still shows is `inferred`", text)
-            self.assertIn("Else `inferred`: you conclude it should be an obligation from a pattern", text)
-            self.assertIn("Else `implicit`: only today's code shows it", text)
+        self.assertIn("A fix commit for behaviour the code still shows, with no doc, test, issue or owner stating it, is `inferred`", shape_md)
+        self.assertIn("whether worded as an obligation or as a description", shape_md)
+        self.assertIn("`inferred`: no such source says it; you conclude it from a pattern", shape_md)
+        self.assertIn("`implicit`: only the code shows it", shape_md)
+        # the rule is written once: SKILL.md links to it and does not restate it
+        self.assertIn("apply the one rule in [references/output-shape.md]", self.TEXT)
+        self.assertNotIn("first match wins", self.TEXT.lower())
+        self.assertNotIn("A fix commit for behaviour", self.TEXT)
         self.assertNotIn("issue text and docs", self.TEXT.lower())
+        self.assertIn("Pull what the repo's own words say the system does or must do", self.TEXT)  # step 2 matches the rule: description counts, not only obligation
+        self.assertIn("- **Status** is", self.TEXT)
 
     def test_history_runs_before_the_interview_and_the_interview_asks_every_area_in_outcome_words(self):
         self.assertLess(self.TEXT.index("3. **History (mandatory)"), self.TEXT.index("4. **Interview (optional)"))

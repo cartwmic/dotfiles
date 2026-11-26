@@ -935,7 +935,7 @@ def analyse(repo, sha, args, rules, tmp):
         'path_refs': path_ref_report(path_ref_counts(ref_texts, set(names), dir_set(names)), chosen),
         'gates': gate_list,
         'surfaces': surface_rows(tree),
-        'docs_found': [{'path': p, 'bytes': names[p]} for p in sorted(files) if DOC_RE.search(p)],
+        'docs_found': [{'path': p, 'bytes': names[p]} for p in sorted(files) if DOC_RE.search(p) and not p.startswith('docs/snapshots/')],  # a snapshot is never evidence
         'skipped': {'count': sum(skipped.values()), 'by_reason': dict(sorted(skipped.items()))},
     }
     if not gate_list:
