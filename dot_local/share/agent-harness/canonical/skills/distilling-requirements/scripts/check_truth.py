@@ -7,7 +7,7 @@ usage:
 
 prepare writes DIR/register-claims.md, a doc in the shape slice.py, check_citations.py and score.py read (one `## R-n` heading, then the row's requirement
 sentence and its evidence as backticked `path:line` citations), and DIR/rows.json (doc line -> R-id, and the rows it could not hand to a checker). It finds every
-`path:line` or `path:start-end` in each `;` part of the evidence cell, whether backticked, in a comma list or followed by a remark. A row whose evidence is an `owner:`
+`path:line` or `path:start-end` in each `;` part of the evidence cell, whether backticked or followed by a remark. A row whose evidence is an `owner:`
 source only is listed as not checked: there is nothing in the repo to read. A row with neither a citation nor an `owner:` part fails (prepare prints it and exits 1,
 and verdicts counts it as a failure). A row whose evidence is a README or doc, or whose
 note names a code comment, gets that source in its sentence ("(README)", "(doc)", "(code comment)"), because the check brief fails a claim that rests on one without saying so.
@@ -26,7 +26,7 @@ sys.path.insert(0, HERE)  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
 from check_shape import R_COLS, evidence_parts, tables  # noqa: E402
 
-CITE = re.compile(r"([^\s:`,;()'\"]+):(\d+)(?:-(\d+))?")  # a path:line or path:start-end anywhere in a part: backticked, in a comma list, before a remark
+CITE = re.compile(r"([^\s:`,;()'\"]+):(\d+)(?:-(\d+))?")  # a path:line or path:start-end anywhere in a part: backticked or before a remark
 DOC_PATH = re.compile(r"(^|/)(readme[^/]*|agents\.md|claude\.md)$|\.(md|rst|adoc)$|^docs?/", re.I)
 SEVERITY = ["HOLDS", "OVERSTATED", "UNSUPPORTED", "WRONG"]
 
@@ -72,7 +72,7 @@ def to_doc(rows):
             elif kind == "cite":
                 cites += [(m.group(1), m.group(2) + ("-" + m.group(3) if m.group(3) else "")) for m in CITE.finditer(part)]
         if not cites:
-            reason = "owner evidence only, nothing in the repo to read" if owner else "history refs only: resolved by check_history_refs.py, claim not read-checked" if history else "evidence has neither a path:line nor an owner: or history part (%s)" % row["evidence"][:60]
+            reason = "owner evidence only, nothing in the repo to read" if owner else "history refs only: to be resolved by check_history_refs.py, claim not read-checked" if history else "evidence has neither a path:line nor an owner: or history part (%s)" % row["evidence"][:60]
             (skipped if owner or history else failed).append({"id": row["id"], "reason": reason})
             continue
         label = source_label(cites, row)

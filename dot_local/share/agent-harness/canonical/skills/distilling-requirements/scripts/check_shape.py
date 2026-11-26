@@ -146,8 +146,8 @@ def main(path):
                     errs.append(f"line {ln}: evidence needs path:line, commit:<sha>, pr:<n>, issue:<n> or owner:<source>")
                 if kind == "R" and r["status"] == "accepted" and not any(k == "owner" for k, _ in parts):
                     errs.append(f"line {ln}: status=accepted needs owner: evidence (only the owner accepts, during this run)")
-                if kind == "R" and r["kind"] == "inferred" and r["status"] != "proposed":
-                    errs.append(f"line {ln}: an inferred row has status proposed")
+                if kind == "R" and r["kind"] == "inferred" and r["status"] not in ("proposed", "disputed"):
+                    errs.append(f"line {ln}: an inferred row has status proposed or disputed, never accepted: once the owner confirms it, it is explicit")
                 if kind == "R" and any(t.startswith("owner:interview") for k, t in parts) and hdr.get("interview", "").strip() == "none":
                     errs.append(f"line {ln}: owner:interview evidence but the header says interview: none")
             if kind == "R" and r["fit"] == "partial" and not r["note"]:

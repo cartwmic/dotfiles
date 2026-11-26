@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Resolve the history refs in the evidence column of a REQUIREMENTS.md: `commit:<sha>`, `pr:<n>` and `issue:<n>`.
 
-usage: check_history_refs.py REQUIREMENTS.md REPO
+usage: check_history_refs.py REQUIREMENTS.md REPO [--commit SHA]
 
-For each ref prints `R-id | ref | resolved | subject or title` or `R-id | ref | UNRESOLVED | reason`.
-  commit  resolved with `git -C REPO cat-file -e <sha>^{commit}`; the subject comes from `git log -1`
-  pr      resolved with `gh pr view <n> --json title` run in REPO
-  issue   resolved with `gh issue view <n> --json title` run in REPO
-With no `gh` on PATH, or a `gh` that fails, a pr or issue is listed UNRESOLVED with the reason; that does not fail the run (the number is checked by nothing else).
-Then one line lists the rows whose refs all resolved: "resolved, claim not read-checked". A ref that resolves proves the commit, PR or issue exists, not that it says what the row says.
-Exit 1 when a commit ref does not resolve, 0 otherwise, 2 on bad usage. Stdlib only.
+For each ref prints `R-id | ref | resolved | subject or title`, `R-id | ref | UNRESOLVED | reason` or `R-id | ref | NOT CHECKED | reason`.
+  commit  must exist (`git -C REPO cat-file -e <sha>^{commit}`) and be an ancestor of the snapshot commit: --commit, else the header's `commit:`
+          (an archive has none, so only existence is checked, and the output says so)
+  pr      `gh pr view <n> --json title` run in REPO
+  issue   `gh issue view <n> --json title` run in REPO
+A pr or issue that gh says does not exist is UNRESOLVED. With no `gh` on PATH, or a gh that cannot run (not signed in, no network, no GitHub remote), it is NOT CHECKED
+and the output says why; that alone does not fail the run. Then one line lists the rows whose refs all resolved: "resolved, claim not read-checked". A ref that resolves
+proves the commit, PR or issue exists, not that it says what the row says.
+Exit 1 when any ref is UNRESOLVED (a commit that is missing or not an ancestor, a PR or issue gh says is not there), 0 otherwise, 2 on bad usage. Stdlib only.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,47 +34,67 @@ def run(argv, cwd=None):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-def resolve_commit(repo, ref):
+NOT_FOUND = re.compile(r"could not resolve to|not found|no (?:pull requests?|issues?) found|http 404", re.I)
+
+
+def resolve_commit(repo, ref, snapshot):
     sha = ref.split(":", 1)[1]
-    code, _, err = run(["git", "-C", repo, "cat-file", "-e", sha + "^{commit}"])
-    if code:
-        return False, "no such commit in %s" % repo
-    return True, run(["git", "-C", repo, "log", "-1", "--format=%s", sha])[1]
+    if run(["git", "-C", repo, "cat-file", "-e", sha + "^{commit}"])[0]:
+        return "UNRESOLVED", "no such commit in %s" % repo
+    if snapshot and run(["git", "-C", repo, "merge-base", "--is-ancestor", sha, snapshot])[0]:
+        return "UNRESOLVED", "not an ancestor of the snapshot commit %s" % snapshot[:7]
+    return "resolved", run(["git", "-C", repo, "log", "-1", "--format=%s", sha])[1]
 
 
-def resolve_gh(repo, ref):
+def resolve_gh(repo, ref, snapshot=None):
     kind, number = ref.split(":", 1)
     if not shutil.which("gh"):
-        return False, "gh is not available"
+        return "NOT CHECKED", "gh is not available"
     code, out, err = run(["gh", kind, "view", number, "--json", "title", "--jq", ".title"], cwd=repo)
-    if code:
-        return False, "gh could not read it: %s" % ((err.splitlines() or ["exit %d" % code])[0])
-    return True, out
+    if not code:
+        return "resolved", out
+    first = (err.splitlines() or ["exit %d" % code])[0]
+    return ("UNRESOLVED", "gh says it does not exist: %s" % first) if NOT_FOUND.search(err) else ("NOT CHECKED", "gh cannot run here (not signed in, no network or no GitHub remote): %s" % first)
 
 
 def main(argv):
-    if len(argv) != 3 or not os.path.isfile(argv[1]) or not os.path.isdir(argv[2]):
+    args, snapshot, it = [], None, iter(argv[1:])
+    for a in it:
+        if a == "--commit":
+            snapshot = next(it, None)
+        else:
+            args.append(a)
+    if len(args) != 2 or not os.path.isfile(args[0]) or not os.path.isdir(args[1]) or snapshot == "":
         print(__doc__.split("\n\n")[0], file=sys.stderr)
         return 2
-    repo = argv[2]
-    with open(argv[1], encoding="utf-8") as f:
-        rows = register_rows(f.read())
-    bad_commit, clean, unresolved = 0, [], []
+    repo = args[1]
+    with open(args[0], encoding="utf-8") as f:
+        text = f.read()
+    if snapshot is None:
+        m = re.search(r"^commit:\s*([0-9a-f]{40})\s*$", text, re.M)
+        snapshot = m.group(1) if m else None
+    if snapshot and run(["git", "-C", repo, "cat-file", "-e", snapshot + "^{commit}"])[0]:
+        print("snapshot commit %s is not in %s" % (snapshot, repo), file=sys.stderr)
+        return 2
+    print("snapshot commit: %s" % (snapshot or "none (archive): commits are checked for existence only"))
+    rows = register_rows(text)
+    failed, clean, unresolved, unchecked = False, [], [], []
     for _, row in rows:
         refs = [(k, p) for k, p in evidence_parts(row["evidence"]) if k in ("commit", "pr", "issue")]
         ok_all = bool(refs)
         for kind, ref in refs:
-            ok, text = (resolve_commit if kind == "commit" else resolve_gh)(repo, ref)
-            print("%s | %s | %s | %s" % (row["id"], ref, "resolved" if ok else "UNRESOLVED", text))
-            if not ok:
+            status, text_ = resolve_commit(repo, ref, snapshot) if kind == "commit" else resolve_gh(repo, ref)
+            print("%s | %s | %s | %s" % (row["id"], ref, status, text_))
+            if status != "resolved":
                 ok_all = False
-                unresolved.append("%s %s" % (row["id"], ref))
-                bad_commit += kind == "commit"
+                (unresolved if status == "UNRESOLVED" else unchecked).append("%s %s" % (row["id"], ref))
+                failed = failed or status == "UNRESOLVED"
         if ok_all:
             clean.append(row["id"])
     print("resolved, claim not read-checked: %s" % (", ".join(clean) or "none"))
     print("unresolved: %s" % (", ".join(unresolved) or "none"))
-    return 1 if bad_commit else 0
+    print("not checked (gh could not run): %s" % (", ".join(unchecked) or "none"))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

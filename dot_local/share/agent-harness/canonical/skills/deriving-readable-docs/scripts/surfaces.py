@@ -33,6 +33,7 @@ import subprocess
 import sys
 
 KINDS = ("entry", "command", "flag", "route", "event", "env", "config", "manifest", "export", "doc", "ci")
+SNAPSHOTS = "docs/snapshots"  # a snapshot of an earlier run is never evidence: its folder is skipped
 SKIP_DIRS = {"node_modules", "vendor", "dist", "target", "build", ".git", "__pycache__", ".venv", "venv", ".tox", "site-packages"}
 TEST = re.compile(r"(^|/)(tests?|__tests__|e2e|spec|testdata|fixtures?|__snapshots__)(/|$)|_test\.|\.test\.|\.spec\.|(^|/)test_[^/]*\.py$|(^|/)conftest\.py$")
 SCRIPTS = re.compile(r"(^|/)scripts?/")  # build and smoke scripts: not the product, so a name only they hold is a weak match
@@ -103,7 +104,7 @@ def list_files(repo):
         for root, dirs, names in os.walk(repo):
             dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
             files += [os.path.relpath(os.path.join(root, n), repo) for n in sorted(names)]
-    return sorted(f for f in files if not SKIP_DIRS & set(f.split("/")) and os.path.isfile(os.path.join(repo, f)))
+    return sorted(f for f in files if not SKIP_DIRS & set(f.split("/")) and not f.startswith(SNAPSHOTS + "/") and os.path.isfile(os.path.join(repo, f)))
 
 
 def read_text(repo, f):
