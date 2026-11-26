@@ -1,39 +1,46 @@
 #!/usr/bin/env python3
-"""design_matrix.py FILE [--label TEXT] [--json] [--out PATH]: check, classify and render one Axiomatic Design matrix.
+"""design_matrix.py FILE [--label TEXT] [--as-found FILE] [--json] [--out PATH]: check, classify and render one Axiomatic Design matrix.
 
-FILE is a markdown file (or JSON, see below) with three tables. Table headers are case-insensitive; the sections are `## FRs`,
-`## DPs` and `## X`. Cells hold no `|`.
+FILE is a markdown file with up to four tables, under `## FRs`, `## DPs`, `## X` and (target only) `## Removed`. Headers are
+case-insensitive. A heading of any other name ends the current table. Cells hold no `|`.
 
     ## FRs
-    | id  | text                                  | dp  |
-    | FR1 | keep a run's record intact on a crash | DP1 |
-    | FR2 | advance a run only on a verdict       | DP2 |
+    | id  | text                                    | dp  |
+    | FR1 | A run's record survives a crash         | DP1 |
+    | FR2 | A run moves on only on a verdict        | DP2 |
 
     ## DPs
-    | id  | text                    | parts                     |
-    | DP1 | append-only run journal | src/journal.py            |
-    | DP2 | verdict gate            | src/gate.py; src/runs.py  |
+    | id  | text                    | parts                    |
+    | DP1 | append-only run journal | journal; snapshot writer |
+    | DP2 | verdict gate            | gate; run state          |
 
     ## X
-    | fr  | dp  | reason                                  | evidence             |
-    | FR1 | DP2 | tuning the gate changes what is written | src/gate.py:88       |
+    | fr  | dp  | reason                                  | evidence        |
+    | FR1 | DP2 | tuning the gate changes what is written | src/gate.py:88  |
 
-* FRs: `dp` names the DP that delivers the FR. An empty `dp` is an FR with no DP (unmet). Two FRs may name one DP.
+* FRs (at least one): `dp` names the DP that delivers the FR. An empty `dp` is an FR with no DP (unmet). Two FRs may name one DP.
+  More than 9 FRs gives a warning, not an error (a zigzag sub-matrix is smaller; a level-1 list should be 5 to 9).
 * DPs: `parts` (optional) lists the files or modules of the DP, split on `;`. A part in several DPs is reported, not judged.
 * X: one row per off-diagonal cell, "changing DP `dp` to tune its own FR forces a change to keep FR `fr` met". This rule is
   this skill's convention, not Suh's. `reason` is one line. `evidence` is one or more of (split on `;`, `,` or space):
-  `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`).
-  The diagonal (an FR and its own DP) is implied and may not be listed. An import alone is not evidence.
+  `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`). With
+  `--target` it may also be a design id of DESIGN.md: a decision (`D2`), gap (`G1`), tension (`T1`) or requirement (`OR-3`,
+  `IR-2`): a target X cites the decision that creates the dependency. A co-change is correlation: an X that cites only
+  co-change is listed, and its reason must stand on its own. The diagonal is implied and may not be listed. An import alone is
+  not evidence.
+* Removed (only with `--as-found`): `| fr | dp | by |`, `by` a decision id (`D2`). Every X of the as-found matrix that is absent from
+  this one (the target) must be listed with the decision that removes it; the script refuses it otherwise, and prints the
+  removed and added cells. Keep ids stable between the two tables so a cell can be matched.
 
-JSON input: {"frs": [{"id", "text", "dp"}], "dps": [{"id", "text", "parts": []}], "x": [{"fr", "dp", "reason", "evidence"}]}.
-
-Output: a markdown block to paste into DESIGN.md (`--json` prints the same facts as JSON instead). Exit 0 when the input is valid,
-whatever the class (a coupled matrix is a finding, not an error); 1 when the input is invalid (the errors are printed); 2 on usage.
+Giving `--as-found FILE` means FILE is the target, so `--target` is implied. `--json` prints the facts instead of markdown.
+Exit 0 when the input is valid, whatever the class (a coupled matrix is a finding, not an error); 1 when it is invalid
+(the errors are printed); 2 on usage.
 
 The matrix is square when the FRs and DPs pair one-to-one. Then it is uncoupled (no X), decoupled (the DP graph has no cycle:
 the DP order is a topological sort, ties broken by id) or coupled (the cycles are the strongly connected components, found with
 repo_facts.py's `scc_components`). Otherwise it is not classified: the theorem that applies is printed (Suh 1996, App. 1-A).
-The result does not depend on the order of the rows in the file.
+Every coupled block, DP delivering several FRs, unmet FR and non-square result is listed under "Fix owed": each needs a fix
+or an owner-accepted reason in DESIGN.md. The result does not depend on the order of the rows in the file.
 """
 import argparse
 import heapq
@@ -55,7 +62,11 @@ EVIDENCE_KINDS = (
     ('commit', re.compile(r'^commit:[0-9a-f]{7,40}$')),
     ('finding id', re.compile(r'^(DF|F|U)-\d+$')),
 )
+DESIGN_ID = re.compile(r'^((D|G|T)\d+|(OR|IR)-\d+)$')  # DESIGN.md ids: decision, gap, tension, owner or inferred requirement
+DECISION_ID = re.compile(r'^D\d+$')
+MAX_LEVEL1_FRS = 9
 EVIDENCE_HELP = 'path:line, cochange:<a>+<b>, commit:<hex sha> or a finding id (F-n, DF-n, U-n)'
+TARGET_HELP = EVIDENCE_HELP + ', or (target) a design id (D2, G1, T1, OR-3, IR-2)'
 
 
 def load_scc():
@@ -80,16 +91,20 @@ def split_row(line):
     return [c.strip() for c in line.strip().strip('|').split('|')]
 
 
+SECTIONS = {'FR': 'FRs', 'FRS': 'FRs', 'DP': 'DPs', 'DPS': 'DPs', 'X': 'X', 'REMOVED': 'Removed'}
+
+
 def parse_markdown(text):
-    """{'FRs': [row dicts], 'DPs': [...], 'X': [...]} from the three tables; raises ValueError."""
+    """{'frs': [...], 'dps': [...], 'x': [...], 'removed': [...]} from the tables; raises ValueError. Any heading ends the table."""
     tables, current, header = {}, None, None
     for line in text.splitlines():
         stripped = line.strip()
-        head = re.match(r'^#{1,6}\s*(FRs?|DPs?|X)\b', stripped, re.I)
-        if head:
-            key = head.group(1).upper()
-            current = 'X' if key == 'X' else key[:2] + 's'
-            tables[current] = []
+        heading = re.match(r'^#{1,6}\s*(.*)$', stripped)
+        if heading:
+            word = re.match(r'(\w+)', heading.group(1))
+            current = SECTIONS.get(word.group(1).upper()) if word else None
+            if current:
+                tables[current] = []
             header = None
             continue
         if current is None or not stripped.startswith('|'):
@@ -106,27 +121,24 @@ def parse_markdown(text):
     missing = [k for k in ('FRs', 'DPs') if k not in tables]
     if missing:
         raise ValueError('no `## %s` section found' % '` or `## '.join(missing))
-    tables.setdefault('X', [])
-    return {'frs': tables['FRs'], 'dps': tables['DPs'], 'x': tables['X']}
+    return {'frs': tables['FRs'], 'dps': tables['DPs'], 'x': tables.get('X', []), 'removed': tables.get('Removed', [])}
 
 
 def load(path):
     with open(path, encoding='utf-8') as fh:
-        text = fh.read()
-    if text.lstrip().startswith('{'):
-        data = json.loads(text)
-        return {k: data.get(k, []) for k in ('frs', 'dps', 'x')}
-    return parse_markdown(text)
+        return parse_markdown(fh.read())
 
 
 def clean(value):
     return value.strip() if isinstance(value, str) else ''
 
 
-def validate(data):
+def validate(data, target=False):
     """(model, errors). The model holds cleaned rows; errors are strings, all of them, in a stable order."""
     errors = []
     frs, dps, xs = [], [], []
+    if not data['frs']:
+        errors.append('no FRs: a matrix needs at least one FR')
     for kind, rows, out in (('FR', data['frs'], frs), ('DP', data['dps'], dps)):
         seen = set()
         for i, row in enumerate(rows, 1):
@@ -178,10 +190,37 @@ def validate(data):
         if not tokens:
             errors.append('%s: evidence is missing; give %s' % (where, EVIDENCE_HELP))
         for token in tokens:
-            if not any(rx.match(token) for _, rx in EVIDENCE_KINDS):
-                errors.append('%s: evidence %r is none of %s' % (where, token, EVIDENCE_HELP))
+            if not any(rx.match(token) for _, rx in EVIDENCE_KINDS) and not (target and DESIGN_ID.match(token)):
+                errors.append('%s: evidence %r is none of %s' % (where, token, TARGET_HELP if target else EVIDENCE_HELP))
         xs.append({'fr': fr, 'dp': dp, 'reason': reason, 'evidence': tokens})
     return {'frs': frs, 'dps': dps, 'x': xs}, errors
+
+
+def check_removed(as_found, target_model, removed_rows):
+    """(removed, added, errors): X cells of the as-found matrix missing from the target need a `Removed` row naming a decision."""
+    errors = []
+    before = {(c['fr'], c['dp']): c for c in as_found['x']}
+    after = {(c['fr'], c['dp']): c for c in target_model['x']}
+    by = {}
+    for i, row in enumerate(removed_rows, 1):
+        fr, dp, who = clean(row.get('fr')), clean(row.get('dp')), clean(row.get('by'))
+        where = 'Removed row %d (%s, %s)' % (i, fr, dp)
+        if (fr, dp) not in before:
+            errors.append('%s: the as-found matrix has no such X' % where)
+        elif (fr, dp) in after:
+            errors.append('%s: the target still has this X' % where)
+        elif not DECISION_ID.match(who):
+            errors.append('%s: `by` must be a decision id of DESIGN.md (D1, D2, ...), not %r' % (where, who))
+        else:
+            by[(fr, dp)] = who
+    removed = []
+    for cell in sorted(set(before) - set(after), key=lambda k: (natural(k[0]), natural(k[1]))):
+        if cell not in by:
+            errors.append('X (%s, %s) is in the as-found matrix and gone from the target: list it under `## Removed` with the decision that removes it' % cell)
+        removed.append({'fr': cell[0], 'dp': cell[1], 'by': by.get(cell, ''), 'reason': before[cell]['reason']})
+    added = [{'fr': k[0], 'dp': k[1], 'reason': after[k]['reason'], 'evidence': after[k]['evidence']}
+             for k in sorted(set(after) - set(before), key=lambda k: (natural(k[0]), natural(k[1])))]
+    return removed, added, errors
 
 
 # --- analysis -------------------------------------------------------------
@@ -216,6 +255,21 @@ def topo_blocks(nodes, edges, scc_components):
 
 
 def analyse(model, scc_components):
+    res = analyse_matrix(model, scc_components)
+    owed = []
+    for block in res['blocks']:
+        owed.append('coupled block {%s}' % ', '.join(block))
+    for dp, v in res['dps_serving_several_frs'].items():
+        owed.append('DP %s delivers several FRs (%s)' % (dp, ', '.join(v)))
+    for fr in res['unmet_frs']:
+        owed.append('FR %s has no DP' % fr)
+    if res['class'] == 'not classified':
+        owed.append('the matrix is not square, so it is not classified')
+    res['fix_owed'] = owed
+    return res
+
+
+def analyse_matrix(model, scc_components):
     frs = sorted(model['frs'], key=lambda f: natural(f['id']))
     dps = sorted(model['dps'], key=lambda d: natural(d['id']))
     delivers = {}
@@ -230,9 +284,13 @@ def analyse(model, scc_components):
         for p in d['parts']:
             part_use.setdefault(p, []).append(d['id'])
     parts_shared = {p: v for p, v in sorted(part_use.items()) if len(v) > 1}
+    cochange_only = [{'fr': c['fr'], 'dp': c['dp']} for c in model['x'] if all(e.startswith('cochange:') for e in c['evidence'])]
     res = {'frs': frs, 'dps': dps, 'x': sorted(model['x'], key=lambda c: (natural(c['fr']), natural(c['dp']))),
            'unmet_frs': unmet, 'removal_candidates': removal, 'dps_serving_several_frs': shared,
-           'parts_in_several_dps': parts_shared}
+           'parts_in_several_dps': parts_shared,
+           'x_cochange_only': sorted(cochange_only, key=lambda c: (natural(c['fr']), natural(c['dp']))), 'warnings': []}
+    if len(frs) > MAX_LEVEL1_FRS:
+        res['warnings'].append('%d FRs: a level-1 list should have 5 to 9 (fine for a zigzag sub-matrix)' % len(frs))
     n_fr, n_dp = len(frs), len(dps)
     if n_fr == n_dp and not unmet and not shared:
         pair = {f['dp']: f['id'] for f in frs}  # DP id -> its FR
@@ -320,14 +378,31 @@ def render(res, label):
         notes.append('DP %s delivers several FRs (%s): coupled or integrated; check the X cells.' % (dp, ', '.join(v)))
     for part, v in res['parts_in_several_dps'].items():
         notes.append('Part %s sits in several DPs (%s): that is not coupling by itself.' % (part, ', '.join(v)))
+    for c in res['x_cochange_only']:
+        notes.append('X (%s, %s) cites only co-change, which is correlation: its reason has to stand on its own.' % (c['fr'], c['dp']))
+    notes += ['Warning: ' + w + '.' for w in res['warnings']]
     if notes:
         out += ['- ' + n for n in notes] + ['']
+    if res['fix_owed']:
+        out += ['Fix owed (each needs a fix, or a reason the owner accepted, in DESIGN.md):', ''] + ['- ' + o for o in res['fix_owed']] + ['']
+    changes = res.get('changes')
+    if changes is not None:
+        out += ['Changes from the as-found matrix:', '']
+        for c in changes['removed']:
+            out.append('- removed X (%s, %s) by %s: %s' % (c['fr'], c['dp'], c['by'], c['reason']))
+        for c in changes['added']:
+            out.append('- added X (%s, %s): %s [%s]' % (c['fr'], c['dp'], c['reason'], '; '.join(c['evidence'])))
+        if not changes['removed'] and not changes['added']:
+            out.append('- none')
+        out.append('')
     return '\n'.join(out).rstrip() + '\n'
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description='Check, classify and render one Axiomatic Design matrix (see the module docstring for the input format).')
-    ap.add_argument('file', help='markdown or JSON table of FRs, DPs and X cells')
+    ap.add_argument('file', help='markdown tables of FRs, DPs and X cells')
+    ap.add_argument('--target', action='store_true', help='this is a target matrix: X evidence may be a DESIGN.md id (D2, G1, T1, OR-3)')
+    ap.add_argument('--as-found', metavar='FILE', help='the as-found table; FILE is then the target, and every X it drops must name the decision that removes it')
     ap.add_argument('--label', default='Design matrix', help='heading of the rendered block, e.g. "As found" or "Target"')
     ap.add_argument('--json', action='store_true', help='print the facts as JSON instead of markdown')
     ap.add_argument('--out', help='write the output here instead of stdout')
@@ -338,7 +413,21 @@ def main(argv=None):
         sys.stderr.write('design_matrix: %s\n' % exc)
         log_run('design_matrix.py', 'render', 'refused', reason='unreadable input')
         return 1
-    model, errors = validate(data)
+    model, errors = validate(data, target=args.target or bool(args.as_found))
+    if data['removed'] and not args.as_found:
+        errors.append('a `## Removed` table needs --as-found')
+    changes = None
+    if args.as_found and not errors:
+        try:
+            before, before_errors = validate(load(args.as_found))
+        except (OSError, ValueError) as exc:
+            sys.stderr.write('design_matrix: %s\n' % exc)
+            return 1
+        errors += ['as-found: ' + e for e in before_errors]
+        if not before_errors:
+            removed, added, more = check_removed(before, model, data['removed'])
+            errors += more
+            changes = {'removed': removed, 'added': added}
     if errors:
         sys.stderr.write('design_matrix: %d problem(s) in %s\n' % (len(errors), args.file))
         for e in errors:
@@ -346,6 +435,10 @@ def main(argv=None):
         log_run('design_matrix.py', 'render', 'failed', errors=len(errors))
         return 1
     res = analyse(model, load_scc())
+    if changes is not None:
+        res['changes'] = changes
+    for w in res['warnings']:
+        sys.stderr.write('design_matrix: warning: %s\n' % w)
     text = json.dumps(res, indent=2, sort_keys=True) + '\n' if args.json else render(res, args.label)
     if args.out:
         with open(args.out, 'w', encoding='utf-8') as fh:

@@ -174,29 +174,135 @@ class BadInput(unittest.TestCase):
         self.fails("## FRs\n| id | text | dp |\n|---|---|---|\n| FR1 | x | DP1 |\n", "no `## DPs` section")
         self.fails(self.base.replace("| FR1 | need FR1 | DP1 |", "| FR1 | need FR1 |"), "row has 2 cells")
 
-    def test_json_input_and_out_file(self):
-        data = {"frs": [{"id": "FR1", "text": "a", "dp": "DP1"}, {"id": "FR2", "text": "b", "dp": "DP2"}],
-                "dps": [{"id": "DP1", "text": "p", "parts": ["x.py"]}, {"id": "DP2", "text": "q"}],
-                "x": [{"fr": "FR2", "dp": "DP1", "reason": "r", "evidence": "x.py:1"}]}
+    def test_out_file_and_label(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "o.md"
-            done = run(json.dumps(data), "--out", str(out), "--label", "Target", name="m.json")
-            self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(done.stdout, "")
-            text = out.read_text()
-        self.assertTrue(text.startswith("#### Target"))
-        self.assertIn("Classification: decoupled. DP order (set earlier ones first): DP1 -> DP2.", text)
+            done = run(self.base, "--out", str(out), "--label", "Target")
+            self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
+            self.assertTrue(out.read_text().startswith("#### Target"))
+
+    def test_no_frs_is_not_a_matrix(self):
+        self.fails("## FRs\n| id | text | dp |\n|---|---|---|\n\n## DPs\n| id | text |\n|---|---|\n", "no FRs")
+
+    def test_any_heading_ends_a_table(self):
+        text = self.base.replace("\n## X", "\n## Notes\n| id | text | parts |\n|---|---|---|\n| DP9 | stray | z |\n\n## X")
+        self.assertEqual([d["id"] for d in facts(text)["dps"]], ["DP1", "DP2"])
+
+    def test_removed_table_needs_as_found(self):
+        self.fails(self.base + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | D1 |\n", "needs --as-found")
+
+
+class TargetEvidence(unittest.TestCase):
+    base = build([("FR1", "DP1"), ("FR2", "DP2")], ["DP1", "DP2"])
+
+    def test_design_ids_are_target_evidence_only(self):
+        for ev in ("D2", "G1", "T3", "OR-4", "IR-1"):
+            text = self.base + "| FR1 | DP2 | decision D2 makes FR1 depend on DP2 | %s |\n" % ev
+            self.assertEqual(run(text, "--target").returncode, 0, ev)
+            done = run(text)
+            self.assertEqual(done.returncode, 1, ev)
+            self.assertIn("is none of", done.stderr)
+
+    def test_cochange_only_x_is_listed(self):
+        r = facts(self.base + "| FR1 | DP2 | they change together because of the shared format | cochange:a.py+b.py |\n")
+        self.assertEqual(r["x_cochange_only"], [{"fr": "FR1", "dp": "DP2"}])
+        out = run(self.base + "| FR1 | DP2 | r | cochange:a.py+b.py |\n").stdout
+        self.assertIn("cites only co-change, which is correlation", out)
+        mixed = facts(self.base + "| FR1 | DP2 | r | cochange:a.py+b.py; src/a.py:3 |\n")
+        self.assertEqual(mixed["x_cochange_only"], [])
+
+
+def pair_files(found, target):
+    d = tempfile.mkdtemp()
+    atexit.register(shutil.rmtree, d, True)
+    for name, text in (("found.md", found), ("target.md", target)):
+        (Path(d) / name).write_text(text, encoding="utf-8")
+    return str(Path(d) / "found.md"), str(Path(d) / "target.md")
+
+
+class AsFoundVersusTarget(unittest.TestCase):
+    frs = [("FR1", "DP1"), ("FR2", "DP2")]
+    found = build(frs, ["DP1", "DP2"], [("FR1", "DP2"), ("FR2", "DP1")])  # coupled
+    target = build(frs, ["DP1", "DP2"], [("FR2", "DP1")]) + ""
+
+    def go(self, target_text):
+        found, target = pair_files(self.found, target_text)
+        return subprocess.run([sys.executable, "-I", str(SCRIPT), target, "--as-found", found], capture_output=True, text=True)
+
+    def test_removed_x_without_a_decision_is_refused(self):
+        done = self.go(self.target)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("X (FR1, DP2) is in the as-found matrix and gone from the target", done.stderr)
+
+    def test_removed_x_with_a_decision_passes_and_is_listed(self):
+        done = self.go(self.target + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | D3 |\n")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("removed X (FR1, DP2) by D3", done.stdout)
+        self.assertIn("Classification: decoupled", done.stdout)
+
+    def test_removed_by_must_be_a_decision_of_a_removed_cell(self):
+        row = "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| %s | %s | %s |\n"
+        self.assertIn("must be a decision id", self.go(self.target + row % ("FR1", "DP2", "OR-1")).stderr)
+        self.assertIn("the target still has this X", self.go(self.target + row % ("FR2", "DP1", "D3")).stderr)
+        self.assertIn("the as-found matrix has no such X", self.go(self.target + row % ("FR1", "DP1", "D3")).stderr)
+
+    def test_added_x_is_listed_and_may_cite_a_decision(self):
+        found, target = pair_files(build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")]),
+                                   build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")]) + "| FR1 | DP2 | D5 moves the check into DP2 | D5 |\n")
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT), target, "--as-found", found], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("added X (FR1, DP2): D5 moves the check into DP2 [D5]", done.stdout)
+
+
+class FixOwed(unittest.TestCase):
+    def test_god_module_owes_a_fix(self):
+        r = facts(build([("FR1", "DP1"), ("FR2", "DP1"), ("FR3", "DP2")], ["DP1", "DP2"]))
+        self.assertEqual(r["class"], "not classified")
+        self.assertIn("DP DP1 delivers several FRs (FR1, FR2)", r["fix_owed"])
+        self.assertIn("Fix owed", run(build([("FR1", "DP1"), ("FR2", "DP1")], ["DP1"])).stdout)
+
+    def test_non_square_and_unmet_owe_a_fix(self):
+        r = facts(build([("FR1", "DP1"), ("FR2", "")], ["DP1"]))
+        self.assertIn("FR FR2 has no DP", r["fix_owed"])
+        self.assertIn("the matrix is not square, so it is not classified", r["fix_owed"])
+
+    def test_coupled_block_owes_a_fix_and_decoupled_owes_none(self):
+        frs = [("FR1", "DP1"), ("FR2", "DP2")]
+        self.assertEqual(facts(build(frs, ["DP1", "DP2"], [("FR1", "DP2"), ("FR2", "DP1")]))["fix_owed"], ["coupled block {DP1, DP2}"])
+        self.assertEqual(facts(build(frs, ["DP1", "DP2"], [("FR1", "DP2")]))["fix_owed"], [])
+
+
+class Warnings(unittest.TestCase):
+    def test_more_than_nine_frs_warns_and_exits_0(self):
+        frs = [("FR%d" % i, "DP%d" % i) for i in range(1, 11)]
+        done = run(build(frs, ["DP%d" % i for i in range(1, 11)]))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("warning: 10 FRs", done.stderr)
+        self.assertIn("Warning: 10 FRs", done.stdout)
+        self.assertEqual(run(build(frs[:9], ["DP%d" % i for i in range(1, 10)])).stderr, "")
 
 
 class LoopEngineExample(unittest.TestCase):
-    """A hand-written example of 6 FRs: its evidence is invented, its shape is the one the skill documents."""
+    """An illustrative example of 6 FRs: its evidence is a placeholder register and decisions, never invented code lines."""
+    found = HERE / "fixtures/loop-engine-as-found.md"
+    target = HERE / "fixtures/loop-engine-target.md"
 
     def test_as_found_is_coupled_and_target_is_decoupled(self):
-        found = facts((HERE / "fixtures/loop-engine-as-found.md").read_text())
-        target = facts((HERE / "fixtures/loop-engine-target.md").read_text())
-        self.assertEqual((found["class"], found["blocks"]), ("coupled", [["DP2", "DP6"]]))
-        self.assertEqual(target["class"], "decoupled")
-        self.assertEqual(target["order"], ["DP1", "DP4", "DP5", "DP2", "DP3", "DP6"])
+        a = facts(self.found.read_text())
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT), str(self.target), "--as-found", str(self.found), "--json"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        t = json.loads(done.stdout)
+        self.assertEqual((a["class"], a["blocks"]), ("coupled", [["DP2", "DP6"]]))
+        self.assertEqual(t["class"], "decoupled")
+        self.assertEqual(t["order"], ["DP1", "DP4", "DP5", "DP2", "DP3", "DP6"])
+        self.assertEqual([(c["fr"], c["dp"], c["by"]) for c in t["changes"]["removed"]], [("FR2", "DP6", "D1"), ("FR6", "DP2", "D2")])
+        self.assertEqual([(c["fr"], c["dp"]) for c in t["changes"]["added"]], [("FR6", "DP3")])
+
+    def test_fixtures_are_marked_illustrative_and_cite_no_code(self):
+        for path in (self.found, self.target):
+            text = path.read_text()
+            self.assertIn("Illustrative example, not a real repo", text)
+            self.assertNotRegex(text, r"\w+\.py:\d+|commit:")
 
 
 if __name__ == "__main__":
