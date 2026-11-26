@@ -94,6 +94,22 @@ def commit(repo, files, msg, remove=()):
     return git(repo, "rev-parse", "HEAD")
 
 
+def build_fixture_repo(build):
+    """Build a fixture repo once, for setUpClass: `build(repo)` makes the commits and returns what the tests need (shas). Returns (folder, what build returned).
+    Each test then takes its own copy with copy_fixture_repo, so a test that adds commits or checks out a branch cannot touch another's."""
+    base = tempfile.mkdtemp(prefix="fixture-")
+    atexit.register(shutil.rmtree, base, True)
+    repo = Path(base, "repo")
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    return repo, build(repo)
+
+
+def copy_fixture_repo(template, tmp):
+    shutil.copytree(template, Path(tmp, "repo"), symlinks=True)
+    return Path(tmp, "repo")
+
+
 def fake_gh(tmp, prs=None, issues=None, views=None):
     """A bin folder with a fake gh first, and one with git only (gh absent); returns (with_gh PATH, without_gh PATH, env for the PR list)."""
     with_gh, without = Path(tmp, "with-gh"), Path(tmp, "no-gh")
@@ -234,14 +250,16 @@ class SurfaceCoverageTest(unittest.TestCase):
 
 
 class HistoryRefsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        def build(repo):
+            return commit(repo, {"a.py": "x\n"}, "fix: retry the upload on timeout"), commit(repo, {"a.py": "y\n"}, "after the snapshot")
+        cls.template, (cls.sha, cls.later) = build_fixture_repo(build)
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.repo = Path(self.tmp, "repo")
-        self.repo.mkdir()
-        git(self.repo, "init", "-q", "-b", "main")
-        self.sha = commit(self.repo, {"a.py": "x\n"}, "fix: retry the upload on timeout")
-        self.later = commit(self.repo, {"a.py": "y\n"}, "after the snapshot")
+        self.repo = copy_fixture_repo(self.template, self.tmp)
         T = "Retry the upload on timeout"
         pr = lambda state, oid, n: {"title": T, "state": state, "mergeCommit": {"oid": oid} if oid else None, "url": "https://github.com/o/r/pull/%d" % n}
         views = {"pr:12": pr("MERGED", self.sha, 12), "pr:229": pr("MERGED", self.later, 229), "pr:225": pr("CLOSED", None, 225),
@@ -336,19 +354,22 @@ class HistoryRefsTest(unittest.TestCase):
 
 
 class HistorySignalsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        def build(repo):
+            commit(repo, {"core/a.py": "1\n", "core/b.py": "1\n", "web/w.py": "1\n", "docs/snapshots/2026-01-01-aaaaaaa/REQUIREMENTS.md": "x\n"}, "initial import")
+            commit(repo, {"core/a.py": "2\n"}, "fix: handle a timeout in a")
+            perf = commit(repo, {"core/a.py": "3\n", "web/w.py": "2\n"}, "perf: cache the lookup")
+            commit(repo, {"core/a.py": "4\n"}, "Revert the cache")
+            commit(repo, {"core/a.py": "5\n", "core/b.py": "2\n", "docs/snapshots/2026-01-01-aaaaaaa/REQUIREMENTS.md": "y\n"}, "tidy a")
+            head = git(repo, "rev-parse", "HEAD")
+            return perf, head, commit(repo, {"core/a.py": "6\n"}, "fix a crash after the snapshot")
+        cls.template, (cls.perf, cls.head, cls.after) = build_fixture_repo(build)
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.repo = Path(self.tmp, "repo")
-        self.repo.mkdir()
-        git(self.repo, "init", "-q", "-b", "main")
-        commit(self.repo, {"core/a.py": "1\n", "core/b.py": "1\n", "web/w.py": "1\n", "docs/snapshots/2026-01-01-aaaaaaa/REQUIREMENTS.md": "x\n"}, "initial import")
-        commit(self.repo, {"core/a.py": "2\n"}, "fix: handle a timeout in a")
-        self.perf = commit(self.repo, {"core/a.py": "3\n", "web/w.py": "2\n"}, "perf: cache the lookup")
-        commit(self.repo, {"core/a.py": "4\n"}, "Revert the cache")
-        commit(self.repo, {"core/a.py": "5\n", "core/b.py": "2\n", "docs/snapshots/2026-01-01-aaaaaaa/REQUIREMENTS.md": "y\n"}, "tidy a")
-        self.head = git(self.repo, "rev-parse", "HEAD")
-        self.after = commit(self.repo, {"core/a.py": "6\n"}, "fix a crash after the snapshot")
+        self.repo = copy_fixture_repo(self.template, self.tmp)
         self.with_gh, self.no_gh, self.env = fake_gh(self.tmp)
 
     def signals(self, *args, path=None, env=None):

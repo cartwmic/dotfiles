@@ -51,14 +51,14 @@ class HistoryHeaderTest(unittest.TestCase):
 
 
 class NoCutTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.template, _ = T.build_fixture_repo(lambda repo: [T.commit(repo, {"a.py": "%d\n" % n}, "fix: bug number %d" % n) for n in range(45)])
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.repo = Path(self.tmp, "repo")
-        self.repo.mkdir()
-        T.git(self.repo, "init", "-q", "-b", "main")
-        for n in range(45):
-            T.commit(self.repo, {"a.py": "%d\n" % n}, "fix: bug number %d" % n)
+        self.repo = T.copy_fixture_repo(self.template, self.tmp)
         self.no_gh = T.fake_gh(self.tmp)[1]
 
     def run_signals(self, *args):
