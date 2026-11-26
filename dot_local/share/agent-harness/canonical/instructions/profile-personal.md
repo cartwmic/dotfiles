@@ -35,4 +35,5 @@ First match wins.
 | Remote | Bar |
 |---|---|
 | `github.com/StoryCraftTW/storycraft` | shared |
+| `github.com/cartwmic/loop-engine`, `gitea.internal.cartwmic.com/cartwmic/loop-engine` | shared |
 | `github.com/cartwmic/*`, `gitea.internal.cartwmic.com/cartwmic/*` | personal |

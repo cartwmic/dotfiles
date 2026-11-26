@@ -108,6 +108,7 @@ BAR_TABLE_HEADING = "## Bar table"
 BAR_ROWS = {
     "personal": (
         "| `github.com/StoryCraftTW/storycraft` | shared |",
+        "| `github.com/cartwmic/loop-engine`, `gitea.internal.cartwmic.com/cartwmic/loop-engine` | shared |",
         "| `github.com/cartwmic/*`, `gitea.internal.cartwmic.com/cartwmic/*` | personal |",
     ),
     "axon-work-computer": ("| `git.example.test/*`, `github.com/axon-*` | shared |",),
@@ -242,6 +243,9 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertLess(text.index(BAR_HEADING), text.index(BAR_TABLE_HEADING))
                     for row in BAR_ROWS[profile]:
                         self.assertEqual(text.count(row), 1)
+                    # First match wins: the rows must stay in BAR_ROWS order.
+                    places = [text.index(row) for row in BAR_ROWS[profile]]
+                    self.assertEqual(places, sorted(places))
                     other = "axon-work-computer" if profile == "personal" else "personal"
                     for row in BAR_ROWS[other]:
                         self.assertNotIn(row, text)
