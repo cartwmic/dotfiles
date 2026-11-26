@@ -1,6 +1,6 @@
 ---
 name: designing-the-smallest-version
-description: Use when asked to design the clean, minimal version of something knowing what we know now — a new capability or feature built from the owner's requirements and what the system it plugs into already does, or a redesign of what an existing repo or component already does. Gives the smallest elegant, maintainable, separable, composable design plus a staged path, as one DESIGN.md with a principles table. Needs no other skill; reads GUIDE.md (deriving-readable-docs) and REQUIREMENTS.md (distilling-requirements) when present, and takes a PRD, tested facts, review-map pages or validation points. Not for auditing dependency-rule drift only (auditing-clean-architecture), a code-quality cleanup plan (desloppify), explaining a PR (review-map) or extracting requirements (distilling-requirements).
+description: Use when asked to design the clean, minimal version of something knowing what we know now — a new capability or feature built from the owner's requirements and what the system it plugs into already does, or a redesign of what an existing repo or component already does. Gives the smallest elegant, maintainable, separable, composable design plus a staged path, as one DESIGN.md with a principles table. Needs no other skill; reads GUIDE.md (deriving-readable-docs) and REQUIREMENTS.md (distilling-requirements) when present, and takes a PRD, tested facts, review-map pages or validation points. Not for auditing existing code against the principles (auditing-design-principles), a code-quality cleanup plan (desloppify), explaining a PR (review-map) or extracting requirements (distilling-requirements).
 ---
 
 # Designing the smallest version
@@ -103,7 +103,7 @@ Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode 
 
 ## How this differs from nearby skills
 
-- `auditing-clean-architecture`: finds dependency-rule drift and emits prose findings only. This designs the target and the path; its bar is design-principles.md. Run the audit for a narrow architectural question; use its findings as input to Step 4.
+- `auditing-design-principles`: audits existing code against design-principles.md and lists breaches with evidence. This designs the target and the path. Use its findings as input to Step 4.
 - `desloppify`: a many-phase plan for code-quality decay. This works one altitude up (components, seams, contracts) and writes one document.
 - `review-map`: explains one PR. Use its pages as input; this skill does not read diffs.
 - `using-generate-prd` and `distilling-requirements`: they say what the product must do; this says how to build it. Their output is input here; this skill needs neither.
