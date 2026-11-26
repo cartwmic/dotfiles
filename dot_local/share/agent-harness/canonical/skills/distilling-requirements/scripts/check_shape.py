@@ -4,7 +4,7 @@
 Usage: python3 check_shape.py REQUIREMENTS.md [REPO]
 Exit 0 and "ok" when clean; exit 1 and one problem per line otherwise.
 Checks structure only (columns, ids, enums, evidence present, counts, dangling refs, the snapshot line),
-not whether a requirement is true. A `path:line` citation into docs/snapshots/ is an error; with REPO, so is one into any file whose first lines carry the snapshot's "Not maintained" line. A file with `shape: requirements/1` is refused: rerun the skill.
+not whether a requirement is true. A `path:line` citation into docs/snapshots/ is an error; with REPO, so is one into any file that holds the snapshot line on a line of its own (`Snapshot of <name> at <sha7|no-git> on <date>. Not maintained: ...`, in the first 60 lines). A file with `shape: requirements/1` is refused: rerun the skill.
 """
 import os
 import re
@@ -47,6 +47,10 @@ def evidence_parts(cell):
     return out
 
 
+SNAPSHOT_MARK = re.compile(r"Snapshot of \S+ at (?:[0-9a-f]{7,40}|no-git) on \d{4}-\d\d-\d\d\. " + re.escape(SNAPSHOT_FIXED))
+MARK_LINES = 60  # the header fence, title and snapshot line of every shape sit well inside this
+
+
 def snapshot_line(hdr):
     """The fixed line that must come first under the title, built from the header's repo, commit and date."""
     commit = hdr.get("commit", "").strip()
@@ -73,14 +77,15 @@ def tables(lines):
 
 
 def is_snapshot_file(path, repo):
-    """True when `path` is inside docs/snapshots/, or (with REPO) a file whose first lines carry the snapshot's "Not maintained" line: a snapshot is never evidence."""
+    """True when `path` is inside docs/snapshots/, or (with REPO) a file with the whole snapshot line (`Snapshot of <name> at <sha> on <date>. Not maintained: ...`) as a line of its own near the top: a snapshot is never evidence.
+    A docstring that quotes the line with placeholders, or mid-sentence, is not a snapshot."""
     norm = os.path.normpath(path).lstrip("/")
     if norm == "docs/snapshots" or norm.startswith("docs/snapshots/") or "/docs/snapshots/" in "/" + norm:
         return True
     if repo:
         try:
             with open(os.path.join(repo, norm), encoding="utf-8", errors="replace") as f:
-                return any(SNAPSHOT_FIXED in next(f, "") for _ in range(8))
+                return any(SNAPSHOT_MARK.fullmatch(next(f, "").strip()) for _ in range(MARK_LINES))
         except OSError:
             return False
     return False
@@ -99,7 +104,7 @@ def main(path, repo=None):
         return 1
     if hdr.get("shape") != SHAPE:
         errs.append(f"header: shape must be {SHAPE}")
-    for k in ("repo", "commit", "scope", "date", "not-read", "counts", "snapshot", "interview", "repo-wide"):
+    for k in ("repo", "commit", "scope", "date", "not-read", "counts", "snapshot", "history", "interview", "repo-wide"):
         if k not in hdr:
             errs.append(f"header: missing {k}")
     if hdr.get("repo-wide") and hdr["repo-wide"].strip() not in ("yes", "no"):
@@ -108,6 +113,10 @@ def main(path, repo=None):
         want = "%s at %s" % (hdr.get("date", "").strip(), hdr.get("commit", "").strip())
         if hdr["snapshot"].strip() != want or not re.fullmatch(r"\d{4}-\d\d-\d\d at ([0-9a-f]{40}|no-git)", hdr["snapshot"].strip()):
             errs.append(f"header: snapshot must be '<date> at <full sha>' (or 'no-git' for an archive) and match date and commit; expected {want!r}")
+    if "history" in hdr and not re.fullmatch(r"[0-9a-f]{40}|no-git", hdr["history"].strip()):
+        errs.append("header: history must be the full sha the history signals were read at, or 'no-git'")
+    elif "history" in hdr and hdr["history"].strip() != hdr.get("commit", "").strip():
+        errs.append("header: history must equal commit (the signals are read at the snapshot commit)")
     body = text.split("```", 2)[2].splitlines() if text.count("```") >= 2 else []
     under_title = [l for l in body if l.strip()][:2]
     if len(under_title) < 2 or not under_title[0].startswith("# ") or under_title[1] != snapshot_line(hdr):

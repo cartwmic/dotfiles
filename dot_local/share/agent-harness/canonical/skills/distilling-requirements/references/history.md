@@ -4,13 +4,15 @@ Mandatory. It has a script half and a skill half. It runs before the interview, 
 
 ## Script half
 
-`python3 -I <skill dir>/scripts/history_signals.py REPO --rev <snapshot sha> [--scope PATH ...] [--format md|json]` lists, read from that commit and not the working tree:
+`python3 -I <skill dir>/scripts/history_signals.py REPO --rev <snapshot sha> [--scope PATH ...] [--format md|json] [--out FILE]` lists, read from that commit and not the working tree:
 
 - commits whose subject says fix, revert, perf, security, race, timeout, crash or flaky: sha, date, subject, files. The keyword match only picks leads; a commit it misses may matter, and one it picks may not;
 - high-churn files that still exist;
 - merged PRs, kept only when their merge commit is an ancestor of the rev, and issues created by the rev's commit time, via `gh` (PRs have no date cut: ancestry is the filter) (the section says why when `gh` does not work, and how many `gh` returned and whether its cap was hit; GitHub search returns at most 1,000 per query, so the script splits the date range until each query is under it, and the cap is hit only when a single day holds that many).
 
-In a scoped run pass the scope paths: only history that touches them is listed. The `repo-wide: yes` run gets the other runs' scope lists from the caller, runs the script unscoped, and also takes the signals that touch none of those scopes. `--scope .` means the whole repo; an absolute path inside the repo is accepted. A folder with no git prints "no git history". `docs/snapshots/` is skipped.
+The script cuts nothing by default (the owner asked for any history, and the skill never silently samples). `--limit N` cuts each list to its N newest rows and prints `(M more rows cut by --limit)`; a cut list is a sample, so rerun without it, or say in the report which list you cut and why. When the report is long (hundreds of lines), pass `--out FILE` and read the file in parts, all of it. Put the rev you ran it at in the header `history:`.
+
+In a scoped run pass the scope paths: only history that touches them is listed. The `repo-wide: yes` run gets the other runs' scope lists from the caller, runs the script unscoped, and also takes the signals that touch none of those scopes. A signal whose code lies in another run's scope belongs to that run. `--scope .` means the whole repo; an absolute path inside the repo is accepted. A folder with no git prints "no git history". `docs/snapshots/` is skipped.
 
 Whether a row's code still exists is decided by today's code at the snapshot commit, not by the signals: drop a row whose code is gone and say so.
 

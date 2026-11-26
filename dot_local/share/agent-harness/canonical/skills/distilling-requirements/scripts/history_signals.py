@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """List the history signals a requirements run reads to find leads for inferred requirements, as markdown (default) or JSON.
 
-usage: history_signals.py REPO [--scope PATH ...] [--rev REV] [--format md|json] [--limit N] [--churn-min N] [--gh-limit N] [--no-gh]
+usage: history_signals.py REPO [--scope PATH ...] [--rev REV] [--format md|json] [--limit N] [--out FILE] [--churn-min N] [--gh-limit N] [--no-gh]
 
 Everything is read from REV (default HEAD, resolved to a full sha and printed), never from the working tree. With --scope, only history that touches those
 repo-relative paths (a file or a folder, repeatable or comma-separated; `./src` is `src`, an absolute path inside the repo is made relative, `.` is the whole repo) is listed, and a scope that does not exist at REV is an error; with none, the whole repo. A folder with no git
@@ -12,11 +12,10 @@ prints "no git history" and exits 0. `docs/snapshots/` is skipped: a snapshot is
   merged PRs       from `gh pr list --state merged --search "merged:A..B"` with no upper date (GitHub dates are UTC), kept only when the PR's merge commit is an ancestor of REV: number, title, labels
   issues           from `gh issue list --state all --search "created:A..B"` up to the UTC day after the commit, then only those created by the commit time; with a scope, only those whose title or body names a scope path
 GitHub search returns at most 1,000 results, so a search that returns that many is split by date and repeated until every window is under the cap (--gh-limit, at most 1,000 per search). The PR and issue lists say how many gh returned and whether one day alone still hit the cap. With no `gh`, a failing gh or --no-gh the section says why.
-Each list is cut to --limit rows (default 40) and says how many it cut. The git helper is repo_facts.py's, loaded by path from the sibling skill
-designing-the-smallest-version. Exit 0, 2 on bad usage, an unknown REV or a scope that is not in REV. Stdlib only.
+No list is cut by default (`--limit 0` is the same). With `--limit N` each list is cut to its N newest rows and says "(M more rows cut by --limit)". With `--out FILE` the report is
+written to FILE and stdout gets one line saying where and how many lines: use it when the report is long, and read the file in parts. Exit 0, 2 on bad usage, an unknown REV or a scope that is not in REV. Stdlib only.
 """
 import datetime
-import importlib.util
 import json
 import os
 import re
@@ -27,7 +26,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
 from scopes import parse_scopes  # noqa: E402
-REPO_FACTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))), "designing-the-smallest-version", "scripts", "repo_facts.py")
 SIGNALS = {
     "fix": r"\bfix(?:e[sd]|ing)?\b|\bbug ?fix|\bregression\b|\bhotfix\b",
     "revert": r"\brevert(?:s|ed|ing)?\b",
@@ -43,14 +41,17 @@ FILES_SHOWN = 6
 SNAPSHOTS = "docs/snapshots"  # a snapshot is never evidence: its folder is skipped
 
 
-def load_git():
-    if not os.path.isfile(REPO_FACTS):
-        print("history_signals: repo_facts.py not found at %s: install the designing-the-smallest-version skill next to distilling-requirements" % REPO_FACTS, file=sys.stderr)
-        sys.exit(2)
-    spec = importlib.util.spec_from_file_location("repo_facts", REPO_FACTS)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.git, mod.resolve
+def git(repo, *args):
+    p = subprocess.run(["git", "-C", repo, *args], capture_output=True, encoding="utf-8", errors="replace")
+    if p.returncode:
+        raise RuntimeError("git %s failed: %s" % (" ".join(args[:2]), (p.stderr.strip().splitlines() or ["exit %d" % p.returncode])[0]))
+    return p.stdout
+
+
+def resolve(repo, rev):
+    """The full sha of REV in REPO, or None when it is not a commit there."""
+    p = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", rev + "^{commit}"], capture_output=True, text=True)
+    return p.stdout.strip() if p.returncode == 0 and p.stdout.strip() else None
 
 
 def in_scope(path, scope):
@@ -179,6 +180,9 @@ def issues(repo, scope, committed, limit):
 
 
 def cut(rows, limit):
+    """The `limit` newest rows and how many were cut; limit 0 means all."""
+    if not limit:
+        return rows, 0
     return rows[:limit], max(0, len(rows) - limit)
 
 
@@ -209,7 +213,6 @@ def markdown(r):
 
 
 def build(repo, rev, scope, limit, churn_min, gh_limit, with_gh):
-    git, resolve = load_git()
     sha = resolve(repo, rev)
     if not sha:
         return None
@@ -232,7 +235,7 @@ def build(repo, rev, scope, limit, churn_min, gh_limit, with_gh):
 
 
 def main(argv):
-    args, scope, opts, flags, it = [], [], {"--rev": "HEAD", "--format": "md", "--limit": "40", "--churn-min": "4", "--gh-limit": "1000"}, set(), iter(argv[1:])
+    args, scope, opts, flags, it = [], [], {"--rev": "HEAD", "--format": "md", "--limit": "0", "--out": "", "--churn-min": "4", "--gh-limit": "1000"}, set(), iter(argv[1:])
     for a in it:
         if a == "--scope":
             scope.append(next(it, ""))
@@ -260,7 +263,13 @@ def main(argv):
     if report is None:
         print("history_signals: %s is not a revision of %s" % (opts["--rev"], args[0]), file=sys.stderr)
         return 2
-    print(json.dumps(report, indent=2) if opts["--format"] == "json" else markdown(report), end="\n" if opts["--format"] == "json" else "")
+    text = json.dumps(report, indent=2) + "\n" if opts["--format"] == "json" else markdown(report)
+    if opts["--out"]:
+        with open(opts["--out"], "w", encoding="utf-8") as f:
+            f.write(text)
+        print("wrote %d lines to %s" % (text.count("\n"), opts["--out"]))
+    else:
+        print(text, end="")
     return 0
 
 

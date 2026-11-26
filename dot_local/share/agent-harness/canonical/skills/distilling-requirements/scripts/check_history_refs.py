@@ -36,7 +36,7 @@ def run(argv, cwd=None):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-NOT_FOUND = re.compile(r"could not resolve to|not found|no (?:pull requests?|issues?) found|http 404", re.I)
+NOT_FOUND = re.compile(r"could not resolve to a (?:pullrequest|issue|issue or pull request)\b|not found|no (?:pull requests?|issues?) found|http 404", re.I)
 
 
 def resolve_commit(repo, ref, snapshot):

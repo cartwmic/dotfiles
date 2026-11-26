@@ -40,7 +40,7 @@ def clear_notes():
     NOTES.clear()
 '''
 REPO = {"src/notes.py": NOTES, "README.md": "# Notes\n\nNotes are kept in memory.\n"}
-HEAD = "```text\nshape: requirements/2\nrepo: demo\ncommit: 0000000000000000000000000000000000000000\nsnapshot: 2026-11-21 at 0000000000000000000000000000000000000000\nscope: whole repo\nrepo-wide: yes\ninterview: none\ndate: 2026-11-21\nnot-read: none\n" \
+HEAD = "```text\nshape: requirements/2\nrepo: demo\ncommit: 0000000000000000000000000000000000000000\nsnapshot: 2026-11-21 at 0000000000000000000000000000000000000000\nhistory: 0000000000000000000000000000000000000000\nscope: whole repo\nrepo-wide: yes\ninterview: none\ndate: 2026-11-21\nnot-read: none\n" \
        "counts: R=%d SM=0 I=0 U=0 F=0 Q=0\n```\n# Requirements: demo\n\nSnapshot of demo at 0000000 on 2026-11-21. Not maintained: it records the code at that commit, not today's.\n\n## 1. Requirements register\n\n" \
        "| id | lens | kind | durability | status | requirement | evidence | check | fit | enforced | note |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
 TAIL = "\n## 2. State machines\n\nNone found.\n\n## 3. Unenforced invariants\n\nNone found.\n\n## 4. Findings\n\nNone found.\n\n## 5. Open questions\n\nNone.\n\n## Run log\n\n- 2026-11-21: first pass.\n"

@@ -50,7 +50,7 @@ sys.exit(2)
 
 
 def doc(rows, header=None, line=LINE, tail="## Run log\n\n- first pass\n"):
-    h = {"shape": "requirements/2", "repo": "demo", "commit": SHA, "snapshot": "2026-11-26 at " + SHA, "scope": "whole repo", "repo-wide": "yes", "interview": "none",
+    h = {"shape": "requirements/2", "repo": "demo", "commit": SHA, "snapshot": "2026-11-26 at " + SHA, "history": SHA, "scope": "whole repo", "repo-wide": "yes", "interview": "none",
          "date": "2026-11-26", "not-read": "none", "counts": "R=%d SM=0 I=0 U=0 F=0 Q=0" % len(rows)}
     h.update(header or {})
     head = "```text\n" + "".join("%s: %s\n" % kv for kv in h.items() if kv[1] is not None) + "```\n\n# Requirements: demo\n\n"
@@ -152,7 +152,7 @@ class ShapeTest(unittest.TestCase):
 
     def test_an_archive_writes_no_git_for_the_sha(self):
         line = "Snapshot of demo at no-git on 2026-11-26. " + LINE.split(". ", 1)[1]
-        self.assertEqual(shape(doc([row(1)], {"commit": "no-git", "snapshot": "2026-11-26 at no-git", "source": "archive"}, line=line)), (0, "ok\n"))
+        self.assertEqual(shape(doc([row(1)], {"commit": "no-git", "snapshot": "2026-11-26 at no-git", "history": "no-git", "source": "archive"}, line=line)), (0, "ok\n"))
 
     def test_a_requirements_file_needs_a_run_log_and_no_longer_a_changelog(self):
         self.assertIn("missing section ## Run log", shape(doc([row(1)], tail="## Changelog\n\n- x\n"))[1])
@@ -313,6 +313,15 @@ class HistoryRefsTest(unittest.TestCase):
         self.assertIn("R-1 | pr:12 | NOT CHECKED | gh is not available", out)
         self.assertIn("not checked (gh could not run): R-1 pr:12", out)
         self.assertIn("| resolved |", out)
+
+    def test_a_repo_gh_cannot_read_is_not_checked_not_unresolved(self):
+        gh = Path(self.with_gh, "gh")
+        gh.write_text(gh.read_text().replace('if a[2] == "77":', 'if a[2] == "88":\n        print("GraphQL: Could not resolve to a Repository with the name \'o/r\'.", file=sys.stderr)\n        sys.exit(1)\n    if a[2] == "77":'))
+        code, out, _ = self.resolve("pr:88")
+        self.assertEqual(code, 0)
+        self.assertIn("R-1 | pr:88 | NOT CHECKED", out)
+        self.assertNotIn("UNRESOLVED", out)
+        self.assertEqual(self.resolve("pr:99")[0], 1)  # a real not-found still fails
 
     def test_bad_usage_exits_2(self):
         self.assertEqual(script("check_history_refs.py")[0], 2)

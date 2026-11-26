@@ -6,11 +6,12 @@ Optional. Run it only in a session that can ask the owner, or when an answers fi
 
 - Ask at most 4 questions at a time. Each question stands alone, so the owner can answer one without the others.
 - Ask every area in the bank, including those with no signal: that is where unwritten requirements live. With no signal, propose nothing and ask open.
+- Before asking a question, open the pointer it cites and check it still says what the question claims; fix or drop the question if not.
 - State each proposal as a solution-neutral outcome requirement, the way the owner would say it: "Owner messages and events are delivered at least once, idempotently, and survive crashes and outages". Put at most one short evidence pointer after it. Do not list mechanisms (file names, a test file, a version pin, user ids): owners reject those as overly specific.
 - The owner confirms, corrects or skips each proposal. A skipped question makes no row.
 - A confirmed or corrected answer becomes an `explicit` row, status `accepted`, evidence `owner:interview <YYYY-MM-DD> Q<n>`. When the owner confirms a requirement you had inferred from history, that row becomes `explicit` and `accepted`, gains the `owner:` evidence and keeps its history refs.
-- The owner's intent can differ from the code (for example the owner says identity is authenticated via PGP, and the code does not). Keep the answer: write the row as `disputed` with a Q, or add a finding. Never drop the answer because the code disagrees.
-- Scope: in a scoped run, ask only what bears on the scope. Answers about the whole repo go to the run with `repo-wide: yes`.
+- The owner's intent can differ from the code (for example the owner says identity is authenticated via PGP, and the code does not). Keep the answer: write the row as `disputed` with a Q, or add a finding. Never drop the answer because the code disagrees. An answer the code meets only in part stays one row: status `accepted` (the owner said it), `enforced` and `fit` as the code and checks show, the unmet part named in `note`, and an `F` row when the gap is a defect.
+- Scope: in a scoped run, ask only what bears on the scope. Answers about the whole repo go to the run with `repo-wide: yes`. An answer whose code lies in another run's scope belongs to the run that owns that code; the repo-wide run takes only answers no scope owns.
 
 ## Question bank
 

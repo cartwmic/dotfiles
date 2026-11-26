@@ -10,7 +10,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/distilling-requirements"
 SHAPE = (SKILL / "references/output-shape.md").read_text(encoding="utf-8")
 
-HEADER = "```text\nshape: requirements/2\nrepo: x\ncommit: " + "a" * 40 + "\nsnapshot: 2026-11-22 at " + "a" * 40 + "\nscope: whole repo\nrepo-wide: yes\ninterview: none\ndate: 2026-11-22\nnot-read: none\ncounts: R=0 SM=1 I=0 U=0 F=0 Q=0\n```\n\n# x\n\nSnapshot of x at aaaaaaa on 2026-11-22. Not maintained: it records the code at that commit, not today's.\n\n"
+HEADER = "```text\nshape: requirements/2\nrepo: x\ncommit: " + "a" * 40 + "\nsnapshot: 2026-11-22 at " + "a" * 40 + "\nhistory: " + "a" * 40 + "\nscope: whole repo\nrepo-wide: yes\ninterview: none\ndate: 2026-11-22\nnot-read: none\ncounts: R=0 SM=1 I=0 U=0 F=0 Q=0\n```\n\n# x\n\nSnapshot of x at aaaaaaa on 2026-11-22. Not maintained: it records the code at that commit, not today's.\n\n"
 
 
 def check(machine):

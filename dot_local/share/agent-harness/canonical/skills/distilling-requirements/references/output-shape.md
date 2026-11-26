@@ -20,6 +20,7 @@ shape: requirements/2
 repo: <name>
 commit: <full sha>
 snapshot: <YYYY-MM-DD> at <full sha>
+history: <full sha the history signals were read at (= commit) | no-git>
 scope: <whole repo | path list; callees and callers read in part as path (lines)>
 repo-wide: <yes | no>
 interview: <path to the answers file | none>
@@ -36,6 +37,8 @@ Snapshot of <repo> at <sha7> on <date>. Not maintained: it records the code at t
 ```
 
 - `snapshot:` repeats `date:` and `commit:`; `check_shape.py` checks the line under the title word for word against the header (`<sha7>` is the first 7 characters of `commit:`).
+- `history:` records that the mandatory history step ran, and at which commit; `check_shape.py` requires it and that it equals `commit:`. Write `no-git` for an archive.
+- `counts:` are counts of unique ids: a row id counts once.
 - `repo-wide: yes` means this run also took the interview answers and the history that touch no other scope. When several scoped runs cover one repo, the owner or caller names exactly one of them `yes`; a run with no scope is `yes`.
 - `interview:` names the answers file the run used (`interview.md` in the same output folder), or `none`; when the file's `commit:` is not this file's, write `<path> (answers at <sha7>)`; a row with `owner:interview` evidence needs a file here, not `none`.
 - Ids are unique within this file. There is no continuity across snapshots: `R-3` in one snapshot need not be `R-3` in the next.
