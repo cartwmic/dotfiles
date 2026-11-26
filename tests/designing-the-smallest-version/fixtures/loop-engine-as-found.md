@@ -33,3 +33,9 @@ The FRs are outcomes, none names a module. The DPs do not map one to one onto mo
 | FR3 | DP2 | the endpoint rejects evidence the gate would not accept, so a gate rule change changes it | F-6 |
 | FR2 | DP6 | the sweeper force-advances a run to unstick it, which skips the gate | DF-3 |
 | FR6 | DP2 | gate timeouts decide what counts as stuck, so tuning the gate changes what the sweeper sweeps | DF-4 |
+
+## Shared
+| dp1 | dp2 | reason |
+|---|---|---|
+| DP2 | DP4 | run state is read by both and written by neither: it is a plain record type |
+| DP4 | DP6 | run state is read by both and written by neither: it is a plain record type |

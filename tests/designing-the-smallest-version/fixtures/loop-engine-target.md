@@ -38,3 +38,8 @@ The FRs are outcomes, none names a module. The DPs do not map one to one onto mo
 |---|---|---|
 | FR2 | DP6 | D1 |
 | FR6 | DP2 | D2 |
+
+## Shared
+| dp1 | dp2 | reason |
+|---|---|---|
+| DP2 | DP4 | run state is read by both and written by neither: it is a plain record type |

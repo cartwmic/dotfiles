@@ -26,14 +26,15 @@ def run(text, *extra, name="m.md"):
     return done
 
 
-def build(frs, dps, xs=()):
-    """frs: (id, dp); dps: ids; xs: (fr, dp) cells, each given a valid reason and evidence. Rows are written in the order given."""
+def build(frs, dps, xs=(), ev=None):
+    """frs: (id, dp); dps: ids; xs: (fr, dp) cells, each given a valid reason and evidence (`ev` for all of them, else a path:line).
+    Rows are written in the order given."""
     out = ["## FRs", "| id | text | dp |", "|---|---|---|"]
     out += ["| %s | need %s | %s |" % (f, f, d) for f, d in frs]
     out += ["", "## DPs", "| id | text | parts |", "|---|---|---|"]
     out += ["| %s | part %s | src/%s.py |" % (d, d, d.lower()) for d in dps]
     out += ["", "## X", "| fr | dp | reason | evidence |", "|---|---|---|---|"]
-    out += ["| %s | %s | %s moves %s | src/%s.py:%d |" % (f, d, d, f, d.lower(), n + 1) for n, (f, d) in enumerate(xs)]
+    out += ["| %s | %s | %s moves %s | %s |" % (f, d, d, f, ev or "src/%s.py:%d" % (d.lower(), n + 1)) for n, (f, d) in enumerate(xs)]
     return "\n".join(out) + "\n"
 
 
@@ -138,6 +139,41 @@ class NotSquare(unittest.TestCase):
         self.assertEqual(r["parts_in_several_dps"], {"src/dp1.py": ["DP1", "DP2"]})
 
 
+class NotSquareWording(unittest.TestCase):
+    def test_which_way_it_is_not_square(self):
+        more_frs = run(build([("FR1", "DP1"), ("FR2", "")], ["DP1"])).stdout
+        self.assertIn("More FRs than DPs (2 FRs, 1 DPs). Theorem 1", more_frs)
+        self.assertIn("coupled, or some FRs cannot be met", more_frs)
+        more_dps = run(build([("FR1", "DP1")], ["DP1", "DP2"])).stdout
+        self.assertIn("More DPs than FRs (2 DPs, 1 FRs). Theorem 3", more_dps)
+        self.assertIn("redundant", more_dps)
+
+
+class MixedDesign(unittest.TestCase):
+    frs = [("FR1", "DP1"), ("FR2", "DP2"), ("FR3", "")]
+
+    def test_paired_part_is_classified_and_unmet_is_said_apart(self):
+        r = facts(build(self.frs, ["DP1", "DP2"], [("FR1", "DP2")]))
+        self.assertEqual((r["class"], r["paired_class"]), ("not classified", "decoupled"))
+        self.assertEqual(r["order"], ["DP2", "DP1"])
+        self.assertEqual(r["unmet_frs"], ["FR3"])
+        out = run(build(self.frs, ["DP1", "DP2"], [("FR1", "DP2")])).stdout
+        self.assertIn("The 2 FR(s) that have a DP of their own (FR1, FR2) are decoupled. DP order (set earlier ones first): DP2 -> DP1.", out)
+        self.assertIn("FRs with no DP: FR3.", out)
+        header, rows = matrix_rows(out)
+        self.assertEqual(header, ["DP2", "DP1"])
+        self.assertEqual(rows["FR1"], ["X", "X"])
+
+    def test_coupled_paired_part_still_owes_its_block(self):
+        r = facts(build(self.frs, ["DP1", "DP2"], [("FR1", "DP2"), ("FR2", "DP1")]))
+        self.assertEqual((r["paired_class"], r["blocks"]), ("coupled", [["DP1", "DP2"]]))
+        self.assertIn("coupled block {DP1, DP2}", r["fix_owed"])
+
+    def test_dp_serving_several_frs_is_left_out_of_the_paired_part(self):
+        r = facts(build([("FR1", "DP1"), ("FR2", "DP1"), ("FR3", "DP2")], ["DP1", "DP2"]))
+        self.assertEqual((r["class"], r["paired_class"], list(r["pair"])), ("not classified", "uncoupled", ["DP2"]))
+
+
 class BadInput(unittest.TestCase):
     base = build([("FR1", "DP1"), ("FR2", "DP2")], ["DP1", "DP2"])
 
@@ -188,6 +224,21 @@ class BadInput(unittest.TestCase):
         text = self.base.replace("\n## X", "\n## Notes\n| id | text | parts |\n|---|---|---|\n| DP9 | stray | z |\n\n## X")
         self.assertEqual([d["id"] for d in facts(text)["dps"]], ["DP1", "DP2"])
 
+    def test_headings_match_whole(self):
+        cell = "| FR1 | DP2 | r | src/a.py:3 |\n"
+        for heading in ("## X notes", "## Xray", "## X cells (old)"):
+            text = self.base.replace("\n## X\n", "\n%s\n" % heading) + cell
+            self.assertEqual(facts(text)["x"], [], heading)
+        self.assertEqual(len(facts(self.base + cell)["x"]), 1)
+        text = self.base.replace("## DPs", "## DPs overview")
+        self.fails(text, "no `## DPs` section")
+
+    def test_unknown_missing_and_repeated_columns(self):
+        self.fails(self.base.replace("| id | text | dp |", "| id | text | dps |"), "FRs table: missing column(s) dp; unknown column(s) dps")
+        self.fails(self.base.replace("| id | text | parts |", "| id | text | parts | owner |").replace("| DP1 | part DP1 | src/dp1.py |", "| DP1 | part DP1 | src/dp1.py | me |").replace("| DP2 | part DP2 | src/dp2.py |", "| DP2 | part DP2 | src/dp2.py | me |"), "DPs table: unknown column(s) owner")
+        self.fails(self.base.replace("| fr | dp | reason | evidence |", "| fr | dp | reason |"), "X table: missing column(s) evidence")
+        self.fails(self.base.replace("| id | text | dp |", "| id | id | dp |"), "repeated column(s) id")
+
     def test_removed_table_needs_as_found(self):
         self.fails(self.base + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | D1 |\n", "needs --as-found")
 
@@ -201,7 +252,20 @@ class TargetEvidence(unittest.TestCase):
             self.assertEqual(run(text, "--target").returncode, 0, ev)
             done = run(text)
             self.assertEqual(done.returncode, 1, ev)
-            self.assertIn("is none of", done.stderr)
+            self.assertIn("run with --target", done.stderr)
+
+    def test_target_x_citing_only_code_is_refused(self):
+        text = self.base + "| FR1 | DP2 | because | src/a.py:3 |\n"
+        done = run(text, "--target")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("a target X needs a reason, not only code", done.stderr)
+        self.assertEqual(run(text).returncode, 0)  # as found, code is the evidence
+        self.assertEqual(run(self.base + "| FR1 | DP2 | because | src/a.py:3; D2 |\n", "--target").returncode, 0)
+
+    def test_mode_b_target_alone_runs_with_target(self):
+        done = run(self.base + "| FR1 | DP2 | D4 puts the check in DP2 | D4 |\n", "--target")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Classification: decoupled", done.stdout)
 
     def test_cochange_only_x_is_listed(self):
         r = facts(self.base + "| FR1 | DP2 | they change together because of the shared format | cochange:a.py+b.py |\n")
@@ -223,7 +287,7 @@ def pair_files(found, target):
 class AsFoundVersusTarget(unittest.TestCase):
     frs = [("FR1", "DP1"), ("FR2", "DP2")]
     found = build(frs, ["DP1", "DP2"], [("FR1", "DP2"), ("FR2", "DP1")])  # coupled
-    target = build(frs, ["DP1", "DP2"], [("FR2", "DP1")]) + ""
+    target = build(frs, ["DP1", "DP2"], [("FR2", "DP1")], ev="D1")
 
     def go(self, target_text):
         found, target = pair_files(self.found, target_text)
@@ -248,10 +312,42 @@ class AsFoundVersusTarget(unittest.TestCase):
 
     def test_added_x_is_listed_and_may_cite_a_decision(self):
         found, target = pair_files(build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")]),
-                                   build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")]) + "| FR1 | DP2 | D5 moves the check into DP2 | D5 |\n")
+                                   build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")], ev="D1") + "| FR1 | DP2 | D5 moves the check into DP2 | D5 |\n")
         done = subprocess.run([sys.executable, "-I", str(SCRIPT), target, "--as-found", found], capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("added X (FR1, DP2): D5 moves the check into DP2 [D5]", done.stdout)
+
+
+class SharedParts(unittest.TestCase):
+    frs = [("FR1", "DP1"), ("FR2", "DP2")]
+
+    def god(self, xs=(), shared=""):
+        text = build(self.frs, ["DP1", "DP2"], xs).replace("src/dp2.py", "src/dp1.py")
+        return text + shared
+
+    def test_shared_part_with_neither_x_nor_reason_is_flagged(self):
+        r = facts(self.god())
+        self.assertEqual(r["shared_parts_unexplained"], {"src/dp1.py": [["DP1", "DP2"]]})
+        self.assertIn("part src/dp1.py is in DP1 and DP2 with neither an X between them nor a `## Shared` reason", r["fix_owed"])
+
+    def test_an_x_between_the_pair_covers_it_either_way(self):
+        self.assertEqual(facts(self.god([("FR1", "DP2")]))["fix_owed"], [])
+        self.assertEqual(facts(self.god([("FR2", "DP1")]))["fix_owed"], [])
+
+    def test_a_written_reason_covers_it(self):
+        text = self.god(shared="\n## Shared\n| dp1 | dp2 | reason |\n|---|---|---|\n| DP2 | DP1 | the file is a constants table, edited by neither |\n")
+        r = facts(text)
+        self.assertEqual((r["shared_parts_unexplained"], r["fix_owed"]), ({}, []))
+        self.assertIn("Shared part, no coupling (DP1, DP2): the file is a constants table", run(text).stdout)
+
+    def test_bad_shared_rows_are_refused(self):
+        head = "\n## Shared\n| dp1 | dp2 | reason |\n|---|---|---|\n"
+        for row, needle in (("| DP1 | DP2 |  |", "reason is missing"), ("| DP1 | DP9 | r |", "two different DPs"), ("| DP1 | DP1 | r |", "two different DPs")):
+            done = run(self.god(shared=head + row + "\n"))
+            self.assertEqual(done.returncode, 1, row)
+            self.assertIn(needle, done.stderr)
+        apart = build(self.frs, ["DP1", "DP2"]) + head + "| DP1 | DP2 | r |\n"
+        self.assertIn("share no part", run(apart).stderr)
 
 
 class FixOwed(unittest.TestCase):

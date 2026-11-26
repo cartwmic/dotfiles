@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """design_matrix.py FILE [--label TEXT] [--as-found FILE] [--json] [--out PATH]: check, classify and render one Axiomatic Design matrix.
 
-FILE is a markdown file with up to four tables, under `## FRs`, `## DPs`, `## X` and (target only) `## Removed`. Headers are
-case-insensitive. A heading of any other name ends the current table. Cells hold no `|`.
+FILE is a markdown file with up to five tables, under `## FRs`, `## DPs`, `## X`, `## Shared` and (target only) `## Removed`. A
+heading must be exactly one of those names (case-insensitive); a heading of any other name, `## X notes` too, ends the current
+table. Each table has exactly its columns: a missing, unknown or repeated column is an error. Cells hold no `|`.
 
     ## FRs
     | id  | text                                    | dp  |
@@ -20,25 +21,29 @@ case-insensitive. A heading of any other name ends the current table. Cells hold
 
 * FRs (at least one): `dp` names the DP that delivers the FR. An empty `dp` is an FR with no DP (unmet). Two FRs may name one DP.
   More than 9 FRs gives a warning, not an error (a zigzag sub-matrix is smaller; a level-1 list should be 5 to 9).
-* DPs: `parts` (optional) lists the files or modules of the DP, split on `;`. A part in several DPs is reported, not judged.
+* DPs: `parts` (optional column) lists the files or modules of the DP, split on `;`. A part in several DPs (a god module) must
+  carry, for each pair of those DPs, an X between them or a row under `## Shared` (`| dp1 | dp2 | reason |`, the reason why the
+  shared part does not couple them). The script lists each pair that has neither under "Fix owed".
 * X: one row per off-diagonal cell, "changing DP `dp` to tune its own FR forces a change to keep FR `fr` met". This rule is
   this skill's convention, not Suh's. `reason` is one line. `evidence` is one or more of (split on `;`, `,` or space):
   `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`). With
   `--target` it may also be a design id of DESIGN.md: a decision (`D2`), gap (`G1`), tension (`T1`) or requirement (`OR-3`,
-  `IR-2`): a target X cites the decision that creates the dependency. A co-change is correlation: an X that cites only
-  co-change is listed, and its reason must stand on its own. The diagonal is implied and may not be listed. An import alone is
-  not evidence.
+  `IR-2`). A target design has no code yet, so a target X that cites only `path:line` is refused: it cites the decision that
+  creates the dependency. A co-change is correlation: an X that cites only co-change is listed, and its reason must stand on
+  its own. The diagonal is implied and may not be listed. An import alone is not evidence.
+  The evidence check is format only: it sees that an X cites something of the right shape, not that the citation shows coupling.
 * Removed (only with `--as-found`): `| fr | dp | by |`, `by` a decision id (`D2`). Every X of the as-found matrix that is absent from
   this one (the target) must be listed with the decision that removes it; the script refuses it otherwise, and prints the
   removed and added cells. Keep ids stable between the two tables so a cell can be matched.
 
-Giving `--as-found FILE` means FILE is the target, so `--target` is implied. `--json` prints the facts instead of markdown.
+Run a target matrix with `--target` (a new capability has no as-found table); giving `--as-found FILE` implies it. `--json` prints the facts instead of markdown.
 Exit 0 when the input is valid, whatever the class (a coupled matrix is a finding, not an error); 1 when it is invalid
 (the errors are printed); 2 on usage.
 
 The matrix is square when the FRs and DPs pair one-to-one. Then it is uncoupled (no X), decoupled (the DP graph has no cycle:
 the DP order is a topological sort, ties broken by id) or coupled (the cycles are the strongly connected components, found with
-repo_facts.py's `scc_components`). Otherwise it is not classified: the theorem that applies is printed (Suh 1996, App. 1-A).
+repo_facts.py's `scc_components`). Otherwise the whole is not classified and the theorem that applies is printed (Suh 1996,
+App. 1-A); the FRs that do have their own DP are still classified as a paired part, and the rest are listed apart.
 Every coupled block, DP delivering several FRs, unmet FR and non-square result is listed under "Fix owed": each needs a fix
 or an owner-accepted reason in DESIGN.md. The result does not depend on the order of the rows in the file.
 """
@@ -91,7 +96,22 @@ def split_row(line):
     return [c.strip() for c in line.strip().strip('|').split('|')]
 
 
-SECTIONS = {'FR': 'FRs', 'FRS': 'FRs', 'DP': 'DPs', 'DPS': 'DPs', 'X': 'X', 'REMOVED': 'Removed'}
+SECTIONS = {'FR': 'FRs', 'FRS': 'FRs', 'DP': 'DPs', 'DPS': 'DPs', 'X': 'X', 'REMOVED': 'Removed', 'SHARED': 'Shared'}
+COLUMNS = {'FRs': ({'id', 'text', 'dp'}, set()), 'DPs': ({'id', 'text'}, {'parts'}), 'X': ({'fr', 'dp', 'reason', 'evidence'}, set()),
+           'Removed': ({'fr', 'dp', 'by'}, set()), 'Shared': ({'dp1', 'dp2', 'reason'}, set())}
+
+
+def check_header(section, header):
+    need, may = COLUMNS[section]
+    problems = []
+    if len(set(header)) != len(header):
+        problems.append('repeated column(s) %s' % ', '.join(sorted({h for h in header if header.count(h) > 1})))
+    if need - set(header):
+        problems.append('missing column(s) %s' % ', '.join(sorted(need - set(header))))
+    if set(header) - need - may:
+        problems.append('unknown column(s) %s' % ', '.join(sorted(set(header) - need - may)))
+    if problems:
+        raise ValueError('%s table: %s (columns: %s)' % (section, '; '.join(problems), ', '.join(sorted(need | may))))
 
 
 def parse_markdown(text):
@@ -101,8 +121,7 @@ def parse_markdown(text):
         stripped = line.strip()
         heading = re.match(r'^#{1,6}\s*(.*)$', stripped)
         if heading:
-            word = re.match(r'(\w+)', heading.group(1))
-            current = SECTIONS.get(word.group(1).upper()) if word else None
+            current = SECTIONS.get(heading.group(1).strip().rstrip(':').strip().upper())
             if current:
                 tables[current] = []
             header = None
@@ -114,6 +133,7 @@ def parse_markdown(text):
             continue
         if header is None:
             header = [c.lower() for c in cells]
+            check_header(current, header)
             continue
         if len(cells) != len(header):
             raise ValueError('%s table: row has %d cells, header has %d: %s' % (current, len(cells), len(header), stripped))
@@ -121,7 +141,8 @@ def parse_markdown(text):
     missing = [k for k in ('FRs', 'DPs') if k not in tables]
     if missing:
         raise ValueError('no `## %s` section found' % '` or `## '.join(missing))
-    return {'frs': tables['FRs'], 'dps': tables['DPs'], 'x': tables.get('X', []), 'removed': tables.get('Removed', [])}
+    return {'frs': tables['FRs'], 'dps': tables['DPs'], 'x': tables.get('X', []), 'removed': tables.get('Removed', []),
+            'shared': tables.get('Shared', [])}
 
 
 def load(path):
@@ -190,10 +211,34 @@ def validate(data, target=False):
         if not tokens:
             errors.append('%s: evidence is missing; give %s' % (where, EVIDENCE_HELP))
         for token in tokens:
-            if not any(rx.match(token) for _, rx in EVIDENCE_KINDS) and not (target and DESIGN_ID.match(token)):
+            if DESIGN_ID.match(token) and not target:
+                errors.append('%s: evidence %r is a design id, which only a target matrix may cite: run with --target (or --as-found)' % (where, token))
+            elif not any(rx.match(token) for _, rx in EVIDENCE_KINDS) and not (target and DESIGN_ID.match(token)):
                 errors.append('%s: evidence %r is none of %s' % (where, token, TARGET_HELP if target else EVIDENCE_HELP))
+        if target and tokens and all(EVIDENCE_KINDS[0][1].match(t) for t in tokens):
+            errors.append('%s: a target X needs a reason, not only code: the target design has no code yet, so also cite the decision or '
+                          'requirement that creates the dependency (D2, OR-3, ...)' % where)
         xs.append({'fr': fr, 'dp': dp, 'reason': reason, 'evidence': tokens})
-    return {'frs': frs, 'dps': dps, 'x': xs}, errors
+    part_dps = {}
+    for d in dps:
+        for p in d['parts']:
+            part_dps.setdefault(p, set()).add(d['id'])
+    shared, seen_pairs = [], set()
+    for i, row in enumerate(data.get('shared', []), 1):
+        a, b = sorted((clean(row.get('dp1')), clean(row.get('dp2'))), key=natural)
+        where = 'Shared row %d (%s, %s)' % (i, a, b)
+        if a not in dp_ids or b not in dp_ids or a == b:
+            errors.append('%s: two different DPs of the DP table are needed' % where)
+        elif not any({a, b} <= v for v in part_dps.values()):
+            errors.append('%s: these DPs share no part' % where)
+        elif (a, b) in seen_pairs:
+            errors.append('%s: listed twice' % where)
+        elif not clean(row.get('reason')):
+            errors.append('%s: reason is missing' % where)
+        else:
+            seen_pairs.add((a, b))
+            shared.append({'dp1': a, 'dp2': b, 'reason': clean(row.get('reason'))})
+    return {'frs': frs, 'dps': dps, 'x': xs, 'shared': shared}, errors
 
 
 def check_removed(as_found, target_model, removed_rows):
@@ -263,6 +308,9 @@ def analyse(model, scc_components):
         owed.append('DP %s delivers several FRs (%s)' % (dp, ', '.join(v)))
     for fr in res['unmet_frs']:
         owed.append('FR %s has no DP' % fr)
+    for part, pairs in res['shared_parts_unexplained'].items():
+        for a, b in pairs:
+            owed.append('part %s is in %s and %s with neither an X between them nor a `## Shared` reason' % (part, a, b))
     if res['class'] == 'not classified':
         owed.append('the matrix is not square, so it is not classified')
     res['fix_owed'] = owed
@@ -284,37 +332,58 @@ def analyse_matrix(model, scc_components):
         for p in d['parts']:
             part_use.setdefault(p, []).append(d['id'])
     parts_shared = {p: v for p, v in sorted(part_use.items()) if len(v) > 1}
+    xset = {(c['fr'], c['dp']) for c in model['x']}
+    own_frs = {}
+    for f in frs:
+        own_frs.setdefault(f['dp'], []).append(f['id'])
+    reasons = {(c['dp1'], c['dp2']) for c in model.get('shared', [])}
+    unexplained = {}
+    for part, ids in parts_shared.items():
+        ids = sorted(ids, key=natural)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                has_x = any((fr, b) in xset for fr in own_frs.get(a, [])) or any((fr, a) in xset for fr in own_frs.get(b, []))
+                if not has_x and (a, b) not in reasons:
+                    unexplained.setdefault(part, []).append([a, b])
     cochange_only = [{'fr': c['fr'], 'dp': c['dp']} for c in model['x'] if all(e.startswith('cochange:') for e in c['evidence'])]
     res = {'frs': frs, 'dps': dps, 'x': sorted(model['x'], key=lambda c: (natural(c['fr']), natural(c['dp']))),
            'unmet_frs': unmet, 'removal_candidates': removal, 'dps_serving_several_frs': shared,
-           'parts_in_several_dps': parts_shared,
+           'parts_in_several_dps': parts_shared, 'shared_parts_unexplained': unexplained,
+           'shared_reasons': sorted(model.get('shared', []), key=lambda c: (natural(c['dp1']), natural(c['dp2']))),
            'x_cochange_only': sorted(cochange_only, key=lambda c: (natural(c['fr']), natural(c['dp']))), 'warnings': []}
     if len(frs) > MAX_LEVEL1_FRS:
         res['warnings'].append('%d FRs: a level-1 list should have 5 to 9 (fine for a zigzag sub-matrix)' % len(frs))
     n_fr, n_dp = len(frs), len(dps)
+    # the paired part: FRs whose DP delivers that FR alone. When the whole is square it is the whole.
+    pair = {f['dp']: f['id'] for f in frs if f['dp'] and len(delivers[f['dp']]) == 1}
+    fr_dp = {fr: dp for dp, fr in pair.items()}
+    edges = [(c['dp'], fr_dp[c['fr']]) for c in res['x'] if c['fr'] in fr_dp and c['dp'] in pair]
+    blocks, coupled = topo_blocks(sorted(pair, key=natural), edges, scc_components)
+    paired_order = [dp for block in blocks for dp in block]
+    if not pair:
+        paired_class = None
+    elif coupled:
+        paired_class = 'coupled'
+    elif edges:
+        paired_class = 'decoupled'
+    else:
+        paired_class = 'uncoupled'
+    res['pair'] = pair
+    res['order'] = paired_order + [d['id'] for d in dps if d['id'] not in pair]
+    res['blocks'] = coupled
+    res['paired_class'] = paired_class
+    res['x_outside_matrix'] = [{'fr': c['fr'], 'dp': c['dp']} for c in res['x'] if c['fr'] not in fr_dp or c['dp'] not in pair]
     if n_fr == n_dp and not unmet and not shared:
-        pair = {f['dp']: f['id'] for f in frs}  # DP id -> its FR
-        edges = [(c['dp'], next(f['dp'] for f in frs if f['id'] == c['fr'])) for c in res['x']]
-        blocks, coupled = topo_blocks([d['id'] for d in dps], edges, scc_components)
-        res['pair'] = pair
-        res['order'] = [dp for block in blocks for dp in block]
-        res['blocks'] = coupled
+        res['class'] = paired_class
         res['theorem'] = None
-        if coupled:
-            res['class'] = 'coupled'
-        elif edges:
-            res['class'] = 'decoupled'
-        else:
-            res['class'] = 'uncoupled'
         return res
     res['class'] = 'not classified'
-    res['order'] = [d['id'] for d in dps]
-    res['blocks'] = []
     if n_dp < n_fr:
-        res['theorem'] = ('%d DPs for %d FRs. Theorem 1 (Suh 1996, App. 1-A): with fewer DPs than FRs, either a coupled design '
-                          'results or the FRs cannot be satisfied.' % (n_dp, n_fr))
+        res['theorem'] = ('More FRs than DPs (%d FRs, %d DPs). Theorem 1 (Suh 1996, App. 1-A): the design is then coupled, '
+                          'or some FRs cannot be met.' % (n_fr, n_dp))
     elif n_dp > n_fr:
-        res['theorem'] = ('%d DPs for %d FRs. Theorem 3: with more DPs than FRs, the design is redundant or coupled.' % (n_dp, n_fr))
+        res['theorem'] = ('More DPs than FRs (%d DPs, %d FRs). Theorem 3: the design is then redundant (a DP serves no FR) or coupled.'
+                          % (n_dp, n_fr))
     else:
         res['theorem'] = ('%d DPs for %d FRs, but they do not pair one-to-one (an FR with no DP, or one DP delivering several FRs). '
                           'Theorem 4: an ideal design has as many DPs as FRs, one each.' % (n_dp, n_fr))
@@ -327,22 +396,31 @@ def cell(text):
     return text.replace('|', '\\|')
 
 
+def describe(cls, order, blocks):
+    if cls == 'uncoupled':
+        return 'uncoupled. Every FR has its own DP and no off-diagonal X; the DPs can be set in any order.'
+    if cls == 'decoupled':
+        return 'decoupled. DP order (set earlier ones first): %s.' % ' -> '.join(order)
+    return ('coupled. Coupled blocks (strongly connected): %s. Order of the DPs, with each block kept together: %s.'
+            % ('; '.join('{%s}' % ', '.join(b) for b in blocks), ' -> '.join(order)))
+
+
 def render(res, label):
     out = ['#### %s' % label, '']
-    cls = res['class']
-    if cls == 'not classified':
-        out += ['Classification: not classified (the matrix is not square). %s' % res['theorem'], '']
-    elif cls == 'uncoupled':
-        out += ['Classification: uncoupled. Every FR has its own DP and no off-diagonal X; the DPs can be set in any order.', '']
-    elif cls == 'decoupled':
-        out += ['Classification: decoupled. DP order (set earlier ones first): %s.' % ' -> '.join(res['order']), '']
+    pair = res['pair']
+    in_matrix = [d for d in res['order'] if d in pair]
+    if res['class'] == 'not classified':
+        out.append('Classification: not classified as a whole. %s' % res['theorem'])
+        if res['paired_class']:
+            out.append('The %d FR(s) that have a DP of their own (%s) are %s' % (len(pair), ', '.join(sorted(pair.values(), key=natural)),
+                                                                              describe(res['paired_class'], in_matrix, res['blocks'])))
+        else:
+            out.append('No FR has a DP of its own, so no part is classified.')
+        out.append('')
     else:
-        blocks = '; '.join('{%s}' % ', '.join(b) for b in res['blocks'])
-        out += ['Classification: coupled. Coupled blocks (strongly connected): %s. Order of the DPs, with each block kept together: '
-                '%s.' % (blocks, ' -> '.join(res['order'])), '']
-    pair = res.get('pair')
-    rows = [pair[d] for d in res['order']] if pair else [f['id'] for f in res['frs']]
-    cols = list(res['order'])
+        out += ['Classification: ' + describe(res['class'], in_matrix, res['blocks']), '']
+    rows = [pair[d] for d in in_matrix] if pair else [f['id'] for f in res['frs']]
+    cols = in_matrix if pair else list(res['order'])
     own = {f['id']: f['dp'] for f in res['frs']}
     xset = {(c['fr'], c['dp']) for c in res['x']}
     out.append('| | ' + ' | '.join(cols) + ' |')
@@ -354,7 +432,7 @@ def render(res, label):
     out.append('| FR | text | DP | text | parts |')
     out.append('|---|---|---|---|---|')
     dp_by_id = {d['id']: d for d in res['dps']}
-    for fr in rows:
+    for fr in rows + [f['id'] for f in res['frs'] if f['id'] not in rows]:
         f = next(f for f in res['frs'] if f['id'] == fr)
         d = dp_by_id.get(f['dp'])
         out.append('| %s | %s | %s | %s | %s |' % (fr, cell(f['text']), f['dp'] or '(none)', cell(d['text']) if d else '', cell('; '.join(d['parts'])) if d else ''))
@@ -377,7 +455,11 @@ def render(res, label):
     for dp, v in res['dps_serving_several_frs'].items():
         notes.append('DP %s delivers several FRs (%s): coupled or integrated; check the X cells.' % (dp, ', '.join(v)))
     for part, v in res['parts_in_several_dps'].items():
-        notes.append('Part %s sits in several DPs (%s): that is not coupling by itself.' % (part, ', '.join(v)))
+        notes.append('Part %s sits in several DPs (%s): that is not coupling by itself, but each pair needs an X or a reason.' % (part, ', '.join(v)))
+    for c in res['shared_reasons']:
+        notes.append('Shared part, no coupling (%s, %s): %s' % (c['dp1'], c['dp2'], c['reason']))
+    if res['class'] == 'not classified' and res['x_outside_matrix']:
+        notes.append('X cells left out of the matrix above (their FR or DP is not paired): %s.' % ', '.join('(%s, %s)' % (c['fr'], c['dp']) for c in res['x_outside_matrix']))
     for c in res['x_cochange_only']:
         notes.append('X (%s, %s) cites only co-change, which is correlation: its reason has to stand on its own.' % (c['fr'], c['dp']))
     notes += ['Warning: ' + w + '.' for w in res['warnings']]
@@ -399,9 +481,10 @@ def render(res, label):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='Check, classify and render one Axiomatic Design matrix (see the module docstring for the input format).')
+    ap = argparse.ArgumentParser(description='Check, classify and render one Axiomatic Design matrix (see the module docstring for the input format). '
+                                 'The evidence check is format only: it sees that an X cites something, not that the citation shows coupling.')
     ap.add_argument('file', help='markdown tables of FRs, DPs and X cells')
-    ap.add_argument('--target', action='store_true', help='this is a target matrix: X evidence may be a DESIGN.md id (D2, G1, T1, OR-3)')
+    ap.add_argument('--target', action='store_true', help='this is a target matrix (mode B has no --as-found): X evidence may be a DESIGN.md id (D2, G1, T1, OR-3) and must not be only path:line')
     ap.add_argument('--as-found', metavar='FILE', help='the as-found table; FILE is then the target, and every X it drops must name the decision that removes it')
     ap.add_argument('--label', default='Design matrix', help='heading of the rendered block, e.g. "As found" or "Target"')
     ap.add_argument('--json', action='store_true', help='print the facts as JSON instead of markdown')
