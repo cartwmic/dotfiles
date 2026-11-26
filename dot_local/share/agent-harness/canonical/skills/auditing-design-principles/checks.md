@@ -1,6 +1,6 @@
 # Checks per section
 
-Where to look for evidence on each section of `design-principles.md`. These are ways to find evidence, not extra rules: a finding cites the file's section and quotes its sentence. Section numbers are as of writing; if the file has moved a rule, follow the file.
+Where to look for evidence on each section of `design-principles.md`. These are ways to find evidence, not extra rules: a finding cites the file's section and quotes its sentence. Section numbers are as of writing; if the file has moved a rule, follow the file. For a section not listed here, take the evidence to look for from that section's own text (its Test or Gate line when it has one).
 
 ## Contents
 - [§1](#1-composable-components) · [§2](#2-kernel-and-adapters) · [§3](#3-clean-architecture-inside-each-component) · [§4](#4-yagni-and-kiss) · [§5](#5-written-contracts-and-invariants) · [§6](#6-conformance-suites) · [§7](#7-no-cross-component-imports) · [§8](#8-judgment-in-agents-mechanism-in-code)
@@ -24,6 +24,8 @@ Judge layers by import direction, not folder names, and scale to the component, 
 - **Own types for meaningful values.** Domain signatures full of bare strings and ints that mean different things; outside data used raw inside instead of parsed at the boundary.
 - **Errors at boundaries.** Framework exceptions reaching the domain; domain errors reaching callers raw.
 - **Decisions in delivery.** A handler or view that branches on business state or on a use case's result to make a business decision. A large outer layer is only a lead: sample it and flag decisions, not rendering or glue; UI-heavy products legitimately have big outer layers.
+- **Humble shells.** Code that is hard to test (views, DB drivers, FFI handles, framework lifecycle hooks) only wires and renders; any decision in it belongs in a testable inner object.
+- **Shared boundary types.** A write-side DTO shared by several use cases couples them. A note at most, and only when field changes have actually cascaded; read-side sharing is routine.
 - **Policy in adapters.** Retention, retry, validation, naming or cache rules decided in adapter code.
 - **Domain and use cases split** where the component is big enough that the split pays.
 - **Composition root.** Concrete adapters built inside domain code instead of once at the edge.

@@ -13,7 +13,7 @@ The authority is `~/.local/share/agent-harness/design-principles.md` (or the cop
 
 ## Contract
 
-- **Read-only.** Do not edit, create or delete anything in the audited checkout, and do not change analyzer, lint or build config. Do not install new tools; recommend a missing one in a finding.
+- **Read-only.** Do not edit, create or delete anything in the audited checkout (the scratch worktree's own git metadata is the one exception), and do not change analyzer, lint or build config. Do not install new tools; recommend a missing one in a finding.
 - **Run things.** Read any file, run the repo's own tests, journeys and installed analyzers, time them, and read the logs they write. Work in a detached scratch worktree (`git -C <repo> worktree add --detach <scratch>/<name> HEAD`, removed when done), never against live data, real accounts or a shared service. Installing the repo's own locked dependencies into that scratch worktree (for example `uv sync`, `npm ci`) is allowed so its tests can run; if they still cannot run, say so.
 - **Write the audit outside the repo** (your scratch directory) unless the caller names a place.
 
@@ -28,7 +28,7 @@ The authority is `~/.local/share/agent-harness/design-principles.md` (or the cop
 
 **3. Map the code.** List the components, the composition (wiring) and any loose scripts. Leave generated and vendored code out of every later check except §10. Mark each component's layers by what its files import, not by folder names: a feature-organised repo, or a framework that dictates folders (Rails, Next.js, Android), is not "missing layers". Gather deterministic facts:
 - An architecture analyzer already configured in the repo (ladder in [checks.md](checks.md)): run it first; it is also the Gate evidence. Check its config covers a rule before you count its silence as a pass.
-- For any git repo, run the facts script from the sibling skill, adding `--summary` to print its keys: `python3 ~/.local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts/repo_facts.py REPO --rev HEAD [--parts parts.tsv] --out <scratch>/facts.json --summary`. `parts.tsv` maps each component to its globs and gives edges between parts. Then read only the keys you need from `facts.json`. It reads the committed tree at REV (uncommitted work is ignored) and needs `deriving-readable-docs` installed beside it.
+- For any git repo, run the facts script from the sibling skill, adding `--summary` to print its keys: `python3 ~/.local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts/repo_facts.py REPO --rev HEAD [--parts parts.tsv] --out <scratch>/facts.json --summary`. `parts.tsv`, which you write, maps each component name to its globs; with it the script also reports edges between parts. Then read only the keys you need from `facts.json`. It reads the committed tree at REV (uncommitted work is ignored) and needs `deriving-readable-docs` installed beside it.
   - Import `edges` and cycles cover TypeScript, JavaScript and Python relative imports only. Imports by workspace package name or tsconfig alias appear under `external_packages`: check those for the repo's own package names before you pass §2, §3 or §7.
   - `gates`, `proof_commands`, `surfaces` and `path_refs` work for any stack. `path_refs` is capped, so absence there does not prove a file is unused.
 - Otherwise, or for what neither covers: `rg` over import lines. Say which source each Evidence cell rests on.
