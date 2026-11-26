@@ -23,7 +23,9 @@ class RunHeaders(unittest.TestCase):
     @unittest.skipIf(os.environ.get(INNER), "this is the run the outer test started")
     def test_the_command_runs_and_passes(self):
         env = dict(os.environ, **{INNER: "1"})
-        result = subprocess.run([sys.executable] + COMMAND.split()[1:], cwd=REPO, env=env, capture_output=True, text=True)
+        # The header command, narrowed to this one file with -p, proves the command works from the repo root
+        # (runlog_support imports under discover) without running the whole suite a second time.
+        result = subprocess.run([sys.executable] + COMMAND.split()[1:] + ["-p", Path(__file__).name], cwd=REPO, env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         self.assertIn("OK", result.stderr)
 
