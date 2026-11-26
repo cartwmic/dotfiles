@@ -12,6 +12,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/deriving-readable-docs/scripts"
 SURFACES = [{"kind": "command", "name": "notes add", "file": "src/cli.py", "line": 3}]
+# The header assemble.py prints: lint_main.py fails a guide without it.
+SNAP = ("<!-- printed -->\n# x guide\n\nSnapshot of x at 0000000 on 2026-11-20. Not maintained: it records the code at that commit, not today's.\n\n"
+        "Repo: x. Commit: " + "0" * 40 + ". Date: 2026-11-20. Snapshot: 2026-11-20 at " + "0" * 40 + ".\n<!-- /printed -->\n\n")
+
 GUIDE = ("# Part 1: In plain English\n\n## What it is\n\nIt saves notes. [A4.0001]\nWho it is for: anyone who takes notes. [A4.0001]\n\n"
          "## How to start\n\nYou run `notes add` to save one. [A4.0001]\n\n# Part 2: Appendix\n\n## A4 Notes\n\n"
          "The `notes add` command saves a note. `src/cli.py:3` [A4.0001]\nIt stops after 5 notes. `src/cli.py:7` [A4.0002]\n")
@@ -48,7 +52,7 @@ class RunlogTest(unittest.TestCase):
             blocked = Path(d, "file")
             blocked.write_text("not a folder")  # makedirs under a file fails
             with tempfile.TemporaryDirectory() as work:
-                Path(work, "GUIDE.md").write_text(GUIDE)
+                Path(work, "GUIDE.md").write_text(SNAP + GUIDE)
                 Path(work, "src").mkdir()
                 Path(work, "src/cli.py").write_text("x\n" * 10)
                 Path(work, "surfaces.json").write_text(json.dumps(SURFACES))
@@ -97,7 +101,7 @@ class LintLogTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "src").mkdir()
             Path(d, "src/cli.py").write_text("x\n" * 10)
-            Path(d, "GUIDE.md").write_text(guide)
+            Path(d, "GUIDE.md").write_text(SNAP + guide)
             Path(d, "surfaces.json").write_text(json.dumps(SURFACES))
             return run(state, "lint_main.py", Path(d, "GUIDE.md"), d, "--surfaces", Path(d, "surfaces.json"), *extra)
 

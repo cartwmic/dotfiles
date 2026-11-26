@@ -37,7 +37,7 @@ class SkillShapeTest(unittest.TestCase):
         self.assertRegex(SKILL, r"(?i)tests?[^.\n]*optional|optional[^.\n]*tests?")
 
     def test_it_stays_near_the_length_the_design_set(self):
-        self.assertLess(len(SKILL.split()), 1450)  # 1,400 before the final re-check step
+        self.assertLess(len(SKILL.split()), 1500)  # 1,400 before the final re-check step, 1,450 before the snapshot rule
 
 
 class SkillReadsAsGeneralTest(unittest.TestCase):

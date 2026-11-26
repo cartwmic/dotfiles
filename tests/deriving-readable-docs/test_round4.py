@@ -257,6 +257,10 @@ class EarlyExitsDocsSayGoAndRustTest(unittest.TestCase):
 # --- lint_main.py: absolute words, who it is for, distinct flags, the glossary ----------------------------------------------
 SURFACES = [{"kind": "command", "name": "notes add", "file": "src/cli.py", "line": 3}, {"kind": "flag", "name": "--tag <name>", "file": "src/cli.py", "line": 5}]
 CLI = "notes\n\ncommand notes add\n\nflag --tag\n\nlimit 5 notes in one day\n" + "x\n" * 4
+# The header assemble.py prints: lint_main.py fails a guide without it.
+SNAP = ("<!-- printed -->\n# x guide\n\nSnapshot of x at 0000000 on 2026-11-20. Not maintained: it records the code at that commit, not today's.\n\n"
+        "Repo: x. Commit: " + "0" * 40 + ". Date: 2026-11-20. Snapshot: 2026-11-20 at " + "0" * 40 + ".\n<!-- /printed -->\n\n")
+
 TEMPLATE = """# Part 1: In plain English
 
 ## What it is
@@ -294,7 +298,7 @@ def lint(text, *extra):
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "src").mkdir()
         (Path(d) / "src/cli.py").write_text(CLI)
-        Path(d, "GUIDE.md").write_text(text)
+        Path(d, "GUIDE.md").write_text(SNAP + text)
         Path(d, "surfaces.json").write_text(json.dumps(SURFACES))
         code, out, _ = script("lint_main.py", Path(d, "GUIDE.md"), d, "--surfaces", Path(d, "surfaces.json"), *extra)
     return code, out

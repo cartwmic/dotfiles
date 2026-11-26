@@ -24,7 +24,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
-from check_shape import R_COLS, tables  # noqa: E402
+from check_shape import R_COLS, evidence_parts, tables  # noqa: E402
 
 CITE = re.compile(r"([^\s:`,;()'\"]+):(\d+)(?:-(\d+))?")  # a path:line or path:start-end anywhere in a part: backticked, in a comma list, before a remark
 DOC_PATH = re.compile(r"(^|/)(readme[^/]*|agents\.md|claude\.md)$|\.(md|rst|adoc)$|^docs?/", re.I)
@@ -63,14 +63,17 @@ def to_doc(rows):
     """(doc text, [{id, line, cited}], not checked, failed): the claims doc, which doc line holds which R-id, the owner-only rows left out and the rows with no usable evidence."""
     out, mapped, skipped, failed = ["# Register claims", "", "Each `## R-n` section is one row of the register, for the claim checker."], [], [], []
     for _, row in rows:
-        cites, owner = [], False
-        for part in (p.strip() for p in row["evidence"].split(";") if p.strip()):
-            if part.startswith("owner:"):
+        cites, owner, history = [], False, False
+        for kind, part in evidence_parts(row["evidence"]):
+            if kind == "owner":
                 owner = True
-            else:
+            elif kind in ("commit", "pr", "issue"):
+                history = True
+            elif kind == "cite":
                 cites += [(m.group(1), m.group(2) + ("-" + m.group(3) if m.group(3) else "")) for m in CITE.finditer(part)]
         if not cites:
-            (skipped if owner else failed).append({"id": row["id"], "reason": "owner evidence only, nothing in the repo to read" if owner else "evidence has neither a path:line nor an owner: part (%s)" % row["evidence"][:60]})
+            reason = "owner evidence only, nothing in the repo to read" if owner else "history refs only: resolved by check_history_refs.py, claim not read-checked" if history else "evidence has neither a path:line nor an owner: or history part (%s)" % row["evidence"][:60]
+            (skipped if owner or history else failed).append({"id": row["id"], "reason": reason})
             continue
         label = source_label(cites, row)
         sentence = row["requirement"].rstrip()

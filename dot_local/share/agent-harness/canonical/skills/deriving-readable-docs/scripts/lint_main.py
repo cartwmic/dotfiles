@@ -4,6 +4,8 @@
 usage: lint_main.py <GUIDE.md> <repo> --surfaces surfaces.json [--jargon references/jargon.txt] [--fixed fixed-ids.txt] [--max-words N]
 
 Part 1 is the text from the heading `Part 1` to the heading `Part 2`. Prints `doc:line: FAIL kind: detail` (or `warn`), then the Part 1 word count (`Part 1: N words (limit 1000)`) and a count; exit 1 on any FAIL.
+  snapshot          the first line under the title is "Snapshot of <repo> at <sha7> on <date>. Not maintained: it records the code at that commit, not today's." and the header line holds
+                    `Snapshot: <date> at <full sha>` (`no-git` for a repo with no git) with the same date and sha; a guide with no title and snapshot line fails
   part1-words       over 1,000 words (or --max-words N: the halved budget of a small repo) fails, at any step, fix rounds included (headings and backticked names count; citations, printed blocks and tags do not)
   sentence-length   a sentence of more than 18 words fails, and so does an average above 14
   heading-depth     a heading deeper than two levels (###) fails
@@ -36,7 +38,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from claims import SPAN, TAG, appendix_index, doc_lines, line_items, part1_slice, prose_sentences, strip_code, word_count, words_of  # noqa: E402
+from claims import PRINTED_BEGIN, PRINTED_END, SPAN, TAG, appendix_index, doc_lines, line_items, part1_slice, prose_sentences, strip_code, word_count, words_of  # noqa: E402
 from runlog import log_run  # noqa: E402
 
 WORDS_MAX, SENTENCE_MAX, SENTENCE_AVG, NAMES_MAX, FLAGS_MAX, JARGON_PER_1000 = 1000, 18, 14, 8, 3, 4
@@ -53,6 +55,8 @@ WHO_FOR = re.compile(r"^\W*who it is for\b", re.I)
 SOURCE_LABEL = re.compile(r"(?<![\w-])(?:README|[\w-]+\.(?:md|rst|txt)|code comments?|help text|test titles?|docs|documentation)(?![\w-])", re.I)
 CUT = "cut"  # the sentence slot of a fixed-ids row for a sentence that did not hold on its re-check
 FILE_LABEL = re.compile(r"^[\w-]+\.(?:md|rst|txt)$", re.I)  # a source named by a file; it counts only when the repo holds a file of that name
+SNAPSHOT_LINE = re.compile(r"Snapshot of (\S+) at ([0-9a-f]{7}|no-git) on (\d{4}-\d\d-\d\d)\. Not maintained: it records the code at that commit, not today's\.")
+SNAPSHOT_KEY = re.compile(r"Snapshot: (\d{4}-\d\d-\d\d) at ([0-9a-f]{40}|no-git)\.")
 SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 _REPO_NAMES = {}
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,9 +151,23 @@ def section_lines(part1):
     return {name: (n + 1, (heads[i + 1][0] - 1) if i + 1 < len(heads) else total) for i, (n, name) in enumerate(heads)}
 
 
+def snapshot_fails(guide):
+    """[(doc_line, "snapshot", detail)]: the title, then the fixed snapshot line under it, then a `Snapshot: <date> at <sha>` key agreeing with it."""
+    lines = [(n, l.strip()) for n, l in enumerate(guide.splitlines(), 1) if l.strip() and l.strip() not in (PRINTED_BEGIN, PRINTED_END)]
+    if len(lines) < 2 or not lines[0][1].startswith("# ") or re.match(r"#+\s+Part 1\b", lines[0][1]):
+        return [(1, "snapshot", "the guide starts with its title, then the line `Snapshot of <repo> at <sha7> on <date>. Not maintained: it records the code at that commit, not today's.`")]
+    m = SNAPSHOT_LINE.fullmatch(lines[1][1])
+    if not m:
+        return [(lines[1][0], "snapshot", "the first line under the title must be `Snapshot of <repo> at <sha7> on <date>. Not maintained: it records the code at that commit, not today's.` | %s" % lines[1][1])]
+    key = SNAPSHOT_KEY.search(guide)
+    if not key or key.group(1) != m.group(3) or (key.group(2)[:7] if key.group(2) != "no-git" else key.group(2)) != m.group(2):
+        return [(lines[1][0], "snapshot", "the header needs `Snapshot: %s at <full sha>.` with the same date and sha as the line under the title" % m.group(3))]
+    return []
+
+
 def lint(guide, repo, rows, terms, fixed=None, words_max=WORDS_MAX):
     """Return (fails, warns, words): the first two as [(doc_line, kind, detail)], then the Part 1 word count. `fixed` is {tags: sentence}: Part 1 sentences a checker already fixed."""
-    fails, warns = [], []
+    fails, warns = snapshot_fails(guide), []
     part1 = part1_slice(guide)
     if not part1:
         return [(1, "part1", "no heading `Part 1`")], warns, 0

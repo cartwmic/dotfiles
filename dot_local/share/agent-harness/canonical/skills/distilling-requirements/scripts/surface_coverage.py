@@ -18,6 +18,10 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
+sys.dont_write_bytecode = True  # the skill folders are deployed; leave no __pycache__ in them
+from check_shape import evidence_parts  # noqa: E402
+
 SURFACES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
                         "deriving-readable-docs", "scripts", "surfaces.py")
 PRODUCT = {"entry", "command", "flag", "route", "event", "env", "config"}
@@ -44,8 +48,8 @@ def r_rows(text):
 def cited(evidence):
     """{(file, first, last)} for the `path:line` and `path:a-b` items of one evidence cell."""
     out = set()
-    for item in evidence.split(";"):
-        m = CITE.match(item.strip().strip("`"))
+    for kind, item in evidence_parts(evidence):
+        m = CITE.match(item) if kind == "cite" else None  # a `pr:12` or `commit:1234567` is a history ref, not line 12 of a file called pr
         if m:
             out.add((m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))))
     return out

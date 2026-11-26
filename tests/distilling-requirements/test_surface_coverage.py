@@ -25,7 +25,7 @@ ROW = "| %s | product | explicit | enduring | proposed | %s | %s | none | none |
 
 
 def register(commit, rows):
-    head = "```text\nshape: requirements/1\nrepo: fixture\ncommit: %s\nscope: whole repo\ndate: 2026-11-21\nnot-read: none\n```\n" % commit
+    head = "```text\nshape: requirements/2\nrepo: fixture\ncommit: %s\nscope: whole repo\ndate: 2026-11-21\nnot-read: none\n```\n" % commit
     cols = "| id | lens | kind | durability | status | requirement | evidence | check | fit | enforced | note |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
     return head + "\n## 1. Requirements register\n\n" + cols + "\n".join(rows) + "\n"
 
@@ -85,6 +85,7 @@ class SurfaceCoverageTest(unittest.TestCase):
         script = self.tmp / "skills/distilling-requirements/scripts/surface_coverage.py"
         script.parent.mkdir(parents=True)
         shutil.copy(COVERAGE, script)
+        shutil.copy(COVERAGE.parent / "check_shape.py", script.parent / "check_shape.py")  # surface_coverage.py reads evidence cells through it
         md = self.tmp / "R.md"
         md.write_text(register(self.head, []))
         res = subprocess.run([sys.executable, "-I", str(script), str(md), str(self.repo)], capture_output=True, text=True)

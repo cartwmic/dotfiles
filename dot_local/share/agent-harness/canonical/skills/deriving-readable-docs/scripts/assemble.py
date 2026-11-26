@@ -53,6 +53,14 @@ def commit_of(repo):
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else "no git"
 
 
+def snapshot_lines(repo, commit, date):
+    """The two snapshot lines of the header: the fixed sentence that goes first under the title, and the `Snapshot:` key. lint_main.py checks both."""
+    sha = commit if re.fullmatch(r"[0-9a-f]{40}", commit) else "no-git"
+    name = os.path.basename(repo.rstrip("/"))
+    return ("Snapshot of %s at %s on %s. Not maintained: it records the code at that commit, not today's." % (name, sha[:7] if sha != "no-git" else sha, date),
+            "Snapshot: %s at %s." % (date, sha))
+
+
 def printed(*lines):
     return "\n".join([PRINTED_BEGIN, *lines, PRINTED_END])
 
@@ -113,10 +121,14 @@ def build(work, repo, date, need_part1=True):
     for p in not_read:
         if not os.path.exists(os.path.join(repo, p)):
             raise AssembleError("not-read.txt: %s is not in the repo" % p)
+    commit = commit_of(repo)
+    sentence, key = snapshot_lines(repo, commit, date)
     header = printed(
         "# %s guide" % os.path.basename(repo.rstrip("/")),
         "",
-        "Repo: %s. Commit: %s. Date: %s." % (os.path.basename(repo.rstrip("/")), commit_of(repo), date),
+        sentence,
+        "",
+        "Repo: %s. Commit: %s. Date: %s. %s" % (os.path.basename(repo.rstrip("/")), commit, date, key),
         "Counts: %d surfaces (%s); %s; %d test cases in %d files; %d of %d named surfaces appear in tests."
         % (len(rows), ", ".join("%s %d" % (k, per[k]) for k in KINDS if per[k]) or "none",
            ("%d scout names found, %d not found and dropped, %d weak matches (only in scripts or tests) dropped" % (len(scout_found), len(scout) - len(scout_found) - len(scout_weak), len(scout_weak)))

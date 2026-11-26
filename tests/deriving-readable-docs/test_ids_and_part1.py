@@ -25,6 +25,10 @@ from claims import appendix_index, doc_lines, prose_sentences  # noqa: E402
 
 SURFACES = [{"kind": "command", "name": "notes add", "file": "src/cli.py", "line": 3}, {"kind": "flag", "name": "--tag <name>", "file": "src/cli.py", "line": 5}]
 
+# A guide the header of which is what assemble.py prints: lint_main.py fails a guide without it.
+SNAP = ("<!-- printed -->\n# x guide\n\nSnapshot of x at 0000000 on 2026-11-20. Not maintained: it records the code at that commit, not today's.\n\n"
+        "Repo: x. Commit: " + "0" * 40 + ". Date: 2026-11-20. Snapshot: 2026-11-20 at " + "0" * 40 + ".\n<!-- /printed -->\n\n")
+
 GUIDE = """# Part 1: In plain English
 
 ## What it is
@@ -55,13 +59,13 @@ It stops after 5 notes in one day. `src/cli.py:7` [A4.b2]
 """
 
 
-def lint(guide, *extra, surfaces=SURFACES, files=None):
+def lint(guide, *extra, surfaces=SURFACES, files=None, snapshot=True):
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "src").mkdir()
         (Path(d) / "src/cli.py").write_text("x\n" * 10)
         for rel, text in (files or {}).items():
             Path(d, rel).write_text(text)
-        Path(d, "GUIDE.md").write_text(guide)
+        Path(d, "GUIDE.md").write_text((SNAP if snapshot else "") + guide)  # a recorded guide keeps its line numbers: snapshot=False
         Path(d, "surfaces.json").write_text(json.dumps(surfaces))
         r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "lint_main.py"), str(Path(d, "GUIDE.md")), d, "--surfaces", str(Path(d, "surfaces.json")), *extra],
                            capture_output=True, text=True)
@@ -314,7 +318,7 @@ class Round1GuidesTest(unittest.TestCase):
 
     def run_guide(self, name, need):
         guide = positional_ids((HERE / "fixtures/round1" / name / "GUIDE.md").read_text())
-        code, out = lint(guide)
+        code, out = lint(guide, snapshot=False)
         flagged = [(int(m.group(1)), squash(m.group(3))) for m in re.finditer(r"GUIDE\.md:(\d+): FAIL (condition|label): (.*)", out)]
         rows = report_rows(HERE / "fixtures/round1" / name / "part1-report.md")
         caught = [r for r in rows if any(n == r[0] and squash(r[3])[:60] in text for n, text in flagged)]
