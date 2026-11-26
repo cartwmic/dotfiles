@@ -1,6 +1,7 @@
 """requirements/2: the snapshot header, the quality lens, the inferred kind, history evidence (check_shape.py, check_truth.py, surface_coverage.py),
 and the two history scripts (check_history_refs.py, history_signals.py) run as the skill runs them. No network: a fake `gh` on PATH stands in for GitHub.
 Run: python3 -I tests/distilling-requirements/test_requirements_v2.py"""
+import runlog_support  # first: keeps the run out of the real log
 import atexit
 import json
 import os
@@ -12,9 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-STATE = tempfile.mkdtemp(prefix="state-")
-os.environ["XDG_STATE_HOME"] = STATE
-atexit.register(shutil.rmtree, STATE, True)
+STATE = runlog_support.STATE  # runlog_support keeps these runs out of the real log
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 SCRIPTS = SKILLS / "distilling-requirements/scripts"

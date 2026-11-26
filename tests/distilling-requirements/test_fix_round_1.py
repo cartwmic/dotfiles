@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import runlog_support  # first: keeps the run out of the real log
 import test_requirements_v2 as T
 
 SKILL = T.SKILLS / "distilling-requirements"

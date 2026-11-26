@@ -7,6 +7,7 @@ The fixture register has four rows that check_shape.py passes:
 No model session runs here: the checker's report is recorded in the test, in the form check-brief.md asks for, and score.py ties it to the claims
 file the adapter and slice.py really made.
 Run: python3 -I tests/distilling-requirements/test_check_truth.py"""
+import runlog_support  # first: keeps the run out of the real log
 import atexit
 import json
 import os
@@ -17,9 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
-os.environ["XDG_STATE_HOME"] = STATE
-atexit.register(shutil.rmtree, STATE, True)
+STATE = runlog_support.STATE  # runlog_support keeps these runs out of the real log
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 TRUTH = SKILLS / "distilling-requirements/scripts/check_truth.py"

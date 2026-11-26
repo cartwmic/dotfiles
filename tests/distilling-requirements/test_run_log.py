@@ -1,6 +1,7 @@
 """Every script of distilling-requirements leaves one JSON line per run in the skill's log (runlog.py, design principle 14): the same log the sibling skills keep.
 Each test runs the script as the skill does (python3 -I, on files) with the state folder pointed at a scratch folder, then reads the line back.
 Run: python3 -m unittest discover -s tests/distilling-requirements"""
+import ast
 import json
 import os
 import shutil
@@ -8,8 +9,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
+import runlog_support  # first: keeps the run out of the real log
 import test_requirements_v2 as T
 
 
@@ -162,15 +165,33 @@ class RunLogTest(unittest.TestCase):
     def test_a_bare_sys_exit_in_a_script_is_logged_with_its_code_and_still_exits(self):
         sys.path.insert(0, str(T.SCRIPTS))
         self.addCleanup(sys.path.remove, str(T.SCRIPTS))
+        patch = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.state)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # the import must not leave bytecode in the skill folder
+        self.addCleanup(setattr, sys, "dont_write_bytecode", keep)
         import logged
-        os.environ["XDG_STATE_HOME"] = str(self.state)
-        self.addCleanup(os.environ.pop, "XDG_STATE_HOME")
         def cli(argv, stats):
             sys.exit(2)
         with self.assertRaises(SystemExit) as caught:
             logged.logged("x.py", "x", cli, [])
         self.assertEqual(caught.exception.code, 2)
         self.assertEqual((self.lines()[0]["outcome"], self.lines()[0]["exit"]), ("refused", 2))
+
+    def test_every_script_with_a_main_block_ends_it_with_sys_exit_of_logged(self):
+        def logs_its_run(path):
+            tree = ast.parse(path.read_text())
+            for node in tree.body:
+                if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and getattr(node.test.left, "id", None) == "__name__":
+                    last = node.body[-1]
+                    call = last.value if isinstance(last, ast.Expr) else None
+                    exit_ok = (isinstance(call, ast.Call) and ast.unparse(call.func) == "sys.exit" and len(call.args) == 1
+                               and isinstance(call.args[0], ast.Call) and ast.unparse(call.args[0].func) == "logged")
+                    return exit_ok
+            return None  # no main block
+        mains = {p.name: logs_its_run(p) for p in sorted(T.SCRIPTS.glob("*.py"))}
+        self.assertEqual({n for n, ok in mains.items() if ok is False}, set(), "a script runs without leaving a log line (sys.exit(logged(...)))")
+        self.assertGreaterEqual(sum(1 for ok in mains.values() if ok), 5, mains)
 
     def test_a_log_that_cannot_be_written_never_changes_the_exit_code(self):
         Path(self.tmp, "blocked").write_text("a file, not a folder")

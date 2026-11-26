@@ -1,5 +1,6 @@
 """surface_coverage.py lists the surfaces (from surfaces.py) that no R-row of a REQUIREMENTS.md cites.
 Run: python3 -I tests/distilling-requirements/test_surface_coverage.py"""
+import runlog_support  # first: keeps the run out of the real log
 import atexit
 import os
 import shutil
@@ -9,9 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
-os.environ["XDG_STATE_HOME"] = STATE
-atexit.register(shutil.rmtree, STATE, True)
+STATE = runlog_support.STATE  # runlog_support keeps these runs out of the real log
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 COVERAGE = SKILLS / "distilling-requirements/scripts/surface_coverage.py"

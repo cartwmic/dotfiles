@@ -1,5 +1,6 @@
 """output-shape.md and check_shape.py: the shape the skill tells writers to follow is the shape the checker holds them to.
 Run: python3 -I tests/distilling-requirements/test_output_shape.py"""
+import runlog_support  # first: keeps the run out of the real log
 import atexit
 import os
 import re
@@ -10,9 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
-os.environ["XDG_STATE_HOME"] = STATE
-atexit.register(shutil.rmtree, STATE, True)
+STATE = runlog_support.STATE  # runlog_support keeps these runs out of the real log
 
 SKILL = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/distilling-requirements"
 SHAPE = (SKILL / "references/output-shape.md").read_text(encoding="utf-8")
