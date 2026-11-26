@@ -1,6 +1,6 @@
 ---
 name: auditing-design-principles
-description: Use when asked to audit, review or check an existing repo, component or folder against Michael's design principles (~/.local/share/agent-harness/design-principles.md), or when a codebase shows drift from them — logic in the wrong layer, outward or cross-component imports, framework types in domain code, mock-heavy tests, speculative abstraction, arbitrary caps, missing contracts, conformance suites or action logs, slow or sleep-based tests. Reads the live principles file and gives every section a verdict with evidence, plus findings that cite the section they break, as one PRINCIPLES-AUDIT.md. Read-only. Not for reviewing one change or PR (reviewer-brief.md, reviewing-prs), designing the target and path (designing-the-smallest-version), or a general code-quality cleanup plan (desloppify).
+description: Use when asked to audit, review or check an existing repo, component or folder against Michael's design principles (~/.local/share/agent-harness/design-principles.md), including clean, hexagonal, onion or ports-and-adapters architecture and the dependency rule, or when a codebase shows drift from them — logic in the wrong layer, outward or cross-component imports, framework types in domain code, mock-heavy tests, speculative abstraction, arbitrary caps, missing contracts, conformance suites or action logs, slow or sleep-based tests. Reads the live principles file and gives every section a verdict with evidence, plus findings that cite the section they break, as one PRINCIPLES-AUDIT.md. Read-only. Not for reviewing one change or PR (reviewer-brief.md, reviewing-prs), designing the target and path (designing-the-smallest-version), or a general code-quality cleanup plan (desloppify).
 ---
 
 # Auditing design principles
@@ -9,40 +9,44 @@ description: Use when asked to audit, review or check an existing repo, componen
 
 One `PRINCIPLES-AUDIT.md` that says, for every section of the live principles file, whether the audited code follows it, with evidence a reader can check, and lists each real breach as a finding that names the section it breaks, the proof and what it costs.
 
-The authority is `~/.local/share/agent-harness/design-principles.md`. This skill never restates its rules. It says how to find evidence for them. When the file and this skill disagree, the file wins; report the drift in the audit's last section.
+The authority is `~/.local/share/agent-harness/design-principles.md` (or the copy the caller names). This skill does not restate its rules; it says where to find evidence for them. Section numbers below are as of writing: when the file has moved or changed a rule, follow the file and note the drift in the audit's last section.
 
 ## Contract
 
-- **Read-only.** Do not edit, create or delete anything in the audited repo. Do not install, upgrade or download tools, and do not change analyzer, lint or build config. Recommend a missing tool in a finding; do not add it.
-- **Inputs are free.** Read any file, run the repo's own tests, journeys and installed analyzers, time them, and read the logs they write. Run in a scratch copy or worktree when a command writes to the tree; never against live data or a shared service.
+- **Read-only.** Do not edit, create or delete anything in the audited checkout, and do not change analyzer, lint or build config. Do not install new tools; recommend a missing one in a finding.
+- **Run things.** Read any file, run the repo's own tests, journeys and installed analyzers, time them, and read the logs they write. Work in a detached scratch worktree (`git -C <repo> worktree add --detach <scratch>/<name> HEAD`, removed when done), never against live data, real accounts or a shared service. Installing the repo's own locked dependencies into that scratch worktree (for example `uv sync`, `npm ci`) is allowed so its tests can run; if they still cannot run, say so.
 - **Write the audit outside the repo** (your scratch directory) unless the caller names a place.
 
 ## Workflow
 
-**1. Frame.** Record, in the audit header:
+**1. Frame.** Record in the audit header:
 - The repo, the commit (`git rev-parse HEAD`) and the scope (the whole repo, or the components or paths asked for).
 - The repo's bar, found the way the global instructions say (a brief's `Bar:` line, else the bar table against `git remote get-url origin`). If it is not known and you may ask, ask; otherwise audit at `shared` and say so. §10 depends on it.
 - The principles file's path and `sha256sum`, so the audit can be repeated against the same rules.
 
-**2. Read the principles file whole.** Take the section numbers and titles from it, not from memory or this skill. The audit has one table row per numbered section in the file, however many there are now. Note each section's own scope: which parts apply only to new components or boundaries, which say "do not retrofit", which depend on the bar.
+**2. Read the principles file whole.** Take the section numbers and titles from it. The table has one row per numbered section. Note each section's own scope: which parts apply only to new components or boundaries, which say not to retrofit untouched code, which depend on the bar. Also note the unnumbered Enforcement section's checkable items (for example, whether the repo's AGENTS.md points at the file) and report them under Map.
 
-**3. Map the code.** List the components, the composition (wiring) and any loose scripts. For each component, mark its layers by what its files import, not by folder names: a feature-organised repo is not "missing layers". Use the project's own words beside each. Gather deterministic facts first:
-- TypeScript, JavaScript or Python: run the sibling skill's facts script, `python3 <skills-dir>/designing-the-smallest-version/scripts/repo_facts.py REPO --rev HEAD --out <scratch>/facts.json` (add `--parts parts.tsv` mapping each component to its globs to get cross-part edges). Read it with `--summary` first, not whole. It gives import edges, cycles, sizes, `gates`, `proof_commands` and `surfaces`.
-- Other stacks, or rules the script does not cover: an installed architecture analyzer (see the ladder in [checks.md](checks.md)), else `rg` over import lines. Say which in each Evidence cell.
+**3. Map the code.** List the components, the composition (wiring) and any loose scripts. Leave generated and vendored code out of every later check except §10. Mark each component's layers by what its files import, not by folder names: a feature-organised repo, or a framework that dictates folders (Rails, Next.js, Android), is not "missing layers". Gather deterministic facts:
+- An architecture analyzer already configured in the repo (ladder in [checks.md](checks.md)): run it first; it is also the Gate evidence. Check its config covers a rule before you count its silence as a pass.
+- For any git repo, run the facts script from the sibling skill, adding `--summary` to print its keys: `python3 ~/.local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts/repo_facts.py REPO --rev HEAD [--parts parts.tsv] --out <scratch>/facts.json --summary`. `parts.tsv` maps each component to its globs and gives edges between parts. Then read only the keys you need from `facts.json`. It reads the committed tree at REV (uncommitted work is ignored) and needs `deriving-readable-docs` installed beside it.
+  - Import `edges` and cycles cover TypeScript, JavaScript and Python relative imports only. Imports by workspace package name or tsconfig alias appear under `external_packages`: check those for the repo's own package names before you pass §2, §3 or §7.
+  - `gates`, `proof_commands`, `surfaces` and `path_refs` work for any stack. `path_refs` is capped, so absence there does not prove a file is unused.
+- Otherwise, or for what neither covers: `rg` over import lines. Say which source each Evidence cell rests on.
 
-**4. Check every section.** Use [checks.md](checks.md) for what evidence answers each section. Sample where the code is large (3–5 user actions traced end to end is usually enough) and say what you sampled. Run what you doubt instead of guessing: the test suite and its time for §12 and §15; one real user action and the log it leaves for §14.
+**4. Check every section** with [checks.md](checks.md). Sample where the code is large (3–5 user actions traced end to end is usually enough) and say what you sampled. Run what you doubt instead of guessing.
 
-**5. Decide applicability per section, not for the whole repo.** A one-file script still answers to §4, §8, §9, §12, §14 and §16; §2, §3, §5, §6 and §7 may be `n/a` for it with one sentence why. A claim in the README or AGENTS.md is a lead, not evidence: verify it in the code.
+**5. Judge applicability per section, not for the whole repo.** A one-file script still answers to most sections (YAGNI, judgment in agents, caps, secrets, verification, logs, fast proof, built to last). The structural sections (kernel and adapters, layers, contracts, conformance, cross-component imports) may be `n/a` for it, or for a repo with one component, with one sentence why. A claim in the README or AGENTS.md is a lead; verify it in the code.
 
-**6. Write findings.** One breach per finding (F1, F2, …). Each has the fields in the template. Severity:
-- **blocking**: it has an obligation (a § and the sentence it breaks), evidence (`file:line`, or a command and what it printed), a consequence someone hits in ordinary use at this repo's bar, and a component. Missing any one makes it a note.
-- **note**: everything else worth saying, including breaches the file scopes away from existing code (a Gate on an old component, §14 or §16 on code nobody is touching). Start those with "when next touched:".
-- A heuristic finding (a size ratio, a mock count, a sharing count) states its threshold and why that threshold. A threshold picked to make findings vanish is the failure this rule stops.
-- Every finding ends with one fix sentence, or a deferral with the trigger that would make it worth fixing.
+**6. Write findings.** One breach per finding (F1, F2, …), with the fields in the template.
+- **blocking**: it has an obligation (the section and the sentence the code plainly misses), evidence (`file:line`, or a command and what it printed), a consequence someone hits in ordinary use at this repo's bar, and a component. Missing any one makes it a note.
+- **note**: everything else worth saying. A breach the file scopes away from existing code (a Gate on an old component; the do-not-retrofit parts of §14 and §16) is always a note that starts "when next touched:".
+- A heuristic finding (a size ratio, a mock count) states its threshold and why that threshold.
+- Each finding ends with one fix sentence, or a deferral naming the trigger that would make it worth fixing. A fix that adds machinery the need does not require fails §4.
+- Never quote a secret's value; cite `file:line` only.
 
-Also list **removable machinery**: code, config, layers or checks that could be deleted with every required behaviour kept (§4, §12). This is often the most useful part of an audit.
+Also list **removable machinery**: code, config, layers or checks that could be deleted with every required behaviour kept (§4, §12).
 
-**7. Emit** the document below, then report its path, the three findings that matter most, and which verdicts you observed by running something versus only read.
+**7. Emit** the document below. Report its path and the three findings that matter most.
 
 ## Template
 
@@ -57,18 +61,19 @@ Also list **removable machinery**: code, config, layers or checks that could be 
 <2–4 sentences: the state, the worst problem, what to do first.>
 
 ## Map
-| Path | Kind (component / composition / script) | Layer by imports | Project term | Notes |
+| Path | Kind | Layer by imports | Project term | Notes |
+<Kind: component, composition, script or generated. Layer: domain, use cases, adapter, delivery, mixed, or none. Then one line on the Enforcement items.>
 
 ## Principles table
 | § | Title (from the file) | Verdict | Evidence |
-<one row per numbered section. Verdict: pass, fail, n/a, or unknown (the repo cannot show it either way; say what record would). Evidence: about 40 words, `file:line` or the command run, "read", "sampled N of M" or "ran"; point to findings by id.>
+<One row per numbered section. Verdicts: pass, partial, fail, n/a, unknown (the repo cannot show it either way; say what record would). partial and unknown are specific to this audit. The verdict states the fact; a breach the file scopes away is still fail, and its finding is a "when next touched:" note. Evidence: a short cell (`file:line`, the command run, "read", "sampled N of M", "ran"); details go in the findings, cited by id.>
 
 ## Findings
 ### F1. <short title>
 - **Severity:** blocking | note
 - **Obligation:** §<n> <title>: "<the sentence it breaks>"
 - **Component:** <part of the system, in plain words>
-- **Evidence:** <file:line, excerpt or command and output; detected by: script / analyzer name / rg / reading>
+- **Evidence:** <file:line, excerpt or command and output; detected by: analyzer / facts script / rg / log-probe / reading>
 - **Consequence:** <what a user or the next maintainer hits>
 - **Fix or deferral:** <one sentence; a deferral names its trigger>
 
@@ -76,7 +81,7 @@ Also list **removable machinery**: code, config, layers or checks that could be 
 <what could go, with every required behaviour kept, and the evidence it is unused or unneeded>
 
 ## Run versus read
-<commands run and what they showed; verdicts that rest on reading alone; tools recommended but not installed>
+<commands run and what they showed; verdicts that rest on reading alone; what could not run and why; tools recommended but not installed>
 
 ## Out of scope
 <seen but not a principles matter (naming, formatting, local duplication: desloppify); drift between this skill and the principles file>
@@ -89,12 +94,8 @@ An audit with no findings still has every section, with `## Findings` empty.
 | Mistake | Instead |
 |---|---|
 | Listing the sections from memory or from this skill | Read the file each run; its numbering and titles are the table. |
-| One verdict for the repo ("not layered, so skip") | Judge each section; most apply to a script too. |
-| Flagging old code under a rule the file says not to retrofit | Report it as a "when next touched:" note, never blocking. |
 | Citing a principle in general terms | Quote the sentence the code breaks. |
-| Trusting the README's architecture | Check the imports. |
-| Calling an analyzer's silence a pass | Check its config covers the rule first. |
-| `fail` on §11 or §13 because no record exists | `unknown`, and say what record would settle it, unless the file requires the record for this code. |
-| Demanding hardening at `personal` | §10 sets the bar; never committed secrets hold at both bars. |
-| Adding abstraction as a fix | A fix that adds machinery the need does not require fails §4. |
+| Counting an empty edge list as "no cross-component imports" | Check `external_packages` and the analyzer's coverage first. |
+| `fail` on §11 or §13 only because the repo holds no record | `unknown`: the record may live elsewhere. Say what record would settle it. |
+| Demanding hardening at `personal` | §10 sets the bar; never committing secrets holds at both bars. |
 | Editing code you found broken | Findings only. |
