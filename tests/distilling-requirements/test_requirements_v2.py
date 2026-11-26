@@ -37,7 +37,12 @@ if a[:2] in (["pr", "view"], ["issue", "view"]):
     sys.exit(1)
 if a[0] in ("pr", "issue") and a[1] == "list":
     open(os.environ["FAKE_GH_LOG"], "a").write(json.dumps(a) + "\\n")
-    print(open(os.environ["FAKE_GH_PRS" if a[0] == "pr" else "FAKE_GH_ISSUES"]).read())
+    items = json.load(open(os.environ["FAKE_GH_PRS" if a[0] == "pr" else "FAKE_GH_ISSUES"]))
+    field, window = a[a.index("--search") + 1].split(":", 1)
+    lo, hi = window.split("..")
+    key = "mergedAt" if a[0] == "pr" else "createdAt"
+    hits = [i for i in items if lo <= i[key][:10] <= hi]
+    print(json.dumps(hits[:min(int(a[a.index("--limit") + 1]), 1000)]))  # GitHub search never returns more than 1,000
     sys.exit(0)
 sys.exit(2)
 """
@@ -306,22 +311,57 @@ class HistorySignalsTest(unittest.TestCase):
         self.assertEqual(self.signals("--limit", "1", "--format", "json")["signal_commits"]["cut"], 2)
 
     def test_merged_prs_are_kept_by_ancestry_not_date_and_the_cap_is_reported(self):
-        prs = [{"number": 5, "title": "Cache lookups", "labels": [{"name": "perf"}], "mergedAt": "2999-01-02T00:00:00Z", "mergeCommit": {"oid": self.perf}, "files": [{"path": "web/w.py"}]},
-               {"number": 6, "title": "Core only", "labels": [], "mergedAt": "2000-01-03T00:00:00Z", "mergeCommit": {"oid": self.head}, "files": [{"path": "core/a.py"}]},
-               {"number": 7, "title": "After the snapshot", "labels": [], "mergedAt": "2000-01-04T00:00:00Z", "mergeCommit": {"oid": self.after}, "files": [{"path": "web/w.py"}]},
-               {"number": 8, "title": "No merge commit", "labels": [], "mergedAt": "2000-01-04T00:00:00Z", "mergeCommit": None, "files": [{"path": "web/w.py"}]}]
+        prs = [{"number": 5, "title": "Cache lookups", "labels": [{"name": "perf"}], "mergedAt": "2020-01-02T00:00:00Z", "mergeCommit": {"oid": self.perf}, "files": [{"path": "web/w.py"}]},
+               {"number": 6, "title": "Core only", "labels": [], "mergedAt": "2020-01-03T00:00:00Z", "mergeCommit": {"oid": self.head}, "files": [{"path": "core/a.py"}]},
+               {"number": 7, "title": "After the snapshot", "labels": [], "mergedAt": "2020-01-04T00:00:00Z", "mergeCommit": {"oid": self.after}, "files": [{"path": "web/w.py"}]},
+               {"number": 8, "title": "No merge commit", "labels": [], "mergedAt": "2020-01-04T00:00:00Z", "mergeCommit": None, "files": [{"path": "web/w.py"}]}]
         with_gh, _, env = fake_gh(self.tmp, prs)
-        r = self.signals("--scope", "web", "--format", "json", "--gh-limit", "4", path=with_gh, env=env)
-        self.assertEqual(r["merged_prs"]["rows"], [{"number": 5, "title": "Cache lookups", "labels": ["perf"], "merged": "2999-01-02"}])  # kept though merged "after" the date: it is an ancestor
-        self.assertEqual((r["merged_prs"]["fetched"], r["merged_prs"]["cap"], r["merged_prs"]["cap_hit"], r["merged_prs"]["total"]), (4, 4, True, 1))
-        out = self.signals("--scope", "web", "--gh-limit", "4", path=with_gh, env=env)
-        self.assertIn("gh returned 4, cap 4, cap hit: yes, so older ones are missing: raise --gh-limit", out)
-        self.assertIn("- #5 Cache lookups [perf] merged 2999-01-02", out)
+        r = self.signals("--scope", "web", "--format", "json", path=with_gh, env=env)
+        self.assertEqual(r["merged_prs"]["rows"], [{"number": 5, "title": "Cache lookups", "labels": ["perf"], "merged": "2020-01-02"}])  # #7 is not an ancestor, #8 has no merge commit
+        self.assertEqual((r["merged_prs"]["fetched"], r["merged_prs"]["cap"], r["merged_prs"]["cap_hit"], r["merged_prs"]["total"]), (4, 1000, False, 1))
+        out = self.signals("--scope", "web", path=with_gh, env=env)
+        self.assertIn("gh returned 4 (searches split by date, each under the cap of 1000), cap hit: no", out)
+        self.assertIn("- #5 Cache lookups [perf] merged 2020-01-02", out)
         self.assertEqual(self.signals("--no-gh", "--format", "json", path=with_gh, env=env)["merged_prs"]["reason"], "--no-gh")
         calls = [json.loads(l) for l in Path(self.tmp, "gh.log").read_text().splitlines()]
         pr_call = next(c for c in calls if c[0] == "pr")
-        self.assertIn("merged:<=" + git(self.repo, "log", "-1", "--format=%cs", self.head), pr_call)
+        self.assertIn("merged:2008-01-01.." + git(self.repo, "log", "-1", "--format=%cs", self.head), pr_call)
         self.assertIn("number,title,labels,mergedAt,mergeCommit,files", pr_call)
+
+    def many(self, per_day):
+        """PRs, `per_day` for each (day, ...) given, every one merged at a commit that is an ancestor of the rev."""
+        out, n = [], 0
+        for day, count in per_day:
+            for _ in range(count):
+                n += 1
+                out.append({"number": n, "title": "PR %d" % n, "labels": [], "mergedAt": day + "T00:00:00Z", "mergeCommit": {"oid": self.perf}})
+        return out
+
+    def test_a_search_that_returns_exactly_1000_is_split_by_date_until_every_window_is_under_the_cap(self):
+        with_gh, _, env = fake_gh(self.tmp, self.many([("2020-01-01", 500), ("2020-01-02", 500)]))
+        r = self.signals("--format", "json", path=with_gh, env=env)["merged_prs"]
+        self.assertEqual((r["total"], r["fetched"], r["cap_hit"]), (1000, 1000, False))
+        calls = [json.loads(l) for l in Path(self.tmp, "gh.log").read_text().splitlines() if json.loads(l)[0] == "pr"]
+        self.assertGreater(len(calls), 1)  # the first, whole-range search came back with 1,000 and was split
+        self.assertTrue(all(c[c.index("--limit") + 1] == "1000" for c in calls))
+
+    def test_more_than_1000_in_all_are_found_by_splitting_and_none_is_counted_twice(self):
+        with_gh, _, env = fake_gh(self.tmp, self.many([("2020-01-01", 600), ("2020-01-02", 600), ("2021-05-05", 3)]))
+        r = self.signals("--format", "json", "--limit", "5", path=with_gh, env=env)["merged_prs"]
+        self.assertEqual((r["total"], r["fetched"], r["cap_hit"], len(r["rows"])), (1203, 1203, False, 5))
+        self.assertIn("## Merged PRs (1203)", self.signals(path=with_gh, env=env))
+
+    def test_one_day_with_1000_or_more_still_says_the_cap_was_hit(self):
+        with_gh, _, env = fake_gh(self.tmp, self.many([("2020-01-01", 1005)]))
+        r = self.signals("--format", "json", path=with_gh, env=env)["merged_prs"]
+        self.assertEqual((r["fetched"], r["cap_hit"]), (1000, True))
+        self.assertIn("cap hit: yes: one day holds that many, so some are missing", self.signals(path=with_gh, env=env))
+
+    def test_issues_are_split_the_same_way(self):
+        issues = [{"number": n, "title": "I %d" % n, "state": "OPEN", "labels": [], "createdAt": ("2020-01-01" if n % 2 else "2020-01-02") + "T00:00:00Z", "body": ""} for n in range(1, 1201)]
+        with_gh, _, env = fake_gh(self.tmp, None, issues)
+        r = self.signals("--format", "json", path=with_gh, env=env)["issues"]
+        self.assertEqual((r["total"], r["cap_hit"]), (1200, False))
 
     def test_issues_come_from_gh_and_a_scope_keeps_those_that_name_it(self):
         issues = [{"number": 3, "title": "web/w.py loses data", "state": "CLOSED", "labels": [], "createdAt": "2026-01-02T00:00:00Z", "body": ""},
@@ -329,7 +369,7 @@ class HistorySignalsTest(unittest.TestCase):
         with_gh, _, env = fake_gh(self.tmp, None, issues)
         r = self.signals("--scope", "web", "--format", "json", path=with_gh, env=env)
         self.assertEqual([i["number"] for i in r["issues"]["rows"]], [3])
-        self.assertEqual([i["number"] for i in self.signals("--format", "json", path=with_gh, env=env)["issues"]["rows"]], [3, 4])
+        self.assertEqual([i["number"] for i in self.signals("--format", "json", path=with_gh, env=env)["issues"]["rows"]], [4, 3])
         self.assertIn("- #3 web/w.py loses data (closed) [] created 2026-01-02", self.signals("--scope", "web", path=with_gh, env=env))
         call = next(json.loads(l) for l in Path(self.tmp, "gh.log").read_text().splitlines() if json.loads(l)[0] == "issue")
         self.assertIn("--state", call)

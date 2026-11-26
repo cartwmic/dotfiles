@@ -8,7 +8,7 @@ Mandatory. It has a script half and a skill half. It runs before the interview, 
 
 - commits whose subject says fix, revert, perf, security, race, timeout, crash or flaky: sha, date, subject, files. The keyword match only picks leads; a commit it misses may matter, and one it picks may not;
 - high-churn files that still exist;
-- merged PRs, kept only when their merge commit is an ancestor of the rev, and issues created up to the rev's date, via `gh` (the section says why when `gh` does not work, and how many `gh` returned and whether its cap was hit; raise `--gh-limit` when it was).
+- merged PRs, kept only when their merge commit is an ancestor of the rev, and issues created up to the rev's date, via `gh` (the section says why when `gh` does not work, and how many `gh` returned and whether its cap was hit; GitHub search returns at most 1,000 per query, so the script splits the date range until each query is under it, and the cap is hit only when a single day holds that many).
 
 In a scoped run pass the scope paths: only history that touches them is listed. A `repo-wide: yes` run also reads history that touches no other scope. A folder with no git prints "no git history". `docs/snapshots/` is skipped.
 
