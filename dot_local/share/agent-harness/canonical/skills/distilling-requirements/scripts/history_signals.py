@@ -130,8 +130,19 @@ def gh_section(rows, reason, fetched, cap, cap_hit, kept):
     return {"available": rows is not None, "reason": reason, "fetched": fetched, "cap": cap, "cap_hit": cap_hit, "total": len(kept), "rows": kept}
 
 
+def commit_files(repo, oid):
+    """Paths a PR changed, read from git (every kept PR's merge commit is in the rev's history, so gh need not list files): a squash or rebase commit's own diff; for a
+    two-parent merge commit the branch's changes since it left the first parent (`P1...P2`), because the first-parent diff would also hold whatever the branch merged in from main."""
+    parents = subprocess.run(["git", "-C", repo, "rev-list", "--parents", "-n", "1", oid], capture_output=True, text=True).stdout.split()[1:]
+    if len(parents) == 2:
+        cmd = ["git", "-C", repo, "diff", "--name-only", parents[0] + "..." + parents[1]]
+    else:
+        cmd = ["git", "-C", repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--first-parent", oid]
+    return subprocess.run(cmd, capture_output=True, text=True).stdout.splitlines()
+
+
 def merged_prs(repo, sha, scope, date, limit):
-    rows, reason, fetched, hit = gh_list(repo, "pr", "merged", date, "number,title,labels,mergedAt,mergeCommit" + (",files" if scope else ""), limit)
+    rows, reason, fetched, hit = gh_list(repo, "pr", "merged", date, "number,title,labels,mergedAt,mergeCommit", limit)
     if rows is None:
         return gh_section(None, reason, 0, min(limit, SEARCH_MAX), False, [])
     reachable = set(subprocess.run(["git", "-C", repo, "rev-list", sha], capture_output=True, text=True).stdout.split())
@@ -140,7 +151,7 @@ def merged_prs(repo, sha, scope, date, limit):
         oid = (pr.get("mergeCommit") or {}).get("oid")
         if oid not in reachable:
             continue
-        if scope and not any(in_scope(f["path"], scope) for f in pr.get("files") or []):
+        if scope and not any(in_scope(f, scope) for f in commit_files(repo, oid)):
             continue
         kept.append({"number": pr["number"], "title": pr["title"], "labels": [l["name"] for l in pr.get("labels") or []], "merged": (pr.get("mergedAt") or "")[:10]})
     return gh_section(rows, "", fetched, min(limit, SEARCH_MAX), hit, kept)

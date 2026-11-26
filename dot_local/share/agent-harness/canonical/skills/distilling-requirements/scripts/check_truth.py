@@ -11,7 +11,7 @@ sentence and its evidence as backticked `path:line` citations), and DIR/rows.jso
 source only is listed as not checked: there is nothing in the repo to read. A row with neither a citation nor an `owner:` part fails (prepare prints it and exits 1,
 and verdicts counts it as a failure). A row whose evidence is a README or doc, or whose
 note names a code comment, gets that source in its sentence ("(README)", "(doc)", "(code comment)"), because the check brief fails a claim that rests on one without saying so.
-The checker then runs from the sibling skill, by path, unchanged: see SKILL.md step 9.
+The checker then runs from the sibling skill, by path, unchanged: see references/truth-check.md.
 verdicts reads the checker reports in REPORTS_DIR (the `read | N.k | VERDICT | path:line` rows) and prints one verdict per R-row, the worst of its claims. A row with
 no verdict counts as a failure. Exit 0 when every checked row HOLDS, 1 otherwise, 2 on bad usage. Stdlib only.
 """

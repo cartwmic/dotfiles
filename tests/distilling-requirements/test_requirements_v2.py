@@ -183,6 +183,24 @@ class SurfaceCoverageTest(unittest.TestCase):
         import surface_coverage
         self.assertEqual(surface_coverage.cited("pr:12; commit:1234567; issue:5; src/a.py:3-4"), {("src/a.py", 3, 4)})
 
+    def test_scope_lists_only_the_surfaces_under_the_scope_and_no_scope_lists_all(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = Path(tmp, "repo")
+        for d, flag in (("a", "--alpha"), ("b", "--beta")):
+            (repo / d).mkdir(parents=True)
+            (repo / d / "cli.py").write_text('import argparse\np = argparse.ArgumentParser()\np.add_argument("%s")\n' % flag)
+        git(repo, "init", "-q", "-b", "main")
+        commit(repo, {"a/cli.py": (repo / "a/cli.py").read_text()}, "init")
+        Path(tmp, "R.md").write_text(doc([], {"commit": git(repo, "rev-parse", "HEAD")}))
+        _, everything, _ = script("surface_coverage.py", Path(tmp, "R.md"), repo)
+        self.assertIn("--alpha", everything)
+        self.assertIn("--beta", everything)
+        _, scoped, _ = script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope", "a")
+        self.assertIn("--alpha", scoped)
+        self.assertNotIn("--beta", scoped)
+        self.assertEqual(script("surface_coverage.py", Path(tmp, "R.md"), repo, "--scope")[0], 2)
+
 
 class HistoryRefsTest(unittest.TestCase):
     def setUp(self):
@@ -269,6 +287,18 @@ class HistorySignalsTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         return json.loads(out) if "json" in args else out
 
+    def test_a_two_parent_merge_commit_is_scoped_by_the_branch_changes_only(self):
+        git(self.repo, "checkout", "-q", "-b", "feat", self.head)
+        commit(self.repo, {"web/w.py": "9\n"}, "feature work")
+        git(self.repo, "checkout", "-q", "main")
+        git(self.repo, "merge", "-q", "--no-ff", "-m", "Merge pull request #9 from x/feat", "feat")
+        merged = git(self.repo, "rev-parse", "HEAD")
+        sys.path.insert(0, str(SCRIPTS))
+        sys.dont_write_bytecode = True
+        import history_signals
+        self.assertEqual(history_signals.commit_files(str(self.repo), merged), ["web/w.py"])
+        self.assertEqual(history_signals.commit_files(str(self.repo), self.perf), ["core/a.py", "web/w.py"])
+
     def test_signal_commits_are_matched_by_message_and_read_from_the_rev_not_the_working_tree(self):
         r = self.signals("--format", "json")
         by = {c["subject"]: c["signals"] for c in r["signal_commits"]["rows"]}
@@ -326,7 +356,8 @@ class HistorySignalsTest(unittest.TestCase):
         calls = [json.loads(l) for l in Path(self.tmp, "gh.log").read_text().splitlines()]
         pr_call = next(c for c in calls if c[0] == "pr")
         self.assertIn("merged:2008-01-01.." + git(self.repo, "log", "-1", "--format=%cs", self.head), pr_call)
-        self.assertIn("number,title,labels,mergedAt,mergeCommit,files", pr_call)
+        self.assertIn("number,title,labels,mergedAt,mergeCommit", pr_call)
+        self.assertNotIn("files", pr_call[-1])  # a scope is matched on the files git reports for the merge commit, not on gh's
 
     def many(self, per_day):
         """PRs, `per_day` for each (day, ...) given, every one merged at a commit that is an ancestor of the rev."""
@@ -400,6 +431,12 @@ class SkillDocsTest(unittest.TestCase):
     QUOTE = ("> Find the app's explicit and implicit state machines and document their states, invariants, and transition tables in one file. Identify invalid states or transitions "
              "the code can actually reach, with evidence, including through retries and concurrency. Prioritize confirmed bugs by impact, group related fixes into issues, then fix them "
              "with regression tests and keep the document updated.")
+
+    def test_check_history_refs_runs_in_the_write_step_not_only_in_the_truth_check(self):
+        step10 = next(l for l in self.TEXT.splitlines() if l.startswith("10. "))
+        self.assertIn("check_history_refs.py", step10)
+        self.assertIn("only checker rounds count", (self.SKILL / "references" / "truth-check.md").read_text())
+        self.assertNotIn("SKILL.md step 9", (self.SKILL / "scripts" / "check_truth.py").read_text())
 
     def test_the_description_names_the_new_scope_and_stays_under_the_limit(self):
         import re
