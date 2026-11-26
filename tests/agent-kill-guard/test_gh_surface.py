@@ -161,6 +161,7 @@ ROWS = [
     ("O11", "gh --version", "", gs.ALLOW),
     ("O12", "pr-open --edit 5 --body-file " + F, "", gs.ALLOW),   # a child process the hook never sees gh in
     ("O13", "~/git/coordinator/scripts/merge-pr.sh 5", "", gs.ALLOW),
+    ("O14", "gh event listen --repo o/r", "", gs.ALLOW),  # gh 2.105 `event`: prints a PR's events, sets no text, merges nothing
     # what gh may do that the table cannot read
     ("U1", "gh -x pr merge 5", UNLISTED, gs.REFUSE),
     ("U2", "gh pr -t T edit 5", UNLISTED, gs.REFUSE),
@@ -223,7 +224,7 @@ ROWS = [
 # The rows the hook let through before gh_surface (owed #4353): none may be ALLOW, and each is a row the allow-everything stub gets wrong.
 HOLES = {"I2", "I3", "I4", "I9", "IE1", "IE2", "IE3", "IE4", "IE5", "IE6", "IE7", "IE8", "IE9", "IE10", "IE11", "IE12", "IE13", "IE14", "IE15", "IE16", "IE17", "IE18", "U9a", "U9e", "U9g", "U9j", "U9k", "M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
 # The rows that must stay allowed, whatever else changes: the sanctioned writers and the commands the review skills run.
-STAY_ALLOWED = {"P6", "P7", "P8", "S1", "S2", "S3", "S4", "S6", "B6", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "I5", "I6", "IE21", "IE22", "IE23", "IE24", "IE25", "IE26", "IE27", "IE28", "O12", "O13"}
+STAY_ALLOWED = {"P6", "P7", "P8", "S1", "S2", "S3", "S4", "S6", "B6", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "I5", "I6", "IE21", "IE22", "IE23", "IE24", "IE25", "IE26", "IE27", "IE28", "O12", "O13", "O14"}
 
 
 def classify(command, surface=gs.surface):
