@@ -34,7 +34,9 @@ if a[:2] in (["pr", "view"], ["issue", "view"]):
     if a[2] == "77":
         print("To get started with GitHub CLI, please run:  gh auth login", file=sys.stderr)
         sys.exit(4)
-    print("GraphQL: Could not resolve to a PullRequest with the number of %%s." %% a[2], file=sys.stderr)
+    # the exact text real gh prints for a number that does not exist (`gh issue view 99999999` and `gh pr view 99999999`)
+    what = "a PullRequest" if a[0] == "pr" else "an issue or pull request"
+    print("GraphQL: Could not resolve to %%s with the number of %%s. (repository.%%s)" %% (what, a[2], "pullRequest" if a[0] == "pr" else "issue"), file=sys.stderr)
     sys.exit(1)
 if a[0] in ("pr", "issue") and a[1] == "list":
     open(os.environ["FAKE_GH_LOG"], "a").write(json.dumps(a) + "\\n")
@@ -303,6 +305,12 @@ class HistoryRefsTest(unittest.TestCase):
         code, out, _ = self.resolve("pr:99")
         self.assertEqual(code, 1)
         self.assertIn("R-1 | pr:99 | UNRESOLVED | gh says it does not exist: GraphQL: Could not resolve to a PullRequest with the number of 99.", out)
+
+    def test_an_issue_gh_says_does_not_exist_is_unresolved_and_fails_the_run(self):
+        code, out, _ = self.resolve("issue:99")
+        self.assertEqual(code, 1)
+        self.assertIn("R-1 | issue:99 | UNRESOLVED | gh says it does not exist: GraphQL: Could not resolve to an issue or pull request with the number of 99.", out)
+        self.assertNotIn("NOT CHECKED", out)
 
     def test_a_gh_that_is_not_signed_in_or_absent_is_not_checked_and_does_not_fail_the_run(self):
         code, out, _ = self.resolve("pr:77")

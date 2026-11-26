@@ -36,7 +36,9 @@ def run(argv, cwd=None):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-NOT_FOUND = re.compile(r"could not resolve to a (?:pullrequest|issue|issue or pull request)\b|not found|no (?:pull requests?|issues?) found|http 404", re.I)
+# Real gh: `pr view` says "Could not resolve to a PullRequest with the number of N.", `issue view` says "Could not resolve to an issue or pull request with the number of N."
+# A missing repo says "Could not resolve to a Repository ...": that is gh unable to read the repo, not a missing ref.
+NOT_FOUND = re.compile(r"could not resolve to an? (?:pullrequest|issue|issue or pull request)\b|not found|no (?:pull requests?|issues?) found|http 404", re.I)
 
 
 def resolve_commit(repo, ref, snapshot):
