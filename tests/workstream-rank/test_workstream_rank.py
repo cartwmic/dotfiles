@@ -116,7 +116,8 @@ class WorkstreamRank(unittest.TestCase):
         self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
 
     def test_an_empty_pane_is_unranked(self):
-        p = self.run_rank("of", "--pane", "", rank_file=GOLDEN, thread="w1A:pG")
+        self.write(self.rows("1|Lead|t3:w1A:pG"))
+        p = self.run_rank("of", "--pane", "", thread="w1A:pG")
         self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
 
     def test_a_row_with_no_pane_never_matches(self):

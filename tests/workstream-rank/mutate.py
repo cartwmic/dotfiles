@@ -21,6 +21,7 @@ MUTATIONS = [
     ("pane default ignores T3CODE_THREAD_ID", 'if [ -n "${T3CODE_THREAD_ID:-}" ]; then pane=t3:$T3CODE_THREAD_ID; fi', ':'),
     ("pane default drops the t3: prefix", 'pane=t3:$T3CODE_THREAD_ID', 'pane=$T3CODE_THREAD_ID'),
     ("pane default falls back to HERDR_PANE_ID", 'pane=\n    if [ -n', 'pane=${HERDR_PANE_ID:-}\n    if [ -n'),
+    ("empty --pane falls back to the thread default", 'if [ "$1" = --pane ]; then pane=$2; fi', 'if [ "$1" = --pane ] && [ -n "$2" ]; then pane=$2; fi'),
     ("--pane ignored", 'if [ "$1" = --pane ]; then pane=$2; fi', ':'),
     ("-/empty pane can match", '|| [ -z "$pane" ] || [ "$pane" = - ]', ''),
     ("row without pane gets a matchable empty pane", '(NF >= 3 && $3 != "") ? $3 : "-"', '$3'),
