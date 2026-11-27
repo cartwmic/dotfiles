@@ -11,13 +11,16 @@ const settingsTemplate = path.join(sourceDir, ".chezmoitemplates/pi_settings_des
 const inspectPromptTarget = ".pi/agent/extensions/inspect-prompt";
 const desktopProfiles = ["personal", "axon-work-computer"];
 
-test("desktop profiles render fullscreen and include inspect-prompt without applying", () => {
+test("desktop profiles render regular mode and include inspect-prompt without applying", () => {
 	const tempHome = mkdtempSync(path.join(tmpdir(), "pi-profile-render-"));
 	const stubBin = path.join(tempHome, "bin");
 	mkdirSync(stubBin);
 	const opStub = path.join(stubBin, "op");
 	writeFileSync(opStub, '#!/bin/sh\nprintf \'{"models":[]}\\n\'\n');
 	chmodSync(opStub, 0o755);
+	// An empty config: the developer's own chezmoi.yaml (hooks, local data such as container mode) must not reach the render.
+	const configFile = path.join(tempHome, "chezmoi.yaml");
+	writeFileSync(configFile, "{}\n");
 	const env = {
 		...process.env,
 		PATH: `${stubBin}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -41,6 +44,8 @@ test("desktop profiles render fullscreen and include inspect-prompt without appl
 			const chezmoiArgs = [
 				"--source",
 				sourceDir,
+				"--config",
+				configFile,
 				"--destination",
 				path.join(tempHome, profile),
 				"--override-data",
@@ -52,7 +57,7 @@ test("desktop profiles render fullscreen and include inspect-prompt without appl
 				{ encoding: "utf8", env },
 			);
 			const settings = JSON.parse(renderedSettings) as { tuiMode?: unknown };
-			assert.equal(settings.tuiMode, "fullscreen", `${profile} should select fullscreen mode`);
+			assert.equal(settings.tuiMode, "regular", `${profile} should select regular mode`);
 
 			const managedTargets = execFileSync(
 				"chezmoi",
