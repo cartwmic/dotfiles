@@ -29,6 +29,7 @@ import termios
 import threading
 import time
 import unittest
+import platform
 import zipfile
 
 SRC = pathlib.Path(__file__).resolve().parents[1]
@@ -444,6 +445,11 @@ class Pty:
                 pass
 
 
+# install.sh refuses anything but macOS arm64, so every test that installs a copy cannot run elsewhere: it is skipped, not failed.
+on_macos_arm64 = unittest.skipUnless((platform.system(), platform.machine()) == ('Darwin', 'arm64'), 'install.sh is macOS arm64 only')
+
+
+@on_macos_arm64
 class Base(unittest.TestCase):
     def setUp(self):
         self.e = Env()
