@@ -2,7 +2,7 @@
 """Truth check for the register rows of a REQUIREMENTS.md: turn each R-row into a claim the deriving-readable-docs checker takes.
 
 usage:
-  check_truth.py prepare REQUIREMENTS.md --out DIR
+  check_truth.py prepare REQUIREMENTS.md --out DIR [--since PREVIOUS_DIR]
   check_truth.py verdicts DIR REPORTS_DIR
 
 prepare writes DIR/register-claims.md, a doc in the shape slice.py, check_citations.py and score.py read (one `## R-n` heading, then the row's requirement
@@ -15,10 +15,15 @@ A row whose evidence includes `owner:interview` and a `path:line` states what th
 note goes to DIR/owner-notes.txt (`N | R-id | note`, N the doc line of the row: every claim N.k of that line is judged with it), not into the sentence, so a date or a number in the note cannot fail check_citations.py.
 The checker reads the note with the sentence under references/check-brief-owner-rows.md. prepare says how many such rows there are.
 The checker then runs from the sibling skill, by path, unchanged: see references/truth-check.md.
+--since PREVIOUS_DIR (a fix round after the first) is the work folder of the round before, where `verdicts` has run: a row whose requirement, evidence and note are
+as they were, and that HOLDS there, is not written to the claims doc again (rows.json lists it under `carried`, and `verdicts` prints it HOLDS, unchanged). Every other row is
+checked again: a row a fix round changed, a new row, and a row that did not hold and was left as it was.
+verdicts also writes DIR/verdicts.json (each row's key and worst verdict) for the next round's --since.
 verdicts reads the checker reports in REPORTS_DIR (the `read | N.k | VERDICT | path:line` rows) and prints one verdict per R-row, the worst of its claims. A row with
 no verdict counts as a failure. Exit 0 when every checked row HOLDS, 1 otherwise, 2 on bad usage. Stdlib only.
 Log: each run appends one JSON line (runlog.py: script, action `check-truth`, outcome ok, failed or refused; step prepare or verdicts, and the row counts).
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -94,22 +99,54 @@ def to_doc(rows):
     return "\n".join(out) + "\n", mapped, skipped, failed, notes
 
 
-def prepare(path, out, stats):
+def row_key(row):
+    """What the checker is shown of a row: if none of it changed, a verdict of the last round still stands."""
+    return hashlib.sha1("\0".join((row["requirement"], row["evidence"], row["note"])).encode("utf-8")).hexdigest()
+
+
+def carried_rows(rows, previous):
+    """(rows to check, [{id, key}] that held unchanged in PREVIOUS_DIR); raises FileNotFoundError when verdicts has not run there."""
+    with open(os.path.join(previous, "verdicts.json"), encoding="utf-8") as f:
+        before = json.load(f)
+    keep, carried = [], []
+    for n, row in rows:
+        old = before.get(row["id"])
+        if old and old["verdict"] == "HOLDS" and old["key"] == row_key(row):
+            carried.append({"id": row["id"], "key": old["key"]})
+        else:
+            keep.append((n, row))
+    return keep, carried
+
+
+def prepare(path, out, stats, since=None):
     with open(path, encoding="utf-8") as f:
         rows = register_rows(f.read())
     if not rows:
         print("%s: no register rows (no table with the R columns)" % path, file=sys.stderr)
         stats["reason"] = "no register rows"
         return 1
+    carried = []
+    if since:
+        try:
+            rows, carried = carried_rows(rows, since)
+        except (OSError, ValueError, KeyError):
+            print("%s: no usable verdicts.json (run `verdicts` in that folder first)" % since, file=sys.stderr)
+            stats["reason"] = "no verdicts.json in --since"
+            return 2
+    keys = {r["id"]: row_key(r) for _, r in rows}
     doc, mapped, skipped, failed, notes = to_doc(rows)
+    for m in mapped:
+        m["key"] = keys[m["id"]]
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "register-claims.md"), "w", encoding="utf-8") as f:
         f.write(doc)
     with open(os.path.join(out, "owner-notes.txt"), "w", encoding="utf-8") as f:
         f.write("".join("%d | %s | %s\n" % n for n in notes))
     with open(os.path.join(out, "rows.json"), "w", encoding="utf-8") as f:
-        json.dump({"source": os.path.abspath(path), "rows": mapped, "not_checked": skipped, "failed": failed}, f, indent=2)
-    stats.update(rows=len(mapped), not_checked=len(skipped), failed=len(failed))
+        json.dump({"source": os.path.abspath(path), "rows": mapped, "not_checked": skipped, "failed": failed, "carried": carried}, f, indent=2)
+    stats.update(rows=len(mapped), not_checked=len(skipped), failed=len(failed), carried=len(carried))
+    if carried:
+        print("%d rows unchanged since %s and holding there, not checked again: %s" % (len(carried), since, ", ".join(c["id"] for c in carried)))
     print("%d rows to check, %d not checked: %s" % (len(mapped), len(skipped), ", ".join("%s (%s)" % (s["id"], s["reason"]) for s in skipped) or "none"))
     if notes:
         print("%d owner-requirement rows (%s): give each checker %s and %s as well" % (len(notes), ", ".join(n[1] for n in notes), os.path.join(HERE, "..", "references", "check-brief-owner-rows.md"), os.path.join(out, "owner-notes.txt")))
@@ -127,24 +164,33 @@ def verdicts(folder, reports, stats):
         line = int(cid.split(".")[0])
         if v in SEVERITY and (line not in worst or SEVERITY.index(v) > SEVERITY.index(worst[line])):
             worst[line] = v
+    judged = {}
     for row in meta["rows"]:
         v = worst.get(row["line"])
         bad += v != "HOLDS"
+        judged[row["id"]] = {"key": row.get("key"), "verdict": v}
         print("%s %s %s" % (row["id"], v or "NO VERDICT", " ".join(row["cited"])))
+    carried = meta.get("carried", [])
+    for c in carried:
+        judged[c["id"]] = {"key": c["key"], "verdict": "HOLDS"}
+        print("%s HOLDS unchanged since the last round" % c["id"])
+    with open(os.path.join(folder, "verdicts.json"), "w", encoding="utf-8") as f:
+        json.dump(judged, f, indent=2)
     for s in meta["not_checked"]:
         print("%s NOT CHECKED %s" % (s["id"], s["reason"]))
     failed = meta["failed"]
     for s in failed:
         print("%s FAILED %s" % (s["id"], s["reason"]))
     stats.update(rows=len(meta["rows"]), holding=len(meta["rows"]) - bad, not_checked=len(meta["not_checked"]), failed=len(failed))
-    print("%d of %d checked rows HOLD; %d not checked; %d failed before any checker" % (len(meta["rows"]) - bad, len(meta["rows"]), len(meta["not_checked"]), len(failed)))
+    print("%d of %d checked rows HOLD; %d not checked; %d failed before any checker%s" % (len(meta["rows"]) - bad, len(meta["rows"]), len(meta["not_checked"]), len(failed),
+          "; %d unchanged since the last round, not checked again" % len(carried) if carried else ""))
     return 1 if bad or failed else 0
 
 
 def cli(argv, stats):
-    if len(argv) == 5 and argv[1] == "prepare" and argv[3] == "--out" and os.path.isfile(argv[2]):
+    if len(argv) in (5, 7) and argv[1] == "prepare" and argv[3] == "--out" and os.path.isfile(argv[2]) and (len(argv) == 5 or argv[5] == "--since"):
         stats["step"] = "prepare"
-        return prepare(argv[2], argv[4], stats)
+        return prepare(argv[2], argv[4], stats, argv[6] if len(argv) == 7 else None)
     if len(argv) == 4 and argv[1] == "verdicts" and os.path.isfile(os.path.join(argv[2], "rows.json")) and os.path.isdir(argv[3]):
         stats["step"] = "verdicts"
         return verdicts(argv[2], argv[3], stats)
