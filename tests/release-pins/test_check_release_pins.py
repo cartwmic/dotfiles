@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/check-release-pins.py"
-TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
+TOOLS = ("loop-engine", "lean-change", "policy-document", "bookends-check")
 MISE_PATH = "dot_config/mise/config.toml"
 KIT_PATH = "dot_local/share/agent-kit/package.json"
 
@@ -166,7 +166,7 @@ class CheckReleasePinsTests(unittest.TestCase):
         self.assertNotIn("second line", out)
 
     def test_agent_kit_unreadable_fails_even_when_a_loop_engine_pin_lags(self):
-        result = self.run_check({"research": "0.48.1"}, ak_error="HTTP 404: Not Found")
+        result = self.run_check({"policy-document": "0.48.1"}, ak_error="HTTP 404: Not Found")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cartwmic/agent-kit package", result.stdout)
 
@@ -221,7 +221,7 @@ class CheckReleasePinsTests(unittest.TestCase):
         self.assertIn("pending bump #12: loop-engine 0.49.0 -> 0.50.0", lines)
         self.assertIn("pending bump #12: lean-change 0.49.0 -> 0.50.0", lines)
         failing = sorted(line.split()[0] for line in lines if "lags the latest release" in line)
-        self.assertEqual(failing, sorted(["policy-document", "research", "bookends-check"]))
+        self.assertEqual(failing, sorted(["policy-document", "bookends-check"]))
 
     def test_agent_kit_pending_bump_passes(self):
         result = self.run_check(kit="0.48.1", prs=[pr(15)], diffs={"15": pr_diff(kit_bump="0.49.0")})

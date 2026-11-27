@@ -21,7 +21,7 @@ anything. The steps, and the step a stop names:
   drift    chezmoi status on the skills tree and the mise config (the file chezmoi manages: ~/.config/mise/config.toml, or on the agent
            host pod conf.d/container.toml); stop on any change the PR did not make
   apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
-  install  mise install for the five tools
+  install  mise install for the four tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
   scripts  on the agent host pod only: chezmoi runs its one pending script, 05_container_tools.sh, so its run is recorded (its steps are
            no-ops after the install above, and it checks that no mise tool is missing). It embeds a hash of the mise config, so without
@@ -54,7 +54,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
+TOOLS = ("loop-engine", "lean-change", "policy-document", "bookends-check")
 SKILLS = "dot_local/share/agent-harness/canonical/skills"
 MISE_CONFIG = "dot_config/mise/config.toml"
 # Container mode (the agent host pod; docs/container-mode.md): .chezmoiignore leaves ~/.config/mise/config.toml out and chezmoi renders the same
@@ -73,7 +73,7 @@ PIN_FIX_RED = re.compile(r"^  pin-fix-red: ([0-9a-f]{40})$", re.M)  # the line c
 
 # The design principles (~/.local/share/agent-harness/design-principles.md), one row each: name, result, evidence.
 PRINCIPLES = [
-    ("Composable components", "n/a", "No component is added; the import copies skill bundles and moves five pins."),
+    ("Composable components", "n/a", "No component is added; the import copies skill bundles and moves four pins."),
     ("Kernel and adapters", "n/a", "No component is added or changed."),
     ("Clean architecture inside each component", "n/a", "No code layer is added or changed."),
     ("YAGNI and KISS", "pass", "The apply writes only the PR's own targets; the drift check stops on anything else."),
@@ -126,7 +126,7 @@ def pr_body(tag, report, head, day):
     return "\n".join([
         "## What changes",
         "",
-        "Imports the %s skill bundles and moves the five Loop Engine pins (%s) to %s. Made by `loop_engine_bump.py %s`. Every Loop Engine release updates the dotfiles pins and skills." % (tag, ", ".join(TOOLS), tag[1:], tag),
+        "Imports the %s skill bundles and moves the four Loop Engine pins (%s) to %s. Made by `loop_engine_bump.py %s`. Every Loop Engine release updates the dotfiles pins and skills." % (tag, ", ".join(TOOLS), tag[1:], tag),
         "",
         "```",
         "\n".join(lines),

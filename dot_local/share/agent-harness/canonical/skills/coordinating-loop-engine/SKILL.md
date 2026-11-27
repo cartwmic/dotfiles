@@ -11,8 +11,7 @@ Outcome: each driver finishes or returns a durable blocker independently of chat
    checkout/write ownership and coordination ownership. Do not invent worktrees,
    a scheduler or permission to share a writer; stop on consequential ambiguity.
 2. Load the [engine skill](../using-loop-engine/SKILL.md) and the selected provider
-   skill at its crate-local skills directory. Generate-PRD additionally requires
-   using-generate-prd beside the research skill. The coordinator does not replace policy.
+   skill at its crate-local skills directory. The coordinator does not replace policy.
 3. Confirm exact profile bytes/hash and separate external role/model commands,
    owner-set spend/resource limits (none by default) and proof owner. Verify model availability once per launch, with one probe, and use no fallback; do not re-audit earlier launches' metadata.
 4. Give each driver a durable handoff: outcome, provider/skill, working directory,

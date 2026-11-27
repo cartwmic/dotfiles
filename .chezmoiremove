@@ -27,6 +27,14 @@
 # and the release importer no longer lists it. A machine that deployed it still has the file, which chezmoi does not delete by itself.
 .local/share/agent-harness/canonical/skills/using-loop-engine/references/operational-ux-capture.schema.json
 
+# Retired 2026-11-27: the research workflow and the requirements-document skill it drove. Dotfiles no longer installs the `research` program, ships the skills
+# using-research-provider and using-generate-prd, or keeps a copy of Loop Engine's PRD.md in the using-loop-engine skill. Source deletion alone leaves the
+# deployed files, so chezmoi removes them on apply; apply_harness_config.sh then prunes the dangling skill links. The `research` program itself is a mise
+# install that no longer appears in the config, so it stays until `mise uninstall research` is run by hand. Prune these entries once every machine has applied.
+.local/share/agent-harness/canonical/skills/using-research-provider
+.local/share/agent-harness/canonical/skills/using-generate-prd
+.local/share/agent-harness/canonical/skills/using-loop-engine/references/PRD.md
+
 # Retired 2026-11-13: viz, the homelab page host, and its tools; agents publish charts, diagrams and pictures on shartifacts.
 # Source deletion alone leaves the deployed CLI, its code, its machine file and the skill. apply_harness_config.sh then prunes
 # the agent-skill symlinks that pointed at the removed skill. Prune once every machine has applied.
