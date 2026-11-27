@@ -6,7 +6,9 @@ the same file, so the writer and this reader are pinned to one shared example.
 
 WORKSTREAM_RANK_SCRIPT points the suite at a mutated copy (see mutate.py).
 """
+import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -30,7 +32,7 @@ class WorkstreamRank(unittest.TestCase):
         self.file.write_text(text)
         return self.file
 
-    def run_rank(self, *args, rank_file="default", thread=None, herdr_pane=None, home=None):
+    def run_rank(self, *args, rank_file="default", thread=None, herdr_pane=None, home=None, t3_db=None):
         env = {"PATH": os.environ["PATH"], "HOME": str(home or self.dir)}
         if rank_file == "default":
             env["WORKSTREAM_RANK_FILE"] = str(self.file)
@@ -38,9 +40,24 @@ class WorkstreamRank(unittest.TestCase):
             env["WORKSTREAM_RANK_FILE"] = str(rank_file)
         if thread is not None:
             env["T3CODE_THREAD_ID"] = thread
+        if t3_db is not None:
+            env["WORKSTREAM_RANK_T3_DB"] = str(t3_db)
         if herdr_pane is not None:
             env["HERDR_PANE_ID"] = herdr_pane
         return subprocess.run(["sh", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=20)
+
+    def make_t3_db(self, tree):
+        """A small T3 database holding {thread: parent thread or None}, in the shape T3 stores threads in."""
+        path = self.dir / "statev2.sqlite"
+        path.unlink(missing_ok=True)
+        db = sqlite3.connect(path)
+        db.execute("create table orchestration_v2_projection_threads(thread_id text primary key, title text, payload_json text)")
+        for thread, parent in tree.items():
+            payload = {"lineage": {"parentThreadId": parent}} if parent else {"lineage": None}
+            db.execute("insert into orchestration_v2_projection_threads values(?, ?, ?)", (thread, thread, json.dumps(payload)))
+        db.commit()
+        db.close()
+        return path
 
     def of(self, pane, **kw):
         p = self.run_rank("of", "--pane", pane, **kw)
@@ -89,7 +106,7 @@ class WorkstreamRank(unittest.TestCase):
 
     def test_a_thread_with_no_row_is_unranked(self):
         self.write(self.rows("1|Lead|t3:mcp:bbbbbbbb-0000-0000-0000-000000000002"))
-        p = self.run_rank("of", thread="thread:delegated-task:command%3Amcp%3Abbbbbbbb")
+        p = self.run_rank("of", thread="thread:delegated-task:command%3Amcp%3Abbbbbbbb", t3_db=self.make_t3_db({"x": None}))
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "1000\n", ""))
 
     def test_the_thread_id_is_matched_whole_with_its_t3_prefix(self):
@@ -97,6 +114,91 @@ class WorkstreamRank(unittest.TestCase):
         self.write(self.rows("1|Bare|bbbbbbbb-0000-0000-0000-000000000002"))
         p = self.run_rank("of", thread="bbbbbbbb-0000-0000-0000-000000000002")
         self.assertEqual(p.stdout, "1000\n")
+
+    # --- a thread below a workstream's thread takes that workstream's rank ---
+
+    LEAD = "bbbbbbbb-0000-0000-0000-000000000002"
+    TREE = {
+        LEAD: None,
+        "thread:delegated-task:builder": LEAD,          # a builder the lead launched
+        "thread:delegated-task:reviewer": "thread:delegated-task:builder",  # a helper of the builder
+        "mcp:other-lead": None,
+        "thread:delegated-task:stray": "mcp:other-lead",
+        "mcp:inner-lead": LEAD,                          # a lead below a lead, with its own row
+        "thread:delegated-task:inner-builder": "mcp:inner-lead",
+    }
+
+    def walk(self, thread, *rows, tree=None):
+        self.write(self.rows(*rows))
+        return self.run_rank("of", thread=thread, t3_db=self.make_t3_db(self.TREE if tree is None else tree))
+
+    def test_a_child_of_a_ranked_thread_takes_its_rank(self):
+        p = self.walk("thread:delegated-task:builder", "2|Lead|t3:" + self.LEAD)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "2\n", ""))
+
+    def test_a_grandchild_takes_the_rank_too(self):
+        p = self.walk("thread:delegated-task:reviewer", "2|Lead|t3:" + self.LEAD)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "2\n", ""))
+
+    def test_the_nearest_ranked_thread_wins(self):
+        rows = ("2|Lead|t3:" + self.LEAD, "9|Inner|t3:mcp:inner-lead")
+        self.assertEqual(self.walk("thread:delegated-task:inner-builder", *rows).stdout, "9\n")
+        self.assertEqual(self.walk("thread:delegated-task:builder", *rows).stdout, "2\n")
+
+    def test_the_best_rank_among_rows_sharing_the_thread_wins_on_the_walk(self):
+        p = self.walk("thread:delegated-task:builder", "5|A|t3:" + self.LEAD, "3|B|t3:" + self.LEAD)
+        self.assertEqual(p.stdout, "3\n")
+
+    def test_a_thread_under_no_ranked_thread_is_unranked(self):
+        p = self.walk("thread:delegated-task:stray", "2|Lead|t3:" + self.LEAD)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "1000\n", ""))
+
+    def test_a_thread_the_database_does_not_know_is_unranked_without_a_warning(self):
+        p = self.walk("thread:delegated-task:nobody", "2|Lead|t3:" + self.LEAD)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "1000\n", ""))
+
+    def test_a_row_without_the_t3_prefix_is_not_a_thread_on_the_walk(self):
+        p = self.walk("thread:delegated-task:builder", "2|Bare|" + self.LEAD)
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
+
+    def test_a_loop_in_the_thread_tree_ends(self):
+        p = self.walk("a", "2|Lead|t3:" + self.LEAD, tree={"a": "b", "b": "a"})
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
+
+    def test_the_threads_own_row_needs_no_database(self):
+        self.write(self.rows("4|Lead|t3:" + self.LEAD))
+        p = self.run_rank("of", thread=self.LEAD, t3_db=self.dir / "no-such.sqlite")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "4\n", ""))
+
+    def test_an_unreadable_database_leaves_a_child_unranked_and_says_so_once(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        p = self.run_rank("of", thread="thread:delegated-task:builder", t3_db=self.dir / "no-such.sqlite")
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
+        self.assertIn("cannot find the workstream of thread", p.stderr)
+
+    def test_a_database_without_the_threads_table_is_reported_not_guessed(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        empty = self.dir / "empty.sqlite"
+        sqlite3.connect(empty).close()
+        p = self.run_rank("of", thread="thread:delegated-task:builder", t3_db=empty)
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
+        self.assertIn("cannot read", p.stderr)
+
+    def test_an_explicit_pane_does_not_walk(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        p = self.run_rank("of", "--pane", "t3:thread:delegated-task:builder", thread="thread:delegated-task:builder",
+                          t3_db=self.make_t3_db(self.TREE))
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
+
+    def test_the_database_is_found_under_t3code_home(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        (self.dir / "userdata").mkdir()
+        db = self.make_t3_db(self.TREE)
+        db.rename(self.dir / "userdata" / "statev2.sqlite")
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.dir / "nohome"), "WORKSTREAM_RANK_FILE": str(self.file),
+               "T3CODE_HOME": str(self.dir), "T3CODE_THREAD_ID": "thread:delegated-task:builder"}
+        p = subprocess.run(["sh", str(SCRIPT), "of"], env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "2\n", ""))
 
     def test_a_herdr_pane_id_alone_is_no_longer_a_key(self):
         p = self.run_rank("of", rank_file=GOLDEN, herdr_pane="w1A:pK")

@@ -5,7 +5,9 @@ HEAVY_GATE_SCRIPT points the suite at a mutated copy (see mutate.py).
 The real script runs as a real process. Only the host's figures are scripted: sysctl, memory_pressure, vm_stat and uname are
 small fakes first on PATH that print whatever the test wrote to files (df too, for the disk floor), so a busy or quiet Mac can be simulated on any machine.
 """
+import json
 import os
+import sqlite3
 import signal
 import subprocess
 import tempfile
@@ -16,6 +18,7 @@ from pathlib import Path
 SCRIPT = Path(os.environ.get("HEAVY_GATE_SCRIPT") or Path(__file__).resolve().parents[2] / "dot_local/bin/executable_heavy-gate")
 # The central-rank reader the gate calls by name (dotfiles PR #76). Tests put it on PATH as workstream-rank when they want the rank on.
 RANK_READER = Path(__file__).resolve().parents[2] / "dot_local/bin/executable_workstream-rank"
+RANK_SHARE = Path(__file__).resolve().parents[2] / "dot_local/share"   # holds workstream-rank/thread_rank.py, which the reader finds at ../share from its bin folder
 # The gate as it was before the second slot (PR #69), frozen: jobs already running when the new version is installed still run it.
 OLD_SCRIPT = Path(__file__).resolve().parent / "heavy-gate-v69.sh"
 
@@ -1351,6 +1354,8 @@ exit $rc
         (self.bin / "workstream-rank").unlink(missing_ok=True)
         if link:
             (self.bin / "workstream-rank").symlink_to(RANK_READER)
+            if not (self.bin.parent / "share").exists():
+                (self.bin.parent / "share").symlink_to(RANK_SHARE)
         self.rank_file.write_text(header + "".join(f"{rank}\t{name}\t{ref}\n" for rank, name, ref in rows))
 
     def stub_reader(self, body):
@@ -1375,6 +1380,31 @@ exit $rc
         for thread, number in (("w1", "1"), ("w3", "3"), ("w7", "7")):
             with self.subTest(thread):
                 self.assertEqual(self.waiting_number(env={"T3CODE_THREAD_ID": thread}), number)
+
+    def use_thread_tree(self, tree):
+        """A small T3 database of {thread: parent}, which the reader walks to find the workstream a child thread belongs to."""
+        path = self.bin.parent / "statev2.sqlite"
+        db = sqlite3.connect(path)
+        db.execute("create table orchestration_v2_projection_threads(thread_id text primary key, title text, payload_json text)")
+        db.executemany("insert into orchestration_v2_projection_threads values(?, ?, ?)",
+                       [(t, t, json.dumps({"lineage": {"parentThreadId": parent} if parent else None})) for t, parent in tree.items()])
+        db.commit()
+        db.close()
+        self.env["WORKSTREAM_RANK_T3_DB"] = str(path)
+
+    def test_a_builder_thread_takes_the_rank_of_the_lead_thread_above_it(self):
+        self.use_rank(*self.RANKED)
+        self.use_thread_tree({"w1": None, "w3": None, "builder-of-w1": "w1", "builder-of-w3": "w3", "helper-of-w3": "builder-of-w3", "stray": None})
+        for thread, number in (("builder-of-w1", "1"), ("builder-of-w3", "3"), ("helper-of-w3", "3"), ("stray", "1005")):
+            with self.subTest(thread):
+                self.assertEqual(self.waiting_number(env={"T3CODE_THREAD_ID": thread}), number)
+
+    def test_two_builders_go_in_the_order_of_their_leads_ranks(self):
+        self.use_rank(("1", "third", "t3:w3"), ("2", "first", "t3:w1"))
+        self.use_thread_tree({"w1": None, "w3": None, "builder-of-w1": "w1", "builder-of-w3": "w3"})
+        # C is a builder under the lead of rank 2 and waits first; D is a builder under the lead of rank 1 and waits second: D goes first
+        self.env["T3CODE_THREAD_ID"] = "builder-of-w1"
+        self.assertEqual(self.full_house_order(d_env={"T3CODE_THREAD_ID": "builder-of-w3"}), ["D", "C"])
 
     def test_the_rank_beats_the_rules_and_the_environment_beats_the_rank(self):
         self.use_rank(*self.RANKED)
