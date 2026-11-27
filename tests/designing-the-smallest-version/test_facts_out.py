@@ -68,8 +68,8 @@ class OutNeverLosesABlock(unittest.TestCase):
         self.assertNotIn("scope", json.loads(f.read_text()))
 
     def last_record(self):
-        lines = (Path(STATE) / "designing-the-smallest-version/log.jsonl").read_text().splitlines()
-        return json.loads(lines[-1])
+        state = Path(os.environ["XDG_STATE_HOME"])  # the folder the runs used: whichever test module set it last
+        return json.loads((state / "designing-the-smallest-version/log.jsonl").read_text().splitlines()[-1])
 
     def test_the_log_says_where_it_wrote_and_that_nothing_was_replaced(self):
         f = self.out("log-new.json")
