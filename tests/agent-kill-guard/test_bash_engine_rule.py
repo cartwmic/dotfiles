@@ -100,6 +100,9 @@ class Refused(unittest.TestCase):
             "loop-engine event --run %s go" % LEAD, "loop-engine event --run=%s go" % LEAD, "loop-engine terminate --run-id %s" % LEAD, "loop-engine append --id %s note '{}'" % LEAD,
             "loop-engine --run %s event go" % LEAD, "loop-engine -- terminate %s" % LEAD, "loop-engine -j -- event %s go" % LEAD,
             "loop-engine -d /x/y.db event %s go" % LEAD, "loop-engine --db /x/y.db event %s go" % LEAD, "loop-engine -c c.toml terminate %s" % LEAD,
+            "loop-engine --human terminate --run=%s" % LEAD, "loop-engine --machine-readable event --run-id=%s go" % LEAD, "loop-engine event --run=%s --event go --format json" % LEAD,
+            "loop-engine terminate --run-id=coordinator-loop-1 --output json", "loop-engine append --run=%s --context-kind note --context-data '{}'" % LEAD,
+            "loop-engine start --provider lean-change --initial-input '{}' --id=%s" % LEAD, "loop-engine --provider-config p.toml --provider-timeout-ms 5 event %s go" % LEAD,
             "loop-engine --config-path=c.toml event %s go" % LEAD, "loop-engine --database-path /x.db event %s go" % LEAD,
         ]:
             with self.subTest(text=text):
@@ -117,14 +120,15 @@ class Refused(unittest.TestCase):
 
     def test_a_flag_the_table_lacks_cannot_hide_the_id(self):
         """An unknown flag may take the next word, so the id cannot be placed: a lead's or the coordinator's id anywhere in a write command refuses it."""
-        for text in ["loop-engine --weird event %s go" % LEAD, "loop-engine --weird x event %s go" % LEAD, "loop-engine event --weird %s go" % LEAD,
+        for text in ["loop-engine --weird event --run=%s go" % LEAD, "loop-engine --weird terminate --run-id=%s" % LEAD, "loop-engine start --weird --id=%s p '{}'" % LEAD,
+                     "loop-engine --weird event %s go" % LEAD, "loop-engine --weird x event %s go" % LEAD, "loop-engine event --weird %s go" % LEAD,
                      "loop-engine event --weird x %s go" % LEAD, "loop-engine terminate --weird=1 %s" % LEAD, "loop-engine start --weird x p '{}' --id %s" % LEAD]:
             with self.subTest(text=text):
                 self.assertTrue(refused(text))
 
     def test_an_id_the_hook_cannot_read_is_refused_and_says_so(self):
         for text in ["loop-engine event $RUN go", "loop-engine event \"$RUN\" go", "loop-engine event ${RUN} go", "loop-engine terminate $(cat run.id)", "loop-engine append `cat id` n '{}'",
-                     "loop-engine event lead-* go", "loop-engine event lead-a-$N go", "loop-engine start p '{}' --id \"$RUN\"", "RUN=lead-a-1; loop-engine event $RUN go"]:
+                     "loop-engine event lead-* go", "loop-engine event lead-a-$N go", "loop-engine --human event $RUN go", "loop-engine event --format json --run=$RUN go", "loop-engine --weird event --run=$RUN go", "loop-engine start p '{}' --id \"$RUN\"", "RUN=lead-a-1; loop-engine event $RUN go"]:
             with self.subTest(text=text):
                 found = verdict(text)
                 self.assertEqual(found[0] if found else None, "bash_engine")

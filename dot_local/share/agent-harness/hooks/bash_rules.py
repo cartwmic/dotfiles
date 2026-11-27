@@ -497,12 +497,12 @@ FLAG_ROWS = {
     ("k9s", ""): "context=,kubeconfig=",
     ("helm", ""): "kube-context=,kubeconfig=",
     ("ci-main-status", ""): "merge-gate,pr=,tip,all,owner-approved=",
-    # loop-engine: the parser takes more than its help lists, found by running it on a catalog that does not exist: `-d`, `--db`, `--database-path` for the catalog, `-c`, `--config-path`
-    # for the config, and `--run`, `--run-id` or `--id` for the run id, in any position (before or after the verb). The options below are read before the verb; each verb's row adds its own.
-    ("loop-engine", ""): "j:json,d:db=,database=,database-path=,c:config=,config-path=,timeout-ms=,h:help,V:version,run=,run-id=,id=",
-    ("loop-engine", "start"): "label=,provider=,input=",
-    ("loop-engine", "append"): "record-id=,kind=,data=",
-    ("loop-engine", "event"): "advice-exception=,override=,event=",  # the engine's own `--override JSON` is not the hook's way past (BASH_ENGINE_OVERRIDE)
+    # loop-engine: its parser takes every option in any position, before or after the verb, and takes more than its help lists (read from its source and run on a catalog that does not exist):
+    # `-d`, `--db`, `--database-path` for the catalog, `-c`, `--config-path`, `--provider-config` for the config, and `--run`, `--run-id` or `--id` for the run id. The engine's own
+    # `--override JSON` is not the hook's way past (BASH_ENGINE_OVERRIDE).
+    ("loop-engine", ""): ("j:json,machine-readable,human,compact,view=,format=,output=,d:db=,database=,database-path=,c:config=,config-path=,provider-config=,timeout-ms=,provider-timeout-ms=,"
+                          "provider-timeout=,h:help,V:version,provider=,input=,initial-input=,lifecycle=,label=,kind=,context-kind=,data=,context-data=,record-id=,event=,advice-exception=,"
+                          "override=,run=,run-id=,id="),
     ("mise", ""): "C:cd=,E:env=,j:jobs=,q:quiet,v:verbose,y:yes,no-config,no-env,no-hooks,raw,locked,silent,h:help",
     ("mise", "exec"): "c:command=,j:jobs=,allow-env=,allow-net=,allow-read=,allow-write=,deny-all,deny-env,deny-net,deny-read,deny-write,fresh-env,no-deps,raw,secrets=,secrets-all,"
                       "h:help,q:quiet,v:verbose,y:yes,locked,silent",
@@ -1454,25 +1454,35 @@ def _run_kind(word):
     return "coordinator" if COORDINATOR_RUN.fullmatch(word) else None
 
 
+def _attached(words):
+    """The values of `--run=ID`, `--run-id=ID` and `--id=ID` words (read one word at a time through the flag table): they name the run whatever other flag the table lacks, so the whole-word fallback reads them too."""
+    found = []
+    for word in words:
+        if word.startswith("-") and "=" in word:
+            one = normalise([("loop-engine", "")], [word])
+            found += [v for name in ("run", "run-id", "id") for v in one.values(name)]
+    return found
+
+
 def _engine_write(words):
-    """(verb, the words that can be the run id, whether they are exactly the id's place) of a `loop-engine` write, else None. A write names its run by a flag (`--run`, `--run-id`, `--id`, before or after the verb)
+    """(verb, the words that can be the run id, the words that are exactly the id's place) of a `loop-engine` write, else None. A write names its run by a flag (`--run`, `--run-id`, `--id`, before or after the verb)
     or else as the first word after the verb (`start` names it only by flag), after every flag the engine takes in any spelling (FLAG_ROWS). A flag the table lacks may take the next word, so the id cannot be
     placed: then every word of the command is a candidate."""
     top = normalise([("loop-engine", "")], words[1:], until_positional=True)
     if top.unknown:
         verb = next((w for w in words[1:] if w in ENGINE_WRITES), None)
-        return (verb, words[1:], False) if verb else None
+        return (verb, words[1:] + _attached(words[1:]), _attached(words[1:])) if verb else None
     verb = top.positional[0] if top.positional else None
     if verb not in ENGINE_WRITES:
         return None
     tail = top.tail if top.tail or len(top.positional) < 2 else top.positional[1:]  # `loop-engine -- event ID E`: after the dashes everything is a plain word
     read = normalise([("loop-engine", ""), ("loop-engine", verb)] if ("loop-engine", verb) in FLAG_ROWS else [("loop-engine", "")], tail)
     if read.unknown:
-        return verb, tail, False
+        return verb, tail + _attached(tail), _attached(tail)
     named = [v for flags in (top, read) for name in ("run", "run-id", "id") for v in flags.values(name)]
     if named or verb == "start":
-        return verb, named, True
-    return verb, read.positional[:1], True
+        return verb, named, named
+    return verb, read.positional[:1], read.positional[:1]
 
 
 def bash_engine_rule(walk, ctx):
@@ -1482,10 +1492,10 @@ def bash_engine_rule(walk, ctx):
         write = _engine_write(cmd.words)
         if not write:
             continue
-        verb, candidates, exact = write
+        verb, candidates, placed = write
         kinds = {w: _run_kind(w) for w in candidates}
         kind = next((k for k in kinds.values() if k), None)
-        unread = next((w for w in candidates if exact and UNREADABLE_ID.search(w)), None) if not kind else None
+        unread = next((w for w in placed if UNREADABLE_ID.search(w)), None) if not kind else None
         if not kind and not unread:
             continue
         reason = next((w.partition("=")[2].strip() for w in reversed(cmd.assigns) if w.partition("=")[0] == ENGINE_OVERRIDE), "")
