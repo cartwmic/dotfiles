@@ -18,7 +18,7 @@ SHIM = Path(__file__).resolve().parents[2] / ".chezmoitemplates/op-shim-connect"
 FAKE_TOKEN = "ops_fake-token-for-the-shim-test"  # a stand-in service-account token; never a real one
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 MARKERS = {  # one per agent shell marker the shim reads; each is set to a non-empty value
-    "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "T3CODE_THREAD_ID": "thread-1", "HERDR_ENV": "1",
+    "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "T3CODE_THREAD_ID": "thread-1",
     "CODEX_SANDBOX": "seatbelt", "CODEX_THREAD_ID": "019a-test",
 }
 

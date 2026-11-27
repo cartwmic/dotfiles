@@ -35,7 +35,7 @@ CONNECT_TIMEOUT_SECONDS=4
 
 # Is this an agent shell? Any name other than the zsh one is (Pi's bash tool, Retro's PATH). The zsh name is an agent when
 # one of these markers is set and not empty: CLAUDECODE and CLAUDE_CODE_ENTRYPOINT (Claude Code), T3CODE_THREAD_ID (a T3
-# thread), HERDR_ENV (a herdr pane), CODEX_THREAD_ID (Codex, sandboxed or not: it is set in every shell Codex runs),
+# thread), CODEX_THREAD_ID (Codex, sandboxed or not: it is set in every shell Codex runs),
 # CODEX_SANDBOX (Codex's seatbelt sandbox, seen as "seatbelt"). A terminal started inside one of these apps is classed as
 # an agent. Easy to extend here.
 agent_shell() {
@@ -44,7 +44,7 @@ agent_shell() {
     *) return 0 ;;
   esac
   [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] || [ -n "${T3CODE_THREAD_ID:-}" ] \
-    || [ -n "${HERDR_ENV:-}" ] || [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_SANDBOX:-}" ]
+    || [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_SANDBOX:-}" ]
 }
 
 # Does this call take no file path? Only these subcommands: read, whoami, item get|list, vault list, account list. A
