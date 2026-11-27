@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 from test_coverage import DOC, PROFILES, covers
-import source_tree  # noqa: E402  (test_coverage has put tests/lib on the path)
+import source_tree  # noqa: E402  (test_coverage has put tests/support on the path)
 
 REPO = Path(__file__).resolve().parents[2]
 SYSTEMS = ("linux", "darwin", "windows")

@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_coverage import PROFILES, managed  # noqa: E402
-import source_tree  # noqa: E402  (test_coverage has put tests/lib on the path)
+import source_tree  # noqa: E402  (test_coverage has put tests/support on the path)
 
 REPO = Path(__file__).resolve().parents[2]
 DOC = REPO / "docs/gate-coverage.md"
