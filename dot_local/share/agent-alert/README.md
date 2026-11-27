@@ -58,33 +58,22 @@ after a sequence number, unchanged; without `--since` it starts after your last
 `ack`. [SPEC.md](./SPEC.md#commands) has the commands and
 [exit codes](./SPEC.md#exit-codes).
 
-### Watch the inbox in a pane
+### Watch the inbox
 
-The core has no follow command and no daemon. To watch the inbox in a Herdr pane,
-run the system `tail -F` there yourself; the pane is only a view. Pick the pane
-(`herdr pane list`), keep its id in `PANE`, and start the follower in it:
-
-```sh
-herdr pane run "$PANE" 'tail -n 20 -F "$HOME/.local/share/coordinator/inbox.jsonl"'
-```
-
-The inbox is append-only, so `tail -F` never loses its place, and it starts by
-showing the last 20 lines.
+The core has no follow command and no daemon. To watch the inbox, run the system
+`tail -n 20 -F "$HOME/.local/share/coordinator/inbox.jsonl"` yourself, in any
+terminal. The inbox is append-only, so `tail -F` never loses its place, and it
+starts by showing the last 20 lines.
 
 ### Wait for the next event
 
-Say `NEXT` is one more than the `seq` of the last event you handled. This blocks
-until the pane shows a line for that sequence number, or fails after 30 seconds:
-
-```sh
-herdr pane wait-output "$PANE" --source recent-unwrapped --timeout 30000 --regex '^\{"version":1,"seq":'"$NEXT"',.*\}$'
-```
-
-The expression is `^\{"version":1,"seq":N,.*\}$` ([SPEC.md](./SPEC.md#waiting-for-one-event-line)).
+Say `NEXT` is one more than the `seq` of the last event you handled. A watcher
+that matches one line at a time can wake on the expression
+`^\{"version":1,"seq":N,.*\}$` with `N` set to `NEXT`
+([SPEC.md](./SPEC.md#waiting-for-one-event-line)).
 A match is a wake-up: the expression cannot validate JSON, so the reader must
-parse the line and acknowledge only parsed events. A pane that is not running the
-follower never satisfies the wait; read the inbox with `tail` instead, which needs
-no pane.
+parse the line and acknowledge only parsed events. A watcher that is not
+following the inbox never matches; read the inbox with `tail` instead.
 
 A coordinator should also read the inbox on its own schedule with
 `agent-alert tail`, since a wait can time out and a ring can be lost.
@@ -100,8 +89,8 @@ are not events and accepts kinds it does not know. It is shown in
 **A source** is any program that runs `agent-alert emit` with a worker and a kind
 for each event it is told about. Follow the [source contract](./SPEC.md#source-contract);
 the [worked source example](./SPEC.md#a-source-30-lines-or-fewer) is
-`examples/source-example.py`, a stand-in for an adapter to another multiplexer
-that uses nothing from Herdr. Put a real adapter in `adapters/<name>/`, find the
+`examples/source-example.py`, a stand-in for an adapter to a terminal multiplexer.
+Put a real adapter in `adapters/<name>/`, find the
 core as `../../core/agent-alert` from there, and add a section here.
 
 **A sink** is a program that reads one event on standard input and nudges the
@@ -250,5 +239,5 @@ repository root:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s dot_local/share/agent-alert/tests
 ```
 
-They never apply anything and never touch the live Herdr, home or `claude` (the pane procedure tests start a scratch Herdr server); see
+They never apply anything and never touch the live home or `claude`; see
 the test module headers for what each runs.

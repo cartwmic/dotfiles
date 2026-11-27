@@ -10,6 +10,8 @@
 .local/bin/__pycache__/**
 .local/share/session-recap/__pycache__
 .local/share/session-recap/__pycache__/**
+.local/share/workstream-rank/__pycache__
+.local/share/workstream-rank/__pycache__/**
 .local/share/agent-alert/tests/**
 .local/share/passage-review/test_passage_review.py
 .pi/agent/extensions/notify-owner/*.test.*

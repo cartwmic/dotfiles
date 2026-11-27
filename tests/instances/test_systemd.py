@@ -129,7 +129,7 @@ class Scratch:
         self.bin = self.base / "bin"
         write_exec(self.bin / "systemctl", STUB_SYSTEMCTL)
         self.tools = self.base / "tools"
-        for tool in ("node", "herdr", "op", "git"):
+        for tool in ("node", "op", "git"):
             write_exec(self.tools / tool, "#!/bin/sh\nexit 0\n")
         self.co = self.base / "co"
         write_exec(self.co / "src" / "coordinatord" / "main.ts", "")
@@ -414,9 +414,9 @@ class MatrixTests(unittest.TestCase):
 
     def test_a_tool_missing_from_the_daemons_path_is_not_ready(self):
         self.s.have_config()
-        (self.s.tools / "herdr").unlink()
+        (self.s.tools / "op").unlink()
         self.s.run(enabled=True)
-        self.assertIn("herdr-on-PATH", self.s.output())
+        self.assertIn("op-on-PATH", self.s.output())
         self.assertCalls([])
 
     def test_a_flag_that_is_not_true_or_false_does_nothing(self):
