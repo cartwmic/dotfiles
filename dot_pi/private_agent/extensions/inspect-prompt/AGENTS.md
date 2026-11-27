@@ -33,29 +33,27 @@ both focused tests and an actual editor receipt. Leave Herdr's non-Pi
 
 ## Validation
 
-From the chezmoi source root, run the focused tests and both private-session
-journeys after edits to snapshot or shortcut behavior:
+From the chezmoi source root, run the focused tests and the private-session
+journey after edits to snapshot or shortcut behavior:
 
 ```sh
 (cd dot_pi/private_agent/extensions/inspect-prompt && node --test)
 python3 dot_pi/private_agent/extensions/inspect-prompt/scenario.py
-python3 dot_pi/private_agent/extensions/inspect-prompt/herdr-scenario.py
 ```
 
 `scenario.py` uses installed Pi, a scripted provider, a dummy editor, and a
 private Herdr client. Its shortcut must reach Pi through that client. Inspect
 its outcome and editor receipts; a unit test of `buildConversationSnapshot`
-alone cannot prove the user path. `herdr-scenario.py` checks non-Pi pane
-navigation and `prefix+e` independently. The private Pi journey currently
+alone cannot prove the user path. The private Pi journey currently
 exercises only `/inspect-session`. For an `/inspect-prompt` change, extend that
 isolated journey or collect an equivalent real Pi TUI command-to-dummy-editor
 receipt. Check assembled prompt content, editor return, and no submitted user
 query before calling that path validated.
 
-`scenario.py` pins Pi 0.87.1 and Herdr 0.9.1; `herdr-scenario.py` pins Herdr
-0.9.1. A version mismatch reports BLOCKED before testing. Check the upgraded
-Pi layout and Herdr key route, adapt the pins and fixtures after verifying
-compatibility, then rerun. A BLOCKED result is no validation.
+`scenario.py` pins Pi 0.87.1 and Herdr 0.9.1. A version mismatch reports
+BLOCKED before testing. Check the upgraded Pi layout and Herdr key route,
+adapt the pins and fixtures after verifying compatibility, then rerun. A
+BLOCKED result is no validation.
 
 Before any separately approved rollout, preview the exact worktree source from
 the checkout root:
