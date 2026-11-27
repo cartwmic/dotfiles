@@ -1,7 +1,7 @@
 # session-recap
 
-Portable stdin-to-command generation and local recap history, independent of Pi
-or Herdr. Python 3.11+ is required. The wrapper selects `SESSION_RECAP_PYTHON`,
+Portable stdin-to-command generation and local recap history, independent of Pi.
+Python 3.11+ is required. The wrapper selects `SESSION_RECAP_PYTHON`,
 then compatible `python3` on PATH, then the user mise shim, in that order.
 `SESSION_RECAP_IMPLEMENTATION` optionally selects an alternate Python script
 for a wrapper invocation; otherwise the maintained installed implementation is used.
@@ -203,8 +203,8 @@ bulk rewritten or deleted.
 The Pi-specific `prepare`/`publish`/`prompt` commands are retired and rejected
 before backend invocation or storage mutation. Existing prepared and current
 prompt files remain untouched and are not listed as recap history. Published
-legacy recaps remain readable. Pi prompt/recap ownership and native Herdr
-identity/membership belong to their respective adapters, not this CLI.
+legacy recaps remain readable. Pi prompt/recap ownership and native
+identity/membership belong to the adapters that publish them, not this CLI.
 
 ## Validation and deployment
 

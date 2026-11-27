@@ -13,19 +13,20 @@ A request with no T3 thread, or a thread with no workstream above it, is shown i
 Costs are analyze.py's: list price per token kind, not subscription billing.
 """
 import json
+import os
 import sqlite3
-import urllib.parse
+import sys
 from collections import defaultdict
 
 import analyze
 
+# the walk up the thread tree and the read-only open are shared with workstream-rank (one way to do it)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'workstream-rank'))
+from t3_lineage import nearest, parent_from_payload, readonly  # noqa: E402
+
 NO_THREAD = '(unmapped) no T3 thread'
 NO_WORKSTREAM = '(unmapped) T3 thread, no ledger workstream'
 UNMAPPED = (NO_THREAD, NO_WORKSTREAM)
-
-
-def readonly(path):
-    return sqlite3.connect('file:%s?mode=ro' % urllib.parse.quote(path), uri=True)
 
 
 def load_t3(path):
@@ -33,7 +34,7 @@ def load_t3(path):
     db = readonly(path)
     parent, title, session_thread = {}, {}, {}
     for thread_id, name, payload in db.execute('select thread_id, title, payload_json from orchestration_v2_projection_threads'):
-        parent[thread_id] = (json.loads(payload).get('lineage') or {}).get('parentThreadId')
+        parent[thread_id] = parent_from_payload(payload)
         title[thread_id] = name
     for (payload,) in db.execute('select payload_json from orchestration_v2_projection_provider_threads'):
         d = json.loads(payload)
@@ -58,13 +59,8 @@ def load_ledger(path):
 
 def workstream_of(thread, parent, ledger):
     """Label of the nearest ledger workstream at or above the thread, or None."""
-    seen = set()
-    while thread and thread not in seen:
-        if thread in ledger:
-            return ' / '.join(ledger[thread])
-        seen.add(thread)
-        thread = parent.get(thread)
-    return None
+    names = nearest(thread, parent, ledger)
+    return ' / '.join(names) if names else None
 
 
 def root_of(thread, parent):

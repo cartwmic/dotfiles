@@ -117,7 +117,7 @@ def main():
             (tools / "jq").symlink_to(shutil.which("jq"))
             # No inherited Pi roots or real-home XDG directories can escape the sandbox.
             env = {k: v for k, v in os.environ.items()
-                   if not k.startswith(("PI_", "MISE_", "XDG_", "HERDR_", "NODE_"))
+                   if not k.startswith(("PI_", "MISE_", "XDG_", "NODE_"))
                    and not any(x in k for x in ["TOKEN", "API_KEY", "_MISE_"])}
             env.update(HOME=str(home), PATH=f"{tools}:{Path(node).parent}:/usr/bin:/bin",
                        XDG_CONFIG_HOME=str(home / ".config"), XDG_DATA_HOME=str(home / ".local/share"),

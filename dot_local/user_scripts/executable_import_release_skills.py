@@ -60,7 +60,6 @@ CRATE_REFERENCE_DIRS = ("docs", "data")
 ROOT_REFERENCES = {
     "using-loop-engine": (
         "agent-usage.md",
-        "operational-ux-capture.schema.json",
         "operational-ux-contracts.md",
         "PRD.md",
     ),

@@ -35,7 +35,7 @@ def main():
         return 2
     print("sshHosts:\n  sshPhone:\n"
           f"    wgAddress: {wg}\n    lanAddress: {lan}\n    user: {args.user}")
-    print("\nKeep the old entry until the candidate's direct SSH/Herdr path works.", file=sys.stderr)
+    print("\nKeep the old entry until the candidate's direct SSH path works.", file=sys.stderr)
     return 0
 
 
