@@ -90,7 +90,6 @@ python3 scripts/ci-par.py \
   tests/mcp-ticket-lookup \
   'dot_local/share/session-recap:test_*.py' \
   'dot_local/share/passage-review:test_*.py' \
-  dot_local/share/agent-alert/tests \
   dot_local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts \
   dot_local/share/agent-harness/canonical/skills/minimizing-prompt-compat-edits/tests \
   termux/tests \

@@ -11,3 +11,4 @@ dot_pi/private_agent/extensions/learnings-monitor/runtime.test.mjs: loads the ex
 dot_pi/private_agent/extensions/learnings-monitor/worker.test.mjs: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
 dot_pi/private_agent/extensions/standing-reminder/index.test.ts: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
 tests/pi-patches/apply_pi_installed.test.mjs: skips itself unless Pi 1.5.0 is installed from the network and a helper path is given (see its header)
+dot_local/share/agent-alert/tests: builds a deployed copy with `chezmoi archive`, which fails on the runner for want of chezmoi profile data (issue 988)
