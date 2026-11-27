@@ -83,7 +83,7 @@ Look for a record of owner-required guarantees versus agent-chosen mechanisms (d
 Run the suite and record its wall time; if it cannot run, the verdict is `unknown` with the reason, plus a timing of one real command. `rg -n 'sleep\(|time\.sleep|setTimeout|Thread\.sleep'` in tests finds fixed waits. Note serial tests that could run in parallel, a fixture rebuilt per test, and whether each command has one test that starts it for real.
 
 ## 16. Built to last
-Duplicated logic across files, workarounds, special cases bolted on, "clean up later" notes, unused code left behind, structure that no longer fits. On code no change is touching these are "when next touched:" notes. Local style and naming belong to desloppify.
+Duplicated logic across files, workarounds, special cases bolted on, "clean up later" notes, unused code left behind, structure that no longer fits. On code no change is touching these are "when next touched:" notes, except in Loop Engine, where they are findings to fix now. Local style and naming belong to desloppify.
 
 ## Analyzer ladder
 Use one only if it is already installed and configured in the repo; recommend the one for the stack otherwise.

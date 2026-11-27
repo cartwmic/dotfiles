@@ -39,7 +39,7 @@ The authority is `~/.local/share/agent-harness/design-principles.md` (or the cop
 
 **6. Write findings.** One breach per finding (F1, F2, …), with the fields in the template.
 - **blocking**: it has an obligation (the section and the sentence the code plainly misses), evidence (`file:line`, or a command and what it printed), a consequence someone hits in ordinary use at this repo's bar, and a component. Missing any one makes it a note.
-- **note**: everything else worth saying. A breach the file scopes away from existing code (a Gate on an old component; the do-not-retrofit parts of §14 and §16) is always a note that starts "when next touched:".
+- **note**: everything else worth saying. A breach the file scopes away from existing code (a Gate on an old component; the do-not-retrofit parts of §14, and §16 outside Loop Engine) is always a note that starts "when next touched:". In Loop Engine, a §16 breach in existing code is a finding to fix now, not a note.
 - A heuristic finding (a size ratio, a mock count) states its threshold and why that threshold.
 - Each finding ends with one fix sentence, or a deferral naming the trigger that would make it worth fixing. A fix that adds machinery the need does not require fails §4.
 - Never quote a secret's value; cite `file:line` only.
@@ -66,7 +66,7 @@ Also list **removable machinery**: code, config, layers or checks that could be 
 
 ## Principles table
 | § | Title (from the file) | Verdict | Evidence |
-<One row per numbered section. Verdicts: pass, partial, fail, n/a, unknown (the repo cannot show it either way; say what record would). partial and unknown are specific to this audit. The verdict states the fact; a breach the file scopes away is still fail, and its finding is a "when next touched:" note. Evidence: a short cell (`file:line`, the command run, "read", "sampled N of M", "ran"); details go in the findings, cited by id.>
+<One row per numbered section. Verdicts: pass, partial, fail, n/a, unknown (the repo cannot show it either way; say what record would). partial and unknown are specific to this audit. The verdict states the fact; a breach the file scopes away is still fail, and its finding is a "when next touched:" note (in Loop Engine, a §16 breach in existing code is a finding to fix now). Evidence: a short cell (`file:line`, the command run, "read", "sampled N of M", "ran"); details go in the findings, cited by id.>
 
 ## Findings
 ### F1. <short title>
