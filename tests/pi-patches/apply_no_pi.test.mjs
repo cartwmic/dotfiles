@@ -13,7 +13,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const PATCHES = join(ROOT, "dot_local/share/pi-patches");
 const SCRIPT = join(ROOT, "dot_local/user_scripts/executable_apply_pi_patches.sh");
 // Pinned, not derived from the directory: a patch that goes missing from the loop must fail here, and a new one must be added on purpose.
-const NAMES = ["anthropic-idle-watchdog", "ask-user-question-render", "btw-native-session", "cursor-provider", "custom-message-marker", "empty-turn-retry",
+const NAMES = ["anthropic-idle-watchdog", "ask-user-question-render", "btw-native-session", "custom-message-marker", "empty-turn-retry",
 	"headless-extension-drain", "prompt-start-race", "response-visibility", "settlement-abort", "standing-reminder-origin"];
 
 function files(dir) {
@@ -64,39 +64,6 @@ test("check with Pi absent: btw-native-session and response-visibility cannot ve
 			assert.match(r.stdout + r.stderr, /Pi is not installed; cannot verify/, name);
 		}
 		assert.deepEqual(files(s.home), [], "no file written under the throwaway HOME");
-	} finally { s.cleanup(); }
-});
-
-for (const profile of ["personal", "axon-work-computer"]) {
-	test(`check with the retired cursor-provider's @marckrenn tree absent (${profile}): exit 0, nothing written`, () => {
-		const s = sandbox();
-		try {
-			const r = spawnSync(process.execPath, [join(PATCHES, "cursor-provider", "patch.mjs"), "--check"], { encoding: "utf8", env: { ...s.env, PI_CHEZMOI_PROFILE: profile } });
-			assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}${r.stderr}`);
-			assert.match(r.stdout, /retired, so absent is the desired state/);
-			assert.deepEqual(files(s.home), [], "no file written under the throwaway HOME");
-		} finally { s.cleanup(); }
-	});
-}
-
-test("check with a partly removed @marckrenn tree: a leftover splice or dropped cursor.ts still fails, a clean remainder passes", () => {
-	const s = sandbox();
-	try {
-		const core = join(s.home, ".pi", "agent", "npm", "node_modules", "@marckrenn", "pi-sub-core");
-		const run = () => spawnSync(process.execPath, [join(PATCHES, "cursor-provider", "patch.mjs"), "--check"], { encoding: "utf8", env: { ...s.env, PI_CHEZMOI_PROFILE: "personal" } });
-		// pi-sub-bar and pi-sub-shared are gone, so no target set is complete; only pi-sub-core remains.
-		mkdirSync(join(core, "src", "providers", "impl"), { recursive: true });
-		writeFileSync(join(core, "src", "providers", "registry.ts"), "export const x = 1;\n");
-		let r = run();
-		assert.equal(r.status, 0, `clean remainder: exit ${r.status}\n${r.stdout}${r.stderr}`);
-		writeFileSync(join(core, "src", "providers", "registry.ts"), "// chezmoi-pi-patch:cursor-provider\nexport const x = 1;\n");
-		r = run();
-		assert.equal(r.status, 1, "a spliced registry.ts in a partial tree fails");
-		assert.match(r.stdout + r.stderr, /partial tree/);
-		writeFileSync(join(core, "src", "providers", "registry.ts"), "export const x = 1;\n");
-		writeFileSync(join(core, "src", "providers", "impl", "cursor.ts"), "// dropped\n");
-		r = run();
-		assert.equal(r.status, 1, "the dropped cursor.ts in a partial tree fails");
 	} finally { s.cleanup(); }
 });
 
