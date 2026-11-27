@@ -1,0 +1,8 @@
+# Pinned release downloads for CI (scripts/ci-install-tool.sh reads this file; .github/workflows/ci.yml calls the script).
+# Columns: tool, version, platform (<os>-<cpu> as the script names it), GitHub repository, release file, sha256 of that file, path of the program inside it.
+# To move a pin: change the version, the file name and the sha256 together. The sha256 is the line for that file in the release's own checksum list
+# (chezmoi: chezmoi_<version>_checksums.txt; mise: SHASUMS256.txt). tests/mise/test_chezmoi_pin.py keeps the chezmoi version equal to the mise config pin.
+chezmoi v2.71.1 linux-amd64  twpayne/chezmoi chezmoi_2.71.1_linux_amd64.tar.gz       e1fb16c962644d57f4d451c324aa86163d00faf5d035500f41fb48943a66dfed chezmoi
+chezmoi v2.71.1 darwin-arm64 twpayne/chezmoi chezmoi_2.71.1_darwin_arm64.tar.gz      9fad1201c328428634b8a086f767df0dfe6dd3ea1128a2a7c45bc0b16641e294 chezmoi
+mise    v2026.7.18 linux-amd64  jdx/mise mise-v2026.7.18-linux-x64.tar.gz            2cae8dc54812fa60bf652e6ebdc69cfee110660cddb27053f5442fded19dbc7d mise/bin/mise
+mise    v2026.7.18 darwin-arm64 jdx/mise mise-v2026.7.18-macos-arm64.tar.gz          06472a4cf89fb5b698bb24b55e1405e1e241e609e051cdf6da72ac7953b374ef mise/bin/mise
