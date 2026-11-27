@@ -104,6 +104,9 @@ def journey(package, directory, module=False, tui=False, abort=True, patched=Tru
     tracepath=directory/'trace';release=directory/'release'
     (agent/'models.json').write_text(json.dumps({'providers':{'proof':{'baseUrl':f'http://127.0.0.1:{backend.server_port}/v1','api':'openai-completions','apiKey':'dummy-local','models':[{'id':'proof','name':'Proof','reasoning':False,'input':['text'],'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0},'contextWindow':8192,'maxTokens':256}]}}}))
     (agent/'settings.json').write_text(json.dumps({'compaction':{'enabled':False},'retry':{'enabled':False}}))
+    if tui:
+        # Pi 1.5.0 stops the TUI at a "Trust parent folder" dialog for a new folder. The throwaway project folder is trusted here so the TUI reaches the journey.
+        (agent/'trust.json').write_text(json.dumps({str(project):True}))
     env={k:v for k,v in os.environ.items() if not any(x in k for x in ['API_KEY','TOKEN','PI_'])}
     env.update(HOME=str(directory),PI_CODING_AGENT_DIR=str(agent),PROBE_TRACE=str(tracepath),PROBE_RELEASE=str(release),PROBE_PHASE='settled' if settled else 'before',PROBE_DEFERRED='yes' if deferred and not custom else 'no',PROBE_THROW='yes' if throws else 'no',PROBE_CUSTOM=custom or '',TERM='xterm-256color',NO_COLOR='1')
     cli=package/('dist/cli.js' if module else 'dist/bundle/cli.js')
