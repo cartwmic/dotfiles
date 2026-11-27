@@ -277,6 +277,16 @@ class Merge(unittest.TestCase):
                 self.assertIn("checked PR 7, but `gh pr merge` merges PR 5", message)
                 self.assertIn("pr-body-check <repo> <pr>", message)
 
+    def test_the_refusal_sends_a_playbook_edit_to_a_branch_then_merge_pr_and_never_to_merge(self):
+        # The kit's `--merge` runs `gh pr merge` as a child process the hook never sees, so the refusal must not tell anyone to use it.
+        message = check("gh pr merge 12")
+        self.assertIn("a playbook edit is made only by the coordinator (any other session sends it to the coordinator by agent message)", message)
+        self.assertIn("on a branch in a worktree, without `--pr`, then `issue-open`, `pr-open` and `~/git/coordinator/scripts/merge-pr.sh PR`", message)
+        self.assertIn("never add `--merge` to the playbook CLI", message)
+        self.assertIn("goes out at once in its own PR", message)
+        self.assertIn("waits on branch `playbook/batch` for the coordinator's daily digest", message)
+        self.assertNotIn("--pr --merge", message)
+
     def test_the_refusal_names_a_command_that_satisfies_both_gates(self):
         # The command the refusal prints, with <repo>/<pr> filled in, must itself pass the hook.
         message = check("gh pr merge 12")
@@ -389,7 +399,7 @@ class Merge(unittest.TestCase):
 
     def test_the_gated_paths_are_not_gh_commands_the_hook_sees(self):
         for text in ["~/git/coordinator/scripts/merge-pr.sh 440",
-                     "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr --merge",
+                     "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr",
                      "loop_engine_bump.py v0.49.1", "agent_kit_bump.py v1.4.0", "gh pr view 12", "gh pr list", "echo gh pr merge 12",
                      "git merge main"]:
             with self.subTest(text=text):
