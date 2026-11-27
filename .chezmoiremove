@@ -173,3 +173,7 @@ bin/herdr-overview-proof
 # Retired 2026-11-27: the herdr-scenario proof of the Pi prompt inspector, which drove a private herdr session. herdr is dropped as a
 # multiplexer. Prune once every machine has applied.
 .pi/agent/extensions/inspect-prompt/herdr-scenario.py
+
+# Retired 2026-11-27: the scenario.py proof of the Pi prompt inspector. It drove a private herdr session and pinned Pi 0.87.1, so it could not start
+# on the managed Pi. herdr is dropped as a multiplexer. Prune once every machine has applied.
+.pi/agent/extensions/inspect-prompt/scenario.py
