@@ -124,7 +124,7 @@ if name=='ssh':
             finish(output=state['new_public']+'\t'+state['new_address']+'\n')
         finish(output='OK\n')
     if '-G' in args: finish(output='hostname 198.51.100.8\nuser u0_a999\n')
-    command=args[-1]; note('phone ssh '+('config-write' if 'mktemp' in command and 'chezmoi.yaml' in command else 'key-stream' if 'cat >' in command else ('macbook_login' if 'zsh -lic' in command else command[:65])))
+    command=args[-1]; state.setdefault('phone_commands',[]).append(command); note('phone ssh '+('config-write' if 'mktemp' in command and 'chezmoi.yaml' in command else 'key-stream' if 'cat >' in command else ('macbook_login' if 'zsh -lic' in command else command[:65])))
     if command=='true' and not state['ready']: finish(255)
     if 'ssh-keygen -lf ~/.ssh/' in command:
         key=re.search(r'ssh-keygen -lf ~/.ssh/([\w-]+)',command).group(1)
@@ -262,6 +262,23 @@ class PhoneCLITest(unittest.TestCase):
         self.assertEqual(self.state['packages']['com.termux.boot'], 1000)
         self.assertEqual(len([x for x in self.state['calls'] if x.startswith('op read ref')]), 2)
         self.assertIn('phone ssh macbook_login', self.state['calls'])
+        # provision and verify look for the phone's own managed launcher and open a login shell on the Mac:
+        # nothing herdr-shaped is asked of the phone or the Mac.
+        commands = self.state['phone_commands']
+        self.assertTrue(any("test -f ~/bin/resume-ssh" in c for c in commands), commands)
+        self.assertTrue(any("test -x ~/bin/resume-ssh" in c for c in commands), commands)
+        self.assertTrue(any(c.endswith("macbook '/bin/zsh -lic true'") for c in commands), commands)
+        self.assertFalse(any("herdr" in c.lower() for c in commands), commands)
+        self.assertIn("phone -> macbook SSH login shell", done.stdout)
+        self.assertIn("Termux->ssh macbook login shell", pending.stderr)
+        self.assertIn("visible ssh macbook path", done.stdout)
+        # every command run leaves one JSON line: provision refused once (packages), then ran; verify refused, then ran
+        log = [json.loads(x) for x in (self.home / ".local/state/bootstrap-phone/log.jsonl").read_text().splitlines()]
+        self.assertEqual([(r["action"], r["exit"]) for r in log],
+                         [("bootstrap-phone.inspect", 0), ("bootstrap-phone.install", 0),
+                          ("bootstrap-phone.provision", 2), ("bootstrap-phone.provision", 0),
+                          ("bootstrap-phone.verify", 2), ("bootstrap-phone.verify", 0)])
+        self.assertIn("PENDING", log[4]["detail"])
         self.assertFalse(any('uninstall' in x for x in self.state['calls']))
 
     def test_phone_side_1password_choice_is_explicit(self):

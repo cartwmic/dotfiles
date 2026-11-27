@@ -489,6 +489,16 @@ def verify(args):
     print("Operator attested Android/VPN/ntfy/Whisperian/visible ssh macbook path. Reboot and off-LAN tests remain pending until explicitly run.")
 
 
+def record(command, exit_code, detail=""):
+    """One JSON line per command run, so a refused or failed step can be found after the terminal is gone."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "bootstrap-phone"
+    state.mkdir(parents=True, exist_ok=True)
+    line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "action": f"bootstrap-phone.{command}",
+            "exit": exit_code, "detail": detail}
+    with open(state / "log.jsonl", "a") as log:
+        log.write(json.dumps(line) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
@@ -510,7 +520,9 @@ def main():
         {"inspect": inspect, "install": install_apps, "provision": provision, "verify": verify}[args.command](args)
     except (BootstrapError, OSError) as exc:
         print(f"[bootstrap-phone] {exc}", file=sys.stderr)
+        record(args.command, 2, str(exc))
         return 2
+    record(args.command, 0)
     return 0
 
 
