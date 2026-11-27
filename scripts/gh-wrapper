@@ -525,7 +525,10 @@ def layer_flags(read):
     """What a layer is given: ([(long name, value or None)], [positional arguments]) from a parse_flags result, or None when the flags could not be read (an
     unlisted flag, a value flag with no value), so a layer leaves such a call as it is."""
     flags, positionals, unknown, missing = read
-    return None if unknown is not None or missing is not None else (flags, positionals)
+    if unknown is not None or missing is not None:
+        return None
+    helped = last_help(flags)      # gh keeps the last help value, so `--help=false` runs the command: only a true one is a help request
+    return [f for f in flags if f[0] != "help"] + ([("help", None)] if helped else []), positionals
 
 
 def parse_text(args, group, verb):
@@ -663,6 +666,16 @@ def command_name(args):
         _, verb, _ = split_command(args)
         return "%s %s" % (group, verb) if re.match(r"^[a-z][a-z-]*$", verb) else group
     return group if group in NOT_REPO else "unrecognised"
+
+
+def leading_repo(args):
+    """(repo value, the arguments without it) when the call starts with gh's repository flag before the group (`gh -R owner/repo pr merge 5`, `--repo x`,
+    `--repo=x`, `-Rx`, `-R=x`), which gh accepts; else (None, args)."""
+    a = args[0] if args else ""
+    if a in ("-R", "--repo") and len(args) > 2:
+        return args[1], args[2:]
+    m = re.match(r"^(?:--repo=|-R=?)(.+)$", a)
+    return (m.group(1), args[1:]) if m and len(args) > 1 else (None, args)
 
 
 def lookup_alias(real, name):
@@ -974,12 +987,20 @@ def main(argv):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
         import gh_classify
         import gh_layers
-        name = command_name(args) or "unrecognised"
+        name, named, repo = command_name(args), args, None
+        if not name:      # `gh -R x pr merge 5`: gh takes the repository flag before the group, and a rule must see the command. Not for the three commands the rewrite layer edits
+            lead, rest = leading_repo(args)
+            if lead and command_name(rest) in FOR_LAYERS and command_name(rest) not in ("api", "run watch", "pr checks"):
+                name, named, repo = command_name(rest), rest, lead
+        name = name or "unrecognised"
         group, _, verb = name.partition(" ")
         read = group == "search" or verb in READ.get(group, ())
-        parsed = parse_flags(args[1:], *FOR_LAYERS[name]) if name in FOR_LAYERS else None      # the one parse of the call's flags: the classification and the layers share it
+        parsed = parse_flags(named[1:], *FOR_LAYERS[name]) if name in FOR_LAYERS else None      # the one parse of the call's flags: the classification and the layers share it
+        layered = layer_flags(parsed) if parsed else None
+        if layered and named is not args:
+            layered = ([("repo", repo)] + layered[0], layered[1])
         call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args, parsed) if name == "api" else None), budget_on=on,
-                              parsed=layer_flags(parsed) if parsed else None, real=real)
+                              parsed=layered, real=real)
         layers = gh_layers.load(gh_layers.LAYERS if on else gh_layers.ALWAYS)
     except Exception as e:      # a lib that is missing or broken must not stop gh: the layers are an optimisation, the leak-guard check is not
         absent = isinstance(e, ModuleNotFoundError) and e.name in ("gh_classify", "gh_layers")
