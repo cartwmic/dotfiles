@@ -1,7 +1,7 @@
 {{- /*
   Installs the gh wrapper on every desktop profile (personal and axon-work-computer; Termux is out of scope, docs/profiles.md). docs/gh-wrapper.md.
   Writes ~/.local/share/gh-wrapper/bin/gh (scripts/gh-wrapper), ~/.local/share/gh-wrapper/lib/*.py (scripts/gh-wrapper-lib), ~/.config/gh-wrapper/budget
-  (`on` or `off`) and ~/.config/mise/conf.d/gh-wrapper.toml, and removes the leak-guard install this replaces when it carries the old mark.
+  (`on` or `off`), ~/.config/gh-wrapper/policy (`on` on personal, `off` elsewhere: the work rules of lib/gh_policy.py) and ~/.config/mise/conf.d/gh-wrapper.toml, and removes the leak-guard install this replaces when it carries the old mark.
   Local chezmoi data, both optional:
     ghBudget:
       enabled: true|false             # the log, rewrite and budget layers; default true on personal, false on axon-work-computer
@@ -50,6 +50,8 @@ for f in "$lib"/*.py; do
 done
 printf '%s\n' {{ if $on }}on{{ else }}off{{ end }} > "$HOME/.config/gh-wrapper/budget.tmp"
 mv "$HOME/.config/gh-wrapper/budget.tmp" "$HOME/.config/gh-wrapper/budget"
+printf '%s\n' {{ if eq .profile "personal" }}on{{ else }}off{{ end }} > "$HOME/.config/gh-wrapper/policy.tmp"
+mv "$HOME/.config/gh-wrapper/policy.tmp" "$HOME/.config/gh-wrapper/policy"
 installed=1
 if [ -e "$dir/gh" ] && ! grep -qF "$MARK" "$dir/gh"; then
   installed=0

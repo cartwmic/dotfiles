@@ -101,6 +101,10 @@ def build_fixture_repo(build):
     repo = Path(base, "repo")
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
+    # Before the first commit: git runs `git maintenance run --auto` after every commit, and it keeps .git/objects/maintenance.lock
+    # while it runs, so a copy taken meanwhile fails when git removes the lock. With both off, nothing touches the fixture after build().
+    git(repo, "config", "gc.auto", "0")
+    git(repo, "config", "maintenance.auto", "false")
     return repo, build(repo)
 
 

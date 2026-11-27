@@ -26,9 +26,12 @@ MACHINE = {"personal": "personal", "axon-work-computer": "work"}
 ENTRY = {"type": "http", "url": URL, "headers": {"X-Origin": "personal", "X-Thread": "${T3CODE_THREAD_ID:-}"}}
 DEPLOYED = (
     ".local/bin/shx-note-image",
+    ".local/bin/shx-waiting",
     ".local/share/shx/shx.mjs",
     ".local/share/shx/core/domain.mjs",
     ".local/share/shx/core/use_cases.mjs",
+    ".local/share/shx/core/waiting.mjs",
+    ".local/share/shx/waiting.mjs",
     ".local/share/shx/adapters/chromium.mjs",
     ".local/share/shx/vendor/perfect-freehand.mjs",
     ".local/share/shx/vendor/perfect-freehand.LICENSE",
@@ -121,6 +124,12 @@ class AgentAccessTest(unittest.TestCase):
                            env=dict(os.environ, XDG_STATE_HOME=tempfile.mkdtemp()))
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1])["code"], "bad_input")
+
+    def test_waiting_command_runs_from_the_source_wrapper(self):
+        r = subprocess.run([str(ROOT / "dot_local/bin/executable_shx-waiting"), "--nope"], capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, XDG_STATE_HOME=tempfile.mkdtemp()))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("unknown option --nope", r.stderr)
 
     def test_coverage_table_has_no_row_and_the_note_records_the_decision(self):
         doc = PROFILES_DOC.read_text()

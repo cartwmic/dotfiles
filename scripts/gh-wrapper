@@ -517,14 +517,18 @@ def parse_flags(args, group, verb):
 
 # The commands whose parsed flags the layers get (Call.parsed), by the name command_name gives them, and the FLAGS row each is parsed with. A layer reads these
 # flags from the call and keeps no flag table of its own, so scripts/leak-guard-gh-flags regenerates every row and the FlagTables test compares it.
-FOR_LAYERS = {"api": ("api", ""), "run watch": ("run", "watch"), "pr checks": ("pr", "checks")}
+FOR_LAYERS = {"api": ("api", ""), "run watch": ("run", "watch"), "pr checks": ("pr", "checks"), "pr create": ("pr", "create"), "pr new": ("pr", "create"),
+              "pr merge": ("pr", "merge"), "issue create": ("issue", "create"), "issue new": ("issue", "create"), "issue close": ("issue", "close")}
 
 
 def layer_flags(read):
     """What a layer is given: ([(long name, value or None)], [positional arguments]) from a parse_flags result, or None when the flags could not be read (an
     unlisted flag, a value flag with no value), so a layer leaves such a call as it is."""
     flags, positionals, unknown, missing = read
-    return None if unknown is not None or missing is not None else (flags, positionals)
+    if unknown is not None or missing is not None:
+        return None
+    helped = last_help(flags)      # gh keeps the last help value, so `--help=false` runs the command: only a true one is a help request
+    return [f for f in flags if f[0] != "help"] + ([("help", None)] if helped else []), positionals
 
 
 def parse_text(args, group, verb):
@@ -662,6 +666,41 @@ def command_name(args):
         _, verb, _ = split_command(args)
         return "%s %s" % (group, verb) if re.match(r"^[a-z][a-z-]*$", verb) else group
     return group if group in NOT_REPO else "unrecognised"
+
+
+RULE_COMMANDS = tuple(n for n in FOR_LAYERS if n not in ("api", "run watch", "pr checks"))      # the commands the work rules judge; the rewrite layer edits the other three by args[0]
+
+
+def leading_flags(args):
+    """gh reads a flag that stands before the group at the command itself, so `gh -R x pr merge 5 --merge` and `gh --help=false pr merge 5 --merge` are `pr merge`.
+    Returns (the flag arguments, the rest of the command line) when every leading flag is one whose extent is clear (`--name=value`, `-Rvalue`, a cluster of
+    switches, `--help`, `-R x`, `--repo x`), else None: for any other flag nothing here says whether the next argument is its value or the group."""
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        a = args[i]
+        if "=" in a or a == "--help" or (not a.startswith("--") and len(a) > 2):      # --help takes no value
+            i += 1
+        elif a in ("-R", "--repo") and i + 1 < len(args):
+            i += 2
+        else:
+            return None
+    return args[:i], args[i:]
+
+
+def rule_command(args):
+    """(command name, the arguments with the group first and the leading flags after it, parsed or not) of a call whose first argument is a flag, when it is one of
+    RULE_COMMANDS: read exactly when the leading flags are clear, else guessed from the words of the call and left unparsed, so a layer refuses it. None otherwise."""
+    read = leading_flags(args)
+    if read:
+        lead, rest = read
+        name = command_name(rest)
+        return (name, rest[:1] + lead + rest[1:], True) if name in RULE_COMMANDS else None
+    words = [a for a in args if not a.startswith("-")]
+    for name in RULE_COMMANDS:
+        group, verb = name.split()
+        if group in words and verb in words[words.index(group) + 1:]:
+            return name, args, False
+    return None
 
 
 def lookup_alias(real, name):
@@ -973,12 +1012,16 @@ def main(argv):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
         import gh_classify
         import gh_layers
-        name = command_name(args) or "unrecognised"
+        name, named, readable = command_name(args), args, True
+        if not name and args and args[0].startswith("-"):      # a flag before the group: gh reads it at the command, so a rule must see the command
+            name, named, readable = rule_command(args) or ("", args, True)
+        name = name or "unrecognised"
         group, _, verb = name.partition(" ")
         read = group == "search" or verb in READ.get(group, ())
-        parsed = parse_flags(args[1:], *FOR_LAYERS[name]) if name in FOR_LAYERS else None      # the one parse of the call's flags: the classification and the layers share it
+        parsed = parse_flags(named[1:], *FOR_LAYERS[name]) if name in FOR_LAYERS and readable else None      # the one parse of the call's flags: the classification and the layers share it
+        layered = layer_flags(parsed) if parsed else None
         call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args, parsed) if name == "api" else None), budget_on=on,
-                              parsed=layer_flags(parsed) if parsed else None)
+                              parsed=layered, real=real)
         layers = gh_layers.load(gh_layers.LAYERS if on else gh_layers.ALWAYS)
     except Exception as e:      # a lib that is missing or broken must not stop gh: the layers are an optimisation, the leak-guard check is not
         absent = isinstance(e, ModuleNotFoundError) and e.name in ("gh_classify", "gh_layers")

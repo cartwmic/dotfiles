@@ -26,5 +26,19 @@ class RegisterLabels(unittest.TestCase):
         self.assertNotIn("Inputs list of Section 1", SKILL)  # Section 1 is Orientation: it has no Inputs list
 
 
+class DogfoodPath(unittest.TestCase):
+    CHECKLIST = (Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/review-plans/references/review-checklist.md").read_text(encoding="utf-8")
+
+    def test_the_path_names_the_measures_and_the_way_back_for_each_increment(self):
+        self.assertIn("switched on for real use when built", SKILL)
+        self.assertIn("the number that would change course, and the one command that undoes it", SKILL)
+        self.assertIn("An increment never depends on an observation period.", SKILL)
+        self.assertIn("measures and where logged, change-course number, undo command, depends on (steps only), parallel?", SKILL)  # the template line
+
+    def test_the_plan_review_checklist_asks_for_the_same_and_not_for_a_rollout_strategy(self):
+        self.assertIn("Each step is switched on for real use when built", self.CHECKLIST)
+        self.assertNotIn("Rollout and rollback strategy exists", self.CHECKLIST)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "dot_local/share/agent-harness/canonical/skills/using-shartifacts/SKILL.md"
 
 # What the skill must tell an agent, by the exact word it will search for.
-NAMES = ("shx-note-image", "artifact_comments", "watch_artifacts", "stroke", "status", "gap", "cursor",
+NAMES = ("shx-note-image", "shx-waiting", "artifact_comments", "watch_artifacts", "stroke", "status", "gap", "cursor",
          "create_artifact", "update_artifact", "check", "--version", "--out", "--pad", "/view/",
          "current", "ok", "lost", "unchecked", "kind: \"mermaid\"", "kind: \"svg\"", "/api/media",
          "/api/artifacts", "base_version", "409",
@@ -56,6 +56,9 @@ class SkillTest(unittest.TestCase):
                      "shx-note-image check <base-url> <artifact-id>"):
             self.assertIn(form, usage)
         self.assertIn("[--version N] [--out file.png] [--pad 24]", body)
+        waiting = (ROOT / "dot_local/share/shx/core/waiting.mjs").read_text()
+        self.assertIn("shx-waiting [<base-url>] [--file F]... [<page-id>...]", waiting)
+        self.assertIn("shx-waiting [--file F]... [<page-id>...]", body)
         self.assertRegex(body, r"shx-note-image check https://shartifacts\.internal\.cartwmic\.com <artifact-id>")
 
 
