@@ -74,6 +74,13 @@ ESCALATION = (
     "reasons; the command lists them) and refuses an id with no words beside it, so say what each ask or decision is in plain words. "
     "No is an acceptable answer."
 )
+DOGFOOD = (
+    'Dogfood, not trials. No trials, pilots or phased enrolment ("one lead first", "seven days on one repo"): they do not give signal fast '
+    "enough. The quickest path forward is always dogfooding: when a change is built, switch it on for real use. We still log and record "
+    "measures to make decisions as if we were in a trial. So every plan, design and brief names the measures and where they are logged, "
+    "gives the number that would change course, and keeps a one-command way back. No step waits on an observation period. Building in "
+    "small steps is fine when each step is switched on as it lands."
+)
 OLD_LINES = (
     "At the start of a session, confirm with the user when you will use subagents",
     "using your harness's question tool. No is an acceptable answer.",
@@ -143,6 +150,7 @@ class InstructionProfileTests(unittest.TestCase):
         self.assertIn(ESCALATION, (INSTR / "AGENTS.md").read_text())
         self.assertIn(OWNERSHIP, (INSTR / "AGENTS.md").read_text())
         self.assertIn(SUBAGENTS, (INSTR / "AGENTS.md").read_text())
+        self.assertIn(DOGFOOD, (INSTR / "AGENTS.md").read_text())
 
     def test_every_harness_and_profile(self):
         for name, template in TEMPLATES.items():
@@ -170,6 +178,15 @@ class InstructionProfileTests(unittest.TestCase):
                     self.assertEqual(profile == "axon-work-computer", "## Work computer" in text)
                     self.assertEqual(profile == "personal", "## Personal computer" in text)
 
+
+    def test_the_dogfood_rule_is_in_every_render_once(self):
+        # Presence and count only: this pins the text, it does not (and cannot) check that a plan obeys it.
+        for name, template in {**TEMPLATES, "cursor": CURSOR}.items():
+            for profile in ("personal", "axon-work-computer", "termux"):
+                with self.subTest(harness=name, profile=profile):
+                    text = render(template, profile)
+                    self.assertEqual(text.count(DOGFOOD), 1)
+                    self.assertEqual(text.count("Dogfood, not trials."), 1)
 
     def test_personal_seat_table_has_the_computer_use_row(self):
         for name, template in TEMPLATES.items():

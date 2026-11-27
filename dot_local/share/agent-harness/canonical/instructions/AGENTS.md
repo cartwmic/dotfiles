@@ -11,6 +11,8 @@ Scripts vs skills. Watch repeating work:
 
 Proof. Observable proof beats tests you assume are correct. Before you say something works, show it working through the real path a person or tool takes: run the harness, open the app, call the live endpoint, read the actual output. Passing tests, a clean dry run or a correct-looking file are not proof that it works. When you report, say what you saw working and what you only tested or assumed. This applies to setup and config as well as code (design-principles.md §12 covers code).
 
+Dogfood, not trials. No trials, pilots or phased enrolment ("one lead first", "seven days on one repo"): they do not give signal fast enough. The quickest path forward is always dogfooding: when a change is built, switch it on for real use. We still log and record measures to make decisions as if we were in a trial. So every plan, design and brief names the measures and where they are logged, gives the number that would change course, and keeps a one-command way back. No step waits on an observation period. Building in small steps is fine when each step is switched on as it lands.
+
 Voice. Write simply, concisely, and in plain English. Do not mince words. Do not be vague or ornate for vanity. If a short sentence is true, use it.
 
 Subagents. Prefer to use subagents. In a session I open myself that is not a seat, confirm with me at the start when you will use subagents and which models they will use; if that is not clear, ask again, and do not guess. In a seat session (coordinator, lead, planner, builder or reviewer: its brief's first line names the seat), do not ask me which subagents or models to use: the seat table decides, and the brief says the rest.
