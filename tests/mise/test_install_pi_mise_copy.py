@@ -118,7 +118,7 @@ class InstallPiMiseCopyTests(unittest.TestCase):
         self.assertFalse([c for c in calls if c.startswith("mise uninstall")], calls)
 
     def test_pi_resolves_on_the_login_path_after_a_fresh_install(self):
-        # RED before the fix: the installer's entry lands in ~/.pi/agent/bin, so `pi` was "not found" for bash, zsh and Herdr's `pi --session`.
+        # RED before the fix: the installer's entry lands in ~/.pi/agent/bin, so `pi` was "not found" for bash and zsh.
         (done,), _, _ = self.run_task(omarchy_pi=True)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual((self.login, self.link), ("1.2.0", "~/.pi/agent/bin/pi"))
