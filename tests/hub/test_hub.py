@@ -24,6 +24,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 FIXTURE = (Path(__file__).parent / "settings.live-shape.json").read_text()  # a copy of the real ~/.t3/userdata/settings.json
 CLAUDE, CODEX, T3 = ("dot_claude/modify_settings.json.tmpl", "dot_codex/modify_private_config.toml.tmpl",
                      "dot_t3/private_userdata/modify_settings.json.tmpl")
@@ -507,9 +509,9 @@ class ApplyPathTest(unittest.TestCase):
         self.cfg.write_text("data:\n  profile: personal\n  hub:\n    enabled: %s\n  t3Hub:\n    enabled: false\n" % ("true" if on else "false"))
 
     def apply(self, *paths):
-        r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(self.cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.cfg), "--config-format", "yaml",
                             "--destination", str(self.home), "apply", *paths], capture_output=True, text=True,
-                           env=dict(os.environ, HOME=str(self.home)), timeout=120)
+                           env=source_tree.chezmoi_env(self.home), timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def targets(self):
@@ -599,9 +601,9 @@ class CodexTablesInHubBlockTest(unittest.TestCase):
         self.cfg_yaml.write_text("data:\n  profile: personal\n  hub:\n    enabled: %s\n  t3Hub:\n    enabled: false\n" % ("true" if on else "false"))
 
     def apply(self):
-        r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(self.cfg_yaml), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.cfg_yaml), "--config-format", "yaml",
                             "--destination", str(self.home), "apply", str(self.cfg)], capture_output=True, text=True,
-                           env=dict(os.environ, HOME=str(self.home)), timeout=120)
+                           env=source_tree.chezmoi_env(self.home), timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         return self.cfg.read_text()
 
