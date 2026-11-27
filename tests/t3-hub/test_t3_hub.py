@@ -1306,10 +1306,6 @@ collapses {"a":1,"a":2} to {"a":2,...} and the first
             self.assertEqual((CLAUDE_FILE in managed), expect_claude, profile)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # --- agent seat instances, the per-seat settings files, the shared MCP file and the reader helper ---
 
 WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
@@ -2055,3 +2051,7 @@ class HomelabChatSeatTest(unittest.TestCase):
             self.assertEqual(self.run_hook_command(command, ALLOWED_CALL, home=home)[0], 2)
         finally:
             env.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

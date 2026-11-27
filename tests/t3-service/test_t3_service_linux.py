@@ -169,10 +169,6 @@ class DropInShell(unittest.TestCase):
         self.assertEqual(recorded, hashlib.sha256(DROPIN.read_bytes()).hexdigest())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AgentFence(unittest.TestCase):
     """dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf: the agents' parent slice may only be throttled, never made to kill."""
     DROPIN = ROOT / "dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf"
@@ -194,3 +190,7 @@ class AgentFence(unittest.TestCase):
 
     def test_the_service_script_reloads_when_it_changes(self):
         self.assertIn('include "dot_config/systemd/user/app-t3code.slice.d/90-agent-fence.conf"', TEMPLATE.read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()
