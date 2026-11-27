@@ -489,8 +489,41 @@ class QualifiedIds(unittest.TestCase):
             self.assertEqual(done.returncode, 1, ev)
             self.assertIn("is none of path:line", done.stderr)
 
+    def test_the_refusal_names_the_qualified_form_and_the_requirement_row(self):
+        self.assertIn("<label>:F-n", self.x("nonsense").stderr)
+        self.assertIn("R-<n>, <label>:R-<n>", self.x("nonsense", "--target").stderr)
+
     def test_the_bare_forms_still_pass(self):
         self.assertEqual(self.x("F-3; DF-2; U-1").returncode, 0)
+
+
+class RequirementEvidence(unittest.TestCase):
+    """A coupling the product itself requires has no decision behind it: a target X may cite the requirement row."""
+    base = build([("FR1", "DP1"), ("FR2", "DP2")], ["DP1", "DP2"])
+
+    def x(self, evidence, *extra):
+        return run(self.base + "| FR1 | DP2 | the product requires advice to close with the run | %s |\n" % evidence, *extra)
+
+    def test_a_target_x_may_cite_a_requirement_row_bare_or_qualified(self):
+        for ev in ("R-12", "core:R-12", "R-12; src/a.py:3"):
+            done = self.x(ev, "--target")
+            self.assertEqual(done.returncode, 0, (ev, done.stderr))
+
+    def test_a_requirement_row_is_not_as_found_evidence(self):
+        done = self.x("core:R-12")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("run with --target", done.stderr)
+
+    def test_a_bare_path_line_is_still_refused_in_a_target(self):
+        done = self.x("src/a.py:3", "--target")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("a target X needs a reason, not only code", done.stderr)
+
+    def test_a_malformed_requirement_id_is_refused(self):
+        for ev in ("R-", "R12", "Core:R-1", "core:R-1x", "commit:R-1"):
+            done = self.x(ev, "--target")
+            self.assertEqual(done.returncode, 1, ev)
+            self.assertIn("is none of path:line", done.stderr)
 
 
 if __name__ == "__main__":
