@@ -182,7 +182,7 @@ class Pi:
         (agent / 'settings.json').write_text(json.dumps({
             'compaction': {'enabled': False, 'keepRecentTokens': 10, 'reserveTokens': 256},
             'retry': {'enabled': False}}))
-        env = {k: v for k, v in os.environ.items() if not any(x in k for x in ['API_KEY', 'TOKEN', 'PI_', 'HERDR_'])}
+        env = {k: v for k, v in os.environ.items() if not any(x in k for x in ['API_KEY', 'TOKEN', 'PI_'])}
         env.update(HOME=str(directory), PI_CODING_AGENT_DIR=str(agent), PROOF_TRACE=str(self.trace_path),
                    PROOF_HOLDS=str(self.holds), TERM='xterm-256color', NO_COLOR='1', NODE_PATH=str(INSTALLED.parents[1]))
         if race:

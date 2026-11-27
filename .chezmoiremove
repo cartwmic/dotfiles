@@ -173,3 +173,7 @@ bin/herdr-overview-proof
 # Retired 2026-11-27: operational-ux-capture.schema.json in the using-loop-engine skill. Loop Engine v0.71.3 no longer ships the file (nothing read it),
 # and the release importer no longer lists it. A machine that deployed it still has the file, which chezmoi does not delete by itself.
 .local/share/agent-harness/canonical/skills/using-loop-engine/references/operational-ux-capture.schema.json
+
+# Retired 2026-11-27: the herdr-scenario proof of the Pi prompt inspector, which drove a private herdr session. herdr is dropped as a
+# multiplexer. Prune once every machine has applied.
+.pi/agent/extensions/inspect-prompt/herdr-scenario.py
