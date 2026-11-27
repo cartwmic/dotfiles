@@ -1244,11 +1244,11 @@ class RedMainFix(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("run 3 did not pass tests", err)
 
-    def test_the_refusal_is_one_read_before_any_run_is_read(self):
+    def test_the_refusal_is_one_read_of_the_pr_before_its_own_run_is_read(self):
         self.flaky_red_with_unrelated_pr()
         self.gate("--pr", "7", repo="dotfiles")
         calls = self.log.read_text().splitlines()
-        self.assertEqual([c for c in calls if c.startswith("pr view 7")], ["pr view 7 -R cartwmic/dotfiles --json headRefOid,headRefName,commits,body"])
+        self.assertEqual(len([c for c in calls if c.startswith("pr view 7")]), 1, calls)   # the PR is read once, for its commits and description
         self.assertFalse([c for c in calls if c.startswith("run view 3")], calls)   # the PR's own run is never read: no tie, no need
 
     def storycraft_world(self):
@@ -1278,6 +1278,15 @@ class RedMainFix(Fixture):
         self.gate(repo="dotfiles")                # no --pr
         rows = [json.loads(l) for l in log.read_text().splitlines()]
         self.assertEqual([(r["pr"], r["exit"], r["passed_by"]) for r in rows], [(7, 1, None), (7, 0, ["named-red+own-run"]), (None, 1, None)])
+
+    def test_the_log_line_for_a_refusal_says_which_rule_said_no_and_why(self):
+        self.flaky_red_with_unrelated_pr()
+        self.gate("--pr", "7", repo="dotfiles")   # refused: the pin rule (more than the pins step failed) and the named-red rule
+        self.gate(repo="dotfiles")                # no --pr: refused for being red, no rule asked
+        refused = [json.loads(l)["refused"] for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual([r["rule"] for r in refused[0]], ["pin-fix", "named-red+own-run"])
+        self.assertIn("does not name this red", refused[0][1]["why"])
+        self.assertIsNone(refused[1])
 
     def test_dotfiles_pin_fix_still_gets_the_pin_line_not_the_general_one(self):
         """The pin rule runs first: a pin fix is named as one even though its own run would also satisfy the general rule."""

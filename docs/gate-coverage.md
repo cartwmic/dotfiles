@@ -43,7 +43,7 @@ A PR that fits neither is refused: exit 1, the same stdout as without `--pr`, an
 
 No flake ruling is recorded for a GitHub run. Only the coordinator's own journal records one (for the coordinator repo), so a red from a flaky test holds main until the test is fixed (the fix PR names the red as above) or a rerun of that run passes. Making a recorded ruling that unblocks main is a follow-up, not part of this gate.
 
-Every call writes one line to `~/.local/state/ci-main-status/hidden-red.jsonl`; its `passed_by` field names the rule behind a pass on a red main (`pin-fix`, `named-red+own-run`) and is null otherwise. Count them with `jq -c 'select(.passed_by != null)'`. The test is `tests/ci-main-status/test_ci_main_status.py` (`RedMainFix`, `PinFixException`).
+Every call for a repo with a GitHub run writes one line to `~/.local/state/ci-main-status/hidden-red.jsonl`. On a red main with `--pr`, its `passed_by` field names the rule behind a pass (`pin-fix`, `named-red+own-run`) and its `refused` field lists each rule that said no, with the sentence it gave (`rule`, `why`); each is null otherwise. Count passes with `jq -c 'select(.passed_by != null)'` and refusals with `jq -c 'select(.refused != null)'`. The test is `tests/ci-main-status/test_ci_main_status.py` (`RedMainFix`, `PinFixException`).
 
 ## What `pr-body-check REPO PR` also runs
 

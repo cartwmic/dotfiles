@@ -211,7 +211,8 @@ Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
 attempt of each hidden red), cache (warm, cold, dropped:<why>, unwritable), reads (gh calls made), skipped ("newest red", when the
-hidden-red reads were skipped) and passed_by (null, or for a --pr pass on a red main the rules that passed it: "pin-fix", "named-red+own-run"). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
+hidden-red reads were skipped), passed_by (null, or for a --pr pass on a red main the rules that passed it: "pin-fix", "named-red+own-run") and refused
+(null, or for a --pr call that a red main refused, each rule that said no as {"rule", "why"}: the sentence on stderr, kept after the terminal is gone). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
 (for tests).
 
 A failed attempt is untested, not red, when the only jobs in it that did not pass or skip were cancelled because no runner
@@ -305,6 +306,7 @@ LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills/"
 WALK_CAP = 250
 RETRIES = 2                 # a gh call that answers HTTP 502, 503 or 504 is asked again, up to this many more times, 1 s then 2 s apart
 READS = [0]                 # gh calls made by this run; the hidden-red log records the count
+REFUSALS = []               # why each --pr rule refused PR N, as {"rule", "why"}; a refused call's hidden-red log row records them
 CALLER = "ci-main-status"   # every gh call names its caller (GH_CALLER); the gh wrapper's log records it
 URGENT = False              # set by main(): --merge-gate and --tip reads are urgent (GH_URGENT=1)
 
@@ -1231,6 +1233,7 @@ def pin_fix_reason(spec, red, pr):
 
 def refuse(pr, why, kind=RED_FIX):
     print(f"ci-main-status: --pr {pr} is not {kind} for this red: {why}", file=sys.stderr)
+    REFUSALS.append({"rule": "pin-fix" if kind == PIN_FIX else "named-red+own-run", "why": why})
     return None
 
 
@@ -1392,7 +1395,10 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
         code = 1
     reds = ([(newest_red, newest[2])] if newest_red else []) + [(sha, rec) for sha, rec, _ in hidden]
     if code == 1 and reds and pr is not None:
+        del REFUSALS[:]
         allowed, pinned = judge_reds(name, spec, reds, pr)
+        if not allowed and log is not None:
+            log["refused"] = list(REFUSALS)   # which rule said no, and why, for the log: stderr is gone when the terminal is
         if allowed:
             if log is not None:   # the rule behind the pass, for the log: the pin fix for the reds it passed, the named-red rule for the rest
                 log["passed_by"] = (["pin-fix"] if pinned else []) + (["named-red+own-run"] if len(pinned) < len(reds) else [])
@@ -1841,13 +1847,14 @@ def log_hidden(name, spec, action, pr, started, code, lines, rec):
     """One JSON line per call of a repo with a grandfather commit, kept after the terminal is gone, in hidden-red.jsonl: ts (UTC),
     duration_ms, repo, action (status, tip or merge-gate), pr, verdict (GREEN, RED, UNTESTED or ERROR: the first line's word), exit, hidden
     (the sha, run and attempt of each hidden red), cache (warm, cold, dropped:<why> or unwritable), reads (gh calls this call made),
-    skipped ("newest red" when the newest commit was already red and the older ones were not read) and passed_by (null, or for a --pr
-    pass on a red main the rule list: "pin-fix", "named-red+own-run")."""
+    skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
+    pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
+    said no as {"rule", "why"}: the sentence stderr carries)."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
-                "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by")})
+                "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
