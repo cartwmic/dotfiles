@@ -204,7 +204,7 @@ The Pi-specific `prepare`/`publish`/`prompt` commands are retired and rejected
 before backend invocation or storage mutation. Existing prepared and current
 prompt files remain untouched and are not listed as recap history. Published
 legacy recaps remain readable. Pi prompt/recap ownership and native
-identity/membership belong to their respective adapters, not this CLI.
+identity/membership belong to the adapters that publish them, not this CLI.
 
 ## Validation and deployment
 

@@ -6,15 +6,16 @@ This file covers `dot_local/share/session-recap/session_recap.py` and its
 source-local tests. The CLI wrapper is `dot_local/bin/executable_session-recap`;
 the desktop config and prompt templates are in `dot_config/session-recap/`.
 The repo-root `AGENTS.md` controls chezmoi apply and secrets. This directory's
-`README.md` owns human setup and CLI usage. Put Pi recap policy/event handling in the independent Pi recap adapter.
-This store imposes no Pi branch, coverage, provider or identity rules.
+`README.md` owns human setup and CLI usage. Put Pi recap policy/event handling
+in the independent Pi recap adapter. This store imposes no Pi branch, coverage,
+provider or identity rules.
 
 ## Workflow
 
 - Run the CLI with Python 3.11+. The wrapper chooses
   `SESSION_RECAP_PYTHON`, then a compatible `python3` on `PATH`, then a mise
   shim. Test that selection if changing the wrapper; macOS's system Python
-  can be too old in some shells.
+  can be too old when it is the `python3` on `PATH`.
 - Keep recap generation a configured executable argv fed on stdin. Managed
   desktop config has `auto_publish = false` and no command. A host-local
   `~/.config/session-recap/config.local.toml` supplies the backend; its

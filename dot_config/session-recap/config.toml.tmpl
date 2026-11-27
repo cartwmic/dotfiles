@@ -1,10 +1,10 @@
-# Automatic recap publication is off on managed desktop profiles.
+# The standalone publication policy is off on managed desktop profiles.
 # Pi recap settings are independent.
 auto_publish = false
 
 # For recaps, create an unmanaged ~/.config/session-recap/config.local.toml:
 # command = ["/path/to/recap-command", "--stdin"]
-# Add auto_publish = true there to enable automatic publication.
+# Add auto_publish = true there to enable the standalone publication policy.
 # Configure Pi separately with /recap settings; CLI preferences are not imported.
 # The command receives the rendered prompt on stdin and must return nonblank
 # UTF-8 recap text on stdout. No model command is provided by chezmoi.
