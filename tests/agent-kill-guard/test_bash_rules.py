@@ -497,6 +497,12 @@ class PrBody(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn("pr-body-check --body-file F", check(text))
 
+    def test_a_refused_edit_names_pr_redact_for_a_merged_or_closed_description(self):
+        for text in ["gh pr edit 5 --body text", "gh api -X PATCH repos/o/r/pulls/5 -f body=x"]:
+            with self.subTest(text=text):
+                self.assertIn("`pr-redact --repo OWNER/REPO --pr N --replacements FILE`", check(text))
+        self.assertNotIn("pr-redact", check("gh pr create --title t --body 'text'"))  # a create has no merged pull request to redact
+
     def test_an_edit_that_sets_no_body_and_other_pr_commands_pass(self):
         for text in ["gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",
                      "echo gh pr create", "gh issue create --body-file /tmp/pr-body.md", "gh issue edit 5 --body-file /tmp/pr-body.md"]:

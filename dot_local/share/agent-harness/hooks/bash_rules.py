@@ -166,7 +166,7 @@ PR_BODY = (
 )
 PR_OPEN = {  # the one-command form of PR_BODY, by verb: pr-open checks the body, pushes, opens or PATCHes, and prints the URL
     "create": "`pr-open --title T --body-file F [--draft]` (F is the body file, `-` reads it from stdin; it checks the body, pushes the branch and opens the PR)",
-    "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host)",
+    "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host; it refuses a merged or closed pull request by design: to take a private detail out of such a description use `pr-redact --repo OWNER/REPO --pr N --replacements FILE`, which only replaces exact listed strings with neutral phrases)",
 }
 PR_API_BODY = (
     "`gh api` that sets a pull request body (POST, PATCH or PUT on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `body` field or `--input`) is refused in agent sessions: "
