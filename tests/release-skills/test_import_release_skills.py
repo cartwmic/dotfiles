@@ -362,6 +362,10 @@ class ImportTests(Fixture):
         self.assertEqual(result.returncode, 1)
         self.assertIn("found 3", result.stderr)
 
+    def test_the_pins_flag_says_how_many_tools_it_moves(self):
+        result = self.run_tool("import", "--help")
+        self.assertIn("also move the four mise tool pins", " ".join(result.stdout.split()))
+
     def test_pins_refuse_a_config_that_does_not_have_the_four_lines(self):
         (self.source / "dot_config/mise/config.toml").write_text('gh = "latest"\n')
         result = self.do_import("--pins", "--apply")
