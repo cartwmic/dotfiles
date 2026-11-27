@@ -146,13 +146,10 @@ profiles reverse exact v1 or v2 blocks; sibling edits are preserved.
 
 Private proof now reproduces v1's false idle guard on both real CLI paths,
 then requires v2's true idle guard and notification delivery while RPC still
-reports streaming. A byte-identical stock Herdr extension is also loaded in a
-private PTY Pi against a scripted Unix IPC socket: v1 suppresses post-working
-idle; v2 publishes it. This proves stock adapter publication, not full Herdr
-server/Overview acceptance or live READY. The existing abort, deferred/backend
-answer, custom-message, sibling helper/reversal and exception checks remain.
+reports streaming. The existing abort, deferred/backend answer, custom-message,
+sibling helper/reversal and exception checks remain.
 Optional `PI_SETTLEMENT_PROOF_ARTIFACTS` retains private journey traces and
-scripted backend/IPC transcripts outside Git.
+scripted backend transcripts outside Git.
 
 **Rollout pending:** these are private copied-Pi checks. No live apply, restart,
 commit or push is authorized by this fix. After independent review and owner

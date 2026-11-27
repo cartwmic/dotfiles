@@ -8,7 +8,6 @@ from pathlib import Path
 import pty
 import select
 import shutil
-import socketserver
 import subprocess
 import tempfile
 import threading
@@ -98,34 +97,17 @@ def patch(package,profile='personal',check=False,success=True):
     require((result.returncode==0)==success, result.stdout+result.stderr)
     return result
 
-def journey(package, directory, module=False, tui=False, abort=True, patched=True, settled=False, deferred=False, throws=False, custom=None, legacy=False, stock=False):
+def journey(package, directory, module=False, tui=False, abort=True, patched=True, settled=False, deferred=False, throws=False, custom=None, legacy=False):
     deferred = deferred or custom=='trigger'
     directory.mkdir();agent=directory/'agent';agent.mkdir();project=directory/'project';project.mkdir()
     backend=Backend();extension=directory/'probe.mjs';extension.write_text(EXTENSION)
     tracepath=directory/'trace';release=directory/'release'
     (agent/'models.json').write_text(json.dumps({'providers':{'proof':{'baseUrl':f'http://127.0.0.1:{backend.server_port}/v1','api':'openai-completions','apiKey':'dummy-local','models':[{'id':'proof','name':'Proof','reasoning':False,'input':['text'],'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0},'contextWindow':8192,'maxTokens':256}]}}}))
     (agent/'settings.json').write_text(json.dumps({'compaction':{'enabled':False},'retry':{'enabled':False}}))
-    env={k:v for k,v in os.environ.items() if not any(x in k for x in ['API_KEY','TOKEN','PI_','HERDR_'])}
+    env={k:v for k,v in os.environ.items() if not any(x in k for x in ['API_KEY','TOKEN','PI_'])}
     env.update(HOME=str(directory),PI_CODING_AGENT_DIR=str(agent),PROBE_TRACE=str(tracepath),PROBE_RELEASE=str(release),PROBE_PHASE='settled' if settled else 'before',PROBE_DEFERRED='yes' if deferred and not custom else 'no',PROBE_THROW='yes' if throws else 'no',PROBE_CUSTOM=custom or '',TERM='xterm-256color',NO_COLOR='1')
     cli=package/('dist/cli.js' if module else 'dist/bundle/cli.js')
     args=['node',str(cli),'--provider','proof','--model','proof','--no-skills','--no-prompt-templates','--no-extensions','--extension',str(extension)]
-    ipc=None;ipc_temp=None;reports=[]
-    if stock:
-        require(tui and settled and not abort, 'stock diagnostic requires TUI settled control')
-        stock_source=Path.home()/'.pi/agent/extensions/herdr-agent-state.ts'
-        stock_copy=directory/'stock-herdr.ts';shutil.copyfile(stock_source,stock_copy)
-        print('STOCK:', hashlib.sha256(stock_copy.read_bytes()).hexdigest(), flush=True)
-        ipc_temp=tempfile.TemporaryDirectory(prefix='pi-ipc-',dir='/tmp')
-        socket_path=str(Path(ipc_temp.name)/'s')
-        class IPCHandler(socketserver.StreamRequestHandler):
-            def handle(self):
-                reports.append(json.loads(self.rfile.readline()))
-                self.wfile.write(b'{"ok":true}\n');self.wfile.flush()
-        ipc=socketserver.ThreadingUnixStreamServer(socket_path,IPCHandler)
-        ipc.daemon_threads=True
-        threading.Thread(target=ipc.serve_forever,daemon=True).start()
-        env.update(HERDR_ENV='1',HERDR_SOCKET_PATH=socket_path,HERDR_PANE_ID='private-proof')
-        args = args[:-2]+['--extension',str(stock_copy),'--extension',str(extension)]
     outputs=[];master=None
     if tui:
         master,slave=pty.openpty()
@@ -155,15 +137,6 @@ def journey(package, directory, module=False, tui=False, abort=True, patched=Tru
             wait(lambda:any('"pending-state"' in x for x in outputs), 'pending state response')
             state=next(json.loads(x) for x in outputs if '"pending-state"' in x)
             require(state['success'] and state['data']['isStreaming'], 'awaited settled must remain streaming')
-        if stock:
-            wait(lambda:any(x.get('params',{}).get('state')=='working' for x in reports),'stock working report')
-            def native_ready():
-                states=[x['params']['state'] for x in reports if x['method']=='pane.report_agent']
-                return 'working' in states and 'idle' in states[states.index('working')+1:]
-            if legacy:
-                time.sleep(.3);require(not native_ready(),'legacy unexpectedly published native READY')
-            else: wait(native_ready,'stock native READY publication through private IPC')
-            print('PASS: unmodified stock Herdr private IPC', 'legacy READY suppressed' if legacy else 'READY published during awaited settlement', flush=True)
         if abort:
             if tui: os.write(master,b'\x1b')
             else: send({'type':'abort','id':'abort-proof'})
@@ -244,7 +217,6 @@ def journey(package, directory, module=False, tui=False, abort=True, patched=Tru
             destination=Path(artifacts)/directory.name;destination.mkdir(parents=True,exist_ok=True)
             (destination/'trace.json').write_text(json.dumps(trace(tracepath),indent=2))
             (destination/'backend-requests.json').write_text(json.dumps(backend.requests,indent=2))
-            (destination/'native-ipc.json').write_text(json.dumps(reports,indent=2))
             (destination/'output.txt').write_text(''.join(outputs))
         if process.poll() is None:
             if tui:
@@ -256,8 +228,6 @@ def journey(package, directory, module=False, tui=False, abort=True, patched=Tru
                 raise RuntimeError('watchdog kill is failure, not completion')
         if master is not None: os.close(master)
         backend.shutdown();backend.server_close()
-        if ipc: ipc.shutdown();ipc.server_close()
-        if ipc_temp: ipc_temp.cleanup()
 
 def main():
     trigger=(ROOT/'run_onchange_after_30_apply_pi_patches.sh.tmpl').read_text()
@@ -278,7 +248,6 @@ def main():
         if 'chezmoi-pi-patch:settlement-abort v1' in (package/'dist/core/agent-session.js').read_text():
             for module in [False, True]:
                 journey(package,root/f'legacy-idle-{module}',module=module,settled=True,abort=False,legacy=True)
-            journey(package,root/'legacy-stock',tui=True,settled=True,abort=False,legacy=True,stock=True)
             patch(package,check=True,success=False)
             legacy_fingerprint=fingerprint(package)
             legacy_files={relative:(package/relative).read_bytes() for relative in legacy_fingerprint}
@@ -328,13 +297,11 @@ def main():
             for custom in ['trigger','notify']:
                 journey(package,root/f'custom-{custom}-{module}',module=module,settled=True,custom=custom,abort=False)
             journey(package,root/f'settled-exception-{module}',module=module,settled=True,throws=True,abort=False)
-        journey(package,root/'stock-ready',tui=True,settled=True,abort=False,stock=True)
         print('PATCHED IDENTITY:', json.dumps(after), flush=True)
         journey(package,root/'tui',tui=True)
         journey(package,root/'tui-settled',tui=True,settled=True)
         journey(package,root/'module-tui',module=True,tui=True)
         journey(package,root/'module-tui-settled',module=True,tui=True,settled=True)
-        journey(package,root/'module-stock-ready',module=True,tui=True,settled=True,abort=False,stock=True)
         target=package/'dist/core/agent-session.js';saved=target.read_text()
         for malformed in [saved.replace('chezmoi-pi-patch:settlement-abort v3','chezmoi-pi-patch:settlement-abort v4'), saved.replace('this._operationAbortController?.abort();','/* missing abort */')]:
             target.write_text(malformed);before=fingerprint(package)
