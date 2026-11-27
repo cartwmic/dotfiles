@@ -36,6 +36,10 @@ def make(files):
 
 
 # --- change 1: the checker depth floor -------------------------------------------------------------------------------
+# A guide the header of which is what assemble.py prints: lint_main.py fails a guide without it.
+SNAP = ("<!-- printed -->\n# x guide\n\nSnapshot of x at 0000000 on 2026-11-20. Not maintained: it records the code at that commit, not today's.\n\n"
+        "Repo: x. Commit: " + "0" * 40 + ". Date: 2026-11-20. Snapshot: 2026-11-20 at " + "0" * 40 + ".\n<!-- /printed -->\n\n")
+
 DOC = ("# Part 1: In plain English\n\n## What it is\n\nIt saves notes. [A4.0001]\n\n# Part 2: Appendix\n\n## A4 Notes\n\n"
        "The add command saves a note. `src/cli.py:3` [A4.0001]\nIt stops after 5 notes. `src/cli.py:7` [A4.0002]\n")
 REPO = {"src/cli.py": "x\n" * 10}
@@ -519,7 +523,7 @@ The `notes add` command saves a note. `src/cli.py:3` [A4.0001]
 
 def lint(guide, *extra):
     with make({"src/cli.py": "x\n" * 10}) as repo, tempfile.TemporaryDirectory() as d:
-        Path(d, "GUIDE.md").write_text(guide)
+        Path(d, "GUIDE.md").write_text(SNAP + guide)
         Path(d, "surfaces.json").write_text(json.dumps(SURFACES))
         code, out, err = script("lint_main.py", Path(d, "GUIDE.md"), repo, "--surfaces", Path(d, "surfaces.json"), *extra)
     return code, out

@@ -7,7 +7,7 @@ description: Use when asked to design the clean, minimal version of something kn
 
 Turn what we know into the smallest design that meets the goal, plus the smallest path to build it. The bar is `~/.local/share/agent-harness/design-principles.md`: read it first and measure against it by section number. Do not copy or reword it.
 
-Read-only against the repo and any live system. Write `DESIGN.md` (and `facts.json` if you ran the script) outside the repo: the path the user gives, else a scratch folder. Scratch clones and small scripts against an extracted copy are allowed when the caller bars builds and tests; name what you ran. Assume a private, local, one-owner setting; add no security or threat sections.
+Read-only against the repo and any live system. Write `DESIGN.md` (and `facts.json` if you ran the script) outside the repo: the path the user gives, else a scratch folder. `DESIGN.md` is a snapshot of the pinned rev and is never maintained: never write a root-level `DESIGN.md` in a repo (it looks live); to keep it, write `docs/snapshots/<YYYY-MM-DD>-<sha7>/DESIGN.md`, or the same folder name elsewhere. A later run writes a new one. A file under `docs/snapshots/`, or any file carrying the line "Snapshot of ... Not maintained", is never evidence or a stated source: it is a lead you re-check against the code. A `GUIDE.md` or `REQUIREMENTS.md` whose snapshot sha is not the pinned rev is stale: say so and treat it as leads only. Scratch clones and small scripts against an extracted copy are allowed when the caller bars builds and tests; name what you ran. Assume a private, local, one-owner setting; add no security or threat sections.
 
 ## Pick the mode
 
@@ -27,7 +27,7 @@ Use what exists; name in the output which you used.
 |---|---|
 | Owner's requirements, in their words | `given`, one `OR-n` row each (Step 3) |
 | A `GUIDE.md` (deriving-readable-docs) | Part 1 is the orientation in Step 1; a "read" Evidence cell may point at a checked guide claim |
-| A `REQUIREMENTS.md` with header `shape: requirements/1` (distilling-requirements) | Replaces inference in Step 3; see below |
+| A `REQUIREMENTS.md` with header `shape: requirements/2` (distilling-requirements) | Replaces inference in Step 3; see below |
 | Repo documents: `docs/PRD.md`, a component's `CONTRACT.md`, specs, ADRs, a `prd-candidate.md` | `given`, even when the caller says "bare" |
 | Tested facts, probe notes, the integrated system's source, docs and live state | The facts a design rests on (Step 1) |
 | Validation points, journeys, e2e tests | Behaviour without rediscovery from code |
@@ -35,7 +35,7 @@ Use what exists; name in the output which you used.
 
 A bare repo must still work: infer from README, `AGENTS.md`, manifests, entry points and tests, and label every such claim `inferred`.
 
-Reading a `requirements/1` file: cite its ids, never re-mint them. Take requirements from `R-n` (ignore `incidental` rows when drawing boundaries), state machines from `SM-n` with their `writers:` lines, invariants from `I-n`, reachable defects from `F-n` and unenforced invariants from `U-n` (Step 4 failures), `fit` and `enforced` gaps as Step 6 proof gaps only where a decision depends on them, `Q-n` as candidates for Section 8. Check its `commit` against the pinned rev and its `not-read` against your scope. **It is an input, not a fact: re-check every item a ranked failure or decision rests on against the code** (it can be wrong, stale or encode the bug as a requirement) and record each refutation with its command in a Re-check table in Section 3. Findings you add get ids `DF-n`; the `F-n` and `Q-n` above are that file's ids, cited, never minted here. Any other shape version: read it as free text and say so.
+Reading a `requirements/2` file (a snapshot at its `commit`, never updated): cite its ids, never re-mint them. Take requirements from `R-n` (ignore `incidental` rows when drawing boundaries), state machines from `SM-n` with their `writers:` lines, invariants from `I-n`, reachable defects from `F-n` and unenforced invariants from `U-n` (Step 4 failures), `fit` and `enforced` gaps as Step 6 proof gaps only where a decision depends on them, `Q-n` as candidates for Section 8. A row with `kind: inferred` is proposed from history, so treat it as `inferred`, never `given`; its history-only evidence (`commit:`, `pr:`, `issue:`) cannot be re-checked by line, so re-check the behaviour in today's code before a decision rests on it. A `lens: quality` row is a non-functional requirement: it constrains the design like any other. Check its `commit` against the pinned rev and its `not-read` against your scope. **It is an input, not a fact: re-check every item a ranked failure or decision rests on against the code** (it can be wrong, stale or encode the bug as a requirement) and record each refutation with its command in a Re-check table in Section 3. Findings you add get ids `DF-n`; the `F-n` and `Q-n` above are that file's ids, cited, never minted here. Any other shape version, including `requirements/1`: read it as free text and say so.
 
 ## Steps
 
@@ -53,7 +53,7 @@ Write a ≤1-page orientation a cold agent could read instead of the repo.
 
 **2B. List what we lean on (mode B).** A short table of what already exists and the design will use or copy: the integrated system's features (one row each: feature, source or test that shows it), the existing code or in-repo pattern to copy (and why that one), and what is absent, where the requirement has no home. Prior art for the whole capability goes here too: adopt, wrap, borrow or build, with the reason (§11).
 
-**3. Requirements.** The owner's words are `given`: one `OR-n` row per requirement, quoting or tightly paraphrasing, with "enforced today?". Take ids from a `requirements/1` file or a repo document if present. Infer the rest from the journeys the entry points serve and the invariants the code or the integrated system relies on, marked `inferred` (`IR-n` requirements, `II-n` invariants; note which nothing enforces). Separate enduring obligations from incidental implementation. Where a component is a state machine in disguise and none is given, draw it as Mermaid `stateDiagram-v2`.
+**3. Requirements.** The owner's words are `given`: one `OR-n` row per requirement, quoting or tightly paraphrasing, with "enforced today?". Take ids from a `requirements/2` file or a repo document if present. Infer the rest from the journeys the entry points serve and the invariants the code or the integrated system relies on, marked `inferred` (`IR-n` requirements, `II-n` invariants; note which nothing enforces). Separate enduring obligations from incidental implementation. Where a component is a state machine in disguise and none is given, draw it as Mermaid `stateDiagram-v2`.
 
 **4. Diagnose.** Name the 3–5 tensions that matter (§13): where requirements, simplicity, accuracy and reuse pull apart, and what each resolution costs. That is usually the most valuable part. Then:
 - **A:** give each principle a verdict with its **scope** (pass at module level, fail inside one module: write both) and evidence; rank failures by proven harm; **reproduce each** with a small script against the extracted pin (symlink `node_modules`; no installs; on Node 22.18+ a `.ts` or `.mjs` script runs and imports `.ts` directly) or a scratch clone, else label it `read only` and make the experiment the first increment. Check that each test double the proof relies on does what the real adapter does, and re-run the reproduction with the double the unit tests use.
@@ -82,6 +82,8 @@ Every new boundary, layer or abstraction needs a concrete requirement or a demon
 
 ```markdown
 # Design: <scope>
+Snapshot of <repo> at <sha7> on <date>. Not maintained: it records the code at that commit, not today's.
+snapshot: <YYYY-MM-DD> at <full sha>   (the pinned rev from Step 1; `no-git` for an archive)
 Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that do not exist in the repo · Rev (start / end) · Inputs used (given / inferred) · In-flight work relied on (and its state) · Top 3 decisions
 
 ## 1. Orientation            (≤1 page: what it is, entry points, size, how a change is proven, where to start; Evidence: the commands behind every number)
@@ -111,4 +113,4 @@ Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode 
 
 ## Done when
 
-`DESIGN.md` exists, every section is filled or marked n/a with a reason, the principles table has a row with evidence for every principle, and the first increment could start today without a further question. Report the file path, the three decisions that matter most, anything left for the owner, and which proofs you observed versus only planned (a design is not proof).
+`DESIGN.md` exists, the snapshot line and `snapshot:` key sit under the title (no script checks this one: this skill has no structure checker), every section is filled or marked n/a with a reason, the principles table has a row with evidence for every principle, and the first increment could start today without a further question. Report the file path, the three decisions that matter most, anything left for the owner, and which proofs you observed versus only planned (a design is not proof).

@@ -6,7 +6,8 @@ The fixture register has four rows that check_shape.py passes:
   so two claims. Another fixture adds R-3, which cites a line the file does not have (check_citations.py catches it before any checker runs).
 No model session runs here: the checker's report is recorded in the test, in the form check-brief.md asks for, and score.py ties it to the claims
 file the adapter and slice.py really made.
-Run: python3 -I tests/distilling-requirements/test_check_truth.py"""
+Run: python3 -m unittest discover -s tests/distilling-requirements"""
+import runlog_support  # first: keeps the run out of the real log
 import atexit
 import json
 import os
@@ -17,9 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-STATE = tempfile.mkdtemp(prefix="state-")  # the scripts log each run (runlog.py): keep these runs out of the real log
-os.environ["XDG_STATE_HOME"] = STATE
-atexit.register(shutil.rmtree, STATE, True)
+STATE = runlog_support.STATE  # runlog_support keeps these runs out of the real log
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 TRUTH = SKILLS / "distilling-requirements/scripts/check_truth.py"
@@ -40,10 +39,10 @@ def clear_notes():
     NOTES.clear()
 '''
 REPO = {"src/notes.py": NOTES, "README.md": "# Notes\n\nNotes are kept in memory.\n"}
-HEAD = "```text\nshape: requirements/1\nrepo: demo\ncommit: 0000000000000000000000000000000000000000\nscope: whole repo\ndate: 2026-11-21\nnot-read: none\n" \
-       "counts: R=%d SM=0 I=0 U=0 F=0 Q=0\n```\n# Requirements: demo\n\n## 1. Requirements register\n\n" \
+HEAD = "```text\nshape: requirements/2\nrepo: demo\ncommit: 0000000000000000000000000000000000000000\nsnapshot: 2026-11-21 at 0000000000000000000000000000000000000000\nhistory: 0000000000000000000000000000000000000000\nscope: whole repo\nrepo-wide: yes\ninterview: none\ndate: 2026-11-21\nnot-read: none\n" \
+       "counts: R=%d SM=0 I=0 U=0 F=0 Q=0\n```\n# Requirements: demo\n\nSnapshot of demo at 0000000 on 2026-11-21. Not maintained: it records the code at that commit, not today's.\n\n## 1. Requirements register\n\n" \
        "| id | lens | kind | durability | status | requirement | evidence | check | fit | enforced | note |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
-TAIL = "\n## 2. State machines\n\nNone found.\n\n## 3. Unenforced invariants\n\nNone found.\n\n## 4. Findings\n\nNone found.\n\n## 5. Open questions\n\nNone.\n\n## Changelog\n\n- 2026-11-21: first pass.\n"
+TAIL = "\n## 2. State machines\n\nNone found.\n\n## 3. Unenforced invariants\n\nNone found.\n\n## 4. Findings\n\nNone found.\n\n## 5. Open questions\n\nNone.\n\n## Run log\n\n- 2026-11-21: first pass.\n"
 ROWS = {
     "R-1": "An empty note shall be refused with an error.|src/notes.py:4-5",
     "R-2": "Clearing the store shall keep the saved notes.|src/notes.py:11-12",
@@ -205,7 +204,7 @@ class TruthCheckTest(unittest.TestCase):
             req.write_text(req.read_text().replace("| src/notes.py:4-5 |", "| the notes module |"))  # the shape check would refuse this cell; prepare must not skip it quietly
             code, out, _ = run(TRUTH, "prepare", req, "--out", work)
             self.assertEqual(code, 1)
-            self.assertIn("R-1 FAILED evidence has neither a path:line nor an owner: part (the notes module)", out)
+            self.assertIn("R-1 FAILED evidence has neither a path:line nor an owner: or history part (the notes module)", out)
             self.assertIn("0 rows to check, 1 not checked: R-4", out)
             reports = work / "reports"
             reports.mkdir()

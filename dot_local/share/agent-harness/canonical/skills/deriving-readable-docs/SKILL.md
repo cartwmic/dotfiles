@@ -1,13 +1,13 @@
 ---
 name: deriving-readable-docs
-description: Use when you need one plain-English guide to any repo, whether or not it has tests, docs, a PRD or any ids. The code is the source; the repo's own words and its tests, when it has them, are evidence. Produces one file, GUIDE.md: Part 1 in plain English that a newcomer reads cold, then an appendix of surfaces, evidence and precise behaviours, each cited as `path:line` and checked by scripts and by fresh checker sessions. Feeds distilling-requirements and designing-the-smallest-version, which read it. Not for reviewing a PR (review-map).
+description: Use when you need one plain-English guide to any repo, whether or not it has tests, docs, a PRD or any ids. The code is the source; the repo's own words and its tests, when it has them, are evidence. Produces one file, GUIDE.md, a snapshot, never maintained: Part 1 in plain English that a newcomer reads cold, then an appendix of surfaces, evidence and precise behaviours, each cited as `path:line` and checked by scripts and by fresh checker sessions. Feeds distilling-requirements and designing-the-smallest-version, which read it. Not for reviewing a PR (review-map).
 ---
 
 # Deriving readable docs
 
 Turn any repo into one guide a person can read cold. Code is the source: a sentence about the product rests on the code line that defines it. The repo's own words (README, `docs/`, help text, comments) give intent and names. Tests are optional evidence: they confirm a behaviour when the repo has them.
 
-Output: `GUIDE.md` outside the repo, default `~/.local/share/derived-docs/<repo-name>/`, or the caller's path. Part 1 is about 1,000 words of plain English, each sentence tagged `[A4.3f9a]` with the id of the appendix line it restates. Part 2 is the appendix: A1 surfaces and A2 evidence (printed by scripts), A3 the whole product, A4 and on one section per capability, A-last what nobody read.
+Output: `GUIDE.md` outside the repo, default `~/.local/share/derived-docs/<repo-name>/<date>-<sha7>/GUIDE.md`, or the caller's path. A snapshot, never updated: a later run writes a new one. To keep it, write `docs/snapshots/<YYYY-MM-DD>-<sha7>/GUIDE.md`, never a root-level `GUIDE.md`. `assemble.py` prints the snapshot line and `lint_main.py` requires it. A file in `docs/snapshots/`, or carrying the line "Snapshot of ... Not maintained", is never evidence or a stated source. Part 1 is about 1,000 words of plain English, each sentence tagged `[A4.3f9a]` with the id of the appendix line it restates. Part 2 is the appendix: A1 surfaces and A2 evidence, A3 the whole product, A4 and on one section per capability, A-last what nobody read.
 
 Every mechanical step is a script call: agents write sentences and judge claims; scripts count, cut, join and score. `<skill>` is this skill's folder.
 

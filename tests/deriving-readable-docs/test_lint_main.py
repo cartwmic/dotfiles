@@ -18,6 +18,10 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/c
 
 SURFACES = [{"kind": "command", "name": "notes add", "file": "src/cli.py", "line": 3}, {"kind": "flag", "name": "--tag <name>", "file": "src/cli.py", "line": 5}]
 
+# A guide the header of which is what assemble.py prints: lint_main.py fails a guide without it.
+SNAP = ("<!-- printed -->\n# x guide\n\nSnapshot of x at 0000000 on 2026-11-20. Not maintained: it records the code at that commit, not today's.\n\n"
+        "Repo: x. Commit: " + "0" * 40 + ". Date: 2026-11-20. Snapshot: 2026-11-20 at " + "0" * 40 + ".\n<!-- /printed -->\n\n")
+
 GUIDE = """# Part 1: In plain English
 
 ## What it is
@@ -50,7 +54,7 @@ def lint(guide, *extra, surfaces=SURFACES):
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "src").mkdir()
         (Path(d) / "src/cli.py").write_text("x\n" * 10)
-        Path(d, "GUIDE.md").write_text(guide)
+        Path(d, "GUIDE.md").write_text(SNAP + guide)
         Path(d, "surfaces.json").write_text(json.dumps(surfaces))
         r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "lint_main.py"), str(Path(d, "GUIDE.md")), d, "--surfaces", str(Path(d, "surfaces.json")), *extra],
                            capture_output=True, text=True)

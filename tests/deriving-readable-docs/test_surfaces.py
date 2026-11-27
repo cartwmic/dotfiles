@@ -305,5 +305,15 @@ class ResolveDefinitionTest(unittest.TestCase):
         self.assertEqual(self.resolve({"a.py": "# build it\n", "b.py": 'cmd = "build"\n'}, "build"), "build | b.py:1")
 
 
+class SnapshotFolderTest(unittest.TestCase):
+    def test_a_snapshot_folder_is_never_a_source_of_surfaces(self):
+        tmp = make_repo({"web/cli.js": 'app.get("/ping", h);\n', "docs/snapshots/2026-01-01-aaaaaaa/cli.js": 'app.get("/only-in-a-snapshot", h);\n'})
+        with tmp:
+            code, out = run(tmp.name, "--json")
+        self.assertEqual(code, 0)
+        self.assertIn("/ping", out)
+        self.assertNotIn("only-in-a-snapshot", out)
+
+
 if __name__ == "__main__":
     unittest.main()

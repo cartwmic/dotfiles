@@ -196,6 +196,10 @@ class IndexTest(unittest.TestCase):
 
 
 # --- defect 16, 6: score.py ---------------------------------------------------------------------------------------------------------------
+# The header assemble.py prints: lint_main.py fails a guide without it.
+SNAP = ("<!-- printed -->\n# x guide\n\nSnapshot of x at 0000000 on 2026-11-20. Not maintained: it records the code at that commit, not today's.\n\n"
+        "Repo: x. Commit: " + "0" * 40 + ". Date: 2026-11-20. Snapshot: 2026-11-20 at " + "0" * 40 + ".\n<!-- /printed -->\n\n")
+
 DOC = ("# Part 1: In plain English\n\n## What it is\n\nIt saves notes. [A4.0001]\n\n# Part 2: Appendix\n\n## A4 Notes\n\n"
        "The add command saves a note. `src/cli.py:3` [A4.0001]\nIt stops after 5 notes. `src/cli.py:7` [A4.0002]\n")
 REPO = {"src/cli.py": "x\n" * 10}
@@ -324,7 +328,7 @@ class RecordFixedTest(unittest.TestCase):
     def lint(self, fixed, now):
         guide = GUIDE_COND % (now, self.A)
         with tempfile.TemporaryDirectory() as d, make({"src/cli.py": "x\n" * 10}) as repo:
-            Path(d, "GUIDE.md").write_text(guide)
+            Path(d, "GUIDE.md").write_text(SNAP + guide)
             Path(d, "surfaces.json").write_text(json.dumps(SURFACES))
             Path(d, "fixed-ids.txt").write_text(fixed)
             return script("lint_main.py", Path(d, "GUIDE.md"), repo, "--surfaces", Path(d, "surfaces.json"), "--fixed", Path(d, "fixed-ids.txt"))
@@ -377,7 +381,7 @@ class WordsTest(unittest.TestCase):
             Path(d, "doc.md").write_text("## A4 x\n\n%s five. `src/cli.py:2` [A4.0001]\n" % self.TWENTY)  # 19 words: the limit is live
             self.assertIn("FAIL sentence-length", script("check_citations.py", Path(d, "doc.md"), repo, "--max-sentence-words", 18)[1])
             guide = "# Part 1: In plain English\n\n## What it is\n\nIt is small. [A4.0001]\nIt is plain. [A4.0001]\n%s. [A4.0001]\n\n# Part 2: Appendix\n\n## A4 x\n\n%s\n" % (self.TWENTY, line)
-            Path(d, "GUIDE.md").write_text(guide)
+            Path(d, "GUIDE.md").write_text(SNAP + guide)
             Path(d, "surfaces.json").write_text("[]")
             code, out, err = script("lint_main.py", Path(d, "GUIDE.md"), repo, "--surfaces", Path(d, "surfaces.json"))
         self.assertNotRegex(out, r"sentence-length: \d+ words")
@@ -403,7 +407,7 @@ class LintWordsTest(unittest.TestCase):
     def hits(self, text):
         guide = ("# Part 1: In plain English\n\n## What it is\n\n%s [A3.0001]\n\n# Part 2: Appendix\n\n## A3 The product as a whole\n\nNotes saves short notes. `src/cli.py:1` [A3.0001]\n" % text)
         with make(REPO) as repo, tempfile.TemporaryDirectory() as d:
-            Path(d, "GUIDE.md").write_text(guide)
+            Path(d, "GUIDE.md").write_text(SNAP + guide)
             Path(d, "surfaces.json").write_text("[]")
             Path(d, "jargon.txt").write_text(self.JARGON)
             code, out, err = script("lint_main.py", Path(d, "GUIDE.md"), repo, "--surfaces", Path(d, "surfaces.json"), "--jargon", Path(d, "jargon.txt"))
@@ -428,7 +432,7 @@ class LintWordsTest(unittest.TestCase):
     def label(self, appendix, part1, repo_files):
         guide = ("# Part 1: In plain English\n\n## What it is\n\n%s [A3.0001]\n\n# Part 2: Appendix\n\n## A3 The product as a whole\n\n%s `src/cli.py:1` [A3.0001]\n" % (part1, appendix))
         with make(dict(REPO, **repo_files)) as repo, tempfile.TemporaryDirectory() as d:
-            Path(d, "GUIDE.md").write_text(guide)
+            Path(d, "GUIDE.md").write_text(SNAP + guide)
             Path(d, "surfaces.json").write_text("[]")
             code, out, err = script("lint_main.py", Path(d, "GUIDE.md"), repo, "--surfaces", Path(d, "surfaces.json"))
         return out

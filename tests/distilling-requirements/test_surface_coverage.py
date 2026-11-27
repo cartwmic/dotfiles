@@ -1,5 +1,7 @@
 """surface_coverage.py lists the surfaces (from surfaces.py) that no R-row of a REQUIREMENTS.md cites.
-Run: python3 -I tests/distilling-requirements/test_surface_coverage.py"""
+Run: python3 -m unittest discover -s tests/distilling-requirements"""
+import runlog_support  # first: keeps the run out of the real log
+import atexit
 import os
 import shutil
 import subprocess
@@ -7,6 +9,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+STATE = runlog_support.STATE  # runlog_support keeps these runs out of the real log
 
 SKILLS = Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills"
 COVERAGE = SKILLS / "distilling-requirements/scripts/surface_coverage.py"
@@ -25,7 +29,7 @@ ROW = "| %s | product | explicit | enduring | proposed | %s | %s | none | none |
 
 
 def register(commit, rows):
-    head = "```text\nshape: requirements/1\nrepo: fixture\ncommit: %s\nscope: whole repo\ndate: 2026-11-21\nnot-read: none\n```\n" % commit
+    head = "```text\nshape: requirements/2\nrepo: fixture\ncommit: %s\nscope: whole repo\ndate: 2026-11-21\nnot-read: none\n```\n" % commit
     cols = "| id | lens | kind | durability | status | requirement | evidence | check | fit | enforced | note |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
     return head + "\n## 1. Requirements register\n\n" + cols + "\n".join(rows) + "\n"
 
@@ -83,8 +87,7 @@ class SurfaceCoverageTest(unittest.TestCase):
 
     def test_missing_surfaces_py_gives_a_clear_error(self):
         script = self.tmp / "skills/distilling-requirements/scripts/surface_coverage.py"
-        script.parent.mkdir(parents=True)
-        shutil.copy(COVERAGE, script)
+        shutil.copytree(COVERAGE.parent, script.parent, ignore=shutil.ignore_patterns("__pycache__"))  # the skill's own scripts, without the sibling skill that holds surfaces.py
         md = self.tmp / "R.md"
         md.write_text(register(self.head, []))
         res = subprocess.run([sys.executable, "-I", str(script), str(md), str(self.repo)], capture_output=True, text=True)
