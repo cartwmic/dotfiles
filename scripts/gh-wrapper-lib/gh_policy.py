@@ -44,10 +44,6 @@ PR_WITHOUT_ISSUE = (
     ("t3 pin bump", r"^t3-pin/\S+$", r"^t3 pin: \S+$"),
     ("revert", r"^revert-\d+(?:-\S+)?$", r'^Revert ".+"$'),
 )
-# MERGE_COMMIT_STOPGAP: TEMPORARY. The coordinator's merge script (scripts/merge-pr.sh) still runs `gh pr merge --merge`, and squash-only would stop every
-# coordinator merge. It may merge with --merge while GH_CALLER names it AND a calling process is that script, and each use is logged as exempt. DELETE THIS
-# ENTRY when the coordinator moves merge-pr.sh to --squash; nothing else may take it, and --rebase has no exemption at all.
-MERGE_COMMIT_STOPGAP = {"kind": "merge-pr.sh stopgap (temporary, removed when the coordinator's merge script squashes)", "caller": "merge-pr", "script": "merge-pr.sh"}
 
 KIND_LABELS = ("bug", "change", "flaky test", "docs", "question")
 PARTS = ("Problem", "Wanted", "Done when")
@@ -214,14 +210,6 @@ def read_linked_merged(call, flags, positionals):
     return read
 
 
-def stopgap_applies(environ=os.environ):
-    """True when GH_CALLER names the merge script and a calling process (the parent or its parent) is that script: both, so a variable alone does not do it."""
-    if environ.get("GH_CALLER") != MERGE_COMMIT_STOPGAP["caller"]:
-        return False
-    import gh_log      # the ancestry reader of the call log, which runs whether or not the log layer does
-    return any(MERGE_COMMIT_STOPGAP["script"] in (name or "").split() for name in gh_log.ancestry())
-
-
 def log(rule, outcome, klass, kind=None, environ=os.environ):
     entry = {"utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "rule": rule, "outcome": outcome, "class": klass, "kind": kind,
              "who": environ.get("GH_CALLER")}
@@ -256,9 +244,6 @@ def before(call):
             log(rule, "exempt", call.klass, kind)
             return
     sentence = refusal(call.klass, flags, read_issue(call, flags), read_linked_merged(call, flags, positionals))
-    if sentence and call.klass == "pr merge" and "rebase" not in {n for n, _ in flags} and stopgap_applies():
-        log(rule, "exempt", call.klass, MERGE_COMMIT_STOPGAP["kind"])
-        return
     if sentence:
         log(rule, "refused", call.klass)
         raise Stop(REFUSED, "gh-wrapper: refused `gh %s`: %s" % (call.klass, sentence))

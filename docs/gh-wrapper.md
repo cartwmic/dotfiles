@@ -158,7 +158,7 @@ The body must be given as text or a file (`--body`, `--body-file FILE`): a body 
 
 **Switch.** `~/.config/gh-wrapper/policy` says `on` or `off`; the installer writes `on` on `personal` and `off` elsewhere, with no chezmoi data key. A host with no file runs as off. It is its own file, not the budget file: turning the API budget off must not drop a repository rule. The work Mac is left out because these are Michael's own repository rules and an employer's repositories keep their own tracker rules.
 
-**What is excused: one place.** The top of `gh_policy.py` holds every exemption, each recognised by something a tool sets:
+**What is excused: one place.** The top of `gh_policy.py` holds the only exemption, from the issue-first rule, recognised by something a tool sets:
 
 - `PR_WITHOUT_ISSUE`: the kinds of pull request that need no issue: release, pin-bump and revert, and nothing else. Each is `(kind, head regex, title regex)`, and a pull request is exempt only when **both** its branch and its title have the form the opening tool gives them, so a hand-made pull request with "release" in its title is still refused. A call with no `--head` or no `--title` is never exempt.
 
@@ -170,9 +170,10 @@ The body must be given as text or a file (`--body`, `--body-file FILE`): a body 
 | t3 pin bump | `t3-pin/<version>` | `t3 pin: <version>` | `t3_pin_check.py` |
 | revert | `revert-<number>[-<branch>]` | `Revert "<original title>"` | GitHub's Revert button |
 
-- `MERGE_COMMIT_STOPGAP`: temporary. The coordinator's `scripts/merge-pr.sh` still runs `gh pr merge --merge`. It may do so while `GH_CALLER=merge-pr` is set **and** the parent (or grandparent) process is a script named `merge-pr.sh` (read by `gh_log.ancestry`, so a variable alone does not do it). `--rebase` has no exemption. **Delete the entry when the coordinator moves `merge-pr.sh` to `--squash`.**
+`--merge` and `--rebase` have no exemption for any caller: the coordinator's `scripts/merge-pr.sh` merges with `--squash`, so a call that sets `GH_CALLER=merge-pr` is judged like every other.
 
-**Log.** Every refusal and every use of an exemption is one line in `~/.local/state/gh-wrapper/policy.jsonl`: `{utc, rule (issue-first, squash-only, issue-form, close-rule), outcome (refused or exempt), class, kind (the exemption used, else null), who ($GH_CALLER, else null)}`. Never a title, a body, an issue number or a repository. Refusals per rule: `jq -sr 'map(select(.outcome=="refused")) | group_by(.rule)[] | "\(.[0].rule) \(length)"' ~/.local/state/gh-wrapper/policy.jsonl`. A use of the merge stopgap shows as `squash-only` with `outcome` `exempt`, so a use from anywhere but the script shows by its `who`.
+
+**Log.** Every refusal and every use of an exemption is one line in `~/.local/state/gh-wrapper/policy.jsonl`: `{utc, rule (issue-first, squash-only, issue-form, close-rule), outcome (refused or exempt), class, kind (the exemption used, else null), who ($GH_CALLER, else null)}`. Never a title, a body, an issue number or a repository. Refusals per rule: `jq -sr 'map(select(.outcome=="refused")) | group_by(.rule)[] | "\(.[0].rule) \(length)"' ~/.local/state/gh-wrapper/policy.jsonl`. 
 
 **Failure.** A bug in the layer never stops a call (the seam's rule above); only its own refusal does. When an issue read fails (no network, an unknown number) the `pr create` is refused with the reason, as the link cannot be checked.
 

@@ -252,19 +252,16 @@ class Policy(WrapperBase):
         self.reset()
         return subprocess.run(["sh", script, *flags], cwd=str(self.other_cwd), capture_output=True, text=True, env=self.env(env), timeout=60)
 
-    def test_the_merge_script_stopgap_needs_the_name_and_the_script_and_is_logged_and_never_covers_rebase(self):
-        named = self.merge_script("export GH_CALLER=merge-pr")
-        done = self.run_script(named, "--merge")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.writes(), [["pr", "merge", "5", "--merge", "--match-head-commit", "abc"]])
-        used = self.policy_log()
-        self.assertEqual([(r["rule"], r["outcome"], r["who"]) for r in used], [("squash-only", "exempt", "merge-pr")])
-        self.assertIn("temporary", used[0]["kind"])
-        self.refused(self.run_script(named, "--rebase"), "`--rebase` is refused")
-        self.refused(self.run_script(self.merge_script("export GH_CALLER=somebody-else"), "--merge"), "`--merge` is refused")
-        self.refused(self.run_script(self.merge_script(":"), "--merge"), "`--merge` is refused")
-        # the name alone, from a caller that is not the script, does not do it
+    def test_no_caller_may_merge_with_a_merge_commit_or_a_rebase_the_coordinators_merge_script_included(self):
+        named = self.merge_script("export GH_CALLER=merge-pr")      # what the coordinator's merge script sets, run as a script of that name
+        for flag in ("--merge", "--rebase"):
+            with self.subTest(flag):
+                self.refused(self.run_script(named, flag), "`%s` is refused" % flag)
         self.refused(self.run_gh("pr", "merge", "5", "--merge", env={"GH_CALLER": "merge-pr"}), "`--merge` is refused")
+        self.assertEqual([r["outcome"] for r in self.policy_log()], ["refused"] * 3)      # and no use of an exemption is logged
+        done = self.run_script(named, "--squash")      # the merge call the coordinator's script makes now
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.writes(), [["pr", "merge", "5", "--squash", "--match-head-commit", "abc"]])
 
     # ---- the issue form -----------------------------------------------------------------------------------------------------------------------------
 
