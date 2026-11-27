@@ -196,6 +196,8 @@ Where the line lands: dotfiles, loop-engine, agent-kit, alert-steward and retro 
 the line goes in the PR description. A plain merge commit also works: the script reads every commit that reaches main, the branch commits a merge brings in included, so the
 line in any of them (or in the merge commit's own message) counts. The coordinator's journal path is not part of
 this rule. A merge driver that passes its own --body must carry the line.
+If the fix merged without the line, do not rerun the old run (the old tree still fails): put the line in the squash message of a later small
+pull request, and it clears the red once that merges.
 Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
