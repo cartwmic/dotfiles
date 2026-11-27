@@ -81,7 +81,7 @@ NOTES = {
             'not the file a re-export comes from), and a Cargo.toml to the Cargo.toml of each path or workspace dependency; `mod_edges` is the '
             '`mod x;` subset, kept out of `cycles`',
     'lines': 'raw newline count, as wc -l; binary files count 0',
-    'code_lines': 'non-blank lines minus comment-only lines (// and /* */ in JS/TS, # in Python); '
+    'code_lines': 'non-blank lines minus comment-only lines (// and /* */ in JS/TS and Rust, # in Python); '
                   'other text files count non-blank lines',
     'cochange': 'with --scope, only commits touching a scope file count, and top_file_pairs lists '
                 'only pairs with a scope file',

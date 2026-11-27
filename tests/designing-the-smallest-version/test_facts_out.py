@@ -147,6 +147,24 @@ class OutNeverLosesABlock(unittest.TestCase):
         self.assertIn("injected", rec["error"])
         self.assertNotIn("replaced", rec)
 
+    def test_a_file_that_appears_after_the_first_check_is_still_refused(self):
+        f = self.out("r4b.json")
+        code = ("import os, sys, runpy\n"
+                "real = os.fsync\n"
+                "def fsync(fd):\n"
+                "    real(fd)\n"
+                "    open(%r, 'wb').write(b'arrived late')\n"
+                "os.fsync = fsync\n"
+                "sys.argv = ['repo_facts.py', %r, '--out', %r]\n"
+                "runpy.run_path(%r, run_name='__main__')" % (str(f), str(self.repo), str(f), str(REPO_FACTS)))
+        done = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertEqual(f.read_bytes(), b"arrived late")
+        self.assertEqual(sorted(p.name for p in self.tmp.glob(".facts-*")), [])
+        rec = self.last_record()
+        self.assertEqual(rec["outcome"], "refused")
+        self.assertNotIn("replaced", rec)
+
     def test_a_run_with_no_out_logs_no_out_fields(self):
         self.assertEqual(run(self.repo).returncode, 0)
         self.assertNotIn("replaced", self.last_record())
@@ -155,6 +173,11 @@ class OutNeverLosesABlock(unittest.TestCase):
         text = (SKILLS / "auditing-design-principles/SKILL.md").read_text()
         line = next(l for l in text.splitlines() if "repo_facts.py" in l)
         self.assertIn("--out <scratch>/facts.json --force", line)  # a rerun of the audit would be refused without it
+
+    def test_the_audit_skill_says_the_facts_script_reads_rust(self):
+        text = (SKILLS / "auditing-design-principles/SKILL.md").read_text()
+        line = next(l for l in text.splitlines() if "Import `edges` and cycles cover" in l)
+        self.assertIn("Rust", line)  # an auditor of a Rust repo must not discard its edges
 
     def test_a_new_file_is_free_and_a_summary_with_no_out_writes_no_file(self):
         self.assertEqual(run(self.repo, "--summary", "--out", str(self.out("fresh.json"))).returncode, 0)
