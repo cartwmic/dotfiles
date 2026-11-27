@@ -26,7 +26,7 @@ const QUOTE_SHOWN = 160;
 const badInput = (message) => new ShxError('bad_input', message);
 const requestFailed = (message) => new ShxError('request_failed', message);
 
-/** argv -> { base, pages: string[] | null, files: string[] }. `pages` null means every page the server lists. */
+/** argv -> { base, pages: string[] | null, files: string[] }. `pages` null means every page the server has. */
 export function parseWaitingArgs(argv, defaultBase) {
   const files = [];
   const ids = [];
@@ -105,8 +105,8 @@ function pointedAt(root) {
   return root.stroke ? '(a drawing)' : '(no text selected)';
 }
 
-/** The text for stdout: one block per waiting thread, longest waiting first across all pages, then the count line. */
-export function renderWaiting(base, found, pagesRead) {
+/** The text for stdout: one block per waiting thread, longest waiting first across all pages, then the count line with what was read. */
+export function renderWaiting(base, found, pagesRead, scope) {
   const all = found.flatMap(({ page, title, waiting }) => waiting.map((t) => ({ page, title, t })));
   all.sort((a, b) => (a.t.key < b.t.key ? -1 : a.t.key > b.t.key ? 1 : 0));
   const lines = [];
@@ -120,9 +120,9 @@ export function renderWaiting(base, found, pagesRead) {
   }
   const pages = found.length;
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  lines.push(all.length === 0
-    ? `none waiting (${plural(pagesRead, 'page')} read)`
-    : `${plural(all.length, 'thread')} waiting on ${plural(pages, 'page')} (${plural(pagesRead, 'page')} read)`);
+  // The count line says what was selected: a run over every page says that archived pages are in it.
+  const read = `${plural(pagesRead, 'page')} read${scope === 'all' ? ', archived pages included' : ''}`;
+  lines.push(all.length === 0 ? `none waiting (${read})` : `${plural(all.length, 'thread')} waiting on ${plural(pages, 'page')} (${read})`);
   return lines.join('\n');
 }
 
@@ -177,7 +177,7 @@ async function scan(request, ports, ctx) {
   for (const f of found) if (f.title === undefined) f.title = oneLine((await ports.api.artifact(request.base, f.page)).title);
   ctx.waiting = found.reduce((n, f) => n + f.waiting.length, 0);
   ctx.threads = found.flatMap((f) => f.waiting.map((t) => ({ page: f.page, thread: t.root.id })));
-  return { text: renderWaiting(request.base, found, pages.length), waiting: ctx.waiting };
+  return { text: renderWaiting(request.base, found, pages.length, scope), waiting: ctx.waiting };
 }
 
 /** One line for the action log. `error` is null on success. */

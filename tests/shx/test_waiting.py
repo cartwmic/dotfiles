@@ -115,13 +115,13 @@ class WaitingTest(unittest.TestCase):
         self.assertIn("thread c1  waiting since 2026-11-20T10:00:00.5Z", r.stdout)
         self.assertIn("  on     The other is the workflow", r.stdout)
         self.assertIn("  he wrote: is this still needed?", r.stdout)
-        self.assertTrue(r.stdout.rstrip().endswith("1 thread waiting on 1 page (1 page read)"), r.stdout)
+        self.assertTrue(r.stdout.rstrip().endswith("1 thread waiting on 1 page (1 page read, archived pages included)"), r.stdout)
 
     def test_his_comment_then_an_agent_reply_is_not_waiting(self):
         s = self.serve({A: ("P", [his("c1", "2026-11-20T10:00:00Z"), agents("r1", "2026-11-20T11:00:00Z", "c1")])})
         r, _ = run(s)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.strip(), "none waiting (1 page read)")
+        self.assertEqual(r.stdout.strip(), "none waiting (1 page read, archived pages included)")
 
     def test_his_comment_agent_reply_then_his_again_is_waiting(self):
         s = self.serve({A: ("P", [his("c1", "2026-11-20T10:00:00Z", "first"), agents("r1", "2026-11-20T11:00:00Z", "c1"),
@@ -143,12 +143,12 @@ class WaitingTest(unittest.TestCase):
     def test_a_resolved_thread_is_not_waiting(self):
         s = self.serve({A: ("P", [his("c1", "2026-11-20T10:00:00Z", resolved=True)])})
         r, _ = run(s)
-        self.assertEqual((r.returncode, r.stdout.strip()), (0, "none waiting (1 page read)"))
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "none waiting (1 page read, archived pages included)"))
 
     def test_a_page_with_no_comments(self):
         s = self.serve({A: ("P", [])})
         r, _ = run(s)
-        self.assertEqual((r.returncode, r.stdout.strip()), (0, "none waiting (1 page read)"))
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "none waiting (1 page read, archived pages included)"))
 
     def test_time_order_not_list_order_and_fractions_of_any_length(self):
         # created_at fractions differ in length, so a text compare puts ".4423Z" after ".44231Z": his later message must still win.
@@ -167,7 +167,7 @@ class WaitingTest(unittest.TestCase):
         r, records = run(s)
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertEqual([l.split()[1] for l in r.stdout.splitlines() if l.startswith("  thread")], ["o1", "o2", "n1"])
-        self.assertTrue(r.stdout.rstrip().endswith("3 threads waiting on 2 pages (4 pages read)"), r.stdout)
+        self.assertTrue(r.stdout.rstrip().endswith("3 threads waiting on 2 pages (4 pages read, archived pages included)"), r.stdout)
         self.assertEqual([m for m, _ in s.requests if m != "GET"], [])  # it changes nothing on the server
         self.assertEqual(len(records), 1)
         self.assertEqual({k: records[0][k] for k in ("command", "scope", "pages", "waiting", "error")},
@@ -180,7 +180,7 @@ class WaitingTest(unittest.TestCase):
         r, _ = run(s)
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertIn("page %s (Archived)" % B, r.stdout)
-        self.assertTrue(r.stdout.rstrip().endswith("(2 pages read)"), r.stdout)
+        self.assertTrue(r.stdout.rstrip().endswith("(2 pages read, archived pages included)"), r.stdout)
 
     def test_his_reply_on_a_thread_an_agent_started_is_waiting(self):
         s = self.serve({A: ("P", [{"id": "c1", "author": "agent", "body": "a question for you", "version": 1, "created_at": "2026-11-20T10:00:00Z"},
@@ -203,7 +203,7 @@ class WaitingTest(unittest.TestCase):
         pages = {"%024x" % (100 + n): ("P%d" % n, [his("c%d" % n, "2026-11-20T10:00:00Z")] if n == 37 else []) for n in range(80)}
         r, _ = run(self.serve(pages))
         self.assertEqual(r.returncode, 1, r.stderr)
-        self.assertTrue(r.stdout.rstrip().endswith("1 thread waiting on 1 page (80 pages read)"), r.stdout)
+        self.assertTrue(r.stdout.rstrip().endswith("1 thread waiting on 1 page (80 pages read, archived pages included)"), r.stdout)
 
     def test_page_ids_and_a_file_of_ids(self):
         s = self.serve({A: ("One", [his("c1", "2026-11-20T10:00:00Z")]), B: ("Two", []), C: ("Three", [his("c3", "2026-11-20T10:00:00Z")])})

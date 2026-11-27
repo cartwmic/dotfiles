@@ -59,7 +59,7 @@ only (`GET`) and changes nothing.
   `SHARTIFACTS_URL`, else `https://shartifacts.internal.cartwmic.com`.
 - stdout: one block per waiting thread, longest waiting first (page id and title, link, thread id and when his first
   unanswered message came, the text he pointed at, his unanswered messages), then a count line such as
-  `2 threads waiting on 1 page (1012 pages read)` or `none waiting (1012 pages read)`. A refusal or failure prints one line on stderr (a crash prints its stack) and nothing on stdout.
+  `2 threads waiting on 1 page (1012 pages read, archived pages included)` or `none waiting (1012 pages read, archived pages included)`; a run over page ids or a file says only `(N pages read)`. A refusal or failure prints on stderr (a usage error adds the usage text, a crash its stack) and nothing on stdout.
 - Exit: `0` none waiting, `1` at least one waits, `2` bad usage or an unreadable `--file`, `3` unexpected failure (an
   uncaught error, or an entry or module that is missing or does not parse: the wrapper loads the entry itself and
   turns any failure into 3, so Node's own `1` is never let through), `4` no `node`, `5` shartifacts

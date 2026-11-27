@@ -165,7 +165,7 @@ after it, and exits 1 when any waits (0 when none; 2 to 5 when it could not read
 shx-waiting [--file F]... [<page-id>...]
 ```
 
-With no page ids it reads every page the server lists. `--file F` takes page ids from any text file. Each
+With no page ids it reads every page the server has, archived ones too. `--file F` takes page ids from any text file. Each
 block gives the page, the link, the thread id (the `parent` for your reply), the text he pointed at and his words.
 It changes nothing: reply with `artifact_comments` (see "Reply and resolve").
 
