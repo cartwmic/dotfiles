@@ -5,6 +5,7 @@ import runlog_support  # first: keeps the run out of the real log
 import tempfile
 import unittest
 import json
+import os
 from pathlib import Path
 
 from test_check_truth import CODEMAP, TRUTH, make, report, run
@@ -141,6 +142,13 @@ class LaterRounds(unittest.TestCase):
             run(TRUTH, "verdicts", work / "round2", reports)
             records = [json.loads(l) for l in (Path(STATE) / "distilling-requirements/log.jsonl").read_text().splitlines()]
             self.assertEqual((records[-1]["step"], records[-1]["carried"]), ("verdicts", 3))
+
+    def test_a_missing_register_path_is_refused_and_the_log_still_says_since(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, _ = run(TRUTH, "prepare", Path(tmp) / "NO-SUCH.md", "--out", Path(tmp) / "w", "--since", Path(tmp) / "old")
+            self.assertEqual(code, 2)
+            record = json.loads((Path(os.environ["XDG_STATE_HOME"]) / "distilling-requirements/log.jsonl").read_text().splitlines()[-1])
+            self.assertEqual((record["outcome"], record["reason"], record["since"]), ("refused", "usage", True))
 
     def test_truth_check_says_later_rounds_check_only_changed_rows_and_why(self):
         text = (Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/distilling-requirements/references/truth-check.md").read_text()

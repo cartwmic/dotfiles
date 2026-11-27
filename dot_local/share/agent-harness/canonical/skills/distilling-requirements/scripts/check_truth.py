@@ -222,6 +222,7 @@ def cli(argv, stats):
         stats["step"] = "verdicts"
         return verdicts(argv[2], argv[3], stats)
     print(__doc__.split("\n\n")[0], file=sys.stderr)
+    stats["since"] = "--since" in argv  # a prepare call refused before prepare() ran (a register path that is no file) still shows whether it asked for --since
     stats["reason"] = "usage"
     return 2
 

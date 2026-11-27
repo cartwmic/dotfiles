@@ -71,16 +71,17 @@ class OutNeverLosesABlock(unittest.TestCase):
         state = Path(os.environ["XDG_STATE_HOME"])  # the folder the runs used: whichever test module set it last
         return json.loads((state / "designing-the-smallest-version/log.jsonl").read_text().splitlines()[-1])
 
-    def test_the_log_says_where_it_wrote_and_that_nothing_was_replaced(self):
+    def test_a_fresh_path_is_written_and_logged_as_not_replaced(self):
         f = self.out("log-new.json")
         self.assertEqual(run(self.repo, "--out", str(f)).returncode, 0)
         rec = self.last_record()
-        self.assertEqual((rec["outcome"], rec["out"], rec["force"], rec["replaced"]), ("ok", str(f), False, False))
+        self.assertEqual((rec["outcome"], rec["exit"], rec["out"], rec["force"], rec["replaced"]), ("ok", 0, str(f), False, False))
 
-    def test_the_log_says_that_force_replaced_a_file(self):
+    def test_a_forced_overwrite_changes_the_file_and_is_logged_as_replaced(self):
         f = self.out("log-force.json")
         f.write_text("old")
         self.assertEqual(run(self.repo, "--force", "--out", str(f)).returncode, 0)
+        self.assertIn("rev", json.loads(f.read_text()))
         rec = self.last_record()
         self.assertEqual((rec["outcome"], rec["out"], rec["force"], rec["replaced"]), ("ok", str(f), True, True))
 
@@ -90,13 +91,61 @@ class OutNeverLosesABlock(unittest.TestCase):
         rec = self.last_record()
         self.assertEqual((rec["force"], rec["replaced"]), (True, False))
 
-    def test_a_refused_run_is_logged_with_its_reason_and_the_path(self):
-        f = self.out("log-refused.json")
-        f.write_text("old")
-        self.assertEqual(run(self.repo, "--out", str(f)).returncode, 2)
+    def assert_refused(self, done, f, reason):
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertEqual(f.read_bytes(), b"old bytes")  # the file is as it was
         rec = self.last_record()
-        self.assertEqual((rec["outcome"], rec["out"], rec["force"], rec["replaced"]), ("refused", str(f), False, False))
-        self.assertIn("already exists", rec["reason"])
+        self.assertEqual((rec["outcome"], rec["exit"]), ("refused", 2))
+        self.assertIn(reason, rec["reason"])
+        self.assertNotIn("replaced", rec)  # a refused run replaced nothing, and says nothing of it
+        self.assertIn(reason, done.stderr)
+        return rec
+
+    def test_an_existing_file_without_force_is_refused_and_logged_with_no_replaced(self):
+        f = self.out("r1.json")
+        f.write_bytes(b"old bytes")
+        rec = self.assert_refused(run(self.repo, "--out", str(f)), f, "already exists")
+        self.assertEqual((rec["out"], rec["force"]), (str(f), False))
+
+    def test_a_bad_rev_is_refused_with_or_without_force_and_the_file_is_kept(self):
+        for name, force in (("r2a.json", ()), ("r2b.json", ("--force",))):  # a bad rev with --force once logged replaced: true
+            f = self.out(name)
+            f.write_bytes(b"old bytes")
+            if force:
+                rec = self.assert_refused(run(self.repo, "--rev", "no-such-rev", "--force", "--out", str(f)), f, "unknown rev")
+                self.assertEqual((rec["force"], rec["out"]), (True, str(f)))
+            else:  # without --force the existing file is refused first, before the rev is looked at
+                self.assert_refused(run(self.repo, "--rev", "no-such-rev", "--out", str(f)), f, "already exists")
+
+    def test_a_bad_rev_into_a_fresh_path_writes_nothing(self):
+        f = self.out("r2c.json")
+        done = run(self.repo, "--rev", "no-such-rev", "--out", str(f))
+        self.assertEqual(done.returncode, 2)
+        self.assertFalse(f.exists())
+        self.assertIn("unknown rev", self.last_record()["reason"])
+        self.assertNotIn("replaced", self.last_record())
+
+    def test_a_path_that_is_not_a_git_repo_is_refused_and_the_file_is_kept(self):
+        f = self.out("r3.json")
+        f.write_bytes(b"old bytes")
+        self.assert_refused(run(self.tmp / "no-such-repo", "--force", "--out", str(f)), f, "not a git repo")
+
+    def test_a_fault_in_os_replace_leaves_the_old_file_and_logs_failed(self):
+        f = self.out("r4.json")
+        f.write_bytes(b"old bytes")
+        code = ("import os, sys, runpy\n"
+                "def boom(*a): raise OSError(5, 'injected')\n"
+                "os.replace = boom\n"
+                "sys.argv = ['repo_facts.py', %r, '--force', '--out', %r]\n"
+                "runpy.run_path(%r, run_name='__main__')" % (str(self.repo), str(f), str(REPO_FACTS)))
+        done = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertEqual(f.read_bytes(), b"old bytes")
+        self.assertEqual(sorted(p.name for p in self.tmp.glob(".facts-*")), [])  # the temp file is gone
+        rec = self.last_record()
+        self.assertEqual((rec["outcome"], rec["exit"], rec["force"]), ("failed", 1, True))
+        self.assertIn("injected", rec["error"])
+        self.assertNotIn("replaced", rec)
 
     def test_a_run_with_no_out_logs_no_out_fields(self):
         self.assertEqual(run(self.repo).returncode, 0)

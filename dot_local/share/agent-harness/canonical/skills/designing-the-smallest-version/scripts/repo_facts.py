@@ -7,7 +7,7 @@
 Reads git only and never writes to REPO. The tree is read from `git archive`
 at REV, so the working tree is ignored. Prints one JSON object (or writes
 --out). --out exits 2 and leaves the file alone when it already exists, before any analysis, unless --force is given.
---summary alone writes no file. Every run with --out logs out, force and replaced (true when --force overwrote a file); a refused run logs the reason. Exit 0 on success; exit 2 with one stderr line on bad arguments, an
+--summary alone writes no file. --out is written through a temp file and os.replace, so a failed write leaves the old file (exit 1). Exit 0 on success; exit 2 with one stderr line on bad arguments, an
 unknown rev or a path that is not a git repo.
 
 Globs (--parts first column, --scope): `*` stays within one path segment, `**`
@@ -27,11 +27,13 @@ same parent-to-child pair as its `mod child;`, and a loop through that pair is t
 An `import type`, `export type ... from` or `import { type A }` (every name a type) is erased at runtime and makes no edge.
 path_refs maps path strings in config and script files to the files or
 directories they name.
-Log: each run appends one JSON line (runlog.py: script, action `repo-facts`, outcome ok or
-refused, and the file and import-edge counts or the reason it refused).
+Log: each run appends one JSON line (runlog.py: script, action `repo-facts`, exit, and one outcome: ok with the file and import-edge counts,
+refused with its reason, or failed with its error). A run with --out also logs `out` and `force` (asked for). Only an ok run with --out logs `replaced`, true when --force
+overwrote a file.
 """
 import argparse
 import collections
+import dataclasses
 import datetime
 import itertools
 import json
@@ -120,13 +122,36 @@ SURFACES_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(o
                                'deriving-readable-docs', 'scripts', 'surfaces.py')
 
 
-RUN = {}  # what the log says of a run that has --out: out, force, replaced (set once the arguments are read)
+class Refusal(Exception):
+    """The run will not do the work (bad arguments, an unknown rev, a file in the way). main turns it into a Refused outcome."""
 
 
 def die(msg):
-    sys.stderr.write(f'repo_facts: {msg}\n')
-    log_run('repo_facts.py', 'repo-facts', 'refused', reason=msg, **RUN)
-    sys.exit(2)
+    raise Refusal(msg)
+
+
+# How a run ends: one value, from which main derives the log line and the exit code. Only Written has `replaced`.
+@dataclasses.dataclass(frozen=True)
+class Written:
+    """The facts went to --out; `replaced` is true when a file was there just before the write."""
+    replaced: bool
+    counts: dict
+
+
+@dataclasses.dataclass(frozen=True)
+class Printed:
+    """The facts went to stdout (no --out)."""
+    counts: dict
+
+
+@dataclasses.dataclass(frozen=True)
+class Refused:
+    reason: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Failed:
+    error: str
 
 
 class _Parser(argparse.ArgumentParser):
@@ -981,19 +1006,44 @@ def analyse(repo, sha, args, rules, tmp):
     return out
 
 
-def refuse_to_overwrite(out, force):
-    """--out never replaces a file that is already there unless --force is given: a facts file made with --parts or --scope, or for another rev, is a
-    report the designer may still need, and a run with other options writes a different one."""
-    if os.path.exists(out) and not force:
-        die(f'{out} already exists: give --force to replace it, or write to another --out')
+def publish(out, text, force):
+    """The only code that touches --out: write a temp file beside it, flush and fsync, then os.replace it over --out, so a failed write leaves the old file as it was.
+    Written(replaced) when the file is in place (`replaced`: a file was there just before the replace), Refused when one is there and force is not given,
+    Failed when the write or the replace fails."""
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix='.facts-', suffix='.tmp', dir=os.path.dirname(os.path.abspath(out)))
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp makes it private; the file a plain write made had the user's usual mode
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        replaced = os.path.exists(out)
+        if replaced and not force:
+            return Refused(already_exists(out))
+        os.replace(tmp, out)
+        tmp = None
+        return Written(replaced, {})
+    except OSError as exc:
+        return Failed(f'cannot write --out: {exc.strerror or exc}')
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
-def main(argv=None):
-    args = parse_args(argv)
-    if args.out:
-        RUN.update(out=args.out, force=args.force, replaced=False)
-        refuse_to_overwrite(args.out, args.force)  # before any analysis
-        RUN['replaced'] = os.path.exists(args.out)  # only --force gets here with a file in the way
+def already_exists(out):
+    return f'{out} already exists: give --force to replace it, or write to another --out'
+
+
+def run(args):
+    """Do the work; the outcome. A Refusal (die) anywhere inside ends it as Refused."""
+    if args.out and os.path.exists(args.out) and not args.force:
+        return Refused(already_exists(args.out))  # before any analysis
     try:
         repo = git(args.repo, 'rev-parse', '--show-toplevel').strip()
     except RuntimeError:
@@ -1014,19 +1064,46 @@ def main(argv=None):
     }
     facts.update(body)
     text = json.dumps(facts, indent=2) + '\n'
+    counts = {'files': sum(facts['languages'].values()), 'edges': facts['edge_count'] if args.scope else len(facts['edges'])}
     if args.out:
-        try:
-            with open(args.out, 'w', encoding='utf-8') as fh:
-                fh.write(text)
-        except OSError as exc:
-            die(f'cannot write --out: {exc.strerror}')
+        done = publish(args.out, text, args.force)
+        if not isinstance(done, Written):
+            return done
+        done = Written(done.replaced, counts)
+    else:
+        done = Printed(counts)
     if args.summary:
         sys.stdout.write(summarize(facts))
     elif not args.out:
         sys.stdout.write(text)
-    log_run('repo_facts.py', 'repo-facts', 'ok', files=sum(facts['languages'].values()),
-            edges=facts['edge_count'] if args.scope else len(facts['edges']), **RUN)
-    return 0
+    return done
+
+
+def record_of(outcome):
+    """(log outcome, exit code, the outcome's own log fields)."""
+    if isinstance(outcome, Written):
+        return 'ok', 0, {'replaced': outcome.replaced, **outcome.counts}
+    if isinstance(outcome, Printed):
+        return 'ok', 0, dict(outcome.counts)
+    if isinstance(outcome, Refused):
+        return 'refused', 2, {'reason': outcome.reason}
+    return 'failed', 1, {'error': outcome.error}
+
+
+def main(argv=None):
+    """The one exit point: run, say a refusal or failure on stderr, append the one log line, return the exit code."""
+    args = None
+    try:
+        args = parse_args(argv)
+        outcome = run(args)
+    except Refusal as exc:
+        outcome = Refused(str(exc))
+    name, code, fields = record_of(outcome)
+    if isinstance(outcome, (Refused, Failed)):
+        sys.stderr.write(f'repo_facts: {outcome.reason if isinstance(outcome, Refused) else outcome.error}\n')
+    asked = {'out': args.out, 'force': args.force} if args and args.out else {}  # `force`: asked for, whatever came of it
+    log_run('repo_facts.py', 'repo-facts', name, exit=code, **asked, **fields)
+    return code
 
 
 if __name__ == '__main__':
