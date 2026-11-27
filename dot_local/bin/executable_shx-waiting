@@ -1,0 +1,10 @@
+#!/bin/sh
+# Lists the shartifacts comment threads whose latest message is the owner's, so none stays unanswered.
+# The work is in ../share/shx/waiting.mjs; this wrapper only finds node. Exit 0 none waiting, 1 some waiting, 2-5 not read.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if ! command -v node >/dev/null 2>&1; then
+	echo "[shx-waiting] ERROR: node not found on PATH (shx-waiting needs Node 20 or newer)" >&2
+	exit 4
+fi
+exec node "$HERE/../share/shx/waiting.mjs" "$@"
