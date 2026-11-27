@@ -329,7 +329,7 @@ class ReadmeStructureTests(unittest.TestCase):
         self.assertFalse((TOOL / "adapters" / "claude-doorbell" / "README.md").exists())
         self.assertEqual(sorted(p.name for p in TOOL.rglob("README.md")), ["README.md"])
         found = sections(self.readme)
-        for heading in ("Pi source: notify-owner", "Claude doorbell sink", "Add an adapter", "Failure modes"):
+        for heading in ("Claude doorbell sink", "Add an adapter", "Failure modes"):
             self.assertIn(heading, found)
 
     def test_readme_links_the_spec_and_every_link_resolves(self):
@@ -358,10 +358,7 @@ class ReadmeStructureTests(unittest.TestCase):
         ):
             self.assertNotIn(fragment, self.readme)
 
-    def test_readme_states_the_pi_source_and_doorbell_facts(self):
-        pi = " ".join(re.sub(r"[`*]", "", sections(self.readme)["Pi source: notify-owner"]).split())
-        for phrase in ("notify_owner(question)", "ask_user_question", "Pi exits cleanly", "no message text", "hard kill", "Explicit only", "herdr pane read", "herdr plugin unlink agent-alert"):
-            self.assertIn(phrase, pi)
+    def test_readme_states_the_doorbell_facts(self):
         doorbell = sections(self.readme)["Claude doorbell sink"]
         for phrase in ('"sink"', "AGENT_ALERT_DOORBELL_SESSION", "fixed 4 seconds", "claude exited with status N",
                        "none is dropped", "doorbell.py --flush", "+N more"):
@@ -370,7 +367,7 @@ class ReadmeStructureTests(unittest.TestCase):
 
     def test_readme_names_each_required_failure_mode_and_how_to_watch_and_wait(self):
         text = self.readme.lower()
-        for phrase in ("lost ring", "login expired or missing", "pi not restarted", "unwritable inbox", "killed hard", "forgets `notify_owner`"):
+        for phrase in ("lost ring", "login expired or missing", "unwritable inbox"):
             self.assertIn(phrase, text)
         self.assertIn("tail -n 20 -F", self.readme)
         self.assertIn("a wake-up", self.readme)

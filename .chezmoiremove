@@ -18,6 +18,10 @@
 .config/systemd/user/kelsey-intake.timer
 
 {{ end -}}
+# Retired 2026-11-27: the Pi notify-owner extension (the `notify_owner` tool). It rang the owner only for a Herdr pane, and nothing
+# runs in Herdr now. Removes the whole deployed directory on apply. Prune once every machine has applied.
+.pi/agent/extensions/notify-owner
+
 # Retired 2026-11-13: viz, the homelab page host, and its tools; agents publish charts, diagrams and pictures on shartifacts.
 # Source deletion alone leaves the deployed CLI, its code, its machine file and the skill. apply_harness_config.sh then prunes
 # the agent-skill symlinks that pointed at the removed skill. Prune once every machine has applied.
