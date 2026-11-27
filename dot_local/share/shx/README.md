@@ -53,19 +53,20 @@ owner) or `agent`. A thread waits when it is not resolved and its latest message
 a fixed width, ties by list order), is the owner's. An agent's reply is never shown as his comment. The command reads
 only (`GET`) and changes nothing.
 
-- No page ids and no `--file`: every page `GET <base>/api/artifacts` lists (read twelve at a time). Page ids, or
+- No page ids and no `--file`: every page `GET <base>/api/artifacts?archived=include` lists, archived pages too (the default list leaves them out; a comment on one is still a comment), read twelve at a time. Page ids, or
   `--file F` (each 24-character hex word in the file is one id, so a plain list or a tab-separated table both work):
-  only those pages. `<base-url>` is the first argument that starts with `http://` or `https://`, else
+  only those pages. `<base-url>` is an argument that starts with `http://` or `https://`, else
   `SHARTIFACTS_URL`, else `https://shartifacts.internal.cartwmic.com`.
 - stdout: one block per waiting thread, longest waiting first (page id and title, link, thread id and when his first
   unanswered message came, the text he pointed at, his unanswered messages), then a count line such as
-  `2 threads waiting on 1 page (1012 pages read)` or `none waiting (1012 pages read)`. Failures print one line on stderr.
+  `2 threads waiting on 1 page (1012 pages read)` or `none waiting (1012 pages read)`. A refusal or failure prints one line on stderr (a crash prints its stack) and nothing on stdout.
 - Exit: `0` none waiting, `1` at least one waits, `2` bad usage or an unreadable `--file`, `3` unexpected failure (an
-  uncaught error, a broken install: Node's own `1` is never allowed through), `4` no `node`, `5` shartifacts
+  uncaught error, or an entry or module that is missing or does not parse: the wrapper loads the entry itself and
+  turns any failure into 3, so Node's own `1` is never let through), `4` no `node`, `5` shartifacts
   unreachable, answered an error or answered something that is not comments (the line names the page). A failure on
   any page fails the run: "could not read" is never "nothing waits".
 - Log: one JSON line per run in `${XDG_STATE_HOME:-~/.local/state}/shx/waiting.log`: `id`, `ts`, `command`
-  (`waiting`), `base`, `scope` (`all` or `ids`), `pages`, `waiting`, `duration_ms`, `error`. Counting the lines
+  (`waiting`), `base`, `scope` (`all` or `ids`), `page_ids` (the ids of an `ids` run; null for `all`), `pages`, `waiting`, `threads` (page and thread id of each thread the run listed), `duration_ms`, `error`. Counting the lines
   answers how often agents run it and how often a run found something waiting.
 
 ## Output
@@ -97,7 +98,7 @@ Every run (failures and usage errors too) appends one JSON line to
 
 ```
 dot_local/bin/executable_shx-note-image   wrapper: finds node, runs shx.mjs
-dot_local/bin/executable_shx-waiting      wrapper: finds node, runs waiting.mjs
+dot_local/bin/executable_shx-waiting      wrapper: finds node, loads waiting.mjs, turns any load or run failure into exit 3
 dot_local/share/shx/
   shx.mjs                 wires the real adapters into the core
   waiting.mjs             the same for shx-waiting

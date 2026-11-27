@@ -1,10 +1,26 @@
 #!/bin/sh
 # Lists the shartifacts comment threads whose latest message is the owner's, so none stays unanswered.
-# The work is in ../share/shx/waiting.mjs; this wrapper only finds node. Exit 0 none waiting, 1 some waiting, 2-5 not read.
+# The work is in ../share/shx/waiting.mjs. Exit 1 means "something waits", so no failure may end in 1, and Node ends a
+# missing or unparsable entry file with 1 before any handler of that file could run: this wrapper loads the entry from a
+# loader that is part of this file, and turns any failure to load or run it into 3.
+# Exit 0 none waiting, 1 some waiting, 2 bad usage, 3 unexpected failure, 4 no node, 5 could not read.
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if ! command -v node >/dev/null 2>&1; then
 	echo "[shx-waiting] ERROR: node not found on PATH (shx-waiting needs Node 20 or newer)" >&2
 	exit 4
 fi
-exec node "$HERE/../share/shx/waiting.mjs" "$@"
+exec node --input-type=module -e '
+const die = (e) => {
+  process.stderr.write(`[shx-waiting] ERROR: unexpected failure: ${e && e.stack ? e.stack : e}\n`);
+  process.exit(3);
+};
+process.on("uncaughtException", die);
+process.on("unhandledRejection", die);
+try {
+  const { pathToFileURL } = await import("node:url");
+  await import(pathToFileURL(process.argv[1]).href);
+} catch (e) {
+  die(e);
+}
+' "$HERE/../share/shx/waiting.mjs" "$@"

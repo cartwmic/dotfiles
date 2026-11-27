@@ -28,7 +28,7 @@ const artifactUrl = (base, artifact) => `${base}/api/artifacts/${encodeURICompon
 export const api = {
   comments: (base, artifact) => request('GET', `${artifactUrl(base, artifact)}/comments`),
   artifact: (base, artifact) => request('GET', artifactUrl(base, artifact)),
-  // For shx-waiting: the pages the server lists (id and title).
-  pages: (base) => request('GET', `${base}/api/artifacts`),
+  // For shx-waiting: every page the server has, archived ones too (the default list leaves them out), as id and title.
+  pages: (base) => request('GET', `${base}/api/artifacts?archived=include`),
   postMatches: (base, artifact, body) => request('POST', `${artifactUrl(base, artifact)}/comments/matches`, body),
 };

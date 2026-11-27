@@ -14,6 +14,7 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CMD = os.path.join(ROOT, "dot_local", "bin", "executable_shx-waiting")
@@ -38,6 +39,7 @@ class Fixture(ThreadingHTTPServer):
     def __init__(self, pages):
         super().__init__(("127.0.0.1", 0), Handler)
         self.pages, self.requests = pages, []  # pages: id -> (title, comments | int status | raw JSON value)
+        self.archived = set()  # ids of pages the default list leaves out; ?archived=include lists them
         threading.Thread(target=self.serve_forever, args=(0.02,), daemon=True).start()
 
     @property
@@ -59,9 +61,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.server.requests.append(("GET", self.path))
-        parts = self.path.strip("/").split("/")
+        url = urlparse(self.path)
+        parts = url.path.strip("/").split("/")
         if parts == ["api", "artifacts"]:
-            return self.reply(200, [{"id": i, "title": t, "kind": "html", "version": 1} for i, (t, _) in self.server.pages.items()])
+            mode = parse_qs(url.query).get("archived", ["exclude"])[0]
+            return self.reply(200, [{"id": i, "title": t, "kind": "html", "version": 1} for i, (t, _) in self.server.pages.items()
+                                    if mode == "include" or i not in self.server.archived])
         if len(parts) >= 3 and parts[:2] == ["api", "artifacts"] and parts[2] in self.server.pages:
             title, comments = self.server.pages[parts[2]]
             if len(parts) == 3:
@@ -168,6 +173,32 @@ class WaitingTest(unittest.TestCase):
         self.assertEqual({k: records[0][k] for k in ("command", "scope", "pages", "waiting", "error")},
                          {"command": "waiting", "scope": "all", "pages": 4, "waiting": 3, "error": None})
 
+    def test_an_archived_page_is_read_too(self):
+        # The default page list leaves archived pages out; a comment on one is still a comment.
+        s = self.serve({A: ("Live", []), B: ("Archived", [his("c1", "2026-11-20T10:00:00Z")])})
+        s.archived.add(B)
+        r, _ = run(s)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("page %s (Archived)" % B, r.stdout)
+        self.assertTrue(r.stdout.rstrip().endswith("(2 pages read)"), r.stdout)
+
+    def test_his_reply_on_a_thread_an_agent_started_is_waiting(self):
+        s = self.serve({A: ("P", [{"id": "c1", "author": "agent", "body": "a question for you", "version": 1, "created_at": "2026-11-20T10:00:00Z"},
+                                  his_reply("r1", "2026-11-20T11:00:00Z", "c1", "my answer")])})
+        r, _ = run(s)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("he wrote: my answer", r.stdout)
+
+    def test_the_log_says_which_pages_were_read_and_which_threads_were_shown(self):
+        s = self.serve({A: ("One", [his("c1", "2026-11-20T10:00:00Z")]), B: ("Two", [])})
+        r, records = run(s, B, A)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual({k: records[0][k] for k in ("scope", "page_ids", "threads")},
+                         {"scope": "ids", "page_ids": [B, A], "threads": [{"page": A, "thread": "c1"}]})
+        r, records = run(s)
+        self.assertEqual({k: records[0][k] for k in ("scope", "page_ids", "pages", "threads")},
+                         {"scope": "all", "page_ids": None, "pages": 2, "threads": [{"page": A, "thread": "c1"}]})
+
     def test_many_pages(self):
         pages = {"%024x" % (100 + n): ("P%d" % n, [his("c%d" % n, "2026-11-20T10:00:00Z")] if n == 37 else []) for n in range(80)}
         r, _ = run(self.serve(pages))
@@ -234,18 +265,23 @@ class WaitingTest(unittest.TestCase):
                 self.assertEqual(r.returncode, 2, r.stderr)
 
     def test_a_broken_install_is_not_exit_1(self):
-        # Node ends an uncaught error, a missing module or a syntax error in an imported file with 1, the code for "waiting".
-        with tempfile.TemporaryDirectory() as tmp:
-            shutil.copytree(os.path.join(ROOT, "dot_local", "share", "shx"), os.path.join(tmp, "share", "shx"))
-            os.makedirs(os.path.join(tmp, "bin"))
-            shutil.copy(CMD, os.path.join(tmp, "bin", "shx-waiting"))
-            with open(os.path.join(tmp, "share", "shx", "core", "waiting.mjs"), "w") as f:
-                f.write("export const x = ;\n")
-            r, _ = run(None, "http://127.0.0.1:9", A, cmd=os.path.join(tmp, "bin", "shx-waiting"))
-            self.assertEqual(r.returncode, 3, r.stderr)
-            os.remove(os.path.join(tmp, "share", "shx", "adapters", "shartifacts_http.mjs"))
-            r, _ = run(None, "http://127.0.0.1:9", A, cmd=os.path.join(tmp, "bin", "shx-waiting"))
-            self.assertEqual(r.returncode, 3, r.stderr)
+        # Node ends an uncaught error, a missing module or a syntax error in a loaded file with 1, the code for "waiting".
+        # Each file of the install, in turn, missing or unparsable: the answer is 3.
+        files = ("waiting.mjs", "core/waiting.mjs", "core/domain.mjs", "adapters/shartifacts_http.mjs", "adapters/fs_store.mjs")
+        for name in files:
+            for how in ("missing", "syntax error"):
+                with self.subTest(file=name, how=how), tempfile.TemporaryDirectory() as tmp:
+                    shutil.copytree(os.path.join(ROOT, "dot_local", "share", "shx"), os.path.join(tmp, "share", "shx"))
+                    os.makedirs(os.path.join(tmp, "bin"))
+                    shutil.copy(CMD, os.path.join(tmp, "bin", "shx-waiting"))
+                    target = os.path.join(tmp, "share", "shx", *name.split("/"))
+                    if how == "missing":
+                        os.remove(target)
+                    else:
+                        with open(target, "a") as f:
+                            f.write("\nexport const x = ;\n")
+                    r, _ = run(None, "http://127.0.0.1:9", A, cmd=os.path.join(tmp, "bin", "shx-waiting"))
+                    self.assertEqual(r.returncode, 3, r.stderr)
 
     def test_no_node(self):
         with tempfile.TemporaryDirectory() as tmp:

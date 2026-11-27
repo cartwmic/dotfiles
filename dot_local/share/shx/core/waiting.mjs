@@ -13,10 +13,10 @@ import { EXIT_CODES, ShxError, normalizeBase, originOf } from './domain.mjs';
 
 export const WAITING_USAGE = `usage:
   shx-waiting [<base-url>] [--file F]... [<page-id>...]
-  With no page ids and no --file it reads every page the server lists. --file F holds page ids, any text:
+  With no page ids and no --file it reads every page the server has, archived ones too. --file F holds page ids, any text:
   each 24-character hex word in it is one id (a plain list, or rows with the id in one column).
   exit 0: nothing waits; 1: at least one thread waits; 2: bad usage; 3: unexpected failure; 4: no node; 5: could not read.
-  <base-url> may be left out when SHARTIFACTS_URL is set.`;
+  <base-url> may be left out: SHARTIFACTS_URL, else the server the using-shartifacts skill names.`;
 
 const OWNER = 'you';
 // How many pages are read at once. The server answers each in about a tenth of a second.
@@ -163,6 +163,8 @@ async function scan(request, ports, ctx) {
   const { pages, scope } = await listPages(request, ports);
   ctx.scope = scope;
   ctx.pages = pages.length;
+  // A run over pages the caller named records which; a run over every page records only how many.
+  if (scope === 'ids') ctx.pageIds = pages.map((p) => p.id);
   const found = (await mapLimit(pages, CONCURRENCY, async (p) => {
     try {
       return { page: p.id, title: p.title, waiting: waitingThreads(await ports.api.comments(request.base, p.id)) };
@@ -174,19 +176,22 @@ async function scan(request, ports, ctx) {
   // A page given by id has no title yet; only the pages that print a block need one.
   for (const f of found) if (f.title === undefined) f.title = oneLine((await ports.api.artifact(request.base, f.page)).title);
   ctx.waiting = found.reduce((n, f) => n + f.waiting.length, 0);
+  ctx.threads = found.flatMap((f) => f.waiting.map((t) => ({ page: f.page, thread: t.root.id })));
   return { text: renderWaiting(request.base, found, pages.length), waiting: ctx.waiting };
 }
 
 /** One line for the action log. `error` is null on success. */
-export function waitingLogRecord({ id, startedAt, durationMs, request, scope, pages, waiting, error }) {
+export function waitingLogRecord({ id, startedAt, durationMs, request, scope, pageIds, pages, waiting, threads, error }) {
   return {
     id,
     ts: new Date(startedAt).toISOString(),
     command: 'waiting',
     base: request ? originOf(request.base) : null,
     scope: scope ?? null,
+    page_ids: pageIds ?? null,
     pages: pages ?? null,
     waiting: waiting ?? null,
+    threads: threads ?? null,
     duration_ms: durationMs,
     error: error ? { code: error.code, message: error.message } : null,
   };
