@@ -61,9 +61,9 @@ every complete line ends with `}`. For the event with `seq` 12 the expression is
 ^\{"version":1,"seq":12,.*\}$
 ```
 
-The opening brace is escaped (`\{`) because Herdr's regex engine reads a bare `{`
-as the start of a repeat count. Herdr matches the expression against one line of
-the pane at a time.
+The opening brace is escaped (`\{`) because some regular expression engines read a
+bare `{` as the start of a repeat count. The watcher matches the expression against
+one line at a time.
 
 A match is a wake-up and not proof of a complete event: the expression cannot
 validate JSON, and a torn line that happens to end in `}` can match. The reader
@@ -267,7 +267,7 @@ use the Python standard library only.
 A source needs only to run `agent-alert emit` with a worker and a kind for each
 thing it is told about, and to report, without stopping, an `emit` that failed.
 This one stands in for an adapter to another multiplexer: it turns lines of the
-form `PANE STATE` on standard input into events and uses nothing from Herdr.
+form `PANE STATE` on standard input into events.
 
 ```python
 #!/usr/bin/env python3
