@@ -19,6 +19,10 @@
 
 {{ end -}}
 
+# Retired 2026-11-27: the Pi notify-owner extension (the `notify_owner` tool). It rang the owner only for a Herdr pane, and nothing
+# runs in Herdr now. Removes the whole deployed directory on apply. Prune once every machine has applied.
+.pi/agent/extensions/notify-owner
+
 # Retired 2026-11-27: operational-ux-capture.schema.json in the using-loop-engine skill. Loop Engine v0.71.3 no longer ships the file (nothing read it),
 # and the release importer no longer lists it. A machine that deployed it still has the file, which chezmoi does not delete by itself.
 .local/share/agent-harness/canonical/skills/using-loop-engine/references/operational-ux-capture.schema.json
