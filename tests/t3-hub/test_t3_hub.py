@@ -1314,8 +1314,8 @@ WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gatew
              "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
 # The skills each seat keeps (restated; the template holds the same lists and the reasons for them).
 KEEP = {
-    "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "herdr", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
-    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "herdr", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "coordinator": {"coordinating-loop-engine", "correcting-repeated-mistakes", "deriving-readable-docs", "no-ai-slop", "omarchy", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
+    "lead": {"coordinating-loop-engine", "correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "using-lean-change-provider", "using-loop-engine", "using-shartifacts"},
     "builder": {"correcting-repeated-mistakes", "creating-formal-verification", "deriving-readable-docs", "hill-climb", "no-ai-slop", "omarchy", "research-method", "statechart", "systematic-debugging", "using-lean-change-provider", "using-loop-engine", "using-policy-document-provider"},
     "planner": {"correcting-repeated-mistakes", "designing-the-smallest-version", "no-ai-slop", "research-method"},
     "reviewer": {"correcting-repeated-mistakes", "designing-the-smallest-version", "review-plans", "reviewing-prs", "using-lean-change-provider", "using-loop-engine"},
@@ -1337,7 +1337,7 @@ COORDINATOR_KEEPS = ["Agent", "Read", "Skill", "mcp__t3-code__request_secret", "
 # Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on only for the homelab chat seat, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
-INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "herdr", "omarchy-app", "writing-skills", "using-research-provider"})
+INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "omarchy-app", "writing-skills", "using-research-provider"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
 # The skills the seat files name from the source because this apply links them later: the archive externals (.chezmoiexternal.toml) review-map and statechart; model-fit only where the coordinator checkout has it (these tests have none).
 FROM_SOURCE = {"review-map", "statechart"}
