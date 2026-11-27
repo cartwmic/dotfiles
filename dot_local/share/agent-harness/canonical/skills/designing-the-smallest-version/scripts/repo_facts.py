@@ -17,6 +17,10 @@ proof_commands lists gate, check and CI files plus test-like package.json script
 surfaces is the surface list (commands, flags, routes, env, config, entry points) of the tree at REV. It comes
 from the sibling skill's deriving-readable-docs/scripts/surfaces.py --json and is not listed here; the script
 exits 2 if that file is missing. --scope does not narrow it: it always lists the whole repo.
+Rust (.rs, and Cargo.toml for the edges between crates) is parsed by rust_imports.py: `mod x;` and `use crate::`, `use super::`, `use self::`
+and `use <workspace crate>::` (also written inline in code) make file edges, and a path or workspace dependency in a Cargo.toml makes an
+edge from that Cargo.toml to the one it names. `mod_edges` lists the `mod x;` edges: they are in `edges` and `dir_edges` too, but left out of both `cycles` lists (file and dir),
+because a child that uses `super::` always closes a loop with the parent that declares it.
 An `import type`, `export type ... from` or `import { type A }` (every name a type) is erased at runtime and makes no edge.
 path_refs maps path strings in config and script files to the files or
 directories they name.
@@ -39,9 +43,10 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from runlog import log_run  # noqa: E402
+import rust_imports  # noqa: E402
 
 TS_EXTS = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs')
-PARSED_EXTS = TS_EXTS + ('.py',)
+PARSED_EXTS = TS_EXTS + ('.py', '.rs')
 NONCODE_DIRS = {'fixtures', 'eval', 'vendor', 'node_modules', 'dist', 'build',
                 'target', 'generated', '__snapshots__'}
 LOCKFILES = {'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'Cargo.lock',
@@ -66,6 +71,10 @@ PY_IMPORT_RE = re.compile(r'^\s*import\s+(.+)$', re.M)
 TYPE_ONLY_RE = re.compile(r"""^\s*(?:import|export)\s+type\b|^\s*(?:import|export)\s*\{\s*type\s[^}]*\}\s*from""", re.M)
 COMMENT_START = ('/', '#', '*')
 NOTES = {
+    'rust': 'Rust edges (rust_imports.py): `mod x;` to the file that holds x, `use crate::`, `use super::`, `use self::` and `use <workspace crate>::`, '
+            'also written inline in code, to the file of the deepest module the path names (a path to the crate root reaches lib.rs or main.rs, '
+            'not the file a re-export comes from), and a Cargo.toml to the Cargo.toml of each path or workspace dependency; `mod_edges` is the '
+            '`mod x;` subset, kept out of `cycles`',
     'lines': 'raw newline count, as wc -l; binary files count 0',
     'code_lines': 'non-blank lines minus comment-only lines (// and /* */ in JS/TS, # in Python); '
                   'other text files count non-blank lines',
@@ -178,7 +187,7 @@ def is_test(path):
     parts = path.split('/')
     name = parts[-1]
     return (any(s in name for s in ('.test.', '.spec.', '_test.'))
-            or (name.startswith('test_') and name.endswith('.py'))
+            or (name.startswith('test_') and name.endswith('.py')) or name == 'tests.rs'
             or any(d in ('tests', '__tests__') for d in parts[:-1]))
 
 
@@ -324,13 +333,22 @@ def type_only(statement):
 
 
 def scan_imports(files, texts):
-    """Return (internal file edges, external packages per dir, external import count in test files)."""
+    """Return (internal file edges, external packages per dir, external import count in test files, Rust `mod x;` edges)."""
     edges = set()
     external = collections.defaultdict(collections.Counter)
     test_ext = 0
+    rust_edges, mod_edges, rust_ext = rust_imports.scan(files, {p: t for p, t in texts.items() if p.endswith('.rs') or posixpath.basename(p) == 'Cargo.toml'})
+    edges |= rust_edges
+    for path, crate in rust_ext:
+        if files[path]['test']:
+            test_ext += 1
+        else:
+            external[dir_key(path)][crate] += 1
     for path in sorted(texts):
         text = texts[path]
         test = files[path]['test']
+        if path.endswith('.rs') or posixpath.basename(path) == 'Cargo.toml':
+            continue
         if path.endswith('.py'):
             for level, mod, names in py_imports(text):
                 hits = set()
@@ -358,7 +376,7 @@ def scan_imports(files, texts):
                     test_ext += 1
                 else:
                     external[dir_key(path)][package_name(spec)] += 1
-    return edges, external, test_ext
+    return edges, external, test_ext, mod_edges
 
 
 # --- graph and table helpers ----------------------------------------------
@@ -900,18 +918,18 @@ def analyse(repo, sha, args, rules, tmp):
             continue
         raw, code = measure(path, data)
         files[path] = {'lines': raw, 'code_lines': code, 'test': is_test(path)}
-        if posixpath.splitext(path)[1] in PARSED_EXTS:
+        if posixpath.splitext(path)[1] in PARSED_EXTS or posixpath.basename(path) == 'Cargo.toml':
             texts[path] = data.decode('utf-8', 'replace')
         if is_ref_source(path):
             ref_texts[path] = data.decode('utf-8', 'replace')
 
     chosen = set(matching(files, args.scope)) if args.scope else None
-    edges, external, test_ext = scan_imports(files, texts)
+    edges, external, test_ext, mod_edges = scan_imports(files, texts)
     dirs = group_edges(edges, dir_key)
     languages = collections.Counter(ext_of(p) for p in files)
     importers = collections.Counter(b for _a, b in edges)
-    file_comps = scc_components(set(files), edges)
-    dir_comps = scc_components({dir_key(p) for p in files}, [(r['from'], r['to']) for r in dirs])
+    file_comps = scc_components(set(files), edges - mod_edges)
+    dir_comps = scc_components({dir_key(p) for p in files}, [(r['from'], r['to']) for r in group_edges(edges - mod_edges, dir_key)])
     flight = in_flight(repo, sha)
     gate_list = gates(tree, [p for p in files if GATE_RE.search(p)])
     proof_list, proof_skipped = proof_commands(files, tree)
@@ -942,11 +960,13 @@ def analyse(repo, sha, args, rules, tmp):
         out['gates_note'] = 'no architecture gate found; see proof_commands'
     if args.scope:
         out['edge_count'] = len(edges)
+        out['mod_edge_count'] = len(mod_edges)
         out['external_package_count'] = len({pkg for c in external.values() for pkg in c})
         out['in_flight'] = {k: len(v) for k, v in flight.items()}
         out['scope'] = scope_report(repo, sha, args.scope, names, files, edges, texts, file_comps, flight)
     else:
         out['edges'] = [list(e) for e in sorted(edges)]
+        out['mod_edges'] = [list(e) for e in sorted(mod_edges)]
         out['external_packages'] = {d: dict(sorted(c.items())) for d, c in sorted(external.items())}
         out['in_flight'] = flight
     if rules is not None:
