@@ -75,7 +75,17 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          XDG_STATE_HOME: ${{ runner.temp }}/state # the check appends its record to $XDG_STATE_HOME/check-untested-hunks/log.jsonl; the next step keeps it
         run: python3 -u scripts/check-untested-hunks.py "$BASE_SHA" "$HEAD_SHA"
+      # The runner is thrown away when the job ends, so the check's record (one JSON line per run: outcome, counts, and the paths that
+      # failed, were not checked or were declared) is kept as a workflow artifact. The check also writes it to the run's summary page.
+      - name: "Untested hunks: keep the check's record (log.jsonl) as a workflow artifact"
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: check-untested-hunks-log
+          path: ${{ runner.temp }}/state/check-untested-hunks/log.jsonl
+          if-no-files-found: warn
 
   # Its own job, so a lagging pin turns the run red without stopping `tests` from running and reporting on its own merits
   # (2026-11-17: two releases three minutes apart each blocked the other's bump PR, and every open PR's suites never ran).

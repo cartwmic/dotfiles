@@ -85,9 +85,14 @@ class CheckUntestedHunks(unittest.TestCase):
         self.git("commit", "-q", "-m", message)
         return self.git("rev-parse", "HEAD")
 
+    def env(self, **extra):
+        """The environment of a run of the check: its record goes to this test's own state folder, never the real one or the CI run's summary."""
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        return dict(env, XDG_STATE_HOME=str(self.state), **extra)
+
     def run_check(self, base, head="HEAD", timeout="600", budget="1500"):
         done = subprocess.run([sys.executable, str(SCRIPT), base, head], cwd=self.repo, capture_output=True, text=True,
-                              env=dict(os.environ, UNTESTED_HUNKS_TIMEOUT=timeout, UNTESTED_HUNKS_BUDGET=budget, XDG_STATE_HOME=str(self.state)))
+                              env=self.env(UNTESTED_HUNKS_TIMEOUT=timeout, UNTESTED_HUNKS_BUDGET=budget))
         return done.returncode, done.stdout + done.stderr
 
     def sigterm_run(self, base):
@@ -96,7 +101,7 @@ class CheckUntestedHunks(unittest.TestCase):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         mark = Path(scratch.name) / "pid"
-        env = dict(os.environ, UNTESTED_HUNKS_BUDGET="1500", XDG_STATE_HOME=str(self.state), TMPDIR=scratch.name, UNTESTED_TEST_MARK=str(mark))
+        env = self.env(UNTESTED_HUNKS_BUDGET="1500", TMPDIR=scratch.name, UNTESTED_TEST_MARK=str(mark))
         proc = subprocess.Popen([sys.executable, str(SCRIPT), base, "HEAD"], cwd=self.repo, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         waited = time.monotonic()
@@ -307,8 +312,51 @@ class CheckUntestedHunks(unittest.TestCase):
         (line,) = self.log_lines()
         self.assertEqual((line["outcome"], line["declared"], line["fail"]), ("ok", 1, 0))
 
+    def test_the_record_lists_the_failing_not_checked_and_declared_scripts(self):
+        base = self.commit({CODE: TOOL, TEST: TESTS}, "base")
+        self.commit({CODE: TOOL_FIXED, TEST: TESTS_FOR_LABEL, "scripts/lonely.py": "x = 1\n", "scripts/other.py": "y = 1\n"}, "change\n\nUntested-change: scripts/other.py: run by hand")
+        self.assertEqual(self.run_check(base)[0], 1)
+        (line,) = self.log_lines()
+        self.assertEqual(sorted(line["fail_paths"]), ["scripts/lonely.py", CODE])  # the new script no test names fails; so does the rule hunk in tool.py
+        self.assertEqual(line["declared_paths"], ["scripts/other.py"])
+        self.assertEqual(line["not_checked_paths"], [])
+
+    def test_the_record_gives_the_reason_a_script_was_not_checked(self):
+        base = self.pr({"scripts/lonely.py": "x = 2\n"}, first={CODE: TOOL, TEST: TESTS, "scripts/lonely.py": "x = 1\n"})
+        self.assertEqual(self.run_check(base)[0], 0)
+        (line,) = self.log_lines()
+        self.assertEqual(line["not_checked_paths"], [{"path": "scripts/lonely.py", "reason": "no test file names it"}])
+        self.assertEqual((line["fail_paths"], line["declared_paths"]), ([], []))
+
+    def test_the_record_is_appended_to_the_github_step_summary_when_there_is_one(self):
+        base = self.pr({CODE: TOOL_FIXED, TEST: TESTS_FOR_LABEL})
+        summary = Path(self._tmp.name) / "summary.md"
+        summary.write_text("earlier step\n")
+        done = subprocess.run([sys.executable, str(SCRIPT), base, "HEAD"], cwd=self.repo, capture_output=True, text=True,
+                              env=self.env(GITHUB_STEP_SUMMARY=str(summary)))
+        self.assertEqual(done.returncode, 1, done.stdout)
+        text = summary.read_text()
+        self.assertTrue(text.startswith("earlier step\n"), text)  # appended, not replaced
+        record = json.loads(text.split("```json\n")[1].split("\n```")[0])
+        self.assertEqual(record, self.log_lines()[0])
+
+    def test_a_step_summary_that_cannot_be_written_does_not_change_the_verdict(self):
+        base = self.pr({CODE: TOOL_FIXED, TEST: TESTS_FOR_LABEL})
+        done = subprocess.run([sys.executable, str(SCRIPT), base, "HEAD"], cwd=self.repo, capture_output=True, text=True,
+                              env=self.env(GITHUB_STEP_SUMMARY=str(Path(self._tmp.name) / "no" / "such" / "dir" / "summary.md")))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_the_ci_step_keeps_the_record_where_the_check_writes_it(self):
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("XDG_STATE_HOME: ${{ runner.temp }}/state", ci)
+        step = ci.split("keep the check's record")[1]
+        self.assertIn("if: ${{ always() &&", step)
+        self.assertIn("uses: actions/upload-artifact@v", step)
+        self.assertIn("path: ${{ runner.temp }}/state/check-untested-hunks/log.jsonl", step)
+
     def test_a_call_with_the_wrong_arguments_logs_refused(self):
-        done = subprocess.run([sys.executable, str(SCRIPT)], cwd=self.repo, capture_output=True, text=True, env=dict(os.environ, XDG_STATE_HOME=str(self.state)))
+        done = subprocess.run([sys.executable, str(SCRIPT)], cwd=self.repo, capture_output=True, text=True, env=self.env())
         self.assertEqual(done.returncode, 2, done.stderr)
         (line,) = self.log_lines()
         self.assertEqual((line["outcome"], line["reason"]), ("refused", "usage"))
