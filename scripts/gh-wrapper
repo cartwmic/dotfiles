@@ -674,11 +674,11 @@ RULE_COMMANDS = tuple(n for n in FOR_LAYERS if n not in ("api", "run watch", "pr
 def leading_flags(args):
     """gh reads a flag that stands before the group at the command itself, so `gh -R x pr merge 5 --merge` and `gh --help=false pr merge 5 --merge` are `pr merge`.
     Returns (the flag arguments, the rest of the command line) when every leading flag is one whose extent is clear (`--name=value`, `-Rvalue`, a cluster of
-    switches, `-R x`, `--repo x`), else None: for any other flag nothing here says whether the next argument is its value or the group."""
+    switches, `--help`, `-R x`, `--repo x`), else None: for any other flag nothing here says whether the next argument is its value or the group."""
     i = 0
     while i < len(args) and args[i].startswith("-"):
         a = args[i]
-        if "=" in a or (not a.startswith("--") and len(a) > 2):
+        if "=" in a or a == "--help" or (not a.startswith("--") and len(a) > 2):      # --help takes no value
             i += 1
         elif a in ("-R", "--repo") and i + 1 < len(args):
             i += 2

@@ -231,6 +231,10 @@ class Policy(WrapperBase):
         for flag in ("--help=false", "-h=false", "--help=0", "--help=false", "--help=nonsense"):
             with self.subTest(flag):
                 self.refused(self.run_gh("pr", "merge", "5", "--merge", flag), "squash only")
+        for lead in (["--help"], ["--help=true"], ["--repo=x/y", "--help"]):      # a help request before the group is still a help request
+            with self.subTest(lead):
+                args = [*lead, "pr", "merge", "5", "--merge"]
+                self.passed(self.run_gh(*args), *args)
         for tail in (["--help"], ["-h"], ["--help=true"], ["--help=false", "--help"]):
             with self.subTest(tail):
                 args = ["pr", "merge", "5", "--merge", *tail]
