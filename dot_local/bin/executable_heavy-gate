@@ -80,8 +80,8 @@
 # every try, so an edit reaches jobs that are already waiting. A job waiting with "-- CMD" registers its number under
 # <lock>.waiters/ (pid, number, state, directory, command) and defers its try while another live waiter has a lower number.
 # The same or a higher number does not defer it. Entries of dead pids are ignored. Nothing else orders the queue.
-# Central rank: if workstream-rank is on PATH and its rank file is valid (it lists at least one workstream), a job in a Herdr pane
-# that belongs to a workstream (HERDR_PANE_ID) takes that workstream's rank, 1 for the most important, as its number. The rank and
+# Central rank: if workstream-rank is on PATH and its rank file is valid (it lists at least one workstream), a job run in the T3 thread
+# of a workstream (t3:$T3CODE_THREAD_ID, the reference the rank file holds) takes that workstream's rank, 1 for the most important, as its number. The rank and
 # the 1-to-5 rules share one scale by putting every job without a workstream after the whole stack: while the rank is on, such a
 # job's rule or default number plus 1000 (so rules still order the jobs among themselves). The rank file's existence flips every
 # job of this version at once; delete it to go back to the plain 1-to-5 rules. A missing, unreadable or corrupt rank file, a reader
@@ -502,7 +502,7 @@ show_priorities() {
   printf 'priorities file: %s\n' "$PRIORITIES"
   if [ -f "$PRIORITIES" ]; then cat "$PRIORITIES"; else printf '(absent: every job is priority %s)\n' "$DEFAULT_PRIORITY"; fi
   printf 'no matching rule: priority %s. HEAVY_GATE_PRIORITY=N in a job'"'"'s environment overrides the file for that job.\n' "$DEFAULT_PRIORITY"
-  if rank_on; then printf 'central rank: on (workstream-rank). A job in a workstream'"'"'s pane takes its rank; any other job takes its file number or %s, plus %s.\n' "$DEFAULT_PRIORITY" "$UNRANKED"
+  if rank_on; then printf 'central rank: on (workstream-rank). A job in a workstream'"'"'s T3 thread takes its rank; any other job takes its file number or %s, plus %s.\n' "$DEFAULT_PRIORITY" "$UNRANKED"
   else printf 'central rank: off (no workstream-rank, or its file is missing or has no workstreams)\n'; fi
   echo "holders:"
   k=1; held=" "

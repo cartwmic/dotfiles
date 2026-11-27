@@ -13,8 +13,12 @@
 #
 # File: $WORKSTREAM_RANK_FILE, else ~/.local/share/coordinator/rank.
 # Lower rank = more important. Ranks are relative positions, so never store one.
-# "of" prints the BEST (lowest) rank among rows whose PANE equals P
-# (default: $HERDR_PANE_ID). If nothing matches it prints UNRANKED (1000),
+# "of" prints the BEST (lowest) rank among rows whose PANE equals P. With no --pane, P is the workstream
+# of the calling T3 thread: t3:$T3CODE_THREAD_ID if a row holds it (the reference the coordinator writes
+# for a T3 thread), else the nearest thread above it in T3's thread tree that a row holds, so a builder
+# a lead launched takes the lead's rank (share/workstream-rank/thread_rank.py reads T3's database,
+# read-only, with only the environment a job has). With no T3CODE_THREAD_ID there is no default, so it
+# prints 1000. If nothing matches it prints UNRANKED (1000),
 # which sorts after any real stack. A missing file, or a file whose line 1 is
 # not '#workstream-rank v1', also prints 1000, with one warning on stderr.
 # It never errors on file problems: exit 0. Bad lines are skipped.
@@ -31,8 +35,9 @@ usage() {
 usage: workstream-rank of [--pane P] [--cwd D] [--cmd C]
        workstream-rank show
 
-of    print the best (lowest) rank of workstreams on pane P (default $HERDR_PANE_ID),
-      or 1000 (unranked) if none, or the rank file is missing or unusable.
+of    print the best (lowest) rank of workstreams on pane P (default: the workstream of the T3 thread
+      $T3CODE_THREAD_ID, found by walking up the thread tree), or 1000 (unranked) if none, or the
+      rank file is missing or unusable.
       --cwd and --cmd are accepted and ignored (reserved for later).
 show  print the stack, best first: RANK<TAB>NAME<TAB>PANE
 
@@ -73,27 +78,79 @@ rows() {
         { pane = (NF >= 3 && $3 != "") ? $3 : "-"; print length(rank), rank, $2, pane }' < "$file"
 }
 
+# best_of PANE: the best (lowest) rank of the rows whose PANE column equals PANE, or UNRANKED.
+best_of() {
+    best=$(rows | PANE=$1 awk -F '\t' -v unranked="$UNRANKED" '
+        $4 "" == ENVIRON["PANE"] "" && (!found || $1 < blen || ($1 == blen && $2 "" < best "")) {
+            blen = $1; best = $2; found = 1 }
+        END { print found ? best : unranked }') || best=$UNRANKED
+    echo "${best:-$UNRANKED}"
+}
+
+# walk_note OUTCOME REASON THREAD: keep a record of the thread-tree walk that survives the terminal. One JSON line in
+# $WORKSTREAM_RANK_STATE_DIR (default ${XDG_STATE_HOME:-~/.local/state}/workstream-rank)/log.jsonl each time the walk's
+# outcome changes (ok, or failed with a reason), not once per call: heavy-gate asks on every poll. The last outcome is
+# kept in the file "walk" beside it. A log that cannot be written never changes the answer.
+walk_note() {
+    dir=${WORKSTREAM_RANK_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/workstream-rank}
+    reason=$(printf '%s' "$2" | tr -d '"\\\n\r' | cut -c1-300)
+    now="$1 $reason"
+    last=$(cat "$dir/walk" 2>/dev/null) || last=
+    [ "$last" != "$now" ] || return 0
+    thread_ref=$(printf '%s' "$3" | tr -d '"\\\n\r')
+    { mkdir -p "$dir" && printf '%s\n' "$now" > "$dir/walk" &&
+        printf '{"ts":"%s","event":"thread-walk","outcome":"%s","reason":"%s","thread":"%s"}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$thread_ref" >> "$dir/log.jsonl"; } 2>/dev/null || :
+}
+
+# thread_pane THREAD: the PANE value of the nearest thread at or above THREAD that a row holds, or nothing.
+# The walk is share/workstream-rank/thread_rank.py (T3's thread tree, read-only). If it cannot run, one
+# warning on stderr and a line in the log (walk_note), and the thread stays unranked.
+thread_pane() {
+    helper=$(dirname "$0")/../share/workstream-rank/thread_rank.py
+    [ -f "$helper" ] || helper=${HOME:-}/.local/share/workstream-rank/thread_rank.py
+    if [ ! -f "$helper" ] || ! command -v python3 >/dev/null 2>&1; then
+        warn "cannot find the workstream of thread $1: needs python3 and $helper"
+        walk_note failed "needs python3 and $helper" "$1"
+        return 0
+    fi
+    if out=$(rows | cut -f4 | python3 "$helper" "$1" 2>&1); then
+        walk_note ok "" "$1"
+        printf '%s\n' "$out"
+    else
+        warn "cannot find the workstream of thread $1 (unranked = $UNRANKED): $out"
+        walk_note failed "$out" "$1"
+    fi
+}
+
 cmd_of() {
-    pane=${HERDR_PANE_ID:-}
+    pane=
+    explicit=
     while [ $# -gt 0 ]; do
         case $1 in
             --pane | --cwd | --cmd)
                 [ $# -ge 2 ] || die "of: $1 needs a value"
-                if [ "$1" = --pane ]; then pane=$2; fi
+                if [ "$1" = --pane ]; then pane=$2; explicit=1; fi
                 shift 2
                 ;;
             *) die "of: unknown argument: $1" ;;
         esac
     done
+    thread=
+    if [ -z "$explicit" ] && [ -n "${T3CODE_THREAD_ID:-}" ]; then
+        thread=$T3CODE_THREAD_ID
+        pane=t3:$thread
+    fi
     if ! usable || [ -z "$pane" ] || [ "$pane" = - ]; then
         echo "$UNRANKED"
         return 0
     fi
-    best=$(rows | PANE=$pane awk -F '\t' -v unranked="$UNRANKED" '
-        $4 "" == ENVIRON["PANE"] "" && (!found || $1 < blen || ($1 == blen && $2 "" < best "")) {
-            blen = $1; best = $2; found = 1 }
-        END { print found ? best : unranked }') || best=$UNRANKED
-    echo "${best:-$UNRANKED}"
+    best=$(best_of "$pane")
+    if [ -n "$thread" ] && [ "$best" = "$UNRANKED" ]; then
+        found=$(thread_pane "$thread")
+        if [ -n "$found" ]; then best=$(best_of "$found"); fi
+    fi
+    echo "$best"
 }
 
 cmd_show() {
