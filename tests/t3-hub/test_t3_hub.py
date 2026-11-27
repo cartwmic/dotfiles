@@ -1562,7 +1562,7 @@ class SeatFilesRefreshTest(unittest.TestCase):
         return seats
 
     def refresh(self, env):
-        run_env = dict(os.environ, HOME=str(env.home), CHEZMOI_SOURCE_DIR=str(REPO), CHEZMOI_CONFIG_FILE=str(env.cfg), CHEZMOI_DEST_DIR=str(env.home))
+        run_env = source_tree.chezmoi_env(env.home, CHEZMOI_SOURCE_DIR=str(source_tree.source()), CHEZMOI_CONFIG_FILE=str(env.cfg), CHEZMOI_DEST_DIR=str(env.home))
         # the config file is YAML but chezmoi infers the format from the name, which here is chezmoi.yaml
         return subprocess.run(["sh", str(REPO / "dot_local/user_scripts/executable_refresh_seat_files.sh")], capture_output=True, text=True, env=run_env, timeout=120)
 
