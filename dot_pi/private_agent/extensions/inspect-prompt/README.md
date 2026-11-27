@@ -64,12 +64,11 @@ a selected non-Pi pane.
 ## Validation
 
 From the chezmoi source root, run the focused tests and the private-session
-journeys after changing snapshot or shortcut behavior:
+journey after changing snapshot or shortcut behavior:
 
 ```sh
 (cd dot_pi/private_agent/extensions/inspect-prompt && node --test)
 python3 dot_pi/private_agent/extensions/inspect-prompt/scenario.py
-python3 dot_pi/private_agent/extensions/inspect-prompt/herdr-scenario.py
 ```
 
 `scenario.py` launches installed Pi in a private Herdr 0.9.1 client, with a
@@ -81,14 +80,11 @@ branch exclusion, editor return, and a subsequent Pi turn. Bottom-follow is
 checked separately. The script writes an `outcome.json` and editor receipts;
 pass `--artifact-dir PATH` to keep them in a chosen directory.
 
-`herdr-scenario.py` checks tab/pane navigation and the actual non-Pi
-`prefix+e` editor dispatch in its own Herdr session. Its scrollback receipt
-contains the selected pane's ordered markers once and omits markers from the
-other pane and tab. Both scripts clean up only their private sessions. The
-journeys exercise installed Pi and Herdr processes with a dummy editor and
-scripted model; they do not prove a live apply, real-model behavior, or
-physical-keyboard delivery. The Pi journey currently exercises
-`/inspect-session`. For a change to `/inspect-prompt`, also require a real
+The script cleans up only its private session. The journey exercises
+installed Pi and Herdr processes with a dummy editor and scripted model; it
+does not prove a live apply, real-model behavior, or physical-keyboard
+delivery. The Pi journey currently exercises
+`/inspect-session`. For a change to `/inspect-prompt`, require a real
 Pi TUI command-to-dummy-editor receipt showing the assembled prompt, editor
 return, and no submitted query; the agent procedure in [AGENTS.md](./AGENTS.md)
 sets that completion boundary.
@@ -99,12 +95,12 @@ The conversation reader depends on Pi 0.87.1's private fullscreen component
 layout for live Bash output. An unsupported-layout error can also mean Pi
 is in inline mode; set `tuiMode` to `fullscreen` and start a new Pi process.
 If a Pi upgrade changes the fullscreen layout, `/inspect-session` stops before
-opening the editor. `scenario.py` pins Pi 0.87.1 and Herdr 0.9.1; `herdr-scenario.py` pins
-Herdr 0.9.1. On another version, they report BLOCKED before exercising the
-editor. Check the changed layout or key route, update the reader and test
-pins/fixtures after verifying compatibility, then rerun the private journeys.
-BLOCKED is no validation. The snapshot is local and temporary; it cannot
-follow edits or serve as a saved transcript.
+opening the editor. `scenario.py` pins Pi 0.87.1 and Herdr 0.9.1. On another
+version, it reports BLOCKED before exercising the editor. Check the changed
+layout or key route, update the reader and test pins/fixtures after verifying
+compatibility, then rerun the private journey. BLOCKED is no validation.
+The snapshot is local and temporary; it cannot follow edits or serve as a
+saved transcript.
 
 If `/inspect-prompt` does nothing during a turn, wait for Pi to become idle.
 If it reports "Opened" but no editor appeared, its current command path did
