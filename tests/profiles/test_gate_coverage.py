@@ -106,7 +106,7 @@ class TableTest(unittest.TestCase):
                         self.assertIn(path, self.managed[profile], "%s: %s is not managed on %s" % (gate, path, profile))
 
     def test_every_work_gate_wrapper_that_personal_has_is_on_work(self):
-        wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/intent-review-check",
+        wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/pr-redact", ".local/bin/intent-review-check",
                     ".local/bin/ci-main-status", ".local/bin/agent-traces", ".local/bin/issue-open", ".local/bin/claims"}
         self.assertEqual(wrappers - self.managed[WORK], set())
         self.assertEqual(wrappers - self.managed[PERSONAL], set())
