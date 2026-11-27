@@ -2,11 +2,12 @@
 """Gather deterministic structural facts about a git repo at a pinned rev.
 
     repo_facts.py REPO [--rev REV] [--parts PARTS.tsv] [--scope GLOB ...]
-                  [--since-days 120] [--max-commit-files 15] [--out facts.json]
+                  [--since-days 120] [--max-commit-files 15] [--out facts.json [--force]]
 
 Reads git only and never writes to REPO. The tree is read from `git archive`
 at REV, so the working tree is ignored. Prints one JSON object (or writes
---out). Exit 0 on success; exit 2 with one stderr line on bad arguments, an
+--out). --out exits 2 and leaves the file alone when it already exists, before any analysis, unless --force is given.
+--summary alone writes no file. --out is written through a temp file and os.replace, so a failed write leaves the old file (exit 1). Exit 0 on success; exit 2 with one stderr line on bad arguments, an
 unknown rev or a path that is not a git repo.
 
 Globs (--parts first column, --scope): `*` stays within one path segment, `**`
@@ -17,14 +18,22 @@ proof_commands lists gate, check and CI files plus test-like package.json script
 surfaces is the surface list (commands, flags, routes, env, config, entry points) of the tree at REV. It comes
 from the sibling skill's deriving-readable-docs/scripts/surfaces.py --json and is not listed here; the script
 exits 2 if that file is missing. --scope does not narrow it: it always lists the whole repo.
+Rust (.rs, and Cargo.toml for the edges between crates) is parsed by rust_imports.py: `mod x;` and `use crate::`, `use super::`, `use self::`
+and `use <workspace crate>::` (also written inline in code) make file edges, and a path or workspace dependency in a Cargo.toml makes an
+edge from that Cargo.toml to the one it names. `mod_edges` lists the `mod x;` edges: they are in `edges` and `dir_edges` too, but left out of both `cycles` lists (file and dir),
+because a child that uses `super::` always closes a loop with the parent that declares it.
+The same pair of files is left out whichever way it was written, so a parent's own `use child::...` of the child it declares is also out of the cycle input: it is the
+same parent-to-child pair as its `mod child;`, and a loop through that pair is the declaration plus the child's `super::`, not a dependency cycle.
 An `import type`, `export type ... from` or `import { type A }` (every name a type) is erased at runtime and makes no edge.
 path_refs maps path strings in config and script files to the files or
 directories they name.
-Log: each run appends one JSON line (runlog.py: script, action `repo-facts`, outcome ok or
-refused, and the file and import-edge counts or the reason it refused).
+Log: each run appends one JSON line (runlog.py: script, action `repo-facts`, exit, and one outcome: ok with the file and import-edge counts,
+refused with its reason, or failed with its error). A run with --out also logs `out` and `force` (asked for). Only an ok run with --out logs `replaced`, true when --force
+overwrote a file.
 """
 import argparse
 import collections
+import dataclasses
 import datetime
 import itertools
 import json
@@ -39,9 +48,10 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from runlog import log_run  # noqa: E402
+import rust_imports  # noqa: E402
 
 TS_EXTS = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs')
-PARSED_EXTS = TS_EXTS + ('.py',)
+PARSED_EXTS = TS_EXTS + ('.py', '.rs')
 NONCODE_DIRS = {'fixtures', 'eval', 'vendor', 'node_modules', 'dist', 'build',
                 'target', 'generated', '__snapshots__'}
 LOCKFILES = {'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'Cargo.lock',
@@ -66,8 +76,12 @@ PY_IMPORT_RE = re.compile(r'^\s*import\s+(.+)$', re.M)
 TYPE_ONLY_RE = re.compile(r"""^\s*(?:import|export)\s+type\b|^\s*(?:import|export)\s*\{\s*type\s[^}]*\}\s*from""", re.M)
 COMMENT_START = ('/', '#', '*')
 NOTES = {
+    'rust': 'Rust edges (rust_imports.py): `mod x;` to the file that holds x, `use crate::`, `use super::`, `use self::` and `use <workspace crate>::`, '
+            'also written inline in code, to the file of the deepest module the path names (a path to the crate root reaches lib.rs or main.rs, '
+            'not the file a re-export comes from), and a Cargo.toml to the Cargo.toml of each path or workspace dependency; `mod_edges` is the '
+            '`mod x;` subset, kept out of `cycles`',
     'lines': 'raw newline count, as wc -l; binary files count 0',
-    'code_lines': 'non-blank lines minus comment-only lines (// and /* */ in JS/TS, # in Python); '
+    'code_lines': 'non-blank lines minus comment-only lines (// and /* */ in JS/TS and Rust, # in Python); '
                   'other text files count non-blank lines',
     'cochange': 'with --scope, only commits touching a scope file count, and top_file_pairs lists '
                 'only pairs with a scope file',
@@ -108,10 +122,36 @@ SURFACES_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(o
                                'deriving-readable-docs', 'scripts', 'surfaces.py')
 
 
+class Refusal(Exception):
+    """The run will not do the work (bad arguments, an unknown rev, a file in the way). main turns it into a Refused outcome."""
+
+
 def die(msg):
-    sys.stderr.write(f'repo_facts: {msg}\n')
-    log_run('repo_facts.py', 'repo-facts', 'refused', reason=msg)
-    sys.exit(2)
+    raise Refusal(msg)
+
+
+# How a run ends: one value, from which main derives the log line and the exit code. Only Written has `replaced`.
+@dataclasses.dataclass(frozen=True)
+class Written:
+    """The facts went to --out; `replaced` is true when a file was there just before the write."""
+    replaced: bool
+    counts: dict
+
+
+@dataclasses.dataclass(frozen=True)
+class Printed:
+    """The facts went to stdout (no --out)."""
+    counts: dict
+
+
+@dataclasses.dataclass(frozen=True)
+class Refused:
+    reason: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Failed:
+    error: str
 
 
 class _Parser(argparse.ArgumentParser):
@@ -134,6 +174,7 @@ def parse_args(argv):
     p.add_argument('--since-days', type=int, default=120)
     p.add_argument('--max-commit-files', type=int, default=15)
     p.add_argument('--out', help='write JSON here instead of stdout')
+    p.add_argument('--force', action='store_true', help='let --out replace a file that is already there')
     p.add_argument('--summary', action='store_true',
                    help='print one line per top-level key instead of the JSON (JSON still goes to --out)')
     a = p.parse_args(argv)
@@ -178,7 +219,7 @@ def is_test(path):
     parts = path.split('/')
     name = parts[-1]
     return (any(s in name for s in ('.test.', '.spec.', '_test.'))
-            or (name.startswith('test_') and name.endswith('.py'))
+            or (name.startswith('test_') and name.endswith('.py')) or name == 'tests.rs'
             or any(d in ('tests', '__tests__') for d in parts[:-1]))
 
 
@@ -324,13 +365,22 @@ def type_only(statement):
 
 
 def scan_imports(files, texts):
-    """Return (internal file edges, external packages per dir, external import count in test files)."""
+    """Return (internal file edges, external packages per dir, external import count in test files, Rust `mod x;` edges)."""
     edges = set()
     external = collections.defaultdict(collections.Counter)
     test_ext = 0
+    rust_edges, mod_edges, rust_ext = rust_imports.scan(files, {p: t for p, t in texts.items() if p.endswith('.rs') or posixpath.basename(p) == 'Cargo.toml'})
+    edges |= rust_edges
+    for path, crate in rust_ext:
+        if files[path]['test']:
+            test_ext += 1
+        else:
+            external[dir_key(path)][crate] += 1
     for path in sorted(texts):
         text = texts[path]
         test = files[path]['test']
+        if path.endswith('.rs') or posixpath.basename(path) == 'Cargo.toml':
+            continue
         if path.endswith('.py'):
             for level, mod, names in py_imports(text):
                 hits = set()
@@ -358,7 +408,7 @@ def scan_imports(files, texts):
                     test_ext += 1
                 else:
                     external[dir_key(path)][package_name(spec)] += 1
-    return edges, external, test_ext
+    return edges, external, test_ext, mod_edges
 
 
 # --- graph and table helpers ----------------------------------------------
@@ -900,18 +950,18 @@ def analyse(repo, sha, args, rules, tmp):
             continue
         raw, code = measure(path, data)
         files[path] = {'lines': raw, 'code_lines': code, 'test': is_test(path)}
-        if posixpath.splitext(path)[1] in PARSED_EXTS:
+        if posixpath.splitext(path)[1] in PARSED_EXTS or posixpath.basename(path) == 'Cargo.toml':
             texts[path] = data.decode('utf-8', 'replace')
         if is_ref_source(path):
             ref_texts[path] = data.decode('utf-8', 'replace')
 
     chosen = set(matching(files, args.scope)) if args.scope else None
-    edges, external, test_ext = scan_imports(files, texts)
+    edges, external, test_ext, mod_edges = scan_imports(files, texts)
     dirs = group_edges(edges, dir_key)
     languages = collections.Counter(ext_of(p) for p in files)
     importers = collections.Counter(b for _a, b in edges)
-    file_comps = scc_components(set(files), edges)
-    dir_comps = scc_components({dir_key(p) for p in files}, [(r['from'], r['to']) for r in dirs])
+    file_comps = scc_components(set(files), edges - mod_edges)
+    dir_comps = scc_components({dir_key(p) for p in files}, [(r['from'], r['to']) for r in group_edges(edges - mod_edges, dir_key)])
     flight = in_flight(repo, sha)
     gate_list = gates(tree, [p for p in files if GATE_RE.search(p)])
     proof_list, proof_skipped = proof_commands(files, tree)
@@ -942,11 +992,13 @@ def analyse(repo, sha, args, rules, tmp):
         out['gates_note'] = 'no architecture gate found; see proof_commands'
     if args.scope:
         out['edge_count'] = len(edges)
+        out['mod_edge_count'] = len(mod_edges)
         out['external_package_count'] = len({pkg for c in external.values() for pkg in c})
         out['in_flight'] = {k: len(v) for k, v in flight.items()}
         out['scope'] = scope_report(repo, sha, args.scope, names, files, edges, texts, file_comps, flight)
     else:
         out['edges'] = [list(e) for e in sorted(edges)]
+        out['mod_edges'] = [list(e) for e in sorted(mod_edges)]
         out['external_packages'] = {d: dict(sorted(c.items())) for d, c in sorted(external.items())}
         out['in_flight'] = flight
     if rules is not None:
@@ -954,8 +1006,44 @@ def analyse(repo, sha, args, rules, tmp):
     return out
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def publish(out, text, force):
+    """The only code that touches --out: write a temp file beside it, flush and fsync, then os.replace it over --out, so a failed write leaves the old file as it was.
+    Written(replaced) when the file is in place (`replaced`: a file was there just before the replace), Refused when one is there and force is not given,
+    Failed when the write or the replace fails."""
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix='.facts-', suffix='.tmp', dir=os.path.dirname(os.path.abspath(out)))
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp makes it private; the file a plain write made had the user's usual mode
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        replaced = os.path.exists(out)
+        if replaced and not force:
+            return Refused(already_exists(out))
+        os.replace(tmp, out)
+        tmp = None
+        return Written(replaced, {})
+    except OSError as exc:
+        return Failed(f'cannot write --out: {exc.strerror or exc}')
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def already_exists(out):
+    return f'{out} already exists: give --force to replace it, or write to another --out'
+
+
+def run(args):
+    """Do the work; the outcome. A Refusal (die) anywhere inside ends it as Refused."""
+    if args.out and os.path.exists(args.out) and not args.force:
+        return Refused(already_exists(args.out))  # before any analysis
     try:
         repo = git(args.repo, 'rev-parse', '--show-toplevel').strip()
     except RuntimeError:
@@ -976,19 +1064,46 @@ def main(argv=None):
     }
     facts.update(body)
     text = json.dumps(facts, indent=2) + '\n'
+    counts = {'files': sum(facts['languages'].values()), 'edges': facts['edge_count'] if args.scope else len(facts['edges'])}
     if args.out:
-        try:
-            with open(args.out, 'w', encoding='utf-8') as fh:
-                fh.write(text)
-        except OSError as exc:
-            die(f'cannot write --out: {exc.strerror}')
+        done = publish(args.out, text, args.force)
+        if not isinstance(done, Written):
+            return done
+        done = Written(done.replaced, counts)
+    else:
+        done = Printed(counts)
     if args.summary:
         sys.stdout.write(summarize(facts))
     elif not args.out:
         sys.stdout.write(text)
-    log_run('repo_facts.py', 'repo-facts', 'ok', files=sum(facts['languages'].values()),
-            edges=facts['edge_count'] if args.scope else len(facts['edges']))
-    return 0
+    return done
+
+
+def record_of(outcome):
+    """(log outcome, exit code, the outcome's own log fields)."""
+    if isinstance(outcome, Written):
+        return 'ok', 0, {'replaced': outcome.replaced, **outcome.counts}
+    if isinstance(outcome, Printed):
+        return 'ok', 0, dict(outcome.counts)
+    if isinstance(outcome, Refused):
+        return 'refused', 2, {'reason': outcome.reason}
+    return 'failed', 1, {'error': outcome.error}
+
+
+def main(argv=None):
+    """The one exit point: run, say a refusal or failure on stderr, append the one log line, return the exit code."""
+    args = None
+    try:
+        args = parse_args(argv)
+        outcome = run(args)
+    except Refusal as exc:
+        outcome = Refused(str(exc))
+    name, code, fields = record_of(outcome)
+    if isinstance(outcome, (Refused, Failed)):
+        sys.stderr.write(f'repo_facts: {outcome.reason if isinstance(outcome, Refused) else outcome.error}\n')
+    asked = {'out': args.out, 'force': args.force} if args and args.out else {}  # `force`: asked for, whatever came of it
+    log_run('repo_facts.py', 'repo-facts', name, exit=code, **asked, **fields)
+    return code
 
 
 if __name__ == '__main__':

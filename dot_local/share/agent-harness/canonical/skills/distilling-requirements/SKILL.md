@@ -33,7 +33,7 @@ Read a repo and write down what it must do, including what nobody wrote down and
 - **Enduring or incidental.** Do not promote every implementation detail to a requirement. Mark `durability`, and use `unclear` plus an open question when you cannot tell.
 - **Conflicts stay visible.** If doc, test and code disagree, write one row per claim, status `disputed`, and leave the choice to the owner.
 - **Say what you did not read**, including test bodies you judged from titles (`fit: title`).
-- **One fact, one table.** Link by id (`I-3`, `F-2`) instead of repeating it. If you looked at something and found it intentional, say so in `note` or an open question.
+- **One fact, one table.** Link by id (`I-3`, `F-2`) instead of repeating it; a row of another register is `<label>:<id>` (see output-shape). If you looked at something and found it intentional, say so in `note` or an open question.
 
 ## Procedure
 

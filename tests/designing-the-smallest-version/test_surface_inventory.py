@@ -99,6 +99,7 @@ class SurfaceInventoryTest(unittest.TestCase):
         script.parent.mkdir(parents=True)
         shutil.copy(REPO_FACTS, script)
         shutil.copy(REPO_FACTS.with_name("runlog.py"), script.with_name("runlog.py"))  # the script logs each run through it
+        shutil.copy(REPO_FACTS.with_name("rust_imports.py"), script.with_name("rust_imports.py"))  # it reads Rust through it
         res = run_facts(script, self.repo)
         self.assertEqual(res.returncode, 2)
         self.assertEqual(len(res.stderr.strip().splitlines()), 1)

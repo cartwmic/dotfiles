@@ -26,10 +26,11 @@ table. Each table has exactly its columns: a missing, unknown or repeated column
   part does not couple them). A pair with neither is a god module; the script lists it under "Fix owed".
 * X: one row per off-diagonal cell, "changing DP `dp` to tune its own FR forces a change to keep FR `fr` met". This rule is
   this skill's convention, not Suh's. `reason` is one line. `evidence` is one or more of (split on `;`, `,` or space):
-  `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`). With
+  `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`; a finding of a register the design names by label is `core:F-3`). With
   `--target` it may also be a design id of DESIGN.md: a decision (`D<n>`), gap (`G<n>`), tension (`T<n>`) or requirement (`OR-<n>`,
-  `IR-2`). A target design has no code yet, so a target X that cites only `path:line` is refused: it cites the decision that
-  creates the dependency. A co-change is correlation: an X that cites only co-change is listed, and its reason must stand on
+  `IR-2`), or a row of a REQUIREMENTS.md register (`R-12`, or `core:R-12` when the design reads several): a coupling the product itself
+  requires has no decision behind it, so the requirement is its evidence. A target design has no code yet, so a target X that cites only
+  `path:line` is refused: it cites the decision or requirement that creates the dependency. A co-change is correlation: an X that cites only co-change is listed, and its reason must stand on
   its own. The diagonal is implied and may not be listed. An import alone is not evidence.
   The evidence check is format only: it sees that an X cites something of the right shape, not that the citation shows coupling.
 * Removed (only with `--as-found`): `| fr | dp | by |`, `by` a decision id (`D<n>`). Every X of the as-found matrix that is absent from
@@ -61,17 +62,18 @@ sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycac
 from logged import logged  # noqa: E402  (writes one run-log record on every exit, through runlog.py)
 
 ID_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]*$')
+REGISTER_LABEL = r'(?!(?:commit|cochange|pr|issue|owner):)[a-z][a-z0-9_-]*'  # names one REQUIREMENTS.md when a design reads several
 EVIDENCE_KINDS = (
     ('path:line', re.compile(r'^[^\s:]+:\d+(-\d+)?$')),
     ('cochange', re.compile(r'^cochange:[^\s+]+\+[^\s+]+$')),
     ('commit', re.compile(r'^commit:[0-9a-f]{7,40}$')),
-    ('finding id', re.compile(r'^(DF|F|U)-\d+$')),
+    ('finding id', re.compile(r'^(DF-\d+|(%s:)?(F|U)-\d+)$' % REGISTER_LABEL)),
 )
-DESIGN_ID = re.compile(r'^((D|G|T)\d+|(OR|IR)-\d+)$')  # DESIGN.md ids: decision, gap, tension, owner or inferred requirement
+DESIGN_ID = re.compile(r'^((D|G|T)\d+|(OR|IR)-\d+|(%s:)?R-\d+)$' % REGISTER_LABEL)  # decision, gap, tension, owner or inferred requirement, or a REQUIREMENTS.md row
 DECISION_ID = re.compile(r'^D\d+$')
 MAX_LEVEL1_FRS = 9
-EVIDENCE_HELP = 'path:line, cochange:<a>+<b>, commit:<hex sha> or a finding id (F-n, DF-n, U-n)'
-TARGET_HELP = EVIDENCE_HELP + ', or (target) a design id (D<n>, G<n>, T<n>, OR-<n>, IR-<n>)'
+EVIDENCE_HELP = 'path:line, cochange:<a>+<b>, commit:<hex sha> or a finding id (F-n, DF-n, U-n; a register\'s F-n and U-n may carry its label: <label>:F-n)'
+TARGET_HELP = EVIDENCE_HELP + ', or (target) a design id (D<n>, G<n>, T<n>, OR-<n>, IR-<n>) or a requirement row (R-<n>, <label>:R-<n>)'
 
 
 def load_scc():
