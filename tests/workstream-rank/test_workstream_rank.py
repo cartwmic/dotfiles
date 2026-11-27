@@ -30,14 +30,16 @@ class WorkstreamRank(unittest.TestCase):
         self.file.write_text(text)
         return self.file
 
-    def run_rank(self, *args, rank_file="default", pane=None, home=None):
+    def run_rank(self, *args, rank_file="default", thread=None, herdr_pane=None, home=None):
         env = {"PATH": os.environ["PATH"], "HOME": str(home or self.dir)}
         if rank_file == "default":
             env["WORKSTREAM_RANK_FILE"] = str(self.file)
         elif rank_file is not None:
             env["WORKSTREAM_RANK_FILE"] = str(rank_file)
-        if pane is not None:
-            env["HERDR_PANE_ID"] = pane
+        if thread is not None:
+            env["T3CODE_THREAD_ID"] = thread
+        if herdr_pane is not None:
+            env["HERDR_PANE_ID"] = herdr_pane
         return subprocess.run(["sh", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=20)
 
     def of(self, pane, **kw):
@@ -73,12 +75,40 @@ class WorkstreamRank(unittest.TestCase):
     def test_an_unmatched_pane_is_unranked_1000(self):
         self.assertEqual(self.of("w9Z:p9", rank_file=GOLDEN), "1000\n")
 
-    def test_the_pane_defaults_to_herdr_pane_id(self):
-        p = self.run_rank("of", rank_file=GOLDEN, pane="w1A:pK")
-        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "2\n", ""))
+    def test_the_pane_defaults_to_the_t3_thread_reference(self):
+        # the three forms of thread id the coordinator writes after "t3:": a plain id, mcp:<uuid>, mcp:launch:<hex>
+        self.write(self.rows("1|Plain|t3:aaaaaaaa-0000-0000-0000-000000000001",
+                             "2|Lead|t3:mcp:bbbbbbbb-0000-0000-0000-000000000002",
+                             "3|Launched|t3:mcp:launch:0123abcd0123abcd"))
+        for thread, rank in (("aaaaaaaa-0000-0000-0000-000000000001", "1"),
+                             ("mcp:bbbbbbbb-0000-0000-0000-000000000002", "2"),
+                             ("mcp:launch:0123abcd0123abcd", "3")):
+            with self.subTest(thread):
+                p = self.run_rank("of", thread=thread)
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, rank + "\n", ""))
+
+    def test_a_thread_with_no_row_is_unranked(self):
+        self.write(self.rows("1|Lead|t3:mcp:bbbbbbbb-0000-0000-0000-000000000002"))
+        p = self.run_rank("of", thread="thread:delegated-task:command%3Amcp%3Abbbbbbbb")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "1000\n", ""))
+
+    def test_the_thread_id_is_matched_whole_with_its_t3_prefix(self):
+        # a row holding the bare id (no "t3:") is not this thread's
+        self.write(self.rows("1|Bare|bbbbbbbb-0000-0000-0000-000000000002"))
+        p = self.run_rank("of", thread="bbbbbbbb-0000-0000-0000-000000000002")
+        self.assertEqual(p.stdout, "1000\n")
+
+    def test_a_herdr_pane_id_alone_is_no_longer_a_key(self):
+        p = self.run_rank("of", rank_file=GOLDEN, herdr_pane="w1A:pK")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "1000\n", ""))
+
+    def test_an_empty_thread_id_is_unranked(self):
+        self.write(self.rows("1|Odd|t3:"))
+        p = self.run_rank("of", thread="")
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
 
     def test_pane_option_beats_the_environment(self):
-        p = self.run_rank("of", "--pane", "w1A:pG", rank_file=GOLDEN, pane="w1A:pK")
+        p = self.run_rank("of", "--pane", "w1A:pG", rank_file=GOLDEN, thread="w1A:pK")
         self.assertEqual(p.stdout, "1\n")
 
     def test_no_pane_at_all_is_unranked(self):
@@ -86,7 +116,7 @@ class WorkstreamRank(unittest.TestCase):
         self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
 
     def test_an_empty_pane_is_unranked(self):
-        p = self.run_rank("of", "--pane", "", rank_file=GOLDEN, pane="w1A:pG")
+        p = self.run_rank("of", "--pane", "", rank_file=GOLDEN, thread="w1A:pG")
         self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
 
     def test_a_row_with_no_pane_never_matches(self):

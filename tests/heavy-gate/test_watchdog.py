@@ -62,7 +62,7 @@ class WatchdogBase(unittest.TestCase):
         (self.psbin / "ps").chmod(0o755)
         self.set(**QUIET)
         host_path = [d for d in os.environ["PATH"].split(":") if not (Path(d) / "workstream-rank").exists()]
-        env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("HERDR_PANE_ID", "WORKSTREAM_RANK_FILE")}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_GATE_") and k not in ("T3CODE_THREAD_ID", "WORKSTREAM_RANK_FILE")}
         self.env = {**env, "PATH": ":".join([str(self.bin), *host_path]), "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(self.root / "heavy-gate.lock"),
                     "HEAVY_GATE_CHECK_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(self.root / "priorities"),
                     "HEAVY_GATE_SLOTS_FILE": str(self.root / "slots"), "WORKSTREAM_RANK_FILE": str(self.root / "rank"),

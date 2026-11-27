@@ -14,7 +14,8 @@
 # File: $WORKSTREAM_RANK_FILE, else ~/.local/share/coordinator/rank.
 # Lower rank = more important. Ranks are relative positions, so never store one.
 # "of" prints the BEST (lowest) rank among rows whose PANE equals P
-# (default: $HERDR_PANE_ID). If nothing matches it prints UNRANKED (1000),
+# (default: t3:$T3CODE_THREAD_ID, the reference the coordinator writes for a T3 thread; with
+# no T3CODE_THREAD_ID there is no default, so it prints 1000). If nothing matches it prints UNRANKED (1000),
 # which sorts after any real stack. A missing file, or a file whose line 1 is
 # not '#workstream-rank v1', also prints 1000, with one warning on stderr.
 # It never errors on file problems: exit 0. Bad lines are skipped.
@@ -31,7 +32,7 @@ usage() {
 usage: workstream-rank of [--pane P] [--cwd D] [--cmd C]
        workstream-rank show
 
-of    print the best (lowest) rank of workstreams on pane P (default $HERDR_PANE_ID),
+of    print the best (lowest) rank of workstreams on pane P (default t3:$T3CODE_THREAD_ID),
       or 1000 (unranked) if none, or the rank file is missing or unusable.
       --cwd and --cmd are accepted and ignored (reserved for later).
 show  print the stack, best first: RANK<TAB>NAME<TAB>PANE
@@ -74,7 +75,8 @@ rows() {
 }
 
 cmd_of() {
-    pane=${HERDR_PANE_ID:-}
+    pane=
+    if [ -n "${T3CODE_THREAD_ID:-}" ]; then pane=t3:$T3CODE_THREAD_ID; fi
     while [ $# -gt 0 ]; do
         case $1 in
             --pane | --cwd | --cmd)
