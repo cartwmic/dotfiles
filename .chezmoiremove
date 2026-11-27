@@ -160,3 +160,7 @@ bin/herdr-overview-proof
 # Retired 2026-11-15 (cartwmic/dotfiles#434, Michael ask #1040): the Playwright MCP server. Its pi-mcp-lazy seed is no longer shipped.
 # (~/.local/state/pi-mcp-lazy/playwright.json is a derived copy, not managed here; it is inert once servers.list drops the name.)
 .local/share/pi-mcp-lazy/seed/playwright.json
+
+# Retired 2026-11-27: the cursor-provider Pi patch, a no-op restore of an old @marckrenn splice that both profiles replaced with the cartwmic/pi-sub fork.
+# A machine that deployed it still has the directory, which chezmoi does not delete by itself.
+.local/share/pi-patches/cursor-provider

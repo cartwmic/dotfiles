@@ -7,9 +7,8 @@ pi packages that this machine actually loads. This file is a README (not
 Most patches edit `@earendil-works/pi-coding-agent` `dist/` (not the stale
 `@mariozechner` namespace). The usage widget is not patched: both chezmoi
 profiles install [`https://github.com/cartwmic/pi-sub`](https://github.com/cartwmic/pi-sub)
-instead of `npm:@marckrenn/pi-sub-bar`. `cursor-provider` is **retired** leftover
-restore against `~/.pi/agent/npm/node_modules/@marckrenn/pi-sub-*` if that tree
-still exists. It is not the delivery vehicle and must not splice.
+instead of `npm:@marckrenn/pi-sub-bar`. The old `cursor-provider` splice patch
+was removed; the fork has an in-tree Cursor provider, so no patch delivers it.
 
 ## Pi version selection
 
@@ -93,7 +92,6 @@ Per-patch rationale and failure modes stay in the sibling READMEs:
 - [settlement-abort](settlement-abort/README.md) — cancel through final settlement on desktop profiles
 - [prompt-start-race](prompt-start-race/README.md) — queue a prompt that loses the start race on desktop profiles
 - [ask-user-question-render](ask-user-question-render/README.md) — keep string `questions` in session history from crashing the rpiv-ask-user-question renderer (all profiles)
-- [cursor-provider](cursor-provider/README.md) — retired leftover-splice restore (not desired-state delivery; widget comes from the fork)
 
 ## Setup
 
@@ -105,7 +103,7 @@ ls
 ```
 
 You should see one subdirectory per patch (`anthropic-idle-watchdog`,
-`cursor-provider`, `custom-message-marker`, `empty-turn-retry`,
+`custom-message-marker`, `empty-turn-retry`,
 `headless-extension-drain`, `prompt-start-race`, `response-visibility`,
 `settlement-abort`, `standing-reminder-origin`) plus this README.
 
@@ -129,10 +127,8 @@ line. **Adding a patch means adding that include line in the tmpl** (do not
 edit the hash values by hand; chezmoi regenerates them). The wrapper also
 hashes the apply script and probes the installed
 `@earendil-works/pi-coding-agent` and nested `@earendil-works/pi-ai`
-versions (reporting `not-installed` before Node exists). After a leftover
-`@marckrenn/pi-sub-*` npm tree appears, `chezmoi apply` restores it unspliced
-as documented in [cursor-provider](cursor-provider/README.md). Cursor remaining
-or spend comes from the GitHub-installed fork and `metricSet`, not this patch.
+versions (reporting `not-installed` before Node exists). Cursor remaining
+or spend comes from the GitHub-installed fork and `metricSet`, not a patch.
 
 Prerequisites: Node on PATH (mise installs it earlier in the after-script
 phase) and the target package tree each patch locates. Patches find Pi through
@@ -140,8 +136,6 @@ phase) and the target package tree each patch locates. Patches find Pi through
 (`~/.pi/agent/install/releases/<current-version>/`), then `npm root -g`. Missing Node or a
 missing patches directory makes the `apply-pi-patches` mise task fail (the bare
 script would exit 0 with a notice).
-`cursor-provider` restores leftovers if that npm tree exists, and no-ops if it
-is absent. It never applies the splice.
 
 ## Usage
 
@@ -176,9 +170,7 @@ work-only patches must treat that as skip / un-patch.
 2. Target the tree pi actually loads. Sibling patches that customize
    pi-coding-agent resolve `@earendil-works/pi-coding-agent/dist/...` (not
    `@mariozechner/...`). Do not add a new splice against the GitHub-installed
-   `cartwmic/pi-sub` tree. `cursor-provider` only restores leftover
-   `~/.pi/agent/npm/node_modules/@marckrenn/pi-sub-*` files if that npm tree
-   still exists.
+   `cartwmic/pi-sub` tree.
 3. Add a hash-trigger line in
    [run_onchange_after_30_apply_pi_patches.sh.tmpl](../../../run_onchange_after_30_apply_pi_patches.sh.tmpl):
    `# patch.mjs (<name>): {{ include "dot_local/share/pi-patches/<name>/patch.mjs" | sha256sum }}`
@@ -186,8 +178,7 @@ work-only patches must treat that as skip / un-patch.
    `PI_CHEZMOI_PROFILE=personal`; otherwise skip and, if a previous run
    applied it, reverse only its own checked edits.
    Fail-safe default is do not apply. Do not add a work-only widget splice;
-   Cursor remaining/spend is configuration on the fork. `cursor-provider`
-   restores leftovers on every profile. Ungated patches ignore the variable.
+   Cursor remaining/spend is configuration on the fork. Ungated patches ignore the variable.
 5. Keep state under `~/.local/state/chezmoi-pi-patches/<name>.json`. For
    shared files, do not restore a whole-file backup over sibling patches; reverse
    only this patch's checked edits.
@@ -197,13 +188,13 @@ work-only patches must treat that as skip / un-patch.
 
 ### Profile gate
 
-| `PI_CHEZMOI_PROFILE` | personal-only patch | `cursor-provider` (retired restore) | `standing-reminder-origin` | un-gated patch |
-|---|---|---|---|---|
-| `personal` | apply | restore leftovers / no-op | apply | apply |
-| `axon-work-computer` | skip; restore | restore leftovers / no-op | apply | apply |
-| `termux` | skip; restore | restore leftovers / no-op | skip/unpatch | apply |
-| any other value | skip; restore backup if previously applied | restore leftovers / no-op | skip/unpatch | apply |
-| unset (manual script) | skip; un-patch | restore leftovers / no-op | skip/unpatch | apply |
+| `PI_CHEZMOI_PROFILE` | personal-only patch | `standing-reminder-origin` | un-gated patch |
+|---|---|---|---|
+| `personal` | apply | apply | apply |
+| `axon-work-computer` | skip; restore | apply | apply |
+| `termux` | skip; restore | skip/unpatch | apply |
+| any other value | skip; restore backup if previously applied | skip/unpatch | apply |
+| unset (manual script) | skip; un-patch | skip/unpatch | apply |
 
 `standing-reminder-origin` reverses only its own literal blocks when disabled,
 preserving sibling edits in shared files.
@@ -226,9 +217,7 @@ of throwing, so it cannot emit a false `agent_settled`. Private real-TUI proof:
 `npm update -g` and mise reinstall replace pi-coding-agent `dist/` and drop
 backups. The usage widget loads from the GitHub-installed
 [`cartwmic/pi-sub`](https://github.com/cartwmic/pi-sub) tree, not from a
-runtime splice of `@marckrenn/pi-sub-*`. If an old npm widget tree reappears
-under `~/.pi/agent/npm`, `chezmoi apply` restores it unspliced. Do not re-enable
-`wantPatched`.
+runtime splice of `@marckrenn/pi-sub-*`. Do not add a splice for it.
 
 ## Validation
 
@@ -244,13 +233,7 @@ node custom-message-marker/patch.mjs --check
 PI_CHEZMOI_PROFILE=personal node standing-reminder-origin/patch.mjs --check
 PI_CHEZMOI_PROFILE=axon-work-computer node standing-reminder-origin/patch.mjs --check
 PI_CHEZMOI_PROFILE=termux node standing-reminder-origin/patch.mjs --check
-PI_CHEZMOI_PROFILE=axon-work-computer node cursor-provider/patch.mjs --check
-PI_CHEZMOI_PROFILE=personal node cursor-provider/patch.mjs --check
 ```
-
-`cursor-provider --check`
-expects unspliced leftover `@marckrenn/pi-sub-*` files (or an absent npm tree)
-on every profile, including work.
 
 If the target package tree is not installed, `--check` / apply exit
 without editing; that is expected.
