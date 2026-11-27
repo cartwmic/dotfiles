@@ -3,7 +3,7 @@ name: CI
 # Linux tests (job `tests`), the release-pin check (job `release-pins`) and macOS mise tests (job `mise-tests`).
 # `tests` runs scripts/ci-linux.sh, which installs nothing: CI installs chezmoi and the apt packages first.
 # chezmoi and mise come from scripts/ci-install-tool.sh (pinned release file, retried, sha256 in scripts/ci-tool-pins.txt), not from the tools' install-script sites.
-# Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
+# Not run here: *proof.py / journey scripts that drive a real Pi or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 #
 # Every run (pull request, push to main, and workflow_dispatch to start an untested main by hand) runs `tests`, `release-pins` and

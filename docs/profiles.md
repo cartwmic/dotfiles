@@ -103,7 +103,7 @@ Prompt cache lifetime: only `seat-reviewer` has `FORCE_PROMPT_CACHING_5M=1` in i
 
 | Seat | Instance id | Window (T3 compacts about 33,000 below it) | Advisor | MCP servers | Skills kept |
 |---|---|---|---|---|---|
-| Lead | `seat-lead` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, t3-code | coordinating-loop-engine, correcting-repeated-mistakes, deriving-readable-docs, herdr, hill-climb, no-ai-slop, omarchy, research-method, using-lean-change-provider, using-loop-engine, using-shartifacts |
+| Lead | `seat-lead` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, t3-code | coordinating-loop-engine, correcting-repeated-mistakes, deriving-readable-docs, hill-climb, no-ai-slop, omarchy, research-method, using-lean-change-provider, using-loop-engine, using-shartifacts |
 | Builder | `seat-builder` | 300000 (about 267K) | on, runs on Opus 5.5 (`advisorModel` in the seat file) | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, deriving-readable-docs, hill-climb, no-ai-slop, omarchy, research-method, systematic-debugging, using-lean-change-provider, using-loop-engine, using-policy-document-provider |
 | Planner | `seat-planner` | 300000 (about 267K) | on | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, designing-the-smallest-version, no-ai-slop, research-method |
 | Reviewer | `seat-reviewer` | 300000 (about 267K), prompt cache written for 5 minutes, T3 idle compaction off | off | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, designing-the-smallest-version, review-plans, reviewing-prs, using-lean-change-provider, using-loop-engine |
