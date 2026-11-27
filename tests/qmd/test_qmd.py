@@ -5,12 +5,15 @@ The real-qmd proof (index, search, hybrid query, byte-identical index.yml) is te
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 PIN = REPO / "dot_config/mise/conf.d/qmd.toml"
 INDEX = REPO / "dot_config/qmd/index.yml.tmpl"
 SKILL = REPO / "dot_local/share/agent-harness/canonical/skills/searching-with-qmd/SKILL.md"
@@ -41,10 +44,10 @@ class Chezmoi:
         self.home.mkdir()
         self.cfg = Path(self.tmp.name) / "chezmoi.yaml"
         self.cfg.write_text("data:\n  profile: %s\n" % profile)
-        self.env = dict(os.environ, HOME=str(self.home))
+        self.env = source_tree.chezmoi_env(self.home)
 
     def run(self, *args, stdin=None):
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(self.cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.cfg), "--config-format", "yaml",
                             "--destination", str(self.home), *args],
                            input=stdin, capture_output=True, text=True, env=self.env, timeout=120)
         self.last = r

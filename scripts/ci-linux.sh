@@ -31,6 +31,11 @@ for tool in chezmoi zsh lsof rsync node python3; do
   fi
 done
 
+# Every test's chezmoi refuses all connections (scripts/ci-offline/chezmoi). chezmoi downloads the archives in .chezmoiexternal.toml whenever it reads the
+# source, so a test that runs it on the real source tree, not on tests/support/source_tree.py's copy, fails on every run and not when GitHub answers 503.
+PATH="$(pwd)/scripts/ci-offline:$PATH"
+export PATH
+
 # A fresh runner's disk is cold: read Chromium's files while the node tests run, so the shx tests do not wait on it (dotfiles#702).
 scripts/warm-chromium.sh &
 warm_pid=$!

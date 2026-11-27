@@ -11,11 +11,14 @@ import urllib.request
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 TMPL = ROOT / "dot_local/share/agent-harness/canonical/mcp/servers.json.tmpl"
 PROFILES_DOC = ROOT / "docs/profiles.md"
 PROFILES = ("personal", "axon-work-computer")
@@ -46,9 +49,9 @@ def chezmoi(profile, *args, stdin=None):
         home.mkdir()
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text("data:\n  profile: %s\n" % profile + "".join("  %s: %s\n" % kv for kv in (WORK_DATA.items() if profile == "axon-work-computer" else ())))
-        r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), *args],
-                           input=stdin, capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                           input=stdin, capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         raise AssertionError("chezmoi %s (%s) failed: %s" % (args[0], profile, r.stderr))
     return r.stdout

@@ -18,6 +18,8 @@ from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 SCRIPT = ROOT / "dot_local/bin/executable_kill-mine"
 SLEEPER = "import sys,time; print('up', flush=True); time.sleep(600)"
 STUBBORN = "import signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('up', flush=True); time.sleep(600)"
@@ -222,8 +224,8 @@ class Deploy(unittest.TestCase):
                 home = Path(tmp) / "home"
                 home.mkdir()
                 (Path(tmp) / "chezmoi.yaml").write_text("data:\n  profile: %s\n" % profile)
-                run = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(Path(tmp) / "chezmoi.yaml"), "--config-format", "yaml",
-                                      "--destination", str(home), "managed"], capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                run = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(Path(tmp) / "chezmoi.yaml"), "--config-format", "yaml",
+                                      "--destination", str(home), "managed"], capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
                 self.assertEqual(run.returncode, 0, run.stderr)
                 self.assertEqual(".local/bin/kill-mine" in run.stdout.split(), want)
 

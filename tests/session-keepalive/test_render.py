@@ -11,11 +11,14 @@ import os
 import plistlib
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 PLIST = REPO / "Library/LaunchAgents/local.session-keepalive.plist.tmpl"
 LOADER = REPO / "run_onchange_after_79_session_keepalive_launchd.sh.tmpl"
 CONFIG = REPO / ".chezmoitemplates/session_keepalive_config"
@@ -93,9 +96,9 @@ class DeployTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "chezmoi.yaml"
             cfg.write_text("data:\n  profile: personal\n")
-            r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml",
+            r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml",
                                 "managed", "--override-data", json.dumps(data)],
-                               capture_output=True, text=True, timeout=120, env={**os.environ, "HOME": str(tmp)})
+                               capture_output=True, text=True, timeout=120, env=source_tree.chezmoi_env(tmp))
             self.assertEqual(r.returncode, 0, r.stderr)
             return set(r.stdout.split())
 

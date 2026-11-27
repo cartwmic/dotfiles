@@ -15,12 +15,15 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 BODY = REPO / ".chezmoitemplates/agent-desktop-macos.sh"
 STEP = REPO / "run_onchange_after_66_agent_desktop_macos.sh.tmpl"
 RELAY = REPO / ".chezmoitemplates/agent-desktop-relay.sh"
@@ -116,9 +119,9 @@ def chezmoi(*args, system="darwin", profile="personal", stdin=None):
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text("data:\n  profile: %s\n" % profile)
         override = json.dumps({"profile": profile, "chezmoi": {"os": system}})
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
                             "--override-data", override, *args], input=stdin, capture_output=True, text=True,
-                           env=dict(os.environ, HOME=str(home)), timeout=120)
+                           env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         raise AssertionError("chezmoi %s (%s, %s) failed: %s" % (args[0], system, profile, r.stderr))
     return r.stdout
