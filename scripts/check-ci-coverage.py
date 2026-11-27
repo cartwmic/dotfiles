@@ -12,7 +12,8 @@ What CI runs is read from the runner itself, not from a second list:
                            `python3 -m unittest discover -s DIR [-p PATTERN]`, and every file named on a `node ... --test FILE ...` line
   .github/workflows/ci.yml every `python3 -m unittest discover -s DIR [-p PATTERN]` (the macOS job)
 A suite runs the files `unittest discover` finds there: PATTERN (default test*.py) in DIR and in each package below it (a folder with an
-__init__.py), the way unittest finds them.
+__init__.py), the way unittest finds them (a file whose name is not an importable module name, such as test-x.py, is not found). A command that is
+commented out runs nothing.
 
 What CI cannot run is named in scripts/ci-not-run.txt, one entry per line, `PATH: reason` (PATH is a file or a folder; a folder covers every
 test file under it; the reason says why it cannot run on the CI machines, or the tracking issue). Blank lines and lines starting with # are ignored.
@@ -32,6 +33,7 @@ import sys
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
 PY_TEST = re.compile(r"^(test_.*|.*_test)\.py$")
 JS_TEST = re.compile(r"^.*\.(test|spec)\.(ts|tsx|mjs|js|cjs)$")
+MODULE_FILE = re.compile(r"^[_a-z]\w*\.py$", re.I)  # unittest discover skips a file whose name is not an importable module name (test-x.py)
 LIST = "scripts/ci-not-run.txt"
 
 
@@ -55,7 +57,7 @@ def discover(root, suite, pattern):
             return
         for name in sorted(os.listdir(here)):
             path = os.path.join(here, name)
-            if os.path.isfile(path) and name.endswith(".py") and fnmatch.fnmatch(name, pattern):
+            if os.path.isfile(path) and MODULE_FILE.match(name) and fnmatch.fnmatch(name, pattern):
                 found.add(os.path.normpath(os.path.join(rel, name)))
             elif os.path.isdir(path) and os.path.isfile(os.path.join(path, "__init__.py")):
                 walk(os.path.join(rel, name))
@@ -64,27 +66,26 @@ def discover(root, suite, pattern):
     return found
 
 
+def uncommented(text):
+    """The text without its comments: a command that is commented out (the usual way to switch a flaky test off) runs nothing."""
+    return "\n".join(re.sub(r"(^|\s)#.*$", "", line) for line in text.splitlines())
+
+
 def runner_specs(root):
     """([(suite, pattern)], [node test files]) that scripts/ci-linux.sh and the workflow run; raises ValueError when the lists cannot be read."""
     with open(os.path.join(root, "scripts/ci-linux.sh"), encoding="utf-8") as f:
-        sh = f.read()
-    yml_path = os.path.join(root, ".github/workflows/ci.yml")
-    with open(yml_path, encoding="utf-8") as f:
-        yml = f.read()
+        sh = uncommented(f.read())
+    with open(os.path.join(root, ".github/workflows/ci.yml"), encoding="utf-8") as f:
+        yml = uncommented(f.read())
     specs = []
     block = re.search(r"python3 scripts/ci-par\.py(.*?)\|\| status=1", sh, re.S)
     if not block:
         raise ValueError("scripts/ci-linux.sh has no `python3 scripts/ci-par.py ... || status=1` command")
     tokens = [t.strip("'\"") for t in block.group(1).replace("\\\n", " ").split()]
-    i = 0
-    while i < len(tokens):
-        if tokens[i] == "--per-test":
-            specs.append((tokens[i + 1], "test*.py"))
-            i += 2
-            continue
-        suite, _, pattern = tokens[i].partition(":")
-        specs.append((suite, pattern or "test*.py"))
-        i += 1
+    for token in tokens:  # `--per-test DIR` runs DIR's tests too, so DIR is read as a suite like the others
+        if token != "--per-test":
+            suite, _, pattern = token.partition(":")
+            specs.append((suite, pattern or "test*.py"))
     if not specs:
         raise ValueError("the ci-par.py command in scripts/ci-linux.sh names no suite")
     for text in (sh, yml):

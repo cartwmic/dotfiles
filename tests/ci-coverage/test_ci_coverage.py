@@ -18,8 +18,8 @@ SCRIPT = ROOT / "scripts/check-ci-coverage.py"
 CI_LINUX = """\
 node --test tests/js/run.test.mjs
 node --experimental-strip-types --test ext/a/index.test.ts ext/a/other.test.ts
-node --test \
-  ext/c/first.test.mjs \
+node --test \\
+  ext/c/first.test.mjs \\
   ext/c/second.test.mjs
 python3 scripts/ci-par.py \\
   --per-test tests/slow \\
@@ -161,6 +161,42 @@ class CheckCiCoverage(unittest.TestCase):
         code, out = self.run_script()
         self.assertEqual(code, 2, out)
         self.assertIn("cannot read the runner", out)
+
+    def test_a_node_line_that_is_commented_out_runs_nothing(self):
+        self.write("scripts/ci-linux.sh", CI_LINUX.replace("node --test tests/js/run.test.mjs", "# node --test tests/js/run.test.mjs"))
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("tests/js/run.test.mjs", out)
+
+    def test_a_file_on_a_continued_node_line_is_not_run_when_that_line_is_commented_out(self):
+        self.write("scripts/ci-linux.sh", CI_LINUX.replace("  ext/c/second.test.mjs\n", "  # ext/c/second.test.mjs\n"))
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("ext/c/second.test.mjs", out)
+        self.assertNotIn("ext/c/first.test.mjs", out)
+
+    def test_a_suite_line_that_is_commented_out_runs_nothing(self):
+        self.write("scripts/ci-linux.sh", CI_LINUX.replace("  tests/alpha \\\n", "  # tests/alpha \\\n"))
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("tests/alpha/test_a.py", out)
+
+    def test_a_workflow_step_that_is_commented_out_runs_nothing(self):
+        self.write(".github/workflows/ci.yml", WORKFLOW.replace("        run: python3 -m unittest discover -s tests/mac -v", "        # run: python3 -m unittest discover -s tests/mac -v"))
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("tests/mac/test_m.py", out)
+
+    def test_a_trailing_comment_does_not_hide_the_command_before_it(self):
+        self.write("scripts/ci-linux.sh", CI_LINUX.replace("tests/tail -v\n", "tests/tail -v  # the tail suite\n"))
+        code, out = self.run_script()
+        self.assertEqual(code, 0, out)
+
+    def test_a_test_file_whose_name_is_not_an_importable_module_is_not_run_by_discover(self):
+        self.write("tests/alpha/test_with-hyphen.py", "")  # discover matches the pattern, then skips the name: it loads no tests from it
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("tests/alpha/test_with-hyphen.py", out)
 
     def test_git_and_node_modules_are_not_searched(self):
         self.write(".git/hooks/test_x.py", "")

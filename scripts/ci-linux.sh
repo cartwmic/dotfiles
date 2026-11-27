@@ -1,5 +1,5 @@
 #!/bin/sh
-# Linux checks for this repo, the same command the CI `tests` job runs: the six node tests, then every
+# Linux checks for this repo, the same command the CI `tests` job runs: the node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
 # discover process per suite), then tests/kgate and tests/pi-mcp-lazy alone, as two processes at once.
 #
