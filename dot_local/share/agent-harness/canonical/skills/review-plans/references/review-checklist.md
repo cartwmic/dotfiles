@@ -16,7 +16,7 @@ Use this checklist while auditing plans. Apply only sections that match the plan
 - Final approach is justified with tradeoffs
 - Failure modes and edge cases are identified
 - Data/lifecycle/state transitions are clear where relevant
-- Rollout and rollback strategy exists
+- Each step is switched on for real use when built ("Dogfood, not trials" in the user instructions): the measures and the log that holds them, the number that would change course, and a one-command way back are named
 
 ## 3) Implementation Plan Quality (writing-plans-style)
 

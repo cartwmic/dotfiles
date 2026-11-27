@@ -2,6 +2,7 @@
 Run: python3 -m unittest discover -s tests/distilling-requirements"""
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,6 +50,21 @@ class HistoryHeaderTest(unittest.TestCase):
         self.assertEqual((code, "history must equal commit" in out), (1, True))
         self.assertIn("history must be", T.shape(T.doc([T.row(1)], {"history": "HEAD"}))[1])
         self.assertEqual(T.shape(T.doc([T.row(1)])), (0, "ok\n"))
+
+
+class FixtureRepoIsQuietTest(unittest.TestCase):
+    """A fixture repo is copied once per test, so nothing may write into it in the background (git's auto maintenance keeps a lock file there and removes it, and a copy that meets it fails)."""
+
+    def test_the_fixture_repo_has_background_maintenance_off(self):
+        template, _ = T.build_fixture_repo(lambda repo: T.commit(repo, {"a.py": "x\n"}, "fix: a"))
+        self.assertEqual(T.git(template, "config", "--get", "gc.auto"), "0")
+        self.assertEqual(T.git(template, "config", "--get", "--type=bool", "maintenance.auto"), "false")
+
+    def test_a_commit_in_the_fixture_repo_starts_no_maintenance(self):
+        template, _ = T.build_fixture_repo(lambda repo: None)
+        out = subprocess.run(["git", "-C", str(template), "commit", "-q", "--allow-empty", "-m", "fix: a"], check=True, capture_output=True, text=True, env=dict(T.ENV, GIT_TRACE="1"))
+        self.assertNotIn("maintenance", out.stderr)
+        self.assertNotIn("gc --auto", out.stderr)
 
 
 class NoCutTest(unittest.TestCase):

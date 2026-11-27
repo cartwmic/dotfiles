@@ -19,6 +19,8 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 CODEX_BASE = 'model = "gpt-6"\n\n[projects."/x"]\ntrust_level = "trusted"\n'
 FIXTURE = (Path(__file__).parent / "settings.live-shape.json").read_text()
 OURS = ("claude-hub", "codex-hub")
@@ -124,9 +126,9 @@ class Env:
         self.write_config(self.profile, enabled)
 
     def chezmoi(self, *args, stdin=None):
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(self.cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.cfg), "--config-format", "yaml",
                             "--destination", str(self.home), *args],
-                           input=stdin, capture_output=True, text=True, env=dict(os.environ, HOME=str(self.home)), timeout=120)
+                           input=stdin, capture_output=True, text=True, env=source_tree.chezmoi_env(self.home), timeout=120)
         if r.returncode:
             raise AssertionError("chezmoi %s failed: %s" % (" ".join(args), r.stderr))
         return r.stdout
@@ -1560,7 +1562,7 @@ class SeatFilesRefreshTest(unittest.TestCase):
         return seats
 
     def refresh(self, env):
-        run_env = dict(os.environ, HOME=str(env.home), CHEZMOI_SOURCE_DIR=str(REPO), CHEZMOI_CONFIG_FILE=str(env.cfg), CHEZMOI_DEST_DIR=str(env.home))
+        run_env = source_tree.chezmoi_env(env.home, CHEZMOI_SOURCE_DIR=str(source_tree.source()), CHEZMOI_CONFIG_FILE=str(env.cfg), CHEZMOI_DEST_DIR=str(env.home))
         # the config file is YAML but chezmoi infers the format from the name, which here is chezmoi.yaml
         return subprocess.run(["sh", str(REPO / "dot_local/user_scripts/executable_refresh_seat_files.sh")], capture_output=True, text=True, env=run_env, timeout=120)
 
