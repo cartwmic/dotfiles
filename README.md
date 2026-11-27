@@ -452,10 +452,6 @@ client: from the phone, `ssh macbook`, then `herdr` to attach to the desktop's
 running session. The phone installs no Herdr plugin, server, or desktop config.
 See [Termux phone setup](./termux/README.md).
 
-The opt-in [Herdr control MCP tunnel](./herdr-mcp/README.md) lets a ChatGPT
-custom app control local Herdr through an OpenAI Secure MCP Tunnel. Chezmoi
-never deploys it; install it explicitly with `herdr-mcp/install.sh`.
-
 ## Portable recaps
 
 `session-recap` works independently of Pi and Herdr. It accepts supplied stdin

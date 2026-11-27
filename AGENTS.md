@@ -260,9 +260,8 @@ to this guide's apply, secrets, and approval rules.
 For common Pi extension procedure, read
 [dot_pi/private_agent/extensions/README.md.tmpl](./dot_pi/private_agent/extensions/README.md.tmpl)
 when editing an extension. Other subtree guides are task-specific:
-[pi-patches](./dot_local/share/pi-patches/README.md),
-[Neovim](./dot_config/nvim/README.md), and the opt-in
-[Herdr control MCP tunnel](./herdr-mcp/README.md). Use those guides when
+[pi-patches](./dot_local/share/pi-patches/README.md) and
+[Neovim](./dot_config/nvim/README.md). Use those guides when
 working in their directories; avoid a second always-on rules file there.
 Ask before adding more nested `AGENTS.md` files. Do not create `~/AGENTS.md`.
 Claude and Codex already have `dot_claude/CLAUDE.md.tmpl` and
