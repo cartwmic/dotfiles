@@ -5,7 +5,7 @@ import subprocess
 
 
 def git(*args, cwd=None):
-    done = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, text=True, cwd=cwd)
+    done = subprocess.run(["git", "-c", "core.quotepath=off", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)  # a file that is not UTF-8 must not crash a check
     if done.returncode != 0:
         raise RuntimeError("git %s: %s" % (" ".join(args), done.stderr.strip()))
     return done.stdout

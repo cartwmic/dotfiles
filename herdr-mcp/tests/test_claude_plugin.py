@@ -5,6 +5,7 @@ Never touches Claude Desktop, a real Herdr server or the network.
 """
 import json
 import pathlib
+import platform
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ SRC = pathlib.Path(__file__).resolve().parents[1]
 TOOLS = ['herdr_cli', 'herdr_get', 'herdr_list', 'herdr_read', 'herdr_request', 'herdr_snapshot', 'herdr_status']
 
 
+@unittest.skipUnless((platform.system(), platform.machine()) == ('Darwin', 'arm64'), 'install.sh is macOS arm64 only')
 class ClaudePluginBuild(unittest.TestCase):
     def test_build_and_start_from_zip(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 
+sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from pi_probe import sha, write_private, install_model_config, ensure_exact_model
 
 

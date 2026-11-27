@@ -141,7 +141,8 @@ python3 scripts/ci-par.py \
   tests/ci-main-status-threads \
   tests/kgate-split \
   tests/test-edit-check \
-  tests/untested-hunks-check || status=1
+  tests/untested-hunks-check \
+  tests/skill-scripts || status=1
 
 # tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
 # timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,

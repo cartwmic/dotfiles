@@ -316,7 +316,7 @@ class AuditTests(StdioBridgeTests):
             ('unknown_tool', 'none', [], 'rejected')])
         self.assertEqual(ends[3]['error_code'], 'unknown_method')
         self.assertEqual(ends[5]['exit_code'], 0)
-        self.assertEqual(ends[4]['transport_error'], 'timeout')
+        self.assertEqual(ends[4]['transport_error'], 'TimeoutError')
         self.assertRegex(ends[4]['request_id'], r'^[0-9a-f-]{36}$')
         self.assertTrue(all(isinstance(r['duration_ms'], int) and r['duration_ms'] >= 0 for r in ends))
 
