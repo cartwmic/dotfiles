@@ -11,6 +11,7 @@ This page is the contract of the base. The layers themselves (log, watch interva
 | the wrapper | `scripts/gh-wrapper` | `~/.local/share/gh-wrapper/bin/gh` (mode 755) |
 | the lib: classification and the layer seam, later the layers | `scripts/gh-wrapper-lib/*.py` | `~/.local/share/gh-wrapper/lib/` |
 | on/off switch for the layers | chezmoi data `ghBudget.enabled` | `~/.config/gh-wrapper/budget`, one word: `on` or `off` (read by the wrapper, not the installer) |
+| on/off switch for the work rules | the profile (`personal` on, anything else off) | `~/.config/gh-wrapper/policy`, one word: `on` or `off` (read by the `gh_policy` layer) |
 | PATH for mise shells | | `~/.config/mise/conf.d/gh-wrapper.toml` (`_.path`) |
 
 `run_onchange_after_47_install-gh-wrapper.sh.tmpl` installs them: the lib first, then the budget file, then the wrapper, each by temp file and rename. It ships every `*.py` in `scripts/gh-wrapper-lib` and removes installed lib files the source no longer has, so adding a layer is adding a file, with no installer change. It renders on `personal` and `axon-work-computer`, not on Termux (out of scope in [profiles.md](./profiles.md)). A `gh` already at the wrapper path or a mise file already at its path that does not carry the mark `gh wrapper (managed by chezmoi` is left alone with a warning. Once the new wrapper is in place, the old install is removed when it carries the old mark: `~/.local/share/leak-guard/bin/gh` and `~/.config/mise/conf.d/leak-guard-gh.toml`.
@@ -26,7 +27,7 @@ Service unit PATHs (t3code, coordinatord) are separate changes.
 ## What a call goes through
 
 1. **Exempt:** `gh auth ...` and `gh --version` go straight to the real gh. Git's credential helper runs `gh auth git-credential` on every push and fetch (78 of 186 logged calls), and it makes no API call. Every exempt group is also in leak-guard's `NOT_REPO`, so skipping the check changes nothing (a test keeps it that way).
-2. **Layers off** (`~/.config/gh-wrapper/budget` missing, or anything but `on`): only the layers in `ALWAYS` run (`gh_rewrite`, whose watch-interval default is on every profile; its `gh api` cache waits for the budget file). The budget and log layers are not read. This is the work Mac.
+2. **Layers off** (`~/.config/gh-wrapper/budget` missing, or anything but `on`): only the layers in `ALWAYS` run (`gh_rewrite`, whose watch-interval default is on every profile, its `gh api` cache waiting for the budget file; and `gh_policy`, which reads its own switch, [the work rules](#the-work-rules-gh_policypy)). The budget and log layers are not read. This is the work Mac.
 3. **Layers on:** the command is classified, then each layer's `before` hook runs, then the leak-guard check, then the real gh, then each layer's `after` hook.
 4. **Leak-guard check:** exactly as [leak-guard.md](./leak-guard.md) says, and only where `~/.config/leak-guard/repos` exists. It fails closed as before.
 5. **Real gh:** found on PATH skipping any file with the mark, so the wrapper never finds itself. With no `after` hook anywhere, the wrapper replaces itself with gh (`exec`), as before. With one, it runs gh as a child and returns its exit code, standard input and output unchanged. While the child runs, SIGTERM, SIGHUP and SIGINT sent to the wrapper are passed on to gh (a timeout that kills only the process it started would otherwise leave a `gh run watch` polling, and an interrupt sent only to the wrapper would leave gh running), and the `after` hooks then see exit code 128 plus the signal. A terminal's Ctrl-C reaches the wrapper and gh both, so gh gets the interrupt twice.
@@ -50,12 +51,12 @@ Pure functions: the wrapper parses the command line and hands the facts in. A ca
 
 ## The layer seam (`gh_layers.py`)
 
-A layer is a module in the lib directory. `LAYERS = ("gh_rewrite", "gh_budget", "gh_log")` fixes the order, and a name with no file is skipped. `ALWAYS = ("gh_rewrite",)` names the layers that also run when the budget file is off. A layer may define:
+A layer is a module in the lib directory. `LAYERS = ("gh_policy", "gh_rewrite", "gh_budget", "gh_log")` fixes the order, and a name with no file is skipped. `ALWAYS = ("gh_policy", "gh_rewrite")` names the layers that also run when the budget file is off (`gh_policy` has its own switch, below). A layer may define:
 
 - `before(call)`: change `call.args`, set `call.action` (`pass`, `rewrite`, `refused`, `exempt`) and `call.rewrite`, or `raise Stop(rc, message)` to refuse the call: the message goes to standard error, the wrapper exits `rc`, gh does not run.
 - `after(call)`: runs once, in reverse order, whatever happened: gh's exit, a `Stop`, or a leak-guard block. `call.rc` is set.
 
-`call` carries `args`, `klass`, `bucket`, `write`, `budget_on` (whether the budget file says `on`), `parsed` (the flags of a `run watch`, `pr checks` or `gh api` call as the wrapper read them: `([(long name, value or None)], [positional arguments])`, or `None` for another command or flags it could not read), `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
+`call` carries `args`, `klass`, `bucket`, `write`, `budget_on` (whether the budget file says `on`), `real` (the real gh, for a layer that reads state from GitHub), `parsed` (the flags of a `run watch`, `pr checks`, `pr create`, `pr merge`, `issue create`, `issue close` or `gh api` call as the wrapper read them: `([(long name, value or None)], [positional arguments])`, or `None` for another command or flags it could not read), `id` (the wrapper's pid), `t0`, `action`, `rewrite`, `rc` and a `notes` dict.
 
 Invariant: **the layers never stop a call by failing.** If the lib cannot be loaded or the classification raises, the wrapper prints `gh-wrapper: the layers could not start (...); the call goes on without them` and runs the call with the leak-guard check only. **A layer's own exception never changes the call either.** It is reported on standard error as `gh-wrapper: layer <name> failed (...); the call goes on`, and the call goes on. Only a `Stop` changes it. A layer that cannot be imported is treated the same way, except one that simply is not there. With the budget file off or missing (the work Mac), a lib that is not installed at all is silent, as it was before the layers existed; a lib that is there and broken still prints the line.
 
@@ -140,13 +141,41 @@ The budget layer leaves `urgent`, `budget` and `budget_left` in `call.notes`, an
 jq -sr 'map(select(.event=="exit")) | group_by(.class,.who) | map({class:.[0].class,who:.[0].who,n:length,secs:(map(.dur_s)|add)}) | sort_by(-.n) | .[:10][] | @json' ~/.local/state/gh-wrapper/calls.jsonl
 ```
 
+## The work rules (`gh_policy.py`)
+
+Four refusals that keep issues and pull requests in the one agreed form. The layer sits in the wrapper because every `gh` call passes it: an agent's command, `pr-open`, `issue-open`, the bump scripts, a coordinator script, whatever harness started them. The Bash hook's tables decide which route an agent may use (`pr-open`, `issue-open`, the merge gates); this layer decides what that route may send, so no rule is written twice.
+
+| Call | Refused unless | Run instead |
+|---|---|---|
+| `gh pr create` (`pr new`) | the first line of the body is `Closes #N` or `Refs #N`, and N is an open issue of that repository (not a pull request) | `issue-open`, then `pr-open` |
+| `gh pr merge` | no `--merge`, `-m`, `--rebase` or `-r`: every pull request lands as one squash commit | `--squash` |
+| `gh issue create` (`issue new`) | the body has the three parts Problem, Wanted and Done when (each a heading line: `## Problem`, `**Problem.**`, `Problem:`), and `--label` holds exactly one of bug, change, flaky test, docs, question (other labels do not count) | `issue-open` |
+| `gh issue close` | a merged pull request is linked to the issue (GitHub's own `closedByPullRequestsReferences`), or the call has `--reason "not planned"` and a non-empty `--comment` | close from the pull request, or say why |
+
+The body must be given as text or a file (`--body`, `--body-file FILE`): a body on standard input, or one gh composes (`--fill`, `--template`, `--editor`, `--web`), cannot be read before gh runs, so those are refused for `pr create` and `issue create`. A call whose flags the wrapper's table does not list is refused for these four commands, as nothing says whether it is a merge commit. `--help` is never refused. The refusal is one sentence on standard error, `gh-wrapper: refused \`gh pr merge\`: ...`, exit 1, and gh does not run. The issue and pull request reads go through the real gh (`gh issue view`, `gh pr view`, never prompting), in the repository `--repo` names, else gh's own choice.
+
+**Switch.** `~/.config/gh-wrapper/policy` says `on` or `off`; the installer writes `on` on `personal` and `off` elsewhere, with no chezmoi data key. A host with no file runs as off. It is its own file, not the budget file: turning the API budget off must not drop a repository rule. The work Mac is left out because these are Michael's own repository rules and an employer's repositories keep their own tracker rules.
+
+**What is excused: one place.** The top of `gh_policy.py` holds every exemption, each recognised by something a tool sets:
+
+- `PR_WITHOUT_ISSUE`: kinds of pull request that need no issue, each `(kind, field, regex)` on the branch (`head`) or the `title`. **Empty as shipped**: whether release, pin-bump and revert pull requests need an issue is undecided, so those tools are refused too until a row is added.
+- `MERGE_COMMIT_STOPGAP`: temporary. The coordinator's `scripts/merge-pr.sh` still runs `gh pr merge --merge`. It may do so while `GH_CALLER=merge-pr` is set **and** the parent (or grandparent) process is a script named `merge-pr.sh` (read by `gh_log.ancestry`, so a variable alone does not do it). `--rebase` has no exemption. **Delete the entry when the coordinator moves `merge-pr.sh` to `--squash`.**
+
+**Log.** Every refusal and every use of an exemption is one line in `~/.local/state/gh-wrapper/policy.jsonl`: `{utc, rule (issue-first, squash-only, issue-form, close-rule), outcome (refused or exempt), class, kind (the exemption used, else null), who ($GH_CALLER, else null)}`. Never a title, a body, an issue number or a repository. Refusals per rule: `jq -sr 'map(select(.outcome=="refused")) | group_by(.rule)[] | "\(.[0].rule) \(length)"' ~/.local/state/gh-wrapper/policy.jsonl`. A use of the merge stopgap shows as `squash-only` with `outcome` `exempt`, so a use from anywhere but the script shows by its `who`.
+
+**Failure.** A bug in the layer never stops a call (the seam's rule above); only its own refusal does. When an issue read fails (no network, an unknown number) the `pr create` is refused with the reason, as the link cannot be checked.
+
+**Labels.** `gh issue create --label change` fails at GitHub when the repository has no label of that name, and gh's message names it. The five kind labels are created once per repository with `gh label create <name> -R OWNER/REPO`.
+
+Tests: `python3 -m unittest discover -s tests/leak-guard -p 'test_gh_policy.py'` drives each refusal and each pass-through through the installed layout with a fake real gh; `test_gh_installer.py` checks the policy file per profile.
+
 ## Profiles
 
 | Profile | Gets |
 |---|---|
-| personal Linux | the wrapper, mise and shell PATH, the budget file `on` |
+| personal Linux | the wrapper, mise and shell PATH, the budget file `on`, the policy file `on` |
 | personal Mac | the same; PATH through mise and `.zshenv` |
-| work Mac | the same wrapper at the new path, leak-guard checks unchanged, the budget file `off`, and the watch-interval default (`gh run watch` and `gh pr checks --watch` poll every 60 s; Michael's decision #3242 on ask #1207). No log, no budget guard, no `gh api` cache there: a per-call log of directory and parent process, and refusing reads, are new on an employer machine, so Michael is asked before they are turned on there. |
+| work Mac | the same wrapper at the new path, leak-guard checks unchanged, the budget file `off`, the policy file `off` (no work rules), and the watch-interval default (`gh run watch` and `gh pr checks --watch` poll every 60 s; Michael's decision #3242 on ask #1207). No log, no budget guard, no `gh api` cache there: a per-call log of directory and parent process, and refusing reads, are new on an employer machine, so Michael is asked before they are turned on there. |
 
 ## Tests
 

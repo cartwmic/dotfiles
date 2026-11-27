@@ -517,7 +517,8 @@ def parse_flags(args, group, verb):
 
 # The commands whose parsed flags the layers get (Call.parsed), by the name command_name gives them, and the FLAGS row each is parsed with. A layer reads these
 # flags from the call and keeps no flag table of its own, so scripts/leak-guard-gh-flags regenerates every row and the FlagTables test compares it.
-FOR_LAYERS = {"api": ("api", ""), "run watch": ("run", "watch"), "pr checks": ("pr", "checks")}
+FOR_LAYERS = {"api": ("api", ""), "run watch": ("run", "watch"), "pr checks": ("pr", "checks"), "pr create": ("pr", "create"), "pr new": ("pr", "create"),
+              "pr merge": ("pr", "merge"), "issue create": ("issue", "create"), "issue new": ("issue", "create"), "issue close": ("issue", "close")}
 
 
 def layer_flags(read):
@@ -978,7 +979,7 @@ def main(argv):
         read = group == "search" or verb in READ.get(group, ())
         parsed = parse_flags(args[1:], *FOR_LAYERS[name]) if name in FOR_LAYERS else None      # the one parse of the call's flags: the classification and the layers share it
         call = gh_layers.Call(args, gh_classify.classify(name, read, api_facts(args, parsed) if name == "api" else None), budget_on=on,
-                              parsed=layer_flags(parsed) if parsed else None)
+                              parsed=layer_flags(parsed) if parsed else None, real=real)
         layers = gh_layers.load(gh_layers.LAYERS if on else gh_layers.ALWAYS)
     except Exception as e:      # a lib that is missing or broken must not stop gh: the layers are an optimisation, the leak-guard check is not
         absent = isinstance(e, ModuleNotFoundError) and e.name in ("gh_classify", "gh_layers")
