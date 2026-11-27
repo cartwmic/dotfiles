@@ -112,7 +112,7 @@ class Fixture(unittest.TestCase):
 
     def run_tool(self, *argv, **env):
         merged = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE_GH_STATE": str(self.state_path),
-                  "HOME": str(self.home), "AGENT_HARNESS_CANONICAL_ROOT": str(self.dir / "deployed"), **env}
+                  "HOME": str(self.home), "XDG_STATE_HOME": str(self.dir / "state"), "AGENT_HARNESS_CANONICAL_ROOT": str(self.dir / "deployed"), **env}
         return subprocess.run([sys.executable, str(SCRIPT), *argv], capture_output=True, text=True, env=merged, timeout=60)
 
     def do_import(self, *flags, tag="v1.0.0"):
@@ -362,6 +362,146 @@ class ImportTests(Fixture):
         result = self.do_import("--pins", "--apply")
         self.assertEqual(result.returncode, 1)
         self.assertEqual(self.tree_state(), {})
+
+
+class CheckTests(Fixture):
+    """`check`: the import as a dry run on an untagged commit of a local git checkout. The bundles in the source are the ones a first import wrote."""
+
+    PINS = "".join('%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (tool, archive, tool)
+                   for tool, archive in (("loop-engine", "loop-cli"), ("lean-change", "lean-change-provider"), ("policy-document", "policy-document-provider"),
+                                         ("research", "research-provider"), ("bookends-check", "bookends-check")))
+    PLAN = {"releases": [{"artifacts": ["%s-aarch64-apple-darwin.tar.xz" % a for a in ("loop-cli", "lean-change-provider", "policy-document-provider", "research-provider", "bookends-check")]
+                          + ["source.tar.gz", "loop-cli-installer.sh"]}]}
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.do_import("--apply").returncode, 0)
+        (self.source / "dot_config/mise/config.toml").write_text(self.PINS)
+        self.repo = self.dir / "release-repo"
+        self.write_repo(GOOD_TREE)
+        self.plan = self.dir / "plan.json"
+        self.plan.write_text(json.dumps(self.PLAN))
+
+    def git(self, *argv):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *argv], check=True, capture_output=True)
+
+    def write_repo(self, files):
+        """Commit exactly these files to the release checkout."""
+        self.repo.mkdir(exist_ok=True)
+        if not (self.repo / ".git").exists():
+            self.git("init", "-q")
+        for path in self.repo.rglob("*"):
+            if path.is_file() and ".git" not in path.relative_to(self.repo).parts:
+                path.unlink()
+        for path, data in files.items():
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_bytes(data)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", "release")
+
+    def check(self, *flags, **env):
+        return self.run_tool("check", "--repo-dir", str(self.repo), "--source", str(self.source), *flags, **env)
+
+    def test_a_release_the_bump_can_take_passes_and_nothing_is_written(self):
+        before = self.tree_state()
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("5 pins resolve", result.stdout)
+        self.assertEqual(self.tree_state(), before)
+
+    def test_it_needs_neither_a_published_release_nor_gh(self):
+        self.state_path.write_text(json.dumps({"releases": {}, "refs": {}, "tag_objects": {}, "trees": {}, "tarballs": {}}))
+        self.assertEqual(self.check().returncode, 0)
+
+    def test_a_commit_that_removes_a_file_the_importer_lists_stops_naming_the_file(self):
+        files = dict(GOOD_TREE)
+        del files["docs/operational-ux-contracts.md"]
+        self.write_repo(files)
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("docs/operational-ux-contracts.md", result.stderr)
+        self.assertIn("ROOT_REFERENCES", result.stderr)
+
+    def test_a_file_the_bundle_holds_that_the_commit_no_longer_ships_stops_naming_the_file(self):
+        files = dict(GOOD_TREE)
+        del files["crates/foo-provider/docs/d.md"]
+        self.write_repo(files)
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("using-foo-provider/references/docs/d.md", result.stderr)
+        self.assertIn(".chezmoiremove", result.stderr)
+
+    def test_an_empty_file_stops_it(self):
+        files = dict(GOOD_TREE)
+        files["docs/PRD.md"] = b""
+        self.write_repo(files)
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("docs/PRD.md is empty", result.stderr)
+
+    def test_an_unsafe_file_stops_it(self):
+        self.write_repo(GOOD_TREE)
+        (self.repo / "skills/using-loop-engine/link").symlink_to("SKILL.md")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "link")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("120000", result.stderr)
+
+    def test_a_pin_that_matches_no_planned_archive_stops_naming_the_pin(self):
+        plan = {"releases": [{"artifacts": [a.replace("loop-cli", "loop-engine-cli") for a in self.PLAN["releases"][0]["artifacts"]]}]}
+        self.plan.write_text(json.dumps(plan))
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pin loop-engine", result.stderr)
+        self.assertIn("^loop-cli-", result.stderr)
+
+    def test_a_config_without_the_five_pins_stops_it(self):
+        (self.source / "dot_config/mise/config.toml").write_text(self.PINS.splitlines(True)[0])
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("found 1", result.stderr)
+
+    def log_lines(self):
+        path = self.dir / "state" / "import-release-skills" / "log.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_each_run_leaves_one_json_line_that_replays_it(self):
+        self.assertEqual(self.check("--plan", str(self.plan), XDG_STATE_HOME=str(self.dir / "state")).returncode, 0)
+        files = dict(GOOD_TREE)
+        del files["docs/operational-ux-contracts.md"]
+        self.write_repo(files)
+        self.assertEqual(self.check("--plan", str(self.plan), XDG_STATE_HOME=str(self.dir / "state")).returncode, 1)
+        passed, refused = self.log_lines()
+        self.assertEqual((passed["action"], passed["outcome"], passed["plan"]), ("check", "pass", True))
+        self.assertEqual((refused["outcome"], len(refused["commit"])), ("refused", 40))
+        self.assertIn("docs/operational-ux-contracts.md", refused["reason"])
+        self.assertNotEqual(passed["commit"], refused["commit"])
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_result(self):
+        blocked = self.dir / "blocked"
+        blocked.write_text("a file, not a directory\n")
+        self.assertEqual(self.check(XDG_STATE_HOME=str(blocked)).returncode, 0)
+
+    def test_a_subfolder_of_the_checkout_reads_the_whole_tree(self):
+        result = self.run_tool("check", "--repo-dir", str(self.repo / "docs"), "--source", str(self.source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_plan_that_cannot_be_read_stops_it_with_a_message(self):
+        for text in (None, "not json"):
+            if text is not None:
+                self.plan.write_text(text)
+            else:
+                self.plan.unlink()
+            result = self.check("--plan", str(self.plan))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("cannot read the mise config or the release plan", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_revision_that_does_not_exist_stops_it(self):
+        result = self.check("--rev", "no-such-rev")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("git ls-tree", result.stderr)
 
 
 class VerifyDeployedTests(Fixture):
