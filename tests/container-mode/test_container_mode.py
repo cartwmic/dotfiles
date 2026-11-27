@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "bookends-check", "policy-document", "research", "aqua:1password/cli"}
-SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
+SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "47_install-gh-wrapper.sh", "65_agent_kit_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
 LEFT_OUT = [".codex", ".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
@@ -72,13 +72,16 @@ class ContainerHome(Scratch):
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", self.settings["env"])
         self.assertFalse((self.home / ".claude/.credentials.json").exists())
 
-    def test_only_the_five_run_scripts_stay_and_none_runs_on_every_apply(self):   # c6: plain `chezmoi verify` has no always-pending script
+    def test_only_the_six_run_scripts_stay_and_none_runs_on_every_apply(self):   # c6: plain `chezmoi verify` has no always-pending script
         scripts = {p for p in self.managed if p[:2].isdigit() and p.endswith(".sh") and "/" not in p}
         self.assertEqual(scripts, SCRIPTS)
         for name in SCRIPTS:   # run_onchange: recorded after the first success, so `chezmoi verify` is clean after it
             self.assertTrue(list(ROOT.glob("run_onchange_after_" + name.removesuffix(".sh") + ".sh*")), name)
 
-    def test_the_gitea_credential_helper_is_in_the_pod_beside_the_five_scripts(self):   # the pod's git finds `git credential-gitea-op` on PATH; script 76 (kept) names it
+    def test_the_gh_wrapper_installer_stays_so_its_rules_run_where_the_agents_work(self):   # dotfiles#960: leaving it out put `gh` straight on the mise shim, with no policy
+        self.assertTrue("47_install-gh-wrapper.sh" in self.managed, "the gh wrapper installer must stay in the container's run-script set (.chezmoiignore $keep)")
+
+    def test_the_gitea_credential_helper_is_in_the_pod_beside_the_six_scripts(self):   # the pod's git finds `git credential-gitea-op` on PATH; script 76 (kept) names it
         self.assertIn(".local/bin/git-credential-gitea-op", self.managed)
         helper = self.home / ".local/bin/git-credential-gitea-op"
         self.assertTrue(os.access(helper, os.X_OK))
@@ -214,6 +217,85 @@ class ContainerFileOutsideThePod(unittest.TestCase):
     def test_false_on_the_work_profile(self):
         keys = "".join("  %s: %s\n" % item for item in WORK_DATA.items())
         self.assertEqual(self.render("axon-work-computer", keys), "false")
+
+
+FAKE_REAL_GH = """#!/bin/sh
+echo "$@" >> "$FAKE_GH_LOG"
+case "$1 $2" in "issue view") echo '{"state":"OPEN","url":"https://github.com/o/r/issues/5"}' ;; *) echo "real gh ran: $*" ;; esac
+"""
+
+
+class GhWrapperInThePod(unittest.TestCase):
+    """The installer, rendered and run in container mode into a throwaway HOME: the wrapper is first on the pod's PATH (the image's ENV PATH starts with ~/.local/bin),
+    the policy is on, and a refused form is refused with a fake gh behind it. Nothing reaches GitHub. docs/container-mode.md, "GitHub"."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.home = cls.tmp / "home"
+        cls.home.mkdir()
+        cls.config = cls.tmp / "chezmoi.yaml"
+        cls.config.write_text(CONFIG % ("personal", ""))
+        rendered = chezmoi(cls.config, cls.home, "execute-template", (ROOT / "run_onchange_after_47_install-gh-wrapper.sh.tmpl").read_text())
+        assert rendered.returncode == 0, rendered.stderr
+        (cls.tmp / "install.sh").write_text(rendered.stdout)
+        cls.install = subprocess.run(["sh", str(cls.tmp / "install.sh")], capture_output=True, text=True, env={**os.environ, "HOME": str(cls.home)}, timeout=60)
+        cls.fake = cls.tmp / "fakebin"
+        cls.fake.mkdir()
+        (cls.fake / "gh").write_text(FAKE_REAL_GH)
+        (cls.fake / "gh").chmod(0o755)
+        cls.log = cls.tmp / "fake-gh.log"
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def sh(self, command, shell="sh"):
+        """`command` in a clean environment with the image's PATH order: ~/.local/bin, the mise shims (where the real gh is: here a fake), then the system."""
+        env = {"HOME": str(self.home), "PATH": "%s/.local/bin:%s:%s" % (self.home, self.fake, os.path.dirname(sys.executable) + ":/usr/bin:/bin"), "FAKE_GH_LOG": str(self.log), "GH_TOKEN": ""}
+        return subprocess.run([shell, "-c", command], capture_output=True, text=True, env=env, cwd=str(self.tmp), timeout=60)
+
+    def test_the_installer_ran_cleanly_and_the_policy_is_on(self):
+        self.assertEqual(self.install.returncode, 0, self.install.stderr)
+        self.assertEqual((self.home / ".config/gh-wrapper/policy").read_text(), "on\n")
+        self.assertEqual((self.home / ".config/gh-wrapper/budget").read_text(), "on\n")
+
+    def test_gh_in_the_pods_plain_sh_is_the_wrapper_through_a_link_in_the_first_path_directory(self):
+        link = self.home / ".local/bin/gh"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), str(self.home / ".local/share/gh-wrapper/bin/gh"))
+        done = self.sh("command -v gh")
+        self.assertEqual(done.stdout.strip(), str(link), done.stderr)
+
+    def test_a_merge_commit_is_refused_by_the_wrapper_and_logged_and_a_version_passes_through(self):
+        self.log.write_text("")
+        done = self.sh("gh pr merge 1 --repo cartwmic/dotfiles --merge")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("gh-wrapper: refused `gh pr merge`: merges are squash only", done.stderr)
+        self.assertNotIn("pr merge", self.log.read_text())   # the real gh never saw it
+        rows = [json.loads(line) for line in (self.home / ".local/state/gh-wrapper/policy.jsonl").read_text().splitlines()]
+        self.assertEqual([(r["rule"], r["outcome"]) for r in rows], [("squash-only", "refused")])
+        done = self.sh("gh --version")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "real gh ran: --version"), done.stderr)
+
+    def test_the_link_is_container_only_and_an_unrelated_gh_there_is_left_alone(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for container, name in (("", "desktop"), ("  container:\n    enabled: true\n", "pod")):
+            home = tmp / name
+            (home / ".local/bin").mkdir(parents=True)
+            if name == "pod":
+                (home / ".local/bin/gh").write_text("#!/bin/sh\n# somebody else's gh\n")
+            cfg = tmp / (name + ".yaml")
+            cfg.write_text("data:\n  profile: personal\n" + container)
+            script = chezmoi(cfg, home, "execute-template", (ROOT / "run_onchange_after_47_install-gh-wrapper.sh.tmpl").read_text()).stdout
+            (tmp / (name + ".sh")).write_text(script)
+            done = subprocess.run(["sh", str(tmp / (name + ".sh"))], capture_output=True, text=True, env={**os.environ, "HOME": str(home)}, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            if name == "desktop":
+                self.assertFalse((home / ".local/bin/gh").exists(), "a desktop home gets no link: its PATH comes from .zshenv, the mise file and the service units")
+            else:
+                self.assertFalse((home / ".local/bin/gh").is_symlink())
+                self.assertIn("is not the gh wrapper's link; left alone", done.stderr)
 
 
 class LeanMiseSet(Scratch):
