@@ -36,4 +36,5 @@ First match wins.
 |---|---|
 | `github.com/StoryCraftTW/storycraft` | shared |
 | `github.com/cartwmic/loop-engine`, `gitea.internal.cartwmic.com/cartwmic/loop-engine` | shared |
+| `github.com/cartwmic/agent-kit`, `gitea.internal.cartwmic.com/cartwmic/agent-kit` | shared |
 | `github.com/cartwmic/*`, `gitea.internal.cartwmic.com/cartwmic/*` | personal |

@@ -23,7 +23,6 @@ goes wrong. Each adapter has a section here.
 |---|---|
 | `core/agent-alert` | `emit`, `tail`, `ack` ([SPEC.md](./SPEC.md)) |
 | `adapters/claude-doorbell/` | Sink: rings a Claude cloud session ([section](#claude-doorbell-sink)) |
-| Pi extension `notify-owner` | Source: a worker calls `notify_owner` (or opens `ask_user_question`) to emit `question`; Pi's clean exit emits `exited` ([section](#pi-source-notify-owner)) |
 | `examples/` | A worked source and a worked consumer, also in [SPEC.md](./SPEC.md#worked-examples) |
 | `tests/` | Tests; source-only, not deployed |
 
@@ -37,8 +36,7 @@ chezmoi apply
 ```
 
 It deploys to `~/.local/share/agent-alert`. Nothing runs until you enable an
-adapter: see the [Pi source](#pi-source-notify-owner) and
-[doorbell](#claude-doorbell-sink) sections. The inbox is
+adapter: see the [doorbell](#claude-doorbell-sink) section. The inbox is
 `~/.local/share/coordinator/inbox.jsonl` unless
 `~/.config/agent-alert/config.json` says otherwise.
 
@@ -58,33 +56,22 @@ after a sequence number, unchanged; without `--since` it starts after your last
 `ack`. [SPEC.md](./SPEC.md#commands) has the commands and
 [exit codes](./SPEC.md#exit-codes).
 
-### Watch the inbox in a pane
+### Watch the inbox
 
-The core has no follow command and no daemon. To watch the inbox in a Herdr pane,
-run the system `tail -F` there yourself; the pane is only a view. Pick the pane
-(`herdr pane list`), keep its id in `PANE`, and start the follower in it:
-
-```sh
-herdr pane run "$PANE" 'tail -n 20 -F "$HOME/.local/share/coordinator/inbox.jsonl"'
-```
-
-The inbox is append-only, so `tail -F` never loses its place, and it starts by
-showing the last 20 lines.
+The core has no follow command and no daemon. To watch the inbox, run the system
+`tail -n 20 -F "$HOME/.local/share/coordinator/inbox.jsonl"` yourself, in any
+terminal. The inbox is append-only, so `tail -F` never loses its place, and it
+starts by showing the last 20 lines.
 
 ### Wait for the next event
 
-Say `NEXT` is one more than the `seq` of the last event you handled. This blocks
-until the pane shows a line for that sequence number, or fails after 30 seconds:
-
-```sh
-herdr pane wait-output "$PANE" --source recent-unwrapped --timeout 30000 --regex '^\{"version":1,"seq":'"$NEXT"',.*\}$'
-```
-
-The expression is `^\{"version":1,"seq":N,.*\}$` ([SPEC.md](./SPEC.md#waiting-for-one-event-line)).
+Say `NEXT` is one more than the `seq` of the last event you handled. A watcher
+that matches one line at a time can wake on the expression
+`^\{"version":1,"seq":N,.*\}$` with `N` set to `NEXT`
+([SPEC.md](./SPEC.md#waiting-for-one-event-line)).
 A match is a wake-up: the expression cannot validate JSON, so the reader must
-parse the line and acknowledge only parsed events. A pane that is not running the
-follower never satisfies the wait; read the inbox with `tail` instead, which needs
-no pane.
+parse the line and acknowledge only parsed events. A watcher that is not
+following the inbox never matches; read the inbox with `tail` instead.
 
 A coordinator should also read the inbox on its own schedule with
 `agent-alert tail`, since a wait can time out and a ring can be lost.
@@ -100,8 +87,8 @@ are not events and accepts kinds it does not know. It is shown in
 **A source** is any program that runs `agent-alert emit` with a worker and a kind
 for each event it is told about. Follow the [source contract](./SPEC.md#source-contract);
 the [worked source example](./SPEC.md#a-source-30-lines-or-fewer) is
-`examples/source-example.py`, a stand-in for an adapter to another multiplexer
-that uses nothing from Herdr. Put a real adapter in `adapters/<name>/`, find the
+`examples/source-example.py`, a stand-in for an adapter to a terminal multiplexer.
+Put a real adapter in `adapters/<name>/`, find the
 core as `../../core/agent-alert` from there, and add a section here.
 
 **A sink** is a program that reads one event on standard input and nudges the
@@ -112,42 +99,6 @@ exit quickly, never write the inbox.
 
 Neither kind changes the core. A reader of the inbox follows the
 [reader rules](./SPEC.md#reader-rules).
-
-## Pi source: notify-owner
-
-The only source in use is the Pi extension `notify-owner` (in the dotfiles repo:
-`dot_pi/private_agent/extensions/notify-owner/`, with its own README; it is deployed with Pi's other extensions,
-not into this directory). It runs `agent-alert emit` for the worker's Herdr pane
-(the pane id from `HERDR_PANE_ID` is the worker name) and nothing else; it needs no Herdr plugin, status event or screen read:
-
-| What happens in Pi | Emitted |
-|---|---|
-| The worker calls the `notify_owner(kind, summary, ...)` tool (legacy: `notify_owner(question)`) | `question` |
-| An `ask_user_question` dialog opens | `question` |
-| Pi exits cleanly (the quit command, SIGTERM, SIGHUP: closing the pane) | `exited` |
-| Anything else: a finished turn, progress, a Herdr `blocked` status | nothing |
-
-The context carries `agent=pi` and, when Herdr gives it, `workspace_id`. Events carry no message text: the
-worker states its question in its reply and the coordinator reads the named pane itself:
-
-```sh
-herdr pane read "$PANE" --source recent-unwrapped --lines 40
-```
-
-A typed `notify_owner` call's arguments (`kind`, `summary`, ...) are not added to the event; they stay in the worker's own
-session log, which the coordinator reads ([extension README](../../../dot_pi/private_agent/extensions/notify-owner/README.md)).
-
-- **Explicit only.** A worker that needs the owner must call the tool (the personal profile's Pi
-  `AGENTS.md` says so). A worker that forgets is silent when its turn ends; the coordinator's own periodic
-  check of its panes is the backstop. Nothing is inferred from status, labels or screen text.
-- **A hard kill (`kill -9`, out of memory) is not reported** as `exited`: no code runs. The same backstop applies.
-- **Not for subagents.** A Pi subagent child (`PI_SUBAGENT_CHILD=1`) and a Pi run with no `HERDR_PANE_ID` register
-  nothing.
-- **Deploy.** A running Pi session gets the tool after its reload command or a restart.
-- **Removed: the Herdr plugin.** An earlier adapter turned Herdr status events into events by inference (status
-  mapping, subagent labels, a marker line, transcript parsing). It is gone. A machine that still has it linked
-  should run `herdr plugin disable agent-alert` and `herdr plugin unlink agent-alert` (see `herdr plugin --help`)
-  around the apply that removes `~/.local/share/agent-alert/adapters/herdr`.
 
 ## Claude doorbell sink
 
@@ -235,11 +186,8 @@ None of these corrupts the inbox. The operator log is
 |---|---|---|
 | **Lost ring**: the ring is not sent, not delivered, or the session does not wake | The event is in the inbox; the coordinator is not told | Read the inbox on a schedule (`tail`, or the wait above). Never treat the ring as the record. |
 | **Login expired or missing** (`claude` signed out) | The doorbell logs `claude exited with status N`; no ring | Sign in to `claude` in a terminal. |
-| **Pi not restarted**: you signed in, or installed a tool, after the Pi session started, or Pi was started from an SSH or other background session | The doorbell runs inside the Pi process's environment and session: it does not see a new login or `PATH`, and a login kept in the macOS Keychain may not be readable from a background session, so `claude` fails or is not found | Start Pi again from a normal terminal session, then check the operator log. |
-| **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the extension and the core log to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
-| **A Pi that is killed hard** (`kill -9`, out of memory) | No `exited` event: no code runs | Accepted. Check panes with `herdr pane list`. |
+| **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the core logs to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
 | **A partial line** in the inbox (a media fault, or a disk filled by another process mid-write) | Readers skip it; the next `emit` ends it with a newline and writes on its own line | Nothing; [SPEC.md](./SPEC.md#writer-guarantees) explains. |
-| **A worker that forgets `notify_owner`** | Silent when its turn ends: nothing is inferred | The coordinator's periodic check of its panes. |
 
 ## Tests
 
@@ -250,5 +198,5 @@ repository root:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s dot_local/share/agent-alert/tests
 ```
 
-They never apply anything and never touch the live Herdr, home or `claude` (the pane procedure tests start a scratch Herdr server); see
+They never apply anything and never touch the live home or `claude`; see
 the test module headers for what each runs.

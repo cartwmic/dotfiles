@@ -3,13 +3,25 @@
 # Restore inbound SSH and the two named interactive Termux sessions.
 set -eu
 
+# One JSON line per step, so a tab that did not open can be traced after the terminal is gone.
+log_dir=${XDG_STATE_HOME:-$HOME/.local/state}/resume-ssh
+mkdir -p "$log_dir"
+record() { # record <action> <detail> <exit>
+    printf '{"ts":"%s","action":"%s","detail":"%s","exit":%s}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" >> "$log_dir/log.jsonl"
+}
+
 if [ "$#" -ne 0 ]; then
+    record resume-ssh.refused "arguments given" 2
     printf 'usage: %s\n' "$0" >&2
     exit 2
 fi
 
 if ! pidof sshd >/dev/null 2>&1; then
-    "$HOME/.termux/boot/start-sshd"
+    status=0
+    "$HOME/.termux/boot/start-sshd" || status=$?
+    record resume-ssh.sshd-start start-sshd "$status"
+    [ "$status" -eq 0 ] || exit "$status"
 fi
 
 user_id=${TERMUX__USER_ID:-0}
@@ -18,22 +30,20 @@ case "$user_id" in
 esac
 
 for host in macbook mac-kvm; do
-    if [ "$host" = macbook ]; then
-        # Leave $HOME and $PATH for the remote shell, not the phone.
-        # shellcheck disable=SC2016
-        ssh_args='-tt,macbook,PATH="$HOME/.local/share/mise/shims:$PATH" herdr'
-    else
-        # The NanoKVM bridge allows only an interactive shell, not remote commands.
-        ssh_args=mac-kvm
-    fi
+    # Plain `ssh <host>` opens that machine's login shell. The NanoKVM bridge
+    # allows only an interactive shell, not remote commands, so mac-kvm is the same.
+    ssh_args=$host
 
     # Select each session once so Termux starts its terminal process.
     # mac-kvm remains visible after the second request.
+    status=0
     am startservice --user "$user_id" \
         -n com.termux/.app.RunCommandService -a com.termux.RUN_COMMAND \
         --es com.termux.RUN_COMMAND_PATH /data/data/com.termux/files/usr/bin/ssh \
         --esa com.termux.RUN_COMMAND_ARGUMENTS "$ssh_args" \
         --es com.termux.RUN_COMMAND_SHELL_NAME "$host" \
         --es com.termux.RUN_COMMAND_SHELL_CREATE_MODE no-shell-with-name \
-        --es com.termux.RUN_COMMAND_SESSION_ACTION 2
+        --es com.termux.RUN_COMMAND_SESSION_ACTION 2 || status=$?
+    record resume-ssh.tab "ssh $ssh_args" "$status"
+    [ "$status" -eq 0 ] || exit "$status"
 done

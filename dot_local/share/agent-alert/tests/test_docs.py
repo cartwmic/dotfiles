@@ -6,12 +6,9 @@ Run (from the repository root):
         -s dot_local/share/agent-alert/tests -p 'test_docs.py'
 
 * The shell blocks of README.md (Usage, the doorbell section)
-  are extracted from the file and run literally (with `sh -c`) against one scratch
-  Herdr 0.9.1 server at a time: the deployed tree is copied to
-  `$HOME/.local/share/agent-alert` of a scratch home, so the README's own
-  `~`-relative paths are the ones used. The pane procedure (`tail -F` in a pane)
-  and the next-sequence `herdr pane wait-output` command run as written, with the
-  pane and without it, and with hand-made partial lines in the inbox.
+  are extracted from the file and run literally (with `sh -c`): the deployed tree
+  is copied to `$HOME/.local/share/agent-alert` of a scratch home, so the README's
+  own `~`-relative paths are the ones used.
 * The doorbell section's config JSON and session-id block run in a scratch HOME
   with a scripted `claude` on PATH.
 * The two Python examples are extracted from the fenced blocks of SPEC.md, shown
@@ -20,10 +17,11 @@ Run (from the repository root):
 * The two adapter READMEs are gone; README.md has a section for each adapter,
   and its wait expression is the one SPEC.md gives.
 
-Nothing here touches the live Herdr, home or `claude`; every path is scratch.
+Nothing here touches the live home or `claude`; every path is scratch.
 """
 
 import json
+import os
 import re
 import shutil
 import stat
@@ -31,13 +29,11 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from herdr_scratch import HERDR_REQUIRED, ScratchHerdr, adapter_copy  # noqa: E402
 
 TOOL = common.TOOL_SOURCE_DIR
 README = TOOL / "README.md"
@@ -82,15 +78,29 @@ def heading_slugs(markdown):
     return slugs
 
 
-class DocsHerdr(ScratchHerdr):
-    """A scratch Herdr whose HOME holds the deployed tree and uses default paths."""
+def adapter_copy():
+    """The deployed-layout copy of the tree (adapters/ kept)."""
+    return common.deployed_copy(delete_adapters=False)
+
+
+class ScratchHome:
+    """A scratch HOME that holds the deployed tree and uses the default paths."""
 
     def __init__(self, test_case):
-        super().__init__(test_case)
-        # No AGENT_ALERT_* variable (the base class removes them): the README's default paths under the scratch HOME are used.
+        self.root = Path(tempfile.mkdtemp(prefix="agent-alert-docs-")).resolve()
+        test_case.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        # No AGENT_ALERT_* variable: the README's default paths under the scratch HOME are used.
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_ALERT_")}
+        self.env.update(
+            HOME=str(self.home),
+            XDG_CONFIG_HOME=str(self.home / ".config"),
+            XDG_STATE_HOME=str(self.home / ".local" / "state"),
+            LANG="en_US.UTF-8",
+        )
         self.installed = self.home / ".local" / "share" / "agent-alert"
         shutil.copytree(adapter_copy(), self.installed, ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        (self.home / ".zshrc").write_text("")  # keeps zsh from asking its first-run questions
         self.inbox_path = self.home / ".local" / "share" / "coordinator" / "inbox.jsonl"
         self.core = self.installed / "core" / "agent-alert"
 
@@ -104,19 +114,6 @@ class DocsHerdr(ScratchHerdr):
             stderr=subprocess.PIPE,
             env=environment,
             timeout=timeout,
-            text=True,
-            encoding="utf-8",
-        )
-
-    def spawn_sh(self, block, **extra):
-        environment = dict(self.env)
-        environment.update({key: str(value) for key, value in extra.items()})
-        return subprocess.Popen(
-            ["sh", "-c", block],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
             text=True,
             encoding="utf-8",
         )
@@ -152,59 +149,16 @@ class DocsHerdr(ScratchHerdr):
                 events.append(event)
         return events
 
-    def pane_text(self, pane):
-        return self.herdr("pane", "read", pane, "--source", "recent-unwrapped", "--lines", "200", check=False).stdout
 
-    def append_raw(self, text):
-        with open(self.inbox_path, "ab") as inbox:
-            inbox.write(text.encode("utf-8"))
-
-    def wait_for_pane_text(self, pane, text):
-        deadline = time.monotonic() + 20
-        while text not in self.pane_text(pane):
-            if time.monotonic() > deadline:
-                raise AssertionError("the pane never showed " + text)
-            time.sleep(0.2)
-
-
-class ReadmeProcedureTests(unittest.TestCase):
-    """The README's steps, run as written against a scratch Herdr server."""
+class ReadmeUsageTests(unittest.TestCase):
+    """The README's Usage block, run as written."""
 
     def setUp(self):
-        if not HERDR_REQUIRED:
-            self.skipTest("herdr is not installed")
-        self.server = DocsHerdr(self)
-        self.server.start()
-        self.assertEqual(self.server.version, "0.9.1")
+        self.server = ScratchHome(self)
         self.assertEqual(readme_blocks("Install", "sh"), [])  # the install step is `chezmoi apply`, never run here
-        self.basic_block, self.pane_block, self.wait_block = readme_blocks("Usage")
+        self.basic_block, = readme_blocks("Usage")
 
-    def start_follower(self, pane):
-        """Run the README's pane procedure, then prove the follower is live by its first event."""
-        self.server.emit("follower-check", "finished")
-        result = self.server.sh(self.pane_block, PANE=pane)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        first = self.server.parsed_events()[-1]["seq"]
-        waited = self.server.sh(self.wait_block, PANE=pane, NEXT=first, timeout=60)
-        self.assertEqual(waited.returncode, 0, waited.stdout + waited.stderr)
-
-    def wait_started(self, pane, next_seq):
-        return self.server.spawn_sh(self.wait_block, PANE=pane, NEXT=next_seq)
-
-    def finish(self, process, expect_success=True, timeout=60):
-        stdout, stderr = process.communicate(timeout=timeout)
-        if expect_success:
-            self.assertEqual(process.returncode, 0, stdout + stderr)
-        else:
-            self.assertNotEqual(process.returncode, 0, stdout + stderr)
-
-    def short_wait(self, pane, next_seq):
-        """The README's wait command with its 30 s limit cut to 2 s, for a case that must time out."""
-        self.assertIn("--timeout 30000", self.wait_block)
-        block = self.wait_block.replace("--timeout 30000", "--timeout 2000")
-        return self.server.sh(block, PANE=pane, NEXT=next_seq, timeout=30)
-
-    def test_basic_usage_block_emits_reads_and_acknowledges_without_any_pane(self):
+    def test_basic_usage_block_emits_reads_and_acknowledges(self):
         result = self.server.sh(self.basic_block)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         lines = result.stdout.splitlines()
@@ -215,68 +169,12 @@ class ReadmeProcedureTests(unittest.TestCase):
         self.assertEqual(json.loads((self.server.inbox_path.parent / "inbox.jsonl.ack").read_text()), {"acked": 1})
         self.assertEqual(self.server.sh('"$HOME/.local/share/agent-alert/core/agent-alert" tail').stdout, "")
 
-    def test_pane_follower_and_next_sequence_wait_see_each_new_event(self):
-        pane, _ = self.server.new_pane("docs-pane")
-        self.start_follower(pane)
-        # the next event is written directly and is longer than the pane is wide
-        next_seq = self.server.parsed_events()[-1]["seq"] + 1
-        waiting = self.wait_started(pane, next_seq)
-        self.server.emit("direct-" + "x" * 300, "blocked")
-        self.finish(waiting)
-        # an event that has not happened is not matched: a later number does not satisfy the wait
-        self.assertNotEqual(self.short_wait(pane, next_seq + 1).returncode, 0)
-
-    def test_inbox_is_the_same_with_the_pane_closed_and_a_pane_without_the_follower_never_satisfies_the_wait(self):
-        silent_pane, _ = self.server.new_pane("docs-silent")
-        self.server.emit("w1", "finished")
-        # no follower in this pane: the wait fails, the inbox is unaffected
-        self.assertNotEqual(self.short_wait(silent_pane, 1).returncode, 0)
-        self.assertEqual([e["seq"] for e in self.server.parsed_events()], [1])
-        pane, _ = self.server.new_pane("docs-closing")
-        self.start_follower(pane)
-        before = self.server.inbox_path.read_bytes()
-        self.server.herdr("pane", "close", pane)
-        self.server.emit("w1", "finished")
-        after = self.server.inbox_path.read_bytes()
-        self.assertTrue(after.startswith(before), "the inbox changed anything but its end")
-        self.assertEqual([e["seq"] for e in self.server.parsed_events()], [1, 2, 3])
-        self.assertEqual(self.server.sh('"$HOME/.local/share/agent-alert/core/agent-alert" tail --since 2').stdout.count("\n"), 1)
-
-    def test_partial_line_with_the_next_number_does_not_satisfy_the_wait_and_the_next_event_does(self):
-        pane, _ = self.server.new_pane("docs-fragment")
-        self.start_follower(pane)
-        last = self.server.parsed_events()[-1]["seq"]
-        fragment = '{"version":1,"seq":%d,"time":"2026-10-17T12:30:05.123Z","worker":"torn","kind":"fin' % (last + 1)
-        self.server.append_raw(fragment)  # a media fault: no closing brace, no newline
-        self.server.wait_for_pane_text(pane, '"kind":"fin')
-        self.assertNotEqual(self.short_wait(pane, last + 1).returncode, 0)
-        waiting = self.wait_started(pane, last + 1)
-        self.server.emit("intact", "finished")
-        self.finish(waiting)
-        events = self.server.parsed_events()
-        self.assertEqual([e["seq"] for e in events], list(range(1, last + 2)))
-        self.assertEqual(events[-1]["worker"], "intact")
-        self.assertEqual(self.server.inbox_lines()[-2], fragment)
-
-    def test_a_torn_line_ending_in_a_brace_wakes_the_wait_and_the_reader_skips_it(self):
-        pane, _ = self.server.new_pane("docs-wake")
-        self.start_follower(pane)
-        last = self.server.parsed_events()[-1]["seq"]
-        # the line is cut just before its last brace: it ends like a complete line but does not parse
-        torn = '{"version":1,"seq":%d,"time":"2026-10-17T12:30:05.123Z","worker":"torn","kind":"finished","context":{"a":"b"}' % (last + 1)
-        self.server.append_raw(torn)
-        self.server.wait_for_pane_text(pane, '"context":{"a":"b"}')
-        self.finish(self.wait_started(pane, last + 1))  # a match is a wake-up ...
-        self.assertEqual([e["seq"] for e in self.server.parsed_events()], list(range(1, last + 1)))  # ... the line is not an event
-        tailed = self.server.sh('"$HOME/.local/share/agent-alert/core/agent-alert" tail --since %d' % last)
-        self.assertEqual((tailed.returncode, tailed.stdout), (0, ""))
-
 
 class DoorbellReadmeTests(unittest.TestCase):
     """The doorbell section: its config JSON and session-id block as written, default paths."""
 
     def setUp(self):
-        self.server = DocsHerdr(self)  # only for its scratch HOME holding the deployed tree; no server is started
+        self.server = ScratchHome(self)
         self.fake_bin = self.server.root / "fakebin"
         self.fake_bin.mkdir()
         self.record = self.server.root / "claude-record.txt"
@@ -431,7 +329,7 @@ class ReadmeStructureTests(unittest.TestCase):
         self.assertFalse((TOOL / "adapters" / "claude-doorbell" / "README.md").exists())
         self.assertEqual(sorted(p.name for p in TOOL.rglob("README.md")), ["README.md"])
         found = sections(self.readme)
-        for heading in ("Pi source: notify-owner", "Claude doorbell sink", "Add an adapter", "Failure modes"):
+        for heading in ("Claude doorbell sink", "Add an adapter", "Failure modes"):
             self.assertIn(heading, found)
 
     def test_readme_links_the_spec_and_every_link_resolves(self):
@@ -460,39 +358,32 @@ class ReadmeStructureTests(unittest.TestCase):
         ):
             self.assertNotIn(fragment, self.readme)
 
-    def test_readme_states_the_pi_source_and_doorbell_facts(self):
-        pi = " ".join(re.sub(r"[`*]", "", sections(self.readme)["Pi source: notify-owner"]).split())
-        for phrase in ("notify_owner(question)", "ask_user_question", "Pi exits cleanly", "no message text", "hard kill", "Explicit only", "herdr pane read", "herdr plugin unlink agent-alert"):
-            self.assertIn(phrase, pi)
+    def test_readme_states_the_doorbell_facts(self):
         doorbell = sections(self.readme)["Claude doorbell sink"]
         for phrase in ('"sink"', "AGENT_ALERT_DOORBELL_SESSION", "fixed 4 seconds", "claude exited with status N",
                        "none is dropped", "doorbell.py --flush", "+N more"):
             self.assertIn(phrase, doorbell)
         self.assertNotIn("timeout_seconds", doorbell)
 
-    def test_readme_names_each_required_failure_mode_and_the_pane_procedure(self):
+    def test_readme_names_each_required_failure_mode_and_how_to_watch_and_wait(self):
         text = self.readme.lower()
-        for phrase in ("lost ring", "login expired or missing", "pi not restarted", "unwritable inbox", "killed hard", "forgets `notify_owner`"):
+        for phrase in ("lost ring", "login expired or missing", "unwritable inbox"):
             self.assertIn(phrase, text)
         self.assertIn("tail -n 20 -F", self.readme)
-        self.assertIn("herdr pane wait-output", self.readme)
-        self.assertIn("--source recent-unwrapped", self.readme)
         self.assertIn("a wake-up", self.readme)
         self.assertIn("parse the line and acknowledge only parsed events", self.readme.replace("\n", " "))
 
     def wait_expression(self, number):
-        wait_block, = [b for b in readme_blocks("Usage") if "wait-output" in b]
-        pattern = re.search(r"--regex '(.*?)'\"\$NEXT\"'(.*?)'", wait_block, re.S)
-        return pattern.group(1) + str(number) + pattern.group(2)
+        spec_section = sections(SPEC.read_text(encoding="utf-8"))["Inbox file"]
+        spec_block, = [b for b in fenced_blocks(spec_section, "") if b.startswith("^")]
+        return spec_block.strip().replace("12", str(number))
 
     def test_readme_wait_expression_is_the_simple_wake_up_and_the_one_in_the_spec(self):
         self.assertEqual(self.wait_expression("N"), r'^\{"version":1,"seq":N,.*\}$')
-        spec_section = sections(SPEC.read_text(encoding="utf-8"))["Inbox file"]
-        spec_block, = [b for b in fenced_blocks(spec_section, "") if b.startswith("^")]
-        self.assertEqual(spec_block.strip(), self.wait_expression(12))
-        self.assertIn("a wake-up", spec_section)
+        self.assertIn(r'`^\{"version":1,"seq":N,.*\}$`', self.readme)
+        self.assertIn("a wake-up", sections(SPEC.read_text(encoding="utf-8"))["Inbox file"])
 
-    def test_readme_wait_expression_wakes_on_the_next_sequence_number_only(self):
+    def test_spec_wait_expression_wakes_on_the_next_sequence_number_only(self):
         compiled = re.compile(self.wait_expression(12), re.M)
         complete = '{"version":1,"seq":12,"time":"2026-10-17T12:30:05.123Z","worker":"w","kind":"finished"}'
         with_context = complete[:-1] + ',"context":{"workspace":"main"}}'
