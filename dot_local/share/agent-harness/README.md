@@ -155,8 +155,8 @@ Test: `tests/cursor/test_mcp_login.py`.
 
 The `shartifacts` entry is Michael's page server (`https://shartifacts.internal.cartwmic.com/mcp`, Streamable
 HTTP, no sign-in). It is on both desktop profiles, like TickTick and Hindsight: Michael asked for the work profile too
-(2026-11-13, rule 272f08d0; `docs/profiles.md` records the quote), so it has no row in the coverage table. The command
-`shx-note-image` (`dot_local/share/shx/README.md`) and the canonical skill `using-shartifacts` go with it. Test:
+(2026-11-13, rule 272f08d0; `docs/profiles.md` records the quote), so it has no row in the coverage table. The commands
+`shx-note-image` and `shx-waiting` (`dot_local/share/shx/README.md`) and the canonical skill `using-shartifacts` go with it. Test:
 `tests/shx/test_agent_access.py`.
 
 The entry sends two request headers so the server can tell which machine and which thread a call came from.
