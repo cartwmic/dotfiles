@@ -415,11 +415,11 @@ class CheckTests(Fixture):
 
     def test_a_commit_that_removes_a_file_the_importer_lists_stops_naming_the_file(self):
         files = dict(GOOD_TREE)
-        del files["docs/operational-ux-capture.schema.json"]
+        del files["docs/operational-ux-contracts.md"]
         self.write_repo(files)
         result = self.check("--plan", str(self.plan))
         self.assertEqual(result.returncode, 1)
-        self.assertIn("docs/operational-ux-capture.schema.json", result.stderr)
+        self.assertIn("docs/operational-ux-contracts.md", result.stderr)
         self.assertIn("ROOT_REFERENCES", result.stderr)
 
     def test_a_file_the_bundle_holds_that_the_commit_no_longer_ships_stops_naming_the_file(self):
@@ -469,13 +469,13 @@ class CheckTests(Fixture):
     def test_each_run_leaves_one_json_line_that_replays_it(self):
         self.assertEqual(self.check("--plan", str(self.plan), XDG_STATE_HOME=str(self.dir / "state")).returncode, 0)
         files = dict(GOOD_TREE)
-        del files["docs/operational-ux-capture.schema.json"]
+        del files["docs/operational-ux-contracts.md"]
         self.write_repo(files)
         self.assertEqual(self.check("--plan", str(self.plan), XDG_STATE_HOME=str(self.dir / "state")).returncode, 1)
         passed, refused = self.log_lines()
         self.assertEqual((passed["action"], passed["outcome"], passed["plan"]), ("check", "pass", True))
         self.assertEqual((refused["outcome"], len(refused["commit"])), ("refused", 40))
-        self.assertIn("docs/operational-ux-capture.schema.json", refused["reason"])
+        self.assertIn("docs/operational-ux-contracts.md", refused["reason"])
         self.assertNotEqual(passed["commit"], refused["commit"])
 
     def test_a_log_that_cannot_be_written_does_not_change_the_result(self):
