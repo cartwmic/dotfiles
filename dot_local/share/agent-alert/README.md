@@ -89,8 +89,8 @@ are not events and accepts kinds it does not know. It is shown in
 **A source** is any program that runs `agent-alert emit` with a worker and a kind
 for each event it is told about. Follow the [source contract](./SPEC.md#source-contract);
 the [worked source example](./SPEC.md#a-source-30-lines-or-fewer) is
-`examples/source-example.py`, a stand-in for an adapter to another multiplexer
-that uses nothing from Herdr. Put a real adapter in `adapters/<name>/`, find the
+`examples/source-example.py`, a stand-in for an adapter to a terminal multiplexer.
+Put a real adapter in `adapters/<name>/`, find the
 core as `../../core/agent-alert` from there, and add a section here.
 
 **A sink** is a program that reads one event on standard input and nudges the
