@@ -287,8 +287,9 @@ class GhWrapperInThePod(unittest.TestCase):
                 (home / ".local/bin/gh").write_text("#!/bin/sh\n# somebody else's gh\n")
             cfg = tmp / (name + ".yaml")
             cfg.write_text("data:\n  profile: personal\n" + container)
-            script = chezmoi(cfg, home, "execute-template", (ROOT / "run_onchange_after_47_install-gh-wrapper.sh.tmpl").read_text()).stdout
-            (tmp / (name + ".sh")).write_text(script)
+            rendered = chezmoi(cfg, home, "execute-template", (ROOT / "run_onchange_after_47_install-gh-wrapper.sh.tmpl").read_text())
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)   # a failed render would give an empty script, and "no link" would pass for nothing
+            (tmp / (name + ".sh")).write_text(rendered.stdout)
             done = subprocess.run(["sh", str(tmp / (name + ".sh"))], capture_output=True, text=True, env={**os.environ, "HOME": str(home)}, timeout=60)
             self.assertEqual(done.returncode, 0, done.stderr)
             if name == "desktop":
