@@ -29,7 +29,7 @@ if "-X" not in args:
     if os.environ.get("FAKE_GET_FAIL"):
         sys.stderr.write("HTTP 502\n"); sys.exit(1)
     print(json.dumps(pr)); sys.exit(0)
-if os.environ.get("FAKE_PATCH_FAIL"):
+if os.environ.get("FAKE_PATCH_FAIL") == "before":
     sys.stderr.write("HTTP 403\n"); sys.exit(1)
 body = None
 for a in args:
@@ -37,6 +37,13 @@ for a in args:
         body = open(a[len("body=@"):], encoding="utf-8", newline="").read()
 open(os.environ["FAKE_POSTED"], "w", encoding="utf-8", newline="").write(body)
 pr["body"] = body + os.environ.get("FAKE_STORE_EXTRA", "")  # a storage that changes the text
+if os.environ.get("FAKE_PATCH_FAIL") == "after":  # the write lands, the answer is lost
+    json.dump(pr, open(os.environ["FAKE_PR"], "w"))
+    sys.stderr.write("HTTP 502\n"); sys.exit(1)
+if os.environ.get("FAKE_PATCH_FAIL") == "other":  # the write fails and someone else's text is there
+    pr["body"] = "someone else's text\n"
+    json.dump(pr, open(os.environ["FAKE_PR"], "w"))
+    sys.stderr.write("HTTP 502\n"); sys.exit(1)
 json.dump(pr, open(os.environ["FAKE_PR"], "w"))
 print(json.dumps(pr))
 '''
@@ -175,12 +182,31 @@ class PrRedact(unittest.TestCase):
         self.assertEqual(self.records()[-1]["outcome"], "failed")
 
     def test_a_failed_write_changes_nothing_and_says_so(self):
-        result = self.run_cmd(env={"FAKE_PATCH_FAIL": "1"})
+        result = self.run_cmd(env={"FAKE_PATCH_FAIL": "before"})
         self.assertEqual(result.returncode, 2)
         self.assertIn("was not changed", result.stderr)
         self.assertEqual(self.stored(), BODY)
         self.assertEqual(self.records()[-1]["outcome"], "failed")
         self.assertEqual(self.records()[-1]["reason"], "github-write-failed")
+
+    def test_a_write_that_landed_before_the_error_is_reported_as_edited(self):
+        result = self.run_cmd(env={"FAKE_PATCH_FAIL": "after"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("edited (GitHub reported an error after storing it)", result.stdout)
+        self.assertEqual(self.records()[-1]["outcome"], "edited")
+
+    def test_a_failed_write_that_leaves_other_text_is_reported_as_unknown(self):
+        result = self.run_cmd(env={"FAKE_PATCH_FAIL": "other"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not be confirmed", result.stderr)
+        self.assertNotIn("was not changed", result.stderr)
+        self.assertEqual(self.records()[-1]["reason"], "github-write-unknown")
+
+    def test_a_phrase_that_contains_a_later_string_is_not_searched_again(self):
+        self.set_pr("a host b 10.0.0.9\n")
+        self.write_reps("10.0.0.9\tan internal host\nhost\ta private address\n")
+        self.assertEqual(self.run_cmd().returncode, 0)
+        self.assertEqual(self.stored(), "a a private address b an internal host\n")  # a second pass over the first replacement would change its "host"
 
     def test_a_stored_body_that_is_not_the_computed_text_is_a_failure(self):
         result = self.run_cmd(env={"FAKE_STORE_EXTRA": " "})  # GitHub keeps one character more than was sent

@@ -11,7 +11,10 @@ when:
   - a string does not occur in the current text (a string that only occurs inside a longer listed string counts as absent). `--allow-clean` excuses only the
     case where NONE of the strings occurs: the description is already clean, nothing is posted, exit 0.
 After the post it reads back what GitHub stored: a body that differs from the text pr-redact computed is a failure (exit 2) and the record says so.
-`--dry-run` does everything except the post and says what it would do. A failed GitHub call changes nothing and says so.
+`--dry-run` does everything except the post and says what it would do. A refused or failed write is checked by reading the description again: unchanged
+is said plainly; a write that landed before the error is reported as edited; anything else is reported as unknown (exit 2).
+GitHub keeps the earlier text of an edited description in the description's edit history. pr-redact does not remove it: the old text stays readable there
+until it is deleted from that history on GitHub.
 
 Neutral phrases: "the home folder", "an internal host", "a private address".
 
@@ -163,15 +166,27 @@ def run(argv, state):
     finally:
         os.unlink(path)
     if sent.returncode != 0:
-        raise Stop(2, "github-write-failed", "GitHub refused the change to %s, so its description was not changed" % ref)
-    try:
-        stored = json.loads(sent.stdout)["body"] or ""
-    except (ValueError, KeyError, TypeError):
-        stored = None
+        # The error may come after the write landed (a timeout, a dropped connection): read the description again before saying what state it is in.
+        again = gh(["api", endpoint], env)
+        try:
+            now = json.loads(again.stdout)["body"] or "" if again.returncode == 0 else None
+        except (ValueError, KeyError, TypeError):
+            now = None
+        if now == body:
+            raise Stop(2, "github-write-failed", "GitHub refused the change to %s, so its description was not changed" % ref)
+        if now != new:
+            raise Stop(2, "github-write-unknown", "the change to %s failed and its description could not be confirmed either way (or it holds other text): read it on GitHub" % ref)
+        stored = now
+        state["landed_after_error"] = True
+    else:
+        try:
+            stored = json.loads(sent.stdout)["body"] or ""
+        except (ValueError, KeyError, TypeError):
+            stored = None
     if stored != new:
         raise Stop(2, "stored-body-differs", "GitHub's stored description of %s is not the text pr-redact computed (it may have changed or been edited by someone else); read it on GitHub and decide. Nothing more was posted" % ref)
     state.update(outcome="edited", reason="")
-    print("pr-redact: %s edited: %s" % (ref, summary))
+    print("pr-redact: %s edited%s: %s" % (ref, " (GitHub reported an error after storing it)" if state.get("landed_after_error") else "", summary))
     return 0
 
 
