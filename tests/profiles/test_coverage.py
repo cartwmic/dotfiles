@@ -1,7 +1,7 @@
 """Every path that lands on one desktop profile only has a row in docs/profiles.md, and every row is still one-profile.
 
 Runs `chezmoi managed` against the real source for personal and axon-work-computer with a minimal config
-(no read-source-state hook, no secrets) and a throwaway HOME. Gates that also need darwin only show up on macOS;
+(no read-source-state hook, no secrets) and a throwaway HOME, on the network-free copy of the source from source_tree.py. Gates that also need darwin only show up on macOS;
 rows marked "(macOS)" or "(Linux)" are skipped on the other OS, rows marked "(Mac mini)" (gated on the hostname) are always skipped, and rows marked "(Windows)" are always skipped here:
 chezmoi never deploys them (they are source files for a Windows install script), so no managed set can show them.
 tests/profiles/test_windows_rows.py checks those rows.
@@ -13,6 +13,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import source_tree  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 DOC = REPO / "docs/profiles.md"
@@ -28,9 +31,9 @@ def managed(profile):
         home.mkdir()
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text("data:\n  profile: %s\n" % profile)
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), "managed"],
-                           capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                           capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         raise AssertionError("chezmoi managed (%s) failed: %s" % (profile, r.stderr))
     return set(r.stdout.split())

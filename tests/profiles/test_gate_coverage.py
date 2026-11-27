@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_coverage import PROFILES, managed  # noqa: E402
+import source_tree  # noqa: E402  (test_coverage has put tests/lib on the path)
 
 REPO = Path(__file__).resolve().parents[2]
 DOC = REPO / "docs/gate-coverage.md"
@@ -46,8 +47,8 @@ def table():
 def chezmoi(args, data, home, stdin=None):
     cfg = Path(home).parent / ("chezmoi-%s.json" % abs(hash(json.dumps(data, sort_keys=True))))
     cfg.write_text(json.dumps({"data": data}))
-    r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
-                        "--no-tty", *args], input=stdin, capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=str(home)))
+    r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
+                        "--no-tty", *args], input=stdin, capture_output=True, text=True, timeout=120, env=source_tree.chezmoi_env(home))
     assert r.returncode == 0, r.stderr
     return r.stdout
 

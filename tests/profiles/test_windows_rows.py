@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 from test_coverage import DOC, PROFILES, covers
+import source_tree  # noqa: E402  (test_coverage has put tests/lib on the path)
 
 REPO = Path(__file__).resolve().parents[2]
 SYSTEMS = ("linux", "darwin", "windows")
@@ -60,7 +61,7 @@ def chezmoi_managed(source, system, profile):
         override = json.dumps({"profile": profile, "chezmoi": {"os": system}})
         r = subprocess.run(["chezmoi", "--source", str(source), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), "--override-data", override, "managed"],
-                           capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                           capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         raise AssertionError("chezmoi managed (%s, %s) failed: %s" % (system, profile, r.stderr))
     return set(r.stdout.split())
@@ -141,7 +142,7 @@ class RealTreeTest(unittest.TestCase):
     def test_chezmoi_deploys_nothing_under_windows_on_any_system_or_profile(self):
         for system in SYSTEMS:
             for profile in PROFILES:
-                self.assertEqual(deployed_windows_paths(chezmoi_managed(REPO, system, profile)), [], (system, profile))
+                self.assertEqual(deployed_windows_paths(chezmoi_managed(source_tree.source(), system, profile)), [], (system, profile))
 
     def test_the_agent_desktop_linux_row_is_one_row_and_points_at_the_doc(self):
         lines = [l for l in self.text.splitlines() if l.startswith("| `.local/bin/agent-desktop`")]
