@@ -125,6 +125,7 @@ SAMPLES = {
     "kubectl on a context": "kubectl --context axon-aks-prod get pods",
     "local `docker run`": "docker run alpine",
     "`git stash` that writes the stash list": "git stash pop",
+    "hand-typed `loop-engine` write": "loop-engine append lead-demo-1 --record-id r --kind note",
 }
 CLEAN = ["git status", "ls -la", "gh pr list", "ci-main-status --merge-gate acme/app && pr-body-check acme/app 12 && gh pr merge 12 -R acme/app"]
 
