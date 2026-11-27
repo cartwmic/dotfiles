@@ -27,12 +27,12 @@ table. Each table has exactly its columns: a missing, unknown or repeated column
 * X: one row per off-diagonal cell, "changing DP `dp` to tune its own FR forces a change to keep FR `fr` met". This rule is
   this skill's convention, not Suh's. `reason` is one line. `evidence` is one or more of (split on `;`, `,` or space):
   `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`). With
-  `--target` it may also be a design id of DESIGN.md: a decision (`D2`), gap (`G1`), tension (`T1`) or requirement (`OR-3`,
+  `--target` it may also be a design id of DESIGN.md: a decision (`D<n>`), gap (`G<n>`), tension (`T<n>`) or requirement (`OR-<n>`,
   `IR-2`). A target design has no code yet, so a target X that cites only `path:line` is refused: it cites the decision that
   creates the dependency. A co-change is correlation: an X that cites only co-change is listed, and its reason must stand on
   its own. The diagonal is implied and may not be listed. An import alone is not evidence.
   The evidence check is format only: it sees that an X cites something of the right shape, not that the citation shows coupling.
-* Removed (only with `--as-found`): `| fr | dp | by |`, `by` a decision id (`D2`). Every X of the as-found matrix that is absent from
+* Removed (only with `--as-found`): `| fr | dp | by |`, `by` a decision id (`D<n>`). Every X of the as-found matrix that is absent from
   this one (the target) must be listed with the decision that removes it; the script refuses it otherwise, and prints the
   removed and added cells. Keep ids stable between the two tables so a cell can be matched.
 
@@ -71,7 +71,7 @@ DESIGN_ID = re.compile(r'^((D|G|T)\d+|(OR|IR)-\d+)$')  # DESIGN.md ids: decision
 DECISION_ID = re.compile(r'^D\d+$')
 MAX_LEVEL1_FRS = 9
 EVIDENCE_HELP = 'path:line, cochange:<a>+<b>, commit:<hex sha> or a finding id (F-n, DF-n, U-n)'
-TARGET_HELP = EVIDENCE_HELP + ', or (target) a design id (D2, G1, T1, OR-3, IR-2)'
+TARGET_HELP = EVIDENCE_HELP + ', or (target) a design id (D<n>, G<n>, T<n>, OR-<n>, IR-<n>)'
 
 
 def load_scc():
@@ -217,7 +217,7 @@ def validate(data, target=False):
                 errors.append('%s: evidence %r is none of %s' % (where, token, TARGET_HELP if target else EVIDENCE_HELP))
         if target and tokens and all(EVIDENCE_KINDS[0][1].match(t) for t in tokens):
             errors.append('%s: a target X needs a reason, not only code: the target design has no code yet, so also cite the decision or '
-                          'requirement that creates the dependency (D2, OR-3, ...)' % where)
+                          'requirement that creates the dependency (D<n>, OR-<n>, ...)' % where)
         xs.append({'fr': fr, 'dp': dp, 'reason': reason, 'evidence': tokens})
     part_dps = {}
     for d in dps:
@@ -255,7 +255,7 @@ def check_removed(as_found, target_model, removed_rows):
         elif (fr, dp) in after:
             errors.append('%s: the target still has this X' % where)
         elif not DECISION_ID.match(who):
-            errors.append('%s: `by` must be a decision id of DESIGN.md (D1, D2, ...), not %r' % (where, who))
+            errors.append('%s: `by` must be a decision id of DESIGN.md (D<n>, ...), not %r' % (where, who))
         else:
             by[(fr, dp)] = who
     removed = []
@@ -484,7 +484,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description='Check, classify and render one Axiomatic Design matrix (see the module docstring for the input format). '
                                  'The evidence check is format only: it sees that an X cites something, not that the citation shows coupling.')
     ap.add_argument('file', help='markdown tables of FRs, DPs and X cells')
-    ap.add_argument('--target', action='store_true', help='this is a target matrix (mode B has no --as-found): X evidence may be a DESIGN.md id (D2, G1, T1, OR-3) and must not be only path:line')
+    ap.add_argument('--target', action='store_true', help='this is a target matrix (mode B has no --as-found): X evidence may be a DESIGN.md id (D<n>, G<n>, T<n>, OR-<n>) and must not be only path:line')
     ap.add_argument('--as-found', metavar='FILE', help='the as-found table; FILE is then the target, and every X it drops must name the decision that removes it')
     ap.add_argument('--label', default='Design matrix', help='heading of the rendered block, e.g. "As found" or "Target"')
     ap.add_argument('--json', action='store_true', help='print the facts as JSON instead of markdown')

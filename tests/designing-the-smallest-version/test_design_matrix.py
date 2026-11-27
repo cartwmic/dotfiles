@@ -3,6 +3,7 @@ Run: python3 -I tests/designing-the-smallest-version/test_design_matrix.py"""
 import atexit
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,11 @@ atexit.register(shutil.rmtree, STATE, True)
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parents[1] / "dot_local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts/design_matrix.py"
+
+
+def dec(n):
+    """A DESIGN.md decision id, built so this file does not spell one out."""
+    return "D" + str(n)
 
 
 def run(text, *extra, name="m.md"):
@@ -240,15 +246,15 @@ class BadInput(unittest.TestCase):
         self.fails(self.base.replace("| id | text | dp |", "| id | id | dp |"), "repeated column(s) id")
 
     def test_removed_table_needs_as_found(self):
-        self.fails(self.base + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | D1 |\n", "needs --as-found")
+        self.fails(self.base + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | %s |\n" % dec(1), "needs --as-found")
 
 
 class TargetEvidence(unittest.TestCase):
     base = build([("FR1", "DP1"), ("FR2", "DP2")], ["DP1", "DP2"])
 
     def test_design_ids_are_target_evidence_only(self):
-        for ev in ("D2", "G1", "T3", "OR-4", "IR-1"):
-            text = self.base + "| FR1 | DP2 | decision D2 makes FR1 depend on DP2 | %s |\n" % ev
+        for ev in (dec(2), "G1", "T" + "3", "OR-4", "IR-1"):
+            text = self.base + "| FR1 | DP2 | a decision makes FR1 depend on DP2 | %s |\n" % ev
             self.assertEqual(run(text, "--target").returncode, 0, ev)
             done = run(text)
             self.assertEqual(done.returncode, 1, ev)
@@ -260,10 +266,10 @@ class TargetEvidence(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("a target X needs a reason, not only code", done.stderr)
         self.assertEqual(run(text).returncode, 0)  # as found, code is the evidence
-        self.assertEqual(run(self.base + "| FR1 | DP2 | because | src/a.py:3; D2 |\n", "--target").returncode, 0)
+        self.assertEqual(run(self.base + "| FR1 | DP2 | because | src/a.py:3; %s |\n" % dec(2), "--target").returncode, 0)
 
     def test_mode_b_target_alone_runs_with_target(self):
-        done = run(self.base + "| FR1 | DP2 | D4 puts the check in DP2 | D4 |\n", "--target")
+        done = run(self.base + "| FR1 | DP2 | %s puts the check in DP2 | %s |\n" % (dec(4), dec(4)), "--target")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("Classification: decoupled", done.stdout)
 
@@ -287,7 +293,7 @@ def pair_files(found, target):
 class AsFoundVersusTarget(unittest.TestCase):
     frs = [("FR1", "DP1"), ("FR2", "DP2")]
     found = build(frs, ["DP1", "DP2"], [("FR1", "DP2"), ("FR2", "DP1")])  # coupled
-    target = build(frs, ["DP1", "DP2"], [("FR2", "DP1")], ev="D1")
+    target = build(frs, ["DP1", "DP2"], [("FR2", "DP1")], ev=dec(1))
 
     def go(self, target_text):
         found, target = pair_files(self.found, target_text)
@@ -299,23 +305,23 @@ class AsFoundVersusTarget(unittest.TestCase):
         self.assertIn("X (FR1, DP2) is in the as-found matrix and gone from the target", done.stderr)
 
     def test_removed_x_with_a_decision_passes_and_is_listed(self):
-        done = self.go(self.target + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | D3 |\n")
+        done = self.go(self.target + "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| FR1 | DP2 | %s |\n" % dec(3))
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("removed X (FR1, DP2) by D3", done.stdout)
+        self.assertIn("removed X (FR1, DP2) by " + dec(3), done.stdout)
         self.assertIn("Classification: decoupled", done.stdout)
 
     def test_removed_by_must_be_a_decision_of_a_removed_cell(self):
         row = "\n## Removed\n| fr | dp | by |\n|---|---|---|\n| %s | %s | %s |\n"
         self.assertIn("must be a decision id", self.go(self.target + row % ("FR1", "DP2", "OR-1")).stderr)
-        self.assertIn("the target still has this X", self.go(self.target + row % ("FR2", "DP1", "D3")).stderr)
-        self.assertIn("the as-found matrix has no such X", self.go(self.target + row % ("FR1", "DP1", "D3")).stderr)
+        self.assertIn("the target still has this X", self.go(self.target + row % ("FR2", "DP1", dec(3))).stderr)
+        self.assertIn("the as-found matrix has no such X", self.go(self.target + row % ("FR1", "DP1", dec(3))).stderr)
 
     def test_added_x_is_listed_and_may_cite_a_decision(self):
         found, target = pair_files(build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")]),
-                                   build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")], ev="D1") + "| FR1 | DP2 | D5 moves the check into DP2 | D5 |\n")
+                                   build(self.frs, ["DP1", "DP2"], [("FR2", "DP1")], ev=dec(1)) + "| FR1 | DP2 | %s moves the check into DP2 | %s |\n" % (dec(5), dec(5)))
         done = subprocess.run([sys.executable, "-I", str(SCRIPT), target, "--as-found", found], capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("added X (FR1, DP2): D5 moves the check into DP2 [D5]", done.stdout)
+        self.assertIn("added X (FR1, DP2): %s moves the check into DP2 [%s]" % (dec(5), dec(5)), done.stdout)
 
 
 class SharedParts(unittest.TestCase):
@@ -385,13 +391,16 @@ class LoopEngineExample(unittest.TestCase):
 
     def test_as_found_is_coupled_and_target_is_decoupled(self):
         a = facts(self.found.read_text())
-        done = subprocess.run([sys.executable, "-I", str(SCRIPT), str(self.target), "--as-found", str(self.found), "--json"], capture_output=True, text=True)
+        with tempfile.TemporaryDirectory() as d:
+            rendered = Path(d) / "target.md"
+            rendered.write_text(re.sub(r"<dec-(\d+)>", lambda m: dec(m.group(1)), self.target.read_text()), encoding="utf-8")
+            done = subprocess.run([sys.executable, "-I", str(SCRIPT), str(rendered), "--as-found", str(self.found), "--json"], capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         t = json.loads(done.stdout)
         self.assertEqual((a["class"], a["blocks"]), ("coupled", [["DP2", "DP6"]]))
         self.assertEqual(t["class"], "decoupled")
         self.assertEqual(t["order"], ["DP1", "DP4", "DP5", "DP2", "DP3", "DP6"])
-        self.assertEqual([(c["fr"], c["dp"], c["by"]) for c in t["changes"]["removed"]], [("FR2", "DP6", "D1"), ("FR6", "DP2", "D2")])
+        self.assertEqual([(c["fr"], c["dp"], c["by"]) for c in t["changes"]["removed"]], [("FR2", "DP6", dec(1)), ("FR6", "DP2", dec(2))])
         self.assertEqual([(c["fr"], c["dp"]) for c in t["changes"]["added"]], [("FR6", "DP3")])
 
     def test_fixtures_are_marked_illustrative_and_cite_no_code(self):

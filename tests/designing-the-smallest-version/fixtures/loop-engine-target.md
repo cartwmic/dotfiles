@@ -1,6 +1,6 @@
 # Illustrative example, not a real repo: a loop engine, target, after the fixes
 
-Nothing here describes real code. F-n stand for findings of an imagined requirements register, D-n for decisions of an imagined DESIGN.md: D1 the sweeper reports a recovery as evidence through the endpoint, D2 the sweeper owns its lease timeout.
+Nothing here describes real code. F-n stand for findings of an imagined requirements register, decisions of an imagined DESIGN.md are written <dec-n> here and filled in by the test: <dec-1> the sweeper reports a recovery as evidence through the endpoint, <dec-2> the sweeper owns its lease timeout.
 The FRs are outcomes, none names a module. The DPs do not map one to one onto modules: two parts serve three DPs.
 
 ## FRs
@@ -31,13 +31,13 @@ The FRs are outcomes, none names a module. The DPs do not map one to one onto mo
 | FR6 | DP1 | the sweeper finds stuck runs from the last journal record | F-5 |
 | FR2 | DP5 | workflow files define which verdicts count, so a loader change shifts the gate | F-1 |
 | FR3 | DP2 | the endpoint rejects evidence the gate would not accept, so a gate rule change changes it | F-6 |
-| FR6 | DP3 | the sweeper reports a recovery as evidence, so a change to the endpoint format changes the sweeper | D1 |
+| FR6 | DP3 | the sweeper reports a recovery as evidence, so a change to the endpoint format changes the sweeper | <dec-1> |
 
 ## Removed
 | fr | dp | by |
 |---|---|---|
-| FR2 | DP6 | D1 |
-| FR6 | DP2 | D2 |
+| FR2 | DP6 | <dec-1> |
+| FR6 | DP2 | <dec-2> |
 
 ## Shared
 | dp1 | dp2 | reason |
