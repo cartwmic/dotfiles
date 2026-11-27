@@ -86,6 +86,14 @@ def user_scopes_work():
         return False
 
 
+def process_running(pid):
+    """True while the process exists and is not a zombie. One that exits between the check and the read is gone: reading its stat then fails, and that is an answer, not an error."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
 def scope_active(unit):
     return subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit]).returncode == 0
 
@@ -1107,8 +1115,7 @@ class RunAndWake(unittest.TestCase):
         for pid in (start["watcher"], start["pid"]):
             os.kill(pid, signal.SIGKILL)
         end = time.monotonic() + 10
-        while time.monotonic() < end and any(Path(f"/proc/{p}/stat").exists() and Path(f"/proc/{p}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
-                                             for p in (start["watcher"], start["pid"])):
+        while time.monotonic() < end and any(process_running(p) for p in (start["watcher"], start["pid"])):
             time.sleep(0.02)
 
     def sweep_by_launching(self, **env):
