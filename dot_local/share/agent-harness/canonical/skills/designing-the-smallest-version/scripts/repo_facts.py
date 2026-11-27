@@ -2,12 +2,12 @@
 """Gather deterministic structural facts about a git repo at a pinned rev.
 
     repo_facts.py REPO [--rev REV] [--parts PARTS.tsv] [--scope GLOB ...]
-                  [--since-days 120] [--max-commit-files 15] [--out facts.json]
+                  [--since-days 120] [--max-commit-files 15] [--out facts.json [--force]]
 
 Reads git only and never writes to REPO. The tree is read from `git archive`
 at REV, so the working tree is ignored. Prints one JSON object (or writes
---out). --out never overwrites a facts file with keys this run does not write (a `parts` or `scope` block, or the `edges` a --scope run
-holds only the count of): it exits 2 and leaves the file alone. --summary alone writes no file. Exit 0 on success; exit 2 with one stderr line on bad arguments, an
+--out). --out exits 2 and leaves the file alone when it already exists, before any analysis, unless --force is given.
+--summary alone writes no file. Exit 0 on success; exit 2 with one stderr line on bad arguments, an
 unknown rev or a path that is not a git repo.
 
 Globs (--parts first column, --scope): `*` stays within one path segment, `**`
@@ -144,6 +144,7 @@ def parse_args(argv):
     p.add_argument('--since-days', type=int, default=120)
     p.add_argument('--max-commit-files', type=int, default=15)
     p.add_argument('--out', help='write JSON here instead of stdout')
+    p.add_argument('--force', action='store_true', help='let --out replace a file that is already there')
     p.add_argument('--summary', action='store_true',
                    help='print one line per top-level key instead of the JSON (JSON still goes to --out)')
     a = p.parse_args(argv)
@@ -975,22 +976,17 @@ def analyse(repo, sha, args, rules, tmp):
     return out
 
 
-def refuse_to_drop(out, facts):
-    """Stop a run from overwriting a facts file with one that has fewer keys: `parts` without --parts, `scope` without --scope, and `edges` (and the
-    other lists) when a --scope run holds only their counts."""
-    try:
-        with open(out, encoding='utf-8') as fh:
-            old = json.load(fh)
-    except (OSError, ValueError):
-        return
-    lost = sorted(set(old) - set(facts)) if isinstance(old, dict) else []
-    if lost:
-        die(f'{out} holds {", ".join("`%s`" % k for k in lost)}, which this run does not write, so writing it would lose them: '
-            'give the same options again, or write to another --out')
+def refuse_to_overwrite(out, force):
+    """--out never replaces a file that is already there unless --force is given: a facts file made with --parts or --scope, or for another rev, is a
+    report the designer may still need, and a run with other options writes a different one."""
+    if os.path.exists(out) and not force:
+        die(f'{out} already exists: give --force to replace it, or write to another --out')
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.out:
+        refuse_to_overwrite(args.out, args.force)  # before any analysis
     try:
         repo = git(args.repo, 'rev-parse', '--show-toplevel').strip()
     except RuntimeError:
@@ -1012,7 +1008,6 @@ def main(argv=None):
     facts.update(body)
     text = json.dumps(facts, indent=2) + '\n'
     if args.out:
-        refuse_to_drop(args.out, facts)
         try:
             with open(args.out, 'w', encoding='utf-8') as fh:
                 fh.write(text)

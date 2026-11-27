@@ -1,4 +1,4 @@
-"""repo_facts.py --out must not overwrite a facts file with one that has fewer keys: a `parts` or `scope` block, or the `edges` a --scope run keeps as a count.
+"""repo_facts.py --out never replaces a file that is already there unless --force is given.
 Run: python3 -I tests/designing-the-smallest-version/test_facts_out.py"""
 import atexit
 import json
@@ -43,49 +43,35 @@ class OutNeverLosesABlock(unittest.TestCase):
     def out(self, name):
         return self.tmp / name
 
-    def test_summary_run_into_a_parts_file_is_refused_and_the_file_survives(self):
+    def test_an_existing_file_is_refused_and_survives_whatever_the_options(self):
         f = self.out("a.json")
         self.assertEqual(run(self.repo, "--parts", str(self.parts), "--out", str(f)).returncode, 0)
         before = f.read_text()
-        done = run(self.repo, "--summary", "--out", str(f))
-        self.assertEqual(done.returncode, 2, done.stdout)
-        self.assertIn("`parts`", done.stderr)
-        self.assertEqual(f.read_text(), before)
-        self.assertIn("parts", json.loads(before))
+        for opts in (("--summary",), (), ("--parts", str(self.parts)), ("--scope", "src/**"), ("--scope", "lib/**", "--summary")):
+            done = run(self.repo, *opts, "--out", str(f))
+            self.assertEqual(done.returncode, 2, (opts, done.stdout))
+            self.assertIn("already exists", done.stderr)
+            self.assertEqual(f.read_text(), before)
 
-    def test_a_scope_block_is_protected_the_same_way(self):
+    def test_the_refusal_comes_before_any_analysis(self):
         f = self.out("b.json")
-        self.assertEqual(run(self.repo, "--scope", "src/**", "--out", str(f)).returncode, 0)
-        done = run(self.repo, "--out", str(f))
+        f.write_text("keep")
+        done = run(self.tmp / "no-such-repo", "--out", str(f))  # a path that is no git repo would fail with its own message if the analysis ran first
         self.assertEqual(done.returncode, 2)
-        self.assertIn("`scope`", done.stderr)
-        self.assertIn("scope", json.loads(f.read_text()))
+        self.assertIn("already exists", done.stderr)
+        self.assertEqual(f.read_text(), "keep")
 
-    def test_the_same_options_may_overwrite_and_a_new_file_is_free(self):
+    def test_force_replaces_the_file(self):
         f = self.out("c.json")
-        self.assertEqual(run(self.repo, "--parts", str(self.parts), "--out", str(f)).returncode, 0)
-        self.assertEqual(run(self.repo, "--parts", str(self.parts), "--out", str(f)).returncode, 0)
+        self.assertEqual(run(self.repo, "--scope", "src/**", "--out", str(f)).returncode, 0)
+        self.assertEqual(run(self.repo, "--force", "--out", str(f)).returncode, 0)
+        self.assertNotIn("scope", json.loads(f.read_text()))
+
+    def test_a_new_file_is_free_and_a_summary_with_no_out_writes_no_file(self):
         self.assertEqual(run(self.repo, "--summary", "--out", str(self.out("fresh.json"))).returncode, 0)
-
-    def test_a_scope_run_may_not_replace_the_full_edge_lists_with_counts(self):
-        f = self.out("e.json")
-        self.assertEqual(run(self.repo, "--out", str(f)).returncode, 0)
-        before = f.read_text()
-        done = run(self.repo, "--scope", "src/**", "--out", str(f))
-        self.assertEqual(done.returncode, 2, done.stdout)
-        self.assertIn("`edges`", done.stderr)
-        self.assertEqual(f.read_text(), before)
-
-    def test_a_summary_with_no_out_writes_no_file(self):
         before = set(self.tmp.iterdir())
         self.assertEqual(run(self.repo, "--summary").returncode, 0)
         self.assertEqual(set(self.tmp.iterdir()), before)
-
-    def test_a_file_that_is_not_facts_json_is_overwritten_as_before(self):
-        f = self.out("d.json")
-        f.write_text("not json")
-        self.assertEqual(run(self.repo, "--out", str(f)).returncode, 0)
-        self.assertIn("rev", json.loads(f.read_text()))
 
 
 if __name__ == "__main__":
