@@ -156,7 +156,8 @@ MERGE_BARE = (
     "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main only for the PR that fixes it: one that names the red with a `Handles: <full sha>` line "
     "(in a commit message of the PR; in its description for storycraft) and whose own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
     "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
-    "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits: open the PR with the playbook CLI's `--pr` alone (it no longer merges), then merge it with `" + MERGE_PR + " PR`."
+    "pin bumps use loop_engine_bump.py or agent_kit_bump.py; a playbook edit is made only by the coordinator (any other session sends it to the coordinator by agent message): run the playbook verb on a branch in a worktree, without `--pr`, then `issue-open`, `pr-open` and `" + MERGE_PR + " PR`; never add `--merge` to the playbook CLI, which merges by itself and skips both gates and the whole suite (playbook fab9b713). "
+    "An edit with Michael's own words goes out at once in its own PR; a bookkeeping edit (seats, tag, enforced) waits on branch `playbook/batch` for the coordinator's daily digest."
 )
 PR_BODY = (
     "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles table or a table in the Proven section, a Decisions: line, "
