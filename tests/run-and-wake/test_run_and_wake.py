@@ -1,9 +1,8 @@
 """Black-box tests for dot_local/bin/executable_run-and-wake.
 
-The real script runs as a real process and its job really detaches. Only herdr is scripted: a fake `herdr` first on PATH
-answers `agent get` from files the test writes (one file per live pane, holding the session it shows), records every call,
-and records each `agent prompt` it accepts. A fake `t3` does the same for `thread send` (argv and stdin). Everything is checked from outside: the launcher's output and exit code, the
-prompts herdr received, and the job log, read back as the replay of each job.
+The real script runs as a real process and its job really detaches. Only T3 is scripted: a fake `t3` first on PATH records each
+`thread send` (argv and stdin) and can say the server is down or refuses the thread. Everything is checked from outside: the launcher's
+output and exit code, the messages the fake `t3` received, and the job log, read back as the replay of each job.
 """
 import fcntl
 import importlib.machinery
@@ -28,47 +27,6 @@ HEAVY_GATE = ROOT / "dot_local/bin/executable_heavy-gate"
 HOOK = ROOT / "dot_local/share/agent-harness/hooks/stop_running_jobs.py"  # the builder Stop hook, whose wait_hint the launcher's message must match
 sys.path.insert(0, str(ROOT / "tests/heavy-gate"))
 from test_heavy_gate import FAKES as GATE_FAKES, QUIET as GATE_QUIET  # noqa: E402  (the gate's scripted host figures)
-
-PANE = "w1A:p5"
-SESSION = "/sessions/launching.jsonl"
-
-FAKE_HERDR = r'''#!/usr/bin/env python3
-import json, os, sys, time
-fake = os.environ["FAKE"]
-args = sys.argv[1:]
-with open(os.path.join(fake, "calls"), "a") as f:
-    f.write(json.dumps(args) + "\n")
-def fail(code, message):
-    print(json.dumps({"error": {"code": code, "message": message}, "id": "cli:agent:" + args[1]}), file=sys.stderr)
-    sys.exit(1)
-verb, pane = args[1], args[2]
-panefile = os.path.join(fake, "panes", pane)
-if not os.path.exists(panefile):
-    fail("agent_not_found", f"agent target {pane} not found")
-status_file = os.path.join(fake, "status")
-if verb == "get":
-    status = open(status_file).read().strip() if os.path.exists(status_file) else "idle"
-    session = open(panefile).read().strip()
-    print(json.dumps({"id": "cli:agent:get", "result": {"type": "agent_info", "agent": {
-        "pane_id": pane, "agent": "pi", "agent_status": status,
-        "agent_session": {"agent": "pi", "kind": "path", "source": "herdr:pi", "value": session}}}}))
-elif verb == "wait":
-    if os.path.exists(os.path.join(fake, "wait_error")):
-        fail("server_unavailable", "herdr server went away")
-    time.sleep(0.5)  # the dialog closes
-    open(status_file, "w").write("idle\n")
-    print(json.dumps({"id": "cli:agent:wait", "result": {"type": "agent_status", "status": "idle"}}))
-elif verb == "prompt":
-    if os.path.exists(os.path.join(fake, "prompt_error")):
-        fail("agent_blocked", "agent is blocked")
-    with open(os.path.join(fake, "prompts"), "a") as f:
-        f.write(json.dumps({"pane": pane, "text": args[3]}) + "\n")
-    swap = os.path.join(fake, "swap_on_prompt")  # /new lands between the check and the send
-    if os.path.exists(swap):
-        open(panefile, "w").write(open(swap).read())
-    print(json.dumps({"id": "cli:agent:prompt", "result": {"type": "ok"}}))
-'''
-
 
 FAKE_T3 = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -139,11 +97,9 @@ class RunAndWake(unittest.TestCase):
         root = Path(self.tmp.name)
         self.root = root
         self.fake = root / "fake"
-        (self.fake / "panes").mkdir(parents=True)
+        self.fake.mkdir()
         self.bin = root / "bin"
         self.bin.mkdir()
-        (self.bin / "herdr").write_text(FAKE_HERDR)
-        (self.bin / "herdr").chmod(0o755)
         (self.bin / "t3").write_text(FAKE_T3)
         (self.bin / "t3").chmod(0o755)
         self.systemd_off = root / "systemd-off"  # first on PATH by default: a host with no user manager, whatever the real one is
@@ -152,33 +108,21 @@ class RunAndWake(unittest.TestCase):
         (self.systemd_off / "systemd-run").chmod(0o755)
         self.state = root / "state"
         self.log = self.state / "run-and-wake/log.jsonl"
-        env = {k: v for k, v in os.environ.items() if k not in ("HERDR_PANE_ID", "PI_SESSION_FILE", "PI_SESSION_ID", "T3CODE_THREAD_ID", "T3CODE_CLI_PATH", "OP_SERVICE_ACCOUNT_TOKEN") and not k.startswith("HEAVY_GATE_")}
+        env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "T3CODE_CLI_PATH", "OP_SERVICE_ACCOUNT_TOKEN") and not k.startswith("HEAVY_GATE_")}
         self.op_home = root / "op-home"  # HOME with no token file, so the real ~/.config is never read
         self.op_home.mkdir()
         self.path = env["PATH"]
         self.env = {**env, "PATH": f"{self.systemd_off}:{self.bin}:{self.path}", "FAKE": str(self.fake), "XDG_STATE_HOME": str(self.state),
-                    "HERDR_PANE_ID": PANE, "PI_SESSION_FILE": SESSION, "HOME": str(self.op_home),
+                    "T3CODE_THREAD_ID": THREAD, "T3CODE_CLI_PATH": str(self.bin / "t3"), "HOME": str(self.op_home),
                     "RUN_AND_WAKE_COALESCE": "0"}  # the merge window is off unless a test turns it on, so a lone wake goes out at once
-        self.show(PANE, SESSION)
 
-    # --- the scripted herdr ---
-    def show(self, pane, session):
-        (self.fake / "panes" / pane).write_text(session + "\n")
-
-    def close_pane(self, pane):
-        (self.fake / "panes" / pane).unlink()
-
-    def prompts(self):
-        path = self.fake / "prompts"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-
+    # --- the scripted t3 ---
     def t3_sends(self):
         path = self.fake / "t3_sends"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def calls(self):
-        path = self.fake / "calls"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    def texts(self):
+        return [send["stdin"] for send in self.t3_sends()]
 
     # --- the script ---
     def launch(self, *cmd, env=None):
@@ -225,27 +169,29 @@ class RunAndWake(unittest.TestCase):
         result = self.launch("--", "sh", "-c", "sleep 2; echo job-output; exit 7")
         self.assertLess(result.seconds, 1.5, "the launching call returns at once, while the job still runs")
         job = self.job_id(result)
-        self.assertIn(f"tagged [run-and-wake k:{job}]; you can end your turn", result.stdout)
+        self.assertIn(f"T3 thread {THREAD} gets one message tagged [run-and-wake k:{job}]", result.stdout)
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "wake")
         start, end, wake = records
         self.assertEqual(start["cmd"], ["sh", "-c", "sleep 2; echo job-output; exit 7"])
-        self.assertEqual([start["pane"], start["session"], start["cwd"]], [PANE, SESSION, os.path.realpath(self.root)])
+        self.assertEqual([start["thread"], start["cwd"]], [THREAD, os.path.realpath(self.root)])
+        self.assertNotIn("pane", start, "the start record no longer carries herdr fields")
+        self.assertNotIn("session", start)
         self.assertIsInstance(start["pid"], int)
         self.assertEqual([end["exit"], end["signal"]], [7, None])
         self.assertGreaterEqual(end["duration_s"], 2)
         self.assertEqual(wake["result"], "sent")
         self.assertEqual(Path(start["output"]).read_text(), "job-output\n", "the job's output is in its output file")
-        prompts = self.prompts()
-        self.assertEqual(len(prompts), 1, "exactly one prompt")
-        self.assertEqual(prompts[0]["pane"], PANE)
-        text = prompts[0]["text"]
+        sends = self.t3_sends()
+        self.assertEqual(len(sends), 1, "exactly one send")
+        self.assertEqual(sends[0]["argv"], ["thread", "send", THREAD, "-"], "the message is read from stdin")
+        text = sends[0]["stdin"]
         self.assertTrue(text.startswith(f"[run-and-wake k:{job}] job finished: exit 7 after 2s: "), text)
         self.assertIn("sh -c 'sleep 2; echo job-output; exit 7'", text)
         self.assertIn(f"Output: {start['output']}", text)
-        self.assertNotIn("\n", text, "one line, so it is submitted whole")
+        self.assertNotIn("\n", text, "one line")
         time.sleep(1)
-        self.assertEqual(len(self.prompts()), 1, "and never a second one")
+        self.assertEqual(len(self.t3_sends()), 1, "and never a second one")
 
     def test_exit_statuses_reach_the_session(self):
         cases = [(["true"], "exit 0", {"exit": 0, "signal": None}),
@@ -257,7 +203,7 @@ class RunAndWake(unittest.TestCase):
                 records = self.replay(job)
                 self.assertReplay(records, "start", "end", "wake")
                 self.assertEqual({k: records[1][k] for k in end}, end)
-                text = next(p["text"] for p in self.prompts() if f"k:{job}]" in p["text"])
+                text = next(t for t in self.texts() if f"k:{job}]" in t)
                 self.assertIn(f"job finished: {said}", text)
 
     def test_the_job_gets_the_token_from_its_file_when_this_process_has_none(self):
@@ -302,7 +248,7 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGTERM"])
-        self.assertIn("job finished: killed by SIGTERM", self.prompts()[0]["text"])
+        self.assertIn("job finished: killed by SIGTERM", self.texts()[0])
 
     def test_the_job_outlives_the_launching_process_group(self):
         # Pi ends a bash call by SIGKILLing its process group; the job must not die with it.
@@ -321,43 +267,26 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual(records[1]["exit"], 0, "the job ran to its end after the launcher's group was killed")
 
     # --- seeded faults ---
-    def test_pane_gone(self):
-        cmd, release = self.held_job()
-        job = self.job_id(self.launch("--", *cmd))
-        self.close_pane(PANE)
-        release.write_text("")
-        records = self.replay(job)
-        self.assertReplay(records, "start", "end", "skip")
-        self.assertEqual(records[-1]["reason"], "pane-gone")
-        self.assertEqual(self.prompts(), [], "nothing is sent")
+    NO_TARGET = {"T3CODE_THREAD_ID": ""}
 
-    def test_session_changed(self):
-        cmd, release = self.held_job()
-        job = self.job_id(self.launch("--", *cmd))
-        self.show(PANE, "/sessions/after-new.jsonl")  # /new or a resume in the same pane
-        release.write_text("")
-        records = self.replay(job)
-        self.assertReplay(records, "start", "end", "skip")
-        self.assertEqual([records[-1]["reason"], records[-1]["detail"]], ["session-changed", "/sessions/after-new.jsonl"])
-        self.assertEqual(self.prompts(), [], "nothing is sent")
-
-    def test_no_pane_waits_for_the_job_and_prints_its_result(self):
-        """A caller nothing can wake (a Pi child T3 runs: no pane, no thread) gets the result in the same call, not a lost wake."""
-        result = self.launch("--", "sh", "-c", "exit 3", env={"HERDR_PANE_ID": ""})
-        self.assertIn("WARN: no HERDR_PANE_ID and no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
+    def test_no_thread_waits_for_the_job_and_prints_its_result(self):
+        """A caller nothing can wake (a Pi child T3 runs: no thread) gets the result in the same call, not a lost wake."""
+        result = self.launch("--", "sh", "-c", "exit 3", env=self.NO_TARGET)
+        self.assertIn("WARN: no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
         self.assertEqual(result.returncode, 3, "the launcher exits with the job's status")
         job = next(line for line in result.stdout.splitlines() if " job " in line).split(" job ")[1].split()[0]
         self.assertIn("[run-and-wake k:%s]" % job, result.stdout, "the line the wake would carry is printed")
         events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
         self.assertEqual(events[:2], ["start", "end"], "the job had ended when the launcher returned")
         self.assertEqual(sorted(events[2:]), ["read", "skip"], "the watcher's skip and the launcher's read, in either order")
-        self.assertEqual(self.calls(), [])
+        self.assertEqual([r["reason"] for r in self.records_of(job) if r["event"] == "skip"], ["no-thread"])
+        self.assertEqual(self.t3_sends(), [], "nobody is messaged")
 
     def test_a_waiting_launcher_killed_with_its_process_group_leaves_the_job_running(self):
         """A caller's tool timeout kills the waiting launcher (and its process group): the job must finish anyway, and --wait must still get it."""
         done = self.root / "done"
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "--", "sh", "-c", f"sleep 2; touch {done}"],
-                                env={**self.env, "HERDR_PANE_ID": ""}, cwd=self.root, text=True,
+                                env={**self.env, **self.NO_TARGET}, cwd=self.root, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         lines = []
         while not any("--wait" in line for line in lines):      # the job id and the --wait command come before the wait starts
@@ -372,52 +301,10 @@ class RunAndWake(unittest.TestCase):
         while not done.exists() and time.monotonic() < deadline:
             time.sleep(0.1)
         self.assertTrue(done.exists(), "the job ran to the end after its launcher's process group was killed")
-        waited = subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, "HERDR_PANE_ID": ""}, cwd=self.root,
+        waited = subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.NO_TARGET}, cwd=self.root,
                                 text=True, capture_output=True, timeout=20)
         self.assertEqual(waited.returncode, 0, waited.stderr)
         self.assertIn("[run-and-wake k:%s] job finished: exit 0" % job, waited.stdout)
-
-    def test_no_pi_session_waits_for_the_job_too(self):
-        result = self.launch("--", "true", env={"PI_SESSION_FILE": ""})
-        self.assertIn("WARN: no PI_SESSION_FILE and no T3CODE_THREAD_ID: nothing could wake you", result.stdout)
-        self.assertEqual(result.returncode, 0)
-        job = self.job_id(result)
-        events = [json.loads(l)["event"] for l in self.log.read_text().splitlines() if json.loads(l)["job"] == job]
-        self.assertEqual(events[:2], ["start", "end"])
-        self.assertEqual(sorted(events[2:]), ["read", "skip"])
-        self.assertEqual(self.calls(), [])
-
-    def test_blocked_pane_is_waited_out_then_sent_once(self):
-        (self.fake / "status").write_text("blocked\n")
-        records = self.replay(self.job_id(self.launch("--", "true")))
-        self.assertReplay(records, "start", "end", "blocked", "wake")
-        self.assertEqual(records[-1]["result"], "sent")
-        calls = self.calls()
-        self.assertEqual([c[1] for c in calls], ["get", "wait", "get", "prompt", "get"])
-        self.assertNotIn("blocked", calls[1], "the wait ends on any state but blocked")
-        self.assertEqual(len(self.prompts()), 1)
-
-    def test_a_failed_wait_ends_the_wake_with_its_error(self):
-        (self.fake / "status").write_text("blocked\n")
-        (self.fake / "wait_error").write_text("")
-        records = self.replay(self.job_id(self.launch("--", "true")))
-        self.assertReplay(records, "start", "end", "blocked", "skip")
-        self.assertEqual([records[-1]["reason"], records[-1]["detail"]], ["herdr-error", "server_unavailable: herdr server went away"])
-        time.sleep(1)
-        self.assertEqual([c[1] for c in self.calls()], ["get", "wait"], "no retry loop, no prompt")
-
-    def test_a_session_swapped_at_the_send_is_logged_after_it(self):
-        # This checks post-send logging only, not delivery isolation: the fake accepts the prompt, then swaps the pane's
-        # session. Which session a check/send-race message lands in is not tested and not prevented: herdr's prompt names a
-        # pane, not a session, and Michael accepted that window (ask #347).
-        (self.fake / "swap_on_prompt").write_text("/sessions/after-new.jsonl\n")
-        records = self.replay(self.job_id(self.launch("--", "true")))
-        self.assertReplay(records, "start", "end", "wake")
-        self.assertEqual([records[-1]["result"], records[-1]["session_after"]], ["sent", "/sessions/after-new.jsonl"])
-
-    def test_a_normal_send_logs_no_session_after(self):
-        records = self.replay(self.job_id(self.launch("--", "true")))
-        self.assertNotIn("session_after", records[-1])
 
     def test_the_watcher_survives_the_launcher_dying_before_it_reports(self):
         # The watcher tells the launcher the job's pid. If Pi has already killed the launcher's process group, that report
@@ -452,15 +339,7 @@ class RunAndWake(unittest.TestCase):
         self.assertFalse(reader.is_alive(), f"the watcher wrote a final record: {records}")
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual(records[1]["exit"], 0)
-        self.assertEqual(len(self.prompts()), 1)
-
-    def test_a_refused_prompt_is_logged_and_not_retried(self):
-        (self.fake / "prompt_error").write_text("")
-        records = self.replay(self.job_id(self.launch("--", "true")))
-        self.assertReplay(records, "start", "end", "wake")
-        self.assertEqual([records[-1]["result"], records[-1]["error"]], ["failed", "agent_blocked: agent is blocked"])
-        time.sleep(1)
-        self.assertEqual([c[1] for c in self.calls()].count("prompt"), 1, "one attempt per job")
+        self.assertEqual(len(self.t3_sends()), 1)
 
     def test_composes_with_heavy_gate_and_its_give_up_status(self):
         for name, body in GATE_FAKES.items():
@@ -477,14 +356,14 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(self.job_id(result), timeout=60)
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual(records[1]["exit"], 75)
-        self.assertIn("job finished: exit 75", self.prompts()[0]["text"])
+        self.assertIn("job finished: exit 75", self.texts()[0])
         output = Path(records[0]["output"]).read_text()
         self.assertIn("[heavy-gate] WARN: still refused", output, "the gate's own messages are in the job output")
         self.assertNotIn("never-runs", output.splitlines(), "the gated command never ran")
 
-    # --- a T3 Code thread: no pane, the wake is one `t3 thread send` ---
+    # --- the wake is one `t3 thread send` ---
     def t3_env(self, **extra):
-        return {"HERDR_PANE_ID": "", "PI_SESSION_FILE": "", "T3CODE_THREAD_ID": THREAD, "T3CODE_CLI_PATH": str(self.bin / "t3"), **extra}
+        return {"T3CODE_THREAD_ID": THREAD, "T3CODE_CLI_PATH": str(self.bin / "t3"), **extra}
 
     def test_a_t3_thread_is_woken_with_the_same_text(self):
         result = self.launch("--", "sh", "-c", "sleep 1; echo job-output; exit 7", env=self.t3_env())
@@ -493,7 +372,7 @@ class RunAndWake(unittest.TestCase):
         self.assertNotIn("WARN", result.stdout)
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "wake")
-        self.assertEqual([records[0]["thread"], records[0]["pane"]], [THREAD, None])
+        self.assertEqual(records[0]["thread"], THREAD)
         spec = importlib.util.spec_from_file_location("stop_running_jobs", HOOK)
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
@@ -509,7 +388,6 @@ class RunAndWake(unittest.TestCase):
         self.assertTrue(text.startswith(f"[run-and-wake k:{job}] job finished: exit 7 after 1s: "), text)
         self.assertIn("sh -c 'sleep 1; echo job-output; exit 7'", text)
         self.assertIn(f"Output: {records[0]['output']}", text)
-        self.assertEqual(self.calls(), [], "herdr is not called")
 
     def test_the_t3_cli_defaults_to_the_one_in_home(self):
         home = self.root / "home"
@@ -534,18 +412,12 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "failed"])
         self.assertIn("t3-missing", records[-1]["error"])
 
-    def test_a_pane_with_its_pi_session_wins_over_a_thread(self):
-        # Pi sets the pane and session on each bash call; the thread id may only be inherited from the app that started the shell.
-        job = self.job_id(self.launch("--", "true", env={"T3CODE_THREAD_ID": THREAD, "T3CODE_CLI_PATH": str(self.bin / "t3")}))
+    def test_herdr_variables_in_the_environment_change_nothing(self):
+        # Before herdr support was removed a pane with its Pi session won over the thread; now the thread is the only wake target.
+        job = self.job_id(self.launch("--", "true", env={"HERDR_PANE_ID": "w1A:p5", "PI_SESSION_FILE": "/sessions/launching.jsonl"}))
         records = self.replay(job)
-        self.assertEqual([records[-1]["target"], records[-1]["result"]], ["herdr", "sent"])
-        self.assertEqual(len(self.prompts()), 1)
-        self.assertEqual(self.t3_sends(), [], "the thread is not messaged as well")
-
-    def test_a_pane_without_a_pi_session_does_not_hide_the_thread(self):
-        records = self.replay(self.job_id(self.launch("--", "true", env=self.t3_env(HERDR_PANE_ID=PANE))))
         self.assertEqual([records[-1]["target"], records[-1]["result"]], ["t3", "sent"])
-        self.assertEqual(self.calls(), [])
+        self.assertEqual([s["argv"][2] for s in self.t3_sends()], [THREAD])
 
     # --- a job outlives the systemd scope of the session that started it (T3 stops a Claude session's scope, killing its cgroup) ---
     def scope_env(self):
@@ -598,8 +470,7 @@ class RunAndWake(unittest.TestCase):
         bare = self.root / "systemd-scope"
         for name in ("python3", "sh", "sleep", "true"):
             (bare / name).symlink_to(shutil.which(name))
-        for name in ("herdr", "t3"):
-            (bare / name).symlink_to(self.bin / name)
+        (bare / "t3").symlink_to(self.bin / "t3")
         self.replay(self.job_id(self.launch("--", "true", env={"PATH": str(bare)})))
         self.assertEqual([a.rsplit("=", 1)[0] for a in self.memory_limit_args(self.systemd_calls()[1])], ["--property=MemoryHigh", "--property=MemoryMax"])
 
@@ -638,8 +509,7 @@ class RunAndWake(unittest.TestCase):
         bare.mkdir()
         for name in ("python3", "sh", "sleep", "true"):
             (bare / name).symlink_to(shutil.which(name))
-        for name in ("herdr", "t3"):
-            (bare / name).symlink_to(self.bin / name)
+        (bare / "t3").symlink_to(self.bin / "t3")
         result = self.launch("--", "true", env={"PATH": str(bare)})
         records = self.replay(self.job_id(result))
         self.assertIsNone(records[0]["scope"])
@@ -671,7 +541,7 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(job, timeout=8)
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual(records[1]["exit"], 0, "the job ran to its end after the session's scope was stopped")
-        self.assertEqual(len(self.prompts()), 1)
+        self.assertEqual(len(self.t3_sends()), 1)
         self.assertTrue(records[0]["slice"].endswith(".slice"), "the start record shows the slice the scope landed in")
 
     # --- a stop that signals the watcher as well as the job ---
@@ -690,7 +560,7 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGTERM"])
-        self.assertIn("job finished: killed by SIGTERM", self.prompts()[0]["text"])
+        self.assertIn("job finished: killed by SIGTERM", self.texts()[0])
 
     @unittest.skipUnless(os.path.isdir("/proc"), "reads the watcher's pid from /proc")
     def test_a_signal_to_the_watcher_alone_is_passed_to_the_job(self):
@@ -729,18 +599,18 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(job)
         self.assertReplay(records, "start", "end", "wake")
         self.assertEqual([records[1]["exit"], records[1]["signal"]], [None, "SIGKILL"])
-        self.assertIn("job finished: killed by SIGKILL", self.prompts()[0]["text"])
+        self.assertIn("job finished: killed by SIGKILL", self.texts()[0])
 
     # --- a host restart, or T3 down when the job ends: the wake is delivered, once, when T3 is back ---
     def recover(self, **extra):
         return subprocess.run([sys.executable, str(SCRIPT), "--recover"], env={**self.env, **self.t3_env(), "RUN_AND_WAKE_T3_RETRY": "0.05:1", **extra},
                               cwd=self.root, text=True, capture_output=True, timeout=30)
 
-    def seed(self, job, boot, *, end=None, wake=None, thread=THREAD, pane=None, start_ts="2026-11-15T18:05:02.470Z"):
-        """Append a job's records as an earlier run of this script left them (a foreign boot id is a host restart)."""
+    def seed(self, job, boot, *, end=None, wake=None, thread=THREAD, pane=None, pid=4242, start_ts="2026-11-15T18:05:02.470Z"):
+        """Append a job's records as an earlier run of this script left them (a foreign boot id is a host restart). `pane` writes the herdr fields older versions put on `start`."""
         self.log.parent.mkdir(parents=True, exist_ok=True)
-        records = [{"ts": start_ts, "job": job, "event": "start", "cmd": ["amz-check.sh", "plus3h"], "cwd": "/w", "pane": pane, "session": None,
-                    "thread": thread, "pid": 4242, "output": f"/o/{job}.log", "op_token": None, "scope": f"run-and-wake-{job}.scope",
+        records = [{"ts": start_ts, "job": job, "event": "start", "cmd": ["amz-check.sh", "plus3h"], "cwd": "/w", **({"pane": pane, "session": "/sessions/old.jsonl"} if pane else {}),
+                    "thread": thread, "pid": pid, "output": f"/o/{job}.log", "op_token": None, "scope": f"run-and-wake-{job}.scope",
                     "slice": "app-t3code-agents.slice", **({"boot": boot} if boot else {})}]
         if end:
             records.append({"ts": "2026-11-15T19:46:25.454Z", "job": job, "event": "end", "duration_s": 6083.0, "signal": None, "exit": None, **end})
@@ -1074,13 +944,6 @@ class RunAndWake(unittest.TestCase):
         self.assertReplay(self.replay(job), "start", "end", "wake")
         self.assertEqual(len(self.t3_sends()), 1)
 
-    def test_a_cancel_is_dropped_for_a_pane_too(self):
-        line = '{"id": "kgate-1-1", "job": "%s", "exit": 143, "cancelled": true}'
-        cmd = f'mkdir -p "$XDG_STATE_HOME/kgate"; printf \'{line}\\n\' "$RUN_AND_WAKE_JOB" >> "$XDG_STATE_HOME/kgate/log.jsonl"; exit 143'
-        job = self.job_id(self.launch("--", "sh", "-c", cmd))
-        self.assertReplay(self.replay(job), "start", "end", "skip")
-        self.assertEqual(self.prompts(), [])
-
     def merged(self, **extra):
         return self.t3_env(**{"RUN_AND_WAKE_COALESCE": "1.5", **extra})
 
@@ -1162,13 +1025,6 @@ class RunAndWake(unittest.TestCase):
         records = self.replay(job, timeout=5)
         self.assertEqual(records[-1]["result"], "sent")
 
-    def test_a_pane_wake_is_never_merged(self):
-        a = self.job_id(self.launch("--", "true", env={"RUN_AND_WAKE_COALESCE": "5"}))
-        b = self.job_id(self.launch("--", "true", env={"RUN_AND_WAKE_COALESCE": "5"}))
-        self.replay(a, timeout=3)
-        self.replay(b, timeout=3)
-        self.assertEqual(len(self.prompts()), 2)
-
     def test_the_merge_window_setting(self):
         spec = importlib.machinery.SourceFileLoader("run_and_wake_mod", str(SCRIPT))
         mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("run_and_wake_mod", spec))
@@ -1205,19 +1061,19 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([r["owner"] for r in self.records_of(job) if r["event"] == "read"], [False])
         self.assertFalse((self.state / f"run-and-wake/jobs/{job}.read").exists(), "a stranger leaves no marker")
 
-    def test_a_wait_from_the_owners_own_pane_drops_the_pane_wake_and_another_pane_does_not(self):
+    def test_a_wait_from_the_owners_own_thread_drops_the_wake_and_another_thread_does_not(self):
         cmd, release = self.held_job()
-        job = self.job_id(self.launch("--", *cmd))  # started from PANE / SESSION
-        stranger = {**self.env, "HERDR_PANE_ID": "w9:p9", "PI_SESSION_FILE": "/sessions/other.jsonl"}
+        job = self.job_id(self.launch("--", *cmd))  # started from THREAD
+        stranger = {**self.env, "T3CODE_THREAD_ID": "other-thread"}
         mine = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=self.env, cwd=self.root, text=True, stdout=subprocess.PIPE)
         other = subprocess.Popen([sys.executable, str(SCRIPT), "--wait", job], env=stranger, cwd=self.root, text=True, stdout=subprocess.PIPE)
-        self.wait_until_blocked(job)  # the owner's wait must hold its lock before the job ends, or the pane wake goes out
+        self.wait_until_blocked(job)  # the owner's wait must hold its lock before the job ends, or the wake goes out
         release.write_text("")
         mine.communicate(timeout=10)
         other.communicate(timeout=10)
         records = self.final_records(job, "skip")
         self.assertEqual(next(r for r in records if r["event"] == "skip")["reason"], "waited")
-        self.assertEqual(self.prompts(), [], "the owner's own wait stood in for the wake")
+        self.assertEqual(self.t3_sends(), [], "the owner's own wait stood in for the wake")
         self.assertEqual(sorted(r["owner"] for r in self.records_of(job) if r["event"] == "read"), [False, True])
 
     # --- a watcher that is gone (the pod's container restarted, or it was killed): the job still gets an end and its owner a wake ---
@@ -1350,13 +1206,30 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([(e["event"], e.get("reason")) for e in self.lost_records(job)], [("end", None), ("skip", "waited")])
         self.assertEqual([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]], [], "the owner's own wait stood in for the wake")
 
-    def test_a_lost_pane_job_is_woken_through_herdr(self):
-        cmd, _ = self.held_job()
-        job = self.job_id(self.launch("--", *cmd))
-        self.crash(job)
-        self.job_id(self.launch("--", "true"))
-        self.assertEqual([e["event"] for e in self.lost_records(job)][:2], ["end", "wake"])
-        self.assertEqual([p["pane"] for p in self.prompts() if f"k:{job}]" in p["text"]], [PANE])
+    # --- logs written by older versions: a job started from a herdr pane has `pane` and `session` on its `start` and no thread ---
+    def old_pane_job(self, name, **kw):
+        """An old pane job as this boot's earlier run left it: started in this boot, so only the sweep and --wait can look at it."""
+        here = Path("/proc/sys/kernel/random/boot_id").read_text().strip() if os.path.exists("/proc/sys/kernel/random/boot_id") else None
+        self.seed(name, here, thread=None, pane="w1A:p5", pid=2**22 + 7, **kw)  # a pid nothing runs as
+        return name
+
+    @LINUX_BOOT
+    def test_an_old_start_line_with_a_pane_is_read_by_wait(self):
+        job = self.old_pane_job("20261115T170000Z-pane01", end={"exit": 7, "duration_s": 3.0})
+        done = self.wait_for(job, timeout=10)
+        self.assertEqual(done.returncode, 7)
+        self.assertIn(f"[run-and-wake k:{job}] job finished: exit 7 after 3s: amz-check.sh plus3h", done.stdout)
+        self.assertEqual([r["owner"] for r in self.records_of(job) if r["event"] == "read"], [False], "no thread to be the owner of an old pane job")
+
+    @LINUX_BOOT
+    def test_an_old_pane_job_whose_watcher_died_is_ended_and_skipped_not_woken(self):
+        job = self.old_pane_job("20261115T170000Z-pane02")
+        self.unheld_lock(job)
+        self.sweep_by_launching()
+        records = [r for r in self.records_of(job) if r["event"] in ("end", "wake", "skip")]
+        self.assertEqual([(r["event"], r.get("error"), r.get("reason")) for r in records], [("end", "lost", None), ("skip", None, "no-thread")])
+        self.assertEqual([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]], [], "there is no pane to wake any more")
+        self.assertFalse((self.state / f"run-and-wake/jobs/{job}.lock").exists(), "settled: nothing left to sweep")
 
     def unheld_lock(self, job):
         jobs = self.state / "run-and-wake/jobs"
