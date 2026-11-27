@@ -102,7 +102,7 @@ opt_in() {
   _miss=''
   [ -n "$REPO" ] || _miss="$_miss instances.$NAME.repo"
   if [ -n "$REPO" ] && [ ! -f "$REPO/$MAIN" ]; then _miss="$_miss checkout($REPO/$MAIN)"; fi
-  for _t in node herdr op git; do have "$_t" || _miss="$_miss $_t-on-PATH"; done
+  for _t in node op git; do have "$_t" || _miss="$_miss $_t-on-PATH"; done
   [ -f "$SRC" ] || _miss="$_miss unit($SRC; run chezmoi apply)"
   if [ -n "$_miss" ]; then finish "NOT READY: missing$_miss"; return 0; fi
 

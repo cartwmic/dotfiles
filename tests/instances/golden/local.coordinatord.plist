@@ -16,7 +16,7 @@
   <key>WorkingDirectory</key><string>/Users/test</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- node, herdr (the mise shim), op (Homebrew) and git must be found from here; the coordinator pane's shell has its own PATH. The gh wrapper's bin directory is first, so gh calls reach the wrapper before the real gh. -->
+    <!-- node (the mise shim), op (Homebrew) and git must be found from here; the coordinator pane's shell has its own PATH. The gh wrapper's bin directory is first, so gh calls reach the wrapper before the real gh. -->
     <key>PATH</key><string>/Users/test/.local/share/gh-wrapper/bin:/Users/test/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
