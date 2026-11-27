@@ -17,9 +17,11 @@ runs keep theirs; this tool never uninstalls anything). The software-change pin 
 that file: releases no longer ship it, and installed copies are untouched.
 
 `check` is the same import as a dry run on a commit that is not tagged yet: the tree comes from a local git checkout
-(--repo-dir, --rev; default the current directory and HEAD) instead of a published release, and nothing is fetched or written.
+(--repo-dir, --rev; default the current directory and HEAD) instead of a published release. It needs git, not gh; nothing is fetched
+and no skill or config file is written; each run appends one JSON line (UTC time, commit, outcome, first stop, seconds) to
+$XDG_STATE_HOME/import-release-skills/log.jsonl (default ~/.local/state).
 Loop Engine's release path runs it before the tag is cut, so a release the bump could not take never gets its tag. It stops on
-what would stop the bump: a file ROOT_REFERENCES expects that the commit no longer has, an unsafe or empty file, a file the
+what the bump would stop on, as far as the tree shows it (it does not read the GitHub archive): a file ROOT_REFERENCES expects that the commit no longer has, an unsafe or empty file, a file the
 canonical bundles hold that the commit no longer ships (an orphan), and, with --plan (the release's cargo-dist plan, JSON),
 a Loop Engine pin whose matching_regex matches none of the planned archives. Each stop names the file or pin and the change.
 
@@ -45,6 +47,8 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_REPO = "cartwmic/loop-engine"
@@ -226,7 +230,7 @@ def pins_in(text):
 def local_listing(repo_dir, rev):
     """Tree entries (path, type, mode, sha, size) of a commit in a local checkout, from `git ls-tree`: the shape the GitHub tree API gives, plus the size."""
     try:
-        result = subprocess.run(["git", "-C", str(repo_dir), "ls-tree", "-r", "-l", "-z", rev], stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
+        result = subprocess.run(["git", "-C", str(repo_dir), "ls-tree", "-r", "-l", "-z", "--full-tree", rev], stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Failure("cannot run git: %s" % error)
     if result.returncode != 0:
@@ -354,6 +358,20 @@ def do_check(args):
     return 0
 
 
+def log_check(args, started, outcome, reason):
+    """One JSON line per check run, so a run can be replayed and counted after the terminal closes (principle 14). A log that cannot be written changes nothing."""
+    try:
+        commit = subprocess.run(["git", "-C", str(args.repo_dir), "rev-parse", args.rev], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30).stdout.strip()
+        path = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "import-release-skills" / "log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "check", "commit": commit or args.rev, "plan": bool(args.plan),
+                "outcome": outcome, "reason": reason.splitlines()[0] if reason else "", "duration_s": round(time.monotonic() - started, 2)}
+        with path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps(line) + "\n")
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def deployed_root():
     return Path(os.environ.get("AGENT_HARNESS_CANONICAL_ROOT") or Path.home() / ".local/share/agent-harness/canonical") / "skills"
 
@@ -407,11 +425,17 @@ def main(argv=None):
     for command in (importing, checking, verifying):
         command.add_argument("--source", default=default_source, help="chezmoi source (default: CHEZMOI_SOURCE_DIR, else ~/.local/share/chezmoi)")
     args = parser.parse_args(argv)
+    started = time.monotonic()
     try:
-        return {"import": do_import, "check": do_check, "verify-deployed": do_verify}[args.command](args)
+        code = {"import": do_import, "check": do_check, "verify-deployed": do_verify}[args.command](args)
     except Failure as error:
         print("import_release_skills: %s" % error, file=sys.stderr)
+        if args.command == "check":
+            log_check(args, started, "refused", str(error))
         return 1
+    if args.command == "check":
+        log_check(args, started, "pass", "")
+    return code
 
 
 if __name__ == "__main__":

@@ -401,8 +401,8 @@ class CheckTests(Fixture):
         self.git("add", "-A")
         self.git("commit", "-q", "--allow-empty", "-m", "release")
 
-    def check(self, *flags):
-        return self.run_tool("check", "--repo-dir", str(self.repo), "--source", str(self.source), *flags)
+    def check(self, *flags, **env):
+        return self.run_tool("check", "--repo-dir", str(self.repo), "--source", str(self.source), *flags, **env)
 
     def test_a_release_the_bump_can_take_passes_and_nothing_is_written(self):
         before = self.tree_state()
@@ -463,6 +463,31 @@ class CheckTests(Fixture):
         result = self.check("--plan", str(self.plan))
         self.assertEqual(result.returncode, 1)
         self.assertIn("found 1", result.stderr)
+
+    def log_lines(self):
+        path = self.dir / "state" / "import-release-skills" / "log.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_each_run_leaves_one_json_line_that_replays_it(self):
+        self.assertEqual(self.check("--plan", str(self.plan), XDG_STATE_HOME=str(self.dir / "state")).returncode, 0)
+        files = dict(GOOD_TREE)
+        del files["docs/operational-ux-capture.schema.json"]
+        self.write_repo(files)
+        self.assertEqual(self.check("--plan", str(self.plan), XDG_STATE_HOME=str(self.dir / "state")).returncode, 1)
+        passed, refused = self.log_lines()
+        self.assertEqual((passed["action"], passed["outcome"], passed["plan"]), ("check", "pass", True))
+        self.assertEqual((refused["outcome"], len(refused["commit"])), ("refused", 40))
+        self.assertIn("docs/operational-ux-capture.schema.json", refused["reason"])
+        self.assertNotEqual(passed["commit"], refused["commit"])
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_result(self):
+        blocked = self.dir / "blocked"
+        blocked.write_text("a file, not a directory\n")
+        self.assertEqual(self.check(XDG_STATE_HOME=str(blocked)).returncode, 0)
+
+    def test_a_subfolder_of_the_checkout_reads_the_whole_tree(self):
+        result = self.run_tool("check", "--repo-dir", str(self.repo / "docs"), "--source", str(self.source))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_a_revision_that_does_not_exist_stops_it(self):
         result = self.check("--rev", "no-such-rev")
