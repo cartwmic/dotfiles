@@ -32,6 +32,19 @@ The three Bash rules that read "no" on work cannot fire there: one guards the ag
 
 The gate wrappers run scripts in the coordinator checkout. Chezmoi renders `~/.local/share/agent-harness/coordinator-instance` per profile: line 1 is the checkout (personal `~/git/coordinator`; work `instances.coordinator.repo` in local data, else `~/coordinator-work`), and on work line 2 is the work coordinator's state directory (`~/.local/share/coordinator-work`). The wrappers use line 1, and set `COORDINATOR_STATE_DIR` from line 2 only when it is unset and that directory holds `pane-bin/ledger`. `COORDINATOR_REPO` overrides line 1. The live-checkout git rule protects line 1 as well as `~/git/coordinator`.
 
+## A red main takes one kind of merge
+
+`ci-main-status --merge-gate REPO` refuses every merge while main is red. `--merge-gate REPO --pr N` is the one way in, for the change that fixes the red. On a red main it passes PR N under one of two rules:
+
+- **The pin fix** (dotfiles only): the red run's only failing step is the release-pins step, PR N changes only the pin files, and PR N's own run passed that step. The pin bump tools (`loop_engine_bump.py`, `agent_kit_bump.py`) are this case.
+- **A named red with its own passing run** (every repo with a GitHub run): PR N carries a line `Handles: <full 40-digit sha of the red commit>` (or git's `This reverts commit <sha>`), in a commit message of the PR, or in the PR description for a repo that squashes from the PR body (storycraft); the line is the one that clears a hidden red once it is on main. And PR N's own full-suite run on its head tree passed every job and step that failed in the red run. A green run alone is not enough: a red that a flaky test made would otherwise let every green PR through.
+
+A PR that fits neither is refused: exit 1, the same stdout as without `--pr`, and a sentence on stderr that says which tie it lacks and the exact `Handles:` line to add. A pin bump on a red main that a test failure made stops at its gates step and leaves its PR open; it merges once main is green.
+
+No flake ruling is recorded for a GitHub run. Only the coordinator's own journal records one (for the coordinator repo), so a red from a flaky test holds main until the test is fixed (the fix PR names the red as above) or a rerun of that run passes. Making a recorded ruling that unblocks main is a follow-up, not part of this gate.
+
+Every call writes one line to `~/.local/state/ci-main-status/hidden-red.jsonl`; its `passed_by` field names the rule behind a pass on a red main (`pin-fix`, `named-red+own-run`) and is null otherwise. Count them with `jq -c 'select(.passed_by != null)'`. The test is `tests/ci-main-status/test_ci_main_status.py` (`RedMainFix`, `PinFixException`).
+
 ## What `pr-body-check REPO PR` also runs
 
 After the body check passes, `pr-body-check REPO PR` runs `ci-main-status --threads REPO PR`: no unresolved review thread may be left (playbook 580f3e02 step 3). Every merge chain that runs the body check therefore runs the thread check, and an unresolved thread is exit 1, like a broken body rule. An unreadable thread state is also exit 1, never a silent pass. The thread check is not run for a body-only check (`--body-file`), a check made before a review round (`--skip-intent-review`), or the `--pr`/`--repo`/`--base` forms, which have no `REPO PR` pair. `ci-main-status --threads` itself ships on both profiles, in `ci-main-status`.

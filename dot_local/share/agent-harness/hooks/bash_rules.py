@@ -15,8 +15,10 @@
               --merge-gate exits 0 for UNTESTED and 1 for RED, as playbook fab9b713 allows an untested merge; a bare `ci-main-status`
               exits 2 for UNTESTED and blocks it. `--match-head-commit <head sha>` makes the merge refuse unless the PR head is still
               the commit the checks read. The PR that fixes a red main adds `--pr N`: `--merge-gate <repo> --pr N` passes a red
-              GitHub-run main when PR N's own full-suite run on its head tree succeeded (a pull_request run that skips the suite
-              does not count; a workflow_dispatch run does). dotfiles tries its release-pins fix rule first, then that same rule.
+              GitHub-run main only when PR N names that red (a `Handles: <full sha>` line in a commit message of the PR, or in its
+              description for storycraft) and its own full-suite run on its head tree succeeded (a pull_request run that skips the
+              suite does not count; a workflow_dispatch run does). A green PR that does not name the red is refused. dotfiles tries
+              its release-pins fix rule first, then that same rule.
               Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
               which runs both checks itself. Never for cartwmic/cartwmic-homelab-v2 either, found the same way and refused even
               before the gates: use `~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA` (it adds the RED-line check the chained
@@ -143,8 +145,8 @@ MERGE_BARE = (
     "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
-    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
-    "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
+    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main only for the PR that fixes it: one that names the red with a `Handles: <full sha>` line "
+    "(in a commit message of the PR; in its description for storycraft) and whose own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
     "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
