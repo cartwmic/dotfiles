@@ -20,8 +20,9 @@ ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid"
            GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
 
-def run(repo, *args):
-    return subprocess.run([sys.executable, "-B", str(REPO_FACTS), str(repo), *args], capture_output=True, text=True)
+def run(repo, *args, cwd=None):
+    return subprocess.run([sys.executable, "-B", str(REPO_FACTS), str(repo), *args], capture_output=True, text=True,
+                          cwd=cwd)
 
 
 class OutNeverLosesABlock(unittest.TestCase):
@@ -182,8 +183,11 @@ class OutNeverLosesABlock(unittest.TestCase):
     def test_a_new_file_is_free_and_a_summary_with_no_out_writes_no_file(self):
         self.assertEqual(run(self.repo, "--summary", "--out", str(self.out("fresh.json"))).returncode, 0)
         before = set(self.tmp.iterdir())
-        self.assertEqual(run(self.repo, "--summary").returncode, 0)
+        cwd = Path(tempfile.mkdtemp(prefix="facts_cwd-"))
+        self.addCleanup(shutil.rmtree, cwd, True)
+        self.assertEqual(run(self.repo, "--summary", cwd=cwd).returncode, 0)
         self.assertEqual(set(self.tmp.iterdir()), before)
+        self.assertEqual(list(cwd.iterdir()), [], "a run with no --out wrote a file into its working folder")
 
 
 if __name__ == "__main__":
