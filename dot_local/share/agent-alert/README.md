@@ -23,7 +23,6 @@ goes wrong. Each adapter has a section here.
 |---|---|
 | `core/agent-alert` | `emit`, `tail`, `ack` ([SPEC.md](./SPEC.md)) |
 | `adapters/claude-doorbell/` | Sink: rings a Claude cloud session ([section](#claude-doorbell-sink)) |
-| Pi extension `notify-owner` | Source: a worker calls `notify_owner` (or opens `ask_user_question`) to emit `question`; Pi's clean exit emits `exited` ([section](#pi-source-notify-owner)) |
 | `examples/` | A worked source and a worked consumer, also in [SPEC.md](./SPEC.md#worked-examples) |
 | `tests/` | Tests; source-only, not deployed |
 
@@ -37,8 +36,7 @@ chezmoi apply
 ```
 
 It deploys to `~/.local/share/agent-alert`. Nothing runs until you enable an
-adapter: see the [Pi source](#pi-source-notify-owner) and
-[doorbell](#claude-doorbell-sink) sections. The inbox is
+adapter: see the [doorbell](#claude-doorbell-sink) section. The inbox is
 `~/.local/share/coordinator/inbox.jsonl` unless
 `~/.config/agent-alert/config.json` says otherwise.
 
@@ -101,42 +99,6 @@ exit quickly, never write the inbox.
 
 Neither kind changes the core. A reader of the inbox follows the
 [reader rules](./SPEC.md#reader-rules).
-
-## Pi source: notify-owner
-
-The only source in use is the Pi extension `notify-owner` (in the dotfiles repo:
-`dot_pi/private_agent/extensions/notify-owner/`, with its own README; it is deployed with Pi's other extensions,
-not into this directory). It runs `agent-alert emit` for the worker's Herdr pane
-(the pane id from `HERDR_PANE_ID` is the worker name) and nothing else; it needs no Herdr plugin, status event or screen read:
-
-| What happens in Pi | Emitted |
-|---|---|
-| The worker calls the `notify_owner(kind, summary, ...)` tool (legacy: `notify_owner(question)`) | `question` |
-| An `ask_user_question` dialog opens | `question` |
-| Pi exits cleanly (the quit command, SIGTERM, SIGHUP: closing the pane) | `exited` |
-| Anything else: a finished turn, progress, a Herdr `blocked` status | nothing |
-
-The context carries `agent=pi` and, when Herdr gives it, `workspace_id`. Events carry no message text: the
-worker states its question in its reply and the coordinator reads the named pane itself:
-
-```sh
-herdr pane read "$PANE" --source recent-unwrapped --lines 40
-```
-
-A typed `notify_owner` call's arguments (`kind`, `summary`, ...) are not added to the event; they stay in the worker's own
-session log, which the coordinator reads ([extension README](../../../dot_pi/private_agent/extensions/notify-owner/README.md)).
-
-- **Explicit only.** A worker that needs the owner must call the tool (the personal profile's Pi
-  `AGENTS.md` says so). A worker that forgets is silent when its turn ends; the coordinator's own periodic
-  check of its panes is the backstop. Nothing is inferred from status, labels or screen text.
-- **A hard kill (`kill -9`, out of memory) is not reported** as `exited`: no code runs. The same backstop applies.
-- **Not for subagents.** A Pi subagent child (`PI_SUBAGENT_CHILD=1`) and a Pi run with no `HERDR_PANE_ID` register
-  nothing.
-- **Deploy.** A running Pi session gets the tool after its reload command or a restart.
-- **Removed: the Herdr plugin.** An earlier adapter turned Herdr status events into events by inference (status
-  mapping, subagent labels, a marker line, transcript parsing). It is gone. A machine that still has it linked
-  should run `herdr plugin disable agent-alert` and `herdr plugin unlink agent-alert` (see `herdr plugin --help`)
-  around the apply that removes `~/.local/share/agent-alert/adapters/herdr`.
 
 ## Claude doorbell sink
 
@@ -224,11 +186,8 @@ None of these corrupts the inbox. The operator log is
 |---|---|---|
 | **Lost ring**: the ring is not sent, not delivered, or the session does not wake | The event is in the inbox; the coordinator is not told | Read the inbox on a schedule (`tail`, or the wait above). Never treat the ring as the record. |
 | **Login expired or missing** (`claude` signed out) | The doorbell logs `claude exited with status N`; no ring | Sign in to `claude` in a terminal. |
-| **Pi not restarted**: you signed in, or installed a tool, after the Pi session started, or Pi was started from an SSH or other background session | The doorbell runs inside the Pi process's environment and session: it does not see a new login or `PATH`, and a login kept in the macOS Keychain may not be readable from a background session, so `claude` fails or is not found | Start Pi again from a normal terminal session, then check the operator log. |
-| **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the extension and the core log to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
-| **A Pi that is killed hard** (`kill -9`, out of memory) | No `exited` event: no code runs | Accepted. Check panes with `herdr pane list`. |
+| **Unwritable inbox** (bad path, unwritable directory, full disk) | `emit` exits nonzero and writes nothing; the event is **lost**; the core logs to the operator log. Nothing is retried; later events are delivered once the inbox works again | Fix the path or free the space. If you need the lost event, the source has to emit it again. |
 | **A partial line** in the inbox (a media fault, or a disk filled by another process mid-write) | Readers skip it; the next `emit` ends it with a newline and writes on its own line | Nothing; [SPEC.md](./SPEC.md#writer-guarantees) explains. |
-| **A worker that forgets `notify_owner`** | Silent when its turn ends: nothing is inferred | The coordinator's periodic check of its panes. |
 
 ## Tests
 
