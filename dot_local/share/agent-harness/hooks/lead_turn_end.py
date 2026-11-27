@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Claude Code Stop hook for the lead seat: a lead's turn may end only when something will wake it, an ask that names it is open, or a state note was accepted.
+"""Claude Code Stop hook for lead threads: a lead's turn may end only when something will wake it, an ask that names it is open, or a state note was accepted.
 
 The rule, and every read behind it, is `coordinator t3 turn-end` in the coordinator checkout (src/t3-hook/turn-end.ts); this script holds none of it. It does what the
 coordinator cannot: counts this thread's running run-and-wake and kgate jobs (stop_running_jobs.py --count, beside it) and passes the number as `--jobs N`, and it knows
 whether this stop follows its own refusal: Claude Code sets `stop_hook_active` in the hook input when the session is already continuing because a Stop hook blocked it. That is
 `--continued`: the coordinator then lets the end through and reports it. No refusal is stored anywhere. No message text is read.
 
-Arguments: --repo COORDINATOR_CHECKOUT --state COORDINATOR_STATE_DIR (the seat file renders both per profile). The session's COORDINATOR_STATE_DIR wins when set.
+Where it runs: the user-level settings.json (dot_claude/modify_settings.json.tmpl), which every T3 provider instance reads, so a lead thread on the default `claudeAgent` instance gets it too. No seat file registers it.
+Whether a thread is a lead is the coordinator's answer (`coordinator t3 turn-end` reads T3's parent field). This script only skips the sessions that name themselves as something else, before any call is made:
+COORDINATOR_SEAT builder, planner, reviewer, scout, computer (worker seats), coordinator (the coordinator instance has no lead check), homelab-chat (its settings deny the ledger and state-note calls the refusal asks for).
+A skipped session exits 0 and writes nothing. Any other COORDINATOR_SEAT, or none, goes to the coordinator.
+
+Arguments: --repo COORDINATOR_CHECKOUT --state COORDINATOR_STATE_DIR (the settings.json group renders both per profile). The session's COORDINATOR_STATE_DIR wins when set.
 Output: exit 2 and the refusal on stderr to keep the session going, else exit 0. It fails open. With no T3CODE_THREAD_ID, or no repo or state argument, the end is allowed and
 nothing is written (this is not a lead session, or it is not set up). Once a thread and both arguments are there, an end that is allowed because the check could not run (a missing
 checkout or state directory, a command that fails, times out or is missing, output it cannot read) writes one JSON line to <state>/t3-hook/turn-end-adapter.jsonl, as does an end
@@ -22,6 +27,9 @@ import time
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# COORDINATOR_SEAT values (set in each seat file's `env`, and by `coordinator t3 setup`) of sessions that are never asked.
+SKIPPED_SEATS = frozenset(["builder", "planner", "reviewer", "scout", "computer", "coordinator", "homelab-chat"])
 
 
 def option(argv, name):
@@ -95,6 +103,8 @@ def ask(argv, hook_input, env, thread, repo, state):
 def refusal(argv, hook_input, env):
     """The coordinator's refusal text, or None to let the end stand (writing the log line when the end stands for a reason worth a record)."""
     thread = env.get("T3CODE_THREAD_ID")
+    if env.get("COORDINATOR_SEAT") in SKIPPED_SEATS:
+        return None
     repo, state = option(argv, "--repo"), env.get("COORDINATOR_STATE_DIR") or option(argv, "--state")
     if not thread or not repo or not state:
         return None

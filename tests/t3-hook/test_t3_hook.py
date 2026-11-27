@@ -130,8 +130,24 @@ def t3(settings):
             for g in groups for h in g.get("hooks", []) if MARK in h.get("command", "")]
 
 
+def without_lead_stop(settings):
+    """The settings without the lead turn-end Stop group, which every render adds (tests/lead-turn-end covers it). Other Stop groups stay."""
+    hooks = settings.get("hooks", {})
+    stop = [g for g in hooks.get("Stop", [])
+            if not any("lead_turn_end.py" in h.get("command", "") for h in g.get("hooks", []))]
+    if "Stop" in hooks:
+        if stop:
+            hooks["Stop"] = stop
+        else:
+            del hooks["Stop"]
+        if not hooks:
+            del settings["hooks"]
+    return settings
+
+
 def without_guard(settings):
     """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
+    settings = without_lead_stop(settings)
     pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
            if not any("refuse_pattern_kill.py" in h.get("command", "") for h in g.get("hooks", []))]
     if "hooks" in settings:
