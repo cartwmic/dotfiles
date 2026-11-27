@@ -487,7 +487,6 @@ def scenario_chezmoi() -> dict[str, Any]:
     command = [binary, "--source", str(ROOT)]
     desktop_targets = [
         "~/.config/mise/config.toml",
-        "~/.config/herdr/config.toml",
         "~/.config/session-recap",
         "~/.local/bin/session-recap",
         "~/.local/share/session-recap",

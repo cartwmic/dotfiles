@@ -173,3 +173,7 @@ bin/herdr-overview-proof
 # Retired 2026-11-27: the herdr-scenario proof of the Pi prompt inspector, which drove a private herdr session. herdr is dropped as a
 # multiplexer. Prune once every machine has applied.
 .pi/agent/extensions/inspect-prompt/herdr-scenario.py
+
+# Retired 2026-11-27: the herdr key map and UI config. herdr is dropped as a multiplexer and its mise pin is gone.
+# Installing herdr is no longer done here; a machine that still has it keeps the binary. Prune once every machine has applied.
+.config/herdr/config.toml
