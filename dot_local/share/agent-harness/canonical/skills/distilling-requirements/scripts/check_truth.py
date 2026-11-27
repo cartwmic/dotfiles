@@ -15,7 +15,7 @@ A row whose evidence includes `owner:interview` and a `path:line` states what th
 note goes to DIR/owner-notes.txt (`N | R-id | note`, N the doc line of the row: every claim N.k of that line is judged with it), not into the sentence, so a date or a number in the note cannot fail check_citations.py.
 The checker reads the note with the sentence under references/check-brief-owner-rows.md. prepare says how many such rows there are.
 The checker then runs from the sibling skill, by path, unchanged: see references/truth-check.md.
---since PREVIOUS_DIR (a fix round after the first) is the work folder of the round before, where `verdicts` has run: a row whose requirement, evidence and note are
+--since PREVIOUS_DIR (a fix round after the first) is the work folder of the round before, where `verdicts` has run (prepare records the register's path and commit in rows.json and exits 2 when PREVIOUS_DIR was made for another path or commit): a row whose requirement, evidence and note are
 as they were, and that HOLDS there, is not written to the claims doc again (rows.json lists it under `carried`, and `verdicts` prints it HOLDS, unchanged). Every other row is
 checked again: a row a fix round changed, a new row, and a row that did not hold and was left as it was.
 verdicts also writes DIR/verdicts.json (each row's key and worst verdict) for the next round's --since.
@@ -118,15 +118,41 @@ def carried_rows(rows, previous):
     return keep, carried
 
 
+def register_commit(text):
+    m = re.search(r"^commit: *(\S+)", text, re.M)
+    return m.group(1) if m else ""
+
+
+def same_register(previous, path, commit):
+    """Why PREVIOUS_DIR was made for another register, or "" when it was made for this path at this commit."""
+    try:
+        with open(os.path.join(previous, "rows.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return ""  # carried_rows reports a folder with no usable record
+    if meta.get("source") != os.path.abspath(path):
+        return "it was made for %s, not %s" % (meta.get("source"), os.path.abspath(path))
+    if meta.get("commit") != commit:
+        return "it was made for commit %s, this register is at commit %s" % (meta.get("commit"), commit)
+    return ""
+
+
 def prepare(path, out, stats, since=None):
     with open(path, encoding="utf-8") as f:
-        rows = register_rows(f.read())
+        text = f.read()
+    rows = register_rows(text)
+    commit = register_commit(text)
     if not rows:
         print("%s: no register rows (no table with the R columns)" % path, file=sys.stderr)
         stats["reason"] = "no register rows"
         return 1
     carried = []
     if since:
+        why = same_register(since, path, commit)
+        if why:
+            print("%s: not the work folder of this register: %s" % (since, why), file=sys.stderr)
+            stats["reason"] = "--since folder is for another register or commit"
+            return 2
         try:
             rows, carried = carried_rows(rows, since)
         except (OSError, ValueError, KeyError):
@@ -143,13 +169,13 @@ def prepare(path, out, stats, since=None):
     with open(os.path.join(out, "owner-notes.txt"), "w", encoding="utf-8") as f:
         f.write("".join("%d | %s | %s\n" % n for n in notes))
     with open(os.path.join(out, "rows.json"), "w", encoding="utf-8") as f:
-        json.dump({"source": os.path.abspath(path), "rows": mapped, "not_checked": skipped, "failed": failed, "carried": carried}, f, indent=2)
-    stats.update(rows=len(mapped), not_checked=len(skipped), failed=len(failed), carried=len(carried))
+        json.dump({"source": os.path.abspath(path), "commit": commit, "rows": mapped, "not_checked": skipped, "failed": failed, "carried": carried}, f, indent=2)
+    stats.update(rows=len(mapped), not_checked=len(skipped), failed=len(failed), carried=len(carried), owner_rows=len(notes))
     if carried:
         print("%d rows unchanged since %s and holding there, not checked again: %s" % (len(carried), since, ", ".join(c["id"] for c in carried)))
     print("%d rows to check, %d not checked: %s" % (len(mapped), len(skipped), ", ".join("%s (%s)" % (s["id"], s["reason"]) for s in skipped) or "none"))
     if notes:
-        print("%d owner-requirement rows (%s): give each checker %s and %s as well" % (len(notes), ", ".join(n[1] for n in notes), os.path.join(HERE, "..", "references", "check-brief-owner-rows.md"), os.path.join(out, "owner-notes.txt")))
+        print("%d owner-requirement rows (%s): give each checker %s and %s as well" % (len(notes), ", ".join(n[1] for n in notes), os.path.normpath(os.path.join(HERE, "..", "references", "check-brief-owner-rows.md")), os.path.join(out, "owner-notes.txt")))
     for f in failed:
         print("%s FAILED %s" % (f["id"], f["reason"]))
     return 1 if failed else 0
@@ -181,7 +207,7 @@ def verdicts(folder, reports, stats):
     failed = meta["failed"]
     for s in failed:
         print("%s FAILED %s" % (s["id"], s["reason"]))
-    stats.update(rows=len(meta["rows"]), holding=len(meta["rows"]) - bad, not_checked=len(meta["not_checked"]), failed=len(failed))
+    stats.update(rows=len(meta["rows"]), holding=len(meta["rows"]) - bad, not_checked=len(meta["not_checked"]), failed=len(failed), carried=len(carried))
     print("%d of %d checked rows HOLD; %d not checked; %d failed before any checker%s" % (len(meta["rows"]) - bad, len(meta["rows"]), len(meta["not_checked"]), len(failed),
           "; %d unchanged since the last round, not checked again" % len(carried) if carried else ""))
     return 1 if bad or failed else 0

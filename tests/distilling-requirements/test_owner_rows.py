@@ -1,6 +1,7 @@
 """A row whose evidence includes owner:interview states what the owner requires: the truth check hands the checker its note and the rule to judge it by.
 Run: python3 -m unittest discover -s tests/distilling-requirements"""
 import runlog_support  # first: keeps the run out of the real log
+import json
 import subprocess
 import sys
 import tempfile
@@ -60,6 +61,10 @@ class OwnerRows(unittest.TestCase):
             self.assertEqual((work / "owner-notes.txt").read_text(),
                              "%d | R-1 | Accepted in the interview on 2026-11-26. No code branches on a host name (app.py:2); the zone is fixed.\n" % first)
             self.assertIn("1 owner-requirement rows (R-1)", out)
+            self.assertNotIn("..", out.split("give each checker")[1].split(" as well")[0])  # the addendum path is printed normalized
+            self.assertTrue(Path(out.split("give each checker ")[1].split(" and ")[0]).is_file())
+            records = [json.loads(l) for l in (Path(STATE) / "distilling-requirements/log.jsonl").read_text().splitlines()]
+            self.assertEqual(records[-1]["owner_rows"], 1)
             self.assertEqual(run(CODEMAP / "check_citations.py", work / "register-claims.md", repo)[0], 0)
 
     def test_the_note_file_is_empty_when_no_row_states_an_owner_requirement(self):

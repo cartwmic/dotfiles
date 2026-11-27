@@ -4,6 +4,7 @@ Run: python3 -m unittest discover -s tests/distilling-requirements"""
 import runlog_support  # first: keeps the run out of the real log
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from test_check_truth import CODEMAP, TRUTH, make, report, run
@@ -83,6 +84,59 @@ class LaterRounds(unittest.TestCase):
             code, _, err = run(TRUTH, "prepare", req, "--out", work / "round2", "--since", work / "round1")
             self.assertEqual(code, 2)
             self.assertIn("run `verdicts` in that folder first", err)
+
+    def held_round(self, tmp):
+        repo, req, work = make(tmp, ["R-1", "R-2", "R-5"])
+        self.assertEqual(run(TRUTH, "prepare", req, "--out", work / "round1")[0], 0)
+        self.assertEqual(check_round(repo, work / "round1", {})[0], 0)
+        return repo, req, work
+
+    def test_a_row_whose_evidence_changed_is_checked_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, req, work = self.held_round(tmp)
+            req.write_text(req.read_text().replace("src/notes.py:4-5", "src/notes.py:4"))
+            code, out, _ = run(TRUTH, "prepare", req, "--out", work / "round2", "--since", work / "round1")
+            self.assertEqual(code, 0)
+            self.assertIn("R-2, R-5", out)
+            self.assertIn("1 rows to check", out)
+            self.assertIn("An empty note shall be refused", (work / "round2/register-claims.md").read_text())
+
+    def test_a_row_whose_note_changed_is_checked_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, req, work = self.held_round(tmp)
+            req.write_text(req.read_text().replace("src/notes.py:4-5 | none | none | yes | |", "src/notes.py:4-5 | none | none | yes | a new note |"))
+            code, out, _ = run(TRUTH, "prepare", req, "--out", work / "round2", "--since", work / "round1")
+            self.assertEqual(code, 0)
+            self.assertIn("R-2, R-5", out)
+            self.assertIn("1 rows to check", out)
+
+    def test_since_refuses_a_folder_made_for_another_register_path_or_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, req, work = self.held_round(tmp)
+            other = req.with_name("OTHER.md")
+            other.write_text(req.read_text())
+            code, _, err = run(TRUTH, "prepare", other, "--out", work / "round2", "--since", work / "round1")
+            self.assertEqual(code, 2)
+            self.assertIn("not the work folder of this register", err)
+            self.assertIn("made for", err)
+            req.write_text(req.read_text().replace("commit: " + "0" * 40, "commit: " + "1" * 40))
+            code, _, err = run(TRUTH, "prepare", req, "--out", work / "round3", "--since", work / "round1")
+            self.assertEqual(code, 2)
+            self.assertIn("commit " + "0" * 40, err)
+            self.assertFalse((work / "round3").exists())
+
+    def test_the_log_records_carry_the_carried_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, req, work = self.held_round(tmp)
+            self.assertEqual(run(TRUTH, "prepare", req, "--out", work / "round2", "--since", work / "round1")[0], 0)
+            records = [json.loads(l) for l in (Path(STATE) / "distilling-requirements/log.jsonl").read_text().splitlines()]
+            self.assertEqual(records[-1]["carried"], 3)
+            self.assertEqual(records[-1]["owner_rows"], 0)
+            reports = work / "round2/reports"
+            reports.mkdir()
+            run(TRUTH, "verdicts", work / "round2", reports)
+            records = [json.loads(l) for l in (Path(STATE) / "distilling-requirements/log.jsonl").read_text().splitlines()]
+            self.assertEqual((records[-1]["step"], records[-1]["carried"]), ("verdicts", 3))
 
     def test_truth_check_says_later_rounds_check_only_changed_rows_and_why(self):
         text = (Path(__file__).resolve().parents[2] / "dot_local/share/agent-harness/canonical/skills/distilling-requirements/references/truth-check.md").read_text()
