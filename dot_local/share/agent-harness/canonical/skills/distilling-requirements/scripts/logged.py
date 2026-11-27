@@ -7,6 +7,9 @@ means the script refused to do the work. Outcome: ok on exit 0, refused on exit 
 A script that raises leaves a line too: outcome crashed, exit 1, `error` the exception's class name; the exception then goes on.
 Not a CLI of its own. Stdlib only.
 """
+import sys
+
+sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
 from runlog import log_run
 
 
