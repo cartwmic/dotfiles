@@ -56,7 +56,9 @@ class DogfoodFindingTests(unittest.TestCase):
 
     def test_the_brief_makes_a_trial_gate_blocking_and_names_both_sides(self):
         brief = (HARNESS / "reviewer-brief.md").read_text(encoding="utf-8")
-        self.assertIn("gates a change on a trial, a pilot or a phased enrolment, or that switches a change on with no measures named, is a blocking finding", brief)
+        self.assertIn("A plan, design or brief that gates a change on a trial, a pilot or a phased enrolment, or that switches a change on with no measures named, is a blocking finding", brief)
+        self.assertIn("so is a pull request description that gates its own change on a trial (a description owes no measures, only the plan, design or brief does)", brief)
+        self.assertIn("a wait for an approval is not", brief)
         self.assertIn("starts with the literal prefix `dogfood:`", brief)
         self.assertIn("Blocking: a path whose step is", brief)
         self.assertIn("Not blocking: a build order of small steps", brief)
@@ -66,6 +68,7 @@ class DogfoodFindingTests(unittest.TestCase):
     def test_the_contract_names_the_prefix(self):
         contract = (HARNESS / "findings-contract.md").read_text(encoding="utf-8")
         self.assertIn("has an `obligation` that starts with the literal prefix `dogfood:`", contract)
+        self.assertIn("a plan, design or brief gates a change on a trial", contract)  # the same documents as the rule's "plan, design and brief"
 
 
 if __name__ == "__main__":
