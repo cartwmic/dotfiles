@@ -11,6 +11,7 @@ Skipped where chezmoi is not installed (the rendering tests only).
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -183,6 +184,37 @@ class SeatGuardTest(unittest.TestCase):
         failed = self.run_hook("lead", repo=self.state / "no-such-checkout")
         self.assertEqual(failed.returncode, 0)
         self.assertTrue((self.state / "t3-hook/turn-end-adapter.jsonl").exists())  # a lead's failed check is still logged
+
+    def ledger(self, conversations):
+        db = sqlite3.connect(self.state / "ledger.sqlite")
+        db.execute("CREATE TABLE workstreams (name TEXT, conversation TEXT)")
+        db.executemany("INSERT INTO workstreams VALUES (?, ?)", [("ws", c) for c in conversations])
+        db.commit()
+        db.close()
+
+    def test_no_seat_session_that_is_not_a_lead_workstream_is_skipped(self):
+        self.ledger(["t3:some-other-thread", None])
+        for seat in (None, "a-seat-that-does-not-exist"):
+            with self.subTest(seat=seat):
+                done = self.run_hook(seat, repo=self.state / "no-such-checkout")   # a call would fail and leave a line in the adapter log
+                self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
+                self.assertEqual(self.calls(), [])
+                self.assertFalse((self.state / "t3-hook").exists())
+        self.assertEqual(self.run_hook("lead").returncode, 0)                    # a seat that names itself a lead is asked whatever the ledger says
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_no_seat_session_that_is_a_lead_workstream_is_asked(self):
+        self.ledger(["t3:thread:x"])
+        self.assertEqual(self.run_hook(None).returncode, 0)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_an_unreadable_ledger_never_hides_a_lead(self):
+        (self.state / "ledger.sqlite").write_text("not a database")
+        self.assertEqual(self.run_hook(None).returncode, 0)
+        self.assertEqual(len(self.calls()), 1)
+        (self.state / "ledger.sqlite").unlink()
+        self.assertEqual(self.run_hook(None).returncode, 0)                      # no ledger file at all
+        self.assertEqual(len(self.calls()), 2)
 
 
 if __name__ == "__main__":

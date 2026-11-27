@@ -7,9 +7,11 @@ whether this stop follows its own refusal: Claude Code sets `stop_hook_active` i
 `--continued`: the coordinator then lets the end through and reports it. No refusal is stored anywhere. No message text is read.
 
 Where it runs: the user-level settings.json (dot_claude/modify_settings.json.tmpl), which every T3 provider instance reads, so a lead thread on the default `claudeAgent` instance gets it too. No seat file registers it.
-Whether a thread is a lead is the coordinator's answer (`coordinator t3 turn-end` reads T3's parent field). This script only skips the sessions that name themselves as something else, before any call is made:
-COORDINATOR_SEAT builder, planner, reviewer, scout, computer (worker seats), coordinator (the coordinator instance has no lead check), homelab-chat (its settings deny the ledger and state-note calls the refusal asks for).
-A skipped session exits 0 and writes nothing. Any other COORDINATOR_SEAT, or none, goes to the coordinator.
+Whether a thread is a lead is the coordinator's answer (`coordinator t3 turn-end` reads T3's parent field), but T3 calls every top-level thread a lead, Michael's own sessions included. So this script skips, before any call is made:
+- COORDINATOR_SEAT builder, planner, reviewer, scout, computer (worker seats), coordinator (the coordinator instance has no lead check), homelab-chat (its settings deny the ledger and state-note calls the refusal asks for);
+- a session with no seat that is not a lead workstream's thread: it has no COORDINATOR_SEAT=lead and the ledger (<state>/ledger.sqlite, table `workstreams`) has no workstream whose `conversation` is `t3:<thread>`. That is a session Michael opens himself.
+A skipped session exits 0 and writes nothing. COORDINATOR_SEAT=lead always goes to the coordinator. A no-seat session goes there when the ledger names it a lead workstream's thread, and also when the ledger cannot be read (missing file, no table, locked): an unreadable
+ledger never hides a lead. Claude Code's own helpers (the Agent tool's subagents) do not fire the Stop hook; their end is a SubagentStop, which nothing here registers.
 
 Arguments: --repo COORDINATOR_CHECKOUT --state COORDINATOR_STATE_DIR (the settings.json group renders both per profile). The session's COORDINATOR_STATE_DIR wins when set.
 Output: exit 2 and the refusal on stderr to keep the session going, else exit 0. It fails open. With no T3CODE_THREAD_ID, or no repo or state argument, the end is allowed and
@@ -22,14 +24,31 @@ Test hooks: LEAD_TURN_END_NODE names the node binary; LEAD_TURN_END_TIMEOUT is t
 import json
 import os
 import subprocess
+import sqlite3
 import sys
 import time
+import urllib.parse
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # COORDINATOR_SEAT values (set in each seat file's `env`, and by `coordinator t3 setup`) of sessions that are never asked.
 SKIPPED_SEATS = frozenset(["builder", "planner", "reviewer", "scout", "computer", "coordinator", "homelab-chat"])
+
+
+def is_lead_workstream(state, thread):
+    """True when the ledger has a workstream whose conversation is `t3:<thread>`, False when it has none, None when the ledger cannot be read (then the thread is asked about)."""
+    path = os.path.join(state, "ledger.sqlite")
+    if not os.path.isfile(path):
+        return None
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path), uri=True, timeout=2)
+        try:
+            return db.execute("SELECT 1 FROM workstreams WHERE conversation = ? LIMIT 1", ("t3:" + thread,)).fetchone() is not None
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return None
 
 
 def option(argv, name):
@@ -107,6 +126,8 @@ def refusal(argv, hook_input, env):
         return None
     repo, state = option(argv, "--repo"), env.get("COORDINATOR_STATE_DIR") or option(argv, "--state")
     if not thread or not repo or not state:
+        return None
+    if env.get("COORDINATOR_SEAT") != "lead" and is_lead_workstream(state, thread) is False:
         return None
     started = time.monotonic()
     try:
