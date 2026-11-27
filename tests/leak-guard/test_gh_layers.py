@@ -157,6 +157,26 @@ class Layers(WrapperBase):
                 self.assertEqual((after["kind"], after["rc"]), ("after", 0))
                 self.assertEqual(self.real_calls()[0]["argv"], args)
 
+    def test_the_work_rules_layer_runs_first_whatever_the_budget_file_says(self):
+        self.layer("gh_policy", "from gh_layers import Stop\ndef before(call):\n    raise Stop(1, 'policy refused')\n")
+        self.layer("gh_budget", SEEING)
+        for setting in (None, "off", "on"):
+            with self.subTest(setting):
+                self.reset()
+                if setting is not None:
+                    self.budget(setting)
+                done = self.gh("pr", "view", "5", cwd=self.other_cwd)
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertIn("policy refused", done.stderr)
+                self.assertNotIn("before", [r["kind"] for r in self.seen()])      # the budget layer never judged the call: the rules come first
+                self.assertEqual(self.real_calls(), [])
+
+    def test_a_layer_is_given_the_real_gh_to_read_state_with(self):
+        self.layer("gh_policy", RECORD + "def before(call): rec('before', call, real=call.real)\n")
+        done = self.gh("pr", "view", "5", cwd=self.other_cwd)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(os.path.realpath(self.seen()[0]["real"]), os.path.realpath(self.realbin / "gh"))
+
     def test_auth_and_version_skip_the_layers(self):
         self.layer("gh_budget", SEEING)
         self.budget("on")

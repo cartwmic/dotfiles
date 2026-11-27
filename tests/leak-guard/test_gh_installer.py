@@ -88,6 +88,13 @@ class GhInstaller(unittest.TestCase):
                 self.install(data, profile)
                 self.assertEqual(self.budget(), want + "\n")
 
+    def test_the_policy_file_is_on_for_personal_and_off_for_work_whatever_the_budget_data_says(self):
+        for profile, data, want in (("personal", "", "on"), ("axon-work-computer", "", "off"), ("personal", "  ghBudget:\n    enabled: false\n", "on"),
+                                    ("axon-work-computer", "  ghBudget:\n    enabled: true\n", "off")):
+            with self.subTest(profile=profile, data=data):
+                self.install(data, profile)
+                self.assertEqual((self.home / ".config" / "gh-wrapper" / "policy").read_text(), want + "\n")
+
     def test_bad_budget_data_fails_the_render(self):
         for bad in ("  ghBudget: true\n", "  ghBudget:\n    enabled: yes please\n", "  ghBudget:\n    enabled: 1\n", "  ghBudget:\n    floor: 600\n"):
             with self.subTest(bad):
