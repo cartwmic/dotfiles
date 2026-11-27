@@ -95,6 +95,10 @@ class FailsClosed(unittest.TestCase):
         ("ci-main-status --merge-gate c && pr-body-check c 5 && gh pr merge 5 --weird", {}),
         ("gh api repos/o/r/pulls/5 --weird", {}),
         ("gh api repos/o/r/issues/5 -Z", {}),
+        ("gh issue edit 5 --weird", {}),
+        ("gh issue create --weird", {}),
+        ("gh api repos/o/r/contents/x --weird", {}),
+        ("gh api user --weird", {}),
         ("gh api repos/o/r/pulls --weird", {}),
         ("git -C %s merge --weird" % LIVE, LIVE_KW),
         ("git -C %s branch --weird" % LIVE, LIVE_KW),
@@ -106,8 +110,6 @@ class FailsClosed(unittest.TestCase):
     ALLOWED = [
         ("gh pr view 5 --weird", {}),
         ("gh pr checks 5 --weird", {}),
-        ("gh api repos/o/r/contents/x --weird", {}),
-        ("gh issue edit 5 --weird", {}),
         ("git -C %s log --weird" % LIVE, LIVE_KW),
         ("git -C %s status --weird" % LIVE, LIVE_KW),
         ("git -C /tmp/scratch merge --weird", LIVE_KW),
@@ -144,8 +146,11 @@ class FailsClosed(unittest.TestCase):
 
     def test_the_log_line_names_the_flag_without_a_value(self):
         found = bash_rules.refusal("gh pr merge 5 --weird=secret", base.ctx())
-        self.assertEqual(found[1].log, {"reason": "flag not in FLAG_ROWS", "flag": "--weird"})
+        self.assertEqual(found[1].log, {"reason": "not on the gh_surface table", "effects": ""})
+        self.assertIn("`--weird`", str(found[1]))
         self.assertNotIn("secret", str(found[1]))
+        git = bash_rules.refusal("git -C %s merge --weird=secret" % LIVE, base.ctx(**LIVE_KW))
+        self.assertEqual(git[1].log, {"reason": "flag not in FLAG_ROWS", "flag": "--weird"})  # the git and docker rows keep their own log line
 
 
 class Tables(unittest.TestCase):
@@ -228,9 +233,90 @@ class Guard(unittest.TestCase):
 
     def test_the_old_readers_are_gone(self):
         for name in ["_flag_value", "read_gh_flags", "GhArgs", "_gh_table", "_read_flag", "GIT_VALUE_OPTIONS", "DOCKER_OPTIONS_WITH_VALUE", "COMPOSE_OPTIONS_WITH_VALUE",
-                     "JS_VALUE_OPTIONS", "SCRIPT_FIRST", "MKTEMP_VALUE_OPTIONS", "GH_FLAGS", "PR_BODY_VERBS"]:
+                     "JS_VALUE_OPTIONS", "SCRIPT_FIRST", "MKTEMP_VALUE_OPTIONS", "GH_FLAGS", "PR_BODY_VERBS",
+                     # the readers of a gh REST endpoint and their texts, replaced by gh_surface
+                     "_api_sets_pr_body", "_api_sets_pr_title", "_api_creates_issue", "_api_pr_write", "_api_shown", "_api_title_message", "_unknown_refusal", "_spelled",
+                     "PR_API_ENDPOINT", "PR_API_BODY", "PR_API_ISSUE_BODY", "PR_API_TITLE", "PR_API_ISSUE_TITLE", "ISSUE_API_BODY"]:
             with self.subTest(name=name):
                 self.assertFalse(hasattr(bash_rules, name), "%s was replaced by FLAG_ROWS" % name)
+
+
+class NoRuleReadsAGhCommand(unittest.TestCase):
+    """What a gh command does to a pull request or an issue is decided in gh_surface.py and nowhere else: a rule that parses a gh command (`gh_command`) must ask `surface` (through
+    `_gh_surface`) and act on its verdict, and no function names a gh group, verb or endpoint to decide it itself. A rule that reads one by hand is the fail-open default this module
+    replaced: a spelling, verb or endpoint outside the rule's own small model passes. A flag's value (`argv.value("body-file")`) is read through the normaliser and is not what this guard looks for."""
+    PARSER = {"gh_command": "the parser: it names the groups and verbs it splits words into"}
+    READS_BY_HAND = {"live_git_rule": "`gh pr checkout` and `gh pr co` change the checked-out tree of the directory they run in: git's concern, not a write to a pull request or an issue"}
+    GH_ATTRIBUTES = {"group", "verb", "before_verb"}
+    ENDPOINT_PARTS = ("pulls", "graphql", "repos/", "issues/", "mergePullRequest")
+
+    @staticmethod
+    def vocabulary():
+        import gh_surface as gs
+        words = set(gs.GROUP_VERBS) | set(gs.GROUP_ALIAS) | {"api", "graphql", "merge", "merges", "pulls", "issues", "repos", "repositories"}
+        for table in gs.GROUP_VERBS.values():
+            words |= set(table)
+        return words
+
+    @classmethod
+    def findings(cls, source, parser=None, reads_by_hand=None):
+        """Every way a function of `source` reads a gh command by hand, as `name:line what`."""
+        parser = cls.PARSER if parser is None else parser
+        reads_by_hand = cls.READS_BY_HAND if reads_by_hand is None else reads_by_hand
+        words, found = cls.vocabulary(), []
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name in parser:
+                continue
+            docstring = node.body[0].value if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant) else None
+            nodes = [n for n in ast.walk(node) if n is not docstring]
+            calls = {n.func.id if isinstance(n.func, ast.Name) else n.func.attr for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, (ast.Name, ast.Attribute))}
+            parses = "gh_command" in calls
+            asks = bool(calls & {"surface", "_gh_surface"})
+            strings = [n for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+            for n in strings:
+                if any(part in n.value for part in cls.ENDPOINT_PARTS):
+                    found.append("%s:%d names an endpoint or a mutation: %r" % (node.name, n.lineno, n.value[:40]))
+            if parses and not asks and node.name not in reads_by_hand:
+                found.append("%s:%d parses a gh command and never asks gh_surface.surface" % (node.name, node.lineno))
+            if (parses or asks) and node.name not in reads_by_hand:
+                for n in nodes:
+                    if isinstance(n, ast.Attribute) and n.attr in cls.GH_ATTRIBUTES:
+                        found.append("%s:%d reads .%s of a gh command" % (node.name, n.lineno, n.attr))
+                for n in strings:
+                    if n.value in words:
+                        found.append("%s:%d names the gh word %r" % (node.name, n.lineno, n.value))
+        return found
+
+    def test_no_rule_reads_a_gh_verb_flag_or_endpoint_by_hand(self):
+        self.assertEqual(self.findings(SOURCE), [], "a function reads a gh command itself. Add the case to gh_surface.py (its tables) and act on surface()'s verdict instead.")
+
+    def test_the_three_rules_ask_the_table_and_the_helper_does(self):
+        tree = ast.parse(SOURCE)
+        functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        called = lambda name: {n.func.id if isinstance(n.func, ast.Name) else n.func.attr for n in ast.walk(functions[name]) if isinstance(n, ast.Call) and isinstance(n.func, (ast.Name, ast.Attribute))}
+        for rule in ("merge_rule", "pr_body_rule", "issue_body_rule"):
+            with self.subTest(rule=rule):
+                self.assertIn("_gh_surface", called(rule))
+        self.assertIn("surface", called("_gh_surface"))
+        self.assertIn("gh_command", called("_gh_surface"))
+
+    def test_the_guard_can_fail(self):
+        """Each planted rule is the old way of doing it, and each is found."""
+        planted = {
+            "a verb compared by hand": "def merge_rule(walk, ctx):\n    gh = gh_command(['pr'])\n    return gh.verb == 'merge'\n",
+            "a gh command parsed and never asked": "def pr_body_rule(walk, ctx):\n    gh = gh_command(['pr'])\n    return gh.argv\n",
+            "a verb word beside a surface call": "def issue_body_rule(walk, ctx):\n    found = surface(gh_command(['issue']))\n    return found if 'create' else None\n",
+            "an attribute beside a surface call": "def issue_body_rule(walk, ctx):\n    gh = gh_command(['issue'])\n    return surface(gh) and gh.group\n",
+            "an endpoint regex": "def _api_endpoint(text):\n    return re.fullmatch(r'repos/[^/]+/[^/]+/pulls/\\d+', text)\n",
+            "a graphql mutation name": "def other(text):\n    return 'mergePullRequest' in text\n",
+        }
+        for name, source in planted.items():
+            with self.subTest(case=name):
+                self.assertNotEqual(self.findings(source), [])
+        clean = "def merge_rule(walk, ctx):\n    gh, found = _gh_surface(walk)\n    return gh.argv.value('body-file') if found.verdict == gs.MERGE_GATE else None\n"
+        self.assertEqual(self.findings(clean), [])
+        self.assertNotEqual(self.findings("def f(x):\n    gh = gh_command(x)\n    return gh.verb\n", reads_by_hand={}), [])
+        self.assertEqual(self.findings("def live_git_rule(walk, ctx):\n    gh = gh_command(walk)\n    return gh.verb == 'checkout'\n"), [])
 
 
 if __name__ == "__main__":

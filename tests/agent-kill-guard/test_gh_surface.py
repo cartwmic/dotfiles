@@ -2,7 +2,7 @@
 still pass.
 
 Each row is a whole command line, read as the hook reads it (bash_rules.Walk finds the gh commands, bash_rules.gh_command parses them), and the expected effects and verdict.
-The rows come from the owed-#4353 survey of the installed hook; the HOLES are the ones the hook let through before gh_surface existed, so a classifier that allows everything
+The rows come from a survey of the installed hook; the HOLES are the ones the hook let through before gh_surface existed, so a classifier that allows everything
 fails on every one of them (the last test runs that stub). Nothing here reads a route, a reason or any other internal of the module: only the effects, the verdict and
 whether the module lists the command.
 """
@@ -221,8 +221,8 @@ ROWS = [
     ("Q20", "gh api graphql -f query=@- < " + F, UNLISTED, gs.REFUSE),
 ]
 
-# The rows the hook let through before gh_surface (owed #4353): none may be ALLOW, and each is a row the allow-everything stub gets wrong.
-HOLES = {"I2", "I3", "I4", "I9", "IE1", "IE2", "IE3", "IE4", "IE5", "IE6", "IE7", "IE8", "IE9", "IE10", "IE11", "IE12", "IE13", "IE14", "IE15", "IE16", "IE17", "IE18", "U9a", "U9e", "U9g", "U9j", "U9k", "M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
+# The rows the hook let through before gh_surface: none may be ALLOW, and each is a row the allow-everything stub gets wrong. (U9e is not one: gh prints help for it and the hook refused it before.)
+HOLES = {"I2", "I3", "I4", "I9", "IE1", "IE2", "IE3", "IE4", "IE5", "IE6", "IE7", "IE8", "IE9", "IE10", "IE11", "IE12", "IE13", "IE14", "IE15", "IE16", "IE17", "IE18", "U9a", "U9g", "U9j", "U9k", "M5", "M6", "M7", "S5", "B5", "B8", "B9", "B10", "B11", "B15", "B16", "G1", "I8", "I12"}
 # The rows that must stay allowed, whatever else changes: the sanctioned writers and the commands the review skills run.
 STAY_ALLOWED = {"P6", "P7", "P8", "S1", "S2", "S3", "S4", "S6", "B6", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "I5", "I6", "IE21", "IE22", "IE23", "IE24", "IE25", "IE26", "IE27", "IE28", "O12", "O13", "O14"}
 
@@ -353,6 +353,25 @@ class EditFlags(unittest.TestCase):
         finally:
             gs.EDIT_FLAGS = original
         self.assertEqual((got.verdict, got.listed), (gs.REFUSE, False))
+        self.assertIn("`add-label`", got.reason)
+        self.assertIn("EDIT_FLAGS", got.reason)  # the fix named is the one that works: add the flag to EDIT_FLAGS, not "add a row"
+        self.assertIn("FLAG_ROWS", got.reason)
+
+    def test_a_flag_the_hook_does_not_know_names_both_tables_to_fix(self):
+        for words in (("pr", "edit", "5", "--newflag"), ("issue", "edit", "5", "--newflag"), ("api", "user", "--newflag")):
+            with self.subTest(words=words):
+                got = verdict_of(*words)
+                self.assertEqual((got.verdict, got.listed), (gs.REFUSE, False))
+                self.assertIn("`--newflag`", got.reason)
+                self.assertIn("FLAG_ROWS", got.reason)
+
+    def test_a_flag_before_the_subcommand_says_where_to_put_it_and_never_shows_its_value(self):
+        got = verdict_of("pr", "--title=SECRETVALUE", "edit", "5")
+        self.assertEqual((got.verdict, got.listed), (gs.REFUSE, False))
+        self.assertIn("`--title`", got.reason)
+        self.assertNotIn("SECRETVALUE", got.reason)
+        self.assertIn("so the hook cannot tell the subcommand", got.reason)
+        self.assertIn("Put the flag after the subcommand", got.reason)
 
     def test_the_report_names_each_flag_once_with_its_verdict(self):
         lines = edit_flags_report()

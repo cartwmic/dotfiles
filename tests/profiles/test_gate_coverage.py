@@ -135,7 +135,7 @@ class WorkHookTest(Base):
         super().setUp()
         self.hooks = self.home / ".local/share/agent-harness/hooks"
         self.hooks.mkdir(parents=True)
-        for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+        for name in ("refuse_pattern_kill.py", "bash_rules.py", "gh_surface.py"):
             shutil.copy(HOOK_SRC / name, self.hooks / name)
         (self.hooks / "profile").write_text(self.render_file(".local/share/agent-harness/hooks/profile", work_data()))
         (self.hooks.parent / "coordinator-instance").write_text(self.render_file(".local/share/agent-harness/coordinator-instance", work_data()))
@@ -503,7 +503,7 @@ class HarnessWiringTest(Base):
     def test_pi_extension_cursor_guard_and_hook_scripts_are_managed_on_work(self):
         on_work = managed(WORK)
         for path in (".pi/agent/extensions/refuse-pattern-kill/index.ts", ".cursor/hooks/shell_guard.py",
-                     ".local/share/agent-harness/hooks/refuse_pattern_kill.py", ".local/share/agent-harness/hooks/bash_rules.py",
+                     ".local/share/agent-harness/hooks/refuse_pattern_kill.py", ".local/share/agent-harness/hooks/bash_rules.py", ".local/share/agent-harness/hooks/gh_surface.py",
                      ".local/share/agent-harness/hooks/profile", ".local/share/agent-harness/coordinator-instance"):
             self.assertIn(path, on_work)
 

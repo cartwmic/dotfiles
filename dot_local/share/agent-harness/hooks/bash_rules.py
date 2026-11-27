@@ -7,7 +7,13 @@
   kube        (personal only)  kubectl, helm, k9s, kubectx on a context other than the homelab's: a context flag, `kubectl config
               use-context`, `kubectx X`, or no flag while the current context (--kubeconfig, an inline KUBECONFIG=, the hook's KUBECONFIG,
               else ~/.kube/config) is another. kubectl inside an ssh string is not inspected. No kubeconfig or no current-context: allowed.
-  merge       (personal and work)  `gh pr merge` unless BOTH gates, in their real form, are joined to it by `&&` earlier in the same and-list
+  gh surface  The three rules below (merge, pr-body, issue-body) do not read gh arguments. Each calls `gh_surface.surface()` (gh_surface.py, one allow table) for every `gh` command and acts
+              on its verdict: ALLOW, PR_BODY, ISSUE_OPEN, MERGE_GATE or REFUSE, with a reason for a REFUSE. The table covers `gh pr`, `gh issue`, `gh agent-task`, `gh api` on a REST path under
+              `pulls`, `issues`, `merges` or `merge-upstream` (also `repositories/<id>/...`, a full URL, a trailing slash, a query string) and `gh api graphql` (every operation of the query is
+              read; a mutation the table does not list refuses; a query from a file, `--input` or the shell refuses). A command the table cannot read (an unknown flag on `gh api` or on a gated
+              verb, an unknown verb or group such as an alias, a flag before the subcommand, a field it does not know) is refused, and its text names the table or the row to extend. Only a row
+              lets a command pass. Not covered, and not claimed: what a shell builds (an alias, `curl`, `python -c`, a script file, `$cmd`), REST writes to `git/refs` or `contents`, `git push`.
+  merge       (personal and work)  a merge by any route: `gh pr merge` unless BOTH gates, in their real form, are joined to it by `&&` earlier in the same and-list
               (any order): `ci-main-status --merge-gate <repo> [--pr N]` (a bare one or `--tip` is not the gate) and
               `pr-body-check <repo> <pr>` (two plain words; `pr-body-check --body-file F` is not the merge check, it never reads the PR's
               head runs), with <pr> the PR number `gh pr merge` names when it names one (a branch or no PR cannot be matched); the refusal names
@@ -21,9 +27,11 @@
               which runs both checks itself. Never for cartwmic/cartwmic-homelab-v2 either, found the same way and refused even
               before the gates: use `~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA` (it adds the RED-line check the chained
               form lacks). The playbook CLI, loop_engine_bump.py and agent_kit_bump.py run gh as a child process
-              the hook never sees, so they pass.
+              the hook never sees, so they pass. A merge through `gh api` (REST `PUT .../pulls/N/merge`, `.../merges`, graphql `mergePullRequest`, `enablePullRequestAutoMerge`,
+              `enqueuePullRequest`) is refused: merge with `gh pr merge` behind the gates, or `merge-pr.sh`. This rule also takes every command the table cannot read (see gh surface),
+              since it runs first.
 
-  pr-body     (personal and work)  `gh pr create`, and `gh pr edit` when it sets a body, unless the body comes from `--body-file F` (or `-F F`)
+  pr-body     (personal and work)  `gh pr create`, and `gh pr edit` when it sets a title, body, body file or attachment, unless the body comes from `--body-file F` (or `-F F`)
               and `pr-body-check --body-file F` with the same F is joined to it by `&&` earlier in the same and-list, and, when the command
               sets `--title T`, that check was given the same `--title T` (it reads the title for task ids). Refused: an inline
               `--body`/`-b`, `--fill`, a create with no body flag, a body from stdin (`-F -`), a different file. The refusal names
@@ -31,19 +39,23 @@
               `pr-body-check --body-file F --title T && gh pr create --title T ... --body-file F`, so bookkeeping in the description (the principles table,
               a table in a Proven section, a Decisions: line, ledger or job ids; it belongs in the PR's agent record, playbook 5a05bfe8; a
               Proven section as plain prose stays, playbook f5a367b5) fails when the body is written, not at merge. `gh pr edit` with no
-              body flag and no title (labels, reviewers) passes; one that sets only a title needs the chained check given the same title. One check must see both the file and the title. `gh api` on `repos/<o>/<r>/pulls[/<n>]` (POST, PATCH, PUT) or a PATCH on `issues/<n>` (a PR is an issue) with a `title` field is held to the same rule:
-              every `title` must have been given to an earlier `pr-body-check --body-file F --title T` in the and-list, and a `-F title=@file` is always refused (its text cannot be seen). No repo is exempt: unlike the merge rule, nothing else runs this check at create time.
+              text flag (labels, reviewers, `--base`) passes; one that sets only a title needs the chained check given the same title. One check must see both the file and the title.
+              Every other write of a pull request's or an issue's title or body is refused with the table's reason: `gh api` on `pulls` or `issues/<n>` (a PR is an issue, and the hook
+              cannot tell a PR number from an issue number) with a title or body field or `--input`, a REST create of a pull request, graphql `updatePullRequest`, `createPullRequest`
+              and `updateIssue`, `gh pr revert`, and `gh issue edit` with a title, body, body file or attachment (no checked route to an issue's text exists yet: follow-up
+              `issue-open --edit`, dotfiles issue 890). A check in front of a REST title no longer lets it through: use `pr-open --edit N --body-file F --title T`. No repo is exempt: unlike
+              the merge rule, nothing else runs this check at create time.
               The body file must also be a mktemp name, so another session cannot overwrite it (2026-11-15: a shared /tmp/pr-body.md put
               one PR's body on another): `F=$(mktemp /tmp/pr-N-body.XXXXXX)` earlier in the same command and `--body-file "$F"`, or the
               literal name mktemp made (last dot-part 6+ letters and digits with a digit or capital). A fixed name is refused for create and
               edit; for `gh pr edit N` the name must also contain N. A `$VAR` the command does not assign from mktemp is refused. A name
               is checked even when the chain is right; when both are wrong the refusal gives both fixes.
 
-  issue-body  (personal and work)  `gh issue create` (`gh issue new`, a `-R` before the verb) and a `gh api` POST on `repos/<o>/<r>/issues` with a field or `--input`: use
-              `issue-open --title T --body-file F`, which expands the `{{claim:ID}}` tokens in F (`claims ran|read|said|none` print them), adds the Sources footer, then runs
-              `gh issue create` as a child process the hook never sees. `gh issue edit|comment|close|view|list` pass. The rule refuses only where `src/claims/cli.ts` exists in
+  issue-body  (personal and work)  an issue made by `gh issue create` (`gh issue new`, a `-R` before the verb), a `gh api` POST on `repos/<o>/<r>/issues` or the graphql `createIssue`:
+              use `issue-open --title T --body-file F`, which expands the `{{claim:ID}}` tokens in F (`claims ran|read|said|none` print them), adds the Sources footer, then runs
+              `gh issue create` as a child process the hook never sees. `gh issue comment|close|view|list` pass. The rule refuses only where `src/claims/cli.ts` exists in
               the profile's coordinator checkout (the file `claims` runs), so a machine that has this hook before it has the coordinator pull is not left unable to file an issue.
-              Not seen: a `gh api graphql` mutation, or an issue made through another tool.
+              The table's own refusals of an issue's text (`gh issue edit` text, graphql `updateIssue`) do not wait for that file.
 
   heavy       (agent host pod only)  a test, journey or stress run in the pod itself: `npm test` / `npm t` / `npm run test*` (and pnpm, yarn, bun,
               `yarn workspace <x> test`, `corepack pnpm test`), `vitest` (also `npx`, `bunx`, `pnpx`, `pnpm exec`, `npm exec`, `node .../vitest`),
@@ -85,12 +97,11 @@
               from a file or a shell command, so the hook has nothing to match.
 
 Flags are read in one place: FLAG_ROWS (one row per tool and subcommand) and `normalise` / `gh_command`, which accept every spelling the tool's flag
-library accepts (`--x v`, `--x=v`, `-x v`, `-xv`, `-x=v`, clusters of short flags, `--` ending the flags). No rule reads a flag itself (the guard in
-tests/agent-kill-guard/test_flag_normaliser.py fails if one does). A gated command (gh pr create/edit/merge, gh api on a PR or issue endpoint, git's
-merge/reset/stash/branch and any git option before the subcommand in the live checkout, docker before its subcommand) with a flag its row lacks is refused,
-naming the row to extend. A gh command with a flag before its group (`gh -x pr merge 5`) or, for `gh pr`, between `pr` and the verb (`gh pr -t T edit 5`) is refused
-whatever the flag is, unless it is `-R owner/repo` / `--repo`, `-h`/`--help` or `--version`: gh may take the next word as that flag's value, so the verb cannot be told
-(a flag after the verb is read against the verb's row, as above).
+library accepts (`--x v`, `--x=v`, `-x v`, `-xv`, `-x=v`, clusters of short flags, `--` ending the flags). No rule reads a flag, a gh verb or a gh endpoint itself: the three gh rules ask
+gh_surface.surface() (the guard in tests/agent-kill-guard/test_flag_normaliser.py fails if one reads them by hand). A gh command with a flag its row lacks is refused when it is `gh api`,
+`gh pr` or `gh issue` create, new, merge or edit, or git's merge/reset/stash/branch (and any git option before the subcommand in the live checkout) or docker before its subcommand, naming the row to
+extend; a read or a comment with an unknown flag passes. A gh command with a flag before its group (`gh -x pr merge 5`) or, for `gh pr`, between `pr` and the verb (`gh pr -t T edit 5`) is refused
+whatever the flag is, unless it is `-R owner/repo` / `--repo`, `-h`/`--help` or `--version`: gh may take the next word as that flag's value, so the verb cannot be told.
 
 Commands are found like the pkill classifier finds them (it supplies the parser): through quotes, `;` `&&` `|`, `$( )`, `sh -c`, `eval`,
 wrappers, `find -exec`, heredocs fed to a shell. Not covered: a git alias, a git option the table does not list that takes a separate value (it hides the subcommand), a command built at run time (`$cmd`), a script file, `python -c`, a command
@@ -104,6 +115,7 @@ import subprocess
 import sys
 from collections import namedtuple
 
+import gh_surface as gs
 from refuse_pattern_kill import ASSIGN, SHELLS, WRAPPERS, Scan, _base, _command_words, shell_script, unwrap
 
 HOMELAB = "kubernetes-admin@kubernetes"
@@ -156,41 +168,18 @@ PR_BODY = (
     "(a Proven section as plain prose, playbook f5a367b5), risk and `Refs #N`; the bookkeeping goes in the PR's agent record (`pr-record path <repo>#N` prints where; playbook 5a05bfe8). "
     "The `--body-file` form never reads the agent record: once the PR exists and before you report, run `pr-body-check <owner/repo> <pr> --skip-intent-review`, which does."
 )
+VERB_OF = {True: "create", False: "edit"}  # the verb a PR_BODY refusal names, by whether the command creates the pull request
 PR_OPEN = {  # the one-command form of PR_BODY, by verb: pr-open checks the body, pushes, opens or PATCHes, and prints the URL
     "create": "`pr-open --title T --body-file F [--draft]` (F is the body file, `-` reads it from stdin; it checks the body, pushes the branch and opens the PR)",
     "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host)",
 }
-PR_API_BODY = (
-    "`gh api` that sets a pull request body (POST, PATCH or PUT on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `body` field or `--input`) is refused in agent sessions: "
-    "it skips the body check that `gh pr create|edit` gets, so agent bookkeeping in the description is found only when `gh pr merge` runs. "
-    "Shortest path: %s or %s."
-)
-PR_API_ISSUE_BODY = (
-    "`gh api` PATCH on `repos/<owner>/<repo>/issues/<n>` with a `body` field or `--input` is refused in agent sessions: a pull request is an issue too, so this can set a pull request body "
-    "and skip the body check, and the hook cannot tell a PR number from an issue number without a lookup. For a PR: %s. For an issue: `gh issue edit N --body-file F`."
-)
-PR_API_TITLE = (
-    "`gh api` that sets a pull request title (POST, PATCH or PUT on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `title` field) sets a title that `pr-body-check` was not given: "
-    "the check reads the title for task ids, which become part of the commit text on main, and it can only read the one it is passed. "
-    "Pass the same title to both: `pr-body-check --body-file F --title T && gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f title=T`, or use `pr-open --edit N --body-file F --title T`."
-)
-PR_API_ISSUE_TITLE = (
-    "`gh api` PATCH on `repos/<owner>/<repo>/issues/<n>` with a `title` field sets a title that `pr-body-check` was not given: a pull request is an issue too, so this can rename a pull request, "
-    "and the hook cannot tell a PR number from an issue number without a lookup. For a PR: `pr-body-check --body-file F --title T && gh api -X PATCH repos/<owner>/<repo>/issues/<n> -f title=T`, "
-    "or `pr-open --edit N --body-file F --title T`. For an issue: `gh issue edit N --title T`."
-)
-PR_API_ENDPOINT = re.compile(r"(?:https://[^/]+/(?:api/v3/)?|/)?(?P<path>repos/[^/]+/[^/]+/(?P<kind>pulls|issues)(?:/\d+)?/?)(?:\?.*)?")
 ISSUE_OPEN_CLI = "src/claims/cli.ts"  # the coordinator file `claims` (so `issue-open`) runs: the issue rule refuses only where it exists
 ISSUE_BODY = (
     "`gh issue create` is refused in agent sessions: an issue body typed by hand states facts (a count, a state, a line of code) with no source, and nothing checks them before a person reads it. "
     "Use `issue-open --title T --body-file F [--repo OWNER/REPO] [--label L ...]` (F is the body file, `-` reads it from stdin). Put each fact in the body as the token a tool printed: "
     "`claims ran -- <cmd>` or `claims read <repo>:<path>:<a>-<b>` print `{{claim:ID}}`; where nothing can be observed, `claims said <text>` or `claims none <reason>` print one that shows as unsourced. "
     "`issue-open` expands the tokens, refuses an unknown or stale one, adds the Sources footer and then creates the issue. `issue-open --dry-run ...` shows the expanded body and creates nothing. "
-    "`gh issue edit|comment|close|view|list` are not affected."
-)
-ISSUE_API_BODY = (
-    "`gh api` that creates an issue (POST on `repos/<owner>/<repo>/issues` with a field or `--input`) is refused in agent sessions: it skips the source check that `issue-open` gives an issue body. "
-    "Use `issue-open --title T --body-file F [--repo OWNER/REPO]`: it expands the `{{claim:ID}}` tokens that `claims ran|read|said|none` print, then creates the issue."
+    "`gh issue comment|close|view|list` are not affected. `gh issue edit` with a title, body, body file or attachment is refused too: no checked route to an issue's text exists yet (follow-up: `issue-open --edit`, dotfiles issue 890)."
 )
 PR_TITLE = (
     "`gh pr %s --title %s` sets a title that `pr-body-check` was not given: the check reads the title for task ids, which become part of the commit text on main, and it can only read the one it is passed. "
@@ -639,12 +628,6 @@ def gh_command(args):
     return GhCommand(group, verb, argv, argv.positional[1:], before[0] if before else None)
 
 
-def _spelled(command, name):
-    """How a flag of the table is written when a message shows it: its short name, else its long name."""
-    short = _table(command)[0][name][0]
-    return "-" + short if short else "--" + name
-
-
 UNKNOWN_FLAG = (
     "`%s` carries a flag this hook's table does not know (`%s`), so the hook cannot tell what the command does and refuses it. Add the flag to the `%s` row of FLAG_ROWS in "
     "dot_local/share/agent-harness/hooks/bash_rules.py (for gh, copy the row from the gh wrapper's FLAGS: scripts/leak-guard-gh-flags regenerates it), then run the command again."
@@ -665,16 +648,6 @@ def _flag_before_verb(gh):
     flag = gh.before_verb.partition("=")[0]
     refusal = Matched(BEFORE_VERB % flag, "gh")
     refusal.log = {"reason": "flag before the gh subcommand", "flag": flag}
-    return refusal
-
-
-def _unknown_refusal(command, argv, row):
-    """The refusal for a gated command whose flags the table does not list, else None. The log line names the flag without any value attached to it."""
-    if not argv.unknown:
-        return None
-    flag = argv.unknown[0]
-    refusal = Matched(UNKNOWN_FLAG % (command, flag, row), command)
-    refusal.log = {"reason": "flag not in FLAG_ROWS", "flag": flag}
     return refusal
 
 
@@ -772,18 +745,38 @@ def kube_rule(walk, ctx):
     return None
 
 
+def _gh_surface(cmd):
+    """(GhCommand, Surface) for a command that is `gh`, else (None, None). The one place a rule asks what a gh command does to a pull request or an issue: gh_surface.surface
+    reads the verb, the flags, the REST endpoint and the graphql mutations, and the rules below act on its verdict. A rule never reads those itself (the guard in
+    tests/agent-kill-guard/test_flag_normaliser.py fails if one does)."""
+    if _base(cmd.words[0]) != "gh":
+        return None, None
+    gh = gh_command(cmd.words[1:])
+    if gh is not None:
+        gh.operands = _redirects(gh.operands)[0]  # the walker leaves `2>/dev/null` and `> out.json` among the words; they are not endpoints or numbers
+    return gh, gs.surface(gh)
+
+
+def _refused(found):
+    """The refusal for a Surface the table refuses: its reason, its route as the matched name, and a log line that names the effects and whether the table lists the command."""
+    message = Matched(found.reason, found.route)
+    message.log = {"reason": "refused by the gh_surface table" if found.listed else "not on the gh_surface table", "effects": " ".join(sorted(found.effects))}
+    return message
+
+
 def merge_rule(walk, ctx):
+    """A merge by any route (`gh pr merge`, REST `.../merge`, a graphql merge) and a gh command the table cannot read (an unknown flag or verb, a flag before the subcommand,
+    a query from a file) are refused here, from gh_surface's verdict; `gh pr merge` itself passes only behind both gates."""
     if ctx.profile not in GATE_PROFILES:
         return None
     for cmd in walk.cmds:
-        gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
-        if _flag_before_verb(gh):
-            return _flag_before_verb(gh)
-        if gh is None or (gh.group, gh.verb) != ("pr", "merge"):
+        gh, found = _gh_surface(cmd)
+        if found is None:
             continue
-        refused = _unknown_refusal("gh pr merge", gh.argv, "pr merge")
-        if refused:
-            return refused
+        if found.verdict == gs.REFUSE and (gs.MERGE in found.effects or not found.listed):
+            return _refused(found)
+        if found.verdict != gs.MERGE_GATE:
+            continue
         repo = gh.argv.value("repo")
         if repo is None:
             repo = (ctx.origin_of or origin_of)(cmd.cwd)
@@ -823,98 +816,24 @@ def _body_file_problem(body_file, verb, number, mktemps):
     return None
 
 
-def _api_pr_write(gh):
-    """The record of a `gh api` call (a GhCommand) that writes to a pull request, else None: a POST/PATCH/PUT on a pulls endpoint, or a PATCH on `issues/<n>` (a PR is an issue too,
-    so it can set a PR's body or title). {method, endpoint, kind, fields, input_file}, `fields` as (name of the flag, value, spelling typed) for each `-f`/`-F` field. Every spelling gh reads
-    (`-fbody=x`, `-f=body=x`, `-XPATCH`, a leading slash, a full URL) is read by the normaliser and PR_API_ENDPOINT."""
-    read = gh.argv
-    endpoint = gh.operands[0] if gh.operands else None
-    found = PR_API_ENDPOINT.fullmatch(endpoint) if endpoint else None
-    if not found:
-        return None
-    fields = [(n, v, typed) for n, v, typed in read.flags if n in ("field", "raw-field") and v is not None]
-    input_file = read.value("input")
-    method = read.value("method")
-    method = method.upper() if method is not None else ("POST" if fields or input_file is not None else "GET")
-    pulls = found.group("kind") == "pulls"
-    if not (method in ("POST", "PATCH", "PUT") if pulls else method == "PATCH" and re.search(r"/\d+/?$", found.group("path"))):
-        return None
-    return {"method": method, "endpoint": found.group("path"), "kind": found.group("kind"), "fields": fields, "input_file": input_file}
-
-
-def _api_shown(write):
-    """The command a log line shows: the parts of a gh api write, with every field value redacted so it never holds a body, a title or a token."""
-    shown = ["gh", "api", _spelled(("api", ""), "method"), write["method"], write["endpoint"]]
-    shown += [x for _, f, typed in write["fields"] for x in (typed.partition("=")[0], f.partition("=")[0] + "=<redacted>")]  # `--field=body=x` is one word: keep the flag, never its value
-    if write["input_file"] is not None:
-        shown += [_spelled(("api", ""), "input"), write["input_file"]]
-    return " ".join(shown)
-
-
-def _api_sets_pr_body(gh):
-    """The record of a `gh api` call that sets a PR body, else None: `_api_pr_write` with a `body` field or an input file (whose JSON the hook cannot see).
-    The record is {method, endpoint, reason, command, kind}; `command` is rebuilt from the parsed parts with every field value redacted."""
-    write = _api_pr_write(gh)
-    if not write:
-        return None
-    if write["input_file"] is None and not any(f.partition("=")[0] == "body" for _, f, _ in write["fields"]):
-        return None
-    reason = "%s on the %s endpoint sets a body (%s)" % (write["method"], write["kind"], _spelled(("api", ""), "input") if write["input_file"] is not None else "a body field")
-    return {"method": write["method"], "endpoint": write["endpoint"], "reason": reason, "command": _api_shown(write), "kind": write["kind"]}
-
-
-def _api_sets_pr_title(gh, gated):
-    """The record of a `gh api` call that sets a PR title the body check was not given, else None: `_api_pr_write` with a `title` field whose text is not in `gated` (a
-    `pr-body-check --title T` joined to it by `&&`, as for `gh pr edit --title`). Every title field counts. A `-F title=@file` (or `@-`) reads its text from a file or stdin, which no
-    check can have been given, so it is always refused; `-f` sends the text as it is. An input file is already refused as a body."""
-    write = _api_pr_write(gh)
-    if not write:
-        return None
-    titles = [(n, f.partition("=")[2]) for n, f, _ in write["fields"] if f.partition("=")[0] == "title"]
-    from_file = any(n == "field" and t.startswith("@") for n, t in titles)
-    if not titles or (not from_file and all(BODY_TITLE + t in gated for _, t in titles)):
-        return None
-    return {"method": write["method"], "endpoint": write["endpoint"], "kind": write["kind"], "from_file": from_file, "command": _api_shown(write)}
-
-
 def pr_body_rule(walk, ctx):
+    """Text of a pull request or an issue, from gh_surface's verdict. PR_BODY (`gh pr create`, `gh pr edit` with a title, body, body file or attachment) passes only through
+    the checked-body form below. Every other REFUSE the table gives (a REST or graphql write of a title or body, `gh issue edit` text, `gh pr revert`, `gh issue delete`) is
+    refused with the table's own reason. merge_rule has already taken the merges and the commands the table cannot read."""
     if ctx.profile not in GATE_PROFILES:
         return None
     for cmd in walk.cmds:
-        gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
-        if _flag_before_verb(gh):
-            return _flag_before_verb(gh)
-        if gh is None:
+        gh, found = _gh_surface(cmd)
+        if found is None:
             continue
-        if gh.group == "api":
-            api_body = _api_sets_pr_body(gh)
-            if api_body:
-                template = PR_API_BODY if api_body["kind"] == "pulls" else PR_API_ISSUE_BODY
-                message = Matched(template % ((PR_OPEN["create"], PR_OPEN["edit"]) if api_body["kind"] == "pulls" else (PR_OPEN["edit"],)),
-                                  "%s %s" % (api_body["method"], api_body["endpoint"]))
-                message.log = {"reason": api_body["reason"], "command": api_body["command"]}
-                return message
-            api_title = _api_sets_pr_title(gh, cmd.gated)
-            if api_title:
-                message = Matched(_api_title_message(api_title), "%s %s" % (api_title["method"], api_title["endpoint"]))
-                message.log = {"reason": "title not given to the check", "command": api_title["command"]}
-                return message
-            endpoint = gh.operands[0] if gh.operands else ""
-            if PR_API_ENDPOINT.fullmatch(endpoint):  # a call on a PR or issue endpoint: its flags must all be known, or a body flag could hide in one
-                refused = _unknown_refusal("gh api", gh.argv, "api")
-                if refused:
-                    return refused
+        if found.verdict == gs.REFUSE:
+            return _refused(found)
+        if found.verdict != gs.PR_BODY:
             continue
-        if gh.group != "pr" or gh.verb not in ("create", "edit"):
-            continue
-        verb = gh.verb
-        refused = _unknown_refusal("gh pr " + verb, gh.argv, "pr " + verb)
-        if refused:
-            return refused
+        verb = VERB_OF[gs.PR_CREATE in found.effects]
         body_file = gh.argv.value("body-file")
-        sets_body = body_file is not None or gh.argv.value("body") is not None
         title = gh.argv.value("title")
-        if verb == "edit" and not sets_body:
+        if verb == "edit" and gs.BODY not in found.effects:
             if title is None:
                 continue  # a label or reviewer change carries no title and no body
             if BODY_TITLE + title not in cmd.gated:  # a rename: the check reads the title the PR will have
@@ -945,44 +864,18 @@ def _issue_open_armed(ctx):
     return os.path.isfile(os.path.join(repo, ISSUE_OPEN_CLI))
 
 
-def _api_creates_issue(gh):
-    """The record of a `gh api` call (a GhCommand) that creates an issue, else None: a POST (the default when it has a field or an input file) on `repos/<o>/<r>/issues`
-    with no issue number. A PATCH on `issues/<n>` is `pr_body_rule`'s, since a PR is an issue too."""
-    read = gh.argv
-    endpoint = gh.operands[0] if gh.operands else None
-    found = PR_API_ENDPOINT.fullmatch(endpoint) if endpoint else None
-    if not found or found.group("kind") != "issues" or re.search(r"/\d+/?$", found.group("path")):
-        return None
-    has_input = read.value("input") is not None or any(n in ("field", "raw-field") and v is not None for n, v, _ in read.flags)
-    method = read.value("method")
-    method = method.upper() if method is not None else ("POST" if has_input else "GET")
-    return {"method": method, "endpoint": found.group("path")} if method == "POST" else None
-
-
 def issue_body_rule(walk, ctx):
+    """ISSUE_OPEN, from gh_surface's verdict: an issue made by `gh issue create`, a REST POST on `issues` or the graphql `createIssue` has to go through `issue-open`. It waits
+    until the coordinator checkout holds the claims command; the refusals of the table (an issue's text, `gh issue delete`) do not wait, since they name no tool to install."""
     if ctx.profile not in GATE_PROFILES or not _issue_open_armed(ctx):
         return None
     for cmd in walk.cmds:
-        gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
-        if gh is None:
-            continue
-        if gh.group == "issue" and gh.verb == "create":
-            message = Matched(ISSUE_BODY, "gh issue create")
-            message.log = {"reason": "issue created without issue-open"}
+        _, found = _gh_surface(cmd)
+        if found is not None and found.verdict == gs.ISSUE_OPEN:
+            message = Matched(ISSUE_BODY, found.route)
+            message.log = {"reason": "issue created without issue-open", "effects": " ".join(sorted(found.effects))}
             return message
-        if gh.group == "api":
-            created = _api_creates_issue(gh)
-            if created:
-                message = Matched(ISSUE_API_BODY, "gh api POST " + created["endpoint"])
-                message.log = {"reason": "POST on the issues endpoint creates an issue", "command": "gh api -X POST " + created["endpoint"]}
-                return message
     return None
-
-
-def _api_title_message(record):
-    """The refusal text for a `gh api` title write: PR_API_TITLE (or the issue-number form), and a line on `-F title=@file` when the title is read from a file."""
-    message = PR_API_TITLE if record["kind"] == "pulls" else PR_API_ISSUE_TITLE
-    return message + (" The title in this command is read from a file or stdin (`-F title=@...`), which no check can have been given: pass it as text with `-f title=T`." if record["from_file"] else "")
 
 
 def _title_refusal(verb, title, message=None):

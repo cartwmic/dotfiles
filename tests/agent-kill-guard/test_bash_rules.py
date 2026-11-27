@@ -549,7 +549,7 @@ class IssueBody(unittest.TestCase):
                "gh issue create --repo cartwmic/x --title t --body-file /tmp/b.md --label bug", "cd /tmp && gh issue create --title t", "echo x | gh issue create --title t --body-file -",
                "sh -c 'gh issue create --title t'", "sudo gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t -f body=b", "gh api -X POST repos/cartwmic/x/issues --input /tmp/i.json",
                "gh api --method=POST https://api.github.com/repos/cartwmic/x/issues -F title=t"]
-    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
+    PASSES = ["gh issue edit 5 --add-label bug", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
               "issue-open --title t --body-file /tmp/b.md", "issue-open --title t --body-file - --dry-run", "echo gh issue create", "grep 'gh issue create' notes.md",
               "gh api repos/cartwmic/x/issues", "gh api repos/cartwmic/x/issues/5/comments -f body=hi", "gh api -X GET repos/cartwmic/x/issues -f labels=bug", "gh pr list"]
 
@@ -609,7 +609,7 @@ class IssueBody(unittest.TestCase):
     def test_the_refusal_writes_a_reason_for_the_guard_log(self):
         found = bash_rules.refusal("gh issue create --title t", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
         self.assertEqual(found[0], "issue_body")
-        self.assertEqual(found[1].log, {"reason": "issue created without issue-open"})
+        self.assertEqual(found[1].log, {"reason": "issue created without issue-open", "effects": "body issue-create title"})
         self.assertEqual(found[2], "gh issue create")
         api = bash_rules.refusal("gh api repos/cartwmic/x/issues -f title=SECRETVALUE", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
         self.assertNotIn("SECRETVALUE", json.dumps(api[1].log))
@@ -644,8 +644,11 @@ class IssueBodyRealHook(unittest.TestCase):
         self.assertEqual(refused.returncode, 2)
         self.assertIn("refused in agent sessions", refused.stderr)
         self.assertIn("issue-open --title T --body-file F", refused.stderr)
-        for allowed in ("issue-open --title t --body-file /tmp/b.md", "gh issue list", "gh issue edit 5 --body-file /tmp/b.md"):
+        for allowed in ("issue-open --title t --body-file /tmp/b.md", "gh issue list", "gh issue edit 5 --add-label bug"):
             self.assertEqual(self.run_hook(allowed).returncode, 0, allowed)
+        edit = self.run_hook("gh issue edit 5 --body-file /tmp/b.md")  # reversed: an issue's text has no checked route until `issue-open --edit` (dotfiles issue 890)
+        self.assertEqual(edit.returncode, 2)
+        self.assertIn("dotfiles issue 890", edit.stderr)
 
     def test_one_guard_log_line_for_the_refusal(self):
         self.log.unlink(missing_ok=True)
@@ -658,7 +661,7 @@ class IssueBodyRealHook(unittest.TestCase):
 
 
 class PrBodyViaApi(unittest.TestCase):
-    """`gh api` on the pulls endpoints sets a PR body without the body check (dotfiles#451): refused, pointing to `pr-open`."""
+    """`gh api` that writes a pull request's title or body is refused (dotfiles#451, and every title since): gh_surface reads the endpoint, the method and the fields, and the refusal names `pr-open`."""
     REFUSED = ["gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
                "gh api --method PATCH repos/cartwmic/x/pulls/1 -F body=@/tmp/b",
                "gh api --method=PATCH repos/cartwmic/x/pulls/1 --raw-field body=hi",
@@ -675,7 +678,9 @@ class PrBodyViaApi(unittest.TestCase):
                "gh api -X PATCH repos/cartwmic/x/pulls/1 -F=body=@/tmp/b",
                "gh api -X PATCH repos/cartwmic/x/pulls/1 --field=body=hi",
                "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field=body=hi",
-               "gh api -X=PATCH repos/cartwmic/x/pulls/1 -f body=hi"]
+               "gh api -X=PATCH repos/cartwmic/x/pulls/1 -f body=hi",
+               # the endpoint spelled another way
+               "gh api -X PATCH repositories/123/pulls/5 -f body=hi", "gh api -X PATCH https://api.github.com/repos/cartwmic/x/pulls/5 -f body=hi"]
     ISSUES_REFUSED = ["gh api -X PATCH repos/cartwmic/x/issues/1 -f body=hi",   # a PR is an issue: this can set a PR body (round-1 note n1)
                       "gh api repos/cartwmic/x/issues/12 -X PATCH -F body=@/tmp/b",
                       "gh api -XPATCH repos/cartwmic/x/issues/12 -fbody=hi",
@@ -685,13 +690,11 @@ class PrBodyViaApi(unittest.TestCase):
               "gh api --method=get repos/cartwmic/x/pulls/1 -fbody=hi",
               "gh api repos/cartwmic/x/pulls/1/comments -f body=hi",
               "gh api repos/cartwmic/x/issues/1 -X PATCH -f state=closed",
-              "gh api repos/cartwmic/x/issues -f title=t -f body=hi",   # creating an issue
               "gh api repos/cartwmic/x/issues/1/comments -f body=hi",
               "gh api repos/cartwmic/x/issues/1 -X GET -f body=hi",
               "gh api -X PATCH repos/cartwmic/x/pulls/1 -f state=closed", "gh api -X PATCH repos/cartwmic/x/pulls/1 -f base=main",
               "gh api -X GET repos/cartwmic/x/pulls/1 -f title=t", "gh api repos/cartwmic/x/issues/1 -X GET -f title=t",   # a read with fields is a query, not a write
               "gh api repos/cartwmic/x/pulls/1/comments -X POST -f title=t",
-              "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title t && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",   # the title the check was given
               "gh api repos/cartwmic/x/pulls --jq '.[].number'",
               "gh pr view 1", "echo gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hi",
               "pr-open --edit 1 --body-file /tmp/pr-1-body.md"]
@@ -700,17 +703,18 @@ class PrBodyViaApi(unittest.TestCase):
         for text in self.REFUSED:
             with self.subTest(text=text):
                 message = check(text) or ""
-                self.assertIn("`gh api` that sets a pull request body (POST, PATCH or PUT", message)
+                self.assertIn("sets the title or body of a pull request without the check that `pr-open` runs", message)
                 self.assertIn("`pr-open --title T --body-file F [--draft]`", message)
-                self.assertIn("`pr-open --edit N --body-file F`", message)
+                self.assertIn("`pr-open --edit N --body-file F [--title T]`", message)
 
     def test_a_patch_on_an_issue_number_that_sets_a_body_is_refused_for_it_can_set_a_pr_body(self):
         for text in self.ISSUES_REFUSED:
             with self.subTest(text=text):
                 message = check(text) or ""
-                self.assertIn("a pull request is an issue too", message)
-                self.assertIn("`pr-open --edit N --body-file F`", message)
-                self.assertIn("gh issue edit N --body-file F", message)
+                self.assertIn("the hook cannot tell a PR number from an issue number", message)
+                self.assertIn("`pr-open --edit N --body-file F [--title T]`", message)
+                self.assertIn("dotfiles issue 890", message)
+                self.assertNotIn("gh issue edit N --body-file F", message)  # that route is refused too
 
     def test_other_gh_api_calls_pass(self):
         for text in self.PASSED:
@@ -722,48 +726,41 @@ class PrBodyViaApi(unittest.TestCase):
                      "gh api -X POST /repos/cartwmic/x/pulls -F title=t -f head=h -f base=main",
                      "gh api -X PATCH https://api.github.com/repos/cartwmic/x/pulls/1 --field=title=t",
                      "gh api -X PATCH repos/cartwmic/x/pulls/1/ -f state=open -f title=t",
-                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title other && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",   # a different title
-                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",                  # a check with no title
-                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title t || gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",        # not and-listed
-                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title t; gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",
                      "sh -c 'gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t'",
-                     "echo ok && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t"]
+                     "echo ok && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",
+                     # a check in front no longer lets a REST title through: the one checked route is `pr-open --edit N --body-file F --title T`
+                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title t && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",
+                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title other && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t",
+                     "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t"]
     TITLE_ISSUES_REFUSED = ["gh api -X PATCH repos/cartwmic/x/issues/1 -f title=t", "gh api repos/cartwmic/x/issues/12/ -XPATCH -Ftitle=t"]
     TITLE_FILE_REFUSED = ["gh api -X PATCH repos/cartwmic/x/pulls/1 -F title=@/tmp/t", "gh api -X PATCH repos/cartwmic/x/pulls/1 -Ftitle=@-", "gh api -X PATCH repos/cartwmic/x/pulls/1 --field=title=@/tmp/t"]
 
-    def test_a_pulls_call_that_sets_a_title_the_check_was_not_given_is_refused(self):
+    def test_a_pulls_call_that_sets_a_title_is_refused_whatever_check_came_first(self):
         for text in self.TITLE_REFUSED:
             with self.subTest(text=text):
                 message = check(text) or ""
-                self.assertIn("`gh api` that sets a pull request title", message)
-                self.assertIn("was not given", message)
-                self.assertIn("pr-body-check --body-file F --title T && gh api", message)
-                self.assertIn("`pr-open --edit N --body-file F --title T`", message)
+                self.assertIn("sets the title or body of a pull request", message)
+                self.assertIn("`pr-open --edit N --body-file F [--title T]`", message)
 
     def test_a_patch_on_an_issue_number_that_sets_a_title_is_refused_for_it_can_rename_a_pr(self):
         for text in self.TITLE_ISSUES_REFUSED:
             with self.subTest(text=text):
                 message = check(text) or ""
-                self.assertIn("a pull request is an issue too", message)
-                self.assertIn("gh issue edit N --title T", message)
+                self.assertIn("the hook cannot tell a PR number from an issue number", message)
+                self.assertIn("dotfiles issue 890", message)
 
-    def test_a_title_read_from_a_file_is_refused_even_when_the_check_got_the_same_text(self):
+    def test_a_title_read_from_a_file_is_refused_with_or_without_a_check_in_front(self):
         for text in self.TITLE_FILE_REFUSED:
             with self.subTest(text=text):
                 title = text.split("title=")[1].split()[0]
                 for chained in (text, "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title %s && %s" % (title, text)):
-                    message = check(chained) or ""
-                    self.assertIn("read from a file", message)
-        self.assertIn("-f title=T", check(self.TITLE_FILE_REFUSED[0]))
+                    self.assertIn("pr-open", check(chained) or "")
 
-    def test_every_title_field_must_have_been_given_to_the_check(self):
-        both = "gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=a -F title=b"
-        self.assertIn("was not given", check("pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title b && " + both))
-        self.assertIsNone(check("pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title a && pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title b && " + both))
-
-    def test_a_body_with_the_title_still_gets_the_body_refusal(self):
-        message = check("pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title t && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=t -f body=hi") or ""
-        self.assertIn("`gh api` that sets a pull request body", message)
+    def test_a_field_the_table_does_not_know_and_a_flag_it_does_not_know_are_refused(self):
+        for text in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -f subtitle=t", "gh api --newflag v -X PATCH repos/cartwmic/x/pulls/1 -f body=x", "gh api repos/cartwmic/x/contents/a --newflag"):
+            with self.subTest(text=text):
+                message = check(text) or ""
+                self.assertIn("gh_surface.py", message)
 
     def test_the_title_rule_runs_on_the_work_profile_and_not_on_termux(self):
         self.assertIsNotNone(check(self.TITLE_REFUSED[0], profile="axon-work-computer"))
@@ -776,7 +773,8 @@ class PrBodyViaApi(unittest.TestCase):
 
 
 class PrBodyViaApiLog(unittest.TestCase):
-    """Each refusal of a gh api body write is one JSON line in the guard log (principle 14): reason, method and endpoint, and the command with every field value redacted. An allowed call writes none."""
+    """Each refusal of a gh api write is one JSON line in the guard log (principle 14): the route gh_surface read (method and path, no query), the effects, and whether the table lists
+    the command. No field value, header, query string or file name reaches it. An allowed call writes none."""
     SECRET = "ghp_notARealToken123456789"
 
     def setUp(self):
@@ -804,11 +802,9 @@ class PrBodyViaApiLog(unittest.TestCase):
         run = self.run_hook("gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=hello-body-text")
         self.assertEqual(run.returncode, 2)
         (record,) = self.records()
-        self.assertEqual((record["action"], record["rule"], record["tool"], record["matched"]), ("refuse", "pr_body", "Bash", "PATCH repos/cartwmic/x/pulls/1"))
+        self.assertEqual((record["action"], record["rule"], record["tool"], record["matched"]), ("refuse", "pr_body", "Bash", "gh api PATCH repos/cartwmic/x/pulls/1"))
         self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
-        self.assertIn("PATCH", record["reason"])
-        self.assertIn("pulls", record["reason"])
-        self.assertEqual(record["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 -f body=<redacted>")
+        self.assertEqual((record["reason"], record["effects"]), ("refused by the gh_surface table", "body"))
         self.assertNotIn("hello-body-text", self.log.read_text())
 
     def test_a_title_refusal_logs_its_reason(self):
@@ -821,17 +817,13 @@ class PrBodyViaApiLog(unittest.TestCase):
         self.assertEqual(run.returncode, 2)
         self.assertNotIn("reason", self.records()[-1])
 
-    def test_a_title_refusal_writes_one_line_with_the_title_redacted(self):
-        run = self.run_hook("gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=hello-title-text -f state=open")
-        self.assertEqual(run.returncode, 2)
-        self.assertIn("`gh api` that sets a pull request title", run.stderr)
-        (record,) = self.records()
-        self.assertEqual((record["action"], record["rule"], record["matched"], record["reason"]), ("refuse", "pr_body", "PATCH repos/cartwmic/x/pulls/1", "title not given to the check"))
-        self.assertEqual(record["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=<redacted> -f state=<redacted>")
+    def test_a_title_written_through_the_api_is_refused_with_or_without_a_check(self):
+        for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=hello-title-text -f state=open",
+                        "pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title hello-title-text && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=hello-title-text"):
+            self.assertEqual(self.run_hook(command).returncode, 2)
+        self.assertEqual([(r["rule"], r["matched"], r["effects"]) for r in self.records()], [("pr_body", "gh api PATCH repos/cartwmic/x/pulls/1", "other title"),
+                                                                                           ("pr_body", "gh api PATCH repos/cartwmic/x/pulls/1", "title")])
         self.assertNotIn("hello-title-text", self.log.read_text())
-        chained = self.run_hook("pr-body-check --body-file /tmp/pr-1-body.aB3xY9 --title hello-title-text && gh api -X PATCH repos/cartwmic/x/pulls/1 -f title=hello-title-text")
-        self.assertEqual(chained.returncode, 0)
-        self.assertEqual(len(self.records()), 1)
 
     def test_the_record_never_holds_a_body_a_header_a_token_or_a_query(self):
         for command in ("gh api -X PATCH repos/cartwmic/x/pulls/1 -H 'Authorization: token %s' -f body=%s -f title=%s" % ((self.SECRET,) * 3),
@@ -840,15 +832,14 @@ class PrBodyViaApiLog(unittest.TestCase):
                         "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field=body=%s --field=title=%s" % ((self.SECRET,) * 2)):  # attached values: one word each
             self.assertEqual(self.run_hook(command).returncode, 2)
         self.assertNotIn(self.SECRET, self.log.read_text())
-        self.assertEqual(len(self.records()), 4)
-        self.assertEqual([r["matched"] for r in self.records()], ["PATCH repos/cartwmic/x/pulls/1", "POST repos/cartwmic/x/pulls", "PATCH repos/cartwmic/x/issues/4", "PATCH repos/cartwmic/x/pulls/1"])
-        self.assertEqual(self.records()[-1]["command"], "gh api -X PATCH repos/cartwmic/x/pulls/1 --raw-field body=<redacted> --field title=<redacted>")
+        self.assertEqual([r["matched"] for r in self.records()], ["gh api PATCH repos/cartwmic/x/pulls/1", "gh api POST repos/cartwmic/x/pulls", "gh api PATCH repos/cartwmic/x/issues/4",
+                                                                   "gh api PATCH repos/cartwmic/x/pulls/1"])
 
-    def test_an_input_file_refusal_names_the_file_and_says_input(self):
+    def test_an_input_file_refusal_logs_the_route_and_not_the_file(self):
         self.assertEqual(self.run_hook("gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json").returncode, 2)
         (record,) = self.records()
-        self.assertIn("--input", record["reason"])
-        self.assertEqual(record["command"], "gh api -X POST repos/cartwmic/x/pulls --input /tmp/pr.json")
+        self.assertEqual((record["matched"], record["effects"]), ("gh api POST repos/cartwmic/x/pulls", "body issue-create pr-create title".replace("issue-create ", "")))
+        self.assertNotIn("/tmp/pr.json", self.log.read_text())
 
 
 class PrBodyNamesFileListFlags(unittest.TestCase):
@@ -1462,7 +1453,7 @@ class DoorDelivery(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.hooks = Path(self.tmp) / "hooks"
         self.hooks.mkdir()
-        for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+        for name in ("refuse_pattern_kill.py", "bash_rules.py", "gh_surface.py"):
             shutil.copy(HOOKS / name, self.hooks / name)
         self.state = Path(self.tmp) / "state"
         (self.state / "t3-hook").mkdir(parents=True)
@@ -1685,7 +1676,7 @@ class Hook(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp()
         cls.hooks = Path(cls.tmp) / "hooks"
         cls.hooks.mkdir()
-        for name in ("refuse_pattern_kill.py", "bash_rules.py"):
+        for name in ("refuse_pattern_kill.py", "bash_rules.py", "gh_surface.py"):
             shutil.copy(HOOKS / name, cls.hooks / name)
 
     @classmethod
