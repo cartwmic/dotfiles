@@ -22,6 +22,8 @@ Rust (.rs, and Cargo.toml for the edges between crates) is parsed by rust_import
 and `use <workspace crate>::` (also written inline in code) make file edges, and a path or workspace dependency in a Cargo.toml makes an
 edge from that Cargo.toml to the one it names. `mod_edges` lists the `mod x;` edges: they are in `edges` and `dir_edges` too, but left out of both `cycles` lists (file and dir),
 because a child that uses `super::` always closes a loop with the parent that declares it.
+The same pair of files is left out whichever way it was written, so a parent's own `use child::...` of the child it declares is also out of the cycle input: it is the
+same parent-to-child pair as its `mod child;`, and a loop through that pair is the declaration plus the child's `super::`, not a dependency cycle.
 An `import type`, `export type ... from` or `import { type A }` (every name a type) is erased at runtime and makes no edge.
 path_refs maps path strings in config and script files to the files or
 directories they name.

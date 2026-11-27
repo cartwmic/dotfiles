@@ -22,6 +22,7 @@ class SecurityRule(unittest.TestCase):
 class RegisterLabels(unittest.TestCase):
     def test_the_label_is_named_where_the_design_has_a_place_for_it(self):
         self.assertIn("in the `Inputs used` header line of `DESIGN.md` (label, file, commit)", SKILL)
+        self.assertIn("Inputs used (given / inferred; with several registers, each one's label, file and commit)", SKILL)  # the header template
         self.assertNotIn("Inputs list of Section 1", SKILL)  # Section 1 is Orientation: it has no Inputs list
 
 

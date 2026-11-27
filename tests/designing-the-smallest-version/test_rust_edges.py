@@ -152,6 +152,61 @@ class ModEdgesAndDirCycles(unittest.TestCase):
         self.assertEqual(dir_pairs, {("src", "src/a"), ("src/a", "src")})  # both edges are listed
         self.assertEqual(out["cycles"], {"dir": [], "file": []})  # but `mod b;` over `use super::` is no loop
 
+    def test_a_parents_own_use_of_its_child_is_left_out_of_the_cycles_too(self):
+        tmp = Path(tempfile.mkdtemp(prefix="rust_parent_use-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        make_repo(tmp / "solo", dict(ROOT_CRATE, **{"src/a.rs": "mod b;\nuse b::f;\npub struct A;\n"}))
+        out = facts(tmp / "solo")
+        self.assertIn(["src/a.rs", "src/a/b.rs"], out["edges"])
+        self.assertEqual(out["cycles"]["file"], [])  # the `use b::f` pair is the `mod b;` pair
+
+LAYOUT = {
+    "Cargo.toml": '[workspace]\nmembers = ["crates/a", "crates/b"]\n',
+    "crates/a/Cargo.toml": '[package]\nname = "lay-a"\nversion = "0.1.0"\n\n[dependencies]\nlay-b = { path = "../b" }\n',
+    "crates/a/src/lib.rs": "pub fn f() {}\n",
+    "crates/b/Cargo.toml": '[package]\nname = "lay-b"\nversion = "0.1.0"\n',
+    "crates/b/src/lib.rs": '#[path = "other/place.rs"]\npub mod renamed;\npub mod inner;\n',
+    "crates/b/src/other/place.rs": "pub struct P;\n",
+    "crates/b/src/inner/mod.rs": "pub mod leaf;\nuse self::leaf::deep::Z;\npub fn g(_: Z) {}\n",
+    "crates/b/src/inner/leaf.rs": "pub mod deep;\n",
+    "crates/b/src/inner/leaf/deep.rs": "pub struct Z;\n",
+    "crates/b/src/shared.rs": "pub fn s() {}\n",
+    "crates/b/tests/it.rs": '#[path = "../src/shared.rs"]\nmod shared;\n#[test]\nfn t() { shared::s(); }\n',
+}
+
+
+class NamedCases(unittest.TestCase):
+    """`use self::`, a direct `path =` dependency, `#[path]` modules and `x/mod.rs`: each has an edge here that only that case can make."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="rust_layout-"))
+        make_repo(cls.tmp / "lay", LAYOUT)
+        cls.facts = facts(cls.tmp / "lay")
+        cls.edges = {tuple(e) for e in cls.facts["edges"]}
+        cls.mods = {tuple(e) for e in cls.facts["mod_edges"]}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_use_self_reaches_the_module_it_names(self):
+        edge = ("crates/b/src/inner/mod.rs", "crates/b/src/inner/leaf/deep.rs")  # only `use self::leaf::deep::Z` links these two
+        self.assertIn(edge, self.edges)
+        self.assertNotIn(edge, self.mods)
+
+    def test_a_direct_path_dependency_is_a_cargo_edge(self):
+        self.assertIn(("crates/a/Cargo.toml", "crates/b/Cargo.toml"), self.edges)  # lay-b = { path = "../b" }, no `workspace = true`
+
+    def test_a_path_attribute_names_the_file_of_a_module(self):
+        self.assertIn(("crates/b/src/lib.rs", "crates/b/src/other/place.rs"), self.mods)
+        self.assertIn(("crates/b/tests/it.rs", "crates/b/src/shared.rs"), self.mods)  # how a test crate pulls in the source it tests
+
+    def test_a_module_may_be_x_slash_mod_rs_and_its_children_sit_beside_it(self):
+        self.assertIn(("crates/b/src/lib.rs", "crates/b/src/inner/mod.rs"), self.mods)
+        self.assertIn(("crates/b/src/inner/mod.rs", "crates/b/src/inner/leaf.rs"), self.mods)
+
+
 class NoTomllibNeededWithoutCargo(unittest.TestCase):
     def test_a_repo_without_cargo_toml_runs_where_tomllib_is_missing(self):
         tmp = Path(tempfile.mkdtemp(prefix="no_toml-"))

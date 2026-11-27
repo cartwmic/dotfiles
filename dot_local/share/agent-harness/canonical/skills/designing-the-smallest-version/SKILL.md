@@ -89,7 +89,7 @@ The target reflects the Step 4b fixes: a fix that is not in a decision is not a 
 # Design: <scope>
 Snapshot of <repo> at <sha7> on <date>. Not maintained: it records the code at that commit, not today's.
 snapshot: <YYYY-MM-DD> at <full sha>   (the pinned rev from Step 1; `no-git` for an archive)
-Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that do not exist in the repo · Rev (start / end) · Inputs used (given / inferred) · In-flight work relied on (and its state) · Top 3 decisions
+Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that do not exist in the repo · Rev (start / end) · Inputs used (given / inferred; with several registers, each one's label, file and commit) · In-flight work relied on (and its state) · Top 3 decisions
 
 ## 1. Orientation            (≤1 page: what it is, entry points, size, how a change is proven, where to start; Evidence: the commands behind every number)
 ## 2. What exists            (A: parts table with kind, edge list, diagram, excluded trees. B: what we lean on, the pattern to copy, what is absent)
