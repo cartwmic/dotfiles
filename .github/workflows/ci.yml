@@ -2,6 +2,7 @@ name: CI
 
 # Linux tests (job `tests`), the release-pin check (job `release-pins`) and macOS mise tests (job `mise-tests`).
 # `tests` runs scripts/ci-linux.sh, which installs nothing: CI installs chezmoi and the apt packages first.
+# chezmoi and mise come from scripts/ci-install-tool.sh (pinned release file, retried, sha256 in scripts/ci-tool-pins.txt), not from the tools' install-script sites.
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
 #
@@ -50,9 +51,9 @@ jobs:
       - name: Install chezmoi (render test uses it)
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
+          scripts/ci-install-tool.sh chezmoi
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/chezmoi" --version
       - name: apt packages for the Linux suites (zsh, lsof, rsync, openssh-server, bubblewrap)
         run: sudo apt-get install -y -qq zsh lsof rsync openssh-server bubblewrap >/dev/null
       # A commit that cuts text from an existing test needs a `Test-edit:` line in its message (dotfiles#629 commit 236a1ce). Its own unit
@@ -131,10 +132,11 @@ jobs:
       - name: Install chezmoi and mise (pinned to the dev-machine versions)
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/.local/bin" -t v2.71.1
-          curl -fsSL https://mise.run | MISE_VERSION=v2026.7.18 sh
+          scripts/ci-install-tool.sh chezmoi
+          scripts/ci-install-tool.sh mise
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/chezmoi" --version
+          "$HOME/.local/bin/mise" --version
       # Includes one expectedFailure (termux palette extra-keys label).
       - name: Mise task tests
         run: python3 -m unittest discover -s tests/mise -v
