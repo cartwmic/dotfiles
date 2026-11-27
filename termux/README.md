@@ -11,7 +11,7 @@ phone, set `profile: "termux"` and `chezmoi apply` owns:
 | `~/.termux/colors.properties` | `dot_termux/colors.properties` |
 | `~/.termux/font.ttf` | `dot_termux/font.ttf` |
 | `~/bin/zellij-jump` | `bin/executable_zellij-jump` |
-| `~/bin/herdr-jump` | `bin/executable_herdr-jump` |
+| `~/bin/resume-ssh` | `bin/executable_resume-ssh` |
 | `~/bin/passage-review` | `bin/executable_passage-review` |
 | `~/.local/bin/passage-review` | `dot_local/bin/executable_passage-review` |
 | `~/.local/share/passage-review/` | `dot_local/share/passage-review/` |
@@ -62,22 +62,19 @@ After a phone-side chezmoi apply, run `termux-reload-settings` while Termux is
 visible. Confirm every swipe on-device; a desktop config check does not prove
 Android touch behavior.
 
-## Herdr from the phone
+## The Mac from the phone
 
-Termux is only the phone-side SSH/jump client. Herdr 0.9.1 and its compatible
-protocol-22 server run on the desktop; no Herdr server or desktop config is
-installed on the phone. From the phone's Termux shell, attach to the managed
-desktop alias, then to that desktop's running Herdr session:
+Termux is only the phone-side SSH client. From the phone's Termux shell, open
+a login shell on the managed desktop alias:
 
 ```sh
 ssh macbook
-herdr
 ```
 
-The phone sees the same desktop session as other clients. For workspace/tab/pane
-navigation, recap semantics and the live-prompt/recap distinction, see the root
-product [README](../README.md). Local narrow PTY or width emulation is layout
-evidence, not physical Termux-over-SSH evidence.
+`exec ~/bin/resume-ssh` (or the `resume-ssh` shell function) restores inbound
+SSH and opens two named sessions, `macbook` and `mac-kvm`, each a plain login
+shell on that machine. Local narrow PTY or width emulation is layout evidence,
+not physical Termux-over-SSH evidence.
 
 ## Rebuild a phone (Mac-driven)
 
@@ -224,7 +221,7 @@ Both the old and candidate clients can coexist during testing.
 Enable the new tunnel on Android as a split tunnel (`$HOMELAB_LAN_CIDR` and
 `$HOMELAB_WG_CIDR`, DNS `$HOMELAB_ROUTER`, endpoint `cartwmic.com:61583`). Enable
 always-on VPN **without lockdown** on-device. Prove direct candidate SSH and
-`ssh macbook` -> visible Herdr (not just installed binaries), then test an
+`ssh macbook` -> a visible login shell, then test an
 external network when available. To switch the Mac alias after that proof:
 
 ```bash
@@ -268,15 +265,14 @@ addresses live only in local chezmoi data.
    HTTPS trust and DNS both on Wi-Fi and over the WireGuard path. The Pi ntfy
    extension that published turn pushes to `https://ntfy.internal.cartwmic.com/pi`
    was removed on 2026-10-28, so test a jump with a hand-made Click URL. A Termux
-   session must be named **`macbook`** to focus that SSH/Herdr path.
+   session must be named **`macbook`** to focus that SSH path.
    Name the interactive Work Mac `ssh mac-kvm` session **`mac-kvm`**.
 3. Restore/configure Whisperian's provider/profile/history through supported
    Android/app UI, grant microphone and its keyboard/Accessibility controls.
    App-private data has no proven export/import path on this unrooted phone;
    installing the APK does **not** prove its settings were restored.
-4. In the phone's visible Termux terminal run `ssh macbook`, then `herdr`, and
-   select the intended workspace/tab/pane. Verify a notification tap returns
-   to that pane. Work-laptop access is **interactive `ssh mac-kvm`**, never
+4. In the phone's visible Termux terminal run `ssh macbook` and confirm a
+   login shell opens. Work-laptop access is **interactive `ssh mac-kvm`**, never
    `ssh laptop` as a replacement.
 
 ```bash
@@ -287,12 +283,11 @@ python3 -m unittest discover -s termux/tests -v # scripted CLI, no live mutation
 ```
 
 `verify` checks APK signers, key fingerprints, USB key-only SSH, managed
-phone files, and phone-to-Mac Herdr availability; without the attended flag
+phone files, and phone-to-Mac login shell; without the attended flag
 it deliberately exits nonzero. The flag records an **operator attestation**,
 not an automated observation of the Android screen. A live reboot and remote
-network test remain separate, deferred checks. The existing Motorola was
-previously observed showing this Pi conversation inside Herdr; none of these
-scripts wipe or re-run that destructive setup as part of tests.
+network test remain separate, deferred checks. None of these scripts wipe or
+re-run the destructive setup as part of tests.
 
 ## Phone-owned profile (manual fallback)
 
@@ -339,12 +334,10 @@ a missing entry fails the apply.
   multiplexing disabled: one interactive shell, no remote commands, SFTP or
   forwarding. The Mac user bridge must be running (configured to start at login).
 - `ssh whonix-gw` / `ssh whonix-ws` → Whonix via `~/.ssh/whonix-homelab`
-- Jump handlers live in `~/bin/{zellij,herdr}-jump`. Usage: `<id> [host]`.
+- The jump handler lives in `~/bin/zellij-jump`. Usage: `<id> [host]`.
   Unset identity (missing host) defaults to `remote`. A present host must be a
-  grammar-valid Termux SSH alias in `{remote, cartwmic-server, macbook, laptop,
-  mac-kvm}` or the script exits without ssh. `mac-kvm` routes through the
-  NanoKVM's single-purpose, non-PTY Herdr control request, not SSH remote
-  execution on the Work Mac; the Work Mac bridge must have a live shell.
+  grammar-valid Termux SSH alias in `{remote, cartwmic-server, macbook, laptop}`
+  or the script exits without ssh.
 - ntfy Click URLs carry a host query (`?host=<alias>`) when the producer stamps
   that alias. Termux session name equals alias: the visible session must be named
   exactly the stamped SSH alias for focus. A miss still foregrounds Termux;
@@ -418,5 +411,4 @@ From a machine with the `personal` profile (needs `Host ssh-phone` in SSH config
 ```bash
 scp ssh-phone:.termux/termux.properties dot_termux/termux.properties
 scp ssh-phone:bin/zellij-jump bin/executable_zellij-jump
-scp ssh-phone:bin/herdr-jump bin/executable_herdr-jump
 ```

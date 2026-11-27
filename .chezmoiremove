@@ -170,6 +170,11 @@ bin/herdr-overview-proof
 # A machine that deployed it still has the directory, which chezmoi does not delete by itself.
 .local/share/pi-patches/cursor-provider
 
+# Retired 2026-11-27: the phone notification jump into a Herdr pane (herdr-jump on
+# the phone, herdr-agent-jump on the Mac). Nothing writes a termux://herdr-jump link.
+.local/bin/herdr-agent-jump
+bin/herdr-jump
+
 # Retired 2026-11-27: the herdr-scenario proof of the Pi prompt inspector, which drove a private herdr session. herdr is dropped as a
 # multiplexer. Prune once every machine has applied.
 .pi/agent/extensions/inspect-prompt/herdr-scenario.py
