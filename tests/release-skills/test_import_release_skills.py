@@ -366,6 +366,110 @@ class ImportTests(Fixture):
         self.assertEqual(self.tree_state(), {})
 
 
+class CheckTests(Fixture):
+    """`check`: the import as a dry run on an untagged commit of a local git checkout. The bundles in the source are the ones a first import wrote."""
+
+    PINS = "".join('%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (tool, archive, tool)
+                   for tool, archive in (("loop-engine", "loop-cli"), ("lean-change", "lean-change-provider"), ("policy-document", "policy-document-provider"),
+                                         ("research", "research-provider"), ("bookends-check", "bookends-check")))
+    PLAN = {"releases": [{"artifacts": ["%s-aarch64-apple-darwin.tar.xz" % a for a in ("loop-cli", "lean-change-provider", "policy-document-provider", "research-provider", "bookends-check")]
+                          + ["source.tar.gz", "loop-cli-installer.sh"]}]}
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.do_import("--apply").returncode, 0)
+        (self.source / "dot_config/mise/config.toml").write_text(self.PINS)
+        self.repo = self.dir / "release-repo"
+        self.write_repo(GOOD_TREE)
+        self.plan = self.dir / "plan.json"
+        self.plan.write_text(json.dumps(self.PLAN))
+
+    def git(self, *argv):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *argv], check=True, capture_output=True)
+
+    def write_repo(self, files):
+        """Commit exactly these files to the release checkout."""
+        self.repo.mkdir(exist_ok=True)
+        if not (self.repo / ".git").exists():
+            self.git("init", "-q")
+        for path in self.repo.rglob("*"):
+            if path.is_file() and ".git" not in path.relative_to(self.repo).parts:
+                path.unlink()
+        for path, data in files.items():
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_bytes(data)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", "release")
+
+    def check(self, *flags):
+        return self.run_tool("check", "--repo-dir", str(self.repo), "--source", str(self.source), *flags)
+
+    def test_a_release_the_bump_can_take_passes_and_nothing_is_written(self):
+        before = self.tree_state()
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("5 pins resolve", result.stdout)
+        self.assertEqual(self.tree_state(), before)
+
+    def test_it_needs_neither_a_published_release_nor_gh(self):
+        self.state_path.write_text(json.dumps({"releases": {}, "refs": {}, "tag_objects": {}, "trees": {}, "tarballs": {}}))
+        self.assertEqual(self.check().returncode, 0)
+
+    def test_a_commit_that_removes_a_file_the_importer_lists_stops_naming_the_file(self):
+        files = dict(GOOD_TREE)
+        del files["docs/operational-ux-capture.schema.json"]
+        self.write_repo(files)
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("docs/operational-ux-capture.schema.json", result.stderr)
+        self.assertIn("ROOT_REFERENCES", result.stderr)
+
+    def test_a_file_the_bundle_holds_that_the_commit_no_longer_ships_stops_naming_the_file(self):
+        files = dict(GOOD_TREE)
+        del files["crates/foo-provider/docs/d.md"]
+        self.write_repo(files)
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("using-foo-provider/references/docs/d.md", result.stderr)
+        self.assertIn(".chezmoiremove", result.stderr)
+
+    def test_an_empty_file_stops_it(self):
+        files = dict(GOOD_TREE)
+        files["docs/PRD.md"] = b""
+        self.write_repo(files)
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("docs/PRD.md is empty", result.stderr)
+
+    def test_an_unsafe_file_stops_it(self):
+        self.write_repo(GOOD_TREE)
+        (self.repo / "skills/using-loop-engine/link").symlink_to("SKILL.md")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "link")
+        result = self.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("120000", result.stderr)
+
+    def test_a_pin_that_matches_no_planned_archive_stops_naming_the_pin(self):
+        plan = {"releases": [{"artifacts": [a.replace("loop-cli", "loop-engine-cli") for a in self.PLAN["releases"][0]["artifacts"]]}]}
+        self.plan.write_text(json.dumps(plan))
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pin loop-engine", result.stderr)
+        self.assertIn("^loop-cli-", result.stderr)
+
+    def test_a_config_without_the_five_pins_stops_it(self):
+        (self.source / "dot_config/mise/config.toml").write_text(self.PINS.splitlines(True)[0])
+        result = self.check("--plan", str(self.plan))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("found 1", result.stderr)
+
+    def test_a_revision_that_does_not_exist_stops_it(self):
+        result = self.check("--rev", "no-such-rev")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("git ls-tree", result.stderr)
+
+
 class VerifyDeployedTests(Fixture):
     def setUp(self):
         super().setUp()
