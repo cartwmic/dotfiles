@@ -325,7 +325,7 @@ class AsFoundVersusTarget(unittest.TestCase):
 
 
 class RunLog(unittest.TestCase):
-    """Each run, a refusal included, leaves one record in the run log (design-principles.md §14)."""
+    """Every exit leaves one record in the run log (design-principles.md §14): ok, failed, refused (either input, --out, a usage error); logged.py also records a crash."""
     frs = [("FR1", "DP1"), ("FR2", "DP2")]
 
     def last_record(self, done):
@@ -361,6 +361,21 @@ class RunLog(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         rec, n = self.last_record(done)
         self.assertEqual((n, rec["outcome"], rec["reason"]), (before + 1, "refused", "unreadable as-found input"))
+
+    def test_usage_error_logs_refused(self):
+        before = self.records()
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT), "--bogus"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 2)
+        rec, n = self.last_record(done)
+        self.assertEqual((n, rec["outcome"], rec["exit"]), (before + 1, "refused", 2))
+
+    def test_unwritable_out_logs_refused(self):
+        before = self.records()
+        done = run(build(self.frs, ["DP1", "DP2"]), "--out", "/nonexistent/dir/out.md")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("cannot write --out", done.stderr)
+        rec, n = self.last_record(done)
+        self.assertEqual((n, rec["outcome"], rec["reason"]), (before + 1, "refused", "cannot write --out"))
 
     def test_invalid_tables_log_failed(self):
         before = self.records()

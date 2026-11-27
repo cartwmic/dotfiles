@@ -21,9 +21,9 @@ table. Each table has exactly its columns: a missing, unknown or repeated column
 
 * FRs (at least one): `dp` names the DP that delivers the FR. An empty `dp` is an FR with no DP (unmet). Two FRs may name one DP.
   More than 9 FRs gives a warning, not an error (a zigzag sub-matrix is smaller; a level-1 list should be 5 to 9).
-* DPs: `parts` (optional column) lists the files or modules of the DP, split on `;`. A part in several DPs (a god module) must
-  carry, for each pair of those DPs, an X between them or a row under `## Shared` (`| dp1 | dp2 | reason |`, the reason why the
-  shared part does not couple them). The script lists each pair that has neither under "Fix owed".
+* DPs: `parts` (optional column) lists the files or modules of the DP, split on `;`. A part in several DPs must carry, for
+  each pair of those DPs, an X between them or a row under `## Shared` (`| dp1 | dp2 | reason |`, the reason why the shared
+  part does not couple them). A pair with neither is a god module; the script lists it under "Fix owed".
 * X: one row per off-diagonal cell, "changing DP `dp` to tune its own FR forces a change to keep FR `fr` met". This rule is
   this skill's convention, not Suh's. `reason` is one line. `evidence` is one or more of (split on `;`, `,` or space):
   `path:line` (or `path:3-9`), `cochange:<fileA>+<fileB>`, `commit:<hex sha>`, a finding id (`F-3`, `DF-2`, `U-1`). With
@@ -58,7 +58,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # python3 -I leaves the script's folder off the path
 sys.dont_write_bytecode = True  # the skill folder is deployed; leave no __pycache__ in it
-from runlog import log_run  # noqa: E402
+from logged import logged  # noqa: E402  (writes one run-log record on every exit, through runlog.py)
 
 ID_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_.-]*$')
 EVIDENCE_KINDS = (
@@ -480,7 +480,8 @@ def render(res, label):
     return '\n'.join(out).rstrip() + '\n'
 
 
-def main(argv=None):
+def cli(argv, stats):
+    """The command line: returns the exit code and puts the run's key figures in `stats` (logged.py writes the log record)."""
     ap = argparse.ArgumentParser(description='Check, classify and render one Axiomatic Design matrix (see the module docstring for the input format). '
                                  'The evidence check is format only: it sees that an X cites something, not that the citation shows coupling.')
     ap.add_argument('file', help='markdown tables of FRs, DPs and X cells')
@@ -489,12 +490,12 @@ def main(argv=None):
     ap.add_argument('--label', default='Design matrix', help='heading of the rendered block, e.g. "As found" or "Target"')
     ap.add_argument('--json', action='store_true', help='print the facts as JSON instead of markdown')
     ap.add_argument('--out', help='write the output here instead of stdout')
-    args = ap.parse_args(argv)
+    args = ap.parse_args(argv[1:])
     try:
         data = load(args.file)
     except (OSError, ValueError) as exc:
         sys.stderr.write('design_matrix: %s\n' % exc)
-        log_run('design_matrix.py', 'render', 'refused', reason='unreadable input')
+        stats['reason'] = 'unreadable input'
         return 1
     model, errors = validate(data, target=args.target or bool(args.as_found))
     if data['removed'] and not args.as_found:
@@ -505,7 +506,7 @@ def main(argv=None):
             before, before_errors = validate(load(args.as_found))
         except (OSError, ValueError) as exc:
             sys.stderr.write('design_matrix: %s\n' % exc)
-            log_run('design_matrix.py', 'render', 'refused', reason='unreadable as-found input')
+            stats['reason'] = 'unreadable as-found input'
             return 1
         errors += ['as-found: ' + e for e in before_errors]
         if not before_errors:
@@ -516,7 +517,7 @@ def main(argv=None):
         sys.stderr.write('design_matrix: %d problem(s) in %s\n' % (len(errors), args.file))
         for e in errors:
             sys.stderr.write('  - %s\n' % e)
-        log_run('design_matrix.py', 'render', 'failed', errors=len(errors))
+        stats['errors'] = len(errors)
         return 1
     res = analyse(model, load_scc())
     if changes is not None:
@@ -525,12 +526,21 @@ def main(argv=None):
         sys.stderr.write('design_matrix: warning: %s\n' % w)
     text = json.dumps(res, indent=2, sort_keys=True) + '\n' if args.json else render(res, args.label)
     if args.out:
-        with open(args.out, 'w', encoding='utf-8') as fh:
-            fh.write(text)
+        try:
+            with open(args.out, 'w', encoding='utf-8') as fh:
+                fh.write(text)
+        except OSError as exc:
+            sys.stderr.write('design_matrix: cannot write --out: %s\n' % exc.strerror)
+            stats['reason'] = 'cannot write --out'
+            return 2
     else:
         sys.stdout.write(text)
-    log_run('design_matrix.py', 'render', 'ok', frs=len(res['frs']), dps=len(res['dps']), x=len(res['x']), cls=res['class'])
+    stats.update(frs=len(res['frs']), dps=len(res['dps']), x=len(res['x']), cls=res['class'])
     return 0
+
+
+def main(argv=None):
+    return logged('design_matrix.py', 'render', cli, [sys.argv[0]] + list(sys.argv[1:] if argv is None else argv))
 
 
 if __name__ == '__main__':
