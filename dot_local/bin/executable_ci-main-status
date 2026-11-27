@@ -1395,7 +1395,6 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
         code = 1
     reds = ([(newest_red, newest[2])] if newest_red else []) + [(sha, rec) for sha, rec, _ in hidden]
     if code == 1 and reds and pr is not None:
-        del REFUSALS[:]
         allowed, pinned = judge_reds(name, spec, reds, pr)
         if not allowed and log is not None:
             log["refused"] = list(REFUSALS)   # which rule said no, and why, for the log: stderr is gone when the terminal is
