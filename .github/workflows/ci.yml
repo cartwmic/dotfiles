@@ -5,6 +5,8 @@ name: CI
 # chezmoi and mise come from scripts/ci-install-tool.sh (pinned release file, retried, sha256 in scripts/ci-tool-pins.txt), not from the tools' install-script sites.
 # Not run here: *proof.py / journey scripts that drive a real Pi, Herdr or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
+# Every test file (test_*.py, *_test.py, *.test.ts/mjs/js, *.spec.*) is run by this workflow or scripts/ci-linux.sh, or named with its reason in
+# scripts/ci-not-run.txt; tests/ci-coverage (scripts/check-ci-coverage.py) fails on one that is neither.
 #
 # Every run (pull request, push to main, and workflow_dispatch to start an untested main by hand) runs `tests`, `release-pins` and
 # `mise-tests`. The macOS job has no path filter: a path list goes stale, and a filtered required check hangs as "expected".
