@@ -11,5 +11,5 @@ Source-only tests (`./tests/` is in .chezmoiignore).
 - WorkMatrixTests are the same matrix for the work coordinator (label `local.coordinatord.work`, `coordinator-work` markers), adoption of the hand-made service included; its setup script is a stub that records its arguments and PATH.
 - RetiredFilesTest (`test_retired_files.py`) runs a real `chezmoi apply` of `.chezmoiremove` into a scratch HOME: personal removes the retired `retrod.service` and keeps `coordinatord.service`; the work profile keeps both.
 - `mutate.py` breaks the reconcile script (restart on a changed unit, opt-out of something never started, adopt by bootstrapping, delete state, the work variant's label, state, PATH, setup arguments, ...) and the files that feed it (`.chezmoiignore`, the wrapper, the work unit template). Each must fail the suite. `INSTANCES_SCRIPT_UNDER_TEST` points the suite at the mutated copy of the script; other files are edited in place for the run and restored.
-- Nothing here reads or writes the real home, the real chezmoi state, launchd or Herdr.
+- Nothing here reads or writes the real home, the real chezmoi state or launchd.
 - R11 (marker writes must not use a POSIX special builtin like ':'; dash aborts on a redirect error) is checked by the marker tests under CI's /bin/sh (dash); macOS sh does not abort, so mutate.py has no mutation for it.

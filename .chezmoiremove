@@ -105,6 +105,11 @@ Library/LaunchAgents/com.cartwmic.sync-claude-pi-auth.plist
 # Prune this entry once every machine has applied.
 .local/share/agent-harness/canonical/skills/auditing-clean-architecture
 
+# Retired 2026-11-27: the herdr skill (herdr is no longer used as a multiplexer; agents run in T3 threads).
+# Same mechanism as above: chezmoi removes this on apply, then apply_harness_config.sh prunes the dangling skill links.
+# Prune this entry once every machine has applied.
+.local/share/agent-harness/canonical/skills/herdr
+
 # Retired 2026-08-04: Termux config is first-class via profile "termux"
 # (dot_termux / bin/*-jump / SSH modify). Remove the old ~/termux staging tree
 # that sync.sh previously pushed from.

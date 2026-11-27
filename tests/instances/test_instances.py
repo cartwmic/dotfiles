@@ -1,6 +1,6 @@
 """Instances: LaunchAgent units, the opt-in flag, and the reconcile script that starts and stops them.
 
-Three layers, none of which touches the real home, the real chezmoi state, launchd or Herdr:
+Three layers, none of which touches the real home, the real chezmoi state or launchd:
 
   RenderTests    the unit templates render byte-identical to the deployed units (golden files); local data changes only the checkout path.
   MatrixTests    the reconcile script run directly in a scratch HOME with a stub launchctl that keeps loaded/not-loaded state and records every
@@ -193,7 +193,7 @@ class Scratch:
         self.bin = self.base / "bin"
         write_exec(self.bin / "launchctl", STUB_LAUNCHCTL)
         self.tools = self.base / "tools"
-        for tool in ("node", "herdr", "op"):
+        for tool in ("node", "op"):
             write_exec(self.tools / tool, "#!/bin/sh\nexit 0\n")
         # git: "-C DIR rev-parse HEAD" prints a commit unless GIT_FAIL exists in the stub dir; anything else is a no-op.
         write_exec(self.tools / "git", '#!/bin/sh\n[ -e "$STUB_DIR/GIT_FAIL" ] && { echo "fatal: not a git repository" >&2; exit 128; }\n'

@@ -22,8 +22,8 @@
   launch arguments.
 */ -}}
 {{- $keeps := dict
-      "coordinator" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "herdr" "no-ai-slop" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
-      "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "creating-formal-verification" "deriving-readable-docs" "herdr" "hill-climb" "no-ai-slop" "omarchy" "research-method" "statechart" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
+      "coordinator" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "deriving-readable-docs" "no-ai-slop" "omarchy" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
+      "lead" (list "coordinating-loop-engine" "correcting-repeated-mistakes" "creating-formal-verification" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "research-method" "statechart" "using-lean-change-provider" "using-loop-engine" "using-shartifacts")
       "builder" (list "correcting-repeated-mistakes" "creating-formal-verification" "deriving-readable-docs" "hill-climb" "no-ai-slop" "omarchy" "research-method" "statechart" "systematic-debugging" "using-lean-change-provider" "using-loop-engine" "using-policy-document-provider")
       "planner" (list "correcting-repeated-mistakes" "designing-the-smallest-version" "no-ai-slop" "research-method")
       "reviewer" (list "correcting-repeated-mistakes" "designing-the-smallest-version" "review-plans" "reviewing-prs" "using-lean-change-provider" "using-loop-engine")
