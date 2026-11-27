@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""pr-redact: take private details out of a merged or closed pull request's description, and do nothing else.
+
+    pr-redact --repo OWNER/REPO --pr N --replacements FILE [--allow-clean] [--dry-run]
+
+FILE holds one replacement per line: the exact string, a tab, then one of the neutral phrases below. The caller never supplies a body. pr-redact reads the
+current description from GitHub, makes exactly those replacements itself in one pass (so a phrase is never searched again), and posts the result. It refuses
+when:
+  - the pull request is open (use `pr-open --edit` for those; `pr-open --edit` still refuses a merged or closed one, so nothing else overwrites its description);
+  - a phrase is not one of the neutral phrases, a string is empty, repeated, or is itself a phrase;
+  - a string does not occur in the current text (a string that only occurs inside a longer listed string counts as absent). `--allow-clean` excuses only the
+    case where NONE of the strings occurs: the description is already clean, nothing is posted, exit 0.
+After the post it reads back what GitHub stored: a body that differs from the text pr-redact computed is a failure (exit 2) and the record says so.
+`--dry-run` does everything except the post and says what it would do. A failed GitHub call changes nothing and says so.
+
+Neutral phrases: "the home folder", "an internal host", "a private address".
+
+Record: one JSON line per run, ${XDG_STATE_HOME:-~/.local/state}/pr-redact/log.jsonl, written on every exit path:
+{utc, repo, pr, outcome (edited|already-clean|dry-run|refused|failed), exit, reason (a fixed code, never text from the strings or from GitHub), replacements (matches), strings (lines),
+ before_sha256, after_sha256 (of the description; null before it is read or when nothing was computed), duration_s}. The strings and phrases are never written. --help writes none.
+A string is named in a message by its line number in FILE only.
+Exit 0 done (or already clean, or dry run); 1 refused; 2 failed. The last line of stderr is `[pr-redact] ERROR: <reason>`.
+Both desktop profiles (docs/gate-coverage.md).
+"""
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+NEUTRAL = ("the home folder", "an internal host", "a private address")
+USAGE = "usage: pr-redact --repo OWNER/REPO --pr N --replacements FILE [--allow-clean] [--dry-run]"
+
+
+class Stop(Exception):
+    def __init__(self, code, reason, message):
+        self.code, self.reason, self.message = code, reason, message
+
+
+def sha(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def parse_args(argv):
+    opts = {"allow_clean": False, "dry_run": False}
+    names = {"--repo": "repo", "--pr": "pr", "--replacements": "replacements"}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            raise SystemExit(print(__doc__.strip()) or 0)
+        if a == "--allow-clean":
+            opts["allow_clean"] = True
+        elif a == "--dry-run":
+            opts["dry_run"] = True
+        elif a in names:
+            if i + 1 >= len(argv):
+                raise Stop(2, "bad-arguments", "%s needs a value. %s" % (a, USAGE))
+            opts[names[a]] = argv[i + 1]
+            i += 1
+        else:
+            raise Stop(2, "bad-arguments", "unknown argument '%s'. %s" % (a, USAGE))
+        i += 1
+    for key in ("repo", "pr", "replacements"):
+        if key not in opts:
+            raise Stop(2, "bad-arguments", "--%s is required. %s" % (key, USAGE))
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", opts["repo"]):
+        raise Stop(2, "bad-arguments", "--repo takes OWNER/REPO. %s" % USAGE)
+    if not opts["pr"].isdigit():
+        raise Stop(2, "bad-arguments", "--pr takes a pull request number. %s" % USAGE)
+    return opts
+
+
+def read_replacements(path):
+    """[(string, phrase)] from a file of `string TAB phrase` lines. Every guard names the line, never the string."""
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        raise Stop(2, "replacements-unreadable", "cannot read the replacements file")
+    if lines and lines[-1] == "":
+        lines.pop()
+    pairs, seen = [], set()
+    for n, line in enumerate(lines, 1):
+        if "\t" not in line:
+            raise Stop(1, "line-malformed", "replacements line %d is not `string TAB phrase`; nothing was changed" % n)
+        string, phrase = line.rsplit("\t", 1)
+        if phrase not in NEUTRAL:
+            raise Stop(1, "phrase-not-neutral", "replacements line %d: the phrase is not one of the neutral phrases (%s); nothing was changed" % (n, ", ".join(NEUTRAL)))
+        if not string:
+            raise Stop(1, "string-empty", "replacements line %d: the string is empty; nothing was changed" % n)
+        if string in NEUTRAL:
+            raise Stop(1, "string-is-phrase", "replacements line %d: the string is a neutral phrase; nothing was changed" % n)
+        if string in seen:
+            raise Stop(1, "string-repeated", "replacements line %d: the string is already on an earlier line; nothing was changed" % n)
+        seen.add(string)
+        pairs.append((string, phrase))
+    if not pairs:
+        raise Stop(1, "no-replacements", "the replacements file has no lines; nothing was changed")
+    return pairs
+
+
+def gh(args, env):
+    return subprocess.run(["gh", *args], capture_output=True, text=True, env=env)
+
+
+def redact(body, pairs):
+    """(new text, matches per pair). One pass, longest string first, so a phrase is never searched again and a string inside a longer one is not counted twice."""
+    phrase = dict(pairs)
+    pattern = re.compile("|".join(re.escape(s) for s in sorted(phrase, key=len, reverse=True)))
+    counts = dict.fromkeys(phrase, 0)
+
+    def sub(m):
+        counts[m.group(0)] += 1
+        return phrase[m.group(0)]
+
+    return pattern.sub(sub, body), [counts[s] for s, _ in pairs]
+
+
+def run(argv, state):
+    opts = parse_args(argv)
+    state["repo"], state["pr"] = opts["repo"], int(opts["pr"])
+    pairs = read_replacements(opts["replacements"])
+    state["strings"] = len(pairs)
+    env = dict(os.environ, GH_CALLER="pr-redact")
+    ref = "%s#%s" % (opts["repo"], opts["pr"])
+    endpoint = "repos/%s/pulls/%s" % (opts["repo"], opts["pr"])
+    got = gh(["api", endpoint], env)
+    if got.returncode != 0:
+        raise Stop(2, "github-read-failed", "could not read %s from GitHub, so nothing was changed" % ref)
+    try:
+        info = json.loads(got.stdout)
+        body, pr_state = info["body"] or "", info["state"]
+    except (ValueError, KeyError, TypeError):
+        raise Stop(2, "github-read-unreadable", "GitHub's answer for %s could not be read, so nothing was changed" % ref)
+    state["before"] = sha(body)
+    if pr_state != "closed":
+        raise Stop(1, "pull-request-open", "%s is open: use `pr-open --edit` for an open pull request. Nothing was changed" % ref)
+    new, counts = redact(body, pairs)
+    missing = [n for n, c in enumerate(counts, 1) if c == 0]
+    if missing and len(missing) == len(pairs) and opts["allow_clean"]:
+        state.update(outcome="already-clean", reason="", replacements=0, after=state["before"])
+        print("pr-redact: %s already clean: none of the %d strings is in the description; nothing posted" % (ref, len(pairs)))
+        return 0
+    if missing:
+        raise Stop(1, "string-missing", "replacements line%s %s: the string is not in the current description of %s%s; nothing was changed"
+                   % ("s" if len(missing) > 1 else "", ", ".join(map(str, missing)), ref,
+                      " (pass --allow-clean only when every string is absent)" if len(missing) == len(pairs) else ""))
+    state.update(replacements=sum(counts), after=sha(new))
+    summary = "%d replacements of %d strings; sha256 %s -> %s" % (sum(counts), len(pairs), state["before"][:12], state["after"][:12])
+    if opts["dry_run"]:
+        state.update(outcome="dry-run", reason="")
+        print("pr-redact: %s dry run, nothing posted: %s" % (ref, summary))
+        return 0
+    fd, path = tempfile.mkstemp(prefix="pr-redact-body-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(new)
+        sent = gh(["api", "-X", "PATCH", endpoint, "-F", "body=@" + path], env)
+    finally:
+        os.unlink(path)
+    if sent.returncode != 0:
+        raise Stop(2, "github-write-failed", "GitHub refused the change to %s, so its description was not changed" % ref)
+    try:
+        stored = json.loads(sent.stdout)["body"] or ""
+    except (ValueError, KeyError, TypeError):
+        stored = None
+    if stored != new:
+        raise Stop(2, "stored-body-differs", "GitHub's stored description of %s is not the text pr-redact computed (it may have changed or been edited by someone else); read it on GitHub and decide. Nothing more was posted" % ref)
+    state.update(outcome="edited", reason="")
+    print("pr-redact: %s edited: %s" % (ref, summary))
+    return 0
+
+
+def log(state, code):
+    try:
+        base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.environ.get("HOME", "/nonexistent"), ".local/state")
+        os.makedirs(os.path.join(base, "pr-redact"), exist_ok=True)
+        line = {"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "repo": state.get("repo"), "pr": state.get("pr"), "outcome": state["outcome"], "exit": code,
+                "reason": state["reason"], "replacements": state.get("replacements", 0), "strings": state.get("strings", 0), "before_sha256": state.get("before"),
+                "after_sha256": state.get("after"), "duration_s": round(time.time() - state["started"], 2)}
+        with open(os.path.join(base, "pr-redact", "log.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(line) + "\n")
+    except OSError:
+        pass  # a log that cannot be written never changes the exit code
+
+
+def main(argv):
+    state = {"started": time.time(), "outcome": "failed", "reason": "unexpected"}
+    try:
+        code = run(argv, state)
+    except Stop as stop:
+        sys.stderr.write("[pr-redact] ERROR: %s\n" % stop.message)
+        code = stop.code
+        state.update(reason=stop.reason, outcome="refused" if code == 1 else "failed")
+    except Exception as err:  # a bug is reported by type only: its text could hold a string
+        sys.stderr.write("[pr-redact] ERROR: unexpected %s; nothing more was done\n" % type(err).__name__)
+        code = 2
+    log(state, code)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

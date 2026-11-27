@@ -7,6 +7,7 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 | PR body check: `pr-body-check` | yes | yes | `.local/bin/pr-body-check`, `.local/bin/stack-map-merge-check` | `tests/pr-body-check/test_pr_body_check.py`, `tests/stack-map-merge-check/test_stack_map_merge_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Agent record path and import: `pr-record` | yes | yes | `.local/bin/pr-record` | `tests/pr-record/test_pr_record.py`, `tests/profiles/test_gate_coverage.py` |
 | Open or edit a PR through the body check: `pr-open` | yes | yes | `.local/bin/pr-open` | `tests/pr-open/test_pr_open.py`, `tests/profiles/test_gate_coverage.py` |
+| Redact a merged or closed PR's description by exact replacement only: `pr-redact` | yes | yes | `.local/bin/pr-redact` | `tests/pr-redact/test_pr_redact.py`, `tests/profiles/test_gate_coverage.py` |
 | Open an issue through the claims check: `issue-open` | yes | yes | `.local/bin/issue-open`, `.local/bin/claims` | `tests/issue-open/test_issue_open.py`, `tests/profiles/test_gate_coverage.py` |
 | Review-record merge rule: `intent-review-check` | yes | yes | `.local/bin/intent-review-check` | `tests/intent-review-check/test_intent_review_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Merge gate: `ci-main-status --merge-gate` | yes | yes | `.local/bin/ci-main-status` | `tests/ci-main-status/test_ci_main_status.py`, `tests/profiles/test_gate_coverage.py` |

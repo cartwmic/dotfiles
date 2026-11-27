@@ -395,6 +395,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/bin/stack-map-merge-check
 .local/bin/pr-record
 .local/bin/pr-open
+# pr-redact needs only gh, but it belongs with the PR gates: it is the one way to redact a merged description, beside pr-open, which refuses to.
+.local/bin/pr-redact
 .local/bin/intent-review-check
 # issue-open runs claims, which runs the coordinator checkout's claims command.
 .local/bin/issue-open
