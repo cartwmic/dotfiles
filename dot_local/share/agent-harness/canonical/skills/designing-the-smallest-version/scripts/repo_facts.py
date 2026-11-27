@@ -6,7 +6,8 @@
 
 Reads git only and never writes to REPO. The tree is read from `git archive`
 at REV, so the working tree is ignored. Prints one JSON object (or writes
---out). Exit 0 on success; exit 2 with one stderr line on bad arguments, an
+--out). --out never overwrites a facts file with keys this run does not write (a `parts` or `scope` block, or the `edges` a --scope run
+holds only the count of): it exits 2 and leaves the file alone. --summary alone writes no file. Exit 0 on success; exit 2 with one stderr line on bad arguments, an
 unknown rev or a path that is not a git repo.
 
 Globs (--parts first column, --scope): `*` stays within one path segment, `**`
@@ -974,6 +975,20 @@ def analyse(repo, sha, args, rules, tmp):
     return out
 
 
+def refuse_to_drop(out, facts):
+    """Stop a run from overwriting a facts file with one that has fewer keys: `parts` without --parts, `scope` without --scope, and `edges` (and the
+    other lists) when a --scope run holds only their counts."""
+    try:
+        with open(out, encoding='utf-8') as fh:
+            old = json.load(fh)
+    except (OSError, ValueError):
+        return
+    lost = sorted(set(old) - set(facts)) if isinstance(old, dict) else []
+    if lost:
+        die(f'{out} holds {", ".join("`%s`" % k for k in lost)}, which this run does not write, so writing it would lose them: '
+            'give the same options again, or write to another --out')
+
+
 def main(argv=None):
     args = parse_args(argv)
     try:
@@ -997,6 +1012,7 @@ def main(argv=None):
     facts.update(body)
     text = json.dumps(facts, indent=2) + '\n'
     if args.out:
+        refuse_to_drop(args.out, facts)
         try:
             with open(args.out, 'w', encoding='utf-8') as fh:
                 fh.write(text)
