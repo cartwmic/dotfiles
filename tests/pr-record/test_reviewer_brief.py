@@ -51,5 +51,22 @@ class NoteFixDecisionTests(unittest.TestCase):
         self.assertIn("A `fixed` disposition whose fix changed a design choice also names that choice's decision id", contract)
 
 
+class DogfoodFindingTests(unittest.TestCase):
+    """A plan that gates a change on a trial is a blocking finding with the `dogfood:` prefix; a staged build order and a sentence that rejects a trial are not."""
+
+    def test_the_brief_makes_a_trial_gate_blocking_and_names_both_sides(self):
+        brief = (HARNESS / "reviewer-brief.md").read_text(encoding="utf-8")
+        self.assertIn("gates a change on a trial, a pilot or a phased enrolment, or that switches a change on with no measures named, is a blocking finding", brief)
+        self.assertIn("starts with the literal prefix `dogfood:`", brief)
+        self.assertIn("Blocking: a path whose step is", brief)
+        self.assertIn("Not blocking: a build order of small steps", brief)
+        self.assertIn("a sentence that quotes or rejects the idea", brief)
+        self.assertIn("Judge the step's shape, not its wording.", brief)
+
+    def test_the_contract_names_the_prefix(self):
+        contract = (HARNESS / "findings-contract.md").read_text(encoding="utf-8")
+        self.assertIn("has an `obligation` that starts with the literal prefix `dogfood:`", contract)
+
+
 if __name__ == "__main__":
     unittest.main()
