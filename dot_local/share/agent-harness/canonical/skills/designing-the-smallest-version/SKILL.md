@@ -106,7 +106,7 @@ Mode (A redesign | B new capability) · Goal · Scope · Names in the goal that 
 … one row for each principle; keep each Evidence cell to about 40 words and point to the Section 4 item …
 
 ## 10. Design matrix         (Step 4b; after the principles table so sections 1-9 keep their numbers; FRs come from Step 3)
-FR list and its status (confirmed by the owner | `unconfirmed`) · constraints (Cs) · as-found matrix (mode A) and target matrix, both as rendered by design_matrix.py · classification and DP order · fixes (each linked to a Section 5 decision and a Section 6 increment) and simplifications (removal candidates, FRs without a DP) · one honest line on what the matrix shows that repo_facts.py and an auditing-clean-architecture pass do not ("nothing new" is allowed)
+FR list and its status (confirmed by the owner | `unconfirmed`) · constraints (Cs) · as-found matrix (mode A) and target matrix, both as rendered by design_matrix.py · classification and DP order · fixes (each linked to a Section 5 decision and a Section 6 increment) and simplifications (removal candidates, FRs without a DP) · one honest line on what the matrix shows that repo_facts.py and an auditing-design-principles pass do not ("nothing new" is allowed)
 ```
 
 Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode B, write `new` once for the whole As found column unless a row has something real today (say what); an `n/a` row takes one sentence at most. Evidence says what you read and what you did not, and `untested` where the test needs a live run (§14's replay). **Target means after the last increment in Section 6.** The table is required; a design without it is not finished.

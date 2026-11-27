@@ -32,7 +32,7 @@ Mark X(i,j), i not j, when **changing DP j to tune its own FR forces a change to
 
 ## What the matrix shows that the other passes do not
 
-`repo_facts.py` and `auditing-clean-architecture` report dependencies between code parts. The matrix relates functions to parts: it can show a part that cannot be tuned for one FR without moving another, and an FR nothing delivers. A code dependency measures reach, not functional independence (MacC08 §4, Sang05 abstract). DESIGN.md says what the matrix added; "nothing new" is allowed.
+`repo_facts.py` and `auditing-design-principles` report dependencies between code parts. The matrix relates functions to parts: it can show a part that cannot be tuned for one FR without moving another, and an FR nothing delivers. A code dependency measures reach, not functional independence (MacC08 §4, Sang05 abstract). DESIGN.md says what the matrix added; "nothing new" is allowed.
 
 ## Limits (keep them in DESIGN.md)
 
