@@ -32,7 +32,7 @@ class WorkstreamRank(unittest.TestCase):
         self.file.write_text(text)
         return self.file
 
-    def run_rank(self, *args, rank_file="default", thread=None, herdr_pane=None, home=None, t3_db=None):
+    def run_rank(self, *args, rank_file="default", thread=None, herdr_pane=None, home=None, t3_db=None, state_dir=None):
         env = {"PATH": os.environ["PATH"], "HOME": str(home or self.dir)}
         if rank_file == "default":
             env["WORKSTREAM_RANK_FILE"] = str(self.file)
@@ -40,6 +40,7 @@ class WorkstreamRank(unittest.TestCase):
             env["WORKSTREAM_RANK_FILE"] = str(rank_file)
         if thread is not None:
             env["T3CODE_THREAD_ID"] = thread
+        env["WORKSTREAM_RANK_STATE_DIR"] = str(state_dir or self.dir / "state")
         if t3_db is not None:
             env["WORKSTREAM_RANK_T3_DB"] = str(t3_db)
         if herdr_pane is not None:
@@ -183,6 +184,61 @@ class WorkstreamRank(unittest.TestCase):
         p = self.run_rank("of", thread="thread:delegated-task:builder", t3_db=empty)
         self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
         self.assertIn("cannot read", p.stderr)
+
+    # --- the walk leaves a record when its outcome changes ---
+
+    def log_lines(self, state_dir=None):
+        path = (state_dir or self.dir / "state") / "log.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_a_walk_that_cannot_run_is_logged_once_with_the_reason_and_the_thread(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        for _ in range(3):  # heavy-gate asks on every poll
+            self.run_rank("of", thread="thread:delegated-task:builder", t3_db=self.dir / "no-such.sqlite")
+        lines = self.log_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual((lines[0]["event"], lines[0]["outcome"], lines[0]["thread"]), ("thread-walk", "failed", "thread:delegated-task:builder"))
+        self.assertIn("cannot read", lines[0]["reason"])
+        self.assertRegex(lines[0]["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_the_log_line_stays_valid_json_for_an_odd_thread_id_or_path(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        self.run_rank("of", thread='thread:"quoted\\back', t3_db=self.dir / 'no "such".sqlite')
+        lines = self.log_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["outcome"], "failed")
+
+    def test_a_recovery_is_logged_and_a_second_success_is_not(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        child = "thread:delegated-task:builder"
+        self.run_rank("of", thread=child, t3_db=self.dir / "no-such.sqlite")
+        for _ in range(2):
+            self.run_rank("of", thread=child, t3_db=self.make_t3_db(self.TREE))
+        self.assertEqual([line["outcome"] for line in self.log_lines()], ["failed", "ok"])
+
+    def test_a_walk_that_cannot_run_for_want_of_the_helper_is_logged(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        bare = self.dir / "bare"
+        (bare / "bin").mkdir(parents=True)
+        (bare / "bin" / "workstream-rank").write_text(SCRIPT.read_text())   # no share/ beside it, and HOME has none
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.dir), "WORKSTREAM_RANK_FILE": str(self.file),
+               "WORKSTREAM_RANK_STATE_DIR": str(self.dir / "state"), "T3CODE_THREAD_ID": "thread:delegated-task:builder"}
+        p = subprocess.run(["sh", str(bare / "bin" / "workstream-rank"), "of"], env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual((p.returncode, p.stdout), (0, "1000\n"))
+        self.assertEqual([(line["outcome"], "needs python3" in line["reason"]) for line in self.log_lines()], [("failed", True)])
+
+    def test_a_thread_with_its_own_row_or_an_explicit_pane_walks_nothing_and_logs_nothing(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        self.run_rank("of", thread=self.LEAD, t3_db=self.dir / "no-such.sqlite")
+        self.run_rank("of", "--pane", "t3:x", thread="thread:delegated-task:builder", t3_db=self.dir / "no-such.sqlite")
+        self.assertEqual(self.log_lines(), [])
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_answer(self):
+        self.write(self.rows("2|Lead|t3:" + self.LEAD))
+        blocked = self.dir / "blocked"
+        blocked.write_text("a file, not a folder")
+        p = self.run_rank("of", thread="thread:delegated-task:builder", t3_db=self.make_t3_db(self.TREE), state_dir=blocked / "state")
+        self.assertEqual((p.returncode, p.stdout), (0, "2\n"))
 
     def test_an_explicit_pane_does_not_walk(self):
         self.write(self.rows("2|Lead|t3:" + self.LEAD))

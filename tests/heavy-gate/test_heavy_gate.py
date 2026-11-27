@@ -82,7 +82,9 @@ class HeavyGate(unittest.TestCase):
         self.env = {**env, "PATH": ":".join([str(bin_dir), *host_path]), "FAKE": str(self.fake), "HEAVY_GATE_LOCK": str(root / "heavy-gate.lock"),
                     "HEAVY_GATE_CHECK_WINDOW": "1", "HEAVY_GATE_SWAP_WINDOW": "1", "HEAVY_GATE_POLL": "1", "HEAVY_GATE_PRIORITIES": str(root / "priorities"),
                     "HEAVY_GATE_SLOTS_FILE": str(root / "slots"), "HEAVY_GATE_VOLUMES_FILE": str(root / "volumes"), "HEAVY_GATE_MAX_LOAD_FILE": str(root / "max-load"),
-                    "WORKSTREAM_RANK_FILE": str(root / "rank")}
+                    "WORKSTREAM_RANK_FILE": str(root / "rank"),
+                    # the rank reader walks no real thread tree and writes no real log: no database, a scratch state folder (tests that walk give their own)
+                    "WORKSTREAM_RANK_T3_DB": str(root / "no-t3.sqlite"), "WORKSTREAM_RANK_STATE_DIR": str(root / "rank-state")}
         self.bin = bin_dir
         self.rank_file = root / "rank"
         self.lock = root / "heavy-gate.lock"
