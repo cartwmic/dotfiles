@@ -142,6 +142,7 @@ def prepare(path, out, stats, since=None):
         text = f.read()
     rows = register_rows(text)
     commit = register_commit(text)
+    stats["since"] = bool(since)  # the log shows which runs used --since, refused or not
     if not rows:
         print("%s: no register rows (no table with the R columns)" % path, file=sys.stderr)
         stats["reason"] = "no register rows"

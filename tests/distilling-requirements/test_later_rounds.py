@@ -124,6 +124,9 @@ class LaterRounds(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("commit " + "0" * 40, err)
             self.assertFalse((work / "round3").exists())
+            record = json.loads((Path(STATE) / "distilling-requirements/log.jsonl").read_text().splitlines()[-1])
+            self.assertEqual((record["outcome"], record["since"]), ("refused", True))
+            self.assertIn("another register or commit", record["reason"])
 
     def test_the_log_records_carry_the_carried_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +134,7 @@ class LaterRounds(unittest.TestCase):
             self.assertEqual(run(TRUTH, "prepare", req, "--out", work / "round2", "--since", work / "round1")[0], 0)
             records = [json.loads(l) for l in (Path(STATE) / "distilling-requirements/log.jsonl").read_text().splitlines()]
             self.assertEqual(records[-1]["carried"], 3)
+            self.assertTrue(records[-1]["since"])
             self.assertEqual(records[-1]["owner_rows"], 0)
             reports = work / "round2/reports"
             reports.mkdir()

@@ -7,7 +7,7 @@
 Reads git only and never writes to REPO. The tree is read from `git archive`
 at REV, so the working tree is ignored. Prints one JSON object (or writes
 --out). --out exits 2 and leaves the file alone when it already exists, before any analysis, unless --force is given.
---summary alone writes no file. Exit 0 on success; exit 2 with one stderr line on bad arguments, an
+--summary alone writes no file. Every run with --out logs out, force and replaced (true when --force overwrote a file); a refused run logs the reason. Exit 0 on success; exit 2 with one stderr line on bad arguments, an
 unknown rev or a path that is not a git repo.
 
 Globs (--parts first column, --scope): `*` stays within one path segment, `**`
@@ -120,9 +120,12 @@ SURFACES_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(o
                                'deriving-readable-docs', 'scripts', 'surfaces.py')
 
 
+RUN = {}  # what the log says of a run that has --out: out, force, replaced (set once the arguments are read)
+
+
 def die(msg):
     sys.stderr.write(f'repo_facts: {msg}\n')
-    log_run('repo_facts.py', 'repo-facts', 'refused', reason=msg)
+    log_run('repo_facts.py', 'repo-facts', 'refused', reason=msg, **RUN)
     sys.exit(2)
 
 
@@ -988,7 +991,9 @@ def refuse_to_overwrite(out, force):
 def main(argv=None):
     args = parse_args(argv)
     if args.out:
+        RUN.update(out=args.out, force=args.force, replaced=False)
         refuse_to_overwrite(args.out, args.force)  # before any analysis
+        RUN['replaced'] = os.path.exists(args.out)  # only --force gets here with a file in the way
     try:
         repo = git(args.repo, 'rev-parse', '--show-toplevel').strip()
     except RuntimeError:
@@ -1020,7 +1025,7 @@ def main(argv=None):
     elif not args.out:
         sys.stdout.write(text)
     log_run('repo_facts.py', 'repo-facts', 'ok', files=sum(facts['languages'].values()),
-            edges=facts['edge_count'] if args.scope else len(facts['edges']))
+            edges=facts['edge_count'] if args.scope else len(facts['edges']), **RUN)
     return 0
 
 

@@ -67,6 +67,46 @@ class OutNeverLosesABlock(unittest.TestCase):
         self.assertEqual(run(self.repo, "--force", "--out", str(f)).returncode, 0)
         self.assertNotIn("scope", json.loads(f.read_text()))
 
+    def last_record(self):
+        lines = (Path(STATE) / "designing-the-smallest-version/log.jsonl").read_text().splitlines()
+        return json.loads(lines[-1])
+
+    def test_the_log_says_where_it_wrote_and_that_nothing_was_replaced(self):
+        f = self.out("log-new.json")
+        self.assertEqual(run(self.repo, "--out", str(f)).returncode, 0)
+        rec = self.last_record()
+        self.assertEqual((rec["outcome"], rec["out"], rec["force"], rec["replaced"]), ("ok", str(f), False, False))
+
+    def test_the_log_says_that_force_replaced_a_file(self):
+        f = self.out("log-force.json")
+        f.write_text("old")
+        self.assertEqual(run(self.repo, "--force", "--out", str(f)).returncode, 0)
+        rec = self.last_record()
+        self.assertEqual((rec["outcome"], rec["out"], rec["force"], rec["replaced"]), ("ok", str(f), True, True))
+
+    def test_force_into_a_new_path_is_logged_as_not_replaced(self):
+        f = self.out("log-force-new.json")
+        self.assertEqual(run(self.repo, "--force", "--out", str(f)).returncode, 0)
+        rec = self.last_record()
+        self.assertEqual((rec["force"], rec["replaced"]), (True, False))
+
+    def test_a_refused_run_is_logged_with_its_reason_and_the_path(self):
+        f = self.out("log-refused.json")
+        f.write_text("old")
+        self.assertEqual(run(self.repo, "--out", str(f)).returncode, 2)
+        rec = self.last_record()
+        self.assertEqual((rec["outcome"], rec["out"], rec["force"], rec["replaced"]), ("refused", str(f), False, False))
+        self.assertIn("already exists", rec["reason"])
+
+    def test_a_run_with_no_out_logs_no_out_fields(self):
+        self.assertEqual(run(self.repo).returncode, 0)
+        self.assertNotIn("replaced", self.last_record())
+
+    def test_the_audit_skill_forces_its_scratch_facts_file(self):
+        text = (SKILLS / "auditing-design-principles/SKILL.md").read_text()
+        line = next(l for l in text.splitlines() if "repo_facts.py" in l)
+        self.assertIn("--out <scratch>/facts.json --force", line)  # a rerun of the audit would be refused without it
+
     def test_a_new_file_is_free_and_a_summary_with_no_out_writes_no_file(self):
         self.assertEqual(run(self.repo, "--summary", "--out", str(self.out("fresh.json"))).returncode, 0)
         before = set(self.tmp.iterdir())
