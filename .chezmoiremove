@@ -164,3 +164,7 @@ bin/herdr-overview-proof
 # Retired 2026-11-27: the cursor-provider Pi patch, a no-op restore of an old @marckrenn splice that both profiles replaced with the cartwmic/pi-sub fork.
 # A machine that deployed it still has the directory, which chezmoi does not delete by itself.
 .local/share/pi-patches/cursor-provider
+
+# Retired 2026-11-27: operational-ux-capture.schema.json in the using-loop-engine skill. Loop Engine v0.71.3 no longer ships the file (nothing read it),
+# and the release importer no longer lists it. A machine that deployed it still has the file, which chezmoi does not delete by itself.
+.local/share/agent-harness/canonical/skills/using-loop-engine/references/operational-ux-capture.schema.json
