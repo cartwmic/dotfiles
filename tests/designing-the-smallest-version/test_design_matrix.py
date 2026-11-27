@@ -324,6 +324,52 @@ class AsFoundVersusTarget(unittest.TestCase):
         self.assertIn("added X (FR1, DP2): %s moves the check into DP2 [%s]" % (dec(5), dec(5)), done.stdout)
 
 
+class RunLog(unittest.TestCase):
+    """Each run, a refusal included, leaves one record in the run log (design-principles.md §14)."""
+    frs = [("FR1", "DP1"), ("FR2", "DP2")]
+
+    def last_record(self, done):
+        """The newest record and the record count."""
+        path = Path(os.environ["XDG_STATE_HOME"]) / "designing-the-smallest-version" / "log.jsonl"  # read now: another test module in the run may have set it last
+        lines = path.read_text(encoding="utf-8").splitlines()
+        return json.loads(lines[-1]), len(lines)
+
+    def records(self):
+        path = Path(os.environ["XDG_STATE_HOME"]) / "designing-the-smallest-version" / "log.jsonl"  # read now: another test module in the run may have set it last
+        return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+    def test_ok_run_logs_ok(self):
+        before = self.records()
+        done = run(build(self.frs, ["DP1", "DP2"]))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        rec, n = self.last_record(done)
+        self.assertEqual((n, rec["script"], rec["outcome"], rec["cls"]), (before + 1, "design_matrix.py", "ok", "uncoupled"))
+
+    def test_unreadable_input_logs_refused(self):
+        before = self.records()
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT), "/nonexistent/m.md"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        rec, n = self.last_record(done)
+        self.assertEqual((n, rec["outcome"], rec["reason"]), (before + 1, "refused", "unreadable input"))
+
+    def test_unreadable_as_found_logs_refused(self):
+        before = self.records()
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "t.md"
+            target.write_text(build(self.frs, ["DP1", "DP2"], ev=dec(1)), encoding="utf-8")
+            done = subprocess.run([sys.executable, "-I", str(SCRIPT), str(target), "--as-found", str(Path(d) / "missing.md")], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        rec, n = self.last_record(done)
+        self.assertEqual((n, rec["outcome"], rec["reason"]), (before + 1, "refused", "unreadable as-found input"))
+
+    def test_invalid_tables_log_failed(self):
+        before = self.records()
+        done = run(build([("FR1", "DP9"), ("FR2", "DP2")], ["DP1", "DP2"]))  # FR1 names a DP that is not in the table
+        self.assertEqual(done.returncode, 1)
+        rec, n = self.last_record(done)
+        self.assertEqual((n, rec["outcome"]), (before + 1, "failed"))
+
+
 class SharedParts(unittest.TestCase):
     frs = [("FR1", "DP1"), ("FR2", "DP2")]
 

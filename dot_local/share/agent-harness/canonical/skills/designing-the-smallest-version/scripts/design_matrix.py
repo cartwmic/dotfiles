@@ -44,7 +44,7 @@ The matrix is square when the FRs and DPs pair one-to-one. Then it is uncoupled 
 the DP order is a topological sort, ties broken by id) or coupled (the cycles are the strongly connected components, found with
 repo_facts.py's `scc_components`). Otherwise the whole is not classified and the theorem that applies is printed (Suh 1996,
 App. 1-A); the FRs that do have their own DP are still classified as a paired part, and the rest are listed apart.
-Every coupled block, DP delivering several FRs, unmet FR and non-square result is listed under "Fix owed": each needs a fix
+Every coupled block, DP delivering several FRs, shared part with no X or reason, unmet FR and non-square result is listed under "Fix owed": each needs a fix
 or an owner-accepted reason in DESIGN.md. The result does not depend on the order of the rows in the file.
 """
 import argparse
@@ -505,6 +505,7 @@ def main(argv=None):
             before, before_errors = validate(load(args.as_found))
         except (OSError, ValueError) as exc:
             sys.stderr.write('design_matrix: %s\n' % exc)
+            log_run('design_matrix.py', 'render', 'refused', reason='unreadable as-found input')
             return 1
         errors += ['as-found: ' + e for e in before_errors]
         if not before_errors:
