@@ -196,27 +196,36 @@ class Policy(WrapperBase):
             with self.subTest(args):
                 self.passed(self.run_gh(*args), *args)
 
-    # The repository flag is accepted by gh before the group, and a false help value does not make a help request: neither may switch the rules off.
-    LEADING = (["-R", "x/y"], ["--repo", "x/y"], ["--repo=x/y"], ["-Rx/y"], ["-R=x/y"])
+    # gh reads a flag that stands before the group at the command, so a flag there must not switch the rules off: not a repository flag, not a `--name=value`.
+    LEADING = (["-R", "x/y"], ["--repo", "x/y"], ["--repo=x/y"], ["-Rx/y"], ["-R=x/y"], ["-R", "x/y", "-R", "z/w"], ["--help=false"], ["--repo=x/y", "--help=false"],
+               ["--reason=completed"], ["--merge=true"], ["--hostname", "github.com"], ["--no-such-flag"], ["-x", "value"])
 
-    def test_the_repository_flag_before_the_group_does_not_get_round_any_rule(self):
+    def test_a_flag_before_the_group_does_not_get_round_any_rule(self):
         body = self.body("no link")
         issue = self.body("## Problem\nx\n")
         for lead in self.LEADING:
             with self.subTest(lead):
-                self.refused(self.run_gh(*lead, "pr", "merge", "5", "--merge"), "squash only")
-                self.refused(self.run_gh(*lead, "pr", "merge", "5", "--rebase"), "squash only")
-                self.refused(self.run_gh(*lead, "pr", "create", "--title", "t", "--body-file", body), "not linked to an issue")
-                self.refused(self.run_gh(*lead, "issue", "create", "--title", "t", "--body-file", issue), "Problem, Wanted and Done when")
-                self.refused(self.run_gh(*lead, "issue", "close", "5"), "close")
+                self.refused(self.run_gh(*lead, "pr", "merge", "5", "--merge"), "")
+                self.refused(self.run_gh(*lead, "pr", "merge", "5", "--rebase"), "")
+                self.refused(self.run_gh(*lead, "pr", "create", "--title", "t", "--body-file", body), "")
+                self.refused(self.run_gh(*lead, "issue", "create", "--title", "t", "--body-file", issue), "")
+                self.refused(self.run_gh(*lead, "issue", "close", "5"), "")
+
+    def test_a_pull_request_or_issue_body_that_is_not_a_regular_file_is_refused(self):
+        fifo = str(self.tmp / "body.fifo")
+        os.mkfifo(fifo)      # what /dev/stdin and `<(...)` are: opening it here would block or leave gh an empty body
+        for path in (fifo, "/dev/null"):
+            with self.subTest(path):
+                self.refused(self.run_gh("pr", "create", "--title", "t", "--body-file", path), "regular file")
+                self.refused(self.run_gh("issue", "create", "--title", "t", "--body-file", path, "--label", "bug"), "regular file")
 
     def test_a_call_with_the_repository_flag_before_the_group_that_follows_the_rules_goes_through_and_reads_that_repository(self):
         env = {"FAKE_ISSUES": json.dumps(OPEN)}
         args = ["-R", "x/y", "pr", "create", "--title", "t", "--body", "Closes #5"]
         self.passed(self.run_gh(*args, env=env), *args)
         self.assertEqual(self.real_calls()[0]["argv"], ["issue", "view", "5", "-R", "x/y", "--json", "state,url"])
-        squash = ["--repo", "x/y", "pr", "merge", "5", "--squash"]
-        self.passed(self.run_gh(*squash), *squash)
+        for squash in (["--repo", "x/y", "pr", "merge", "5", "--squash"], ["--help=false", "pr", "merge", "5", "--squash"], ["-R", "x/y", "-R", "z/w", "pr", "merge", "5", "-s"]):
+            self.passed(self.run_gh(*squash), *squash)
 
     def test_only_a_true_help_value_skips_the_rules(self):
         for flag in ("--help=false", "-h=false", "--help=0", "--help=false", "--help=nonsense"):

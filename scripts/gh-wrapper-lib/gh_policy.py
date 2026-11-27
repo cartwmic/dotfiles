@@ -20,6 +20,7 @@ import datetime
 import json
 import os
 import re
+import stat
 import subprocess
 
 from gh_layers import Stop
@@ -68,6 +69,8 @@ def body_of(flags):
             if val == "-":
                 return None, "the body comes from standard input, where it cannot be read before gh runs. Give it with --body-file FILE"
             try:
+                if not stat.S_ISREG(os.stat(val).st_mode):      # /dev/stdin, a pipe, a process substitution: reading it here would leave gh an empty body
+                    return None, "the body file is not a regular file (standard input or a pipe), so it cannot be read before gh runs. Give it with --body-file FILE"
                 with open(val, encoding="utf-8", errors="replace") as f:
                     return f.read(), None
             except OSError as e:
