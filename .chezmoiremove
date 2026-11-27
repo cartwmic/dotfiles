@@ -164,3 +164,8 @@ bin/herdr-overview-proof
 # Retired 2026-11-27: the cursor-provider Pi patch, a no-op restore of an old @marckrenn splice that both profiles replaced with the cartwmic/pi-sub fork.
 # A machine that deployed it still has the directory, which chezmoi does not delete by itself.
 .local/share/pi-patches/cursor-provider
+
+# Retired 2026-11-27: the phone notification jump into a Herdr pane (herdr-jump on
+# the phone, herdr-agent-jump on the Mac). Nothing writes a termux://herdr-jump link.
+.local/bin/herdr-agent-jump
+bin/herdr-jump

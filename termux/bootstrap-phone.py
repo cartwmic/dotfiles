@@ -457,7 +457,7 @@ def provision(args):
         for name, (fingerprint, _) in FINGERPRINTS.items():
             if key_fingerprint(args.serial, port, user, name) != fingerprint:
                 raise BootstrapError(f"{name} is missing/mismatched after apply; a missing phone-side token is only a soft skip")
-        for name in ("~/.termux/boot/start-sshd", "~/bin/herdr-jump", "~/.ssh/authorized_keys"):
+        for name in ("~/.termux/boot/start-sshd", "~/bin/resume-ssh", "~/.ssh/authorized_keys"):
             phone_ssh(args.serial, port, user, "sh", "-c", f"test -f {name}")
         print(f"provisioned termux_user={user}; SSH keys and managed files verified")
         print("NEXT: launch Termux:Boot once; grant battery/boot permissions on-device; set up WireGuard and Play apps (see termux/README.md).")
@@ -473,20 +473,20 @@ def verify(args):
             if key_fingerprint(args.serial, port, user, name) != fingerprint:
                 raise BootstrapError(f"key fingerprint mismatch: {name}")
         phone_ssh(args.serial, port, user, "sh", "-c",
-                  "test -x ~/.termux/boot/start-sshd && test -x ~/bin/herdr-jump && "
+                  "test -x ~/.termux/boot/start-sshd && test -x ~/bin/resume-ssh && "
                   "test -f ~/.ssh/authorized_keys && "
                   "test \"$(stat -c %a ~/.ssh/authorized_keys)\" = 600")
         # BatchMode and strict known-hosts deliberately cannot auto-trust a new Mac.
         phone_ssh(args.serial, port, user, "ssh", "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no",
                   "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=yes", "macbook",
-                  "/bin/zsh -lic 'command -v herdr'")
-        print("PASS: signed packages, phone-owned files, key fingerprints, USB key-only SSH, phone -> macbook SSH and Herdr executable")
+                  "/bin/zsh -lic true")
+        print("PASS: signed packages, phone-owned files, key fingerprints, USB key-only SSH, phone -> macbook SSH login shell")
     missing = [p for p in PLAY_PACKAGES if not text(adb(args.serial, "shell", "pm", "path", p, check=False)).startswith("package:")]
     if missing:
         raise BootstrapError("missing Play apps: " + ", ".join(missing))
     if not args.attest_android:
-        raise BootstrapError("PENDING attended Android check: WireGuard tunnel, ntfy test, Whisperian input/Accessibility, Termux->ssh macbook->Herdr pane; rerun --attest-android only after checking")
-    print("Operator attested Android/VPN/ntfy/Whisperian/visible Herdr path. Reboot and off-LAN tests remain pending until explicitly run.")
+        raise BootstrapError("PENDING attended Android check: WireGuard tunnel, ntfy test, Whisperian input/Accessibility, Termux->ssh macbook login shell; rerun --attest-android only after checking")
+    print("Operator attested Android/VPN/ntfy/Whisperian/visible ssh macbook path. Reboot and off-LAN tests remain pending until explicitly run.")
 
 
 def main():

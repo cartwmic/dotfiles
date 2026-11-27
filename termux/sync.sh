@@ -25,7 +25,6 @@ Canonical sources:
   dot_termux/termux.properties   -> ~/.termux/termux.properties
   dot_termux/font.ttf            -> ~/.termux/font.ttf
   bin/executable_zellij-jump     -> ~/bin/zellij-jump
-  bin/executable_herdr-jump      -> ~/bin/herdr-jump
   private_dot_ssh/modify_config.tmpl (termux block)
   run_once_after_05_provision_termux_ssh_keys.sh.tmpl
 

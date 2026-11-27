@@ -145,8 +145,8 @@ if name=='ssh':
             state['keys']['whonix-homelab']=os.environ['PHONE_TEST_WHONIX']
         finish()
     if 'macbook' in command:
-        login=('zsh -lic' in command and 'command -v herdr' in command)
-        finish(0 if login else 1, '/mock/herdr\n' if login else '')
+        login='zsh -lic' in command
+        finish(0 if login else 1)
     finish(0 if state['ready'] else 1)
 if name=='op':
     if args[:2]==['document','get']:

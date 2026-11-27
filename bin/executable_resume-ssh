@@ -18,14 +18,9 @@ case "$user_id" in
 esac
 
 for host in macbook mac-kvm; do
-    if [ "$host" = macbook ]; then
-        # Leave $HOME and $PATH for the remote shell, not the phone.
-        # shellcheck disable=SC2016
-        ssh_args='-tt,macbook,PATH="$HOME/.local/share/mise/shims:$PATH" herdr'
-    else
-        # The NanoKVM bridge allows only an interactive shell, not remote commands.
-        ssh_args=mac-kvm
-    fi
+    # Plain `ssh <host>` opens that machine's login shell. The NanoKVM bridge
+    # allows only an interactive shell, not remote commands, so mac-kvm is the same.
+    ssh_args=$host
 
     # Select each session once so Termux starts its terminal process.
     # mac-kvm remains visible after the second request.
