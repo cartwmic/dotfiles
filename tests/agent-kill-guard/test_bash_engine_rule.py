@@ -97,6 +97,10 @@ class Refused(unittest.TestCase):
             "loop-engine --config c.toml --timeout-ms 5 event %s go" % LEAD, "loop-engine --timeout-ms=5 -j terminate %s" % LEAD,
             "loop-engine terminate -- %s" % LEAD, "loop-engine event --advice-exception '{}' %s go" % LEAD, "loop-engine append --record-id r1 %s note '{}'" % LEAD,
             "loop-engine append --record-id=r1 %s note '{}'" % LEAD, "loop-engine start --label l --id %s p '{}'" % LEAD, "loop-engine start p '{}' --id=%s --label=l" % LEAD,
+            "loop-engine event --run %s go" % LEAD, "loop-engine event --run=%s go" % LEAD, "loop-engine terminate --run-id %s" % LEAD, "loop-engine append --id %s note '{}'" % LEAD,
+            "loop-engine --run %s event go" % LEAD, "loop-engine -- terminate %s" % LEAD, "loop-engine -j -- event %s go" % LEAD,
+            "loop-engine -d /x/y.db event %s go" % LEAD, "loop-engine --db /x/y.db event %s go" % LEAD, "loop-engine -c c.toml terminate %s" % LEAD,
+            "loop-engine --config-path=c.toml event %s go" % LEAD, "loop-engine --database-path /x.db event %s go" % LEAD,
         ]:
             with self.subTest(text=text):
                 self.assertTrue(refused(text))
@@ -157,7 +161,9 @@ class Allowed(unittest.TestCase):
                          "loop-engine explore %s" % run, "loop-engine monitor --run %s --database /x.db" % run, "loop-engine reclaim", "loop-engine reclaim --apply",
                          "loop-engine --help", "loop-engine --version", "loop-engine -V", "loop-engine show --help", "loop-engine", "loop-engine bogus %s" % run,
                          "mise exec -- loop-engine show %s" % run, "sh -c 'loop-engine history %s'" % run, "loop-engine show $RUN", "loop-engine history \"$RUN\"",
-                         "loop-engine --weird show %s" % run, "loop-engine show --weird %s" % run]:
+                         "loop-engine --weird show %s" % run, "loop-engine show --weird %s" % run,
+                         "loop-engine -d /x.db show %s" % run, "loop-engine --db /x.db history %s" % run, "loop-engine -c c.toml read %s --kind history" % run,
+                         "loop-engine --run %s show" % run, "loop-engine -- show %s" % run]:
                 with self.subTest(text=text):
                     self.assertFalse(refused(text))
 
@@ -233,7 +239,12 @@ class WayPast(unittest.TestCase):
     def test_one_command_is_one_use(self):
         found, seen = self.notes("BASH_ENGINE_OVERRIDE=why loop-engine event %s go && loop-engine event %s go" % (LEAD, LEAD))
         self.assertEqual(found[0], "bash_engine")
-        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen, [])  # a refused command is not run, so the way past on its first half is not used and not logged
+
+    def test_an_override_is_not_logged_when_another_rule_refuses_the_command(self):
+        found, seen = self.notes("BASH_ENGINE_OVERRIDE=why loop-engine event %s go; git stash" % LEAD)
+        self.assertIsNotNone(found)
+        self.assertEqual(seen, [])
 
     def test_the_override_does_not_reach_another_rule(self):
         self.assertIsNotNone(verdict("BASH_ENGINE_OVERRIDE=why loop-engine event lead-a-1 go; git stash"))

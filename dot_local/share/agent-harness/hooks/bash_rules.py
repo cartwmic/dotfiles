@@ -298,6 +298,7 @@ class Walk:
 
     def __init__(self, text, cwd=None, home=None):
         self.home = home or os.path.expanduser("~")  # what `~`, `$HOME` and `${HOME}` mean in a `cd` or `git -C` target
+        self.notes = []   # (rule, matched, extra) for each use of a rule's way past; refusal() hands them to the caller when nothing in the command is refused
         self.cmds = []    # Cmd: words from the command position (wrappers unwrapped), the assignments before it,
         self.scans = []   # in a polling loop, under run-and-wake, the merge checks run earlier by && (a frozenset), working directory
         self.text = text
@@ -496,10 +497,12 @@ FLAG_ROWS = {
     ("k9s", ""): "context=,kubeconfig=",
     ("helm", ""): "kube-context=,kubeconfig=",
     ("ci-main-status", ""): "merge-gate,pr=,tip,all,owner-approved=",
-    ("loop-engine", ""): "j:json,database=,config=,timeout-ms=,h:help,V:version",  # the options before the verb; each verb's own row adds its flags (`loop-engine --help`, `<verb> --help`)
-    ("loop-engine", "start"): "id=,label=",
-    ("loop-engine", "append"): "record-id=",
-    ("loop-engine", "event"): "advice-exception=,override=",  # the engine's own `--override JSON` is not the hook's way past (BASH_ENGINE_OVERRIDE)
+    # loop-engine: the parser takes more than its help lists, found by running it on a catalog that does not exist: `-d`, `--db`, `--database-path` for the catalog, `-c`, `--config-path`
+    # for the config, and `--run`, `--run-id` or `--id` for the run id, in any position (before or after the verb). The options below are read before the verb; each verb's row adds its own.
+    ("loop-engine", ""): "j:json,d:db=,database=,database-path=,c:config=,config-path=,timeout-ms=,h:help,V:version,run=,run-id=,id=",
+    ("loop-engine", "start"): "label=,provider=,input=",
+    ("loop-engine", "append"): "record-id=,kind=,data=",
+    ("loop-engine", "event"): "advice-exception=,override=,event=",  # the engine's own `--override JSON` is not the hook's way past (BASH_ENGINE_OVERRIDE)
     ("mise", ""): "C:cd=,E:env=,j:jobs=,q:quiet,v:verbose,y:yes,no-config,no-env,no-hooks,raw,locked,silent,h:help",
     ("mise", "exec"): "c:command=,j:jobs=,allow-env=,allow-net=,allow-read=,allow-write=,deny-all,deny-env,deny-net,deny-read,deny-write,fresh-env,no-deps,raw,secrets=,secrets-all,"
                       "h:help,q:quiet,v:verbose,y:yes,locked,silent",
@@ -1452,8 +1455,9 @@ def _run_kind(word):
 
 
 def _engine_write(words):
-    """(verb, the words that can be the run id, whether they are exactly the id's place) of a `loop-engine` write, else None. A write names its run as the first word after the verb (`start`: the value of its `--id` flag), after
-    every flag the engine takes in any spelling (FLAG_ROWS). A flag the table lacks may take the next word, so the id cannot be placed: then every word of the command is a candidate."""
+    """(verb, the words that can be the run id, whether they are exactly the id's place) of a `loop-engine` write, else None. A write names its run by a flag (`--run`, `--run-id`, `--id`, before or after the verb)
+    or else as the first word after the verb (`start` names it only by flag), after every flag the engine takes in any spelling (FLAG_ROWS). A flag the table lacks may take the next word, so the id cannot be
+    placed: then every word of the command is a candidate."""
     top = normalise([("loop-engine", "")], words[1:], until_positional=True)
     if top.unknown:
         verb = next((w for w in words[1:] if w in ENGINE_WRITES), None)
@@ -1461,11 +1465,13 @@ def _engine_write(words):
     verb = top.positional[0] if top.positional else None
     if verb not in ENGINE_WRITES:
         return None
-    read = normalise([("loop-engine", ""), ("loop-engine", verb)] if ("loop-engine", verb) in FLAG_ROWS else [("loop-engine", "")], top.tail)
+    tail = top.tail if top.tail or len(top.positional) < 2 else top.positional[1:]  # `loop-engine -- event ID E`: after the dashes everything is a plain word
+    read = normalise([("loop-engine", ""), ("loop-engine", verb)] if ("loop-engine", verb) in FLAG_ROWS else [("loop-engine", "")], tail)
     if read.unknown:
-        return verb, top.tail, False
-    if verb == "start":
-        return verb, [read.value("id")] if read.value("id") is not None else [], True
+        return verb, tail, False
+    named = [v for flags in (top, read) for name in ("run", "run-id", "id") for v in flags.values(name)]
+    if named or verb == "start":
+        return verb, named, True
     return verb, read.positional[:1], True
 
 
@@ -1484,8 +1490,7 @@ def bash_engine_rule(walk, ctx):
             continue
         reason = next((w.partition("=")[2].strip() for w in reversed(cmd.assigns) if w.partition("=")[0] == ENGINE_OVERRIDE), "")
         if reason:  # the way past: this one command, with its reason, written to the guard log
-            if ctx.note:
-                ctx.note("bash_engine", "loop-engine " + verb, {"reason": "override", "why": reason[:300], "run_kind": kind or "unread"})
+            walk.notes.append(("bash_engine", "loop-engine " + verb, {"reason": "override", "why": reason[:300], "run_kind": kind or "unread"}))
             continue
         if kind:
             run = next(w for w, k in kinds.items() if k)
@@ -1508,6 +1513,8 @@ def refusal(text, ctx):
         message = rule(walk, ctx)
         if message:
             return rule.__name__.replace("_rule", ""), message, getattr(message, "matched", None)
+    for note in walk.notes if ctx.note else ():  # a way past is logged only when the command ran: no rule refused it
+        ctx.note(*note)
     return None
 
 
