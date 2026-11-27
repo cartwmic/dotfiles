@@ -63,7 +63,7 @@ def mise_line(tool, version):
 
 
 def mise(versions):
-    """A mise config with the five pins; versions maps tool -> version (default 0.49.0)."""
+    """A mise config with the four pins; versions maps tool -> version (default 0.49.0)."""
     return "gh = \"latest\"\n" + "".join(mise_line(t, versions.get(t, "0.49.0")) + "\n" for t in TOOLS)
 
 
