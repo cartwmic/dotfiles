@@ -106,7 +106,7 @@ class TableTest(unittest.TestCase):
                         self.assertIn(path, self.managed[profile], "%s: %s is not managed on %s" % (gate, path, profile))
 
     def test_every_work_gate_wrapper_that_personal_has_is_on_work(self):
-        wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/intent-review-check",
+        wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/pr-redact", ".local/bin/intent-review-check",
                     ".local/bin/ci-main-status", ".local/bin/agent-traces", ".local/bin/issue-open", ".local/bin/claims"}
         self.assertEqual(wrappers - self.managed[WORK], set())
         self.assertEqual(wrappers - self.managed[PERSONAL], set())
@@ -125,6 +125,7 @@ SAMPLES = {
     "kubectl on a context": "kubectl --context axon-aks-prod get pods",
     "local `docker run`": "docker run alpine",
     "`git stash` that writes the stash list": "git stash pop",
+    "hand-typed `loop-engine` write": "loop-engine append lead-demo-1 --record-id r --kind note",
 }
 CLEAN = ["git status", "ls -la", "gh pr list", "ci-main-status --merge-gate acme/app && pr-body-check acme/app 12 && gh pr merge 12 -R acme/app"]
 
