@@ -3,6 +3,7 @@
 
     import_release_skills.py import TAG [--source DIR] [--repo OWNER/REPO] [--expect-commit SHA]
                                         [--pins] [--apply] [--prune]
+    import_release_skills.py check [--repo-dir DIR] [--rev REV] [--plan FILE] [--source DIR]
     import_release_skills.py verify-deployed [NAME ...] [--source DIR]
 
 `import` shows, per skill bundle, what the tag changes in
@@ -17,6 +18,15 @@ that file: releases no longer ship it, and installed copies are untouched.
 The tag still ships the research crate (the `research` program and its skills `using-research-provider` and
 `using-generate-prd`, left out by SKIPPED_BUNDLES) and a copy of docs/PRD.md (left out of ROOT_REFERENCES);
 dotfiles installs and imports none of them.
+
+`check` is the same import as a dry run on a commit that is not tagged yet: the tree comes from a local git checkout
+(--repo-dir, --rev; default the current directory and HEAD) instead of a published release. It needs git, not gh; nothing is fetched
+and no skill or config file is written; each run appends one JSON line (UTC time, commit, outcome, first stop, seconds) to
+$XDG_STATE_HOME/import-release-skills/log.jsonl (default ~/.local/state).
+Loop Engine's release path runs it before the tag is cut, so a release the bump could not take never gets its tag. It stops on
+what the bump would stop on, as far as the tree shows it (it does not read the GitHub archive): a file ROOT_REFERENCES expects that the commit no longer has, an unsafe or empty file, a file the
+canonical bundles hold that the commit no longer ships (an orphan), and, with --plan (the release's cargo-dist plan, JSON),
+a Loop Engine pin whose matching_regex matches none of the planned archives. Each stop names the file or pin and the change.
 
 `verify-deployed` compares the canonical bundles in the source with the deployed copies byte for
 byte (extra deployed files are orphans: chezmoi apply does not delete them) and checks that each
@@ -40,6 +50,8 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_REPO = "cartwmic/loop-engine"
@@ -57,6 +69,7 @@ ROOT_REFERENCES = {
 # Bundles the tag ships that dotfiles does not import: the research workflow and the skill that drives it for requirements documents.
 SKIPPED_BUNDLES = ("using-research-provider", "using-generate-prd")
 PIN_LINE = re.compile(r'^((?:loop-engine|lean-change|policy-document|bookends-check) = \{ version = ")([^"]+)(")', re.M)
+PIN_REGEX = re.compile(r'^(loop-engine|lean-change|policy-document|bookends-check) = \{ version = "[^"]+", matching_regex = "([^"]+)"', re.M)
 PIN_COUNT = 4
 # Names chezmoi would read as attributes, or drop (an empty file is not deployed without empty_).
 CHEZMOI_SPECIAL = re.compile(
@@ -131,7 +144,8 @@ def plan_bundles(tree):
                 wanted["references/" + source[len(base):]] = source
         for filename in ROOT_REFERENCES.get(name, ()) if not base else ():
             if "docs/" + filename not in files:
-                raise Failure("%s expects docs/%s in the tag" % (name, filename))
+                raise Failure("%s expects docs/%s in the tag, which no longer has it: drop it from ROOT_REFERENCES in this script "
+                              "(and delete it from the %s bundle) in cartwmic/dotfiles before the release, or restore the file" % (name, filename, name))
             wanted["references/" + filename] = "docs/" + filename
         bundles[name] = {destination: (source, files[source]["sha"], files[source]["mode"]) for destination, source in wanted.items()}
     if not bundles:
@@ -209,8 +223,44 @@ def diff_bundle(bundle_dir, wanted):
     return added, changed, orphans
 
 
+def orphans_in(bundle_dir, wanted):
+    """Files the bundle holds that the release does not ship, sorted."""
+    return sorted(d for d in local_files(bundle_dir) if d not in wanted)
+
+
 def pins_in(text):
     return PIN_LINE.findall(text)
+
+
+def local_listing(repo_dir, rev):
+    """Tree entries (path, type, mode, sha, size) of a commit in a local checkout, from `git ls-tree`: the shape the GitHub tree API gives, plus the size."""
+    try:
+        result = subprocess.run(["git", "-C", str(repo_dir), "ls-tree", "-r", "-l", "-z", "--full-tree", rev], stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Failure("cannot run git: %s" % error)
+    if result.returncode != 0:
+        raise Failure("git ls-tree %s in %s failed: %s" % (rev, repo_dir, result.stderr.decode("utf-8", "replace").strip()))
+    listing = []
+    for record in filter(None, result.stdout.split(b"\0")):
+        meta, _, path = record.partition(b"\t")
+        mode, kind, sha, size = meta.decode().split()
+        listing.append({"path": path.decode("utf-8", "surrogateescape"), "type": kind, "mode": mode, "sha": sha, "size": size})
+    return listing
+
+
+def check_pins_resolve(text, plan):
+    """Each Loop Engine pin's matching_regex must match a planned release archive: that is how mise picks the asset to install."""
+    pins = PIN_REGEX.findall(text)
+    if len(pins) != PIN_COUNT:
+        raise Failure("expected %d Loop Engine pins with a matching_regex in %s, found %d" % (PIN_COUNT, MISE_CONFIG, len(pins)))
+    archives = sorted({a for release in plan.get("releases", []) for a in release.get("artifacts", []) if isinstance(a, str) and a.endswith(".tar.xz")})
+    if not archives:
+        raise Failure("the release plan lists no .tar.xz archives, so no pin can resolve")
+    for name, pattern in pins:
+        if not any(re.search(pattern, archive) for archive in archives):
+            raise Failure("pin %s in %s has matching_regex %s, which matches none of the planned archives (%s): change the pin's matching_regex in "
+                          "cartwmic/dotfiles before the release, or restore the archive name" % (name, MISE_CONFIG, pattern, ", ".join(archives)))
+    return len(pins)
 
 
 def write_atomic(path, data):
@@ -287,6 +337,52 @@ def do_import(args):
     return 0
 
 
+def do_check(args):
+    source = Path(args.source)
+    skills = source / CANONICAL_SKILLS
+    if not skills.is_dir():
+        raise Failure("no canonical skills tree at %s" % skills)
+    listing = local_listing(args.repo_dir, args.rev)
+    bundles = plan_bundles(listing)
+    check_bundle_files(bundles)
+    sizes = {entry["path"]: entry["size"] for entry in listing}
+    for name, entries in bundles.items():
+        for source_path, _sha, _mode in entries.values():
+            if sizes[source_path] == "0":
+                raise Failure("%s is empty; chezmoi would not deploy it" % source_path)
+    problems = ["%s/%s is in the canonical bundle but the release no longer ships it, and the bump stops on orphans: delete it from cartwmic/dotfiles "
+                "(and add it to .chezmoiremove) before the release" % (name, d)
+                for name, entries in sorted(bundles.items()) for d in orphans_in(skills / name, entries)]
+    if problems:
+        raise Failure("\n".join(problems))
+    print("%s: %d bundles, %d files; every file the import expects is present and none is orphaned" % (args.rev, len(bundles), sum(len(e) for e in bundles.values())))
+    pins = None
+    if args.plan:
+        try:
+            config_text = (source / MISE_CONFIG).read_text(encoding="utf-8")
+            plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise Failure("cannot read the mise config or the release plan to check the pins: %s" % error)
+        pins = check_pins_resolve(config_text, plan)
+    if pins:
+        print("%d pins resolve to a planned archive" % pins)
+    return 0
+
+
+def log_check(args, started, outcome, reason):
+    """One JSON line per check run, so a run can be replayed and counted after the terminal closes (principle 14). A log that cannot be written changes nothing."""
+    try:
+        commit = subprocess.run(["git", "-C", str(args.repo_dir), "rev-parse", args.rev], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30).stdout.strip()
+        path = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "import-release-skills" / "log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "check", "commit": commit or args.rev, "plan": bool(args.plan),
+                "outcome": outcome, "reason": reason.splitlines()[0] if reason else "", "duration_s": round(time.monotonic() - started, 2)}
+        with path.open("a", encoding="utf-8") as log:
+            log.write(json.dumps(line) + "\n")
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def deployed_root():
     return Path(os.environ.get("AGENT_HARNESS_CANONICAL_ROOT") or Path.home() / ".local/share/agent-harness/canonical") / "skills"
 
@@ -331,16 +427,26 @@ def main(argv=None):
     importing.add_argument("--pins", action="store_true", help="also move the four mise tool pins to the tag's version")
     importing.add_argument("--apply", action="store_true")
     importing.add_argument("--prune", action="store_true", help="with --apply: delete orphan files in the bundles")
+    checking = commands.add_parser("check", help="dry-run the import on a commit of a local checkout that is not tagged yet")
+    checking.add_argument("--repo-dir", default=".", help="local checkout of the release repository (default: current directory)")
+    checking.add_argument("--rev", default="HEAD", help="commit to check (default: HEAD)")
+    checking.add_argument("--plan", help="the release's cargo-dist plan (JSON): also check that each pin's matching_regex matches a planned archive")
     verifying = commands.add_parser("verify-deployed", help="check the deployed bundles and harness links against the source")
     verifying.add_argument("names", nargs="*")
-    for command in (importing, verifying):
+    for command in (importing, checking, verifying):
         command.add_argument("--source", default=default_source, help="chezmoi source (default: CHEZMOI_SOURCE_DIR, else ~/.local/share/chezmoi)")
     args = parser.parse_args(argv)
+    started = time.monotonic()
     try:
-        return do_import(args) if args.command == "import" else do_verify(args)
+        code = {"import": do_import, "check": do_check, "verify-deployed": do_verify}[args.command](args)
     except Failure as error:
         print("import_release_skills: %s" % error, file=sys.stderr)
+        if args.command == "check":
+            log_check(args, started, "refused", str(error))
         return 1
+    if args.command == "check":
+        log_check(args, started, "pass", "")
+    return code
 
 
 if __name__ == "__main__":
