@@ -218,7 +218,7 @@ The work profile reads `privatePiProviderRef` with `op` through the service acco
 
 Known gaps:
 - Closed: a Codex run with its sandbox off used to set no marker and got the terminal fallback. `CODEX_THREAD_ID` now marks it as an agent shell, so the zsh name refuses without a token (playbook 78819cbd).
-- A terminal started inside an agent app inherits its marker and refuses without a token. The herdr skill reads `HERDR_ENV=1` as "inside a herdr pane", so a terminal run inside herdr may be classed as an agent shell too; not checked on this Mac.
+- A terminal started inside an agent app inherits its marker and refuses without a token.
 - Retro's pane shells are zsh. They refuse only if a marker is set in them; without one they keep the terminal fallback.
 - A zsh started from inside Pi's bash tool (for example `zsh -c 'op whoami'`) has no marker, and `dot_zshenv` puts the zsh name first, so its `op` runs the real CLI with the desktop-app fallback. Confirmed in a scratch run: the Homebrew `op` ran (scratch HOME, no token), because `dot_zshenv` puts Homebrew ahead of the rest of the PATH.
 - The shim's own refusal writes its message to stderr and no log record. The `op_read_cached.sh` refusal is logged; the shim's is not (principle 14).

@@ -27,14 +27,14 @@ Phone-side chezmoi owns configuration.
 ## Terminal colors
 
 The phone-owned `colors.properties` sets Tokyo Night to match the managed Kitty
-palette. Pi's
-System theme needs the Termux fork's OSC 4 query support (versionCode 1009 or
-later) to inherit all 16 ANSI colors through SSH; older builds return
-no palette colors.
+palette. Pi's System theme needs the Termux fork's OSC 4 query support
+(versionCode 1009 or later) to inherit all 16 ANSI colors through SSH; older
+builds return no palette colors.
 
 After applying the palette, run `termux-reload-settings` in a local phone shell
-**while Termux is visible**. Run `/reload` in Pi to refresh its reported colors. Do not copy the palette to the phone instead of applying
-its chezmoi source.
+**while Termux is visible**. Run `/reload` in Pi to refresh its reported
+colors. Do not copy the palette to the phone instead of applying its chezmoi
+source.
 
 ## Extra-key swipe actions
 
