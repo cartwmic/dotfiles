@@ -493,7 +493,6 @@ def scenario_chezmoi() -> dict[str, Any]:
         "~/.local/share/session-recap",
         "~/.local/bin/passage-review",
         "~/.local/share/passage-review",
-        "~/.local/share/agent-harness/canonical/skills/herdr/SKILL.md",
         "~/.pi/agent/extensions/README.md",
         "~/.pi/agent/extensions/passage-review",
     ]
