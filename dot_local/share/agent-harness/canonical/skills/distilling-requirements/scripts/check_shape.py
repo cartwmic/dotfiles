@@ -35,6 +35,10 @@ ENUMS = {
 SHAPE = "requirements/2"
 SNAPSHOT_FIXED = "Not maintained: it records the code at that commit, not today's."
 HISTORY = {"commit": re.compile(r"commit:[0-9a-f]{7,40}"), "pr": re.compile(r"pr:\d+"), "issue": re.compile(r"issue:\d+")}
+# An id cited from another register is written `<label>:<id>` (`core:R-12`): ids are bare only inside their own file. This file cannot resolve such a
+# reference, so it is neither a dangling reference nor a Q-<n> of this file.
+REF = re.compile(r"(?<![\w.-]:)\b([RIUFQ])-(\d+)\b")
+OWN_Q = re.compile(r"(?<![\w.-]:)\bQ-\d+\b")
 ENFORCED = {"R": {"yes", "partial", "no"}, "I": {"type", "check", "constraint", "convention", "test", "none"}}
 
 
@@ -164,7 +168,7 @@ def main(path, repo=None, stats=None):
                 errs.append(f"line {ln}: {ecol}={r[ecol]!r} not in {sorted(ENFORCED[kind])}")
             if kind == "R" and r["enforced"] in ("partial", "no") and not r["note"]:
                 errs.append(f"line {ln}: enforced={r['enforced']} needs a note saying what is not enforced")
-            if kind == "R" and (r["status"] == "disputed" or r["durability"] == "unclear") and not re.search(r"\bQ-\d+\b", r["note"]):
+            if kind == "R" and (r["status"] == "disputed" or r["durability"] == "unclear") and not OWN_Q.search(r["note"]):
                 errs.append(f"line {ln}: a disputed or unclear row needs a Q-<n> in its note")
             for col, allowed in ENUMS.items():
                 if col in r and r[col] not in allowed:
@@ -197,7 +201,7 @@ def main(path, repo=None, stats=None):
         if dup:
             errs.append(f"duplicate ids: {sorted(dup)}")
     defined = {x for v in ids.values() for x in v}
-    for m in re.finditer(r"\b([RIUFQ])-(\d+)\b", text):
+    for m in REF.finditer(text):
         if m.group(0) not in defined:
             errs.append(f"dangling reference {m.group(0)}")
     want = f"R={len(ids['R'])} SM={sm} I={len(ids['I'])} U={len(ids['U'])} F={len(ids['F'])} Q={len(ids['Q'])}"

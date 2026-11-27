@@ -471,5 +471,27 @@ class LoopEngineExample(unittest.TestCase):
             self.assertNotRegex(text, r"\w+\.py:\d+|commit:")
 
 
+class QualifiedIds(unittest.TestCase):
+    """Two registers each have an F-1: a finding cited from one of several registers carries its label, `<label>:F-1`."""
+    base = build([("FR1", "DP1"), ("FR2", "DP2")], ["DP1", "DP2"])
+
+    def x(self, evidence, *extra):
+        return run(self.base + "| FR1 | DP2 | because | %s |\n" % evidence, *extra)
+
+    def test_a_qualified_finding_id_is_evidence_as_found_and_in_a_target(self):
+        for ev in ("core:F-3", "cli:U-1", "loop-core:F-12", "core:F-3; src/a.py:3"):
+            self.assertEqual(self.x(ev).returncode, 0, ev)
+            self.assertEqual(self.x(ev, "--target").returncode, 0, ev)
+
+    def test_a_label_is_lowercase_and_the_designs_own_findings_stay_bare(self):
+        for ev in ("Core:F-3", "core:DF-3", "core:R-3x", ":F-3", "core:F-", "commit:F-3"):
+            done = self.x(ev)
+            self.assertEqual(done.returncode, 1, ev)
+            self.assertIn("is none of path:line", done.stderr)
+
+    def test_the_bare_forms_still_pass(self):
+        self.assertEqual(self.x("F-3; DF-2; U-1").returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
