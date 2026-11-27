@@ -11,6 +11,9 @@ sentence and its evidence as backticked `path:line` citations), and DIR/rows.jso
 source only is listed as not checked: there is nothing in the repo to read. A row with neither a citation nor an `owner:` part fails (prepare prints it and exits 1,
 and verdicts counts it as a failure). A row whose evidence is a README or doc, or whose
 note names a code comment, gets that source in its sentence ("(README)", "(doc)", "(code comment)"), because the check brief fails a claim that rests on one without saying so.
+A row whose evidence includes `owner:interview` and a `path:line` states what the owner requires, not what the code does: the last sentence of its requirement ends "(owner requirement)", and its
+note goes to DIR/owner-notes.txt (`N | R-id | note`, N the doc line of the row: every claim N.k of that line is judged with it), not into the sentence, so a date or a number in the note cannot fail check_citations.py.
+The checker reads the note with the sentence under references/check-brief-owner-rows.md. prepare says how many such rows there are.
 The checker then runs from the sibling skill, by path, unchanged: see references/truth-check.md.
 verdicts reads the checker reports in REPORTS_DIR (the `read | N.k | VERDICT | path:line` rows) and prints one verdict per R-row, the worst of its claims. A row with
 no verdict counts as a failure. Exit 0 when every checked row HOLDS, 1 otherwise, 2 on bad usage. Stdlib only.
@@ -30,6 +33,7 @@ from logged import logged  # noqa: E402
 
 CITE = re.compile(r"([^\s:`,;()'\"]+):(\d+)(?:-(\d+))?")  # a path:line or path:start-end anywhere in a part: backticked or before a remark
 DOC_PATH = re.compile(r"(^|/)(readme[^/]*|agents\.md|claude\.md)$|\.(md|rst|adoc)$|^docs?/", re.I)
+OWNER_LABEL = "owner requirement"
 SEVERITY = ["HOLDS", "OVERSTATED", "UNSUPPORTED", "WRONG"]
 
 
@@ -62,13 +66,15 @@ def source_label(cites, row):
 
 
 def to_doc(rows):
-    """(doc text, [{id, line, cited}], not checked, failed): the claims doc, which doc line holds which R-id, the owner-only rows left out and the rows with no usable evidence."""
-    out, mapped, skipped, failed = ["# Register claims", "", "Each `## R-n` section is one row of the register, for the claim checker."], [], [], []
+    """(doc text, [{id, line, cited}], not checked, failed, owner notes): the claims doc, which doc line holds which R-id, the owner-only rows left out, the rows with no usable evidence and the
+    notes of the rows that state an owner requirement ([(doc line, R-id, note)])."""
+    out, mapped, skipped, failed, notes = ["# Register claims", "", "Each `## R-n` section is one row of the register, for the claim checker."], [], [], [], []
     for _, row in rows:
-        cites, owner, history = [], False, False
+        cites, owner, history, interview = [], False, False, False
         for kind, part in evidence_parts(row["evidence"]):
             if kind == "owner":
                 owner = True
+                interview = interview or part.startswith("owner:interview")
             elif kind in ("commit", "pr", "issue"):
                 history = True
             elif kind == "cite":
@@ -77,13 +83,15 @@ def to_doc(rows):
             reason = "owner evidence only, nothing in the repo to read" if owner else "history refs only: to be resolved by check_history_refs.py, claim not read-checked" if history else "evidence has neither a path:line nor an owner: or history part (%s)" % row["evidence"][:60]
             (skipped if owner or history else failed).append({"id": row["id"], "reason": reason})
             continue
-        label = source_label(cites, row)
+        tags = [t for t in (source_label(cites, row), OWNER_LABEL if interview else "") if t]
         sentence = row["requirement"].rstrip()
-        if label:
-            sentence = (sentence[:-1] if sentence.endswith(".") else sentence) + " (%s)." % label
+        if tags:
+            sentence = (sentence[:-1] if sentence.endswith(".") else sentence) + "".join(" (%s)" % t for t in tags) + "."
         out += ["", "## %s" % row["id"], "%s %s" % (sentence, ", ".join("`%s:%s`" % c for c in cites))]
         mapped.append({"id": row["id"], "line": len(out), "cited": ["%s:%s" % c for c in cites]})
-    return "\n".join(out) + "\n", mapped, skipped, failed
+        if interview:
+            notes.append((len(out), row["id"], row["note"].replace("\n", " ").strip()))
+    return "\n".join(out) + "\n", mapped, skipped, failed, notes
 
 
 def prepare(path, out, stats):
@@ -93,14 +101,18 @@ def prepare(path, out, stats):
         print("%s: no register rows (no table with the R columns)" % path, file=sys.stderr)
         stats["reason"] = "no register rows"
         return 1
-    doc, mapped, skipped, failed = to_doc(rows)
+    doc, mapped, skipped, failed, notes = to_doc(rows)
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "register-claims.md"), "w", encoding="utf-8") as f:
         f.write(doc)
+    with open(os.path.join(out, "owner-notes.txt"), "w", encoding="utf-8") as f:
+        f.write("".join("%d | %s | %s\n" % n for n in notes))
     with open(os.path.join(out, "rows.json"), "w", encoding="utf-8") as f:
         json.dump({"source": os.path.abspath(path), "rows": mapped, "not_checked": skipped, "failed": failed}, f, indent=2)
     stats.update(rows=len(mapped), not_checked=len(skipped), failed=len(failed))
     print("%d rows to check, %d not checked: %s" % (len(mapped), len(skipped), ", ".join("%s (%s)" % (s["id"], s["reason"]) for s in skipped) or "none"))
+    if notes:
+        print("%d owner-requirement rows (%s): give each checker %s and %s as well" % (len(notes), ", ".join(n[1] for n in notes), os.path.join(HERE, "..", "references", "check-brief-owner-rows.md"), os.path.join(out, "owner-notes.txt")))
     for f in failed:
         print("%s FAILED %s" % (f["id"], f["reason"]))
     return 1 if failed else 0
