@@ -14,8 +14,9 @@ four Loop Engine tool pins (loop-engine, lean-change, policy-document, bookends-
 dot_config/mise/config.toml to the tag's version (mise keeps older installed versions, so frozen
 runs keep theirs; this tool never uninstalls anything). The software-change pin was removed from
 that file: releases no longer ship it, and installed copies are untouched.
-The tag still ships the research crate (the `research` program, its skills `using-research-provider` and
-`using-generate-prd`) and a copy of docs/PRD.md; dotfiles installs and imports none of them (SKIPPED_BUNDLES).
+The tag still ships the research crate (the `research` program and its skills `using-research-provider` and
+`using-generate-prd`, left out by SKIPPED_BUNDLES) and a copy of docs/PRD.md (left out of ROOT_REFERENCES);
+dotfiles installs and imports none of them.
 
 `verify-deployed` compares the canonical bundles in the source with the deployed copies byte for
 byte (extra deployed files are orphans: chezmoi apply does not delete them) and checks that each
