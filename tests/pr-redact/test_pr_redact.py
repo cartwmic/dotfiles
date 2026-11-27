@@ -25,12 +25,15 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps({"args": args, "caller": os.environ.get("GH_CALLER")}) + "\n")
 pr = json.load(open(os.environ["FAKE_PR"]))
+down = os.environ["FAKE_PR"] + ".down"  # set when a failed write is followed by a GitHub that cannot be read
 if "-X" not in args:
-    if os.environ.get("FAKE_GET_FAIL"):
+    if os.environ.get("FAKE_GET_FAIL") or os.path.exists(down):
         sys.stderr.write("HTTP 502\n"); sys.exit(1)
     print(json.dumps(pr)); sys.exit(0)
 if os.environ.get("FAKE_PATCH_FAIL") == "before":
     sys.stderr.write("HTTP 403\n"); sys.exit(1)
+if os.environ.get("FAKE_PATCH_FAIL") == "down":
+    open(down, "w").close(); sys.stderr.write("HTTP 502\n"); sys.exit(1)
 body = None
 for a in args:
     if a.startswith("body=@"):
@@ -197,6 +200,13 @@ class PrRedact(unittest.TestCase):
 
     def test_a_failed_write_that_leaves_other_text_is_reported_as_unknown(self):
         result = self.run_cmd(env={"FAKE_PATCH_FAIL": "other"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not be confirmed", result.stderr)
+        self.assertNotIn("was not changed", result.stderr)
+        self.assertEqual(self.records()[-1]["reason"], "github-write-unknown")
+
+    def test_a_failed_write_followed_by_an_unreadable_description_is_reported_as_unknown(self):
+        result = self.run_cmd(env={"FAKE_PATCH_FAIL": "down"})
         self.assertEqual(result.returncode, 2)
         self.assertIn("could not be confirmed", result.stderr)
         self.assertNotIn("was not changed", result.stderr)
