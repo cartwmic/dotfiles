@@ -113,7 +113,7 @@ class Fixture(unittest.TestCase):
 
     def run_tool(self, *argv, **env):
         merged = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]), "FAKE_GH_STATE": str(self.state_path),
-                  "HOME": str(self.home), "AGENT_HARNESS_CANONICAL_ROOT": str(self.dir / "deployed"), **env}
+                  "HOME": str(self.home), "XDG_STATE_HOME": str(self.dir / "state"), "AGENT_HARNESS_CANONICAL_ROOT": str(self.dir / "deployed"), **env}
         return subprocess.run([sys.executable, str(SCRIPT), *argv], capture_output=True, text=True, env=merged, timeout=60)
 
     def do_import(self, *flags, tag="v1.0.0"):
@@ -488,6 +488,17 @@ class CheckTests(Fixture):
     def test_a_subfolder_of_the_checkout_reads_the_whole_tree(self):
         result = self.run_tool("check", "--repo-dir", str(self.repo / "docs"), "--source", str(self.source))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_plan_that_cannot_be_read_stops_it_with_a_message(self):
+        for text in (None, "not json"):
+            if text is not None:
+                self.plan.write_text(text)
+            else:
+                self.plan.unlink()
+            result = self.check("--plan", str(self.plan))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("cannot read the mise config or the release plan", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_a_revision_that_does_not_exist_stops_it(self):
         result = self.check("--rev", "no-such-rev")

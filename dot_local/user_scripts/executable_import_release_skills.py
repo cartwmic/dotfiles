@@ -351,8 +351,14 @@ def do_check(args):
     if problems:
         raise Failure("\n".join(problems))
     print("%s: %d bundles, %d files; every file the import expects is present and none is orphaned" % (args.rev, len(bundles), sum(len(e) for e in bundles.values())))
-    config = source / MISE_CONFIG
-    pins = check_pins_resolve(config.read_text(encoding="utf-8"), json.loads(Path(args.plan).read_text(encoding="utf-8"))) if args.plan else None
+    pins = None
+    if args.plan:
+        try:
+            config_text = (source / MISE_CONFIG).read_text(encoding="utf-8")
+            plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise Failure("cannot read the mise config or the release plan to check the pins: %s" % error)
+        pins = check_pins_resolve(config_text, plan)
     if pins:
         print("%d pins resolve to a planned archive" % pins)
     return 0
