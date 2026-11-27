@@ -60,7 +60,7 @@ class WorkMacTestCase(unittest.TestCase):
             d.mkdir(parents=True, exist_ok=True)
         for name, text in STUBS.items():
             write_exec(self.bin / name, text)
-        for name in ("node", "herdr", "git", "op"):
+        for name in ("node", "git", "op"):
             write_exec(self.tools / name, "#!/bin/sh\nexit 0\n")
         (self.base / "gitconfig").write_text("")
         self.genv = dict(os.environ, GIT_CONFIG_GLOBAL=str(self.base / "gitconfig"), GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
@@ -511,8 +511,8 @@ class ApplyAndCompareTests(WorkMacTestCase):
         self.assertIn("no live unit", self.out())
 
     def test_with_that_extra_path_set_the_units_are_identical(self):
-        self.hand_setup(extra="/opt/nvm/bin:/opt/herdr/bin")
-        self.write_config(CFG_PROFILE.replace("data:\n", 'data:\n  instances:\n    coordinator:\n      extraPath: "/opt/nvm/bin:/opt/herdr/bin"\n'))
+        self.hand_setup(extra="/opt/nvm/bin:/opt/tools/bin")
+        self.write_config(CFG_PROFILE.replace("data:\n", 'data:\n  instances:\n    coordinator:\n      extraPath: "/opt/nvm/bin:/opt/tools/bin"\n'))
         self.run_script()
         self.assertOK()
         self.assertIn("identical", self.out())
@@ -841,7 +841,7 @@ class DerivedFromTheLiveUnitTests(WorkMacTestCase):
     """The checkout and extraPath are read (read-only) from the installed live unit when nothing says otherwise."""
 
     def prefix(self):
-        return "%s/.local/share/mise/installs/node/lts/bin:%s/.local/share/mise/installs/herdr/0.9.1" % (self.home, self.home)
+        return "%s/.local/share/mise/installs/node/lts/bin:%s/.local/share/mise/installs/git/2.47.0" % (self.home, self.home)
 
     def live_path(self):
         return self.home / "Library/LaunchAgents" / (LABEL + ".plist")
