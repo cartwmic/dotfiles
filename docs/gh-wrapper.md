@@ -158,7 +158,16 @@ The body must be given as text or a file (`--body`, `--body-file FILE`): a body 
 
 **What is excused: one place.** The top of `gh_policy.py` holds every exemption, each recognised by something a tool sets:
 
-- `PR_WITHOUT_ISSUE`: kinds of pull request that need no issue, each `(kind, field, regex)` on the branch (`head`) or the `title`. **Empty as shipped**: whether release, pin-bump and revert pull requests need an issue is undecided, so those tools are refused too until a row is added.
+- `PR_WITHOUT_ISSUE`: the kinds of pull request that need no issue: release, pin-bump and revert, and nothing else. Each is `(kind, head regex, title regex)`, and a pull request is exempt only when **both** its branch and its title have the form the opening tool gives them, so a hand-made pull request with "release" in its title is still refused. A call with no `--head` or no `--title` is never exempt.
+
+| Kind | Branch | Title | Set by |
+|---|---|---|---|
+| release | `release/vX.Y.Z` | `release: vX.Y.Z` or `release: prepare vX.Y.Z` | Loop Engine's `release-after-merge.sh`, the agent-kit release |
+| agent-kit pin bump | `agent-kit-vX.Y.Z` | `chore(agent-kit): pin @cartwmic/agent-kit <version>` | `agent_kit_bump.py` |
+| loop-engine pin bump | `loop-engine-vX.Y.Z` | `feat(loop-engine): import vX.Y.Z skills; bump pins to <version>` | `loop_engine_bump.py` |
+| t3 pin bump | `t3-pin/<version>` | `t3 pin: <version>` | `t3_pin_check.py` |
+| revert | `revert-<number>[-<branch>]` | `Revert "<original title>"` | GitHub's Revert button |
+
 - `MERGE_COMMIT_STOPGAP`: temporary. The coordinator's `scripts/merge-pr.sh` still runs `gh pr merge --merge`. It may do so while `GH_CALLER=merge-pr` is set **and** the parent (or grandparent) process is a script named `merge-pr.sh` (read by `gh_log.ancestry`, so a variable alone does not do it). `--rebase` has no exemption. **Delete the entry when the coordinator moves `merge-pr.sh` to `--squash`.**
 
 **Log.** Every refusal and every use of an exemption is one line in `~/.local/state/gh-wrapper/policy.jsonl`: `{utc, rule (issue-first, squash-only, issue-form, close-rule), outcome (refused or exempt), class, kind (the exemption used, else null), who ($GH_CALLER, else null)}`. Never a title, a body, an issue number or a repository. Refusals per rule: `jq -sr 'map(select(.outcome=="refused")) | group_by(.rule)[] | "\(.[0].rule) \(length)"' ~/.local/state/gh-wrapper/policy.jsonl`. A use of the merge stopgap shows as `squash-only` with `outcome` `exempt`, so a use from anywhere but the script shows by its `who`.

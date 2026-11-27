@@ -30,9 +30,19 @@ READ_TIMEOUT = 30
 # ---- what is excused: the ONE place --------------------------------------------------------------------------------------------------------------------
 # Each exemption is recognised by something a tool sets and a person does not type by accident, never by what the caller says it is.
 #
-# PR_WITHOUT_ISSUE: kinds of pull request that need no issue, as (kind, field, regex), field being "head" (the branch) or "title". EMPTY ON PURPOSE: whether
-# release, pin-bump and revert pull requests need an issue is not decided, so with the list empty `gh pr create` from those tools is refused too.
-PR_WITHOUT_ISSUE = ()
+# PR_WITHOUT_ISSUE: the kinds of pull request that need no issue (the owner's answer: release, pin-bump and revert pull requests, and nothing else), each as
+# (kind, head regex, title regex). A pull request is exempt only when BOTH its branch and its title have the form the opening tool gives them, so an ordinary
+# pull request with "release" in its title is still refused. Every pattern is the one the tool sets: scripts/release-after-merge.sh in Loop Engine and the agent-kit
+# release (release/vX.Y.Z, "release: ..."), executable_agent_kit_bump.py (agent-kit-vX.Y.Z), executable_loop_engine_bump.py (loop-engine-vX.Y.Z),
+# executable_t3_pin_check.py (t3-pin/<version>), and GitHub's own Revert button (revert-<number>-<branch>, Revert "<title>").
+_VERSION = r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?"
+PR_WITHOUT_ISSUE = (
+    ("release", r"^release/%s$" % _VERSION, r"^release: (?:prepare )?%s$" % _VERSION),
+    ("agent-kit pin bump", r"^agent-kit-%s$" % _VERSION, r"^chore\(agent-kit\): pin @cartwmic/agent-kit \S+$"),
+    ("loop-engine pin bump", r"^loop-engine-%s$" % _VERSION, r"^feat\(loop-engine\): import %s skills; bump pins to \S+$" % _VERSION),
+    ("t3 pin bump", r"^t3-pin/\S+$", r"^t3 pin: \S+$"),
+    ("revert", r"^revert-\d+(?:-\S+)?$", r'^Revert ".+"$'),
+)
 # MERGE_COMMIT_STOPGAP: TEMPORARY. The coordinator's merge script (scripts/merge-pr.sh) still runs `gh pr merge --merge`, and squash-only would stop every
 # coordinator merge. It may merge with --merge while GH_CALLER names it AND a calling process is that script, and each use is logged as exempt. DELETE THIS
 # ENTRY when the coordinator moves merge-pr.sh to --squash; nothing else may take it, and --rebase has no exemption at all.
@@ -91,8 +101,8 @@ def kind_labels(flags):
 
 def exempt_pr(title, head):
     """The kind of PR_WITHOUT_ISSUE this pull request is, or None."""
-    for kind, field, pattern in PR_WITHOUT_ISSUE:
-        if re.search(pattern, head if field == "head" else title):
+    for kind, head_form, title_form in PR_WITHOUT_ISSUE:
+        if re.search(head_form, head) and re.search(title_form, title):
             return kind
     return None
 

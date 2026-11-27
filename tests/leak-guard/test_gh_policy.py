@@ -148,15 +148,38 @@ class Policy(WrapperBase):
     def test_gh_pr_new_is_the_same_command_as_pr_create(self):
         self.refused(self.run_gh("pr", "new", "--title", "t", "--body", "no link"), "not linked to an issue")
 
-    def test_no_kind_of_pull_request_is_exempt_as_shipped_and_a_listed_kind_goes_through_and_is_logged(self):
-        self.assertEqual(P.PR_WITHOUT_ISSUE, ())
-        args = ["pr", "create", "--title", "chore(release): v1", "--head", "release/v1", "--body", "no link"]
-        self.refused(self.run_gh(*args), "not linked to an issue")
-        path = self.tmp / "lib" / "gh_policy.py"
-        path.write_text(path.read_text().replace("PR_WITHOUT_ISSUE = ()", 'PR_WITHOUT_ISSUE = (("release", "head", "^release/"),)'))
-        self.passed(self.run_gh(*args), *args)
-        self.assertEqual([(r["rule"], r["outcome"], r["kind"]) for r in self.policy_log()], [("issue-first", "refused", None), ("issue-first", "exempt", "release")])
-        self.refused(self.run_gh("pr", "create", "--title", "t", "--head", "feature/x", "--body", "no link"), "not linked to an issue")
+    # The forms below are what each tool really sets (checked against the last 30 days of real pull requests when they were written).
+    EXEMPT = (
+        ("release", "release/v0.76.3", "release: v0.76.3"),
+        ("release", "release/v0.71.1", "release: prepare v0.71.1"),
+        ("agent-kit pin bump", "agent-kit-v0.82.0", "chore(agent-kit): pin @cartwmic/agent-kit 0.82.0"),
+        ("loop-engine pin bump", "loop-engine-v0.71.2", "feat(loop-engine): import v0.71.2 skills; bump pins to 0.71.2"),
+        ("t3 pin bump", "t3-pin/0.0.31", "t3 pin: 0.0.31"),
+        ("revert", "revert-12-fix-the-thing", 'Revert "fix(area): the thing (#12)"'),
+    )
+
+    def test_exactly_the_release_pin_bump_and_revert_kinds_are_exempt(self):
+        self.assertEqual(sorted({k for k, _, _ in self.EXEMPT}), sorted(k for k, _, _ in P.PR_WITHOUT_ISSUE))
+
+    def test_each_exempt_kind_goes_through_with_no_issue_and_the_use_is_logged(self):
+        for kind, head, title in self.EXEMPT:
+            with self.subTest(kind, head=head):
+                args = ["pr", "create", "--base", "main", "--head", head, "--title", title, "--body", "no link"]
+                self.passed(self.run_gh(*args), *args)
+                self.assertEqual([(r["rule"], r["outcome"], r["kind"]) for r in self.policy_log()][-1], ("issue-first", "exempt", kind))
+                self.assertNotIn(head, json.dumps(self.policy_log()))
+
+    def test_a_look_alike_made_by_hand_is_still_refused(self):
+        for head, title, why in (("feature/x", "release: v1.2.3", "the title alone"), ("release/v1.2.3", "add a thing", "the branch alone"),
+                                 ("feature/x", 'Revert "something"', "a revert title on an ordinary branch"), ("revert-1-x", "undo it", "a revert branch with an ordinary title"),
+                                 ("agent-kit-v1.2.3", "chore: bump", "the branch alone"), ("my-t3-pin/1", "t3 pin: 1", "a prefix"),
+                                 ("release/v1.2", "release: v1.2", "a version with two parts"), ("loop-engine-v1.2.3", "feat(loop-engine): other work", "the branch alone")):
+            with self.subTest(why, head=head, title=title):
+                self.refused(self.run_gh("pr", "create", "--head", head, "--title", title, "--body", "no link"), "not linked to an issue")
+
+    def test_an_exempt_form_with_no_head_or_no_title_is_refused(self):
+        self.refused(self.run_gh("pr", "create", "--title", "release: v1.2.3", "--body", "no link"), "not linked to an issue")
+        self.refused(self.run_gh("pr", "create", "--head", "release/v1.2.3", "--body", "no link"), "not linked to an issue")
 
     # ---- squash only --------------------------------------------------------------------------------------------------------------------------------
 
