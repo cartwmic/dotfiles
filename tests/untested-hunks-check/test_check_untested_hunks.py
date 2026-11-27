@@ -198,13 +198,48 @@ class CheckUntestedHunks(unittest.TestCase):
         base = self.pr({TEST: TESTS_FOR_BOTH})
         self.assertEqual(self.run_check(base)[0], 0)
 
-    def test_a_new_script_and_a_deleted_script_are_not_blamed(self):
+    def test_a_deleted_script_is_not_blamed(self):
         base = self.pr({"scripts/other.py": "x = 1\n"})
-        self.assertEqual(self.run_check(base)[0], 0)
         (self.repo / "scripts/other.py").unlink()
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "drop it")
         self.assertEqual(self.run_check(base)[0], 0)
+
+    def test_a_new_script_with_no_test_that_depends_on_it_fails(self):
+        # The #908 shape: a script added in the range, a test file that names it but does not need it.
+        base = self.commit({CODE: TOOL, TEST: TESTS}, "base")
+        self.commit({"scripts/matrix.py": "def build(n):\n    return [n] * 3\n", TEST: TESTS + "    def test_names_it(self):\n        self.assertTrue('matrix.py')\n\n"}, "add matrix")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("1 changed code hunks in 1 scripts", out)
+        self.assertIn("scripts/matrix.py changes at lines 1-2", out)
+
+    def test_a_new_script_a_test_depends_on_passes(self):
+        base = self.commit({CODE: TOOL, TEST: TESTS}, "base")
+        needs = TESTS + "    def test_build(self):\n        import matrix\n        self.assertEqual(matrix.build(1), [1, 1, 1])\n\n"
+        self.commit({"scripts/matrix.py": "def build(n):\n    return [n] * 3\n", TEST: needs}, "add matrix")
+        self.assertEqual(self.run_check(base)[0], 0)
+
+    def test_a_new_script_in_a_commit_range_is_cleared_by_a_later_commit_that_tests_it(self):
+        base = self.commit({CODE: TOOL, TEST: TESTS}, "base")
+        self.commit({"scripts/matrix.py": "def build(n):\n    return [n] * 3\n", TEST: TESTS + "    def test_names_it(self):\n        self.assertTrue('matrix.py')\n\n"}, "add matrix")
+        needs = TESTS + "    def test_build(self):\n        import matrix\n        self.assertEqual(matrix.build(1), [1, 1, 1])\n\n"
+        self.commit({TEST: needs}, "test it")
+        self.assertEqual(self.run_check(base)[0], 0)
+
+    def test_a_declaration_excuses_a_new_script(self):
+        base = self.commit({CODE: TOOL, TEST: TESTS}, "base")
+        self.commit({"scripts/matrix.py": "def build(n):\n    return [n] * 3\n", TEST: TESTS + "    def test_names_it(self):\n        self.assertTrue('matrix.py')\n\n"},
+                    "add matrix\n\nUntested-change: scripts/matrix.py: run by hand only")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("DECLARED untested change: scripts/matrix.py", out)
+
+    def test_a_new_script_no_test_names_is_not_checked_and_does_not_fail(self):
+        base = self.pr({"scripts/other.py": "x = 1\n"})
+        code, out = self.run_check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("NOT CHECKED scripts/other.py: no test file names it", out)
 
     def test_a_script_no_test_names_is_not_checked_and_does_not_fail(self):
         base = self.pr({"scripts/lonely.py": "x = 2\n"}, first={CODE: TOOL, TEST: TESTS, "scripts/lonely.py": "x = 1\n"})

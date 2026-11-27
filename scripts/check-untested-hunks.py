@@ -7,10 +7,11 @@ early_exits.py, which decides when a continue/break counts as an exit; both comm
 found that the rule dropped exits the old one listed). A check that only asks "did the change touch a test file?" passes both
 commits. This one asks it of every changed hunk.
 
-It takes the pull request's own change (BASE's merge-base with HEAD, to HEAD) and, for each hunk that changes the code of an existing
+It takes the pull request's own change (BASE's merge-base with HEAD, to HEAD) and, for each hunk that changes the code of a
 Python script (not a test file), undoes that one hunk in a copy of HEAD. It runs the test files that name the script: the script's own
 folder (tests/<script name>/) first, then the others. The first file that fails catches the hunk. If they all still pass, no test
-depends on the hunk, and the check fails. A hunk that changes only comments, docstrings or layout is skipped: the
+depends on the hunk, and the check fails. A script the pull request adds is one hunk, the whole file: it is undone by emptying it, so a new script that no test that names it
+depends on fails the check (dotfiles#908 added a 536-line script and the check said "0 changed code hunks"). A hunk that changes only comments, docstrings or layout is skipped: the
 syntax tree is the same with or without it. It judges the pull request as it stands, so a later commit that adds the test clears an
 earlier commit's hunk.
 
@@ -207,11 +208,30 @@ def survives(commit, path, hunk, files, parent, lock):
             copy.close()
 
 
+def added_files(old, new):
+    """{path: lines} of the files that `new` adds to `old`. The patch reader skips them (nothing existing was edited), so this reads
+    them whole: a new script is one hunk, the whole file, and undoing it leaves an empty file."""
+    out = {}
+    for path in git("diff", "--name-only", "--no-renames", "--diff-filter=A", old, new).splitlines():
+        try:
+            out[path] = git("show", "%s:%s" % (new, path)).splitlines()
+        except RuntimeError:
+            continue
+    return out
+
+
 def code_hunks(merge_base, head):
-    """The hunks of the pull request that change what an existing non-test Python script does, as (path, (removed, added, start, count))."""
+    """The hunks of the pull request that change what a non-test Python script does, as (path, (removed, added, start, count)). A script
+    the pull request adds counts as one hunk, the whole file: a new script that no test depends on is as untested as a changed line."""
     patch = git("diff", "-U0", "--no-renames", "--no-color", merge_base, head)
     after = {}
     out = []
+    for path, lines in added_files(merge_base, head).items():
+        if is_test_file(path) or not lines:
+            continue
+        after[path] = "".join(line + "\n" for line in lines)
+        if is_python(path, after[path]) and shape(after[path]) != shape(""):
+            out.append((path, ([], lines, 1, len(lines))))
     for path, removed, added, start, count in hunks(patch):
         if not path or is_test_file(path):
             continue
@@ -247,6 +267,7 @@ def declared_reason(path, hunk, found, merge_base):
     for script, why, commit in found:
         if path == script or path.endswith("/" + script):
             seen = [(r, a) for p, r, a, _start, _count in hunks(git("diff", "-U0", "--no-renames", "--no-color", merge_base, commit)) if p == path]
+            seen += [([], lines) for new, lines in added_files(merge_base, commit).items() if new == path]
             if (removed, added) in seen:
                 reasons.append(why)
     return "; ".join(reasons)
