@@ -62,7 +62,6 @@ def blob_sha(data):
 GOOD_TREE = {
     "skills/using-loop-engine/SKILL.md": b"root skill v1\n",
     "docs/agent-usage.md": b"agent usage v1\n",
-    "docs/operational-ux-capture.schema.json": b"{}\n",
     "docs/operational-ux-contracts.md": b"ux\n",
     "docs/PRD.md": b"prd\n",
     "docs/not-a-reference.md": b"stays in the repo\n",
@@ -139,7 +138,6 @@ class ImportTests(Fixture):
         expected = {
             "using-loop-engine/SKILL.md": b"root skill v1\n",
             "using-loop-engine/references/agent-usage.md": b"agent usage v1\n",
-            "using-loop-engine/references/operational-ux-capture.schema.json": b"{}\n",
             "using-loop-engine/references/operational-ux-contracts.md": b"ux\n",
             "using-loop-engine/references/PRD.md": b"prd\n",
             "using-foo-provider/SKILL.md": b"foo skill v1\n",

@@ -33,27 +33,20 @@ both focused tests and an actual editor receipt. Leave Herdr's non-Pi
 
 ## Validation
 
-From the chezmoi source root, run the focused tests and the private-session
-journey after edits to snapshot or shortcut behavior:
+From the chezmoi source root, run the focused tests after edits to snapshot or
+shortcut behavior:
 
 ```sh
 (cd dot_pi/private_agent/extensions/inspect-prompt && node --test)
-python3 dot_pi/private_agent/extensions/inspect-prompt/scenario.py
 ```
 
-`scenario.py` uses installed Pi, a scripted provider, a dummy editor, and a
-private Herdr client. Its shortcut must reach Pi through that client. Inspect
-its outcome and editor receipts; a unit test of `buildConversationSnapshot`
-alone cannot prove the user path. The private Pi journey currently
-exercises only `/inspect-session`. For an `/inspect-prompt` change, extend that
-isolated journey or collect an equivalent real Pi TUI command-to-dummy-editor
+There is no outside-in proof of this extension today. The only one, a private
+herdr journey, was removed with herdr support, and it could not run on the
+managed Pi anyway. An outside-in proof can return on another terminal host. A
+unit test of `buildConversationSnapshot` alone cannot prove the user path. For
+an `/inspect-prompt` change, collect a real Pi TUI command-to-dummy-editor
 receipt. Check assembled prompt content, editor return, and no submitted user
-query before calling that path validated.
-
-`scenario.py` pins Pi 0.87.1 and Herdr 0.9.1. A version mismatch reports
-BLOCKED before testing. Check the upgraded Pi layout and Herdr key route,
-adapt the pins and fixtures after verifying compatibility, then rerun. A
-BLOCKED result is no validation.
+query before calling that path validated, and say plainly when it is missing.
 
 Before any separately approved rollout, preview the exact worktree source from
 the checkout root:
@@ -64,14 +57,12 @@ chezmoi --source "$PWD" apply --dry-run --verbose "$HOME/.pi/agent/extensions/in
 
 Apply only with the user's approval. Starting a new Pi process is required to
 load changed extension code. Do not restart or hand off the owner's Herdr
-server for documentation or validation work. Keep disposable scenario servers
-and artifacts separate from the owner's session.
+server for documentation or validation work.
 
 ## Completion and handoff
 
-Report the changed source paths, focused tests, both journey outcomes (or why
-a journey could not run), the target-profile dry-run, and whether anything was
-applied or committed. For changes to `/inspect-prompt`, include its real
+Report the changed source paths, focused tests, the target-profile dry-run,
+and whether anything was applied or committed. For changes to `/inspect-prompt`, include its real
 command-path editor receipt; disclose its absence as unverified. Name any
 untested installed Pi/Herdr version or pending rollout step. A successful
 script with a dummy editor and provider does not establish behavior with a
