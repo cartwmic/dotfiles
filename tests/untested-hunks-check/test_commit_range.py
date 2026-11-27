@@ -79,6 +79,13 @@ class History(unittest.TestCase):
         self.assertEqual(head, second)
         self.assertEqual(commits, [first, second])
 
+    def test_git_reads_a_file_that_is_not_utf8_without_raising(self):
+        (self.repo / "latin.txt").write_bytes(b"caf\xe9\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "latin")
+        self.assertIn("caf", commit_range.git("show", "HEAD:latin.txt", cwd=str(self.repo)))
+        self.assertIn("caf", commit_range.git("show", "HEAD", cwd=str(self.repo)))
+
     def test_walk_raises_for_a_rev_that_does_not_resolve(self):
         self.commit("base", "base")
         with self.assertRaises(RuntimeError):

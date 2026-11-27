@@ -7,6 +7,7 @@ so it does not depend on how fast the machine is; the file runs in about half a 
     python3 -m unittest discover -s tests/untested-hunks-check
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -65,7 +66,9 @@ class CheckUntestedHunks(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.repo = Path(self._tmp.name)
+        self.repo = Path(self._tmp.name) / "repo"
+        self.repo.mkdir()
+        self.state = Path(self._tmp.name) / "state"  # the check's log goes here, not into the real ~/.local/state
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "t@example.invalid")
         self.git("config", "user.name", "t")
@@ -84,7 +87,7 @@ class CheckUntestedHunks(unittest.TestCase):
 
     def run_check(self, base, head="HEAD", timeout="600", budget="1500"):
         done = subprocess.run([sys.executable, str(SCRIPT), base, head], cwd=self.repo, capture_output=True, text=True,
-                              env=dict(os.environ, UNTESTED_HUNKS_TIMEOUT=timeout, UNTESTED_HUNKS_BUDGET=budget))
+                              env=dict(os.environ, UNTESTED_HUNKS_TIMEOUT=timeout, UNTESTED_HUNKS_BUDGET=budget, XDG_STATE_HOME=str(self.state)))
         return done.returncode, done.stdout + done.stderr
 
     def sigterm_run(self, base):
@@ -93,7 +96,7 @@ class CheckUntestedHunks(unittest.TestCase):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         mark = Path(scratch.name) / "pid"
-        env = dict(os.environ, UNTESTED_HUNKS_BUDGET="1500", TMPDIR=scratch.name, UNTESTED_TEST_MARK=str(mark))
+        env = dict(os.environ, UNTESTED_HUNKS_BUDGET="1500", XDG_STATE_HOME=str(self.state), TMPDIR=scratch.name, UNTESTED_TEST_MARK=str(mark))
         proc = subprocess.Popen([sys.executable, str(SCRIPT), base, "HEAD"], cwd=self.repo, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         waited = time.monotonic()
@@ -235,11 +238,99 @@ class CheckUntestedHunks(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("DECLARED untested change: scripts/matrix.py", out)
 
-    def test_a_new_script_no_test_names_is_not_checked_and_does_not_fail(self):
+    def test_a_new_script_no_test_names_fails_and_says_what_to_do(self):
         base = self.pr({"scripts/other.py": "x = 1\n"})
         code, out = self.run_check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("FAIL untested change: scripts/other.py is a new script and no test file names it", out)
+        self.assertIn("Add a test that depends on it", out)
+        self.assertIn("Untested-change: scripts/other.py: <why", out)
+
+    def test_a_declaration_excuses_a_new_script_no_test_names(self):
+        base = self.pr({"scripts/other.py": "x = 1\n"}, "add other\n\nUntested-change: scripts/other.py: run by hand only")
+        code, out = self.run_check(base)
         self.assertEqual(code, 0, out)
-        self.assertIn("NOT CHECKED scripts/other.py: no test file names it", out)
+        self.assertIn("DECLARED untested change: scripts/other.py", out)
+
+    def test_a_new_python_script_found_by_its_shebang_that_no_test_names_fails(self):
+        base = self.pr({"bin/executable_tool2": "#!/usr/bin/env python3\nx = 1\n"})
+        self.assertEqual(self.run_check(base)[0], 1)
+
+    def test_a_range_that_adds_a_binary_file_passes_without_a_traceback(self):
+        base = self.pr({"README.md": "x\n"})
+        (self.repo / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+        (self.repo / "notes.txt").write_bytes(b"caf\xe9\n")  # latin-1: not UTF-8
+        (self.repo / "scripts").mkdir(exist_ok=True)
+        (self.repo / "scripts/latin.py").write_bytes(b"# caf\xe9\nx = 1\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "add binaries")
+        code, out = self.run_check(base)
+        self.assertNotIn("Traceback", out)
+        self.assertNotIn("UnicodeDecodeError", out)
+        self.assertEqual(code, 1, out)  # only the new latin-1 script is judged, and no test names it
+        self.assertIn("scripts/latin.py", out)
+        self.assertNotIn("logo.png", out)
+
+    def test_a_range_that_adds_only_a_binary_file_passes(self):
+        base = self.pr({"README.md": "x\n"})
+        (self.repo / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "add image")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("0 changed code hunks", out)
+
+    def log_lines(self):
+        return [json.loads(line) for line in (self.state / "check-untested-hunks" / "log.jsonl").read_text().splitlines()]
+
+    def test_a_run_writes_one_json_line_with_its_outcome_and_counts(self):
+        base = self.pr({CODE: TOOL_FIXED, TEST: TESTS_FOR_LABEL})
+        self.assertEqual(self.run_check(base)[0], 1)
+        (line,) = self.log_lines()
+        self.assertEqual((line["action"], line["outcome"], line["exit"]), ("check", "failed", 1))
+        self.assertEqual((line["hunks"], line["scripts"], line["fail"], line["not_checked"], line["declared"]), (2, 1, 1, 0, 0))
+        self.assertTrue(line["range"].startswith(base), line)
+        self.assertRegex(line["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsInstance(line["duration_ms"], int)
+
+    def test_a_clean_run_logs_ok_and_a_refusal_logs_refused(self):
+        base = self.pr({"README.md": "x\n"})
+        self.assertEqual(self.run_check(base)[0], 0)
+        self.assertEqual(self.run_check("0" * 40)[0], 2)
+        ok, refused = self.log_lines()
+        self.assertEqual(ok["outcome"], "ok")
+        self.assertEqual((refused["outcome"], refused["exit"], refused["reason"]), ("refused", 2, "range does not resolve"))
+
+    def test_a_declared_run_counts_the_declaration(self):
+        base = self.pr({"scripts/other.py": "x = 1\n"}, "add other\n\nUntested-change: scripts/other.py: run by hand only")
+        self.run_check(base)
+        (line,) = self.log_lines()
+        self.assertEqual((line["outcome"], line["declared"], line["fail"]), ("ok", 1, 0))
+
+    def test_a_call_with_the_wrong_arguments_logs_refused(self):
+        done = subprocess.run([sys.executable, str(SCRIPT)], cwd=self.repo, capture_output=True, text=True, env=dict(os.environ, XDG_STATE_HOME=str(self.state)))
+        self.assertEqual(done.returncode, 2, done.stderr)
+        (line,) = self.log_lines()
+        self.assertEqual((line["outcome"], line["reason"]), ("refused", "usage"))
+
+    def test_a_test_file_that_is_not_utf8_and_names_the_script_does_not_crash_the_check(self):
+        latin = ("# -*- coding: latin-1 -*-\n" + TESTS_FOR_LABEL + "    # caf\xe9 tool.py\n").encode("latin-1")
+        base = self.commit({CODE: TOOL}, "base")
+        (self.repo / TEST).parent.mkdir(parents=True)
+        (self.repo / TEST).write_bytes(latin)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "add the test")
+        self.commit({CODE: TOOL_FIXED}, "fix")
+        code, out = self.run_check(base)
+        self.assertNotIn("Traceback", out)
+        self.assertEqual(code, 1, out)
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_verdict(self):
+        base = self.pr({CODE: TOOL_FIXED, TEST: TESTS_FOR_LABEL})
+        self.state.write_text("a file where the log folder should be\n")
+        code, out = self.run_check(base)
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("Traceback", out)
 
     def test_a_script_no_test_names_is_not_checked_and_does_not_fail(self):
         base = self.pr({"scripts/lonely.py": "x = 2\n"}, first={CODE: TOOL, TEST: TESTS, "scripts/lonely.py": "x = 1\n"})
@@ -255,6 +346,7 @@ class CheckUntestedHunks(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("fail in %s (FAIL: test_" % TEST, out)
         self.assertIn("before anything was undone", out)
+        self.assertEqual(self.log_lines()[-1]["not_checked"], 1)
 
     def test_tests_that_all_skip_are_not_checked(self):
         skipping = HEADER + "    @unittest.skip('needs a thing this runner lacks')\n    def test_it(self):\n        self.assertTrue(tool.counts(1, 5, 3))\n\n"
@@ -262,6 +354,7 @@ class CheckUntestedHunks(unittest.TestCase):
         code, out = self.run_check(base)
         self.assertEqual(code, 0, out)
         self.assertIn("all skip", out)
+        self.assertEqual(self.log_lines()[-1]["not_checked"], 1)
 
     def test_a_deleted_guard_no_test_reads_fails_and_one_a_test_reads_passes(self):
         guarded = "def counts(start, end, line):\n    if end < start:\n        return 'empty'\n    return start < line <= end\n"
@@ -355,6 +448,7 @@ class CheckUntestedHunks(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("NOT CHECKED scripts/tool.py: ", out)
         self.assertIn("ran longer than 2 s before anything was undone", out)
+        self.assertEqual(self.log_lines()[-1]["not_checked"], 1)
 
     def test_a_hang_that_undoing_a_hunk_brings_back_counts_as_caught(self):
         looping = "def wait(n):\n    while n:\n        pass\n    return n\n"
@@ -376,6 +470,7 @@ class CheckUntestedHunks(unittest.TestCase):
         self.assertEqual(code, 1, out)  # the label hunk is a FAIL, printed before the budget ends
         self.assertIn("FAIL untested change: scripts/tool.py changes at line 2", out)
         self.assertIn("NOT CHECKED scripts/tool.py line 5: time budget", out)  # the PACE hunk was in its slow test when the budget ended
+        self.assertEqual((self.log_lines()[-1]["fail"], self.log_lines()[-1]["not_checked"]), (1, 1))
         self.assertEqual(self.git("worktree", "list").count("\n"), 0, out)
 
     def test_a_budget_spent_before_the_unchanged_run_prints_not_checked_for_each_hunk(self):
@@ -387,6 +482,7 @@ class CheckUntestedHunks(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(out.count("NOT CHECKED scripts/tool.py line"), 2, out)
         self.assertEqual(out.count("time budget"), 2, out)
+        self.assertEqual(self.log_lines()[-1]["not_checked"], 2)
         self.assertNotIn("FAIL", out)
 
     def test_the_scripts_own_test_folder_runs_first_so_a_slow_file_elsewhere_is_not_reached(self):
@@ -409,6 +505,7 @@ class CheckUntestedHunks(unittest.TestCase):
         base = self.commit({CODE: PACED_BASE, TEST: OWN_LOADS, ELSEWHERE: SLOW_WHEN_SLOW}, "base")
         self.commit({CODE: PACED_FIXED}, "fix")
         self.assert_stopped_clean(*self.sigterm_run(base))
+        self.assertEqual((self.log_lines()[-1]["outcome"], self.log_lines()[-1]["exit"]), ("error", 143))  # a stopped run still leaves its record
 
     def test_sigterm_during_the_unchanged_run_kills_it_and_removes_the_scratch_worktrees(self):
         base = self.commit({CODE: TOOL, TEST: ALWAYS_SLOW_MARKED}, "base")

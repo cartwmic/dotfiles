@@ -10,9 +10,10 @@ commits. This one asks it of every changed hunk.
 It takes the pull request's own change (BASE's merge-base with HEAD, to HEAD) and, for each hunk that changes the code of a
 Python script (not a test file), undoes that one hunk in a copy of HEAD. It runs the test files that name the script: the script's own
 folder (tests/<script name>/) first, then the others. The first file that fails catches the hunk. If they all still pass, no test
-depends on the hunk, and the check fails. A script the pull request adds is one hunk, the whole file: it is undone by emptying it, so a new script that no test that names it
-depends on fails the check (dotfiles#908 added a 536-line script and the check said "0 changed code hunks"). A hunk that changes only comments, docstrings or layout is skipped: the
-syntax tree is the same with or without it. It judges the pull request as it stands, so a later commit that adds the test clears an
+depends on the hunk, and the check fails. A script the pull request adds is one hunk, the whole file: it is undone by emptying it, so a new
+script that no test that names it depends on fails the check (dotfiles#908 added a 536-line script and the check said "0 changed code
+hunks"). A new script that no test file names at all fails too, unless it is declared. A hunk that changes only comments, docstrings or
+layout is skipped: the syntax tree is the same with or without it. It judges the pull request as it stands, so a later commit that adds the test clears an
 earlier commit's hunk.
 
 A hunk that no test can see on purpose (a refactor, a rename) is declared in the message of a commit of the pull request (first
@@ -26,8 +27,8 @@ declared hunk passes and is printed, so the CI log and the reviewer see each one
 A Python script is a .py file or a file whose first line is a python shebang. Tests are chosen by name: the test files (test_*.py,
 *_test.py) that mention the script's file name as a whole word, with or without chezmoi's source prefixes and without ".tmpl" or ".py"
 (`kgate` or `executable_kgate.tmpl`).
-A script that no test mentions, or whose tests fail, all skip or hang (see TIMEOUT) before anything is undone, prints NOT CHECKED and never fails;
-those are other mistakes. Only Python is read, and only unittest-style files (python3 -m unittest). Hunks that depend on each other
+A changed script that no test mentions, or whose tests fail, all skip or hang (see TIMEOUT) before anything is undone, prints NOT CHECKED
+and never fails; those are other mistakes. (A new script that no test mentions is the exception above.) Only Python is read, and only unittest-style files (python3 -m unittest). Hunks that depend on each other
 (a changed signature and its callers) count as seen when undoing one breaks the tests; the check names a hunk only when the tests
 pass without it.
 
@@ -37,8 +38,14 @@ each hunk not yet checked prints NOT CHECKED with the reason "time budget". The 
 test runs the same way and removes the scratch worktrees.
 
 Exit 0 clean, 1 an undeclared hunk, 2 BASE or HEAD does not resolve (a shallow checkout: fetch the history first).
+
+Log: every run appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/check-untested-hunks/log.jsonl (ts in UTC, action, outcome ok, failed,
+refused or error, duration_ms, range, and the counts hunks, scripts, fail, not_checked, declared), so the CI log is not the only record. A
+log that cannot be written never changes the verdict.
 """
 import ast
+import datetime
+import json
 import os
 import re
 import shutil
@@ -61,6 +68,8 @@ BUDGET = int(os.environ.get("UNTESTED_HUNKS_BUDGET", "1500"))
 # noticed); a hang before anything is undone prints NOT CHECKED. A suite slower than this (tests/heavy-gate) is not checked either.
 TIMEOUT = int(os.environ.get("UNTESTED_HUNKS_TIMEOUT", "600"))
 POLL = 0.5  # how often a running test file is checked against the budget and TIMEOUT
+STARTED = time.monotonic()
+STATS = {"range": None, "hunks": 0, "scripts": 0, "fail": 0, "not_checked": 0, "declared": 0}  # what the run's log record counts
 DEADLINE = float("inf")  # monotonic time the run stops at. main() sets it; the end of main() sets it to 0, so every run stops at its next check
 
 
@@ -112,6 +121,15 @@ def name_pattern(path):
 
 def is_python(path, text):
     return path.endswith(".py") or re.match(r"#!.*\bpython", text) is not None
+
+
+def python_by_path_or_shebang(rev, path):
+    """Is the file at `rev` a Python script: its name ends in .py, or (read as bytes) its first line is a python shebang. A path that is
+    not .py is never read whole."""
+    if path.endswith(".py"):
+        return True
+    done = subprocess.run(["git", "cat-file", "blob", "%s:%s" % (rev, path)], capture_output=True)
+    return done.returncode == 0 and re.match(rb"#!.*\bpython", done.stdout.split(b"\n", 1)[0]) is not None
 
 
 def tests_naming(commit, path):
@@ -209,29 +227,34 @@ def survives(commit, path, hunk, files, parent, lock):
 
 
 def added_files(old, new):
-    """{path: lines} of the files that `new` adds to `old`. The patch reader skips them (nothing existing was edited), so this reads
-    them whole: a new script is one hunk, the whole file, and undoing it leaves an empty file."""
+    """{path: lines} of the Python scripts that `new` adds to `old`. The patch reader skips added files (nothing existing was edited), so
+    this reads them whole: a new script is one hunk, the whole file, and undoing it leaves an empty file. Any other added file (an image,
+    a font) is not read."""
     out = {}
     for path in git("diff", "--name-only", "--no-renames", "--diff-filter=A", old, new).splitlines():
         try:
-            out[path] = git("show", "%s:%s" % (new, path)).splitlines()
+            if python_by_path_or_shebang(new, path):
+                out[path] = git("show", "%s:%s" % (new, path)).splitlines()
         except RuntimeError:
             continue
     return out
 
 
 def code_hunks(merge_base, head):
-    """The hunks of the pull request that change what a non-test Python script does, as (path, (removed, added, start, count)). A script
-    the pull request adds counts as one hunk, the whole file: a new script that no test depends on is as untested as a changed line."""
+    """(hunks, new): the hunks of the pull request that change what a non-test Python script does, as (path, (removed, added, start,
+    count)), and the paths of the scripts it adds. A script the pull request adds counts as one hunk, the whole file: a new script that no
+    test depends on is as untested as a changed line."""
     patch = git("diff", "-U0", "--no-renames", "--no-color", merge_base, head)
     after = {}
     out = []
+    new = set()
     for path, lines in added_files(merge_base, head).items():
         if is_test_file(path) or not lines:
             continue
         after[path] = "".join(line + "\n" for line in lines)
-        if is_python(path, after[path]) and shape(after[path]) != shape(""):
+        if shape(after[path]) != shape(""):
             out.append((path, ([], lines, 1, len(lines))))
+            new.add(path)
     for path, removed, added, start, count in hunks(patch):
         if not path or is_test_file(path):
             continue
@@ -245,7 +268,7 @@ def code_hunks(merge_base, head):
         before = shape(undo(after[path], *hunk))
         if before is None or before != shape(after[path]):
             out.append((path, hunk))
-    return out
+    return out, new
 
 
 def declarations(merge_base, head):
@@ -281,82 +304,134 @@ def not_checked(path, hunk):
     return "NOT CHECKED %s %s: time budget (%d s) ran out before this change was checked" % (path, where(hunk[2], hunk[3]), BUDGET)
 
 
+def say(line, counter=None):
+    """Print one verdict line and count it for the run's log record."""
+    if counter:
+        STATS[counter] += 1
+    print(line)
+
+
 def stop_on_term(signum, frame):
     raise SystemExit(128 + signum)  # unwinds main(): the test runs in flight are killed and the scratch worktrees removed
+
+
+def log_path():
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "check-untested-hunks", "log.jsonl")
+
+
+def log_run(outcome, code, **extra):
+    """Append one JSON line for this run (design principle 14). A log that cannot be written never changes the verdict."""
+    record = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "script": "check-untested-hunks.py",
+              "action": "check", "outcome": outcome, "exit": code, "duration_ms": round((time.monotonic() - STARTED) * 1000),
+              "range": STATS["range"], **{k: STATS[k] for k in ("hunks", "scripts", "fail", "not_checked", "declared")}, **extra}
+    try:
+        path = log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception:
+        pass  # the log is a record, not a dependency of the verdict
+
+
+def report_untested(path, hunk, files, found, merge_base, new):
+    """Print the verdict for a hunk no test depends on: DECLARED when a commit's message excuses it, else FAIL."""
+    removed, added, start, count = hunk
+    reason = declared_reason(path, (removed, added), found, merge_base)
+    if reason:
+        say("DECLARED untested change: %s %s: %s" % (path, where(start, count), reason), "declared")
+        return
+    declare = "  %s: %s: <why no test can see it, in one line>" % (TRAILER, path)
+    if new and not files:
+        say("FAIL untested change: %s is a new script and no test file names it.\n"
+            "  Add a test that depends on it (a test_*.py file that names `%s` and fails when the script is emptied), or, if no test can\n"
+            "  see it, add a line to a commit message of the pull request:\n%s" % (path, script_name(path), declare), "fail")
+        return
+    say("FAIL untested change: %s changes at %s and every test that names it still passes with that change undone.\n"
+        "    now:    %s\n    before: %s\n"
+        "  Add a test that fails when this change is undone (tests that name it: %s); a later commit may add it.\n"
+        "  If no test can see it (a refactor), add a line to a commit message of the pull request:\n%s"
+        % (path, where(start, count), (added[0].strip() if added else "(nothing: lines were removed)")[:100],
+           (removed[0].strip() if removed else "(nothing: lines were added)")[:100], ", ".join(files), declare), "fail")
 
 
 def main(argv):
     global DEADLINE
     if len(argv) != 3:
         print("usage: check-untested-hunks.py BASE HEAD", file=sys.stderr)
+        log_run("refused", 2, reason="usage")
         return 2
+    STATS["range"] = "%s..%s" % (argv[1], argv[2])
     try:
         head = git("rev-parse", "--verify", "--quiet", argv[2] + "^{commit}").strip()
         merge_base = git("merge-base", argv[1], head).strip()
-        changed = code_hunks(merge_base, head)
+        changed, new = code_hunks(merge_base, head)
         found = declarations(merge_base, head)
     except RuntimeError as err:
         print("check-untested-hunks: cannot read %s..%s (%s); fetch the full history (fetch-depth: 0)" % (argv[1], argv[2], err), file=sys.stderr)
+        log_run("refused", 2, reason="range does not resolve")
         return 2
     DEADLINE = time.monotonic() + BUDGET
     signal.signal(signal.SIGTERM, stop_on_term)
     by_path = {}
     for path, hunk in changed:
         by_path.setdefault(path, []).append(hunk)
+    STATS["hunks"], STATS["scripts"] = len(changed), len(by_path)
     print("check-untested-hunks: %d changed code hunks in %d scripts, %s..%s" % (len(changed), len(by_path), merge_base[:8], head[:8]))
     lock = threading.Lock()
     jobs = []
-    failed = 0
     with tempfile.TemporaryDirectory(prefix="untested-hunks-") as parent, ThreadPoolExecutor(WORKERS) as pool:
         try:
             for path, found_hunks in by_path.items():
                 files = tests_for(head, path)
                 if not files:
-                    print("NOT CHECKED %s: no test file names it" % path)
+                    if path in new:
+                        report_untested(path, found_hunks[0], files, found, merge_base, True)
+                    else:
+                        say("NOT CHECKED %s: no test file names it" % path, "not_checked")
                     continue
                 try:
                     failed_file, ran = baseline(head, parent, lock, files)
                 except Hang as hang:
-                    print("NOT CHECKED %s: %s ran longer than %d s before anything was undone" % (path, hang, TIMEOUT))
+                    say("NOT CHECKED %s: %s ran longer than %d s before anything was undone" % (path, hang, TIMEOUT), "not_checked")
                     continue
                 except OutOfTime:
                     for hunk in found_hunks:
-                        print(not_checked(path, hunk))
+                        say(not_checked(path, hunk), "not_checked")
                     continue
                 if failed_file or ran == 0:
-                    print("NOT CHECKED %s: its tests %s before anything was undone (%s)" % (path, "fail in " + failed_file if failed_file else "all skip", ", ".join(files)))
+                    say("NOT CHECKED %s: its tests %s before anything was undone (%s)" % (path, "fail in " + failed_file if failed_file else "all skip", ", ".join(files)), "not_checked")
                     continue
                 for hunk in found_hunks:
                     jobs.append((path, hunk, files, pool.submit(survives, head, path, hunk, files, parent, lock)))
             for path, hunk, files, future in jobs:
-                removed, added, start, count = hunk
                 try:
                     survived = future.result()
                 except OutOfTime:
-                    print(not_checked(path, hunk))
+                    say(not_checked(path, hunk), "not_checked")
                     continue
-                if not survived:
-                    continue
-                reason = declared_reason(path, (removed, added), found, merge_base)
-                if reason:
-                    print("DECLARED untested change: %s %s: %s" % (path, where(start, count), reason))
-                    continue
-                failed += 1
-                print(
-                    "FAIL untested change: %s changes at %s and every test that names it still passes with that change undone.\n"
-                    "    now:    %s\n    before: %s\n"
-                    "  Add a test that fails when this change is undone (tests that name it: %s); a later commit may add it.\n"
-                    "  If no test can see it (a refactor), add a line to a commit message of the pull request:\n"
-                    "  %s: %s: <why no test can see it, in one line>"
-                    % (path, where(start, count), (added[0].strip() if added else "(nothing: lines were removed)")[:100],
-                       (removed[0].strip() if removed else "(nothing: lines were added)")[:100], ", ".join(files), TRAILER, path)
-                )
+                if survived:
+                    report_untested(path, hunk, files, found, merge_base, False)
         finally:
             # Stop (SIGTERM, a crash, or the end): every run still going is killed at its next check, POLL seconds at most; queued hunks are cancelled.
             DEADLINE = 0.0
             pool.shutdown(wait=True, cancel_futures=True)
-    return 1 if failed else 0
+    code = 1 if STATS["fail"] else 0
+    log_run("failed" if code else "ok", code)
+    return code
+
+
+def run(argv):
+    """main(), with the run recorded however it ends: a SIGTERM or a crash writes an error record before it goes on."""
+    try:
+        return main(argv)
+    except SystemExit as stop:
+        log_run("error", stop.code, reason="stopped by signal" if isinstance(stop.code, int) and stop.code > 128 else "exit")
+        raise
+    except BaseException as err:
+        log_run("error", 1, reason=type(err).__name__)
+        raise
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(run(sys.argv))
