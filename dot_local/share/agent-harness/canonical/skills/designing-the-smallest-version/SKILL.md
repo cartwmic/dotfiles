@@ -116,7 +116,7 @@ Verdicts: `pass`, `fail`, `n/a`; Target may also say `fail (accepted)`. In mode 
 - `auditing-design-principles`: audits existing code against design-principles.md and lists breaches with evidence. This designs the target and the path. Use its findings as input to Step 4.
 - `desloppify`: a many-phase plan for code-quality decay. This works one altitude up (components, seams, contracts) and writes one document.
 - `review-map`: explains one PR. Use its pages as input; this skill does not read diffs.
-- `using-generate-prd` and `distilling-requirements`: they say what the product must do; this says how to build it. Their output is input here; this skill needs neither.
+- `distilling-requirements`: it says what the product must do; this says how to build it. Its output is input here; this skill needs neither.
 - `/statechart` (poteto, pstack): proves state-machine models with TLA+. Borrowed ideas only: treat the model as wrong until the code confirms it, label diagrams in the reader's words, declare what you left out.
 
 ## Done when
