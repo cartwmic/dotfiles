@@ -15,7 +15,7 @@ On main (a push or a manual run on main, no --base) a lagging pin does not turn 
 labelled `pin-lag` that names each lagging pin and its latest release, keeps it up to date, and closes it when every pin
 matches (exit 0). A run on any other branch (GITHUB_REF names it) changes nothing: the issue follows main's pins only.
 Exit 2 only when the issue itself could not be written. A release it cannot read is a printed warning and exit 0. A pin missing
-from a pin file stops the run with exit 1 (nothing is left to compare).
+from a pin file, or a pin file that cannot be read, is exit 1 (nothing is left to compare); the run is still logged.
 
 Every run appends one JSON line to $XDG_STATE_HOME/check-release-pins/log.jsonl (default ~/.local/state): the UTC time, mode,
 commits, the pins it judged or found lagging, the issue action, the exit and the duration. CI keeps it as a workflow artifact.
@@ -99,14 +99,18 @@ def parse_kit_pin(text):
 
 
 def local_pins(mise_path, kit_path):
-    """{name: version} for the four Loop Engine tools and agent-kit, read from the files. A missing pin ends the run."""
-    pins = parse_mise_pins(Path(mise_path).read_text())
+    """{name: version} for the four Loop Engine tools and agent-kit, read from the files. Raises ValueError for a pin it cannot read."""
+    try:
+        pins = parse_mise_pins(Path(mise_path).read_text())
+        kit_text = Path(kit_path).read_text()
+    except OSError as error:
+        raise ValueError("cannot read the pin file: %s" % error)
     for tool in LOOP_ENGINE_TOOLS:
         if tool not in pins:
-            sys.exit("cannot read the %s pin from %s" % (tool, mise_path))
-    kit = parse_kit_pin(Path(kit_path).read_text())
+            raise ValueError("cannot read the %s pin from %s" % (tool, mise_path))
+    kit = parse_kit_pin(kit_text)
     if kit is None:
-        sys.exit("cannot read dependencies[\"@cartwmic/agent-kit\"] from %s" % kit_path)
+        raise ValueError("cannot read dependencies[\"@cartwmic/agent-kit\"] from %s" % kit_path)
     return {**pins, "agent-kit": kit}
 
 
@@ -231,12 +235,17 @@ def sync_lag_issue(lagging):
     return None
 
 
-def judge_main(pins):
+def judge_main(mise_path, kit_path):
     ref = os.environ.get("GITHUB_REF", "")
     RECORD.update(mode="main", ref=ref)
     if ref and ref != "refs/heads/main":
         print("not main (%s): the pin-lag issue follows main's pins only, so nothing was checked or changed" % ref)
         return 0
+    try:
+        pins = local_pins(mise_path, kit_path)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
     le_latest, error = latest_loop_engine()
     if error:
         print("warning: cannot read the latest cartwmic/loop-engine release (%s); the release pins were not checked" % error)
@@ -284,7 +293,7 @@ def main():
     args = parser.parse_args()
     if bool(args.base) != bool(args.head):
         parser.error("--base and --head go together")
-    code = judge_pull_request(args.base, args.head) if args.base else judge_main(local_pins(args.mise_config, args.agent_kit_package))
+    code = judge_pull_request(args.base, args.head) if args.base else judge_main(args.mise_config, args.agent_kit_package)
     write_log(code, began)
     return code
 

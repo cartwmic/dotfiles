@@ -290,6 +290,17 @@ class MainModeTests(Fixture):
                                  "--agent-kit-package", str(self.dir / "package.json"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot read the loop-engine pin", result.stderr)
+        (record,) = self.log_records()   # the red run is the one the log must hold
+        self.assertEqual((record["mode"], record["exit"]), ("main", 1))
+
+    def test_a_missing_pin_file_is_a_logged_exit_1_on_main_and_nothing_on_another_branch(self):
+        args = ("--mise-config", str(self.dir / "absent.toml"), "--agent-kit-package", str(self.dir / "package.json"))
+        result = self.run_script(*args)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot read the pin file", result.stderr)
+        elsewhere = self.run_script(*args, extra_env={"GITHUB_REF": "refs/heads/old-branch"})
+        self.assertEqual(elsewhere.returncode, 0, elsewhere.stdout + elsewhere.stderr)
+        self.assertEqual([r["exit"] for r in self.log_records()], [1, 0])
 
 
 class PullRequestModeTests(Fixture):
