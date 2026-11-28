@@ -216,6 +216,30 @@ class OpShim(unittest.TestCase):
         self.run_zsh_name(["whoami"], env={"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "sess-9"})
         self.assertEqual(json.loads(self.guard_lines()[0])["session"], "sess-9")
 
+    def test_a_t3_thread_id_of_the_delegated_task_form_is_logged_whole(self):
+        # Delegated threads (builders, leads) carry ":" and "%" in the id; stripping them would match no thread or ledger source.
+        thread = "thread:delegated-task:command%3Amcp%3Af636143a-2bc5%3Adelegate-task%3Aonepassword-guard-1b"
+        for run in (lambda: self.run_zsh_name(["whoami"], env={"T3CODE_THREAD_ID": thread}), lambda: self.run_shim(["whoami"], env={"T3CODE_THREAD_ID": thread})):
+            if self.guard_log.exists():
+                self.guard_log.unlink()
+            self.assertEqual(run().returncode, 69)
+            self.assertEqual(json.loads(self.guard_lines()[0])["session"], thread)
+
+    def test_the_first_marker_and_the_first_session_variable_win(self):
+        # Order as agent_shell checks the markers; the session is T3's, then Codex's, then Claude's.
+        env = {"CODEX_SANDBOX": "seatbelt", "CODEX_THREAD_ID": "codex-1", "T3CODE_THREAD_ID": "t3-1", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "claude-1"}
+        self.run_zsh_name(["whoami"], env=env)
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["reason"], record["session"]), ("marker CLAUDECODE", "t3-1"))
+        self.guard_log.unlink()
+        self.run_zsh_name(["whoami"], env={k: v for k, v in env.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID")})
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["reason"], record["session"]), ("marker CODEX_THREAD_ID", "codex-1"))
+        self.guard_log.unlink()
+        self.run_zsh_name(["whoami"], env={"CODEX_SANDBOX": "seatbelt", "CLAUDE_CODE_SESSION_ID": "claude-1"})
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["reason"], record["session"]), ("marker CODEX_SANDBOX", "claude-1"))
+
     def test_a_first_argument_that_is_not_a_subcommand_is_not_logged(self):
         # A flag first (op --session=TOKEN read ...) or any word outside the fixed list logs matched null, never the text.
         for args in (["--session=TOKENVALUE456", "read", "op://Vault-Secret/Item-Secret/field"], ["Vault-Secret"], []):
