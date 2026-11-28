@@ -1,7 +1,8 @@
 """Black-box tests for scripts/check-release-pins.py (playbook rule 7c57de5a's check).
 
 Each test runs the real script with a scripted `gh` first on PATH; nothing reaches GitHub. The fake answers the release
-endpoints, `gh pr list` (with its --base filter) and `gh pr diff`, from a JSON state file the test writes.
+endpoints and keeps the pin-lag issues in the JSON state file the test writes, so a test reads back what the script did.
+Pull-request mode runs against a real scratch git repository.
 
     python3 -m unittest tests/release-pins/test_check_release_pins.py
 """
@@ -22,7 +23,8 @@ KIT_PATH = "dot_local/share/agent-kit/package.json"
 
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
-state = json.load(open(os.environ["FAKE_GH_STATE"]))
+state_path = os.environ["FAKE_GH_STATE"]
+state = json.load(open(state_path))
 args = sys.argv[1:]
 
 
@@ -31,24 +33,47 @@ def fail(message):
     sys.exit(1)
 
 
-if args[:2] == ["pr", "list"]:
-    if state.get("pr_error"):
-        fail(state["pr_error"])
-    base = args[args.index("--base") + 1] if "--base" in args else None
-    numbers = [pr["number"] for pr in state.get("prs", []) if base in (None, pr["base"])]
-    print(json.dumps([{"number": number} for number in numbers]))
-    sys.exit(0)
-if args[:2] == ["pr", "diff"]:
-    number = args[2]
-    if number in state.get("diff_errors", {}):
-        fail(state["diff_errors"][number])
-    sys.stdout.write(state.get("diffs", {}).get(number, ""))
+def save():
+    json.dump(state, open(state_path, "w"))
+
+
+def option(name):
+    return args[args.index(name) + 1]
+
+
+if args[:1] in (["issue"], ["label"]):
+    command = " ".join(args[:2])
+    if command in state.get("issue_errors", []):
+        fail("HTTP 403: Resource not accessible by integration")
+    issues = state.setdefault("issues", [])
+    state.setdefault("calls", []).append(command)
+    if command == "issue list":
+        print(json.dumps([{"number": i["number"], "title": i["title"], "body": i["body"]} for i in issues if i["open"]]))
+    elif command == "label create":
+        state.setdefault("labels", []).append(args[2])
+    elif command == "issue create":
+        if "pin-lag" not in state.get("labels", []):
+            fail("could not add label: 'pin-lag' not found")
+        number = len(issues) + 1
+        issues.append({"number": number, "title": option("--title"), "body": option("--body"), "open": True,
+                       "label": option("--label")})
+        print("https://github.com/cartwmic/dotfiles/issues/%d" % number)
+    elif command == "issue edit":
+        issue = next(i for i in issues if str(i["number"]) == args[2])
+        issue["title"], issue["body"] = option("--title"), option("--body")
+    elif command == "issue close":
+        next(i for i in issues if str(i["number"]) == args[2])["open"] = False
+    save()
     sys.exit(0)
 path = args[1] if args[:1] == ["api"] else ""
 key = "le" if "loop-engine/releases/latest" in path else "ak" if "packages/npm/agent-kit/versions" in path else None
 if key is None:
     sys.stderr.write("fake gh: unexpected " + " ".join(args) + "\n")
     sys.exit(1)
+state.setdefault("calls", []).append("release " + key)
+save()
+if state.get(key + "_silent_exit"):
+    sys.exit(state[key + "_silent_exit"])
 if state.get(key + "_error"):
     fail(state[key + "_error"])
 if key == "le":
@@ -67,32 +92,15 @@ def mise(versions):
     return "gh = \"latest\"\n" + "".join(mise_line(t, versions.get(t, "0.49.0")) + "\n" for t in TOOLS)
 
 
-def file_diff(path, body):
-    return "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n%s" % (path, path, path, path, body)
-
-
-def pr_diff(mise_bumps=None, kit_bump=None):
-    """What `gh pr diff` prints for a PR that moves pins: mise_bumps maps a tool to its new version (from 0.49.0),
-    kit_bump is the new agent-kit version (from 0.48.1)."""
-    text = ""
-    if mise_bumps:
-        text += file_diff(MISE_PATH, "".join("-%s\n+%s\n" % (mise_line(t, "0.49.0"), mise_line(t, v))
-                                             for t, v in mise_bumps.items()))
-    if kit_bump:
-        text += file_diff(KIT_PATH,
-                          '-    "@cartwmic/agent-kit": "0.48.1",\n+    "@cartwmic/agent-kit": "%s",\n' % kit_bump)
-    return text
-
-
-def pr(number, base="main"):
-    return {"number": number, "base": base}
+def kit_package(version):
+    return json.dumps({"dependencies": {"@cartwmic/agent-kit": version}})
 
 
 def all_tools_to(version):
     return dict.fromkeys(TOOLS, version)
 
 
-class CheckReleasePinsTests(unittest.TestCase):
+class Fixture(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -103,151 +111,331 @@ class CheckReleasePinsTests(unittest.TestCase):
         # package versions are out of order and include non-release names: the highest X.Y.Z wins, compared as integers
         self.state = {"le_tag": "v0.49.0", "ak_tags": ["0.9.0", "0.10.0", "0.49.0", "0.48.1", "nightly", "0.50.0-rc1"]}
 
-    def run_check(self, mise_versions=None, kit="0.49.0", **state):
+    def run_script(self, *args, cwd=None, extra_env=None, **state):
+        extra_env = extra_env or {}
+        if (self.dir / "state.json").exists():  # what the fake gh kept from the earlier runs of this test
+            self.state.update({k: v for k, v in self.after().items() if k in ("issues", "labels", "calls")})
         self.state.update(state)
         (self.dir / "state.json").write_text(json.dumps(self.state))
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_REF", "XDG_STATE_HOME")}   # CI sets GITHUB_REF for the suite itself
+        env.update(PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_STATE=str(self.dir / "state.json"),
+                   XDG_STATE_HOME=str(self.dir / "xdg"), **extra_env)
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=env,
+                              cwd=cwd, timeout=60)
+
+    def log_records(self):
+        """The JSON lines the check appended to its log under XDG_STATE_HOME."""
+        path = self.dir / "xdg/check-release-pins/log.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def after(self):
+        """The fake gh's state after the last run: the issues it holds and the calls it saw."""
+        return json.loads((self.dir / "state.json").read_text())
+
+
+class MainModeTests(Fixture):
+    """No --base: a push or manual run on main. A lagging pin never fails it; it opens, updates or closes the one issue."""
+
+    def run_check(self, mise_versions=None, kit="0.49.0", extra_env=None, **state):
         (self.dir / "mise.toml").write_text(mise(mise_versions or {}))
-        (self.dir / "package.json").write_text(json.dumps({"dependencies": {"@cartwmic/agent-kit": kit}}))
-        env = {**os.environ, "PATH": "%s:%s" % (self.dir / "bin", os.environ["PATH"]),
-               "FAKE_GH_STATE": str(self.dir / "state.json")}
-        return subprocess.run([sys.executable, str(SCRIPT), "--mise-config", str(self.dir / "mise.toml"),
-                               "--agent-kit-package", str(self.dir / "package.json")],
-                              capture_output=True, text=True, env=env, timeout=60)
+        (self.dir / "package.json").write_text(kit_package(kit))
+        return self.run_script("--mise-config", str(self.dir / "mise.toml"),
+                               "--agent-kit-package", str(self.dir / "package.json"), extra_env=extra_env, **state)
 
-    def assertFailsWithOneLinePerLaggingPin(self, result, tools=TOOLS):
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertNotIn("pending bump", result.stdout)
-        lines = result.stdout.splitlines()
-        self.assertEqual(len(lines), len(tools), result.stdout)
-        for tool in tools:
-            self.assertIn("%s pin 0.49.0 lags the latest release 0.50.0" % tool, result.stdout)
+    def open_issues(self):
+        return [i for i in self.after().get("issues", []) if i["open"]]
 
-    def test_all_pins_equal_latest_passes(self):
+    def test_all_pins_equal_latest_passes_and_opens_no_issue(self):
         result = self.run_check()
         self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
-        self.assertEqual(len(result.stdout.splitlines()), 1)
         self.assertTrue(result.stdout.startswith("OK"))
+        self.assertIn("agent-kit pin 0.49.0 at latest 0.49.0", result.stdout)
+        self.assertEqual(self.after().get("issues", []), [])
 
-    def test_nothing_lagging_makes_no_pr_lookup(self):
-        result = self.run_check(pr_error="HTTP 401: Bad credentials")
+    def test_a_lagging_loop_engine_pin_opens_one_labelled_issue_and_passes(self):
+        result = self.run_check({"policy-document": "0.48.1"})
         self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
-        self.assertTrue(result.stdout.startswith("OK"))
+        self.assertIn("policy-document pin 0.48.1 lags the latest release 0.49.0", result.stdout)
+        (issue,) = self.open_issues()
+        self.assertEqual(issue["title"], "Pin lag: policy-document 0.48.1 -> 0.49.0")
+        self.assertEqual(issue["label"], "pin-lag")
+        self.assertIn("loop_engine_bump.py v0.49.0", issue["body"])
+        self.assertIn("pin-lag", self.after()["labels"])
 
-    def test_each_loop_engine_pin_lagging_refuses(self):
-        for tool in TOOLS:
-            with self.subTest(tool=tool):
-                result = self.run_check({tool: "0.48.1"})
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                lines = result.stdout.splitlines()
-                self.assertEqual(len(lines), 1)
-                self.assertIn("%s pin 0.48.1 lags the latest release 0.49.0" % tool, lines[0])
-                self.assertIn("loop_engine_bump.py v0.49.0", lines[0])
-
-    def test_agent_kit_lagging_refuses(self):
+    def test_a_lagging_agent_kit_pin_opens_an_issue_naming_the_bump(self):
         result = self.run_check(kit="0.10.0", ak_tags=["0.49.0", "0.9.0", "0.48.1"])
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertEqual(len(result.stdout.splitlines()), 1)
-        self.assertIn("agent-kit pin 0.10.0 lags the latest release 0.49.0", result.stdout)
-        self.assertIn("agent_kit_bump.py v0.49.0", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (issue,) = self.open_issues()
+        self.assertEqual(issue["title"], "Pin lag: agent-kit 0.10.0 -> 0.49.0")
+        self.assertIn("agent_kit_bump.py v0.49.0", issue["body"])
+
+    def test_every_lagging_pin_is_in_the_one_issue(self):
+        result = self.run_check(all_tools_to("0.48.1"), kit="0.48.1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (issue,) = self.open_issues()
+        for name in (*TOOLS, "agent-kit"):
+            self.assertIn("%s 0.48.1 -> 0.49.0" % name, issue["title"])
+
+    def test_the_issue_text_is_public_text(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        (issue,) = self.open_issues()
+        self.assertNotIn("playbook", issue["title"] + issue["body"])
 
     def test_agent_kit_latest_is_compared_as_integers(self):
         # string order would call v0.9.0 the highest; the integer order is v0.10.0
-        result = self.run_check(kit="0.9.0", ak_tags=["0.9.0", "0.10.0"])
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("latest release 0.10.0", result.stdout)
+        self.run_check(kit="0.9.0", ak_tags=["0.9.0", "0.10.0"])
+        self.assertEqual(self.open_issues()[0]["title"], "Pin lag: agent-kit 0.9.0 -> 0.10.0")
 
-    def test_agent_kit_unreadable_fails_naming_the_cause(self):
-        result = self.run_check(ak_error="HTTP 404: Not Found")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        out = result.stdout + result.stderr
-        self.assertIn("cannot read the published versions of the cartwmic/agent-kit package (HTTP 404: Not Found)", out)
-        self.assertIn("packages: read", out)
+    def test_a_second_run_with_the_same_lag_leaves_the_one_issue_alone(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        result = self.run_check({"loop-engine": "0.48.1"})
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(len(self.after()["issues"]), 1)
+        self.assertEqual(self.after()["calls"].count("issue create"), 1)
+        self.assertNotIn("issue edit", self.after()["calls"])
+        self.assertIn("up to date", result.stdout)
+
+    def test_a_changed_lag_updates_the_same_issue(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        self.run_check({"loop-engine": "0.48.1"}, le_tag="v0.50.0", kit="0.50.0", ak_tags=["0.50.0"])
+        (issue,) = self.open_issues()
+        self.assertEqual(len(self.after()["issues"]), 1)
+        self.assertEqual(issue["number"], 1)
+        self.assertIn("loop-engine 0.48.1 -> 0.50.0", issue["title"])
+        self.assertIn("lean-change 0.49.0 -> 0.50.0", issue["title"])
+
+    def test_matching_pins_close_the_open_issue(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.open_issues(), [])
+        self.assertIn("closed pin-lag issue #1", result.stdout)
+
+    def test_a_lag_after_a_closed_issue_opens_a_new_one(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        self.run_check()
+        self.run_check({"loop-engine": "0.48.1"})
+        self.assertEqual([i["number"] for i in self.open_issues()], [2])
+
+    def test_loop_engine_unreadable_warns_and_passes_without_touching_issues(self):
+        result = self.run_check({"loop-engine": "0.48.1"}, le_error="HTTP 401: Bad credentials")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.startswith("warning: cannot read the latest cartwmic/loop-engine release "
+                                                 "(HTTP 401: Bad credentials)"), result.stdout)
+        self.assertNotIn("second line", result.stdout + result.stderr)
         self.assertNotIn("OK", result.stdout)
-        self.assertNotIn("second line", out)
+        self.assertNotIn("issue list", self.after().get("calls", []))
 
-    def test_agent_kit_unreadable_fails_even_when_a_loop_engine_pin_lags(self):
-        result = self.run_check({"policy-document": "0.48.1"}, ak_error="HTTP 404: Not Found")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("cartwmic/agent-kit package", result.stdout)
+    def test_agent_kit_unreadable_warns_naming_the_cause_and_passes(self):
+        result = self.run_check(ak_error="HTTP 404: Not Found")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.startswith(
+            "warning: cannot read the published versions of the cartwmic/agent-kit package (HTTP 404: Not Found)"),
+            result.stdout)
+        self.assertIn("packages: read", result.stdout)
+        self.assertNotIn("OK", result.stdout)
 
-    def test_agent_kit_with_no_release_versions_fails(self):
+    def test_a_gh_that_fails_without_a_message_is_named_by_its_exit_code(self):
+        result = self.run_check(le_silent_exit=3)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("(gh exited 3)", result.stdout)
+
+    def test_agent_kit_with_no_release_versions_warns(self):
         result = self.run_check(ak_tags=["nightly", "0.50.0-rc1"])
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("no X.Y.Z versions", result.stdout)
 
-    def test_pass_line_names_the_agent_kit_pin_and_latest(self):
-        result = self.run_check(kit="0.49.0")
-        self.assertIn("agent-kit pin 0.49.0 at latest 0.49.0", result.stdout)
-
-    def test_loop_engine_unreadable_exits_2(self):
-        result = self.run_check(le_error="HTTP 401: Bad credentials")
+    def test_an_issue_that_cannot_be_written_fails_the_run(self):
+        result = self.run_check({"loop-engine": "0.48.1"}, issue_errors=["issue create"])
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("HTTP 401: Bad credentials", result.stdout + result.stderr)
-        self.assertNotIn("OK", result.stdout)
+        self.assertIn("cannot open the pin-lag issue (HTTP 403: Resource not accessible by integration)", result.stdout)
+        self.assertNotIn("second line", result.stdout + result.stderr)
 
-    def test_behind_with_open_pr_bumping_to_latest_passes_with_notice(self):
-        result = self.run_check(le_tag="v0.50.0", prs=[pr(12)], diffs={"12": pr_diff(all_tools_to("0.50.0"))})
+    def test_an_issue_list_that_cannot_be_read_fails_the_run(self):
+        result = self.run_check(issue_errors=["issue list"])
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot read the open pin-lag issues", result.stdout)
+
+    def test_a_run_on_main_acts_and_a_run_on_another_branch_changes_nothing(self):
+        result = self.run_check({"loop-engine": "0.48.1"}, extra_env={"GITHUB_REF": "refs/heads/main"})
+        self.assertEqual(len(self.open_issues()), 1, result.stdout)
+        for ref in ("refs/heads/loop-engine-v0.70.0", "refs/pull/12/merge", "refs/tags/v1"):
+            with self.subTest(ref=ref):
+                result = self.run_check(extra_env={"GITHUB_REF": ref})   # every pin matches: on main this would close the issue
+                self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
+                self.assertIn("not main (%s)" % ref, result.stdout)
+                self.assertEqual(len(self.open_issues()), 1)
+                self.assertEqual(self.after()["calls"].count("issue close"), 0)
+        branch_lag = self.run_check({"loop-engine": "0.40.0"}, extra_env={"GITHUB_REF": "refs/heads/old-branch"})
+        self.assertEqual(branch_lag.returncode, 0)
+        self.assertIn("0.48.1 -> 0.49.0", self.open_issues()[0]["title"])   # a branch cut before a bump did not rewrite the issue
+
+    def test_every_run_appends_one_json_line_with_its_mode_and_issue_action(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        self.run_check()
+        self.run_check(le_error="HTTP 500")
+        opened, closed, warned = self.log_records()
+        self.assertEqual((opened["mode"], opened["lagging"], opened["issue"], opened["exit"]), ("main", ["loop-engine"], "opened 1", 0))
+        self.assertEqual((closed["lagging"], closed["issue"], closed["exit"]), ([], "closed #1", 0))
+        self.assertEqual((warned["lagging"] if "lagging" in warned else None, warned["exit"], "issue" in warned), (None, 0, False))
+        for record in (opened, closed, warned):
+            self.assertRegex(record["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertEqual(record["action"], "check-release-pins")
+            self.assertIn("duration_ms", record)
+
+    def test_a_pin_missing_from_the_config_stops_the_check(self):
+        (self.dir / "mise.toml").write_text('gh = "latest"\n')
+        (self.dir / "package.json").write_text(kit_package("0.49.0"))
+        result = self.run_script("--mise-config", str(self.dir / "mise.toml"),
+                                 "--agent-kit-package", str(self.dir / "package.json"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read the loop-engine pin", result.stderr)
+        (record,) = self.log_records()   # the red run is the one the log must hold
+        self.assertEqual((record["mode"], record["exit"]), ("main", 1))
+
+    def test_a_missing_pin_file_is_a_logged_exit_1_on_main_and_nothing_on_another_branch(self):
+        args = ("--mise-config", str(self.dir / "absent.toml"), "--agent-kit-package", str(self.dir / "package.json"))
+        result = self.run_script(*args)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot read the pin file", result.stderr)
+        elsewhere = self.run_script(*args, extra_env={"GITHUB_REF": "refs/heads/old-branch"})
+        self.assertEqual(elsewhere.returncode, 0, elsewhere.stdout + elsewhere.stderr)
+        self.assertEqual([r["exit"] for r in self.log_records()], [1, 0])
+
+
+class PullRequestModeTests(Fixture):
+    """--base and --head: only the pins the pull request changes are judged, against the merge base."""
+
+    def git(self, *args):
+        done = subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, text=True, check=True)
+        return done.stdout.strip()
+
+    def commit(self, files, message="change"):
+        for path, text in files.items():
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_text(text)
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.dir / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.start = self.commit({MISE_PATH: mise({}), KIT_PATH: kit_package("0.48.1"), "README.md": "one\n"})
+
+    def check(self, base, head, **state):
+        return self.run_script("--base", base, "--head", head, cwd=self.repo, **state)
+
+    def branch(self, files, name="pr"):
+        self.git("checkout", "-q", "-b", name, self.start)
+        return self.commit(files)
+
+    def test_a_pr_that_changes_no_pin_passes_without_looking_up_a_release(self):
+        head = self.branch({"README.md": "two\n"})
+        result = self.check(self.start, head, le_error="HTTP 500", ak_error="HTTP 500")
         self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
-        for tool in TOOLS:
-            self.assertIn("pending bump #12: %s 0.49.0 -> 0.50.0" % tool, result.stdout.splitlines())
-        self.assertEqual(result.stdout.splitlines()[-1], "OK: every lagging pin has an open bump PR")
+        self.assertIn("changes no pin", result.stdout)
+        self.assertNotIn("calls", self.after())
 
-    def test_behind_with_no_open_pr_fails(self):
-        result = self.run_check(le_tag="v0.50.0")
-        self.assertFailsWithOneLinePerLaggingPin(result)
+    def test_a_pr_that_lags_the_latest_release_but_changes_no_pin_passes(self):
+        # main pins 0.49.0 and 0.48.1; the latest releases are newer. The PR did not cause that.
+        head = self.branch({"README.md": "two\n"})
+        result = self.check(self.start, head, le_tag="v0.60.0", ak_tags=["0.60.0"])
+        self.assertEqual(result.returncode, 0, result.stdout)
 
-    def test_behind_with_open_pr_to_a_different_version_fails(self):
-        result = self.run_check(le_tag="v0.50.0", prs=[pr(12), pr(13)], diffs={
-            "12": pr_diff(all_tools_to("0.50.1")),  # newer than the latest
-            "13": pr_diff(all_tools_to("0.49.5")),  # older than the latest
-        })
-        self.assertFailsWithOneLinePerLaggingPin(result)
+    def test_a_pr_behind_a_bump_on_main_is_not_blamed_for_the_old_pins(self):
+        # the PR branched before main bumped the pins; its head still has the old values. Against main's tip they look
+        # changed, against the merge base they are not.
+        head = self.branch({"README.md": "two\n"})
+        self.git("checkout", "-q", "main")
+        tip = self.commit({MISE_PATH: mise(all_tools_to("0.50.0")), KIT_PATH: kit_package("0.50.0")}, "bump")
+        result = self.check(tip, head, le_tag="v0.50.0", ak_tags=["0.50.0"])
+        self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
+        self.assertIn("changes no pin", result.stdout)
 
-    def test_open_pr_into_another_branch_does_not_count(self):
-        result = self.run_check(le_tag="v0.50.0", prs=[pr(12, base="some-stacked-branch")],
-                                diffs={"12": pr_diff(all_tools_to("0.50.0"))})
-        self.assertFailsWithOneLinePerLaggingPin(result)
+    def test_a_bump_to_the_latest_release_passes(self):
+        head = self.branch({MISE_PATH: mise(all_tools_to("0.50.0")), KIT_PATH: kit_package("0.50.0")})
+        result = self.check(self.start, head, le_tag="v0.50.0", ak_tags=["0.49.0", "0.50.0"])
+        self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
+        self.assertIn("sets the loop-engine pin to 0.50.0, the latest release", result.stdout)
+        self.assertIn("sets the agent-kit pin to 0.50.0, the latest release", result.stdout)
 
-    def test_pin_line_in_another_file_does_not_count(self):
-        result = self.run_check(le_tag="v0.50.0", prs=[pr(12)],
-                                diffs={"12": file_diff("README.md", "+%s\n" % mise_line("loop-engine", "0.50.0"))})
-        self.assertFailsWithOneLinePerLaggingPin(result)
-
-    def test_every_lagging_pin_needs_its_own_bump(self):
-        result = self.run_check(le_tag="v0.50.0", prs=[pr(12)],
-                                diffs={"12": pr_diff({"loop-engine": "0.50.0", "lean-change": "0.50.0"})})
+    def test_a_loop_engine_pin_set_to_an_older_version_fails(self):
+        head = self.branch({MISE_PATH: mise({"lean-change": "0.40.0"})})
+        result = self.check(self.start, head, le_tag="v0.49.0")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        lines = result.stdout.splitlines()
-        self.assertIn("pending bump #12: loop-engine 0.49.0 -> 0.50.0", lines)
-        self.assertIn("pending bump #12: lean-change 0.49.0 -> 0.50.0", lines)
-        failing = sorted(line.split()[0] for line in lines if "lags the latest release" in line)
-        self.assertEqual(failing, sorted(["policy-document", "bookends-check"]))
+        self.assertEqual(result.stdout.splitlines(), [
+            "lean-change pin set to 0.40.0 by this PR, but the latest release is 0.49.0; "
+            "bump it with loop_engine_bump.py v0.49.0"])
 
-    def test_agent_kit_pending_bump_passes(self):
-        result = self.run_check(kit="0.48.1", prs=[pr(15)], diffs={"15": pr_diff(kit_bump="0.49.0")})
-        self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
-        self.assertIn("pending bump #15: agent-kit 0.48.1 -> 0.49.0", result.stdout.splitlines())
+    def test_an_agent_kit_pin_set_to_an_older_version_fails(self):
+        head = self.branch({KIT_PATH: kit_package("0.30.0")})
+        result = self.check(self.start, head, ak_tags=["0.48.1", "0.49.0"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("agent-kit pin set to 0.30.0 by this PR, but the latest release is 0.49.0", result.stdout)
 
-    def test_pr_lookup_failure_fails_and_says_why(self):
-        result = self.run_check(le_tag="v0.50.0", pr_error="HTTP 401: Bad credentials")
+    def test_a_pin_set_to_a_version_newer_than_the_latest_release_fails(self):
+        head = self.branch({KIT_PATH: kit_package("0.99.0")})
+        result = self.check(self.start, head, ak_tags=["0.49.0"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+    def test_one_bad_pin_fails_the_run_though_another_is_right(self):
+        head = self.branch({MISE_PATH: mise({"loop-engine": "0.49.0", "lean-change": "0.30.0"}),
+                            KIT_PATH: kit_package("0.49.0")})
+        result = self.check(self.start, head, ak_tags=["0.49.0"], le_tag="v0.49.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("lean-change pin set to 0.30.0", result.stdout)
+        self.assertIn("sets the agent-kit pin to 0.49.0, the latest release", result.stdout)
+
+    def test_only_the_changed_pins_are_looked_up(self):
+        head = self.branch({KIT_PATH: kit_package("0.49.0")})
+        result = self.check(self.start, head, ak_tags=["0.49.0"], le_error="HTTP 500")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.after()["calls"], ["release ak"])
+
+    def test_a_changed_pin_whose_release_cannot_be_read_fails_naming_the_cause(self):
+        head = self.branch({MISE_PATH: mise({"loop-engine": "0.50.0"})})
+        result = self.check(self.start, head, le_error="HTTP 401: Bad credentials")
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        out = result.stdout + result.stderr
-        self.assertIn("cannot read the open cartwmic/dotfiles PRs into main (HTTP 401: Bad credentials)", out)
-        self.assertNotIn("second line", out)
-        self.assertNotIn("OK", result.stdout)
-        self.assertIn("lags the latest release 0.50.0", result.stdout)
+        self.assertIn("cannot read the latest loop-engine release (HTTP 401: Bad credentials)", result.stdout)
+        self.assertNotIn("second line", result.stdout + result.stderr)
 
-    def test_pr_diff_lookup_failure_fails_even_with_a_matching_pr(self):
-        # the unreadable PR is first in the list; the matching PR after it must not rescue the check
-        result = self.run_check(le_tag="v0.50.0", prs=[pr(12), pr(13)],
-                                diff_errors={"12": "HTTP 406: the diff exceeded the maximum number of lines"},
-                                diffs={"13": pr_diff(all_tools_to("0.50.0"))})
+    def test_a_pr_that_deletes_the_agent_kit_pin_file_fails_naming_the_pin(self):
+        self.git("checkout", "-q", "-b", "pr", self.start)
+        self.git("rm", "-q", KIT_PATH)
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "drop")
+        result = self.check(self.start, self.git("rev-parse", "HEAD"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("agent-kit pin removed by this PR", result.stdout)
+
+    def test_a_pr_that_removes_a_pin_fails_naming_it(self):
+        head = self.branch({MISE_PATH: "\n".join(l for l in mise({}).splitlines() if not l.startswith("lean-change")) + "\n"})
+        result = self.check(self.start, head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("lean-change pin removed by this PR", result.stdout)
+
+    def test_a_pr_run_appends_its_commits_and_changed_pins_to_the_log(self):
+        head = self.branch({MISE_PATH: mise({"loop-engine": "0.30.0"})})
+        self.check(self.start, head, le_tag="v0.49.0")
+        (record,) = self.log_records()
+        self.assertEqual((record["mode"], record["base"], record["head"], record["changed"], record["exit"]), ("pull_request", self.start, head, ["loop-engine"], 1))
+
+    def test_commits_git_cannot_find_stop_the_check(self):
+        result = self.check(self.start, "0" * 40)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        out = result.stdout + result.stderr
-        self.assertIn("cannot read the diff of cartwmic/dotfiles PR #12 (HTTP 406: the diff exceeded the maximum "
-                      "number of lines)", out)
-        self.assertNotIn("OK", result.stdout)
-        self.assertNotIn("pending bump #", result.stdout)
+        self.assertIn("cannot find the merge base", result.stdout)
+
+    def test_base_without_head_is_refused(self):
+        result = self.run_script("--base", self.start, cwd=self.repo)
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("--base and --head go together", result.stderr)
+
+    def test_the_pr_check_never_touches_issues(self):
+        head = self.branch({MISE_PATH: mise({"loop-engine": "0.30.0"})})
+        self.check(self.start, head, le_tag="v0.49.0")
+        self.assertEqual(self.after().get("issues", []), [])
 
 
 if __name__ == "__main__":
