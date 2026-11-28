@@ -276,6 +276,18 @@ class MergeCheckTest(unittest.TestCase):
         self.pull_request(24, {}, remove=["README.md"])
         self.assertRefused(self.check(24), "dotfiles:README.md", "a failing citation names a file this PR changed (README.md)")
 
+    def test_a_pr_that_deletes_a_checked_folder_is_refused_for_the_folder(self):
+        """The generator names some failures by folder (dot_cursor) rather than by file; git lists only the files removed from it."""
+        self.pull_request(41, {}, remove=["dot_cursor/mcp.json"])
+        self.assertRefused(self.check(41), "a failing citation names a file this PR changed (dot_cursor)")
+
+    def test_a_pr_that_removes_the_root_setup_scripts_is_refused_for_the_repository_root(self):
+        """`no run_* setup scripts at the repository root` has an empty path; a changed file at the root is what it names."""
+        scripts = [name for name in git(self.dotfiles, "ls-files").split() if name.startswith("run_") and "/" not in name]
+        self.assertTrue(scripts, "the fixture has root setup scripts")
+        self.pull_request(42, {}, remove=scripts)
+        self.assertRefused(self.check(42), "a failing citation names a file this PR changed (.)")
+
     def test_a_pr_that_renames_a_cited_dotfiles_file_is_refused_for_the_old_name(self):
         """git's own rename detection lists only the new name; the citation still names the old one."""
         self.pull_request(29, {"README-renamed.md": self.world.read("dotfiles", "README.md")}, remove=["README.md"])

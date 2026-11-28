@@ -9,7 +9,7 @@ pull-request runs build it, so a fix already on main counts and a PR that is onl
 origin/main, with its generator, content.md and fact files; the other three repositories are read at their origin/main after a fetch.
 
 Refuse (exit 1) when that build fails and the PR is to blame: it changed one of the page's own files, or a failing citation names a dotfiles
-file the PR changed (edited, deleted or renamed). A build that fails for any other reason (another repository moved, or a dotfiles file the PR did not
+file the PR changed (edited, deleted or renamed) or a folder holding one (the repository root counts for a file at the root). A build that fails for any other reason (another repository moved, or a dotfiles file the PR did not
 change) is a warning, exit 0. Exit 2: the check could not run (gh or any git command fails or cannot start, a clone or the scratch clone is
 missing, the head moved while checking, the PR conflicts with main so there is no merge result to build (merge main into the PR first), the page build
 ran over 600 seconds, or the call was wrong: the usage error). Nothing is written under ~/.local/state/stack-map, no network is used beyond
@@ -90,13 +90,20 @@ def build(label, generator_text, dotfiles_sha, home_clone, repos_dir, work):
     return False, lines, 0
 
 
-CITATION_LINE = re.compile(r"^(?P<repo>[\w.-]+):(?P<path>[^:]+):\d+: ")
+CITATION_LINE = re.compile(r"^(?P<repo>[\w.-]+):(?P<path>[^:]*):\d+: ")
 
 
 def cited_files(lines):
-    """The dotfiles paths that failing generator lines (`repo:path:line: message`) name."""
+    """The dotfiles paths that failing generator lines (`repo:path:line: message`) name. An empty path is the repository root."""
     found = (CITATION_LINE.match(line) for line in lines)
     return sorted({m["path"] for m in found if m and m["repo"] == "dotfiles"})
+
+
+def names_a_changed_file(path, changed):
+    """Whether a cited path is a changed file, a folder holding one, or (empty path) the repository root with a changed file in it."""
+    if not path:
+        return any("/" not in name for name in changed)
+    return any(name == path or name.startswith(path.rstrip("/") + "/") for name in changed)
 
 
 def merge_result(primary, base, head):
@@ -155,7 +162,7 @@ def check(pr, record):
         print("stack-map-merge-check: the stack map page builds with this PR merged with main (%s), %d citations verified" % (sha[:7], count))
         record.update(outcome="passed", citations=count)
         return 0
-    cited_changed = [path for path in cited_files(lines) if path in changed]
+    cited_changed = [path or "." for path in cited_files(lines) if names_a_changed_file(path, changed)]
     record.update(failed=[line[:200] for line in lines], cited_changed=cited_changed)
     if touched or cited_changed:
         record["outcome"] = "refused"
