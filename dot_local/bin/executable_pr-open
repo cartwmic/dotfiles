@@ -246,5 +246,5 @@ pr=$number
 write_src "$number"
 if command -v pr-record >/dev/null 2>&1; then
   record=$(pr-record path "$repo#$number" 2>/dev/null) && { printf 'agent record (principles table, Decisions: line, job ids go here): %s\n' "$record"
-    printf 'before you report, run: pr-body-check %s %s --skip-intent-review (the --body-file form pr-open ran does not check the agent record)\n' "$repo" "$number"; } || true
+    printf 'before you report, run: pr-body-check %s %s --skip-intent-review (the --body-file form pr-open ran does not read the agent record; this run reads it and also judges the Known limits section against it, so a permanent limit needs its Permanent limits: line first)\n' "$repo" "$number"; } || true
 fi
