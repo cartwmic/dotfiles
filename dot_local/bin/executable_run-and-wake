@@ -38,8 +38,8 @@ Contract (docs/run-and-wake.md):
   sent unless the owner waited. The same check runs just before a wake in a burst is sent. The held seconds are on the `wake` or `skip` record as `held_s`.
 - A stopped job is never held: it is looked at once, as the sweep does, because a stop can come with a SIGKILL a scope stop timeout later that would take the
   watcher before it decided. If the owner waited, it is dropped as `waited`; if the thread is in a turn, as `stopped-in-turn`; otherwise (an idle thread, or one
-  whose state cannot be read) it sends at once. Accepted risk: a job stopped by someone other than its owner while the owner's thread is in a turn gives the owner
-  no wake; each case is a `stopped-in-turn` skip, next to the job's `end` record.
+  whose state cannot be read) it sends at once. Known limit (decision #7791; the owner of the work has not accepted it): a job stopped by someone other than its owner while the owner's
+  thread is in a turn gives the owner no wake; each case is a `stopped-in-turn` skip, next to the job's `end` record.
 - The sweep (a watcher that died after its job ended) applies the same drop rules before it sends the did-not-finish text: `waited`, and `stopped-in-turn` (the
   `end` record has `stopped` and one `t3 thread show` says the thread is in a turn). The sweep runs inside every run-and-wake call, so it looks once and never waits
   for a turn. `--recover` (a job from an earlier boot) is unchanged.

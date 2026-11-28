@@ -1630,6 +1630,50 @@ class RunAndWake(unittest.TestCase):
                 self.assertNotIn("held_s", records[-1])
                 self.assertEqual(len(self.t3_shows()) - asks, 1, "one look at the thread, no waiting")
 
+    # --- guard: a stop gives the watcher until the stopper's SIGKILL, so no wait may outlast it (class: dotfiles#346 r1.n2, #1028 r1.F1) ---
+    STOP_TIMEOUT = 1.5  # stands in for systemd's 90 s: SIGKILL follows the SIGTERM this much later
+
+    def check_a_stopped_watcher_writes_its_record_before_sigkill(self, busy, env, t3_down=False):
+        if busy:
+            self.thread_in_a_turn()
+        if t3_down:
+            (self.fake / "t3_down").write_text("all")
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd, env=self.busy(**env))
+        job = self.job_id(result)
+        os.killpg(os.getpgid(int(result.stdout.split(", pid ")[1].split(",")[0])), signal.SIGTERM)  # systemctl --user stop <scope>
+        watcher = self.final_records(job, "end")[0]["watcher"]
+        time.sleep(self.STOP_TIMEOUT)
+        final = [r for r in self.records_of(job) if r["event"] in ("wake", "skip")]
+        try:
+            os.kill(watcher, signal.SIGKILL)  # the stopper's SIGKILL at the stop timeout
+        except ProcessLookupError:
+            pass
+        self.assertTrue(final, f"the watcher was still waiting {self.STOP_TIMEOUT}s after a stop: SIGKILL takes it with no wake or skip record")
+
+    def test_a_stopped_job_on_a_busy_thread_is_decided_before_the_stop_timeout(self):
+        self.check_a_stopped_watcher_writes_its_record_before_sigkill(busy=True, env={})
+
+    def test_a_stopped_job_on_a_busy_thread_with_a_merge_window_is_decided_before_the_stop_timeout(self):
+        self.check_a_stopped_watcher_writes_its_record_before_sigkill(busy=True, env={"RUN_AND_WAKE_COALESCE": "60"})
+
+    def test_a_stopped_job_in_the_merge_window_is_decided_before_the_stop_timeout(self):
+        self.check_a_stopped_watcher_writes_its_record_before_sigkill(busy=False, env={"RUN_AND_WAKE_COALESCE": "60"})
+
+    def test_a_stopped_job_with_t3_down_is_decided_before_the_stop_timeout(self):
+        self.check_a_stopped_watcher_writes_its_record_before_sigkill(busy=False, env={}, t3_down=True)
+
+    # --- guard: only the owner's own act drops the owner's wake (class: dotfiles#516 r1.f1, #1028 r1.F2) ---
+    def test_a_scan_of_the_jobs_folder_does_not_hide_the_owners_wake(self):
+        self.thread_in_a_turn()
+        job = self.job_id(self.launch("--", "sh", "-c", "exit 3", env=self.busy()))
+        self.final_records(job, "end")
+        time.sleep(0.1)
+        subprocess.run(["grep", "-r", "-q", "no-such-text", str(self.state / "run-and-wake/jobs")])  # another tool scans the folder; the owner reads nothing
+        self.leave_the_turn()
+        records = self.replay(job)
+        self.assertEqual([records[-1]["event"], records[-1].get("result")], ["wake", "sent"], "the owner never saw the result, so it is woken")
+
     def swept(self, job, thread_state, *, end, output_read=False, waited=False):
         """A job whose watcher died after its end (what a stop that took the watcher with it leaves), found by the next call's sweep. `output_read`: something read its output file after
         the end; `waited`: the owner's `--wait` printed its result. Returns once the sweep call has returned: the sweep never waits for a turn."""
