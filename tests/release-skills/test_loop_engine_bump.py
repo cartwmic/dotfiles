@@ -30,7 +30,7 @@ LAST_PRINCIPLE = (int(_HEADINGS[-1][0]), _HEADINGS[-1][1])
 README = ROOT / "dot_local/share/agent-harness/README.md"
 SKILLS_SRC = "dot_local/share/agent-harness/canonical/skills"
 SKILLS_DEST = ".local/share/agent-harness/canonical/skills"
-TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
+TOOLS = ("loop-engine", "lean-change", "policy-document", "bookends-check")
 
 PR_GH = r'''import subprocess
 state.setdefault("calls", []).append(args)
@@ -315,7 +315,8 @@ class BumpTests(Fixture):
         # Only the PR's targets were applied: pins, the imported skills; not main's unrelated later change.
         self.assertEqual(self.live(".config/mise/config.toml"), 'gh = "latest"\n' + pins("1.0.0"))
         self.assertEqual(self.live(SKILLS_DEST + "/using-foo-provider/SKILL.md"), "foo skill v1\n")
-        self.assertEqual(self.live(SKILLS_DEST + "/using-loop-engine/references/PRD.md"), "prd\n")
+        for skipped in ("using-loop-engine/references/PRD.md", "using-research-provider/SKILL.md", "using-generate-prd/SKILL.md"):
+            self.assertIsNone(self.live(SKILLS_DEST + "/" + skipped), skipped)  # the tag ships them; dotfiles does not import them
         self.assertEqual(self.live(SKILLS_DEST + "/my-own-skill/SKILL.md"), "mine\n")
         self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
         for harness in (".claude/skills", ".codex/skills", ".pi/agent/skills", ".agents/skills"):
@@ -326,7 +327,7 @@ class BumpTests(Fixture):
         self.assertEqual(self.mise_installs()[-1], ["install", *TOOLS])
         self.assertIn("PR #100 https://example.test/pull/100", result.stdout)
         self.assertIn("merge " + sha, result.stdout)
-        self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, research 1.0.0, bookends-check 1.0.0", result.stdout)
+        self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, bookends-check 1.0.0", result.stdout)
         self.assertIn("+foo skill v1", result.stdout)  # the diff it checked
         lines = self.log_lines()
         self.assertEqual(len({line["id"] for line in lines}), 1)
@@ -370,7 +371,7 @@ class BumpTests(Fixture):
         self.assertEqual(self.live(SKILLS_DEST + "/using-foo-provider/SKILL.md"), "foo skill v1\n")
         self.assertEqual(self.live(".unrelated"), "unrelated v1\n")  # main's later unrelated change is not applied
         self.assertEqual(self.mise_installs()[-1], ["install", *TOOLS])
-        self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, research 1.0.0, bookends-check 1.0.0", result.stdout)
+        self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, bookends-check 1.0.0", result.stdout)
         self.assertEqual([line["step"] for line in self.log_lines()],
                          ["profile", "pr", "import", "publish", "checks", "gates", "merge", "source", "drift", "apply", "install", "verify"])
         self.assertIn(str(self.home / container), self.log_lines()[-3]["detail"])  # the apply step's targets

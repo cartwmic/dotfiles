@@ -1,13 +1,13 @@
 ---
 name: distilling-requirements
-description: Use when you need to know what a repo is required to do, from its code, tests, docs, history and behavior, not from a diff. Produces one REQUIREMENTS.md, a snapshot at one commit that is never maintained: a register of explicit, implicit and inferred requirements (product, behavioral, technical and non-functional quality ones, including unwritten ones), state machines, unenforced invariants, reachable invalid states with evidence, and the test covering each requirement. A mandatory history step (commits, PRs, issues) finds inferred requirements; an optional interview asks the owner about non-functional ones. Use for backfilling a PRD or auditing an unfamiliar repo (a first pass: verify each finding). Not for reviewing a PR (review-map), a Loop Engine PRD candidate (using-generate-prd) or designing (designing-the-smallest-version).
+description: Use when you need to know what a repo is required to do, from its code, tests, docs, history and behavior, not from a diff. Produces one REQUIREMENTS.md, a snapshot at one commit that is never maintained: a register of explicit, implicit and inferred requirements (product, behavioral, technical and non-functional quality ones, including unwritten ones), state machines, unenforced invariants, reachable invalid states with evidence, and the test covering each requirement. A mandatory history step (commits, PRs, issues) finds inferred requirements; an optional interview asks the owner about non-functional ones. Use for backfilling a PRD or auditing an unfamiliar repo (a first pass: verify each finding). Not for reviewing a PR (review-map) or designing (designing-the-smallest-version).
 ---
 
 # Distilling Requirements
 
 Read a repo and write down what it must do, including what nobody wrote down and the non-functional requirements (quality), with evidence for every line and the test that covers it. The output is a snapshot: one file that records the code at one commit and is never maintained, in a fixed shape ([references/output-shape.md](references/output-shape.md)) so a person, another skill or a later run reads it the same way.
 
-**How it differs from neighbours.** `using-generate-prd` drives a Loop Engine research run to a schema-valid `LE-n` PRD candidate and needs the engine; it has no state machines, unenforced invariants or per-requirement test coverage. `review-map` explains a diff. This skill needs only the repo, covers four lenses, and adds state machines, unenforced invariants and test-coverage gaps. Its register can seed a PRD candidate later; it mints no `LE-n` ids.
+**How it differs from neighbours.** `review-map` explains a diff. This skill needs only the repo, covers four lenses, and adds state machines, unenforced invariants and test-coverage gaps. It mints no `LE-n` ids.
 
 ## Inputs
 

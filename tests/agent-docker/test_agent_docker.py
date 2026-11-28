@@ -2,7 +2,7 @@
 
     python3 -m unittest discover -s tests/agent-docker -v
 
-- the DOCKER_CONFIG block in dot_zshenv, in a real non-interactive `zsh -c` (the kind Claude Code, T3, Codex and herdr panes start) with
+- the DOCKER_CONFIG block in dot_zshenv, in a real non-interactive `zsh -c` (the kind Claude Code, T3 and Codex start) with
   HOME set to a temporary directory holding dot_zshenv as ~/.zshenv;
 - the deployed config.json, read as a file;
 - (macOS) a real `chezmoi apply` of the personal and work profiles into a scratch HOME with a fake ~/.docker.
@@ -21,7 +21,7 @@ ZSHENV = ROOT / "dot_zshenv"
 CONFIG = ROOT / "dot_config/agent-docker/config.json"
 ZSH = shutil.which("zsh")
 CHEZMOI = shutil.which("chezmoi")
-MARKERS = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_SANDBOX", "CODEX_THREAD_ID"]
+MARKERS = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "CODEX_SANDBOX", "CODEX_THREAD_ID"]
 
 
 class ConfigFileTest(unittest.TestCase):

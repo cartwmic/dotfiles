@@ -1,7 +1,7 @@
 """The lead's turn-end check on Claude Code and Pi, for both desktop profiles.
 
 - hooks/lead_turn_end.py is run as a process, the way Claude Code runs it, against a stub coordinator checkout whose cli.ts answers from the arguments it was given.
-- The lead seat file (both profiles) carries the Stop hook with this profile's own coordinator checkout and state directory; no other seat does.
+- Where the Stop hook is registered, and which seats the script skips, is tests/lead-turn-end/test_global_stop.py.
 - The Pi extension's config.json renders per profile and deploys on both; its test file does not.
 Skipped where chezmoi is not installed (the rendering tests only).
 
@@ -57,8 +57,8 @@ class HookTest(unittest.TestCase):
         shutil.copy(ROOT / "dot_local/share/agent-harness/hooks/stop_running_jobs.py", self.hooks / "stop_running_jobs.py")
 
     def run_hook(self, hook_input="{}", thread="thread:lead", extra=None, repo=None, state=None):
-        env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "COORDINATOR_STATE_DIR")}
-        env.update({"STUB_RECORD": str(self.record), "RUN_AND_WAKE_STATE": str(Path(self.tmp.name) / "rw"), "KGATE_STATE": str(Path(self.tmp.name) / "kg"), **(extra or {})})
+        env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "COORDINATOR_STATE_DIR", "COORDINATOR_SEAT")}
+        env.update({"LEAD_TURN_END_PS": "/nonexistent/ps", "STUB_RECORD": str(self.record), "RUN_AND_WAKE_STATE": str(Path(self.tmp.name) / "rw"), "KGATE_STATE": str(Path(self.tmp.name) / "kg"), **(extra or {})})
         if thread:
             env["T3CODE_THREAD_ID"] = thread
         return subprocess.run([sys.executable, str(self.hooks / "lead_turn_end.py"), "--repo", str(repo or self.repo), "--state", str(state or self.state)],
@@ -173,65 +173,12 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout)
 
-    def render_seat(self, seat, profile, extra=None):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = Path(tmp) / "chezmoi.yaml"
-            cfg.write_text(json.dumps({"data": {"profile": profile, **(extra or {})}}))
-            done = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "execute-template"],
-                                  input=(ROOT / f"dot_claude/fleet/seat-{seat}.json.tmpl").read_text(), capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=tmp))
-        self.assertEqual(done.returncode, 0, done.stderr)
-        return json.loads(done.stdout), tmp
-
     def test_the_pi_config_points_each_profile_at_its_own_coordinator(self):
         jobs = f"{HOME}/.local/share/agent-harness/hooks/stop_running_jobs.py"
         self.assertEqual(self.render_config("personal"), {"enabled": True, "coordinatorRepo": f"{HOME}/git/coordinator", "stateDir": f"{HOME}/.local/share/coordinator", "jobsHook": jobs})
         self.assertEqual(self.render_config("axon-work-computer"), {"enabled": True, "coordinatorRepo": f"{HOME}/coordinator-work", "stateDir": f"{HOME}/.local/share/coordinator-work", "jobsHook": jobs})
         self.assertEqual(self.render_config("personal", {"instances": {"coordinator": {"repo": "/srv/coordinator"}}})["coordinatorRepo"], "/srv/coordinator")
         self.assertFalse(self.render_config("personal", {"agentHost": {"removeCoordinatorHook": True}})["enabled"])
-
-    def test_only_the_lead_seat_file_has_the_lead_stop_hook(self):
-        for profile in ("personal", "axon-work-computer"):
-            for seat in ("lead", "builder", "planner", "reviewer", "scout", "coordinator"):
-                hooks, _ = self.render_seat(seat, profile)
-                hooks = hooks.get("hooks")
-                with self.subTest(profile=profile, seat=seat):
-                    if seat == "lead":
-                        self.assertEqual(list(hooks), ["Stop"])
-                        self.assertIn("lead_turn_end.py", hooks["Stop"][0]["hooks"][0]["command"])
-                    else:
-                        self.assertNotIn("lead_turn_end.py", json.dumps(hooks))
-
-    def test_the_lead_seat_hook_names_this_profiles_coordinator(self):
-        for profile, repo, state in (("personal", "git/coordinator", "coordinator"), ("axon-work-computer", "coordinator-work", "coordinator-work")):
-            seat, tmp = self.render_seat("lead", profile)
-            command = seat["hooks"]["Stop"][0]["hooks"][0]["command"]
-            with self.subTest(profile=profile):
-                self.assertIn(f"{tmp}/{repo}'", command)
-                self.assertIn(f"{tmp}/.local/share/{state}'", command)
-
-    def test_the_lead_seat_hook_is_left_out_when_the_coordinator_runs_elsewhere(self):
-        seat, _ = self.render_seat("lead", "personal", {"agentHost": {"removeCoordinatorHook": True}})
-        self.assertNotIn("hooks", seat)
-
-    def test_the_seat_command_passes_exit_2_through_and_fails_open(self):
-        seat, tmp = self.render_seat("lead", "personal")
-        command = seat["hooks"]["Stop"][0]["hooks"][0]["command"]
-        home = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: shutil.rmtree(home, ignore_errors=True))
-        env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "COORDINATOR_STATE_DIR")}
-        env.update({"HOME": str(home), "T3CODE_THREAD_ID": "thread:lead", "STUB_RECORD": str(home / "rec")})
-        run = lambda: subprocess.run(["sh", "-c", command.replace(tmp, str(home))], input="{}", capture_output=True, text=True, env=env, timeout=60)
-        self.assertEqual(run().returncode, 0)   # script not installed: allowed
-        hooks = home / ".local/share/agent-harness/hooks"
-        hooks.mkdir(parents=True)
-        shutil.copy(HOOK, hooks / "lead_turn_end.py")
-        self.assertEqual(run().returncode, 0)   # installed, no coordinator checkout: allowed
-        (home / "git/coordinator/src/coordinatord").mkdir(parents=True)
-        (home / "git/coordinator/src/coordinatord/cli.ts").write_text(STUB)
-        (home / ".local/share/coordinator").mkdir(parents=True, exist_ok=True)   # the failed check above left its log line here
-        done = run()
-        self.assertEqual(done.returncode, 2, done.stderr)
-        self.assertIn("Do the work", done.stderr)
 
     def managed(self, profile):
         done = self.chezmoi(lambda tmp: ["--destination", tmp, "managed", "--include=files", "--path-style=relative", "--override-data", json.dumps(self.data(profile))])

@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MISE_PATH = "dot_config/mise/config.toml"
 AGENT_KIT_PATH = "dot_local/share/agent-kit/package.json"
 DOTFILES = "cartwmic/dotfiles"
-LOOP_ENGINE_TOOLS = ("loop-engine", "lean-change", "policy-document", "research", "bookends-check")
+LOOP_ENGINE_TOOLS = ("loop-engine", "lean-change", "policy-document", "bookends-check")
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 

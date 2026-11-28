@@ -11,7 +11,7 @@ if [ -d "$HOME/.local/share/gh-wrapper/bin" ]; then
 fi
 
 # Pi: 1-hour prompt cache (Anthropic default is 5 minutes). Read by every zsh,
-# so it reaches Herdr panes, the coordinator pane and subagents. Override in
+# so it reaches T3 threads, the coordinator and subagents. Override in
 # ~/.zshenv.local or the environment (PI_CACHE_RETENTION=short).
 export PI_CACHE_RETENTION="${PI_CACHE_RETENTION:-long}"
 
@@ -51,7 +51,7 @@ fi
 # the live Hyprland instance each time a shell starts, so a Hyprland restart (new signature) needs nothing else. It keeps a signature whose
 # instance is live, replaces one that is unset or dead (t3code outlived a Hyprland restart), and is a silent no-op with no live session.
 # The file exists on personal Linux only (.chezmoiignore), so this does nothing elsewhere.
-if [ -n "${CLAUDECODE-}${CLAUDE_CODE_ENTRYPOINT-}${T3CODE_THREAD_ID-}${HERDR_ENV-}${CODEX_SANDBOX-}${CODEX_THREAD_ID-}" ] \
+if [ -n "${CLAUDECODE-}${CLAUDE_CODE_ENTRYPOINT-}${T3CODE_THREAD_ID-}${CODEX_SANDBOX-}${CODEX_THREAD_ID-}" ] \
    && [ -r "$HOME/.local/share/agent-desktop/session.sh" ]; then
   . "$HOME/.local/share/agent-desktop/session.sh"
   agent_desktop_session
@@ -80,7 +80,7 @@ fi
 # are in .chezmoitemplates/op-shim-connect). A DOCKER_CONFIG that is already set, even empty, is kept, so `DOCKER_CONFIG= docker ...` gets
 # the normal config; ~/.zshenv.local can set one too. The directory exists on the personal Mac only (.chezmoiignore), so this does nothing elsewhere.
 if [ -z "${DOCKER_CONFIG+set}" ] && [ -d "$HOME/.config/agent-docker" ] \
-   && [ -n "${CLAUDECODE-}${CLAUDE_CODE_ENTRYPOINT-}${T3CODE_THREAD_ID-}${HERDR_ENV-}${CODEX_SANDBOX-}${CODEX_THREAD_ID-}" ]; then
+   && [ -n "${CLAUDECODE-}${CLAUDE_CODE_ENTRYPOINT-}${T3CODE_THREAD_ID-}${CODEX_SANDBOX-}${CODEX_THREAD_ID-}" ]; then
   export DOCKER_CONFIG="$HOME/.config/agent-docker"
 fi
 

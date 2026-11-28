@@ -6,6 +6,7 @@ The real shim runs as a real process. op is a fake first found on PATH after the
 arguments, stdin and whether it got the test's fake token, then exits with a status the test chose. No real op, token or
 1Password account is used.
 """
+import json
 import os
 import shutil
 import stat
@@ -18,7 +19,7 @@ SHIM = Path(__file__).resolve().parents[2] / ".chezmoitemplates/op-shim-connect"
 FAKE_TOKEN = "ops_fake-token-for-the-shim-test"  # a stand-in service-account token; never a real one
 NO_TOKEN = "1Password service account token not set; refusing to use the desktop app (playbook 78819cbd)"
 MARKERS = {  # one per agent shell marker the shim reads; each is set to a non-empty value
-    "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "T3CODE_THREAD_ID": "thread-1", "HERDR_ENV": "1",
+    "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "T3CODE_THREAD_ID": "thread-1",
     "CODEX_SANDBOX": "seatbelt", "CODEX_THREAD_ID": "019a-test",
 }
 
@@ -54,6 +55,7 @@ class OpShim(unittest.TestCase):
         fake.write_text(FAKE_OP)
         fake.chmod(0o755)
         self.out = self.tmp / "op-call.txt"
+        self.guard_log = self.tmp / "guard.jsonl"
         self.tmpdir = self.tmp / "tmpdir"
         self.tmpdir.mkdir()
         # The same file under the zsh name, as dot_zshenv puts it on every zsh's PATH.
@@ -75,6 +77,7 @@ class OpShim(unittest.TestCase):
         return {
             "OP_CONNECT_TOKEN_FILE": str(self.tmp / "no-connect-token-here"),
             "OP_CONNECT_FALLBACK_LOG": str(self.tmp / "connect-fallback.log"),
+            "AGENT_HARNESS_GUARD_LOG": str(self.guard_log),  # keep refusal lines out of the real guard log
         }
 
     def run_zsh_name(self, args, env=None, cwd=None):
@@ -171,6 +174,105 @@ class OpShim(unittest.TestCase):
                 self.assertEqual(result.returncode, 69, (name, result.stderr))
                 self.assertEqual(result.stderr, NO_TOKEN + "\n", name)
                 self.assertFalse(self.out.exists(), f"{name}: op never ran")
+
+    # A refusal leaves one line in the guard log (design principle 14): {ts, action, rule, tool, cwd, matched} as the bash_rules
+    # refusals write it, plus reason (which marker matched) and session. Nothing from the arguments goes in it but a subcommand
+    # name from a fixed list.
+
+    SECRETS = ("op://Vault-Secret/Item-Secret/field", "SESSIONSECRET123", "Vault-Secret", "Item-Secret", "TOKENVALUE456")
+
+    def guard_lines(self):
+        return self.guard_log.read_text().splitlines() if self.guard_log.exists() else []
+
+    def test_a_refusal_leaves_one_line_in_the_guard_log_with_the_marker_and_no_secret(self):
+        for name, value in MARKERS.items():
+            with self.subTest(marker=name):
+                if self.guard_log.exists():
+                    self.guard_log.unlink()
+                result = self.run_zsh_name(["read", "op://Vault-Secret/Item-Secret/field", "--session=SESSIONSECRET123"], env={name: value})
+                self.assertEqual(result.returncode, 69, result.stderr)
+                lines = self.guard_lines()
+                self.assertEqual(len(lines), 1, lines)
+                record = json.loads(lines[0])
+                self.assertEqual({k: record[k] for k in ("action", "rule", "tool", "matched", "reason")},
+                                 {"action": "refuse", "rule": "op-shim", "tool": "op", "matched": "read", "reason": "marker " + name})
+                self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
+                for secret in self.SECRETS:
+                    self.assertNotIn(secret, lines[0])
+
+    def test_a_refusal_by_the_pi_name_logs_that_name_as_the_reason(self):
+        result = self.run_shim(["item", "get", "Item-Secret", "--vault", "Vault-Secret"])
+        self.assertEqual(result.returncode, 69, result.stderr)
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["matched"], record["reason"], record["session"]), ("item", "pi name", None))
+        for secret in self.SECRETS:
+            self.assertNotIn(secret, self.guard_lines()[0])
+
+    def test_the_log_line_names_the_session_the_environment_gives(self):
+        result = self.run_zsh_name(["whoami"], env={"CLAUDECODE": "1", "T3CODE_THREAD_ID": "thread-1"})
+        self.assertEqual(result.returncode, 69, result.stderr)
+        self.assertEqual(json.loads(self.guard_lines()[0])["session"], "thread-1")
+        self.guard_log.unlink()
+        self.run_zsh_name(["whoami"], env={"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "sess-9"})
+        self.assertEqual(json.loads(self.guard_lines()[0])["session"], "sess-9")
+
+    def test_a_t3_thread_id_of_the_delegated_task_form_is_logged_whole(self):
+        # Delegated threads (builders, leads) carry ":" and "%" in the id; stripping them would match no thread or ledger source.
+        thread = "thread:delegated-task:command%3Amcp%3Af636143a-2bc5%3Adelegate-task%3Aonepassword-guard-1b"
+        for run in (lambda: self.run_zsh_name(["whoami"], env={"T3CODE_THREAD_ID": thread}), lambda: self.run_shim(["whoami"], env={"T3CODE_THREAD_ID": thread})):
+            if self.guard_log.exists():
+                self.guard_log.unlink()
+            self.assertEqual(run().returncode, 69)
+            self.assertEqual(json.loads(self.guard_lines()[0])["session"], thread)
+
+    def test_the_first_marker_and_the_first_session_variable_win(self):
+        # Order as agent_shell checks the markers; the session is T3's, then Codex's, then Claude's.
+        env = {"CODEX_SANDBOX": "seatbelt", "CODEX_THREAD_ID": "codex-1", "T3CODE_THREAD_ID": "t3-1", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "claude-1"}
+        self.run_zsh_name(["whoami"], env=env)
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["reason"], record["session"]), ("marker CLAUDECODE", "t3-1"))
+        self.guard_log.unlink()
+        self.run_zsh_name(["whoami"], env={k: v for k, v in env.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID")})
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["reason"], record["session"]), ("marker CODEX_THREAD_ID", "codex-1"))
+        self.guard_log.unlink()
+        self.run_zsh_name(["whoami"], env={"CODEX_SANDBOX": "seatbelt", "CLAUDE_CODE_SESSION_ID": "claude-1"})
+        record = json.loads(self.guard_lines()[0])
+        self.assertEqual((record["reason"], record["session"]), ("marker CODEX_SANDBOX", "claude-1"))
+
+    def test_a_first_argument_that_is_not_a_subcommand_is_not_logged(self):
+        # A flag first (op --session=TOKEN read ...) or any word outside the fixed list logs matched null, never the text.
+        for args in (["--session=TOKENVALUE456", "read", "op://Vault-Secret/Item-Secret/field"], ["Vault-Secret"], []):
+            with self.subTest(args=args):
+                if self.guard_log.exists():
+                    self.guard_log.unlink()
+                result = self.run_shim(args)
+                self.assertEqual(result.returncode, 69, result.stderr)
+                self.assertEqual(len(self.guard_lines()), 1)
+                self.assertIsNone(json.loads(self.guard_lines()[0])["matched"])
+                for secret in self.SECRETS:
+                    self.assertNotIn(secret, self.guard_lines()[0])
+
+    def test_a_session_id_with_odd_characters_still_gives_one_json_line(self):
+        self.run_zsh_name(["whoami"], env={"CLAUDECODE": "1", "T3CODE_THREAD_ID": 'a"b\\c d'})
+        self.assertEqual(json.loads(self.guard_lines()[0])["session"], "abcd")
+
+    def test_a_run_that_is_not_refused_writes_no_log_line(self):
+        self.write_token()
+        self.run_zsh_name(["whoami"], env={"CLAUDECODE": "1"})
+        self.run_zsh_name(["whoami"], env={"CLAUDECODE": ""})
+        self.assertEqual(self.guard_lines(), [])
+
+    def test_the_shim_still_refuses_when_the_log_cannot_be_written(self):
+        # A regular file as the log's parent folder: the write fails even for root.
+        blocker = self.tmp / "not-a-folder"
+        blocker.write_text("x")
+        env = {"AGENT_HARNESS_GUARD_LOG": str(blocker / "guard.jsonl")}
+        for run in (lambda: self.run_zsh_name(["whoami"], env={**env, "CLAUDECODE": "1"}), lambda: self.run_shim(["whoami"], env=env)):
+            result = run()
+            self.assertEqual(result.returncode, 69, result.stderr)
+            self.assertEqual(result.stderr, NO_TOKEN + "\n")
+            self.assertFalse(self.out.exists(), "op never ran")
 
     def test_codex_with_its_sandbox_off_refuses_without_a_token(self):
         # Codex sets CODEX_THREAD_ID in every shell it runs. With its sandbox off it sets no CODEX_SANDBOX, so this is the

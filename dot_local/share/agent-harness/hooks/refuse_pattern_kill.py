@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse `pkill` and `killall` in an agent's shell command, then run the eleven checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, issue body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config).
+"""Refuse `pkill` and `killall` in an agent's shell command, then run the twelve checks of bash_rules.py (sleep-poll, heredoc, kube context, merge, PR body, issue body, local docker, heavy jobs in the agent host pod, git stash, git in the live coordinator checkout, credential config, a hand-typed Loop Engine write on a lead's or the coordinator's run).
 
 A pattern kill can hit another agent's jobs (three incidents in two days). This is the one classifier; the harness adapters call it:
   Claude Code  PreToolUse hook on Bash (and Monitor):  python3 refuse_pattern_kill.py        (reads the hook JSON on stdin)
@@ -13,6 +13,7 @@ It fails open: input it cannot read is allowed, and an error inside bash_rules a
 The bash_rules checks that depend on the profile read AGENT_HARNESS_PROFILE, else the file `profile` beside this script (rendered by chezmoi).
 The heavy-job check runs only in the agent host pod: AGENT_HARNESS_CONTAINER=true, else the file `container` beside this script reads `true` (rendered by chezmoi from container mode).
 Every bash_rules refusal is also written as one JSON line ({ts, action, rule, tool, cwd, matched}; `matched` is the command name the rule found, from its fixed list such as `npx vitest`, else null; never the command text, which can hold a token) to ~/.local/state/agent-harness/guard.jsonl (AGENT_HARNESS_GUARD_LOG overrides the path); a write that fails is ignored.
+A rule that has a way past (the Loop Engine write rule: `BASH_ENGINE_OVERRIDE='<why>' loop-engine ...`) also writes one line for each use of it, in the same file, with `action: "override"` and the why (300 characters at most).
 
 What counts: the command position of any simple command, found through quotes, `;`, `&&`, `||`, `|`, `&`, newlines, `( )`, `$( )`,
 backticks, `sh -c '...'` (and bash, zsh, dash, ksh; also `-lc`), `eval`, heredocs fed to a shell, and wrappers such as `sudo`, `env`,
@@ -555,12 +556,13 @@ def log_door_failure(env, reason, run, adapter):
         pass
 
 
-def log_refusal(rule, tool, env, cwd=None, matched=None, extra=None):
-    """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. `extra` adds fields a rule chose to log (the gh api body rule's reason and redacted command). A failed write is ignored."""
+def log_refusal(rule, tool, env, cwd=None, matched=None, extra=None, action="refuse"):
+    """One JSON line per bash_rules refusal, so the logs answer how often each rule refuses. `extra` adds fields a rule chose to log (the gh api body rule's reason and redacted command).
+    `action` is "override" for a use of a rule's way past (the same line, so the counts of refusals and of ways past sit in one file). A failed write is ignored."""
     try:
         path = env.get("AGENT_HARNESS_GUARD_LOG") or os.path.join(env.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "agent-harness", "guard.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": "refuse", "rule": rule, "tool": tool, "cwd": cwd, "matched": matched}
+        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "action": action, "rule": rule, "tool": tool, "cwd": cwd, "matched": matched}
         record.update(extra or {})
         with open(path, "a") as handle:
             handle.write(json.dumps(record) + "\n")
@@ -579,7 +581,8 @@ def bash_rules_message(command, raw):
         run_id, adapter = hook_session(raw)
         ctx = bash_rules.Context(tool=tool, profile=load_profile(os.environ, here), env=dict(os.environ), cwd=cwd or os.getcwd(),
                                  container=load_container(os.environ, here), coordinator_repo=load_coordinator_repo(os.environ, here),
-                                 run=run_id, door=load_door(os.environ, here, run_id, adapter))
+                                 run=run_id, door=load_door(os.environ, here, run_id, adapter),
+                                 note=lambda rule, matched, extra: log_refusal(rule, tool, os.environ, cwd or os.getcwd(), matched, extra, action="override"))
         found = bash_rules.refusal(command, ctx)
         if not found:
             return None

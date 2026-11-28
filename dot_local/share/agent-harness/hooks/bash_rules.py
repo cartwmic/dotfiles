@@ -1,4 +1,4 @@
-"""Eleven refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check. Each names the fix.
+"""Twelve refusals for an agent's shell command, run by refuse_pattern_kill.py after its pkill check, and the door rule that tells a playbook rule. Each names the fix.
 
   sleep-poll  (both profiles)  a `while` or `until` loop whose body runs `sleep`: use `run-and-wake -- <cmd>`. Not refused: anything under
               `run-and-wake`, `for` loops, `while read` loops (they walk items), a lone sleep. Skipped for Claude's Monitor tool.
@@ -15,8 +15,10 @@
               --merge-gate exits 0 for UNTESTED and 1 for RED, as playbook fab9b713 allows an untested merge; a bare `ci-main-status`
               exits 2 for UNTESTED and blocks it. `--match-head-commit <head sha>` makes the merge refuse unless the PR head is still
               the commit the checks read. The PR that fixes a red main adds `--pr N`: `--merge-gate <repo> --pr N` passes a red
-              GitHub-run main when PR N's own full-suite run on its head tree succeeded (a pull_request run that skips the suite
-              does not count; a workflow_dispatch run does). dotfiles tries its release-pins fix rule first, then that same rule.
+              GitHub-run main only when PR N names that red (a `Handles: <full sha>` line in a commit message of the PR, or in its
+              description for storycraft) and its own full-suite run on its head tree succeeded (a pull_request run that skips the
+              suite does not count; a workflow_dispatch run does). A green PR that does not name the red is refused. dotfiles tries
+              its release-pins fix rule first, then that same rule.
               Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
               which runs both checks itself. Never for cartwmic/cartwmic-homelab-v2 either, found the same way and refused even
               before the gates: use `~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA` (it adds the RED-line check the chained
@@ -84,6 +86,14 @@
               Not covered: the sign-in code leak (decision #2330): a code reaches the transcript from a browser page or a message tool, not
               from a file or a shell command, so the hook has nothing to match.
 
+  bash-engine (all profiles)  a hand-typed Loop Engine write, `loop-engine start|append|event|terminate`, on a lead's run (`lead-<slug>-<digits>`, the whole shape: `lead-a-b` and
+              `leader-1` are not) or on the coordinator's run (`coordinator-loop-...`): the workflow commands change those runs, and a raw write skips the checks they make.
+              The run id is the first word after the verb (`start`: the `--id` flag), read after every flag spelling and through wrappers, `mise exec`, `sh -c`. Reads (`list`, `show`,
+              `history`, `read`, `explore`, `monitor`, `reclaim`), `change` runs and any other id pass; so does a write whose command names no id (`start` without `--id`).
+              An id the hook cannot read (`$RUN`, a glob) is refused too: write it out. The refusal names the `workflows lead|coordinator` command for the verb; while `workflows lead catch-up` and `workflows lead note` are not built (ENGINE_NOT_BUILT), it says so. The way past
+              is `BASH_ENGINE_OVERRIDE='<why>'` on the same command (an assignment before the command, or `env` with it; an exported value does not count: one use); the use is logged
+              as `action: "override"` with the why. The rule judges the id and ignores the catalog (`--database`).
+
 Flags are read in one place: FLAG_ROWS (one row per tool and subcommand) and `normalise` / `gh_command`, which accept every spelling the tool's flag
 library accepts (`--x v`, `--x=v`, `-x v`, `-xv`, `-x=v`, clusters of short flags, `--` ending the flags). No rule reads a flag itself (the guard in
 tests/agent-kill-guard/test_flag_normaliser.py fails if one does). A gated command (gh pr create/edit/merge, gh api on a PR or issue endpoint, git's
@@ -143,8 +153,8 @@ MERGE_BARE = (
     "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
-    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
-    "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
+    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main only for the PR that fixes it: one that names the red with a `Handles: <full sha>` line "
+    "(in a commit message of the PR; in its description for storycraft) and whose own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
     "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
@@ -158,7 +168,7 @@ PR_BODY = (
 )
 PR_OPEN = {  # the one-command form of PR_BODY, by verb: pr-open checks the body, pushes, opens or PATCHes, and prints the URL
     "create": "`pr-open --title T --body-file F [--draft]` (F is the body file, `-` reads it from stdin; it checks the body, pushes the branch and opens the PR)",
-    "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host)",
+    "edit": "`pr-open --edit N --body-file F` (it checks the body, then sets it through `gh api`, because `gh pr edit` fails on the agent host; it refuses a merged or closed pull request by design: to take a private detail out of such a description use `pr-redact --repo OWNER/REPO --pr N --replacements FILE`, which only replaces exact listed strings with neutral phrases)",
 }
 PR_API_BODY = (
     "`gh api` that sets a pull request body (POST, PATCH or PUT on `repos/<owner>/<repo>/pulls` or `.../pulls/<n>` with a `body` field or `--input`) is refused in agent sessions: "
@@ -256,7 +266,7 @@ def kube_message(what, fix):
     )
 
 
-Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container coordinator_repo run door", defaults=(None,) * 11)
+Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container coordinator_repo run door note", defaults=(None,) * 12)  # note(rule, matched, extra): the caller writes one log line for an allowed use of a way past
 
 
 def read_file(path):
@@ -290,6 +300,7 @@ class Walk:
 
     def __init__(self, text, cwd=None, home=None):
         self.home = home or os.path.expanduser("~")  # what `~`, `$HOME` and `${HOME}` mean in a `cd` or `git -C` target
+        self.notes = []   # (rule, matched, extra) for each use of a rule's way past; refusal() hands them to the caller when nothing in the command is refused
         self.cmds = []    # Cmd: words from the command position (wrappers unwrapped), the assignments before it,
         self.scans = []   # in a polling loop, under run-and-wake, the merge checks run earlier by && (a frozenset), working directory
         self.text = text
@@ -379,6 +390,8 @@ class Walk:
                     self._text(command[0], cwd, loop, inner_waking, gated, depth + 1)
                 more = tuple(w for w in rest[:len(rest) - len(command)] if ASSIGN.match(w))
                 self._command(command, assigns + more, loop, inner_waking, gated, cwd, depth + 1)
+        if name == "mise":
+            self._mise(rest, assigns, loop, waking, gated, cwd, depth)
         if name in ("find", "fd"):
             for k, w in enumerate(rest):
                 if w in ("-exec", "-execdir", "-ok", "-okdir", "-x", "--exec") and k + 1 < len(rest):
@@ -389,6 +402,18 @@ class Walk:
                 self._text(scan.bodies[index], cwd, loop, waking, gated, depth + 1)
         if name == "eval":
             self._text(" ".join(rest), cwd, loop, waking, gated, depth + 1)
+
+    def _mise(self, rest, assigns, loop, waking, gated, cwd, depth):
+        """`mise exec [TOOL@VERSION]... -- COMMAND` and `mise exec -c 'SHELL TEXT'` (also `mise x`) run the command that follows: read it like a wrapper's."""
+        top = normalise([("mise", "")], rest, until_positional=True)
+        if not top.positional or top.positional[0] not in ("exec", "x"):
+            return
+        split = top.tail.index("--") if "--" in top.tail else len(top.tail)
+        text = normalise([("mise", "exec")], top.tail[:split]).value("command")
+        if text:
+            self._text(text, cwd, loop, waking, gated, depth + 1)
+        if top.tail[split + 1:]:
+            self._command(top.tail[split + 1:], assigns, loop, waking, gated, cwd, depth + 1)
 
 
 MKTEMP_ASSIGN = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=[\"']?(?:\$\(|`)\s*mktemp\b([^)`]*)")
@@ -474,6 +499,15 @@ FLAG_ROWS = {
     ("k9s", ""): "context=,kubeconfig=",
     ("helm", ""): "kube-context=,kubeconfig=",
     ("ci-main-status", ""): "merge-gate,pr=,tip,all,owner-approved=",
+    # loop-engine: its parser takes every option in any position, before or after the verb, and takes more than its help lists (read from its source and run on a catalog that does not exist):
+    # `-d`, `--db`, `--database-path` for the catalog, `-c`, `--config-path`, `--provider-config` for the config, and `--run`, `--run-id` or `--id` for the run id. The engine's own
+    # `--override JSON` is not the hook's way past (BASH_ENGINE_OVERRIDE).
+    ("loop-engine", ""): ("j:json,machine-readable,human,compact,view=,format=,output=,d:db=,database=,database-path=,c:config=,config-path=,provider-config=,timeout-ms=,provider-timeout-ms=,"
+                          "provider-timeout=,h:help,V:version,provider=,input=,initial-input=,lifecycle=,label=,kind=,context-kind=,data=,context-data=,record-id=,event=,advice-exception=,"
+                          "override=,run=,run-id=,id="),
+    ("mise", ""): "C:cd=,E:env=,j:jobs=,q:quiet,v:verbose,y:yes,no-config,no-env,no-hooks,raw,locked,silent,h:help",
+    ("mise", "exec"): "c:command=,j:jobs=,allow-env=,allow-net=,allow-read=,allow-write=,deny-all,deny-env,deny-net,deny-read,deny-write,fresh-env,no-deps,raw,secrets=,secrets-all,"
+                      "h:help,q:quiet,v:verbose,y:yes,locked,silent",
     ("mktemp", ""): "p:tmpdir=,suffix=",
     ("js", ""): "C:cwd=,F:filter=,w:workspace=,prefix=,dir=",  # npm, pnpm, yarn, bun: the options before the subcommand that take a value
     # grep, rg, sed, awk, jq, yq: only the flags that take a value are listed (any other is read as one that does not), because the file reader needs to know which
@@ -1387,7 +1421,110 @@ def door_rule(walk, ctx):
     return None
 
 
-RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, issue_body_rule, docker_rule, heavy_rule, stash_rule, live_git_rule, credential_rule, door_rule)
+# --- bash-engine: a hand-typed Loop Engine write on a lead's or the coordinator's run (design step S2h)
+ENGINE_WRITES = ("start", "append", "event", "terminate")  # the four verbs of `loop-engine --help` that change a run; reclaim only trims finished runs' payloads and is not a run write
+LEAD_RUN = re.compile(r"lead-[^/\s]+-[0-9]+")  # the whole shape the workflow commands make: `lead-<slug>-<n>`; `lead-a-b` (no number), `leader-1` and `lead-1` are not it
+COORDINATOR_RUN = re.compile(r"coordinator-loop-[^/\s]+")
+UNREADABLE_ID = re.compile(r"[$`*?\[]")  # a variable, a command substitution or a glob: the shell fills the id in after the hook has read the text
+ENGINE_OVERRIDE = "BASH_ENGINE_OVERRIDE"  # the way past: `BASH_ENGINE_OVERRIDE='<why>' loop-engine ...`, an assignment on the command itself, so one command is one use
+ENGINE_FIX = {  # (kind of run, verb) -> the workflow command that does the move
+    ("lead", "start"): "`workflows lead enrol NAME` starts a workstream's lead run; `workflows lead start-run --provider lean-change --workstream NAME` starts a linked change run",
+    ("lead", "append"): "`workflows lead catch-up NAME` (it replays moves and repairs a claim with no settle); `workflows lead note --did TEXT [--for ITEM]` records a move that has no command",
+    ("lead", "event"): "`workflows lead catch-up NAME` (it replays moves and repairs a claim with no settle); `workflows lead note --did TEXT [--for ITEM]` records a move that has no command",
+    ("lead", "terminate"): "`workflows lead cancel RUN --why TEXT` ends one run, `workflows lead retire NAME` ends a workstream's run",
+    ("coordinator", "start"): "`workflows coordinator enrol` starts the loop, `workflows coordinator roll` replaces it",
+    ("coordinator", "append"): "`workflows coordinator release EVENT --why TEXT` puts a wedged loop back to waiting, `workflows lead catch-up NAME` repairs a claim with no settle",
+    ("coordinator", "event"): "`workflows coordinator release EVENT --why TEXT` puts a wedged loop back to waiting, `workflows lead catch-up NAME` repairs a claim with no settle",
+    ("coordinator", "terminate"): "`workflows coordinator retire` ends the loop, `workflows coordinator roll` replaces it",
+}
+ENGINE_NOT_BUILT = ("workflows lead catch-up", "workflows lead note")  # commands a refusal names that are not deployed yet; when they are, make this `()` and the sentence is gone
+BASH_ENGINE = (
+    "`loop-engine %s %s` is refused in agent sessions: that is %s, whose record the workflow commands keep, and a hand-typed engine write on it skips their checks. "
+    "Use %s. If none of them can make the move, one command takes this refusal with a logged reason: put the reason on that command, "
+    "`" + ENGINE_OVERRIDE + "='<why>' loop-engine %s ...` (the use is written to the guard log with the reason and counted; an exported variable does not count, so each command needs its own)."
+)
+BASH_ENGINE_UNREAD = (
+    "`loop-engine %s` is refused in agent sessions: its run id (`%s`) is filled in by the shell, so the hook cannot tell whether it is a lead's or the coordinator's run (`lead-<slug>-<n>`, `coordinator-loop-...`). "
+    "Write the run id out in the command. For a lead's or the coordinator's run use the `workflows lead|coordinator` commands: `workflows lead catch-up NAME`, `cancel RUN --why TEXT`, `retire NAME`, `workflows coordinator release|retire|roll`. "
+    "If a variable is what the job needs, one command takes this refusal with a logged reason: `" + ENGINE_OVERRIDE + "='<why>' loop-engine %s ...` (logged with the reason and counted)."
+)
+
+
+def _with_not_built(message):
+    """The refusal text, with one sentence added when it names a command that is not built yet (ENGINE_NOT_BUILT): say so, and that the way past today is the override on that one command."""
+    if not any(name in message for name in ENGINE_NOT_BUILT):
+        return message
+    names = " and ".join("`%s`" % name for name in ENGINE_NOT_BUILT)
+    return message + " Note: %s are not built yet, so until they are the way past is `%s='<why>'` on that one command." % (names, ENGINE_OVERRIDE)
+
+
+def _run_kind(word):
+    """"lead" or "coordinator" when the word is the id of a lead's or the coordinator's run (the whole word), else None."""
+    if LEAD_RUN.fullmatch(word):
+        return "lead"
+    return "coordinator" if COORDINATOR_RUN.fullmatch(word) else None
+
+
+def _attached(words):
+    """The values of `--run=ID`, `--run-id=ID` and `--id=ID` words (read one word at a time through the flag table): they name the run whatever other flag the table lacks, so the whole-word fallback reads them too."""
+    found = []
+    for word in words:
+        if word.startswith("-") and "=" in word:
+            one = normalise([("loop-engine", "")], [word])
+            found += [v for name in ("run", "run-id", "id") for v in one.values(name)]
+    return found
+
+
+def _engine_write(words):
+    """(verb, the words that can be the run id, the words that are exactly the id's place) of a `loop-engine` write, else None. A write names its run by a flag (`--run`, `--run-id`, `--id`, before or after the verb)
+    or else as the first word after the verb (`start` names it only by flag), after every flag the engine takes in any spelling (FLAG_ROWS). A flag the table lacks may take the next word, so the id cannot be
+    placed: then every word of the command is a candidate."""
+    top = normalise([("loop-engine", "")], words[1:], until_positional=True)
+    if top.unknown:
+        verb = next((w for w in words[1:] if w in ENGINE_WRITES), None)
+        return (verb, words[1:] + _attached(words[1:]), _attached(words[1:])) if verb else None
+    verb = top.positional[0] if top.positional else None
+    if verb not in ENGINE_WRITES:
+        return None
+    tail = top.tail if top.tail or len(top.positional) < 2 else top.positional[1:]  # `loop-engine -- event ID E`: after the dashes everything is a plain word
+    read = normalise([("loop-engine", ""), ("loop-engine", verb)] if ("loop-engine", verb) in FLAG_ROWS else [("loop-engine", "")], tail)
+    if read.unknown:
+        return verb, tail + _attached(tail), _attached(tail)
+    named = [v for flags in (top, read) for name in ("run", "run-id", "id") for v in flags.values(name)]
+    if named or verb == "start":
+        return verb, named, named
+    return verb, read.positional[:1], read.positional[:1]
+
+
+def bash_engine_rule(walk, ctx):
+    for cmd in walk.cmds:
+        if _base(cmd.words[0]) != "loop-engine":
+            continue
+        write = _engine_write(cmd.words)
+        if not write:
+            continue
+        verb, candidates, placed = write
+        kinds = {w: _run_kind(w) for w in candidates}
+        kind = next((k for k in kinds.values() if k), None)
+        unread = next((w for w in placed if UNREADABLE_ID.search(w)), None) if not kind else None
+        if not kind and not unread:
+            continue
+        reason = next((w.partition("=")[2].strip() for w in reversed(cmd.assigns) if w.partition("=")[0] == ENGINE_OVERRIDE), "")
+        if reason:  # the way past: this one command, with its reason, written to the guard log
+            walk.notes.append(("bash_engine", "loop-engine " + verb, {"reason": "override", "why": reason[:300], "run_kind": kind or "unread"}))
+            continue
+        if kind:
+            run = next(w for w, k in kinds.items() if k)
+            message = Matched(_with_not_built(BASH_ENGINE % (verb, run, "a lead's run" if kind == "lead" else "the coordinator's run", ENGINE_FIX[(kind, verb)], verb)), "loop-engine " + verb)
+            message.log = {"reason": "write on a %s run" % kind, "run_kind": kind}
+        else:
+            message = Matched(_with_not_built(BASH_ENGINE_UNREAD % (verb, unread, verb)), "loop-engine " + verb)
+            message.log = {"reason": "run id not readable", "run_kind": "unread"}
+        return message
+    return None
+
+
+RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, issue_body_rule, docker_rule, heavy_rule, stash_rule, live_git_rule, credential_rule, bash_engine_rule, door_rule)
 
 
 def refusal(text, ctx):
@@ -1397,6 +1534,8 @@ def refusal(text, ctx):
         message = rule(walk, ctx)
         if message:
             return rule.__name__.replace("_rule", ""), message, getattr(message, "matched", None)
+    for note in walk.notes if ctx.note else ():  # a way past is logged only when the command ran: no rule refused it
+        ctx.note(*note)
     return None
 
 

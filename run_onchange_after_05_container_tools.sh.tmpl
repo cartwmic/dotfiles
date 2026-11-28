@@ -1,6 +1,6 @@
 #!/bin/sh
 # Container mode only (.chezmoiignore leaves this script out everywhere else; docs/container-mode.md): install the pod's tools.
-#   1. mise install: the lean set in ~/.config/mise/conf.d/container.toml (node, python, gh, jq, chezmoi, loop-engine, lean-change, bookends-check, policy-document, research, op);
+#   1. mise install: the lean set in ~/.config/mise/conf.d/container.toml (node, python, gh, jq, chezmoi, loop-engine, lean-change, bookends-check, policy-document, op);
 #   2. claude: the install-claude mise task from the same file (the Claude Code installer puts `claude` in ~/.local/bin);
 #   3. t3: install_t3.sh, the same installer step the Linux service script uses, here pinned to [t3Pin] in .chezmoidata.toml (reinstalled when `t3 --version` differs).
 # It sorts before script 20 (harness config sync) and 65 (agent-kit install), which need node and python. Files are already in place when it runs,

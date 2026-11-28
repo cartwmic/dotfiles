@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
-LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "bookends-check", "policy-document", "research", "aqua:1password/cli"}
+LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "bookends-check", "policy-document", "aqua:1password/cli"}
 SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
