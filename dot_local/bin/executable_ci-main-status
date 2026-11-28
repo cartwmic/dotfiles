@@ -165,9 +165,12 @@ commit's message: git's own "This reverts commit <sha>", or "Handles: <sha>" (th
 indent, as a squash body puts it). Only a full 40-digit sha links: a short one clears nothing, so the answer is the same whatever the
 cache holds. The code only reads the line; whoever writes it says the commit fixes or reverts the red one. A rerun that passed clears a red
 without a link (it is the commit's verdict). While any hidden red exists the answer is RED, exit 1, in plain status, --tip and --merge-gate:
-first line "REPO: RED  N unhandled red(s) on main", then for each red a line (run, short sha, subject) and under it its own fix (the exact
-"Handles: <full sha>" line to add, and the "gh run rerun <run id> --repo <owner/repo>" command), then a note that a short sha does not count; an UNTESTED or GREEN line
-that would have come first follows, indented. A link clears only a red below the newest conclusive commit: a newest red stays red until a
+first line "REPO: RED  N unhandled red(s) on main", then (a repo whose row has "main_queue": dotfiles) one "Quicker:" sentence, then for each red a line (run, short sha, subject) and under it its own fix (the exact
+"Handles: <full sha>" line to add, on a line of its own, and the "gh run rerun <run id> --repo <owner/repo>" command), then a note that a short sha does not count; an UNTESTED or GREEN line
+that would have come first follows, indented.
+The "Quicker:" sentence says which way clears the reds sooner (dotfiles' ci.yml runs main's runs one at a time in one group, and each pull request's runs in a group of its own):
+a main run going (not one that only waits behind it) means a rerun starts only after it and the `Handles:` line in a pull request is quicker; with none going, a rerun
+of every red already going or queued means wait for it, and otherwise a rerun starts now and is quicker. A repo without "main_queue" gets no sentence: for it the claim is not known to hold. What clears a red does not change. A link clears only a red below the newest conclusive commit: a newest red stays red until a
 newer conclusive pass, whatever names it, and then it is a hidden red if nothing links it. A handler commit is judged by its own run like
 any other commit: red, it is a red itself; untested or still going, it gets the answer the rule above gives that commit, and the red it
 links is not counted. A newest red skips the hidden-red reads (it is RED already), unless --pr is given.
@@ -272,7 +275,7 @@ from urllib.parse import quote, urlparse
 REPOS = {
     # "since": the grandfather commit, one fixed commit per repo (the date after each is its committer date): red runs on it and its ancestors are
     # not held against main. Move it forward to main's tip right before this ships, never back.
-    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml", "since": "c666fb34ef3f24c34cb1b6ab7b79334c09df2ef2"},   # 2026-11-24
+    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml", "since": "c666fb34ef3f24c34cb1b6ab7b79334c09df2ef2", "main_queue": True},   # 2026-11-24
     "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml", "since": "2995bb8e774f0b8d21c9e825e243f755fe3fc2f0"},   # 2026-11-23
     "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml", "since": "9905bd2a3acefe345b8ec2401713d5b16e43ecf6"},   # 2026-11-24
     "coordinator": {"github": "cartwmic/coordinator", "journal": True},
@@ -821,6 +824,7 @@ def verdicts_of(spec, runs):
             by_sha.setdefault(r["headSha"], []).append((r, itertools.chain([first], attempts)))
     verdicts = CommitVerdicts(spec["github"], by_sha)
     verdicts.newest_created = max((r.get("createdAt") or "" for r in runs), default="")   # GitHub's own clock, for the hidden-red floor
+    verdicts.unfinished = {r["databaseId"]: r["status"] for r in runs if r["status"] != "completed"}   # main runs going, queued or pending (quicker_way)
     return verdicts, going
 
 
@@ -1167,13 +1171,43 @@ def link_place(name, spec):
     return f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
 
 
-def hidden_block(name, spec, reds):
-    """The lines that name the hidden reds, first in the output: a count, then for each red its status line and its own paste-ready fix."""
+def quicker_way(spec, reds, unfinished):
+    """Which way clears the hidden reds sooner: (way, one sentence), or (None, None) for a repo whose main runs are not known to queue.
+
+    Only a repo whose row says "main_queue" (dotfiles: ci.yml puts every main run in one group that runs one at a time, keeping one running and
+    one pending run, a newer pending run replacing the older, and a pull request's runs in a group of their own) is advised: for another repo the
+    claim is not known to hold. `unfinished` is {run id: status} of the main runs not finished, read from the newest runs only; a red's own rerun
+    is judged by its own status (rec.rerun_going), which is read for that red whatever its age. A run is ahead of a rerun when it is running or
+    queued for a runner; a pending run only waits for the running one, and a rerun takes its place.
+    handles: a run is ahead (another main run, or another red's rerun that is not pending); a rerun starts only after it, and a pull request's run starts at once.
+    wait: nothing else is ahead and every red's rerun is already going or queued: asking again changes nothing, and a pull request needs a full run of its own.
+    rerun: nothing is ahead, so a rerun starts now; a `Handles:` line first needs a pull request and its full run.
+    """
+    if not spec.get("main_queue"):
+        return None, None
+    own = {rec.run_id for rec in reds if rec.rerun_going}
+    if any(status != "pending" for run_id, status in unfinished.items() if run_id not in own):
+        way = "handles"
+    elif all(rec.rerun_going for rec in reds):
+        return "wait", "Quicker: wait for the rerun that is already going; a pull request with the `Handles:` line needs a full run of its own first."
+    elif any(unfinished.get(run_id) != "pending" for run_id in own):   # another red's rerun is going (a status we cannot see counts as going)
+        way = "handles"
+    else:
+        return "rerun", "Quicker: rerun it. No main run is going, so the rerun starts now; the `Handles:` line first needs a pull request and its full run."
+    return way, ("Quicker: the `Handles:` line in a pull request. A main run is going, and a rerun starts only after it ends, while the pull "
+                 "request's own run starts at once; it merges with `--merge-gate dotfiles --pr <its number>` once that run passes.")
+
+
+def hidden_block(name, spec, reds, advice=None):
+    """The lines that name the hidden reds, first in the output: a count, the quicker way if known (quicker_way), then for each red its
+    status line, the `Handles:` line to paste on a line of its own, and its rerun command."""
     where = link_place(name, spec)
-    lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"]
+    lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"] + ([f"  {advice}"] if advice else [])
     for sha, rec, subject in reds:
         lines.append(f"  {rec.label} failed on {sha[:7]} {subject}: no later commit on main links it, no rerun passed")
-        lines.append(f"    to clear it, put `Handles: {sha}` in {where}, or rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
+        lines.append(f"    to clear it, put this line in {where}:")
+        lines.append(f"      Handles: {sha}")
+        lines.append(f"    or rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
     return lines + ["  a short sha does not count: the gate links only the full 40-character sha"]
 
 
@@ -1391,7 +1425,10 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
             hidden = hidden_reds(spec, tip, verdicts.newest_created, newest_red, log)
     code, lines = verdict_lines(name, tip, walked, hits, going, noun, tip_only)
     if hidden:
-        lines = hidden_block(name, spec, hidden) + (["  " + lines[0]] + lines[1:] if code != 1 else lines)
+        way, advice = quicker_way(spec, [rec for _, rec, _ in hidden], verdicts.unfinished)
+        if log is not None:
+            log["quicker"] = way   # which way the message named, so how often each is advised can be counted
+        lines = hidden_block(name, spec, hidden, advice) + (["  " + lines[0]] + lines[1:] if code != 1 else lines)
         code = 1
     reds = ([(newest_red, newest[2])] if newest_red else []) + [(sha, rec) for sha, rec, _ in hidden]
     if code == 1 and reds and pr is not None:
@@ -1848,12 +1885,14 @@ def log_hidden(name, spec, action, pr, started, code, lines, rec):
     (the sha, run and attempt of each hidden red), cache (warm, cold, dropped:<why> or unwritable), reads (gh calls this call made),
     skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
     pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
-    said no as {"rule", "why"}: the sentence stderr carries)."""
+    said no as {"rule", "why"}: the sentence stderr carries) and quicker (null, or for a repo with "main_queue" and a hidden red the way the
+    message named as quicker: "handles", "rerun" or "wait")."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
-                "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused")})
+                "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused"),
+                "quicker": rec.get("quicker")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
