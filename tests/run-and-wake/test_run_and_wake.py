@@ -1503,6 +1503,33 @@ class RunAndWake(unittest.TestCase):
         self.assertIn(f"k:{unread}]", text)
         self.assertNotIn(f"k:{read}]", text)
 
+    def test_a_burst_held_for_a_turn_keeps_held_s_on_each_record(self):
+        # Three jobs end while the thread is in a turn: when it ends they share one merge window. The read one is dropped, the two unread ones go out as one message.
+        self.requires_atime()
+        self.thread_in_a_turn()
+        env = self.busy(RUN_AND_WAKE_COALESCE="1.0")
+        read = self.job_id(self.launch("--", "true", env=env))
+        first = self.job_id(self.launch("--", "sh", "-c", "exit 4", env=env))
+        second = self.job_id(self.launch("--", "sh", "-c", "exit 5", env=env))
+        for job in (read, first, second):
+            self.final_records(job, "end")
+        time.sleep(0.5)
+        self.assertEqual(self.t3_sends(), [], "nothing is sent while the turn runs")
+        self.leave_the_turn()
+        spool = self.state / "run-and-wake/spool"
+        end = time.monotonic() + 10
+        while time.monotonic() < end and sum(len(f.read_text().splitlines()) for f in spool.glob("*.jsonl")) < 3:
+            time.sleep(0.02)  # all three are queued in the window now
+        self.read_output_after_the_end(read)  # read inside the window, after the turn
+        dropped, sent_first, sent_second = self.replay(read)[-1], self.replay(first)[-1], self.replay(second)[-1]
+        self.assertEqual([dropped["event"], dropped["reason"]], ["skip", "seen"])
+        self.assertGreater(dropped["held_s"], 0)
+        self.assertEqual([sent_first["result"], sent_second["result"]], ["sent", "sent"])
+        self.assertGreater(sent_first["held_s"], 0)
+        self.assertGreater(sent_second["held_s"], 0)
+        self.assertEqual([sent_first["merged_with"], sent_second["merged_with"]], [[second], [first]])
+        self.assertEqual(len(self.t3_sends()), 1, "one message")
+
     def test_stopped_job_on_a_busy_thread_is_dropped_when_read(self):
         # The third real case: the agent stopped its own job (SIGTERM), then read the output; the wake ran 40 minutes later as a stale turn.
         self.requires_atime()
