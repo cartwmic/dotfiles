@@ -1,0 +1,24 @@
+#!/bin/sh
+# finding-sweep ITEM FINDING_ID: after you fix a review finding, list every line of the PR's agent record and description source that still shares
+# a six-word run with the text the finding quoted, so no copy of the old claim stays behind (finding-triage.md, "fix the claim, not the line").
+# It prints and judges nothing; exit 0 once the call is understood, 2 on a bad call, 1 on an unreadable file. Runs the script in the coordinator
+# checkout of this profile. Both desktop profiles, like pr-record. Quote ITEM in a shell: `coordinator#1741` is a glob in zsh.
+# The coordinator checkout: COORDINATOR_REPO, else line 1 of ~/.local/share/agent-harness/coordinator-instance (chezmoi renders it per profile), else
+# ~/git/coordinator.
+# Record: the script writes its own run record. When the script is missing this shim writes one JSON line to
+# ${XDG_STATE_HOME:-~/.local/state}/agent-harness/finding-sweep.jsonl (event script-missing), so a fixer who was told to sweep and could not is counted.
+instance="$HOME/.local/share/agent-harness/coordinator-instance"
+repo="${COORDINATOR_REPO:-}"
+if [ -z "$repo" ] && [ -f "$instance" ]; then
+  repo="$(sed -n 1p "$instance")"
+fi
+[ -n "$repo" ] || repo="$HOME/git/coordinator"
+script="$repo/scripts/finding-sweep.ts"
+if [ ! -f "$script" ]; then
+  state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
+  mkdir -p "$state_dir" 2>/dev/null &&
+    printf '{"ts":"%s","event":"script-missing","script":"finding-sweep","path":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$script" >> "$state_dir/finding-sweep.jsonl" 2>/dev/null || true
+  echo "finding-sweep: $script is missing: pull the coordinator checkout (the command ships there; ~/git/coordinator, or the checkout named in ~/.local/share/agent-harness/coordinator-instance) and run again" >&2
+  exit 2
+fi
+exec node --experimental-strip-types --disable-warning=ExperimentalWarning "$script" "$@"
