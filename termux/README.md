@@ -27,15 +27,14 @@ Phone-side chezmoi owns configuration.
 ## Terminal colors
 
 The phone-owned `colors.properties` sets Tokyo Night to match the managed Kitty
-palette. Herdr's interface theme is separate from this terminal palette. Pi's
-System theme needs the Termux fork's OSC 4 query support (versionCode 1009 or
-later) to inherit all 16 ANSI colors through SSH and Herdr; older builds return
-no palette colors.
+palette. Pi's System theme needs the Termux fork's OSC 4 query support
+(versionCode 1009 or later) to inherit all 16 ANSI colors through SSH; older
+builds return no palette colors.
 
 After applying the palette, run `termux-reload-settings` in a local phone shell
-**while Termux is visible**. Reattach Herdr and run `/reload` in Pi to refresh
-its reported colors. Do not copy the palette to the phone instead of applying
-its chezmoi source.
+**while Termux is visible**. Run `/reload` in Pi to refresh its reported
+colors. Do not copy the palette to the phone instead of applying its chezmoi
+source.
 
 ## Extra-key swipe actions
 
@@ -315,7 +314,7 @@ fresh-install example.
 
 After apply (and SSH key provision below), `passage-review` is available in `~/bin`.
 It reviews stdin or files locally in Termux; use `passage-review open REVIEW_ID`
-to select recent pane-output passages even when no Herdr selection adapter is
+to select recent pane-output passages even when no selection adapter is
 available. `vim` supplies the default `vi` comment editor; alternatively set
 `$VISUAL` or `$EDITOR` to another installed terminal editor. The phone's
 existing dictation keyboard can supply comment text. The library stays

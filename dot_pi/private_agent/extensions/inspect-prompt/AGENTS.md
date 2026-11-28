@@ -28,8 +28,7 @@ layout error fail-closed. Saved Bash results and live components can overlap;
 reconcile by command/output occurrence, keeping running output and new
 repeated commands after compaction. Match a completed pending component only
 to a saved result after the latest user message. Changes to that logic need
-both focused tests and an actual editor receipt. Leave Herdr's non-Pi
-`prefix+e` binding alone; Ctrl+Alt+E is the Pi shortcut.
+both focused tests and an actual editor receipt. Ctrl+Alt+E is the Pi shortcut.
 
 ## Validation
 
@@ -41,7 +40,7 @@ shortcut behavior:
 ```
 
 There is no outside-in proof of this extension today. The only one, a private
-herdr journey, was removed with herdr support, and it could not run on the
+terminal-multiplexer journey, was removed, and it could not run on the
 managed Pi anyway. An outside-in proof can return on another terminal host. A
 unit test of `buildConversationSnapshot` alone cannot prove the user path. For
 an `/inspect-prompt` change, collect a real Pi TUI command-to-dummy-editor
@@ -56,14 +55,14 @@ chezmoi --source "$PWD" apply --dry-run --verbose "$HOME/.pi/agent/extensions/in
 ```
 
 Apply only with the user's approval. Starting a new Pi process is required to
-load changed extension code. Do not restart or hand off the owner's Herdr
-server for documentation or validation work.
+load changed extension code. Do not restart or hand off the owner's terminal
+session for documentation or validation work.
 
 ## Completion and handoff
 
 Report the changed source paths, focused tests, the target-profile dry-run,
 and whether anything was applied or committed. For changes to `/inspect-prompt`, include its real
 command-path editor receipt; disclose its absence as unverified. Name any
-untested installed Pi/Herdr version or pending rollout step. A successful
+untested installed Pi version or pending rollout step. A successful
 script with a dummy editor and provider does not establish behavior with a
 real model or a physical keyboard.

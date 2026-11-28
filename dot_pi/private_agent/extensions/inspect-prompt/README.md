@@ -37,7 +37,7 @@ chezmoi --source "$PWD" apply "$HOME/.pi/agent/extensions/inspect-prompt"
 pi
 ```
 
-Applying does not restart the owner's Herdr server. This repository's
+Applying does not restart the owner's terminal session. This repository's
 `AGENTS.md` owns apply and conflict procedure; an edit to this README alone
 does not authorize a live apply.
 
@@ -58,8 +58,7 @@ same execution. The snapshot excludes system instructions, internal thinking,
 and abandoned branches. It stays fixed while the editor is open; closing the
 editor returns to the same Pi session without applying any edits.
 
-Ctrl+Alt+E is Pi-specific. Herdr's `prefix+e` continues to open scrollback for
-a selected non-Pi pane.
+Ctrl+Alt+E is Pi-specific.
 
 ## Validation
 
@@ -71,7 +70,7 @@ shortcut behavior:
 ```
 
 There is no outside-in proof of this extension today. Its only one, a private
-herdr journey, was removed with herdr support, and it could not run on the
+terminal-multiplexer journey, was removed, and it could not run on the
 managed Pi anyway. An outside-in proof can return on another terminal host.
 Until then, the unit tests do not prove the user path. For a change to
 `/inspect-prompt`, require a real Pi TUI command-to-dummy-editor receipt
@@ -94,5 +93,5 @@ not surface a spawn failure; check the editor command or use `/inspect-session`
 to get a launch error. If `/inspect-session` reports that it needs an
 interactive TUI, start Pi interactively; `pi --print` has no editor UI. For an
 editor launch error, check the configured command before blaming the shortcut.
-If the command works but Ctrl+Alt+E does not arrive through Herdr, check the
-Herdr key route by hand; no script covers it.
+If the command works but Ctrl+Alt+E does not arrive through your terminal,
+check the terminal's key route by hand; no script covers it.
