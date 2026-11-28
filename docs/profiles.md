@@ -103,7 +103,7 @@ Prompt cache lifetime: only `seat-reviewer` has `FORCE_PROMPT_CACHING_5M=1` in i
 
 | Seat | Instance id | Window (T3 compacts about 33,000 below it) | Advisor | MCP servers | Skills kept |
 |---|---|---|---|---|---|
-| Lead | `seat-lead` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, t3-code | coordinating-loop-engine, correcting-repeated-mistakes, deriving-readable-docs, herdr, hill-climb, no-ai-slop, omarchy, research-method, using-lean-change-provider, using-loop-engine, using-shartifacts |
+| Lead | `seat-lead` | 200000 (about 167K) | off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`) | hindsight, shartifacts, t3-code | coordinating-loop-engine, correcting-repeated-mistakes, deriving-readable-docs, hill-climb, no-ai-slop, omarchy, research-method, using-lean-change-provider, using-loop-engine, using-shartifacts |
 | Builder | `seat-builder` | 300000 (about 267K) | on, runs on Opus 5.5 (`advisorModel` in the seat file) | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, deriving-readable-docs, hill-climb, no-ai-slop, omarchy, research-method, systematic-debugging, using-lean-change-provider, using-loop-engine, using-policy-document-provider |
 | Planner | `seat-planner` | 300000 (about 267K) | on | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, designing-the-smallest-version, no-ai-slop, research-method |
 | Reviewer | `seat-reviewer` | 300000 (about 267K), prompt cache written for 5 minutes, T3 idle compaction off | off | hindsight, shartifacts, t3-code | correcting-repeated-mistakes, designing-the-smallest-version, review-plans, reviewing-prs, using-lean-change-provider, using-loop-engine |
@@ -205,7 +205,7 @@ The work profile reads `privatePiProviderRef` with `op` through the service acco
 | Caller | Without a token | With a token |
 |---|---|---|
 | `~/.pi/agent/bin/op`: Pi's bash tool and `!` commands, and Retro's launchd PATH | refuses, exit 69, always | Connect first for `read`, `inject`, `run` and `item get --format json` when a Connect token is present (see "Connect first" below); otherwise the real `op` with the service account (empty HOME; the read-only subcommands with no path option also run from that HOME, see `takes_no_path`) |
-| `~/.local/share/op-shim/op`: the same file, reached by every zsh (`dot_zshenv`) | refuses (exit 69) only in an agent shell, when one of `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `T3CODE_THREAD_ID`, `HERDR_ENV`, `CODEX_THREAD_ID`, `CODEX_SANDBOX` is set and not empty; in any other shell runs `op` unchanged (the desktop-app path) | the same routing as the row above (Connect first for those calls, then the service account) |
+| `~/.local/share/op-shim/op`: the same file, reached by every zsh (`dot_zshenv`) | refuses (exit 69) only in an agent shell, when one of `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `T3CODE_THREAD_ID`, `CODEX_THREAD_ID`, `CODEX_SANDBOX` is set and not empty; in any other shell runs `op` unchanged (the desktop-app path) | the same routing as the row above (Connect first for those calls, then the service account) |
 | `kgate` (profile secrets and the ghcr pull credential) | refuses (exit 69) before `op` runs on a cache miss, no pod created; a value cached in the last 24 hours is used without `op` (`docs/kgate.md`, "Secret cache") | a cache miss reads with the service account |
 | `op_read_cached.sh` (pi's model keys, work GLM key) | refuses (exit 69) on a cache miss, never runs `op`; a stale cached value is served with a WARN; refusals, stale serves and failed reads (`op-failed`, `op-failed-stale-served`) are logged in `$XDG_STATE_HOME/agent-harness/op-read-cached.jsonl` (reference only, no value) | a cache miss reads with the service account |
 | `apply_harness_config.sh` (`resolve_secret`, during `chezmoi apply`) | the secret is unavailable and the apply goes on | the service account |
@@ -218,7 +218,7 @@ The work profile reads `privatePiProviderRef` with `op` through the service acco
 
 Known gaps:
 - Closed: a Codex run with its sandbox off used to set no marker and got the terminal fallback. `CODEX_THREAD_ID` now marks it as an agent shell, so the zsh name refuses without a token (playbook 78819cbd).
-- A terminal started inside an agent app inherits its marker and refuses without a token. The herdr skill reads `HERDR_ENV=1` as "inside a herdr pane", so a terminal run inside herdr may be classed as an agent shell too; not checked on this Mac.
+- A terminal started inside an agent app inherits its marker and refuses without a token.
 - Retro's pane shells are zsh. They refuse only if a marker is set in them; without one they keep the terminal fallback.
 - A zsh started from inside Pi's bash tool (for example `zsh -c 'op whoami'`) has no marker, and `dot_zshenv` puts the zsh name first, so its `op` runs the real CLI with the desktop-app fallback. Confirmed in a scratch run: the Homebrew `op` ran (scratch HOME, no token), because `dot_zshenv` puts Homebrew ahead of the rest of the PATH.
 - The shim's own refusal writes its message to stderr and no log record. The `op_read_cached.sh` refusal is logged; the shim's is not (principle 14).

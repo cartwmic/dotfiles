@@ -143,6 +143,34 @@ class Refused(unittest.TestCase):
         self.assertIsNone(verdict("mise exec -- git stash list"))
 
 
+class NotBuilt(unittest.TestCase):
+    """A refusal that names `workflows lead catch-up` or `workflows lead note` says they are not built yet and that the way past today is the override on that one command."""
+    SAYS = "`workflows lead catch-up` and `workflows lead note` are not built yet"
+
+    def test_a_refusal_naming_either_command_says_so_and_names_the_way_past(self):
+        for text in ["loop-engine event lead-a-1 go", "loop-engine append lead-a-1 note '{}'", "loop-engine event coordinator-loop-1 go", "loop-engine append coordinator-loop-1 n '{}'",
+                     "loop-engine event $RUN go", "loop-engine terminate $RUN"]:
+            with self.subTest(text=text):
+                message = verdict(text)[1]
+                self.assertIn(self.SAYS, message)
+                self.assertIn("the way past is `BASH_ENGINE_OVERRIDE='<why>'` on that one command", message)
+
+    def test_a_refusal_that_names_neither_command_does_not_say_it(self):
+        for text in ["loop-engine start p '{}' --id lead-a-1", "loop-engine terminate lead-a-1", "loop-engine terminate coordinator-loop-1", "loop-engine start p '{}' --id coordinator-loop-1"]:
+            with self.subTest(text=text):
+                self.assertNotIn("not built yet", verdict(text)[1])
+
+    def test_the_sentence_is_one_constant_and_an_empty_one_removes_it(self):
+        was = bash_rules.ENGINE_NOT_BUILT
+        try:
+            bash_rules.ENGINE_NOT_BUILT = ()
+            for text in ["loop-engine event lead-a-1 go", "loop-engine event $RUN go"]:
+                self.assertNotIn("not built yet", verdict(text)[1])
+        finally:
+            bash_rules.ENGINE_NOT_BUILT = was
+        self.assertIn("not built yet", verdict("loop-engine event lead-a-1 go")[1])
+
+
 class Allowed(unittest.TestCase):
     def test_the_same_writes_on_other_runs(self):
         """A `change` run carries no marker: the rule does not judge it. Ids that only look close are not a lead's or the coordinator's run."""
