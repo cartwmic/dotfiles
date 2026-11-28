@@ -1,0 +1,5 @@
+# Keeps the op shim's folder first in the PATH that full mise activation builds (a person's terminal, and any agent started from one).
+# mise puts its tool folders (the real `op` among them) ahead of what ~/.zshenv put first, so without this the guard shim never runs there.
+# Same mechanism as the gh wrapper's file (docs/gh-wrapper.md). A folder that does not exist is ignored.
+[env]
+_.path = ["{{ env.HOME }}/.local/share/op-shim"]
