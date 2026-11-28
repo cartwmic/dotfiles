@@ -1519,6 +1519,7 @@ class PinLagLine(Fixture):
         self.status("--merge-gate", "dotfiles")
         (record,) = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
         self.assertIsNone(record["pin_lag"])
+        self.assertIsNone(record["pin_lag_error"])
 
     def test_the_age_reads_in_minutes_hours_and_days(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
@@ -1551,6 +1552,9 @@ class PinLagLine(Fixture):
                 rc, out = self.status("--merge-gate", "dotfiles")
                 self.assertEqual((rc, self.lines(out)), (0, []), out)
                 self.assertIn("GREEN", out)
+                last = json.loads(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()[-1])
+                self.assertIsNone(last["pin_lag"])
+                self.assertTrue(last["pin_lag_error"], "a failed read leaves its reason in the run log, unlike a read that found no issue")
 
     def test_only_the_merge_gate_of_dotfiles_reads_the_issue(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")], "cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")]}
