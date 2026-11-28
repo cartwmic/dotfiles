@@ -1306,10 +1306,6 @@ collapses {"a":1,"a":2} to {"a":2,...} and the first
             self.assertEqual((CLAUDE_FILE in managed), expect_claude, profile)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # --- agent seat instances, the per-seat settings files, the shared MCP file and the reader helper ---
 
 WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
@@ -1339,7 +1335,7 @@ COORDINATOR_KEEPS = ["Agent", "Read", "Skill", "mcp__t3-code__request_secret", "
 # Claude Code's bundled skills that every seat file turns off (restated from .chezmoitemplates/fleet_seat). workflow-authoring stays on only for the homelab chat seat, and is off for the seats that deny the Workflow tool.
 BUNDLED_OFF = {"artifact-design", "artifact-diagramming", "claude-api", "code-review", "dataviz", "fewer-permission-prompts", "init", "keybindings-help", "loop",
                "plugin-authoring", "run", "security-review", "simplify", "update-config"}
-INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "omarchy-app", "writing-skills", "using-research-provider"})
+INSTALLED = sorted({s for k in KEEP.values() for s in k} | {"desloppify", "omarchy-app", "writing-skills"})
 # The skills this source tree ships (the seat files list them even before apply_harness_config.sh has linked them into ~/.claude/skills).
 # The skills the seat files name from the source because this apply links them later: the archive externals (.chezmoiexternal.toml) review-map and statechart; model-fit only where the coordinator checkout has it (these tests have none).
 FROM_SOURCE = {"review-map", "statechart"}
@@ -2055,3 +2051,7 @@ class HomelabChatSeatTest(unittest.TestCase):
             self.assertEqual(self.run_hook_command(command, ALLOWED_CALL, home=home)[0], 2)
         finally:
             env.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
