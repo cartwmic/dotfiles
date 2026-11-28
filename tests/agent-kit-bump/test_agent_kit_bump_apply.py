@@ -19,6 +19,7 @@ SHA = "b" * 40
 STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
 echo "dotfiles-apply: $STUB_SAYS"
+[ -n "$STUB_ERR" ] && echo "$STUB_ERR" >&2
 exit "${STUB_EXIT:-0}"
 """
 
@@ -41,9 +42,10 @@ class Apply(unittest.TestCase):
         self.log = self.tmp / "stub.log"
         self.dest = self.tmp / "home"
         self.commands = []
-        self.old = {k: os.environ.get(k) for k in ("PATH", "STUB_LOG", "STUB_SAYS", "STUB_EXIT")}
+        self.old = {k: os.environ.get(k) for k in ("PATH", "STUB_LOG", "STUB_SAYS", "STUB_EXIT", "STUB_ERR")}
         os.environ.update(PATH="%s:%s" % (self.bin, os.environ["PATH"]), STUB_LOG=str(self.log), STUB_SAYS="applied")
         os.environ.pop("STUB_EXIT", None)
+        os.environ.pop("STUB_ERR", None)
         self.m = load()
         self.pins = {self.dest / self.m.KIT_DEST / name: (name, b"a", b"b") for name in self.m.PIN_FILES}
         real_run = self.m.run
@@ -113,6 +115,13 @@ class Apply(unittest.TestCase):
         os.environ.pop("STUB_EXIT")
         self.apply()
         self.assertEqual(len(self.stub_calls()), 2)
+
+    def test_what_the_command_wrote_to_stderr_is_passed_on_in_full(self):
+        os.environ.update(STUB_ERR="65_agent_kit_install.sh: npm ci failed (the script's own error)")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.apply()
+        self.assertEqual(err.getvalue().strip(), "65_agent_kit_install.sh: npm ci failed (the script's own error)")
 
     def test_a_failed_install_script_stops_at_the_apply_step(self):
         os.environ.update(STUB_EXIT="1", STUB_SAYS="chezmoi: 65_agent_kit_install.sh: exit status 1")
