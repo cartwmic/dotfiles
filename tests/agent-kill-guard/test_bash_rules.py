@@ -286,6 +286,7 @@ class Merge(unittest.TestCase):
         self.assertIn("goes out at once in its own PR", message)
         self.assertIn("waits on branch `playbook/batch` for the coordinator's daily digest", message)
         self.assertNotIn("--pr --merge", message)
+        self.assertNotIn("--red-main-fix", message)
 
     def test_the_refusal_names_a_command_that_satisfies_both_gates(self):
         # The command the refusal prints, with <repo>/<pr> filled in, must itself pass the hook.

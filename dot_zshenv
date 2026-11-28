@@ -11,7 +11,7 @@ if [ -d "$HOME/.local/share/gh-wrapper/bin" ]; then
 fi
 
 # Pi: 1-hour prompt cache (Anthropic default is 5 minutes). Read by every zsh,
-# so it reaches Herdr panes, the coordinator pane and subagents. Override in
+# so it reaches T3 threads, the coordinator and subagents. Override in
 # ~/.zshenv.local or the environment (PI_CACHE_RETENTION=short).
 export PI_CACHE_RETENTION="${PI_CACHE_RETENTION:-long}"
 

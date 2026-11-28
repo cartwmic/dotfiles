@@ -45,7 +45,15 @@ def render(template, data):
 
 
 def without_guard(settings):
-    """The settings without the pattern-kill guard hook, which every render adds (tests/agent-kill-guard covers it)."""
+    """The settings without the pattern-kill guard hook (tests/agent-kill-guard covers it) and the lead Stop group (tests/lead-turn-end covers it), which every render adds."""
+    stop = settings.get("hooks", {}).get("Stop")
+    if stop is not None:
+        kept = [g for g in stop if not any("lead_turn_end.py" in h.get("command", "") for h in g.get("hooks", []))]
+        if len(kept) != len(stop):
+            if kept:
+                settings["hooks"]["Stop"] = kept
+            else:
+                del settings["hooks"]["Stop"]
     pre = [g for g in settings.get("hooks", {}).get("PreToolUse", [])
            if not any("refuse_pattern_kill.py" in h.get("command", "") for h in g.get("hooks", []))]
     if "hooks" in settings:
@@ -243,7 +251,7 @@ class SettingsHookTest(unittest.TestCase):
         s = self.run_modify(PERSONAL, json.dumps(self.run_modify(WORK, '{"a": 1}')))
         owned = {"cleanupPeriodDays": 365, "model": "claude-opus-5-5", "promptCacheTtl": "1h", "advisorModel": "claude-fable-5-2", "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}}}  # keys the script sets on every apply
         self.assertEqual(s, {"a": 1, **owned})
-        untouched = {"hooks": {"Stop": []}, **owned}
+        untouched = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo user"}]}]}, **owned}
         self.assertEqual(self.run_modify(PERSONAL, json.dumps(untouched)), untouched)
 
     def test_prompt_cache_ttl_is_one_hour_on_both_desktop_profiles(self):

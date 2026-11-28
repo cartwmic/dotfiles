@@ -549,9 +549,9 @@ Library/Preferences/pnpm/**
 {{- if (includeTemplate "container" . | fromJson).enabled }}
 # Container mode. Everything above that is not left out stays. This leaves out what needs a desktop, systemd or launchd, and the files of tools the container does not install
 # (the lean set is dot_config/mise/conf.d/container.toml.tmpl). A new path is in the pod unless it is listed here; tests/container-mode names the exact set that stays.
-# Run scripts: only the five below run (the tools, the harness config, agent-kit, and the two git settings a pod needs to push and commit). A script nobody listed is left out, so a new one never reaches the pod unseen, and plain `chezmoi verify` has no always-pending run_after
+# Run scripts: only the six below run (the tools, the harness config, agent-kit, the two git settings a pod needs to push and commit, and the removal of the retired research install a pod from before its retirement still holds). A script nobody listed is left out, so a new one never reaches the pod unseen, and plain `chezmoi verify` has no always-pending run_after
 # script to fail on (c6). The list is computed, not written: every run_ script in the source root, minus these.
-{{- $keep := list "05_container_tools.sh" "20_apply_harness_config.sh" "65_agent_kit_install.sh" "76_git_credential_linux.sh" "77_git_identity_linux.sh" }}
+{{- $keep := list "05_container_tools.sh" "20_apply_harness_config.sh" "65_agent_kit_install.sh" "76_git_credential_linux.sh" "69_retire_research_mise_install.sh" "77_git_identity_linux.sh" }}
 {{- range $path := glob (joinPath .chezmoi.sourceDir "run_*") }}
 {{-   $name := regexReplaceAll "^run_(once_|onchange_)?(before_|after_)?" (base $path | trimSuffix ".tmpl") "" }}
 {{-   if not (has $name $keep) }}

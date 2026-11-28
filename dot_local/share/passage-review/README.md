@@ -7,7 +7,7 @@
 `dot_local/bin/executable_passage-review`. It freezes UTF-8 input in a
 user-local snapshot, stores comments separately with exact quote and 1-based
 line-range anchors, and exports only pending notes selected by ID. It does not
-edit source files, send feedback, or depend on Pi or Herdr. When your editor
+edit source files, send feedback, or depend on Pi. When your editor
 is Neovim, the review opens in Neovim: read the document, visually select
 lines or text, and comment on them. Desktop and Termux
 profiles own separate local libraries; phone data is not synced back to the
@@ -132,10 +132,10 @@ pbpaste | passage-review new --title "Terminal selection"
 termux-clipboard-get | passage-review new --title "Terminal selection"
 ```
 
-No Herdr adapter is required. If a Herdr pane-capture adapter is used, keep it
+No terminal-multiplexer adapter is required. If a pane-capture adapter is used, keep it
 as a source-only entry point and pipe its captured text to
 `passage-review new --title "Pane output"`. The CLI and saved-review commands
-have no Herdr/Pi imports or process requirement. On a phone where direct remote
+have no Pi imports or process requirement. On a phone where direct remote
 selection capture is unavailable, open the saved snapshot and select recent
 output by its displayed line range.
 
