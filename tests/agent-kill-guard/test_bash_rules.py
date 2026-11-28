@@ -209,6 +209,8 @@ class Merge(unittest.TestCase):
                 self.assertIn("pr-record path <repo>#N", message)
                 self.assertIn("`Promises:` line", message)
                 self.assertIn("unresolved review thread", message)
+                self.assertIn("names the red with a `Handles: <full sha>` line", message)   # `--pr` passes a red main only for the PR that names it
+                self.assertNotIn("when that PR's own full-suite run", message)           # the old rule, a green run alone
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
@@ -496,6 +498,12 @@ class PrBody(unittest.TestCase):
                      "pr-body-check --body-file %s && gh pr create --title t --body 'text'" % c]:
             with self.subTest(text=text):
                 self.assertIn("pr-body-check --body-file F", check(text))
+
+    def test_a_refused_edit_names_pr_redact_for_a_merged_or_closed_description(self):
+        for text in ["gh pr edit 5 --body text", "gh api -X PATCH repos/o/r/pulls/5 -f body=x"]:
+            with self.subTest(text=text):
+                self.assertIn("`pr-redact --repo OWNER/REPO --pr N --replacements FILE`", check(text))
+        self.assertNotIn("pr-redact", check("gh pr create --title t --body 'text'"))  # a create has no merged pull request to redact
 
     def test_an_edit_that_sets_no_body_and_other_pr_commands_pass(self):
         for text in ["gh pr edit 5 --add-label x", "gh pr view 5", "gh pr list", "gh pr merge 5 --body-file x",

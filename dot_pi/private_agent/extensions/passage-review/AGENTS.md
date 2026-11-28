@@ -22,7 +22,7 @@ snapshot, note, and export invariants.
   terminal reviewer; do not build a second note store or editor in Pi.
 - Export is a separate user-chosen CLI step. This adapter must not alter
   notes, paste exported feedback into Pi, edit an assistant reply, or use
-  Herdr as a prerequisite. `helpers.ts` enforces the idle TUI and branch
+  a terminal multiplexer as a prerequisite. `helpers.ts` enforces the idle TUI and branch
   guards; `index.test.ts` checks that `/review` spawns no export/archive
   action. Markdown is advisory and cannot block a future violating change;
   keep the source guards and regression tests. Termux installs the standalone

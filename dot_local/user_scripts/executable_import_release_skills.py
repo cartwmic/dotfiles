@@ -11,10 +11,13 @@
 The tag is resolved to one commit; every imported file is read from that commit's archive and
 must match the git blob hash in the commit's tree. Files that sit in a bundle but not in the tag
 are orphans: --apply refuses while any exist, and --prune deletes them. --pins also moves the
-five Loop Engine tool pins (loop-engine, lean-change, policy-document, research, bookends-check) in
+four Loop Engine tool pins (loop-engine, lean-change, policy-document, bookends-check) in
 dot_config/mise/config.toml to the tag's version (mise keeps older installed versions, so frozen
 runs keep theirs; this tool never uninstalls anything). The software-change pin was removed from
 that file: releases no longer ship it, and installed copies are untouched.
+The tag still ships the research crate (the `research` program and its skills `using-research-provider` and
+`using-generate-prd`, left out by SKIPPED_BUNDLES) and a copy of docs/PRD.md (left out of ROOT_REFERENCES);
+dotfiles installs and imports none of them.
 
 `check` is the same import as a dry run on a commit that is not tagged yet: the tree comes from a local git checkout
 (--repo-dir, --rev; default the current directory and HEAD) instead of a published release. It needs git, not gh; nothing is fetched
@@ -61,12 +64,13 @@ ROOT_REFERENCES = {
     "using-loop-engine": (
         "agent-usage.md",
         "operational-ux-contracts.md",
-        "PRD.md",
     ),
 }
-PIN_LINE = re.compile(r'^((?:loop-engine|lean-change|policy-document|research|bookends-check) = \{ version = ")([^"]+)(")', re.M)
-PIN_REGEX = re.compile(r'^(loop-engine|lean-change|policy-document|research|bookends-check) = \{ version = "[^"]+", matching_regex = "([^"]+)"', re.M)
-PIN_COUNT = 5
+# Bundles the tag ships that dotfiles does not import: the research workflow and the skill that drives it for requirements documents.
+SKIPPED_BUNDLES = ("using-research-provider", "using-generate-prd")
+PIN_LINE = re.compile(r'^((?:loop-engine|lean-change|policy-document|bookends-check) = \{ version = ")([^"]+)(")', re.M)
+PIN_REGEX = re.compile(r'^(loop-engine|lean-change|policy-document|bookends-check) = \{ version = "[^"]+", matching_regex = "([^"]+)"', re.M)
+PIN_COUNT = 4
 # Names chezmoi would read as attributes, or drop (an empty file is not deployed without empty_).
 CHEZMOI_SPECIAL = re.compile(
     r"^(?:\.|(?:after|before|create|dot|empty|encrypted|exact|executable|external|literal|modify|once|onchange|"
@@ -124,6 +128,8 @@ def plan_bundles(tree):
         if not match:
             continue
         base, name = match.groups()
+        if name in SKIPPED_BUNDLES:
+            continue
         if name in bundles:
             raise Failure("two skills named %s in the tag" % name)
         crate = base.split("/")[1] if base else ""
@@ -418,7 +424,7 @@ def main(argv=None):
     importing.add_argument("tag")
     importing.add_argument("--repo", default=DEFAULT_REPO)
     importing.add_argument("--expect-commit", help="fail unless the tag resolves to a commit starting with this")
-    importing.add_argument("--pins", action="store_true", help="also move the five mise tool pins to the tag's version")
+    importing.add_argument("--pins", action="store_true", help="also move the four mise tool pins to the tag's version")
     importing.add_argument("--apply", action="store_true")
     importing.add_argument("--prune", action="store_true", help="with --apply: delete orphan files in the bundles")
     checking = commands.add_parser("check", help="dry-run the import on a commit of a local checkout that is not tagged yet")
