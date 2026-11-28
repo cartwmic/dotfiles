@@ -8,7 +8,7 @@ usage: ci-par.py [--per-test DIR]... [--shards N DIR [--hold ID]... [--hold-file
 --shards N DIR   the test ids that `unittest discover -s DIR` finds run in N processes (every Nth id to each, so slow tests spread),
                  with DIR as the working directory, in the suite pool. For a suite whose start-up is dear (a process per test
                  would pay it 600 times) and whose tests share nothing on disk. Its counts are summed under DIR. It prints the selection first, e.g.
-                 `tests/kgate: 612 ids, 1 held, the other 611 dealt round-robin to 4 parts: 153, 153, 153, 152`.
+                 `tests/kgate: 612 ids, 15 held, the other 597 dealt round-robin to 4 parts: 150, 149, 149, 149`.
 --hold ID        with --shards: leave this test id out of the shards (a timing-bound test that fails under load). The caller runs
                  it, and an id that DIR does not hold is an error, so a stale name cannot drop a test unseen.
 --hold-file FILE one test id a line, each held as --hold ID holds it (blank lines are skipped).
