@@ -13,6 +13,8 @@ shx-note-image check <base-url> <artifact-id>
 `<base-url>` may be left out when `SHARTIFACTS_URL` is set. The MCP side is the `shartifacts` entry in
 `canonical/mcp/servers.json.tmpl`.
 
+`shx-waiting` is the other command of this component (below, "shx-waiting"); it does not draw anything.
+
 ## The picture
 
 1. `GET <base>/api/artifacts/<id>/comments`; take the root comment's `stroke`.
@@ -39,9 +41,37 @@ characters; an element's text includes its `alt`, `aria-label` or `title`), sinc
 image with no label: `anchor_text` is empty, and nothing can tell it from its neighbour) are left out; the last stay
 `unchecked` on a later version. With nothing to check it posts nothing and starts no browser.
 
+## shx-waiting
+
+```sh
+shx-waiting [<base-url>] [--file F]... [<page-id>...]
+```
+
+Lists the comment threads that wait for an agent, so none goes unanswered. The server's comment list for a page is
+flat: a thread's first comment has no `parent`, each reply names the first comment, and `author` is `you` (the
+owner) or `agent`. A thread waits when it is not resolved and its latest message, by `created_at` (fractions padded to
+a fixed width, ties by list order), is the owner's. An agent's reply is never shown as his comment. The command reads
+only (`GET`) and changes nothing.
+
+- No page ids and no `--file`: every page `GET <base>/api/artifacts?archived=include` lists, archived pages too (the default list leaves them out; a comment on one is still a comment), read twelve at a time. Page ids, or
+  `--file F` (each 24-character hex word in the file is one id, so a plain list or a tab-separated table both work):
+  only those pages. `<base-url>` is an argument that starts with `http://` or `https://`, else
+  `SHARTIFACTS_URL`, else `https://shartifacts.internal.cartwmic.com`.
+- stdout: one block per waiting thread, longest waiting first (page id and title, link, thread id and when his first
+  unanswered message came, the text he pointed at, his unanswered messages), then a count line such as
+  `2 threads waiting on 1 page (1012 pages read, archived pages included)` or `none waiting (1012 pages read, archived pages included)`; a run over page ids or a file says only `(N pages read)`. A refusal or failure prints on stderr (a usage error adds the usage text, a crash its stack) and nothing on stdout.
+- Exit: `0` none waiting, `1` at least one waits, `2` bad usage or an unreadable `--file`, `3` unexpected failure (an
+  uncaught error, or an entry or module that is missing or does not parse: the wrapper loads the entry itself and
+  turns any failure into 3, so Node's own `1` is never let through), `4` no `node`, `5` shartifacts
+  unreachable, answered an error or answered something that is not comments (the line names the page). A failure on
+  any page fails the run: "could not read" is never "nothing waits".
+- Log: one JSON line per run in `${XDG_STATE_HOME:-~/.local/state}/shx/waiting.log`: `id`, `ts`, `command`
+  (`waiting`), `base`, `scope` (`all` or `ids`), `page_ids` (the ids of an `ids` run; null for `all`), `pages`, `waiting`, `threads` (page and thread id of each thread the run listed), `duration_ms`, `error`. Counting the lines
+  answers how often agents run it and how often a run found something waiting.
+
 ## Output
 
-Every outcome prints one JSON object on stdout.
+The two commands above (`shx-note-image` and `check`) print one JSON object on stdout:
 
 | Exit | `code` | When |
 |------|--------|------|
@@ -68,9 +98,11 @@ Every run (failures and usage errors too) appends one JSON line to
 
 ```
 dot_local/bin/executable_shx-note-image   wrapper: finds node, runs shx.mjs
+dot_local/bin/executable_shx-waiting      wrapper: finds node, loads waiting.mjs, turns any load or run failure into exit 3
 dot_local/share/shx/
   shx.mjs                 wires the real adapters into the core
-  core/                   domain.mjs (arguments, stroke, placement, crop, log record), use_cases.mjs; no node: imports
+  waiting.mjs             the same for shx-waiting
+  core/                   domain.mjs (arguments, stroke, placement, crop, log record), use_cases.mjs, waiting.mjs (shx-waiting); no node: imports
   adapters/               chromium.mjs (DevTools Protocol over a pipe), shartifacts_http.mjs, freehand.mjs, fs_store.mjs
   vendor/                 perfect-freehand 1.2.3 (MIT) and its licence
 ```
@@ -82,6 +114,7 @@ other's adapters).
 
 - `python3 -I tests/shx/test_note_image.py` runs the command against a stdlib server that plays shartifacts, with
   real Chromium (skips without it).
+- `python3 -I tests/shx/test_waiting.py` runs `shx-waiting` against a stdlib server that plays shartifacts (needs node only).
 - `python3 -I tests/shx/test_boundaries.py` fails if a `core/` file imports anything outside `core/`.
 - `python3 -I tests/shx/test_skill.py` and `python3 -I tests/shx/test_agent_access.py` check the skill and what
   chezmoi renders for both desktop profiles.

@@ -72,6 +72,11 @@ GOOD_TREE = {
     "crates/foo-provider/src/lib.rs": b"not a reference\n",
     "crates/foo-provider/skills/using-foo-provider/SKILL.md": b"foo skill v1\n",
     "crates/foo-provider/skills/using-other/SKILL.md": b"other skill\n",
+    # The research crate: shipped by the tag, imported by nobody (SKIPPED_BUNDLES).
+    "crates/research/README.md": b"research readme\n",
+    "crates/research/data/r.json": b"{}\n",
+    "crates/research/skills/using-research-provider/SKILL.md": b"research skill\n",
+    "crates/research/skills/using-generate-prd/SKILL.md": b"generate prd skill\n",
 }
 
 
@@ -139,7 +144,6 @@ class ImportTests(Fixture):
             "using-loop-engine/SKILL.md": b"root skill v1\n",
             "using-loop-engine/references/agent-usage.md": b"agent usage v1\n",
             "using-loop-engine/references/operational-ux-contracts.md": b"ux\n",
-            "using-loop-engine/references/PRD.md": b"prd\n",
             "using-foo-provider/SKILL.md": b"foo skill v1\n",
             "using-foo-provider/references/README.md": b"foo readme\n",
             "using-foo-provider/references/data/a.json": b'{"a":1}\n',
@@ -147,7 +151,7 @@ class ImportTests(Fixture):
             "using-foo-provider/references/docs/d.md": b"d\n",
             "using-other/SKILL.md": b"other skill\n",  # a crate's references go to using-<crate> only
         }
-        self.assertEqual(self.tree_state(), expected)
+        self.assertEqual(self.tree_state(), expected)  # no using-research-provider, no using-generate-prd, no references/PRD.md
         again = self.do_import()
         self.assertIn("+0 added  ~0 changed  -0 orphan", again.stdout)
         self.assertEqual([l for l in again.stdout.splitlines() if l.startswith("    ")], [])  # no per-file change lines
@@ -308,32 +312,33 @@ class ImportTests(Fixture):
 
     def test_a_missing_root_reference_doc_is_refused(self):
         files = dict(GOOD_TREE)
-        del files["docs/PRD.md"]
+        del files["docs/operational-ux-contracts.md"]
         self.release("v1.0.0", files)
         result = self.do_import("--apply")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("docs/PRD.md", result.stderr)
+        self.assertIn("docs/operational-ux-contracts.md", result.stderr)
 
     def test_no_bundles_in_the_tag_is_an_error(self):
         self.release("v1.0.0", {"README.md": b"x\n"})
         self.assertEqual(self.do_import().returncode, 1)
 
-    def test_pins_move_with_the_import_and_only_the_five_tool_lines(self):
+    def test_pins_move_with_the_import_and_only_the_four_tool_lines(self):
         config = self.source / "dot_config/mise/config.toml"
         original = (
             'gh = "latest"\n'
             'loop-engine = { version = "0.9.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }\n'
             'lean-change = { version = "0.9.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }\n'
             'policy-document = { version = "0.9.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }\n'
-            'research = { version = "0.9.0", matching_regex = "^research-provider-", rename_exe = "research" }\n'
             'bookends-check = { version = "0.9.0", matching_regex = "^bookends-check-", rename_exe = "bookends-check" }\n'
             'other = { version = "0.9.0" }\n'
+            'research = { version = "0.9.0", matching_regex = "^research-provider-", rename_exe = "research" }\n'  # no longer a Loop Engine pin here: left alone
         )
         config.write_text(original)
         self.assertEqual(self.do_import("--apply").returncode, 0)
         self.assertEqual(config.read_text(), original)  # no --pins, no pin change
         self.assertEqual(self.do_import("--pins", "--apply", "--prune").returncode, 0)
-        self.assertEqual(config.read_text(), original.replace('version = "0.9.0", matching', 'version = "1.0.0", matching'))
+        moved = original.replace('version = "0.9.0", matching', 'version = "1.0.0", matching')
+        self.assertEqual(config.read_text(), moved.replace('research = { version = "1.0.0"', 'research = { version = "0.9.0"'))
         self.assertIn('other = { version = "0.9.0" }', config.read_text())
 
     def test_pins_move_the_bookends_check_pin(self):
@@ -341,7 +346,7 @@ class ImportTests(Fixture):
         line = 'bookends-check = { version = "%s", matching_regex = "^bookends-check-", rename_exe = "bookends-check" }\n'
         others = "".join(
             '%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (n, n, n)
-            for n in ("loop-engine", "lean-change", "policy-document", "research")
+            for n in ("loop-engine", "lean-change", "policy-document")
         )
         config.write_text(others + line % "0.9.0")
         self.assertEqual(self.do_import("--pins", "--apply", "--prune").returncode, 0)
@@ -351,13 +356,17 @@ class ImportTests(Fixture):
         config = self.source / "dot_config/mise/config.toml"
         config.write_text("".join(
             '%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (n, n, n)
-            for n in ("loop-engine", "lean-change", "policy-document", "research")
+            for n in ("loop-engine", "lean-change", "policy-document")
         ))
         result = self.do_import("--pins", "--apply")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("found 4", result.stderr)
+        self.assertIn("found 3", result.stderr)
 
-    def test_pins_refuse_a_config_that_does_not_have_the_five_lines(self):
+    def test_the_pins_flag_says_how_many_tools_it_moves(self):
+        result = self.run_tool("import", "--help")
+        self.assertIn("also move the four mise tool pins", " ".join(result.stdout.split()))
+
+    def test_pins_refuse_a_config_that_does_not_have_the_four_lines(self):
         (self.source / "dot_config/mise/config.toml").write_text('gh = "latest"\n')
         result = self.do_import("--pins", "--apply")
         self.assertEqual(result.returncode, 1)
@@ -369,8 +378,8 @@ class CheckTests(Fixture):
 
     PINS = "".join('%s = { version = "0.9.0", matching_regex = "^%s-", rename_exe = "%s" }\n' % (tool, archive, tool)
                    for tool, archive in (("loop-engine", "loop-cli"), ("lean-change", "lean-change-provider"), ("policy-document", "policy-document-provider"),
-                                         ("research", "research-provider"), ("bookends-check", "bookends-check")))
-    PLAN = {"releases": [{"artifacts": ["%s-aarch64-apple-darwin.tar.xz" % a for a in ("loop-cli", "lean-change-provider", "policy-document-provider", "research-provider", "bookends-check")]
+                                         ("bookends-check", "bookends-check")))
+    PLAN = {"releases": [{"artifacts": ["%s-aarch64-apple-darwin.tar.xz" % a for a in ("loop-cli", "lean-change-provider", "policy-document-provider", "research-provider", "bookends-check")]  # the release still ships research; no pin names it
                           + ["source.tar.gz", "loop-cli-installer.sh"]}]}
 
     def setUp(self):
@@ -406,7 +415,7 @@ class CheckTests(Fixture):
         before = self.tree_state()
         result = self.check("--plan", str(self.plan))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("5 pins resolve", result.stdout)
+        self.assertIn("4 pins resolve", result.stdout)
         self.assertEqual(self.tree_state(), before)
 
     def test_it_needs_neither_a_published_release_nor_gh(self):
@@ -433,11 +442,11 @@ class CheckTests(Fixture):
 
     def test_an_empty_file_stops_it(self):
         files = dict(GOOD_TREE)
-        files["docs/PRD.md"] = b""
+        files["docs/operational-ux-contracts.md"] = b""
         self.write_repo(files)
         result = self.check()
         self.assertEqual(result.returncode, 1)
-        self.assertIn("docs/PRD.md is empty", result.stderr)
+        self.assertIn("docs/operational-ux-contracts.md is empty", result.stderr)
 
     def test_an_unsafe_file_stops_it(self):
         self.write_repo(GOOD_TREE)
@@ -456,7 +465,7 @@ class CheckTests(Fixture):
         self.assertIn("pin loop-engine", result.stderr)
         self.assertIn("^loop-cli-", result.stderr)
 
-    def test_a_config_without_the_five_pins_stops_it(self):
+    def test_a_config_without_the_four_pins_stops_it(self):
         (self.source / "dot_config/mise/config.toml").write_text(self.PINS.splitlines(True)[0])
         result = self.check("--plan", str(self.plan))
         self.assertEqual(result.returncode, 1)

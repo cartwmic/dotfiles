@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SHIMS = (ROOT / ".chezmoitemplates/op-shim-connect", ROOT / ".chezmoitemplates/op-shim-service-account")  # personal, then every other profile
 NAME = re.compile(r"\$\{([A-Z][A-Z0-9_]*):-\}")
-EXPECTED = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_THREAD_ID", "CODEX_SANDBOX"}
+EXPECTED = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "CODEX_THREAD_ID", "CODEX_SANDBOX"}
 
 
 def agent_shell_markers(path):

@@ -157,6 +157,18 @@ trusting `events`.
 
 Wait only when the task says to wait for his answer. Otherwise hand off with the link.
 
+Every time he answers, and before you tell him nothing is waiting, run `shx-waiting`: a comment is feedback
+even when he picked no option. It lists each comment thread whose latest message is his, with no agent reply
+after it, and exits 1 when any waits (0 when none; 2 to 5 when it could not read, which is not "none").
+
+```sh
+shx-waiting [--file F]... [<page-id>...]
+```
+
+With no page ids it reads every page the server has, archived ones too. `--file F` takes page ids from any text file. Each
+block gives the page, the link, the thread id (the `parent` for your reply), the text he pointed at and his words.
+It changes nothing: reply with `artifact_comments` (see "Reply and resolve").
+
 ## When it fails
 
 `shx-note-image` always prints one JSON object. On failure it is

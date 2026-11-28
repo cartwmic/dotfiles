@@ -7,6 +7,7 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 | PR body check: `pr-body-check` | yes | yes | `.local/bin/pr-body-check`, `.local/bin/stack-map-merge-check` | `tests/pr-body-check/test_pr_body_check.py`, `tests/stack-map-merge-check/test_stack_map_merge_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Agent record path and import: `pr-record` | yes | yes | `.local/bin/pr-record` | `tests/pr-record/test_pr_record.py`, `tests/profiles/test_gate_coverage.py` |
 | Open or edit a PR through the body check: `pr-open` | yes | yes | `.local/bin/pr-open` | `tests/pr-open/test_pr_open.py`, `tests/profiles/test_gate_coverage.py` |
+| Redact a merged or closed PR's description by exact replacement only: `pr-redact` | yes | yes | `.local/bin/pr-redact` | `tests/pr-redact/test_pr_redact.py`, `tests/profiles/test_gate_coverage.py` |
 | Open an issue through the claims check: `issue-open` | yes | yes | `.local/bin/issue-open`, `.local/bin/claims` | `tests/issue-open/test_issue_open.py`, `tests/profiles/test_gate_coverage.py` |
 | Review-record merge rule: `intent-review-check` | yes | yes | `.local/bin/intent-review-check` | `tests/intent-review-check/test_intent_review_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Merge gate: `ci-main-status --merge-gate` | yes | yes | `.local/bin/ci-main-status` | `tests/ci-main-status/test_ci_main_status.py`, `tests/profiles/test_gate_coverage.py` |
@@ -17,6 +18,7 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 | Bash rule: unquoted heredoc with a backtick | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: credential config read raw | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/bin/config-show` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: `git stash` that writes the stash list | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/hooks/refuse_pattern_kill.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
+| Bash rule: a hand-typed `loop-engine` write on a lead's or the coordinator's run | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/hooks/refuse_pattern_kill.py` | `tests/agent-kill-guard/test_bash_engine_rule.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: git that changes the live coordinator checkout | yes | yes | `.local/share/agent-harness/hooks/bash_rules.py`, `.local/share/agent-harness/coordinator-instance` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: heavy jobs in the agent host pod | yes (pod only) | no: a pod-only rule (the personal Mac gets it too, inert); the work Mac is no pod and has no kgate host, so a work lead runs a suite where its repo runs it | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
 | Bash rule: kubectl on a context other than the homelab's | yes | no: it keeps agents on the personal homelab cluster, which the standing grant for that cluster covers and the work clusters it does not | `.local/share/agent-harness/hooks/bash_rules.py` | `tests/agent-kill-guard/test_bash_rules.py`, `tests/profiles/test_gate_coverage.py` |
@@ -31,6 +33,19 @@ The three Bash rules that read "no" on work cannot fire there: one guards the ag
 ## How the work profile finds the coordinator
 
 The gate wrappers run scripts in the coordinator checkout. Chezmoi renders `~/.local/share/agent-harness/coordinator-instance` per profile: line 1 is the checkout (personal `~/git/coordinator`; work `instances.coordinator.repo` in local data, else `~/coordinator-work`), and on work line 2 is the work coordinator's state directory (`~/.local/share/coordinator-work`). The wrappers use line 1, and set `COORDINATOR_STATE_DIR` from line 2 only when it is unset and that directory holds `pane-bin/ledger`. `COORDINATOR_REPO` overrides line 1. The live-checkout git rule protects line 1 as well as `~/git/coordinator`.
+
+## A red main takes one kind of merge
+
+`ci-main-status --merge-gate REPO` refuses every merge while main is red. `--merge-gate REPO --pr N` is the one way in, for the change that fixes the red. On a red main it passes PR N under one of two rules:
+
+- **The pin fix** (dotfiles only): the red run's only failing step is the release-pins step, PR N changes only the pin files, and PR N's own run passed that step. The pin bump tools (`loop_engine_bump.py`, `agent_kit_bump.py`) are this case.
+- **A named red with its own passing run** (every repo with a GitHub run): PR N carries a line `Handles: <full 40-digit sha of the red commit>` (or git's `This reverts commit <sha>`), in a commit message of the PR, or in the PR description for a repo that squashes from the PR body (storycraft); the line is the one that clears a hidden red once it is on main. And PR N's own full-suite run on its head tree passed every job and step that failed in the red run. A green run alone is not enough: a red that a flaky test made would otherwise let every green PR through.
+
+A PR that fits neither is refused: exit 1, the same stdout as without `--pr`, and a sentence on stderr that says which tie it lacks and the exact `Handles:` line to add. A pin bump on a red main that a test failure made stops at its gates step and leaves its PR open; it merges once main is green.
+
+No flake ruling is recorded for a GitHub run. Only the coordinator's own journal records one (for the coordinator repo), so a red from a flaky test holds main until the test is fixed (the fix PR names the red as above) or a rerun of that run passes. Making a recorded ruling that unblocks main is a follow-up, not part of this gate.
+
+Every call for a repo with a GitHub run writes one line to `~/.local/state/ci-main-status/hidden-red.jsonl`. On a red main with `--pr`, its `passed_by` field names the rule behind a pass (`pin-fix`, `named-red+own-run`) and its `refused` field lists each rule that said no, with the sentence it gave (`rule`, `why`); each is null otherwise. Count passes with `jq -c 'select(.passed_by != null)'` and refusals with `jq -c 'select(.refused != null)'`. The test is `tests/ci-main-status/test_ci_main_status.py` (`RedMainFix`, `PinFixException`).
 
 ## What `pr-body-check REPO PR` also runs
 

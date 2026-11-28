@@ -13,24 +13,33 @@ merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable 
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
 
 --pr N (only with --merge-gate and one REPO) is for the PR that fixes a red main (fab9b713 lets the revert or fix merge into
-a red main). Without --pr nothing changes. With it, a red main passes only under the rule for that repo; then the RED lines print as
+a red main). A red main takes one kind of merge: the change that fixes it. Without --pr nothing changes. With it, a red main passes only under the rule for that repo; then the RED lines print as
 usual, followed by one "merge-gate:" line, and the exit is 0. Anything else exits 1 with the same stdout as without --pr; the
 reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's journal) is always refused.
 
-  Every repo: PR N passes when its own full-suite run on its exact head tree succeeded. That is a run of the same
+  Every repo: PR N passes when it is tied to the red AND its own full-suite run on its exact head tree succeeded.
+  Tied: the PR carries a link line naming the red commit's full 40-digit sha, the same line that handles a hidden red (below):
+  `Handles: <sha>` or git's "This reverts commit <sha>", in a commit message of the PR, or in the PR description for a repo that squashes
+  from the PR body (storycraft), the place the squash merge will carry it to main. One line for each red the rule passes; a short sha does not
+  count. A green run alone is not a tie: a red that a flaky test made would let every green PR through. The refusal names each red it
+  lacks and the exact line to add. The run is a run of the same
   workflow whose failure made main red, on PR N's head commit or on a commit with the same tree. It counts only when every job
   that did not pass in main's red run ran in it and passed, and so did each step that failed there. A job or step that was
   skipped does not count: agent-kit's unit.yml skips `npm test` and the node-floor job on pull_request events, so a
   pull_request run is not a full-suite run and a workflow_dispatch run on the branch is. Runs are read newest first: one that
   skipped a red job or step is passed over, and the first one that ran them decides (a failed one refuses). The "merge-gate:"
-  line names the run (id and URL). No such run, a failed one, a run still going with its steps listed, a run on another tree or one that skipped a red job refuses.
+  line names the run (id and URL) and the sha it names. No such run, a failed one, a run still going with its steps listed, a run on another tree or one that skipped a red job refuses.
+  A flake ruling is not a rule here: for a GitHub run nothing records one (the coordinator's journal below does, for its own repo only), so a red
+  from a flaky test holds main until it is fixed (the fix PR names it, as above) or a rerun of that run passes; the call never rules a flake itself.
 
   dotfiles tries one more rule first (the pin fix), and falls back to the rule above when it does not apply: a red main passes
   as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
   Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
   package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
-  so its fix passes when its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+  so its fix passes when it names the red and its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
+  The pin bump tools (loop_engine_bump.py, agent_kit_bump.py) call this gate with --pr and stop, PR left open, on a refusal: a pin bump is not the fix for a
+  test failure, so on a red main that a test made they stop until main is green.
 
 --owner-approved ASK (only with --merge-gate OWNER/REPO --pr N, a repo outside the table) is the one-time admin merge Michael has approved
 for a repo whose main has no required status check to verify (protected with none, or not protected: without the flag both exit 1,
@@ -186,8 +195,8 @@ the same stdout and exit code. A hidden red older than 30 days holds the floor, 
 stuck unfinished holds the floor until GitHub gives it up. A red commit that a force-push removed from main and that was merged back more
 than 30 days after its run reads RED cold and GREEN warm: the one known difference.
 --merge-gate --pr N passes the newest red and the hidden reds together, the way it passes a red tip: dotfiles passes each red the pin-fix
-rule passes by that rule and the rest, once, by the full-suite rule against the union of what failed in them; the "merge-gate:" line names
-the run. Where --pr N passes (exit 0), one stdout line "  pin-fix-red: <full 40-digit sha>" follows for each red the pin-fix rule passed
+rule passes by that rule and the rest, once, by the named-red rule (the PR names each of them, and its full-suite run passed the union of what
+failed in them); the "merge-gate:" line names the run. Where --pr N passes (exit 0), one stdout line "  pin-fix-red: <full 40-digit sha>" follows for each red the pin-fix rule passed
 (not for one the full-suite rule passed): the dotfiles pin bump scripts (agent_kit_bump.py, loop_engine_bump.py; personal profile only)
 put one "Handles: <sha>" line in the squash body for each, so the bump leaves main readable as green. A refusal exits 1 with the same
 stdout as without --pr (no such line).
@@ -201,8 +210,9 @@ pull request, and it clears the red once that merges.
 Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
-attempt of each hidden red), cache (warm, cold, dropped:<why>, unwritable), reads (gh calls made) and skipped ("newest red", when the
-hidden-red reads were skipped). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
+attempt of each hidden red), cache (warm, cold, dropped:<why>, unwritable), reads (gh calls made), skipped ("newest red", when the
+hidden-red reads were skipped), passed_by (null, or for a --pr pass on a red main the rules that passed it: "pin-fix", "named-red+own-run") and refused
+(null, or for a --pr call that a red main refused, each rule that said no as {"rule", "why"}: the sentence on stderr, kept after the terminal is gone). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
 (for tests).
 
 A failed attempt is untested, not red, when the only jobs in it that did not pass or skip were cancelled because no runner
@@ -296,6 +306,7 @@ LOOP_ENGINE_SKILLS = "dot_local/share/agent-harness/canonical/skills/"
 WALK_CAP = 250
 RETRIES = 2                 # a gh call that answers HTTP 502, 503 or 504 is asked again, up to this many more times, 1 s then 2 s apart
 READS = [0]                 # gh calls made by this run; the hidden-red log records the count
+REFUSALS = []               # why each --pr rule refused PR N, as {"rule", "why"}; a refused call's hidden-red log row records them
 CALLER = "ci-main-status"   # every gh call names its caller (GH_CALLER); the gh wrapper's log records it
 URGENT = False              # set by main(): --merge-gate and --tip reads are urgent (GH_URGENT=1)
 
@@ -1151,9 +1162,14 @@ def hidden_reds(spec, tip, newest_created, newest_red, note):
     return sorted(reds, key=lambda red: -red[1].run_id)
 
 
+def link_place(name, spec):
+    """Where a link line must be to reach main: the squash merge writes the commit messages, or (storycraft) the PR body. Said in the hidden-red block and in a refusal."""
+    return f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
+
+
 def hidden_block(name, spec, reds):
     """The lines that name the hidden reds, first in the output: a count, then for each red its status line and its own paste-ready fix."""
-    where = f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
+    where = link_place(name, spec)
     lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"]
     for sha, rec, subject in reds:
         lines.append(f"  {rec.label} failed on {sha[:7]} {subject}: no later commit on main links it, no rerun passed")
@@ -1217,6 +1233,7 @@ def pin_fix_reason(spec, red, pr):
 
 def refuse(pr, why, kind=RED_FIX):
     print(f"ci-main-status: --pr {pr} is not {kind} for this red: {why}", file=sys.stderr)
+    REFUSALS.append({"rule": "pin-fix" if kind == PIN_FIX else "named-red+own-run", "why": why})
     return None
 
 
@@ -1262,17 +1279,37 @@ def judge_run(repo, run, wanted):
     return "good", None
 
 
-def red_fix_reason(spec, reds, pr):
-    """Why PR `pr` may merge into a red main, or None: its own full-suite run on its head tree passed what failed in each of `reds` (Records).
+def named_reds(spec, pull):
+    """The full shas the PR names with a link line (LINK: `Handles: <sha>` or git's revert line), read where the squash merge will carry them:
+    its commit messages, or its description for a repo that squashes from the PR body. A line anywhere else would pass the gate and clear nothing."""
+    if spec.get("squash_body"):
+        texts = [pull["body"] or ""]
+    else:
+        texts = [f"{c['messageHeadline']}\n\n{c['messageBody']}" for c in pull["commits"]]
+    return {sha for text in texts for sha in LINK.findall(text)}
 
-    The runs are those of the same workflow on the PR's head commit or on a commit with its tree, newest first. One that skipped a
-    job or step that failed in main is passed over; the first one that ran them all decides. Prints why not to stderr. A gh failure
-    is a refusal, not an error.
+
+def red_fix_reason(name, spec, reds, pr):
+    """Why PR `pr` may merge into a red main, or None. Two things must hold for each of `reds` ([(sha, Record)]):
+
+    1. It is tied to the red: the PR carries a link line naming the red's full sha (named_reds). A green run alone says nothing about a red
+       that a flaky test made, so no PR is the fix by passing a run.
+    2. Its own full-suite run on its head tree passed what failed in the reds. The runs are those of the same workflow on the PR's head commit
+       or on a commit with its tree, newest first. One that skipped a job or step that failed in main is passed over; the first one that ran
+       them all decides.
+
+    Prints why not to stderr. A gh failure is a refusal, not an error.
     """
     repo = spec["github"]
     try:
-        wanted = red_jobs_of(repo, reds)
-        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName"])
+        pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName,commits,body"])
+        missing = [(sha, rec) for sha, rec in reds if sha not in named_reds(spec, pull)]
+        if missing:
+            place = link_place(name, spec)
+            return refuse(pr, "it does not name this red. A green run of its own is not enough: the PR must say which red it fixes. "
+                              + "; ".join(f"{rec.label} on {sha[:7]}: put `Handles: {sha}` in {place}" for sha, rec in missing)
+                              + ". No flake ruling is recorded for this repo's runs, so a red from a flaky test holds main until it is fixed or a rerun passes.")
+        wanted = red_jobs_of(repo, [rec for _, rec in reds])
         head = pull["headRefOid"]
         tree = tree_of(repo, head)
         listing = ["run", "list", "-R", repo, "--workflow", spec["workflow"], "--limit", "100", "--json", RUN_FIELDS]
@@ -1287,8 +1324,8 @@ def red_fix_reason(spec, reds, pr):
             if verdict == "good":
                 same = "" if run["headSha"] == head else f", same tree as its head {head[:7]}"
                 return (f"  merge-gate: PR #{pr} passed as a red-main fix: its own full-suite run {run['databaseId']} ({run['url']}) "
-                        f"on {run['headSha'][:7]}{same} succeeded, and ran and passed every job and step that failed in {', '.join(r.label for r in reds)} "
-                        f"({', '.join(wanted)}). Allowed.")
+                        f"on {run['headSha'][:7]}{same} succeeded, and ran and passed every job and step that failed in {', '.join(rec.label for _, rec in reds)} "
+                        f"({', '.join(wanted)}); it names {', '.join(sha for sha, _ in reds)} with a Handles line. Allowed.")
             passed_over.append(why)
         return refuse(pr, "no full-suite run of its head tree" + (": " + "; ".join(passed_over) if passed_over
                                                                      else f": no {spec['workflow']} run of {head[:7]} or of a commit with its tree"))
@@ -1316,9 +1353,9 @@ def judge_reds(name, spec, reds, pr):
             lines.append(reason)
             pinned.append(sha)
         else:
-            rest.append(rec)
+            rest.append((sha, rec))
     if rest:
-        reason = red_fix_reason(spec, rest, pr)
+        reason = red_fix_reason(name, spec, rest, pr)
         if not reason:
             return None, []
         lines.append(reason)
@@ -1359,7 +1396,11 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
     reds = ([(newest_red, newest[2])] if newest_red else []) + [(sha, rec) for sha, rec, _ in hidden]
     if code == 1 and reds and pr is not None:
         allowed, pinned = judge_reds(name, spec, reds, pr)
+        if not allowed and log is not None:
+            log["refused"] = list(REFUSALS)   # which rule said no, and why, for the log: stderr is gone when the terminal is
         if allowed:
+            if log is not None:   # the rule behind the pass, for the log: the pin fix for the reds it passed, the named-red rule for the rest
+                log["passed_by"] = (["pin-fix"] if pinned else []) + (["named-red+own-run"] if len(pinned) < len(reds) else [])
             return 0, lines + allowed + [f"  pin-fix-red: {sha}" for sha in pinned]
     return code, lines
 
@@ -1804,13 +1845,15 @@ def hidden_log_path():
 def log_hidden(name, spec, action, pr, started, code, lines, rec):
     """One JSON line per call of a repo with a grandfather commit, kept after the terminal is gone, in hidden-red.jsonl: ts (UTC),
     duration_ms, repo, action (status, tip or merge-gate), pr, verdict (GREEN, RED, UNTESTED or ERROR: the first line's word), exit, hidden
-    (the sha, run and attempt of each hidden red), cache (warm, cold, dropped:<why> or unwritable), reads (gh calls this call made) and
-    skipped ("newest red" when the newest commit was already red and the older ones were not read)."""
+    (the sha, run and attempt of each hidden red), cache (warm, cold, dropped:<why> or unwritable), reads (gh calls this call made),
+    skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
+    pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
+    said no as {"rule", "why"}: the sentence stderr carries)."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
-                "reads": READS[0], "skipped": rec.get("skipped")})
+                "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")

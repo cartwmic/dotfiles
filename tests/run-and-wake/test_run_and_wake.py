@@ -86,6 +86,14 @@ def user_scopes_work():
         return False
 
 
+def process_running(pid):
+    """True while the process exists and is not a zombie. One that exits between the check and the read is gone: reading its stat then fails, and that is an answer, not an error."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
 def scope_active(unit):
     return subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit]).returncode == 0
 
@@ -94,6 +102,7 @@ class RunAndWake(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(self.wait_for_watchers)  # runs before the folder is removed: no watcher is left writing into it
         root = Path(self.tmp.name)
         self.root = root
         self.fake = root / "fake"
@@ -163,6 +172,29 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([r["event"] for r in records], list(events))
         for r in records:
             self.assertRegex(r["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$", "UTC time on every record")
+
+    def wait_for_watchers(self, timeout=20):
+        """Returns once no job's watcher is alive. A watcher holds jobs/<job>.lock until it has woken and removed it, and it is detached: the
+        launching call returns while it still writes its records and runs the scripted t3. Removing the folder under it fails
+        with "Directory not empty". Every test starts jobs, so this is the one place that waits for all of them."""
+        end = time.monotonic() + timeout
+        jobs = self.state / "run-and-wake/jobs"
+        for lock in sorted(jobs.glob("*.lock")) if jobs.is_dir() else []:
+            try:
+                fd = os.open(lock, os.O_RDONLY)
+            except FileNotFoundError:
+                continue  # the watcher finished and removed it
+            try:
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() > end:
+                            self.fail(f"the watcher of {lock.stem} is still running after {timeout}s")
+                        time.sleep(0.02)
+            finally:
+                os.close(fd)
 
     # --- the journey ---
     def test_returns_at_once_then_wakes_the_launching_session_once(self):
@@ -1083,8 +1115,7 @@ class RunAndWake(unittest.TestCase):
         for pid in (start["watcher"], start["pid"]):
             os.kill(pid, signal.SIGKILL)
         end = time.monotonic() + 10
-        while time.monotonic() < end and any(Path(f"/proc/{p}/stat").exists() and Path(f"/proc/{p}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
-                                             for p in (start["watcher"], start["pid"])):
+        while time.monotonic() < end and any(process_running(p) for p in (start["watcher"], start["pid"])):
             time.sleep(0.02)
 
     def sweep_by_launching(self, **env):
@@ -1335,6 +1366,7 @@ class RunAndWake(unittest.TestCase):
         self.seed(job, self.ELSEWHERE)
         self.unheld_lock(job)
         (self.fake / "t3_down").write_text("all\n")
+        self.addCleanup((self.fake / "t3_down").unlink)  # T3 comes back at the end, so the new job's own watcher, retrying for 30 s, delivers and ends
         started = time.monotonic()
         self.sweep_by_launching(RUN_AND_WAKE_T3_RETRY="1:30")  # a 30 s window the call must not sit through
         self.assertLess(time.monotonic() - started, 10)
