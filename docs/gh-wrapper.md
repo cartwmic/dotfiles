@@ -1,6 +1,6 @@
 # The gh wrapper
 
-One `gh` wrapper, first on PATH on every desktop profile. It is the leak-guard wrapper ([leak-guard.md](./leak-guard.md)) under a new name, with a seam for layers that save GitHub API calls. Every agent shares one GitHub account, and its core (REST) bucket of 5,000 calls an hour hit 0 twice on 2026-11-16. `gh run watch` alone costs about 4 REST calls per poll (run, jobs, workflow, annotations): 64 calls in 60 seconds at its default 3-second interval (measured with `-i 3`).
+One `gh` wrapper, first on PATH on every desktop profile and in container mode. It is the leak-guard wrapper ([leak-guard.md](./leak-guard.md)) under a new name, with a seam for layers that save GitHub API calls. Every agent shares one GitHub account, and its core (REST) bucket of 5,000 calls an hour hit 0 twice on 2026-11-16. `gh run watch` alone costs about 4 REST calls per poll (run, jobs, workflow, annotations): 64 calls in 60 seconds at its default 3-second interval (measured with `-i 3`).
 
 This page is the contract of the base. The layers themselves (log, watch interval and `gh api` cache, budget guard) are separate changes that add files to the lib directory, and each documents itself here when it lands.
 
@@ -14,15 +14,15 @@ This page is the contract of the base. The layers themselves (log, watch interva
 | on/off switch for the work rules | the profile (`personal` on, anything else off) | `~/.config/gh-wrapper/policy`, one word: `on` or `off` (read by the `gh_policy` layer) |
 | PATH for mise shells | | `~/.config/mise/conf.d/gh-wrapper.toml` (`_.path`) |
 
-`run_onchange_after_47_install-gh-wrapper.sh.tmpl` installs them: the lib first, then the budget file, then the wrapper, each by temp file and rename. It ships every `*.py` in `scripts/gh-wrapper-lib` and removes installed lib files the source no longer has, so adding a layer is adding a file, with no installer change. It renders on `personal` and `axon-work-computer`, not on Termux (out of scope in [profiles.md](./profiles.md)). A `gh` already at the wrapper path or a mise file already at its path that does not carry the mark `gh wrapper (managed by chezmoi` is left alone with a warning. Once the new wrapper is in place, the old install is removed when it carries the old mark: `~/.local/share/leak-guard/bin/gh` and `~/.config/mise/conf.d/leak-guard-gh.toml`.
+`run_onchange_after_47_install-gh-wrapper.sh.tmpl` installs them: the lib first, then the budget file, then the wrapper, each by temp file and rename. It ships every `*.py` in `scripts/gh-wrapper-lib` and removes installed lib files the source no longer has, so adding a layer is adding a file, with no installer change. It renders on `personal` and `axon-work-computer`, not on Termux (out of scope in [profiles.md](./profiles.md)), and container mode keeps it (its script is in the container's `$keep` list in `.chezmoiignore`; `tests/container-mode` fails without it). A `gh` already at the wrapper path or a mise file already at its path that does not carry the mark `gh wrapper (managed by chezmoi` is left alone with a warning. Once the new wrapper is in place, the old install is removed when it carries the old mark: `~/.local/share/leak-guard/bin/gh` and `~/.config/mise/conf.d/leak-guard-gh.toml`.
 
-To re-run it by hand: `chezmoi execute-template < "$(chezmoi source-path)/run_onchange_after_47_install-gh-wrapper.sh.tmpl" | sh`. To undo: delete `~/.local/share/gh-wrapper` and `~/.config/mise/conf.d/gh-wrapper.toml`.
+To re-run it by hand: `chezmoi execute-template < "$(chezmoi source-path)/run_onchange_after_47_install-gh-wrapper.sh.tmpl" | sh`. To undo: delete `~/.local/share/gh-wrapper` and `~/.config/mise/conf.d/gh-wrapper.toml` (in container mode also the link `~/.local/bin/gh`; left in place it dangles, and a shell then finds the next `gh` on its PATH). To switch the rules off without removing anything, write `off` to `~/.config/gh-wrapper/policy` (or `budget`): the installer writes both files again each time it runs, which is when its script text changes (a new lib file or a wrapper change), so a switch-off lasts until the next apply that changes it.
 
 ## Getting first on PATH
 
 `~/.local/share/gh-wrapper/bin` must come before every other `gh`. Three pieces do it, as they did for leak-guard: the mise file (mise puts `_.path` entries ahead of the real gh, and is the load-bearing one wherever mise is active), `dot_zshenv` (plain `zsh -c`) and `dot_zprofile` (login shells, after `/etc/zprofile`'s `path_helper`). `tests/leak-guard/test_gh_path.py` runs fresh `zsh -c`, `-lc`, `-ic` and `-lic` on a work install and on a personal install with no data, and checks each prints the wrapper. One host thing breaks it: a `gh` in `~/.local/share/mise/command-wrappers/bin`, which mise puts ahead of `_.path` (the Omarchy-owned directory). Remove a `gh` file there.
 
-Service unit PATHs (t3code, coordinatord) are separate changes.
+Service unit PATHs (t3code, coordinatord) are separate changes. In container mode there is no systemd. The installer writes the link `~/.local/bin/gh` to the wrapper, and the pod image's `ENV PATH` starts with `~/.local/bin`, so the T3 server, its sessions and the coordinator daemon find the wrapper first ([container-mode.md](./container-mode.md)).
 
 ## What a call goes through
 
@@ -187,6 +187,7 @@ Tests: `python3 -m unittest discover -s tests/leak-guard -p 'test_gh_policy.py'`
 |---|---|
 | personal Linux | the wrapper, mise and shell PATH, the budget file `on`, the policy file `on` |
 | personal Mac | the same; PATH through mise and `.zshenv` |
+| personal Linux, container mode (the agent host pod) | the same wrapper, lib, budget `on` and policy `on`; PATH through `.zshenv`, `.zprofile`, the mise file and the link `~/.local/bin/gh` (the image's PATH starts with `~/.local/bin`) |
 | work Mac | the same wrapper at the new path, leak-guard checks unchanged, the budget file `off`, the policy file `off` (no work rules), and the watch-interval default (`gh run watch` and `gh pr checks --watch` poll every 60 s; Michael's decision #3242 on ask #1207). No log, no budget guard, no `gh api` cache there: a per-call log of directory and parent process, and refusing reads, are new on an employer machine, so Michael is asked before they are turned on there. |
 
 ## Tests

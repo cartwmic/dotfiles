@@ -1,7 +1,8 @@
 {{- /*
-  Installs the gh wrapper on every desktop profile (personal and axon-work-computer; Termux is out of scope, docs/profiles.md). docs/gh-wrapper.md.
+  Installs the gh wrapper on every desktop profile (personal and axon-work-computer; Termux is out of scope, docs/profiles.md) and in container mode (docs/container-mode.md). docs/gh-wrapper.md.
   Writes ~/.local/share/gh-wrapper/bin/gh (scripts/gh-wrapper), ~/.local/share/gh-wrapper/lib/*.py (scripts/gh-wrapper-lib), ~/.config/gh-wrapper/budget
-  (`on` or `off`), ~/.config/gh-wrapper/policy (`on` on personal, `off` elsewhere: the work rules of lib/gh_policy.py) and ~/.config/mise/conf.d/gh-wrapper.toml, and removes the leak-guard install this replaces when it carries the old mark.
+  (`on` or `off`), ~/.config/gh-wrapper/policy (`on` on personal, `off` elsewhere: the work rules of lib/gh_policy.py) and ~/.config/mise/conf.d/gh-wrapper.toml
+  (in container mode also the symlink ~/.local/bin/gh -> the wrapper: the pod's image puts ~/.local/bin first on the PATH of every process, T3 and its daemon included), and removes the leak-guard install this replaces when it carries the old mark.
   Local chezmoi data, both optional:
     ghBudget:
       enabled: true|false             # the log, rewrite and budget layers; default true on personal, false on axon-work-computer
@@ -21,6 +22,7 @@
 {{-   $gb := dig "ghBudget" (dict) . -}}
 {{-   if not (kindIs "map" $gb) }}{{ fail "ghBudget must be a map with enabled (true or false)" }}{{ end -}}
 {{-   range $k, $_ := $gb }}{{ if ne $k "enabled" }}{{ fail (printf "ghBudget.%s is not a setting (enabled)" $k) }}{{ end }}{{ end -}}
+{{-   $container := (includeTemplate "container" . | fromJson).enabled -}}
 {{-   $on := eq .profile "personal" -}}
 {{-   if hasKey $gb "enabled" -}}
 {{-     if not (kindIs "bool" (get $gb "enabled")) }}{{ fail "ghBudget.enabled must be true or false" }}{{ end -}}
@@ -68,6 +70,18 @@ else
   printf '# gh wrapper (managed by chezmoi; run_onchange_after_47_install-gh-wrapper)\n# Keeps the wrapper directory first in the PATH mise builds; mise puts its own tool directories ahead of anything a .zshrc adds.\n[env]\n_.path = ["%s"]\n' "$dir" > "$conf.tmp"
   mv "$conf.tmp" "$conf"
 fi
+{{- if $container }}
+if [ "$installed" = 1 ]; then
+  mkdir -p "$HOME/.local/bin"
+  link="$HOME/.local/bin/gh"
+  if [ -e "$link" ] || [ -L "$link" ]; then
+    if [ "$(readlink "$link" 2>/dev/null)" = "$dir/gh" ]; then :
+    else echo "gh-wrapper: WARNING: $link already exists and is not the gh wrapper's link; left alone, so the T3 sessions may run another gh" >&2; fi
+  else
+    ln -s "$dir/gh" "$link"
+  fi
+fi
+{{- end }}
 {{- if $repos }}
 mkdir -p "$HOME/.config/leak-guard"
 printf '%s' {{ (join "\n" $repos) | b64enc | quote }} | base64 -d > "$HOME/.config/leak-guard/repos.tmp"
