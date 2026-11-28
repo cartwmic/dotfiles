@@ -11,6 +11,9 @@
 # For a cartwmic/dotfiles PR (`cartwmic/dotfiles` or `dotfiles`), the merge form first runs `stack-map-merge-check REPO PR`: it builds the agent stack map page
 # from the PR merged with main and refuses (exit 1) a PR that would break it, before any body rule is read (docs/stack-map/README.md, "Before a merge"). A missing
 # stack-map-merge-check is a failure too (exit 127), never a skip. It is not run for the same forms the thread check skips.
+# The Known limits section of the live description is judged by the coordinator script, not here: its rule `known-limits-record` (coordinator scripts/pr-body-check.ts) runs `known-limits-check` on the description as it is on GitHub
+# against the PR's agent record, for every repo, in every form with a REPO PR pair and no --body-file (the merge form and --skip-intent-review). It catches a description set any way, including the one `pr-open` cannot check
+# (`gh issue edit <PR number> --body-file`), and a permanent limit that needs the record, which does not exist when `pr-open` posts the body. This wrapper adds nothing to it (docs/gate-coverage.md).
 # The gh calls are made by pr-body-check.ts, started below, so they inherit these. They are merge-chain reads: GH_URGENT=1 keeps the
 # gh budget guard from refusing them, and GH_CALLER names this check in the gh wrapper's log.
 export GH_URGENT=1 GH_CALLER=pr-body-check
