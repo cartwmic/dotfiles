@@ -296,10 +296,9 @@ def origin_of(directory):
         return None
 
 
-Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd written", defaults=(False,))  # written: a check command stands earlier in the same text, whether or not it guards this one
+Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd seen", defaults=(frozenset(),))  # seen: the checks, in their real form, that stand earlier in the same text, whether or not they guard this command (gated holds only those that do)
 
 
-CHECK_NAMES = ("ci-main-status", "pr-body-check", "public-text-check")  # the commands whose success a guarded command may depend on
 PIPE_JOINS = ("|", "|&")
 CHAIN_JOINS = ("&&", "||") + PIPE_JOINS  # the joins inside one and-or list; every other join (`;`, `&`, a newline, a bracket) starts a new one
 
@@ -353,8 +352,8 @@ class Walk:
             assigns = tuple(w for w in raw[:len(raw) - len(words)] if ASSIGN.match(w))
             here = gated | self._and_listed(scan, index)
             polling = loop or any(loops)
-            written = any(_base(w[0]) in CHECK_NAMES for w in map(_command_words, scan.commands[:index]) if w)
-            self._command(words, assigns, polling, waking, here, cwd, depth, scan, index, written)
+            seen = frozenset().union(*(Walk._checks(_command_words(c)) for c in scan.commands[:index]))
+            self._command(words, assigns, polling, waking, here, cwd, depth, scan, index, seen)
             if _base(words[0]) in ("cd", "pushd"):
                 target = next((w for w in words[1:] if w != "--" and not w.startswith("-")), None)
                 cwd = _resolve(target, cwd, self.home)
@@ -423,8 +422,8 @@ class Walk:
                     found.add(BODY_PAIR + body_file + "\0" + title)  # one check saw both, not a file from one check and a title from another
         return found
 
-    def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None, written=False):
-        self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd, written))
+    def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None, seen=frozenset()):
+        self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd, seen))
         name, rest = _base(words[0]), words[1:]
         if "kgate" in [_base(w) for w in rest]:
             rest = rest[:[_base(w) for w in rest].index("kgate")]  # what follows runs on the cluster, not here
@@ -880,7 +879,7 @@ def merge_rule(walk, ctx):
         checked = {e[len(PR_CHECK):] for e in cmd.gated if e.startswith(PR_CHECK)}
         if CI_GATE not in cmd.gated or not checked:
             return _merge_refusal(MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx)),
-                                  "a check is written before the merge but does not guard it" if cmd.written else "no check before the merge")
+                                  MERGE_UNGUARDED if (CI_GATE in cmd.seen and CI_GATE not in cmd.gated) or (not checked and any(e.startswith(PR_CHECK) for e in cmd.seen)) else MERGE_MISSING)
         merged = _pr_number(gh)  # None when it names a branch or no PR: the hook cannot see which
         if merged and str(int(merged)) not in checked:
             return _merge_refusal(MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx)), "the check names another pull request")
@@ -889,10 +888,14 @@ def merge_rule(walk, ctx):
     return None
 
 
+MERGE_UNGUARDED = "a check is written before the merge but the merge does not run on its success"
+MERGE_MISSING = "a check is missing, or is not in its real form"
+
+
 def _merge_refusal(message, reason):
     """A merge refusal with the reason the guard log writes beside the rule name."""
     refusal = Matched(message, "gh pr merge")
-    refusal.log = {"reason": reason}
+    refusal.log = {"reason": reason, "command": "gh pr merge"}
     return refusal
 
 
@@ -1135,7 +1138,7 @@ def public_comment_rule(walk, ctx):
         if body_file not in (None, "-") and inline is None and PUBLIC_FILE + body_file + "\0" + (repo or "").lower() in cmd.gated:
             continue
         message = Matched(PUBLIC_COMMENT % (gh.group, gh.verb, repo or "OWNER/REPO", gh.group, gh.verb), "gh " + command)
-        message.log = {"reason": "a check is written before the comment but does not guard it" if cmd.written else "comment text not checked for private details", "command": "gh " + command}
+        message.log = {"reason": "the comment check is written before the comment but the comment does not run on its success" if body_file is not None and (PUBLIC_FILE + body_file + "\0" + (repo or "").lower()) in cmd.seen else "the comment check is missing, or is not in its real form", "command": "gh " + command}
         return message
     return None
 

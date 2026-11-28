@@ -2181,15 +2181,27 @@ class CheckMustGuard(unittest.TestCase):
         self.assertIsNotNone(self.merge("%s | %s" % (self.BODY, self.MERGE)))
 
     def test_the_guard_log_says_why_a_merge_or_comment_was_refused(self):
-        def reason(text, **kw):
+        def log(text, **kw):
             context = bash_rules.Context(**dict(ctx(**kw)._asdict(), platform="linux"))
-            return bash_rules.refusal(text, context)[1].log["reason"]
-        self.assertEqual(reason(self.MERGE), "no check before the merge")
-        self.assertEqual(reason("! %s && %s && %s" % (self.BODY, self.GATE, self.MERGE)), "a check is written before the merge but does not guard it")
-        self.assertEqual(reason("%s && %s && gh pr merge 6" % (self.GATE, self.BODY)), "the check names another pull request")
+            return bash_rules.refusal(text, context)[1].log
+        unguarded, missing = bash_rules.MERGE_UNGUARDED, bash_rules.MERGE_MISSING
+        for text, reason in [
+                (self.MERGE, missing),                                                          # no check at all
+                ("%s && %s" % (self.GATE, self.MERGE), missing),                                # the body check is absent; the gate there does guard
+                ("%s && %s" % (self.BODY, self.MERGE), missing),
+                ("%s >/dev/null && %s && %s" % (self.GATE, self.BODY, self.MERGE), missing),    # a check not in its real form is not a check seen
+                ("sh -c '%s && %s' && %s" % (self.GATE, self.BODY, self.MERGE), missing),       # checks in a nested shell do not guard a merge outside it
+                ("! %s && %s && %s" % (self.BODY, self.GATE, self.MERGE), unguarded),           # negated
+                ("%s && %s || true && %s" % (self.GATE, self.BODY, self.MERGE), unguarded),
+                ("%s; %s && %s" % (self.GATE, self.BODY, self.MERGE), unguarded),
+                ("%s | cat && %s && %s" % (self.GATE, self.BODY, self.MERGE), unguarded)]:
+            with self.subTest(text=text):
+                self.assertEqual(log(text), {"reason": reason, "command": "gh pr merge"})
+        self.assertIn("another pull request", log("%s && %s && gh pr merge 6" % (self.GATE, self.BODY))["reason"])
         kw = dict(origins=self.ORIGINS, visibility=lambda repo: "public")
-        self.assertEqual(reason(self.POST, **kw), "comment text not checked for private details")
-        self.assertEqual(reason("! %s && %s" % (self.CHECK, self.POST), **kw), "a check is written before the comment but does not guard it")
+        self.assertEqual(log(self.POST, **kw)["reason"], "the comment check is missing, or is not in its real form")
+        self.assertEqual(log("! %s && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
+        self.assertEqual(log("%s || true && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
 
     def test_the_check_that_is_negated_in_one_place_still_fails_the_chain_in_a_nested_shell(self):
         self.assertIsNotNone(self.merge("%s && sh -c '! %s && %s'" % (self.GATE, self.BODY, self.MERGE)))
