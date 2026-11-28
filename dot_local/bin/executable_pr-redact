@@ -16,7 +16,7 @@ is said plainly; a write that landed before the error is reported as edited; any
 GitHub keeps the earlier text of an edited description in the description's edit history. pr-redact does not remove it: the old text stays readable there
 until it is deleted from that history on GitHub.
 
-Neutral phrases: "the home folder", "an internal host", "a private address".
+Neutral phrases: "the home folder", "an internal host", "a private address", "the owner", "a private id", "a private folder".
 
 Record: one JSON line per run, ${XDG_STATE_HOME:-~/.local/state}/pr-redact/log.jsonl, written on every exit path:
 {utc, repo, pr, outcome (edited|already-clean|dry-run|refused|failed), exit, reason (a fixed code, never text from the strings or from GitHub), replacements (matches), strings (lines),
@@ -34,7 +34,7 @@ import sys
 import tempfile
 import time
 
-NEUTRAL = ("the home folder", "an internal host", "a private address")
+NEUTRAL = ("the home folder", "an internal host", "a private address", "the owner", "a private id", "a private folder")
 USAGE = "usage: pr-redact --repo OWNER/REPO --pr N --replacements FILE [--allow-clean] [--dry-run]"
 
 

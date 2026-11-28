@@ -110,6 +110,17 @@ class PrRedact(unittest.TestCase):
         self.assertNotIn("10.0.0.9", result.stdout + result.stderr)
         self.assertNotIn("internal.example", result.stdout + result.stderr)
 
+    def test_each_neutral_phrase_replaces_its_string_and_any_other_phrase_is_refused(self):
+        self.set_pr("Asked by Pat, rule 0a1b2c3d, in /work/session-1/notes. Pat again.\n")
+        self.write_reps("Pat\tthe owner\nrule 0a1b2c3d\ta private id\n/work/session-1/notes\ta private folder\n")
+        result = self.run_cmd()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.stored(), "Asked by the owner, a private id, in a private folder. the owner again.\n")
+        self.set_pr("Asked by Pat.\n")
+        self.write_reps("Pat\tthe boss\n")
+        self.assertEqual(self.run_cmd().returncode, 1)
+        self.assertEqual(self.stored(), "Asked by Pat.\n")
+
     def test_the_call_goes_through_gh_api_with_the_caller_named_and_the_body_from_a_file(self):
         self.run_cmd()
         read, write = self.calls()
