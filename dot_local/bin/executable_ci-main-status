@@ -169,8 +169,8 @@ first line "REPO: RED  N unhandled red(s) on main", then (a repo whose row has "
 "Handles: <full sha>" line to add, on a line of its own, and the "gh run rerun <run id> --repo <owner/repo>" command), then a note that a short sha does not count; an UNTESTED or GREEN line
 that would have come first follows, indented.
 The "Quicker:" sentence says which way clears the reds sooner (dotfiles' ci.yml runs main's runs one at a time in one group, and each pull request's runs in a group of its own):
-a main run going or queued means a rerun starts only after it and the `Handles:` line in a pull request is quicker; no main run going means a rerun starts now and is quicker;
-a rerun of every red already going means wait for it. A repo without "main_queue" gets no sentence: for it the claim is not known to hold. What clears a red does not change. A link clears only a red below the newest conclusive commit: a newest red stays red until a
+a main run going (not one that only waits behind it) means a rerun starts only after it and the `Handles:` line in a pull request is quicker; with none going, a rerun
+of every red already going or queued means wait for it, and otherwise a rerun starts now and is quicker. A repo without "main_queue" gets no sentence: for it the claim is not known to hold. What clears a red does not change. A link clears only a red below the newest conclusive commit: a newest red stays red until a
 newer conclusive pass, whatever names it, and then it is a hidden red if nothing links it. A handler commit is judged by its own run like
 any other commit: red, it is a red itself; untested or still going, it gets the answer the rule above gives that commit, and the red it
 links is not counted. A newest red skips the hidden-red reads (it is RED already), unless --pr is given.
@@ -824,7 +824,7 @@ def verdicts_of(spec, runs):
             by_sha.setdefault(r["headSha"], []).append((r, itertools.chain([first], attempts)))
     verdicts = CommitVerdicts(spec["github"], by_sha)
     verdicts.newest_created = max((r.get("createdAt") or "" for r in runs), default="")   # GitHub's own clock, for the hidden-red floor
-    verdicts.going_runs = sum(r["status"] != "completed" for r in runs)   # main runs going or queued: a rerun waits behind them (quicker_way)
+    verdicts.unfinished = {r["databaseId"]: r["status"] for r in runs if r["status"] != "completed"}   # main runs going, queued or pending (quicker_way)
     return verdicts, going
 
 
@@ -1171,22 +1171,25 @@ def link_place(name, spec):
     return f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
 
 
-def quicker_way(spec, reds, going_runs):
+def quicker_way(spec, reds, unfinished):
     """Which way clears the hidden reds sooner: (way, one sentence), or (None, None) for a repo whose main runs are not known to queue.
 
-    Only a repo whose row says "main_queue" (dotfiles: ci.yml puts every main run in one group that runs one at a time, and a pull request's
-    runs in a group of their own) is advised: for another repo the claim is not known to hold.
-    wait: every red already has a rerun going, so another changes nothing and a pull request needs a full run of its own.
-    handles: a main run is going or queued; a rerun starts only after it, and a pull request's run starts at once.
-    rerun: no main run is going, so a rerun starts now; a `Handles:` line first needs a pull request and its run.
+    Only a repo whose row says "main_queue" (dotfiles: ci.yml puts every main run in one group that runs one at a time, keeping one running and
+    one pending run, a newer pending run replacing the older, and a pull request's runs in a group of their own) is advised: for another repo the
+    claim is not known to hold. `unfinished` is {run id: status} of the main runs not finished. A run ahead is one that is running or queued for a
+    runner, other than the reds' own reruns; a pending run only waits for the running one, and a rerun takes its place.
+    handles: a run is ahead; a rerun starts only after it, and a pull request's run starts at once.
+    wait: no run is ahead and every red's rerun is already going or queued: asking again changes nothing, and a pull request needs a full run of its own.
+    rerun: no run is ahead, so a rerun starts now; a `Handles:` line first needs a pull request and its full run.
     """
     if not spec.get("main_queue"):
         return None, None
-    if all(rec.rerun_going for rec in reds):
+    own = {rec.run_id for rec in reds}
+    if any(status != "pending" for run_id, status in unfinished.items() if run_id not in own):
+        return "handles", ("Quicker: the `Handles:` line in a pull request. A main run is going, and a rerun starts only after it ends, while the pull "
+                           "request's own run starts at once; it merges with `--merge-gate dotfiles --pr <its number>` once that run passes.")
+    if own <= set(unfinished):
         return "wait", "Quicker: wait for the rerun that is already going; a pull request with the `Handles:` line needs a full run of its own first."
-    if going_runs:
-        return "handles", (f"Quicker: the `Handles:` line in a pull request. {going_runs} main run(s) going or queued, and a rerun starts only after "
-                           "them, while the pull request's own run starts at once; it merges with `--merge-gate dotfiles --pr <its number>` once that run passes.")
     return "rerun", "Quicker: rerun it. No main run is going, so the rerun starts now; the `Handles:` line first needs a pull request and its full run."
 
 
@@ -1417,7 +1420,7 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
             hidden = hidden_reds(spec, tip, verdicts.newest_created, newest_red, log)
     code, lines = verdict_lines(name, tip, walked, hits, going, noun, tip_only)
     if hidden:
-        way, advice = quicker_way(spec, [rec for _, rec, _ in hidden], verdicts.going_runs)
+        way, advice = quicker_way(spec, [rec for _, rec, _ in hidden], verdicts.unfinished)
         if log is not None:
             log["quicker"] = way   # which way the message named, so how often each is advised can be counted
         lines = hidden_block(name, spec, hidden, advice) + (["  " + lines[0]] + lines[1:] if code != 1 else lines)
