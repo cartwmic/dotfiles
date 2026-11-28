@@ -6,6 +6,7 @@ Not part of CI. It proves the tests pin every rule rather than just exercising t
 """
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -80,8 +81,13 @@ WALK_MUTATIONS = [
 ]
 
 
-def run_suite(tmp, script_text, helper_edit=None):
-    """Lay out tmp/bin/mutant beside tmp/share/workstream-rank (the layout the script finds its helper in), run the suite on it. True when it fails."""
+SUITE_LIMIT = 300   # seconds one mutant's suite run may take; a mutant that loops forever is a kill, not a hang
+
+
+def run_suite(tmp, script_text, helper_edit=None, limit=SUITE_LIMIT):
+    """Lay out tmp/bin/mutant beside tmp/share/workstream-rank (the layout the script finds its helper in), run the suite on it.
+    True when it fails. The suite runs in its own process group and the whole group is killed when the run ends (done, over the
+    time limit or interrupted), so a mutant that loops leaves nothing running."""
     root = Path(tmp)
     (root / "bin").mkdir(parents=True, exist_ok=True)
     (root / "bin" / "mutant").write_text(script_text)
@@ -96,8 +102,19 @@ def run_suite(tmp, script_text, helper_edit=None):
             sys.exit(f"mutation on {name}: pattern found {text.count(old)} times, want 1: {old!r}")
         (share / name).write_text(text.replace(old, new))
     env = {**os.environ, "WORKSTREAM_RANK_SCRIPT": str(root / "bin" / "mutant"), "PYTHONDONTWRITEBYTECODE": "1"}
-    r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(HERE)], env=env, capture_output=True, text=True)
-    return r.returncode != 0
+    # Named modules, not discover: test_mutate.py (about this file) must not run inside every mutant's suite.
+    with subprocess.Popen([sys.executable, "-m", "unittest", "test_workstream_rank", "test_t3_lineage"], cwd=HERE, env=env,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) as proc:
+        try:
+            proc.communicate(timeout=limit)
+            return proc.returncode != 0
+        except subprocess.TimeoutExpired:
+            return True
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def main():
