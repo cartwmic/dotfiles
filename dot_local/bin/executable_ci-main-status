@@ -46,8 +46,9 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   from a flaky test holds main until it is fixed (the fix PR names it, as above) or a rerun of that run passes; the call never rules a flake itself.
 
   dotfiles tries one more rule first (the pin fix), and falls back to the rule above when it does not apply: a red main passes
-  as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (a new agent-kit or
-  Loop Engine release turned the pin check red; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
+  as the pin fix when all three hold. (1) The red run's only failing step is the "Release pins: ..." step (the pin check still fails a
+  pull request that sets a pin to anything but the latest release, and a main run that could not write the pin-lag issue; a new release alone no longer turns main red,
+  it opens the pin-lag issue the "pin-lag:" line shows; playbook 7c57de5a). (2) PR N changes exactly the pin files: agent-kit's
   package.json and package-lock.json, or the Loop Engine bump's files (the mise config, plus skills under the canonical skills
   tree), or both sets in one combined bump PR. (3) PR N's own pull_request run succeeded and passed that step. A dotfiles red that is not that gets the rule above,
   so its fix passes when it names the red and its own full-suite run on its head tree passed what failed. When neither rule passes both reasons go to stderr.
@@ -223,6 +224,10 @@ line in any of them (or in the merge commit's own message) counts. The coordinat
 this rule. A merge driver that passes its own --body must carry the line.
 If the fix merged without the line, do not rerun the old run (the old tree still fails): put the line in the squash message of a later small
 pull request, and it clears the red once that merges.
+--merge-gate dotfiles also prints one stdout line "pin-lag: <tool> <pinned> -> <latest>, open <age> (<issue url>)" while the issue labelled pin-lag is open on
+cartwmic/dotfiles: the release-pins job opens it when a Loop Engine or agent-kit pin lags its latest release and closes it when the pins match (it no longer turns
+main red). The line is a warning: it never changes the exit code, it is also printed when the gate refuses, and a failed read of the issue prints nothing. The call's
+hidden-red log line (below) carries the line as "pin_lag" (null when none) and, when the issue could not be read, the reason as "pin_lag_error".
 Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate, contains), pr, verdict (the first line's word; USAGE for a refused --contains call), exit, hidden (sha, run and
@@ -1951,14 +1956,15 @@ def log_hidden(name, spec, action, pr, started, code, lines, rec):
     skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
     pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
     said no as {"rule", "why"}: the sentence stderr carries) and quicker (null, or for a repo with "main_queue" and a hidden red the way the
-    message named as quicker: "handles", "rerun" or "wait") and handles_issues (null, or for a --pr call on a repo that asks an issue of a
-    Handles line, {red sha: issue number} for each Handles line an issue backed; a refusal for a Handles line with no issue has the rule "handles-no-issue")."""
+    message named as quicker: "handles", "rerun" or "wait"), handles_issues (null, or for a --pr call on a repo that asks an issue of a
+    Handles line, {red sha: issue number} for each Handles line an issue backed; a refusal for a Handles line with no issue has the rule "handles-no-issue")
+    pin_lag (null, or the `pin-lag:` line a --merge-gate dotfiles call printed) and pin_lag_error (null, or why the pin-lag issue could not be read)."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
                 "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused"),
-                "quicker": rec.get("quicker"), "handles_issues": rec.get("handles_issues")})
+                "quicker": rec.get("quicker"), "handles_issues": rec.get("handles_issues"), "pin_lag": rec.get("pin_lag"), "pin_lag_error": rec.get("pin_lag_error")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
@@ -2040,6 +2046,33 @@ def contains_main(argv):
     return code
 
 
+PIN_LAG_REPO = "cartwmic/dotfiles"
+
+
+def lag_age(created_at, now=None):
+    """How long ago an ISO time was, as `45m`, `3h 12m` or `2d 4h`."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    minutes = max(0, int((now - datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))).total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    if minutes < 48 * 60:
+        return f"{minutes // 60}h {minutes % 60}m"
+    return f"{minutes // 1440}d {minutes % 1440 // 60}h"
+
+
+def pin_lag_line():
+    """(the one `pin-lag:` warning line for the open pin-lag issue of dotfiles, or None; the reason it could not be read, or None).
+    A warning only: whatever happens here never changes the gate's exit code. A read that fails is (None, its reason), kept in the run log."""
+    try:
+        issues = gh(["issue", "list", "--repo", PIN_LAG_REPO, "--label", "pin-lag", "--state", "open", "--limit", "1", "--json", "title,createdAt,url"])
+        if not issues:
+            return None, None
+        lag = issues[0]
+        return f"pin-lag: {lag['title'].removeprefix('Pin lag: ')}, open {lag_age(lag['createdAt'])} ({lag['url']})", None
+    except (Unreadable, KeyError, TypeError, ValueError, AttributeError) as e:
+        return None, f"{type(e).__name__}: {e}"[:200]
+
+
 def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     spec = REPOS[name]
@@ -2052,6 +2085,11 @@ def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
         traceback.print_exc(file=sys.stderr)
         code, lines = 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
+    if merge_gate and name == "dotfiles":
+        lag, rec["pin_lag_error"] = pin_lag_line()
+        rec["pin_lag"] = lag
+        if lag:
+            lines = [*lines, lag]
     if spec and "gitea" in spec:
         log_gitea(name, spec, "merge-gate" if gate else "tip" if tip_only else "status", pr if gate else None, started, code, lines, rec)
     if hidden_since(spec):
