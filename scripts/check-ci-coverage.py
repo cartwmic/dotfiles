@@ -8,7 +8,7 @@ without anyone seeing it (the inspect-prompt tests: one failed on main for two m
 anywhere under ROOT (default: the repository root), apart from .git, node_modules and __pycache__.
 
 What CI runs is read from the runner itself, not from a second list:
-  scripts/ci-linux.sh      the `scripts/ci-par.py` arguments (SUITE[:PATTERN] and --per-test DIR), every
+  scripts/ci-linux.sh      the `scripts/ci-par.py` arguments (SUITE[:PATTERN] and --per-test DIR), the DIR of a `scripts/ci-par.py --shards N DIR`, every
                            `python3 -m unittest discover -s DIR [-p PATTERN]`, and every file named on a `node ... --test FILE ...` line
   .github/workflows/ci.yml every `python3 -m unittest discover -s DIR [-p PATTERN]` (the macOS job)
 A suite runs the files `unittest discover` finds there: PATTERN (default test*.py) in DIR and in each package below it (a folder with an
@@ -88,6 +88,8 @@ def runner_specs(root):
             specs.append((suite, pattern or "test*.py"))
     if not specs:
         raise ValueError("the ci-par.py command in scripts/ci-linux.sh names no suite")
+    for m in re.finditer(r"python3 scripts/ci-par\.py\s+--shards\s+\d+\s+(\S+)", sh):   # a suite run in several processes: ci-par finds its tests as discover does
+        specs.append((m.group(1), "test*.py"))
     for text in (sh, yml):
         for m in re.finditer(r"unittest discover -s (\S+)(?: -p (\S+))?", text):
             specs.append((m.group(1), m.group(2) or "test*.py"))
