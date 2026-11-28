@@ -211,6 +211,7 @@ class CheckCiCoverage(unittest.TestCase):
         code, out = self.run_script()
         self.assertEqual(code, 1, out)
         self.assertIn("12 test files: 10 run by CI, 1 named in scripts/ci-not-run.txt, 1 neither", out)  # the 10 files in RUN, plus the listed one and the orphan
+        self.assertIn("a test file is test_*.py, test-*.py, *_test.py, *.test.{ts,tsx,mjs,js,cjs} or *.spec.{ts,tsx,mjs,js,cjs}", out)
 
     def test_git_and_node_modules_are_not_searched(self):
         self.write(".git/hooks/test_x.py", "")
