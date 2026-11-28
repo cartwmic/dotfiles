@@ -213,7 +213,8 @@ If the fix merged without the line, do not rerun the old run (the old tree still
 pull request, and it clears the red once that merges.
 --merge-gate dotfiles also prints one stdout line "pin-lag: <tool> <pinned> -> <latest>, open <age> (<issue url>)" while the issue labelled pin-lag is open on
 cartwmic/dotfiles: the release-pins job opens it when a Loop Engine or agent-kit pin lags its latest release and closes it when the pins match (it no longer turns
-main red). The line is a warning: it never changes the exit code, it is also printed when the gate refuses, and a failed read of the issue prints nothing.
+main red). The line is a warning: it never changes the exit code, it is also printed when the gate refuses, and a failed read of the issue prints nothing. The call's
+hidden-red log line (below) carries the line as "pin_lag" (null when none).
 Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
@@ -1890,13 +1891,13 @@ def log_hidden(name, spec, action, pr, started, code, lines, rec):
     skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
     pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
     said no as {"rule", "why"}: the sentence stderr carries) and quicker (null, or for a repo with "main_queue" and a hidden red the way the
-    message named as quicker: "handles", "rerun" or "wait")."""
+    message named as quicker: "handles", "rerun" or "wait") and pin_lag (null, or the `pin-lag:` line a --merge-gate dotfiles call printed)."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
                 "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused"),
-                "quicker": rec.get("quicker")})
+                "quicker": rec.get("quicker"), "pin_lag": rec.get("pin_lag")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
@@ -1959,6 +1960,7 @@ def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
         code, lines = 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
     if merge_gate and name == "dotfiles":
         lag = pin_lag_line()
+        rec["pin_lag"] = lag
         if lag:
             lines = [*lines, lag]
     if spec and "gitea" in spec:

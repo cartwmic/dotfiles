@@ -1495,6 +1495,15 @@ class PinLagLine(Fixture):
         self.assertEqual(self.lines(out), ["pin-lag: loop-engine 0.70.0 -> 0.72.2, agent-kit 0.85.0 -> 0.86.0, open 3h 12m (https://github.com/cartwmic/dotfiles/issues/1019)"])
         self.assertIn("GREEN", out)
         self.assertIn("--label pin-lag --state open", self.log.read_text())
+        (record,) = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual(record["pin_lag"], self.lines(out)[0])   # the log keeps the warning after the terminal is gone
+
+    def test_the_log_line_of_a_call_with_no_lag_carries_a_null_pin_lag(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.reply = {"issue list": "[]"}
+        self.status("--merge-gate", "dotfiles")
+        (record,) = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertIsNone(record["pin_lag"])
 
     def test_the_age_reads_in_minutes_hours_and_days(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
