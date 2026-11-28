@@ -3,7 +3,7 @@
 
 The mistake: a test file is added (or a directory of them) and nobody lists it in the runner, so it never runs and can fail for months
 without anyone seeing it (the inspect-prompt tests: one failed on main for two months). A test file is one of
-  test_*.py and *_test.py       (Python unittest)
+  test_*.py and *_test.py       (Python unittest; a hyphen for the underscore, as in test-x.py, counts too)
   *.test.{ts,tsx,mjs,js,cjs} and *.spec.{ts,tsx,mjs,js,cjs}   (node's test runner)
 anywhere under ROOT (default: the repository root), apart from .git, node_modules and __pycache__.
 
@@ -31,7 +31,7 @@ import re
 import sys
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
-PY_TEST = re.compile(r"^(test_.*|.*_test)\.py$")
+PY_TEST = re.compile(r"^(test[_-].*|.*[_-]test)\.py$")  # `test-x.py` is a test file too: discover matches it, then skips it as unimportable
 JS_TEST = re.compile(r"^.*\.(test|spec)\.(ts|tsx|mjs|js|cjs)$")
 MODULE_FILE = re.compile(r"^[_a-z]\w*\.py$", re.I)  # unittest discover skips a file whose name is not an importable module name (test-x.py)
 LIST = "scripts/ci-not-run.txt"
@@ -119,7 +119,7 @@ def read_list(root):
 
 
 def check(root):
-    """The list of problems (strings); empty when every test file is run or named."""
+    """(problems, counts): the problems are strings, empty when every test file is run or named; counts is (test files, run by CI, named in the list)."""
     specs, nodes = runner_specs(root)
     run = set()
     for suite, pattern in specs:
@@ -133,7 +133,9 @@ def check(root):
             continue
         named[where] = n
     files = test_files(root)
+    ran = 0
     for f in files:
+        ran += f in run
         listed = [w for w in named if f == w or f.startswith(w + "/")]
         if f in run and listed:
             problems.append("%s:%d: `%s` is run by CI (%s): remove the entry" % (LIST, named[listed[0]], listed[0], f))
@@ -143,18 +145,20 @@ def check(root):
     for w, n in named.items():
         if not any(f == w or f.startswith(w + "/") for f in files):
             problems.append("%s:%d: `%s` holds no test file: remove the entry" % (LIST, n, w))
-    return problems
+    left_out = sum(1 for f in files if f not in run and any(f == w or f.startswith(w + "/") for w in named))
+    return problems, (len(files), ran, left_out)
 
 
 def main(argv):
     root = argv[1] if len(argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
-        problems = check(root)
+        problems, (total, ran, left_out) = check(root)
     except (OSError, ValueError) as err:
         print("check-ci-coverage: cannot read the runner under %s: %s" % (root, err), file=sys.stderr)
         return 2
     for p in problems:
         print("check-ci-coverage: " + p)
+    print("check-ci-coverage: %d test files: %d run by CI, %d named in %s, %d neither" % (total, ran, left_out, LIST, total - ran - left_out))
     if not problems:
         print("check-ci-coverage: every test file is run by CI or named in %s" % LIST)
     return 1 if problems else 0

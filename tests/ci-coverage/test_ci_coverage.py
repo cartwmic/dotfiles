@@ -198,6 +198,20 @@ class CheckCiCoverage(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("tests/alpha/test_with-hyphen.py", out)
 
+    def test_a_hyphenated_test_file_the_default_pattern_matches_is_found_and_not_run_by_discover(self):
+        self.write("tests/alpha/test-x.py", "")  # test*.py matches it, discover skips it as unimportable: a test file CI never runs
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("tests/alpha/test-x.py", out)
+
+    def test_it_prints_the_counts_it_found(self):
+        self.write("tests/orphan/test_o.py", "")
+        self.write("scripts/ci-not-run.txt", "tests/orphan/test_o.py: needs a desktop\n")
+        self.write("tests/orphan2/test_p.py", "")
+        code, out = self.run_script()
+        self.assertEqual(code, 1, out)
+        self.assertIn("12 test files: 10 run by CI, 1 named in scripts/ci-not-run.txt, 1 neither", out)  # the 10 files in RUN, plus the listed one and the orphan
+
     def test_git_and_node_modules_are_not_searched(self):
         self.write(".git/hooks/test_x.py", "")
         self.write("node_modules/pkg/index.test.js", "")
