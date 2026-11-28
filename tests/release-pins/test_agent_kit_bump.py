@@ -116,6 +116,12 @@ fail("fake gh: unexpected pr " + verb)
 FAKE_GATE = r'''#!/bin/sh
 # A scripted merge gate: logs its call, and refuses when FAKE_GATE_REFUSE names it.
 echo "$(basename "$0") $*" >> "$FAKE_CALL_LOG"
+# `ci-main-status --tip dotfiles --contains SHA`, as dotfiles-apply asks it: green, on the tip of the fake origin's main (the merge commit, once there is one).
+if [ "$(basename "$0")" = ci-main-status ] && [ "$3" = "--contains" ] && [ -z "${FAKE_GATE_REFUSE:-}" ]; then
+  tip=$(git --git-dir "$FAKE_ORIGIN" rev-parse refs/heads/main)
+  echo "dotfiles: GREEN  run 1 passed on $(echo "$tip" | cut -c1-7), which contains $(echo "$4" | cut -c1-7); commit $tip"
+  exit 0
+fi
 if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
   echo "$(basename "$0"): RED on stdout"
   [ -z "${FAKE_GATE_SAY:-}" ] || echo "$FAKE_GATE_SAY"
@@ -163,6 +169,8 @@ class AgentKitBumpTests(unittest.TestCase):
         for name, text in (("gh", FAKE_GH), ("npm", FAKE_NPM), ("ci-main-status", FAKE_GATE), ("pr-body-check", FAKE_GATE), ("pr-record", FAKE_PR_RECORD)):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
+        for name in ("dotfiles-apply", "dotfiles-update"):  # the real commands: the bump tools apply through them
+            (self.bin / name).symlink_to(ROOT / "dot_local/bin" / ("executable_" + name))
         self.home = self.dir / "home"
         self.origin = self.dir / "origin.git"
         self.checkout = self.dir / "checkout"
@@ -195,8 +203,9 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, "%s: %s%s" % (cmd, result.stdout, result.stderr))
         return result.stdout
 
-    def world(self, profile="personal"):
-        """Origin with the seed plus one later unrelated commit on main; HOME applied from the seed without scripts."""
+    def world(self, profile="personal", unrelated_pending=False):
+        """Origin with the seed plus one later unrelated commit on main; HOME applied from the seed without scripts. That later commit is already on
+        this machine (dotfiles-apply stops at anything pending that the PR did not make), unless `unrelated_pending`."""
         self.sh("git", "init", "-q", "--bare", "-b", "main", self.origin)
         self.sh("git", "clone", "-q", self.origin, self.checkout)
         files = {**self.seed, INSTALL_TEMPLATE: (ROOT / INSTALL_TEMPLATE).read_text(encoding="utf-8")}
@@ -208,7 +217,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.sh("git", "-C", self.checkout, "push", "-q", "origin", "main")
         config = self.home / ".config/chezmoi/chezmoi.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text("data:\n  profile: %s\n" % profile, encoding="utf-8")
+        config.write_text("sourceDir: %s\ndata:\n  profile: %s\n" % (self.checkout, profile), encoding="utf-8")
         self.sh("chezmoi", "--source", self.checkout, "--no-tty", "apply", "-x", "scripts")
         # Someone else's later change on main, not applied here: the bump must not apply it.
         other = self.dir / "other"
@@ -216,6 +225,8 @@ class AgentKitBumpTests(unittest.TestCase):
         (other / "dot_unrelated").write_text("unrelated v2\n", encoding="utf-8")
         self.sh("git", "-C", other, "commit", "-q", "-am", "unrelated")
         self.sh("git", "-C", other, "push", "-q", "origin", "main")
+        if not unrelated_pending:
+            (self.home / ".unrelated").write_text("unrelated v2\n", encoding="utf-8")
 
     def bump(self, version=NEW, *extra):
         return subprocess.run([sys.executable, str(SCRIPT), version, "--source", str(self.checkout), *extra], env=self.env(),
@@ -310,7 +321,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(sorted(changed), sorted([KIT_SRC + "/package.json", KIT_SRC + "/package-lock.json"]))
         self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
         self.assertEqual(json.loads(self.live(KIT_DEST + "/package-lock.json"))["packages"]["node_modules/" + PACKAGE]["version"], NEW)
-        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
+        self.assertEqual(self.live(".unrelated"), "unrelated v2\n")
 
         # The source checkout moved to the merge commit, so a later full apply cannot restore the old pins.
         self.assertEqual(self.sh("git", "-C", self.checkout, "rev-parse", "HEAD").strip(), sha)
@@ -322,7 +333,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(len([c for c in calls if c.startswith("npm ci")]), 1)
 
         self.assertEqual([line["step"] for line in self.log_lines()],
-                         ["profile", "pr", "publish", "checks", "gates", "merge", "source", "drift", "apply", "install", "verify"])
+                         ["profile", "pr", "publish", "checks", "gates", "merge", "drift", "apply", "install", "verify"])
         self.assertTrue(all(line["outcome"] == "ok" for line in self.log_lines()))
 
         # A rerun resumes the merged PR: no new PR, no second merge, and it still leaves main's unrelated change alone.
@@ -331,7 +342,7 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertIn("resuming PR #100 (MERGED)", again.stdout)
         self.assertEqual(len(self.prs()), 1)
         self.assertEqual(len([c for c in self.calls() if c.startswith("gh pr merge")]), 1)
-        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
+        self.assertEqual(self.live(".unrelated"), "unrelated v2\n")
 
     def pending_scripts(self):
         return self.sh("chezmoi", "--source", self.checkout, "--no-tty", "status", "--include", "scripts").split()[1::2]
@@ -343,12 +354,12 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.pending_scripts(), [])  # chezmoi recorded the run
 
-    def test_a_failing_install_stops_at_install_and_a_rerun_runs_it_again(self):
+    def test_a_failing_install_stops_at_apply_and_a_rerun_runs_it_again(self):
         self.world()
         self.npm_fails = "1"
         result = self.bump()
-        self.assert_stopped(result, "install", "the agent-kit install failed")
-        self.assertIn("registry unreachable", result.stderr)
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn("registry unreachable", result.stdout + result.stderr)
         self.assertEqual(self.pending_scripts(), ["65_agent_kit_install.sh"])  # a failed run is not recorded
         self.npm_fails = ""
         again = self.bump()
@@ -504,7 +515,8 @@ class AgentKitBumpTests(unittest.TestCase):
         self.world()
         self.sh("git", "-C", self.checkout, "commit", "-q", "--allow-empty", "-m", "local only, not pushed")
         result = self.bump()
-        self.assert_stopped(result, "source", "cannot fast-forward the chezmoi source checkout")
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn("not behind the tested commit", result.stdout)
         self.assertEqual(self.prs()[0]["state"], "MERGED")  # the merge happened; only the source is behind
         self.assert_nothing_applied()
         self.sh("git", "-C", self.checkout, "reset", "-q", "--hard", "origin/main")  # the fix a person makes
@@ -536,11 +548,22 @@ class AgentKitBumpTests(unittest.TestCase):
     def branch_head(self):
         return self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/" + self.LE_BRANCH).strip()
 
+    def bump_combined(self):
+        """A combined PR (the Loop Engine's files with the pins): dotfiles-apply stops at the files the kit tool does not name, the person takes the whole
+        tested merge once, as the message says, and the rerun finishes."""
+        first = self.first_run = self.bump(NEW, "--pr", "7")
+        self.assert_stopped(first, "apply", "a combined bump")
+        self.assertIn("--whole-commit", first.stderr)
+        tip = self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/main").strip()
+        taken = subprocess.run(["dotfiles-apply", "--contains", tip, "--whole-commit"], env=self.env(), capture_output=True, text=True, timeout=300)
+        self.assertEqual(taken.returncode, 0, taken.stdout + taken.stderr)
+        return self.bump(NEW, "--pr", "7")
+
     def test_pr_pins_onto_the_existing_pr_and_applies_only_the_agent_kit_files(self):
         self.world()
         self.existing_pr()
         before = self.branch_head()
-        result = self.bump(NEW, "--pr", "7")
+        result = self.bump_combined()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(self.prs()), 1, "no PR of its own")
         self.assertFalse(any(c.startswith("gh pr create") for c in self.calls()))
@@ -556,7 +579,7 @@ class AgentKitBumpTests(unittest.TestCase):
         # The merge names the pushed head; the checks that ran are the new head's.
         calls = self.calls()
         self.assertIn("--match-head-commit " + after, [c for c in calls if c.startswith("gh pr merge")][0])
-        self.assertEqual([c for c in calls if c.startswith("ci-main-status")], ["ci-main-status --merge-gate dotfiles --pr 7"])
+        self.assertEqual([c for c in calls if c.startswith("ci-main-status --merge-gate")], ["ci-main-status --merge-gate dotfiles --pr 7"])
 
         # The PR had no record, so the gates step wrote one before the body check; the PR's description is not touched.
         self.assertIn("| %d | %s |" % LAST_PRINCIPLE, self.record("dotfiles#7"))
@@ -564,10 +587,10 @@ class AgentKitBumpTests(unittest.TestCase):
         # The kit pin is applied and installed; the Loop Engine files in the same PR are left to loop_engine_bump.py.
         self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
         self.assertEqual(json.loads((self.home / KIT_DEST / "node_modules" / PACKAGE / "package.json").read_text())["version"], NEW)
-        self.assertIsNone(self.live(".config/mise/config.toml"))
-        self.assertIsNone(self.live(".local/share/agent-harness/canonical/skills/using-x/SKILL.md"))
-        self.assertEqual([line["step"] for line in self.log_lines()],
-                         ["profile", "pr", "publish", "checks", "gates", "merge", "source", "drift", "apply", "install", "verify"])
+        # The Loop Engine's files came with the whole tested merge the person took once (loop_engine_bump.py then finds them current).
+        self.assertIn("9.9.9", self.live(".config/mise/config.toml"))
+        self.assertEqual(self.live(".local/share/agent-harness/canonical/skills/using-x/SKILL.md"), "a skill\n")
+        self.assertEqual([line["step"] for line in self.log_lines()][-3:], ["apply", "install", "verify"])
 
         # A rerun resumes the merged PR: no push, no second merge.
         again = self.bump(NEW, "--pr", "7")
@@ -582,9 +605,9 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assert_stopped(self.bump(NEW, "--pr", "7"), "checks", "red checks")
         pinned = self.branch_head()  # the first run pushed the pin, then stopped on the red check
         self.gh_state.write_text(json.dumps({**json.loads(self.gh_state.read_text()), "checks": [[{"name": "tests", "bucket": "pass"}]]}))
-        result = self.bump(NEW, "--pr", "7")
+        result = self.bump_combined()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("already pins", result.stdout)
+        self.assertIn("already pins", self.first_run.stdout)
         self.assertEqual(self.sh("git", "--git-dir", self.origin, "log", "--format=%s", "-n", "3", pinned).count("pin %s %s" % (PACKAGE, NEW)), 1)
 
     def test_the_checks_wait_for_github_to_report_the_pushed_head(self):
@@ -594,7 +617,7 @@ class AgentKitBumpTests(unittest.TestCase):
         state = json.loads(self.gh_state.read_text())
         state["stale"] = {"oid": before, "count": 3}
         self.gh_state.write_text(json.dumps(state))
-        result = self.bump(NEW, "--pr", "7")
+        result = self.bump_combined()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.calls()
         merge = next(i for i, c in enumerate(calls) if c.startswith("gh pr merge"))
@@ -681,7 +704,8 @@ class AgentKitBumpTests(unittest.TestCase):
         self.world()
         self.sh("git", "-C", self.checkout, "checkout", "-q", "-b", "wip")
         result = self.bump()
-        self.assert_stopped(result, "source", "is on wip, not main")
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn("is on wip, not main", result.stdout)
         self.assertEqual(self.prs()[0]["state"], "MERGED")
         self.assert_nothing_applied()
         self.assertEqual(self.sh("git", "-C", self.checkout, "branch", "--show-current").strip(), "wip")

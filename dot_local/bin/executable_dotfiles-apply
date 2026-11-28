@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""dotfiles-apply: put dotfiles on this machine from a commit the gate has approved, and from no other.
+
+    dotfiles-apply [--contains SHA] [--whole-commit] [--dry-run] [PATH ...]
+
+The rule is "deploy only a commit `ci-main-status --tip` approves". This is the one command every actor calls to follow it: a builder or lead
+after a merge, the pin bump tools, and (in a later change) the container start script. A bare `chezmoi apply` follows nothing.
+
+  1. It asks the gate: `ci-main-status --tip dotfiles --contains SHA`, for a tested main commit that contains the change you are deploying
+     (SHA: the commit as it sits on main; after a squash merge, the merge commit). With no --contains it asks for the newest tested commit that
+     contains this checkout's base. If the gate says no (nothing tested contains it yet, or the newest tested commit does not), it applies
+     nothing, says so, and exits 1: wait for the main run that covers your merge and run it again.
+  2. It moves the chezmoi source checkout to the tested commit it was given, by fast-forward only, and to no other. A checkout with
+     uncommitted changes, or one that is not behind that commit, is left as it is and the run stops.
+  3. It shows `chezmoi diff` and applies. With PATH arguments (destination paths: absolute, `~/...` or relative to your home; a script is named
+     by the path `chezmoi status` shows for it) it applies those paths only, each one itself and not its contents, plus the directories above a
+     new one. It stops, applying nothing, when anything else is pending that you did not name, and lists it: name it too, or pass
+     --whole-commit to take everything pending (the work is then done by `dotfiles-update --no-pull`, which holds back a path edited here and
+     lists it). A script you name is run through chezmoi, so chezmoi records its run. With no PATH it takes the whole commit.
+     --leave-pending PATH (repeatable) says a pending path is for a later run of this command, so it does not stop this one and is not applied.
+  4. It checks again and exits 1 unless nothing it was asked to apply is still pending.
+
+--dry-run asks the gate and says what it would do, and moves and applies nothing.
+
+Exit 0: applied, or nothing to do. Exit 1: refused or failed (the line before it says why; the outcome below names it). Exit 2: wrong usage.
+It refuses on any profile but personal: no agent applies on the work Mac, and the owner takes the merged commit there with his own `chezmoi update`.
+
+A stop file holds a run: while ~/.local/state/dotfiles-apply/stop exists (its text is shown), a run stops before it moves or applies anything.
+Create it to hold an apply that a tool is about to make; remove it to let runs go on.
+
+Every run, a refused one too, appends one JSON line to ~/.local/state/dotfiles-apply/log.jsonl: ts, duration_ms, action "apply", outcome, exit,
+asked (the sha it was given or the checkout's base), commit (the tested commit), run (the CI run that tested it), paths, whole, dry_run, caller
+(the T3, Codex or Claude session id when the environment gives one) and reason. Outcomes: applied, nothing-to-do, dry-run; refused: untested, source-not-main,
+profile, hooks, stopped, source-dirty, source-not-behind, other-pending; failed: gate-error, failed, held, still-pending. "Was this applied from a tested
+commit" is `grep '"outcome": "applied"'`; applies and refusals per day are counts of that file.
+
+Tests: tests/dotfiles-apply. Environment: DOTFILES_APPLY_CHEZMOI_ARGS adds global chezmoi flags (the tests use it for a scratch source and destination).
+"""
+import argparse
+import datetime
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+SHA = re.compile(r"[0-9a-fA-F]{7,40}")
+GATE_LINE = re.compile(r"GREEN\s+(?P<run>.+?) passed on \S+, which contains \S+; commit (?P<commit>[0-9a-f]{40})")
+CALLER_VARIABLES = (("t3", "T3CODE_THREAD_ID"), ("codex", "CODEX_THREAD_ID"), ("claude", "CLAUDE_CODE_SESSION_ID"))
+
+
+class Stop(Exception):
+    """A run that ends here: `outcome` is the word the log keeps, `code` the exit code (1 refused or failed)."""
+
+    def __init__(self, outcome, message, code=1):
+        super().__init__(message)
+        self.outcome, self.code = outcome, code
+
+
+def state_dir():
+    return os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "dotfiles-apply")
+
+
+def caller():
+    for kind, name in CALLER_VARIABLES:
+        if os.environ.get(name):
+            return "%s:%s" % (kind, os.environ[name])
+    return None
+
+
+def chezmoi(*args, check=True):
+    cmd = ["chezmoi", "--no-tty", *shlex.split(os.environ.get("DOTFILES_APPLY_CHEZMOI_ARGS", "")), *args]
+    result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+    if check and result.returncode != 0:
+        raise Stop("failed", "chezmoi %s failed (exit %d): %s" % (" ".join(args[:2]), result.returncode, (result.stderr or result.stdout).strip()))
+    return result
+
+
+def git(source, *args, check=True):
+    result = subprocess.run(["git", "-C", source, *args], stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+    if check and result.returncode != 0:
+        raise Stop("failed", "git %s failed (exit %d): %s" % (" ".join(args[:2]), result.returncode, (result.stderr or result.stdout).strip()))
+    return result
+
+
+def check_profile():
+    """The destination directory. Stops unless the profile is personal and no hook is set to run when chezmoi reads the source (AGENTS.md: such a hook can
+    change the host, so every chezmoi call here would be an install). dump-config reads no source state, so it runs no hook."""
+    config = json.loads(chezmoi("dump-config", "--format", "json").stdout)
+    profile = (config.get("data") or {}).get("profile")
+    if profile != "personal":
+        raise Stop("profile", "the profile is %r: this command applies only on personal, and nothing was done. No agent applies on another machine; "
+                   "the owner takes the merged commit there with his own `chezmoi update`." % profile)
+    hook = ((config.get("hooks") or {}).get("read-source-state") or {}).get("pre") or {}
+    if hook.get("command") or hook.get("script"):
+        raise Stop("hooks", "the chezmoi config runs a hook when the source is read (hooks.read-source-state.pre), which can change this host. "
+                   "Nothing was done; run `chezmoi apply` by hand once the owner has approved that hook.")
+    return config["destDir"]
+
+
+def check_stop_file():
+    path = os.path.join(state_dir(), "stop")
+    if os.path.exists(path):
+        try:
+            with open(path) as handle:
+                why = handle.read().strip()[:300]
+        except OSError:
+            why = ""
+        raise Stop("stopped", "the stop file %s is present%s: nothing was moved or applied. Remove it to let runs go on." % (path, " (" + why + ")" if why else ""))
+
+
+def ask_gate(asked):
+    """(tested commit, the run that tested it) from `ci-main-status --tip dotfiles --contains ASKED`: exit 0 yes, 1 no, 2 wrong usage."""
+    try:
+        gate = subprocess.run(["ci-main-status", "--tip", "dotfiles", "--contains", asked], stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+    except OSError as error:
+        raise Stop("gate-error", "cannot run ci-main-status: %s" % error)
+    said = (gate.stdout.strip() or gate.stderr.strip() or "no output").splitlines()
+    if gate.returncode == 0:
+        found = GATE_LINE.search(gate.stdout)
+        if not found:
+            raise Stop("gate-error", "ci-main-status said yes but its line is not the form this command reads: %s" % said[0])
+        print("dotfiles-apply: " + said[0])
+        return found["commit"], found["run"]
+    if gate.returncode == 1:
+        raise Stop("untested", "the gate does not approve a commit that contains %s, so nothing was applied: %s\n"
+                   "Wait for the main run that covers your merge (a run cancelled by a newer push is covered by the next one), then run this again." % (asked, said[0]))
+    raise Stop("gate-error", "ci-main-status exited %d: %s" % (gate.returncode, said[0]), code=2 if gate.returncode == 2 else 1)
+
+
+def move_checkout(source, commit, dry_run):
+    """Fast-forward the source checkout to the tested commit; say where it was. The checkout is left alone on a refusal."""
+    git(source, "cat-file", "-e", commit + "^{commit}")
+    branch = git(source, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
+    if branch != "main":
+        raise Stop("source-not-main", "the source checkout %s is on %s, not main, so it was not moved and nothing was applied. Check out main there "
+                   "(a later update pulls main, so a checkout elsewhere would be moved by the wrong branch)." % (source, branch or "a detached HEAD"))
+    here = git(source, "rev-parse", "HEAD").stdout.strip()
+    if here == commit:
+        return
+    if git(source, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        raise Stop("source-dirty", "the source checkout %s has uncommitted changes, so it was not moved and nothing was applied. Commit or discard them (they are not tested)." % source)
+    if git(source, "merge-base", "--is-ancestor", here, commit, check=False).returncode != 0:
+        raise Stop("source-not-behind", "the source checkout %s is at %s, which is not behind the tested commit %s (it is ahead of it, or has its own commits), "
+                   "so it was not moved and nothing was applied. Wait for a tested commit that contains it." % (source, here[:12], commit[:12]))
+    if dry_run:
+        print("dotfiles-apply: would move the source checkout from %s to %s" % (here[:12], commit[:12]))
+        return
+    git(source, "merge", "--ff-only", "--quiet", commit)
+    print("dotfiles-apply: moved the source checkout from %s to %s" % (here[:12], commit[:12]))
+
+
+def always_runs(path):
+    """True for a run_after_ or run_before_ script: chezmoi lists it after every apply because it runs on every apply, so it is not a pending change."""
+    found = chezmoi("source-path", path, check=False)
+    return os.path.basename(found.stdout.strip()).startswith(("run_after_", "run_before_")) if found.returncode == 0 else False
+
+
+def pending():
+    """[(status code, absolute path)] of what `chezmoi status` lists, without the scripts that run on every apply."""
+    entries = []
+    for line in chezmoi("status", "--path-style", "absolute").stdout.splitlines():
+        if len(line) > 3 and line[2] == " " and not (line[1] == "R" and always_runs(line[3:])):
+            entries.append((line[:2], line[3:]))
+    return entries
+
+
+def normalize(path, home):
+    path = os.path.expanduser(path)
+    return os.path.normpath(path if os.path.isabs(path) else os.path.join(home, path))
+
+
+def apply_paths(named, entries, leave=()):
+    """Apply the named paths that are pending, each as itself (never its contents), with the pending directories above them first; scripts through
+    chezmoi so it records their run. Stops, applying nothing, when anything else is pending. Returns the paths applied (none: all were current)."""
+    listed = {path: code for code, path in entries}
+    todo = [path for path in named if path in listed]
+    for path in named:
+        if path not in listed:
+            print("dotfiles-apply: %s is not pending (already current)" % path)
+    if not todo:
+        return []
+    parents = sorted({p for path in todo for p in listed if path.startswith(p + os.sep)}, key=len)
+    others = sorted(set(listed) - set(todo) - set(parents) - set(leave))
+    if others:
+        raise Stop("other-pending", "these are also pending, and you did not name them, so nothing was applied:\n  %s\n"
+                   "Name them too, or pass --whole-commit to take everything pending." % "\n  ".join(others))
+    scripts = [path for path in todo if listed[path][1] == "R"]
+    files = parents + [path for path in todo if path not in scripts]
+    if files:
+        print(chezmoi("diff", "--no-pager", "--exclude=scripts", "--recursive=false", *files, check=False).stdout, end="")
+    check_stop_file()
+    if files:
+        chezmoi("apply", "--recursive=false", "--exclude=scripts", *files)
+    for path in scripts:
+        chezmoi("apply", "--include=scripts", path)
+    return parents + todo
+
+
+def apply_whole(entries):
+    """Everything pending, by `dotfiles-update --no-pull`: it applies what loses nothing, runs the scripts last, and holds back a path edited here."""
+    if not entries:
+        return []
+    print(chezmoi("diff", "--no-pager", "--exclude=scripts", check=False).stdout, end="")
+    check_stop_file()
+    env = dict(os.environ, DOTFILES_UPDATE_CHEZMOI_ARGS=os.environ.get("DOTFILES_APPLY_CHEZMOI_ARGS", ""))
+    try:
+        update = subprocess.run(["dotfiles-update", "--no-pull"], stdin=subprocess.DEVNULL, env=env)
+    except OSError as error:
+        raise Stop("failed", "cannot run dotfiles-update: %s" % error)
+    if update.returncode == 3:
+        raise Stop("held", "dotfiles-update held paths back (above): decide each with `dotfiles-update --take-source PATH` or `--keep-local PATH`, then run this again.")
+    if update.returncode != 0:
+        raise Stop("failed", "dotfiles-update exited %d (above)" % update.returncode)
+    return [path for _, path in entries]
+
+
+def apply(args, record, home):
+    source = chezmoi("source-path").stdout.strip()
+    git(source, "fetch", "--quiet", "origin")
+    asked = args.contains or git(source, "merge-base", "HEAD", "origin/main").stdout.strip()
+    record["asked"] = asked
+    commit, run = ask_gate(asked)
+    record.update(commit=commit, run=run)
+    if args.dry_run:
+        move_checkout(source, commit, True)
+        record["outcome"] = "dry-run"
+        print("dotfiles-apply: dry run, nothing moved or applied")
+        return 0
+    check_stop_file()
+    move_checkout(source, commit, False)
+    entries = pending()
+    applied = apply_whole(entries) if record["whole"] else apply_paths([normalize(path, home) for path in args.paths], entries,
+                                                                                [normalize(path, home) for path in args.leave_pending])
+    record["paths"] = [path.replace(home, "~", 1) if path.startswith(home + os.sep) else path for path in applied]
+    if not applied:
+        record["outcome"] = "nothing-to-do"
+        print("dotfiles-apply: nothing to do: tested commit %s (%s) is in place and everything asked for is already current" % (commit[:12], run))
+        return 0
+    left = [path for _, path in pending() if record["whole"] or path in applied]
+    if left:
+        raise Stop("still-pending", "still pending after the apply:\n  %s" % "\n  ".join(left))
+    record["outcome"] = "applied"
+    print("dotfiles-apply: applied %d path(s) from tested commit %s (%s)" % (len(applied), commit[:12], run))
+    return 0
+
+
+def write_record(record):
+    """One JSON line per run. A failure to write it is said, not fatal."""
+    try:
+        os.makedirs(state_dir(), exist_ok=True)
+        with open(os.path.join(state_dir(), "log.jsonl"), "a") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:
+        print("dotfiles-apply: could not write its run record: %s" % error)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog="dotfiles-apply", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--contains", metavar="SHA", help="the change being deployed, as a commit on main (7 to 40 hex digits); the gate must approve a tested commit containing it")
+    parser.add_argument("--whole-commit", action="store_true", help="take everything pending, not only the named paths")
+    parser.add_argument("--dry-run", action="store_true", help="ask the gate and say what it would do; move and apply nothing")
+    parser.add_argument("--leave-pending", action="append", default=[], metavar="PATH",
+                        help="a path that may stay pending in this run because a later run of this command applies it (repeatable); nothing else may")
+    parser.add_argument("paths", nargs="*", metavar="PATH", help="destination paths to apply (default: the whole commit)")
+    args = parser.parse_args(argv)
+    if args.contains and not SHA.fullmatch(args.contains):
+        parser.error("--contains takes a commit sha of 7 to 40 hex digits")
+    started = time.time()
+    record = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "apply", "asked": None, "commit": None, "run": None,
+              "paths": [], "whole": args.whole_commit or not args.paths, "dry_run": args.dry_run, "caller": caller(), "outcome": "failed", "reason": None}
+    try:
+        code = apply(args, record, check_profile())
+    except Stop as stop:
+        record.update(outcome=stop.outcome, reason=str(stop)[:300])
+        print("dotfiles-apply: %s" % stop)
+        code = stop.code
+    except Exception as error:  # an unexpected failure is a failed run, recorded, never a silent pass
+        record.update(outcome="failed", reason="%s: %s" % (type(error).__name__, error))
+        print("dotfiles-apply: unexpected failure: %s: %s" % (type(error).__name__, error))
+        code = 1
+    record.update(exit=code, duration_ms=round((time.time() - started) * 1000))
+    write_record(record)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

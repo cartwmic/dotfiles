@@ -16,14 +16,15 @@ anything. The steps, and the step a stop names:
            and pr-body-check dotfiles N (a bad description or record stops it). It reads the agent record; one is written first if the PR
            has none, and an existing one is never overwritten
   merge    squash-merge, only while the head is still the one the checks ran on; read the merge SHA
-  source   fast-forward the chezmoi source checkout to the merge SHA (ff-only); if it cannot, stop before apply, so a
-           later full apply cannot restore the old pins
   drift    chezmoi status on the skills tree and the mise config (the file chezmoi manages: ~/.config/mise/config.toml, or on the agent
            host pod conf.d/container.toml); stop on any change the PR did not make
-  apply    chezmoi apply of exactly the PR's targets; apply_harness_config.sh skills (skill links only, no MCP)
+  apply    `dotfiles-apply --contains <merge sha>` of exactly the PR's targets: it asks the gate for a tested main commit that contains the merge,
+           moves the chezmoi source checkout to that commit (never to an untested tip, so a later full apply cannot restore the old pins) and applies from
+           it. While no tested commit contains the merge it refuses: this stops here with the PR merged, and a rerun picks up at this step.
+           Then apply_harness_config.sh skills (skill links only, no MCP)
   install  mise install for the four tools
   verify   import_release_skills.py verify-deployed for the changed bundles; mise's active installed version is the version
-  scripts  on the agent host pod only: chezmoi runs its one pending script, 05_container_tools.sh, so its run is recorded (its steps are
+  scripts  on the agent host pod only: dotfiles-apply runs its one pending script, 05_container_tools.sh, through chezmoi so its run is recorded (its steps are
            no-ops after the install above, and it checks that no mise tool is missing). It embeds a hash of the mise config, so without
            this run chezmoi would keep listing it as pending after every bump. Nothing runs on a machine whose `chezmoi status` does not
            list it (the Mac and omarchy leave the script out). No other script runs; a failure stops here and a rerun picks up here
@@ -47,6 +48,7 @@ import os
 import re
 import shutil
 import subprocess
+import shlex
 import sys
 import tempfile
 import time
@@ -447,31 +449,38 @@ def installed_versions(dest):
             for tool in TOOLS}
 
 
-def fast_forward_source(source, sha, log):
-    """Move the chezmoi source checkout to the merge commit, so a later full apply cannot restore the old pins."""
-    branch = git(source, "symbolic-ref", "-q", "--short", "HEAD", step="source", check=False).stdout.strip()
-    if branch != "main":
-        raise Stop("source", "the chezmoi source checkout %s is on %s, not main, so it cannot move to the merge commit %s. "
-                   "The PR is merged and nothing was applied; check out main there and rerun this script."
-                   % (source, branch or "a detached HEAD", sha))
-    moved = git(source, "merge", "--ff-only", "-q", sha, step="source", check=False)
-    if moved.returncode != 0:
-        raise Stop("source", "cannot fast-forward the chezmoi source checkout %s to the merge commit %s: %s. The PR is merged "
-                   "and nothing was applied; fix the checkout and rerun this script."
-                   % (source, sha, (moved.stderr or moved.stdout).strip()))
-    log.record("source", "ok", "chezmoi source checkout %s is at %s" % (source, sha))
+def deploy(sha, paths, step, leave=()):
+    """Apply these destination paths through `dotfiles-apply --contains SHA`: it asks the gate for a tested main commit that contains the merge, moves the
+    chezmoi source checkout to that commit and applies from it, and exits 1 when none does yet (or when anything else is pending, or an apply fails)."""
+    # Under the hook-free config copy, so a configured read-source-state hook never runs here (dotfiles-apply refuses a config that has one).
+    env = {**os.environ, "DOTFILES_APPLY_CHEZMOI_ARGS": "--config %s --config-format json" % shlex.quote(str(HOOKLESS_CONFIG[0]))} if HOOKLESS_CONFIG else None
+    result = run(["dotfiles-apply", "--contains", sha, *(a for p in leave for a in ("--leave-pending", str(p))), *sorted(str(p) for p in paths)],
+                 step, env=env, check=False)
+    print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)  # what the command said in full: a script's own error comes before its last line
+    if result.returncode != 0:
+        said = (result.stderr or result.stdout).strip()
+        again = "run this script again once that is settled"
+        if "also pending" in result.stdout:  # a combined bump: the other tool's files came with the same merge, and neither tool may take the other's
+            again = ("this merge also changed files this tool does not apply (a combined bump): take the whole tested merge once with "
+                     "`dotfiles-apply --contains %s --whole-commit`, then run this script again" % sha)
+        raise Stop(step, "dotfiles-apply exited %d: %s. The PR is merged and nothing more was done; %s."
+                   % (result.returncode, said.splitlines()[-1] if said else "no output", again))
 
 
-def run_pending_container_tools(wt, dest, log):
-    """On the agent host pod, run 05_container_tools.sh through chezmoi so its run is recorded. Nothing runs when `chezmoi status` does not list it."""
+def other_scripts(wt, dest, step, keep=()):
+    """Destination paths of the scripts this merge leaves pending (their run_onchange hash moved with the PR's files), except `keep`. This tool does not run
+    them: a later full apply does, from a tested commit. They are named to dotfiles-apply as left, so they do not stop it."""
+    status = chezmoi(wt, "status", "--include", "scripts", step=step).stdout
+    return [dest / line[3:] for line in status.splitlines() if len(line) > 3 and dest / line[3:] not in keep]
+
+
+def run_pending_container_tools(wt, sha, dest, log):
+    """On the agent host pod, run 05_container_tools.sh through chezmoi (dotfiles-apply) so its run is recorded. Nothing runs when `chezmoi status` does not list it."""
     pending = {line[3:] for line in chezmoi(wt, "status", "--include", "scripts", step="scripts").stdout.splitlines()}
     if CONTAINER_TOOLS not in pending:
         return
-    result = chezmoi(wt, "apply", "--force", "--include", "scripts", dest / CONTAINER_TOOLS, step="scripts", check=False)
-    print(result.stdout, end="", flush=True)
-    if result.returncode != 0:
-        raise Stop("scripts", "%s failed (exit %d), so chezmoi did not record its run and a rerun runs it again: %s"
-                   % (CONTAINER_TOOLS, result.returncode, "\n".join(s for s in (result.stdout.strip(), result.stderr.strip()) if s)))
+    deploy(sha, [dest / CONTAINER_TOOLS], "scripts", leave=other_scripts(wt, dest, "scripts", keep=[dest / CONTAINER_TOOLS]))
     log.record("scripts", "ok", "ran %s through chezmoi" % CONTAINER_TOOLS)
 
 
@@ -479,15 +488,12 @@ def apply(source, dest, sha, pr, version, log):
     git(source, "fetch", "-q", "origin", step="drift")
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
         raise Stop("drift", "merge commit %s is not on origin/main" % sha)
-    fast_forward_source(source, sha, log)
     with Worktree(source, sha, "drift") as wt:
         targets = pr_targets(wt.path, sha)
         mise_dest = check_drift(wt.path, dest, targets, log)
-        # A new bundle's directories go first, one level each, so nothing outside the PR is applied.
-        new_dirs = {d for t in targets for d in t.parents if dest in d.parents and not d.is_dir()}
-        # --force: the drift check above showed each live target is the pre-PR or the PR content.
-        chezmoi(wt.path, "apply", "--force", "--recursive=false", "-x", "scripts",
-                *sorted(new_dirs, key=lambda d: len(d.parts)), *sorted(targets), step="apply")
+        # The scripts the PR leaves pending stay so: the container script runs last, below, once mise has installed the tools; the others wait for a later
+        # full apply. A new bundle's directories go first, inside the command, so nothing outside the PR is applied.
+        deploy(sha, targets, "apply", leave=other_scripts(wt.path, dest, "apply"))
         bundles = sorted({targets[t][0][len(SKILLS) + 1:].split("/")[0] for t in targets if t != mise_dest})
         if bundles:  # links every run, so a rerun repairs links a failed run left behind
             print(run(["sh", wt.path / HARNESS_TOOL, "skills"], "apply").stdout, end="", flush=True)
@@ -506,7 +512,7 @@ def apply(source, dest, sha, pr, version, log):
             raise Stop("verify", "mise has not installed %s as the active version of: %s" % (version, ", ".join(wrong)))
         installed = ", ".join("%s %s" % kv for kv in versions.items())
         log.record("verify", "ok", "PR #%d, merge %s, installed: %s" % (pr["number"], sha, installed))
-        run_pending_container_tools(wt.path, dest, log)
+        run_pending_container_tools(wt.path, sha, dest, log)
     print("PR #%d %s\nmerge %s\ninstalled: %s" % (pr["number"], pr["url"], sha, installed))
 
 

@@ -22,8 +22,10 @@ The steps, and the step a stop names (the same shape as loop_engine_bump.py):
   drift    the PR changes both pin files and, at most, the Loop Engine's pins and skills (a combined bump; loop_engine_bump.py
            applies those); any other file stops it. Only the two pin files are targets. Stop on any live change the PR
            did not make; print the diff of the targets
-  apply    chezmoi apply of exactly those two files (scripts excluded), then the install: chezmoi runs the 65 install script from the merge
-           commit once (chezmoi apply of other explicit targets runs no script), so its run is recorded and chezmoi does not list it as pending
+  apply    `dotfiles-apply --contains <merge sha>` of exactly those two files, then the install: the 65 install script, named to the same command, so
+           chezmoi runs it once and records its run (an apply of other explicit targets runs no script) and does not list it as pending. The command asks the
+           gate for a tested main commit that contains the merge, moves the chezmoi source checkout to that commit (never to an untested tip) and applies from
+           it. While no tested commit contains the merge the command refuses: this stops here with the PR merged, and a rerun picks up at this step
   verify   the version of @cartwmic/agent-kit installed under ~/.local/share/agent-kit is X.Y.Z
 
 --pr N is for two releases that land close together: it puts both pins in one PR. Separate bump PRs also work, because
@@ -44,6 +46,7 @@ import os
 import re
 import shutil
 import subprocess
+import shlex
 import sys
 import tempfile
 import time
@@ -444,14 +447,30 @@ def check_drift(wt, dest, targets, log):
     log.record("drift", "ok", "%d PR target(s), %d pending; nothing else pending under %s" % (len(targets), len(pending), dest / KIT_DEST))
 
 
-def install(wt, dest, log):
-    """Run the agent-kit install once, through chezmoi so its run is recorded: apply the 65 script's own target (chezmoi apply of other explicit
-    targets runs no script). Without the record chezmoi would keep listing the script as pending after every bump."""
-    result = chezmoi(wt, "apply", "--force", "--include", "scripts", dest / INSTALL_TARGET, step="install", check=False)
+def deploy(sha, paths, step, leave=()):
+    """Apply these destination paths through `dotfiles-apply --contains SHA`: it asks the gate for a tested main commit that contains the merge, moves the
+    chezmoi source checkout to that commit and applies from it, and exits 1 when none does yet (or when anything else is pending, or an apply fails)."""
+    # Under the hook-free config copy, so a configured read-source-state hook never runs here (dotfiles-apply refuses a config that has one).
+    env = {**os.environ, "DOTFILES_APPLY_CHEZMOI_ARGS": "--config %s --config-format json" % shlex.quote(str(HOOKLESS_CONFIG[0]))} if HOOKLESS_CONFIG else None
+    result = run(["dotfiles-apply", "--contains", sha, *(a for p in leave for a in ("--leave-pending", str(p))), *sorted(str(p) for p in paths)],
+                 step, env=env, check=False)
     print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)  # what the command said in full: a script's own error comes before its last line
     if result.returncode != 0:
-        raise Stop("install", "the agent-kit install failed (exit %d): %s" % (result.returncode, (result.stderr or result.stdout).strip()))
-    log.record("install", "ok", "npm ci for the pinned %s" % PACKAGE)
+        said = (result.stderr or result.stdout).strip()
+        again = "run this script again once that is settled"
+        if "also pending" in result.stdout:  # a combined bump: the other tool's files came with the same merge, and neither tool may take the other's
+            again = ("this merge also changed files this tool does not apply (a combined bump): take the whole tested merge once with "
+                     "`dotfiles-apply --contains %s --whole-commit`, then run this script again" % sha)
+        raise Stop(step, "dotfiles-apply exited %d: %s. The PR is merged and nothing more was done; %s."
+                   % (result.returncode, said.splitlines()[-1] if said else "no output", again))
+
+
+def other_scripts(wt, dest, step, keep=()):
+    """Destination paths of the scripts this merge leaves pending (their run_onchange hash moved with the PR's files), except `keep`. This tool does not run
+    them: a later full apply does, from a tested commit. They are named to dotfiles-apply as left, so they do not stop it."""
+    status = chezmoi(wt, "status", "--include", "scripts", step=step).stdout
+    return [dest / line[3:] for line in status.splitlines() if len(line) > 3 and dest / line[3:] not in keep]
 
 
 def installed_version(dest):
@@ -460,33 +479,19 @@ def installed_version(dest):
     return json.loads(path.read_text(encoding="utf-8")).get("version", "(no version)") if path.is_file() else "(not installed)"
 
 
-def fast_forward_source(source, sha, log):
-    """Move the chezmoi source checkout to the merge commit, so a later full apply cannot restore the old pins."""
-    branch = git(source, "symbolic-ref", "-q", "--short", "HEAD", step="source", check=False).stdout.strip()
-    if branch != "main":
-        raise Stop("source", "the chezmoi source checkout %s is on %s, not main, so it cannot move to the merge commit %s. "
-                   "The PR is merged and nothing was applied; check out main there and rerun this script."
-                   % (source, branch or "a detached HEAD", sha))
-    moved = git(source, "merge", "--ff-only", "-q", sha, step="source", check=False)
-    if moved.returncode != 0:
-        raise Stop("source", "cannot fast-forward the chezmoi source checkout %s to the merge commit %s: %s. The PR is merged "
-                   "and nothing was applied; fix the checkout and rerun this script."
-                   % (source, sha, (moved.stderr or moved.stdout).strip()))
-    log.record("source", "ok", "chezmoi source checkout %s is at %s" % (source, sha))
-
-
 def apply(source, dest, sha, pr, version, log):
     git(source, "fetch", "-q", "origin", step="drift")
     if git(source, "merge-base", "--is-ancestor", sha, "origin/main", step="drift", check=False).returncode != 0:
         raise Stop("drift", "merge commit %s is not on origin/main" % sha)
-    fast_forward_source(source, sha, log)
     with Worktree(source, sha, "drift") as wt:
         targets = pr_targets(wt.path, sha, dest)
         check_drift(wt.path, dest, targets, log)
-        # --force: check_drift showed each live target is the pre-PR or the PR content.
-        chezmoi(wt.path, "apply", "--force", "-x", "scripts", *sorted(targets), step="apply")
+        # The 65 install script is named with the two files: dotfiles-apply stops at any pending path it was not given, and the pin change makes
+        # the script pending. It runs after the files, through chezmoi, so its run is recorded and chezmoi does not keep listing it as pending.
+        install = dest / INSTALL_TARGET
+        deploy(sha, [*targets, install], "apply", leave=other_scripts(wt.path, dest, "apply", keep=[install]))
         log.record("apply", "ok", "%d target(s): %s" % (len(targets), ", ".join(str(t) for t in sorted(targets))))
-        install(wt.path, dest, log)
+        log.record("install", "ok", "npm ci for the pinned %s, run by the apply above" % PACKAGE)
     installed = installed_version(dest)
     if installed != version:
         raise Stop("verify", "%s %s is installed here, not %s" % (PACKAGE, installed, version))
