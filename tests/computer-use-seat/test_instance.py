@@ -8,11 +8,14 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 SETTINGS = REPO / "dot_t3/private_userdata/modify_settings.json.tmpl"
 WORK_DATA = {"workGitHost": "git.example.test", "workGlmBaseUrl": "https://gateway.test", "workGlmKeyRef": "op://test/gateway",
              "workGlmModelId": "test-model", "workAwsProfile": "test-aws", "workDevportalMcpUrlRef": "op://test/devportal"}
@@ -41,8 +44,8 @@ class Home:
             (self.home / ".claude/skills" / name / "SKILL.md").write_text("---\nname: %s\n---\n" % name)
 
     def chezmoi(self, *args, stdin=None):
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(self.cfg), "--config-format", "yaml", "--destination", str(self.home), *args],
-                           input=stdin, capture_output=True, text=True, timeout=120, env={"PATH": "/usr/bin:/bin:" + str(Path(shutil.which("chezmoi")).parent), "HOME": str(self.home)})
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.cfg), "--config-format", "yaml", "--destination", str(self.home), *args],
+                           input=stdin, capture_output=True, text=True, timeout=120, env=source_tree.chezmoi_env(self.home))
         if r.returncode:
             raise AssertionError("chezmoi %s failed: %s" % (" ".join(args), r.stderr))
         return r.stdout

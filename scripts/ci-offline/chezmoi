@@ -13,13 +13,13 @@ if [ -n "${CI_OFFLINE_REAL_CHEZMOI:-}" ] && [ -x "$CI_OFFLINE_REAL_CHEZMOI" ]; t
 fi
 # Without it, the first chezmoi on PATH that is not this folder's.
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
-self=$(cd "$here" && pwd)   # shell builtins only: a test may give this a PATH with no other tool on it
+self=$(cd "$here" && pwd -P)   # shell builtins only: a test may give this a PATH with no other tool on it
 rest=$PATH
 while [ -n "$rest" ]; do
   dir=${rest%%:*}
   case $rest in *:*) rest=${rest#*:} ;; *) rest= ;; esac
   [ -n "$dir" ] || continue
-  [ "$(cd "$dir" 2>/dev/null && pwd)" = "$self" ] && continue
+  [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && continue
   if [ -x "$dir/chezmoi" ]; then
     unset https_proxy http_proxy all_proxy ALL_PROXY no_proxy
     HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 NO_PROXY= exec "$dir/chezmoi" "$@"
