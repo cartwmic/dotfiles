@@ -13,7 +13,7 @@ after a merge, the pin bump tools, and (in a later change) the container start s
   2. It moves the chezmoi source checkout to the tested commit it was given, by fast-forward only, and to no other. A checkout with
      uncommitted changes, or one that is not behind that commit, is left as it is and the run stops.
   3. It shows `chezmoi diff` and applies. With PATH arguments (destination paths: absolute, `~/...` or relative to your home; a script is named
-     by the path `chezmoi status` shows for it) it applies those paths only, each one itself and not its contents, plus the directories above a
+     by the path `chezmoi status` shows for it) it applies those paths only, each one itself (a named directory also stands for the pending paths under it), plus the directories above a
      new one. It stops, applying nothing, when anything else is pending that you did not name, and lists it: name it too, or pass
      --whole-commit to take everything pending (the work is then done by `dotfiles-update --no-pull`, which holds back a path edited here and
      lists it). A script you name is run through chezmoi, so chezmoi records its run. With no PATH it takes the whole commit.
@@ -177,13 +177,13 @@ def normalize(path, home):
 
 
 def apply_paths(named, entries, leave=()):
-    """Apply the named paths that are pending, each as itself (never its contents), with the pending directories above them first; scripts through
+    """Apply the named paths that are pending, each as itself (a named directory also stands for the pending paths under it, unless --leave-pending names them), with the pending directories above them first; scripts through
     chezmoi so it records their run. Stops, applying nothing, when anything else is pending. Returns the paths applied (none: all were current)."""
     listed = {path: code for code, path in entries}
     todo = []
     for path in named:
         found = ([path] if path in listed else []) + sorted(p for p in listed if p.startswith(path + os.sep))  # a named directory stands for the pending paths under it
-        todo += [p for p in found if p not in todo]
+        todo += [p for p in found if p not in todo and p not in leave]
         if not found:
             print("dotfiles-apply: %s is not pending (already current)" % path)
     parents = sorted({p for path in todo for p in listed if path.startswith(p + os.sep)} - set(todo), key=len)

@@ -464,7 +464,7 @@ def deploy(sha, paths, step, leave=()):
         if "also pending" in result.stdout:  # a combined bump: the other tool's files came with the same merge, and neither tool may take the other's
             again = ("other files are pending that this tool does not apply (listed above). If this is a combined bump (the other tool's files came with "
                      "this merge), take the whole tested merge once with `dotfiles-apply --contains %s --whole-commit`, then run this script again. "
-                     "If something else is pending (check `chezmoi status`), settle that first and run this script again" % sha)
+                     "If something else is pending (check `chezmoi status`), settle that first (`dotfiles-apply --contains %s --whole-commit` takes a tested merge whole; or name the pending paths yourself) and run this script again" % (sha, sha))
         raise Stop(step, "dotfiles-apply exited %d: %s. The PR is merged and nothing more was done; %s."
                    % (result.returncode, said.splitlines()[-1] if said else "no output", again))
 

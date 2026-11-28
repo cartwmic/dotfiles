@@ -746,7 +746,7 @@ not have finished (and may be half of a change). Builders, leads, the Loop Engin
   applied and the command exits 1: wait, and run it again.
 - It moves the chezmoi source checkout to that tested commit by fast-forward, never to the tip, and stops, leaving the checkout alone, when it is not on `main`, has
   uncommitted changes or has its own commits.
-- With paths it applies those paths only (each as itself, not its contents; the directories above a new one first; a script, named by the path `chezmoi status` shows,
+- With paths it applies those paths only (each as itself, and a named directory also stands for the pending paths under it; the directories above a new one first; a script, named by the path `chezmoi status` shows,
   through chezmoi so its run is recorded). It stops, applying nothing, when anything else is pending that you did not name, and lists it. `--whole-commit` (or no paths)
   takes everything pending, by `dotfiles-update --no-pull`, which holds back a path edited on the machine and says so. `--leave-pending PATH` (repeatable) names a path
   that a later run applies, so it does not stop this one; the Loop Engine and agent-kit bump tools use it for the scripts a bump leaves for a full apply.
@@ -755,7 +755,7 @@ not have finished (and may be half of a change). Builders, leads, the Loop Engin
   tested merge once with `--whole-commit`, then run both tools again.
 - It shows `chezmoi diff`, applies, then exits 1 unless nothing it applied is still pending.
 - A stop file, `~/.local/state/dotfiles-apply/stop`, holds a run before it moves or applies anything: create it to hold an apply a tool is about to make, remove it to let runs go on.
-- Every run, refused ones too, is one line in `~/.local/state/dotfiles-apply/log.jsonl`: the time, the sha it was given, the tested commit, the CI run that tested it, the paths, the caller (the T3, Codex or
+- Every run, refused ones too, is one line in `~/.local/state/dotfiles-apply/log.jsonl`: the time, the sha it was given, the tested commit, the CI run that tested it, the paths applied, the paths asked for and the ones left to a later run, the caller (the T3, Codex or
   Claude session id) and the outcome (`applied`, `nothing-to-do`, `dry-run`, `untested`, `other-pending`, `stopped`, `still-pending`, ...). `grep '"outcome": "applied"'` answers "was this applied from a tested commit", and
   `jq -s 'group_by(.outcome) | map({(.[0].outcome): length}) | add'` counts what ran and what was refused. If the command refuses with `untested` for more than two hours on a change whose own checks have
   been green, the wait on main's run is the problem to fix, not the gate.

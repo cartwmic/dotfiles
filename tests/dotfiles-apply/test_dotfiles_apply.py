@@ -293,6 +293,17 @@ class DotfilesApply(unittest.TestCase):
         self.assertEqual((self.read(".dir/one"), self.read(".dir/two")), ("new\n", "new\n"))
         self.assertEqual(self.log()[-1]["outcome"], "applied")
 
+    def test_a_path_left_pending_is_not_taken_with_the_directory_that_holds_it(self):
+        (self.author / "dot_dir").mkdir()
+        self.write("dot_dir/one", "new\n")
+        self.write("dot_dir/two", "new\n")
+        change = self.commit("a directory of files")
+        self.set_green(change)
+        r = self.apply("--contains", change, ".dir", "--leave-pending", str(self.home / ".dir/two"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read(".dir/one"), "new\n")
+        self.assertFalse((self.home / ".dir/two").exists())
+
     def test_naming_only_current_paths_while_something_else_is_pending_is_not_nothing_to_do(self):
         self.write("dot_b", "two\n")
         change = self.commit("change to b")
