@@ -2198,6 +2198,10 @@ class CheckMustGuard(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(log(text), {"reason": reason, "command": "gh pr merge"})
         self.assertIn("another pull request", log("%s && %s && gh pr merge 6" % (self.GATE, self.BODY))["reason"])
+        self.assertEqual(log("%s && %s && gh pr merge 5 -R cartwmic/cartwmic-homelab-v2" % (self.GATE, self.BODY)),
+                         {"reason": "homelab merge goes through its merge script", "command": "gh pr merge"})
+        self.assertEqual(log("%s && %s && gh pr merge 5 -R cartwmic/coordinator" % (self.GATE, self.BODY)),
+                         {"reason": "coordinator merge goes through its merge script", "command": "gh pr merge"})
         kw = dict(origins=self.ORIGINS, visibility=lambda repo: "public")
         self.assertEqual(log(self.POST, **kw)["reason"], "the comment check is missing, or is not in its real form")
         self.assertEqual(log("! %s && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
