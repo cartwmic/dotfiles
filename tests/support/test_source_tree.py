@@ -1,6 +1,7 @@
 """tests/support/source_tree.py: the source copy that tests run chezmoi on has no way to reach the network, and leaves the repo alone."""
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,7 +63,22 @@ class SourceTreeTest(unittest.TestCase):
 
     def test_ci_linux_puts_the_offline_chezmoi_first_on_path_and_the_wrapper_runs(self):
         self.assertIn('PATH="$(pwd)/scripts/ci-offline:$PATH"', (source_tree.REPO / "scripts/ci-linux.sh").read_text())
+        self.assertIn("CI_OFFLINE_REAL_CHEZMOI", (source_tree.REPO / "scripts/ci-linux.sh").read_text())
         self.assertTrue(os.access(OFFLINE / "chezmoi", os.X_OK))
+
+    def test_the_offline_chezmoi_linked_into_a_folder_of_its_own_still_finds_the_real_one_and_still_refuses(self):
+        """tests/container-mode links the chezmoi it finds on PATH into a folder that holds nothing else."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = Path(tmp) / "bin"
+            bare.mkdir()
+            (bare / "chezmoi").symlink_to(OFFLINE / "chezmoi")
+            env = {"PATH": str(bare), "HOME": tmp, "CI_OFFLINE_REAL_CHEZMOI": shutil.which("chezmoi", path=os.environ["PATH"].replace(str(OFFLINE) + ":", ""))}
+            ok = subprocess.run([str(bare / "chezmoi"), "--version"], capture_output=True, text=True, env=env)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertIn("chezmoi version", ok.stdout)
+            bad = run_chezmoi(source_tree.REPO, tmp, {**env, "PATH": str(bare)})
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn("127.0.0.1:1", bad.stderr)
 
     def test_the_offline_chezmoi_says_so_when_there_is_no_chezmoi_behind_it(self):
         r = subprocess.run([str(OFFLINE / "chezmoi"), "--version"], capture_output=True, text=True, env={"PATH": str(OFFLINE) + ":/nonexistent"})
