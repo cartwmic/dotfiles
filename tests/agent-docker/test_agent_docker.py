@@ -21,7 +21,7 @@ ZSHENV = ROOT / "dot_zshenv"
 CONFIG = ROOT / "dot_config/agent-docker/config.json"
 ZSH = shutil.which("zsh")
 CHEZMOI = shutil.which("chezmoi")
-MARKERS = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_SANDBOX", "CODEX_THREAD_ID"]
+MARKERS = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "CODEX_SANDBOX", "CODEX_THREAD_ID"]
 
 
 class ConfigFileTest(unittest.TestCase):

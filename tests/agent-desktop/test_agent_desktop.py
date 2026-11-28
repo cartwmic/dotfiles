@@ -823,7 +823,7 @@ class ZshenvTest(unittest.TestCase):
 
     def test_every_agent_marker_counts(self):
         make_instance(self.runtime, "aaa_1000_1", os.getpid())
-        for marker in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "HERDR_ENV", "CODEX_SANDBOX", "CODEX_THREAD_ID"):
+        for marker in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "T3CODE_THREAD_ID", "CODEX_SANDBOX", "CODEX_THREAD_ID"):
             with self.subTest(marker=marker):
                 self.assertEqual(self.session(marker=marker), "wayland-1 aaa_1000_1")
 

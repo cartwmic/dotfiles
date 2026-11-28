@@ -24,7 +24,6 @@
 loop-engine = "github:cartwmic/loop-engine"
 lean-change = "github:cartwmic/loop-engine"
 policy-document = "github:cartwmic/loop-engine"
-research = "github:cartwmic/loop-engine"
 bookends-check = "github:cartwmic/loop-engine"
 
 # =============================================================================
@@ -74,7 +73,6 @@ chezmoi = "2.71.1"
 loop-engine = { version = "0.72.0", matching_regex = "^loop-cli-", rename_exe = "loop-engine" }
 lean-change = { version = "0.72.0", matching_regex = "^lean-change-provider-", rename_exe = "lean-change" }
 policy-document = { version = "0.72.0", matching_regex = "^policy-document-provider-", rename_exe = "policy-document" }
-research = { version = "0.72.0", matching_regex = "^research-provider-", rename_exe = "research" }
 bookends-check = { version = "0.72.0", matching_regex = "^bookends-check-", rename_exe = "bookends-check" }
 
 # Build tools & task runners
