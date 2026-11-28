@@ -10,7 +10,7 @@
 | `pr-open --edit` | title (when given) and the description about to be patched | same |
 | `issue-open` (also `--dry-run`) | title and expanded description | `dot_local/bin/executable_issue-open` |
 | `pr-body-check REPO PR` (the merge form) | the description, title and commit messages of the PR as it stands | `dot_local/bin/executable_pr-body-check` |
-| Bash hook: `gh pr comment`, `gh issue comment`, `gh pr review` with a body | comment text must be checked earlier in the same `&&` list | `dot_local/share/agent-harness/hooks/bash_rules.py` (`public_comment_rule`) |
+| Bash hook: `gh pr comment`, `gh issue comment`, `gh pr review` with a body | comment text must be checked earlier in the same `&&` list, and the post must run on the check's success (not after `!`, `||`, `;`, `&` or a pipe) | `dot_local/share/agent-harness/hooks/bash_rules.py` (`public_comment_rule`) |
 
 The gh wrapper (`scripts/gh-wrapper`) already reads every gh text path, but the agent pod does not install it, so the checks sit at the doors an agent passes here.
 
