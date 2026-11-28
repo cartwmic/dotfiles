@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """disposition-check: a fixed review disposition names where the fix lives, and the name can be checked.
 
-usage: disposition-check [--head SHA] [--base SHA] [--repo DIR] FILE [FILE ...]
+usage: disposition-check [--head SHA] [--base SHA] [--repo DIR] [--log FILE | --no-log] FILE [FILE ...]
 
 A review finding whose fix is an artifact outside the diff (a tracker ticket, a doc, a config change
 elsewhere) was once marked fixed with only a commit sha: the log looked fixed while nothing in it could
@@ -38,10 +38,21 @@ checked; review flows always pass --head and --base. --repo is the checkout to r
 (default: the current directory). A line that is not valid JSON is warned about with its line number, not
 checked. Exit 0 every fixed disposition can be checked; 1 one cannot (each is named); 2 bad arguments, an
 unreadable file, or git failed.
+
+Log: every disposition the check passes by mapping a sha that is no longer reachable from the head, and every
+fixed disposition it refuses, appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/disposition-check/log.jsonl
+(--log FILE or DISPOSITION_CHECK_LOG names another; --no-log writes none; a write that fails never changes the
+result). The line holds the time, the outcome (mapped-pass or refused), the item (the folder of the review log),
+the finding, the sha, the head and base, and for a refusal the reason. Counting the two outcomes in that file is
+the measure of the mapping. It is the same log convention as known-limits-check, the other check in this folder.
 """
+import datetime
 import json
+import os
 import subprocess
 import sys
+
+LOG = {"path": None, "off": False}  # set from --log / --no-log in main()
 
 
 def git(repo, *args):
@@ -78,8 +89,38 @@ def commit_in_change(repo, sha, head, base):
         return False, "git failed: %s" % done.stderr.strip(), ""
     why = "%s is not an ancestor of the head %s" % (sha, head)
     if base is not None and not commit_change_in(repo, sha, base) and commit_change_in(repo, sha, head):
-        return True, "", "sha %s is no longer in the branch (a rebase or force-push removed it), and its change is in the head %s and not in the base" % (sha, head)
+        return True, "", "sha %s is no longer reachable from the head %s, but its change is in the head and not in the base" % (sha, head)
     return False, why, ""
+
+
+def log_path():
+    if LOG["path"]:
+        return LOG["path"]
+    env = os.environ.get("DISPOSITION_CHECK_LOG", "").strip()
+    if env:
+        return env
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "disposition-check", "log.jsonl")
+
+
+def write_log(**fields):
+    """One JSON line for a mapped pass or a refusal. A failed write never changes the result."""
+    if LOG["off"]:
+        return
+    record = {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "tool": "disposition-check"}
+    record.update(fields)
+    try:
+        path = log_path()
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def item_of(path):
+    """The review item a log belongs to: the folder holding findings.jsonl (empty for stdin)."""
+    return "" if path == "-" else os.path.basename(os.path.dirname(os.path.abspath(path)))
 
 
 def main(argv):
@@ -108,6 +149,14 @@ def main(argv):
             repo = args.pop(0)
         elif a.startswith("--repo="):
             repo = a.split("=", 1)[1]
+        elif a == "--log":
+            if not args:
+                usage("--log needs a file")
+            LOG["path"] = args.pop(0)
+        elif a.startswith("--log="):
+            LOG["path"] = a.split("=", 1)[1]
+        elif a == "--no-log":
+            LOG["off"] = True
         elif a in ("-h", "--help"):
             print(__doc__.strip())
             return 0
@@ -167,6 +216,7 @@ def main(argv):
                 continue
             if not sha:
                 bad += 1
+                write_log(outcome="refused", reason="no-sha-no-artifact", item=item_of(path), finding=fid, sha="", head=head, base=base)
                 print("disposition-check: %s: finding %s is fixed with neither a sha nor an artifact reference"
                       % (where, fid), file=sys.stderr)
                 print("  name the commit that fixes it, or the ticket, doc path or config location that carries the fix", file=sys.stderr)
@@ -175,9 +225,11 @@ def main(argv):
                 continue
             ok, why, note = commit_in_change(repo, sha, head, base)
             if note:
+                write_log(outcome="mapped-pass", item=item_of(path), finding=fid, sha=sha, head=head, base=base)
                 print("disposition-check: %s: finding %s: %s" % (where, fid, note))
             if not ok:
                 bad += 1
+                write_log(outcome="refused", reason=why, item=item_of(path), finding=fid, sha=sha, head=head, base=base)
                 print("disposition-check: %s: finding %s is fixed with sha %s, but %s" % (where, fid, sha, why), file=sys.stderr)
                 print("  the fix is not in this diff: record the sha of the commit in base..head that carries it, or the artifact that does (a ticket key, a doc path or a config location)", file=sys.stderr)
 
@@ -189,7 +241,7 @@ def main(argv):
 
 
 def usage(why):
-    print("disposition-check: %s\nusage: disposition-check [--head SHA] [--base SHA] [--repo DIR] FILE [FILE ...]" % why, file=sys.stderr)
+    print("disposition-check: %s\nusage: disposition-check [--head SHA] [--base SHA] [--repo DIR] [--log FILE | --no-log] FILE [FILE ...]" % why, file=sys.stderr)
     raise SystemExit(2)
 
 
