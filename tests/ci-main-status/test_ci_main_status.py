@@ -142,6 +142,12 @@ GH_FAKE = textwrap.dedent('''\
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
             subject = git(src, "log", "-1", "--format=%B", sha).rstrip("\\n")
             print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}, "committer": {"date": git(src, "log", "-1", "--format=%cI", sha).strip()}}}))
+        elif "/issues/" in path:   # an issue, as the REST API returns it: body, labels, and a pull_request key when the number is a PR
+            n = path.split("/issues/")[1].split("?")[0]
+            issue = (fixture.get("issues") or {}).get(repo, {}).get(n)
+            if issue is None:
+                fail("HTTP 404: no issue fixture " + n)
+            print(json.dumps(issue))
         elif "/check-runs/" in path:
             notes = fixture.get("annotations", {}).get(path.split("/check-runs/")[1].split("/")[0])
             if notes is None:
@@ -220,12 +226,19 @@ REPOS_GITHUB = {"dotfiles": "cartwmic/dotfiles", "loop-engine": "cartwmic/loop-e
                 "alert-steward": "cartwmic/alert-steward", "storycraft": "StoryCraftTW/storycraft", "retro": "cartwmic/retro"}
 
 
-def names(*shas, body=None, in_body=False):
-    """The `gh pr view --json commits,body` fields of a PR whose commit message (or, with in_body, its description) carries a `Handles:` line for each sha."""
-    text = "\n".join(f"Handles: {sha}" for sha in shas)
+def names(*shas, body=None, in_body=False, issue=50):
+    """The `gh pr view --json commits,body` fields of a PR whose commit message (or, with in_body, its description) carries a `Handles:` line for each sha,
+    and, unless `issue` is None, a `Closes #<issue>` line (the issue a repo with `handles_labels` asks for: see backing)."""
+    text = "\n".join(f"Handles: {sha}" for sha in shas) + (f"\nCloses #{issue}" if issue and shas else "")
     if in_body:
         return {"commits": [{"messageHeadline": "the fix", "messageBody": ""}], "body": text}
     return {"commits": [{"messageHeadline": "the fix", "messageBody": text}], "body": body or "a description"}
+
+
+def backing(*shas, labels=("flaky test",), body=None, pull=False):
+    """An issue as the REST API returns it, for the fake gh: its body holds each sha (or `body`), carrying `labels`; `pull` makes it a pull request."""
+    return {"body": body if body is not None else "The red run failed on " + " and ".join(shas), "state": "open",
+            "labels": [{"name": label} for label in labels], **({"pull_request": {}} if pull else {})}
 
 
 def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None, branch="main"):
@@ -261,6 +274,7 @@ class Fixture(unittest.TestCase):
         self.annotations = {}                        # job id (str) -> the check run's annotations
         self.prs = {}                                # PR number -> `gh pr view --json files,headRefOid`
         self.failing_pr = []                         # repos whose `gh pr view` fails
+        self.issues = {"cartwmic/dotfiles": {"50": backing(self.c3)}}   # repo -> {issue number -> issue}: #50, the one names() cites, is on record for c3
         self.journal = t / "journal.jsonl"           # absent unless a test writes it
         self.lock = t / "lock.d"
         self.log = t / "gh.log"
@@ -294,7 +308,8 @@ class Fixture(unittest.TestCase):
              "check_runs": getattr(self, "check_runs", {}), "statuses": getattr(self, "statuses", {}),
              "fail_once": getattr(self, "fail_once", []), "compare_cap": getattr(self, "compare_cap", 10000),
              "compare_drop": getattr(self, "compare_drop", []), "listing_drop": getattr(self, "listing_drop", []),
-             "fail_path": getattr(self, "fail_path", {}), "reply": getattr(self, "reply", {})}))
+             "fail_path": getattr(self, "fail_path", {}), "reply": getattr(self, "reply", {}),
+             "issues": getattr(self, "issues", {})}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
