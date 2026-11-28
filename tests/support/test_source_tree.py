@@ -28,6 +28,16 @@ def managed(source, home):
 
 
 class SourceTreeTest(unittest.TestCase):
+    def test_the_command_line_bridge_for_tests_that_are_not_python_reads_the_copy_with_every_connection_refused(self):
+        """dot_pi/private_agent/extensions/inspect-prompt/profile.test.ts (node) runs chezmoi through it."""
+        with tempfile.TemporaryDirectory() as home:
+            cfg = Path(home) / "chezmoi.yaml"
+            cfg.write_text("data:\n  profile: personal\n")
+            args = ["--source", "{source}", "--config", str(cfg), "--config-format", "yaml", "--destination", str(Path(home) / "dest"), "managed"]
+            r = subprocess.run([sys.executable, str(Path(source_tree.__file__)), *args], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(".claude", r.stdout)
+
     def test_no_archive_url_in_the_copy_points_at_the_network_and_the_repo_file_is_unchanged(self):
         copy = (source_tree.source() / source_tree.EXTERNALS).read_text()
         self.assertEqual(re.findall(r'url\s*=\s*"https?://', copy), [])
