@@ -36,8 +36,8 @@ The CLI prints a saved review ID, opens the reply snapshot, and prompts for a
 line or range and a comment in your editor. Keep the ID to reopen the review
 or export selected pending notes; see `dot_local/share/passage-review/README.md`
 (Usage).
-Use the standalone CLI for file or stdin reviews and saved reviews while Pi or
-Herdr is unavailable. `/review` does not send feedback to Pi, edit the reply,
+Use the standalone CLI for file or stdin reviews and saved reviews while Pi is
+unavailable. `/review` does not send feedback to Pi, edit the reply,
 or change pending-note state. A non-interactive Pi mode reports that this
 command needs the interactive terminal.
 

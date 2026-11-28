@@ -88,6 +88,9 @@ GH_FAKE = textwrap.dedent('''\
         pull = fixture.get("prs", {}).get(args[2])
         if pull is None:
             fail("fake gh: no PR fixture " + args[2])
+        if "--json" in args:   # as gh: only the fields asked for. A field the script reads and does not ask for is missing, not silently there.
+            wanted = args[args.index("--json") + 1].split(",")
+            pull = {k: pull[k] for k in wanted if k in pull}
         print(json.dumps(pull))
     elif args[0] == "api":
         path = args[1]
@@ -215,6 +218,14 @@ def commit(path, msg, when=None):
 
 REPOS_GITHUB = {"dotfiles": "cartwmic/dotfiles", "loop-engine": "cartwmic/loop-engine", "agent-kit": "cartwmic/agent-kit",
                 "alert-steward": "cartwmic/alert-steward", "storycraft": "StoryCraftTW/storycraft", "retro": "cartwmic/retro"}
+
+
+def names(*shas, body=None, in_body=False):
+    """The `gh pr view --json commits,body` fields of a PR whose commit message (or, with in_body, its description) carries a `Handles:` line for each sha."""
+    text = "\n".join(f"Handles: {sha}" for sha in shas)
+    if in_body:
+        return {"commits": [{"messageHeadline": "the fix", "messageBody": ""}], "body": text}
+    return {"commits": [{"messageHeadline": "the fix", "messageBody": text}], "body": body or "a description"}
 
 
 def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None, branch="main"):
@@ -816,7 +827,7 @@ class PinFixException(Fixture):
         red_steps = red_steps or steps(pins="failure", linux="skipped")
         self.jobs = {"2": [*ci_jobs(red_steps), {"name": "mise-tests", "conclusion": "success", "steps": []}, *red_extra_jobs],
                      str(own_run["databaseId"]): [*ci_jobs(own_steps or steps()), {"name": "mise-tests", "conclusion": "skipped", "steps": []}]}
-        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": self.head, "headRefName": "fix"}}
+        self.prs = {"7": {"files": [{"path": f} for f in files], "changedFiles": len(files), "headRefOid": self.head, "headRefName": "fix", **names(self.c3)}}
 
     def gate(self, *extra):
         self.write_fixture()
@@ -1019,7 +1030,7 @@ class RedMainFix(Fixture):
             rows.append(row)
             self.jobs[str(row["databaseId"])] = jobs
         self.runs = {self.WF: rows}
-        self.prs = {"7": {"headRefOid": self.head, "headRefName": "fix"}}
+        self.prs = {"7": {"headRefOid": self.head, "headRefName": "fix", **names(self.c3)}}
 
     def dispatch(self, run_id, conclusion="success", sha=None, **jobs):
         return run(run_id, sha or self.head, conclusion, event="workflow_dispatch", age=run_id, branch="fix"), full_suite_jobs(**jobs)
@@ -1159,7 +1170,7 @@ class RedMainFix(Fixture):
             self.jobs[str(row["databaseId"])] = ci_jobs([{"name": "Set up job", "conclusion": "success"}, {"name": red_step, "conclusion": conclusion}])
         self.runs = {"cartwmic/dotfiles|ci.yml": rows}
         self.prs = {"7": {"files": [{"path": "dot_local/bin/executable_ci-main-status"}], "changedFiles": 1,
-                          "headRefOid": self.head, "headRefName": "fix"}}
+                          "headRefOid": self.head, "headRefName": "fix", **names(self.c3)}}
 
     def test_dotfiles_red_on_another_step_passes_on_a_green_full_head_run_of_the_same_tree(self):
         self.dotfiles_world((run(3, self.head, "success", event="pull_request", age=7, branch="fix"), "success"))
@@ -1186,6 +1197,96 @@ class RedMainFix(Fixture):
         rc, out, err = self.gate("--pr", "7", repo="dotfiles")
         self.assertEqual(rc, 1, out)
         self.assertIn("run 3 did not pass tests", err)
+
+    # -- a red main takes only the change that names it (a flaky red must not let every green PR through)
+    def flaky_red_with_unrelated_pr(self, repo="dotfiles"):
+        """The real case: main's run failed in one test; PR 7 has nothing to do with it, and its own run is green and passed that test."""
+        self.dotfiles_world((run(3, self.head, "success", event="pull_request", age=7, branch="fix"), "success"))
+        self.prs["7"].update(names())   # it names no red
+
+    def test_an_unrelated_green_pr_is_refused_on_a_red_main_with_a_sentence_that_says_what_it_lacks(self):
+        self.flaky_red_with_unrelated_pr()
+        rc0, out0, _ = self.gate(repo="dotfiles")
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual((rc, out), (rc0, out0), err)   # same stdout as without --pr
+        self.assertEqual(rc, 1)
+        self.assertIn("does not name this red", err)
+        self.assertIn(f"put `Handles: {self.c3}` in the fix's commit message", err)
+        self.assertIn("No flake ruling is recorded", err)
+        self.assertNotIn("merge-gate:", out)
+
+    def test_the_same_pr_passes_once_a_commit_message_names_the_red(self):
+        self.flaky_red_with_unrelated_pr()
+        self.prs["7"].update(names(self.c3))
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(f"it names {self.c3} with a Handles line", out)
+
+    def test_a_revert_line_names_the_red_too(self):
+        self.flaky_red_with_unrelated_pr()
+        self.prs["7"]["commits"] = [{"messageHeadline": "Revert the cause", "messageBody": f"This reverts commit {self.c3}."}]
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(f"it names {self.c3}", out)
+
+    def test_a_line_naming_another_commit_a_short_sha_or_a_free_text_mention_does_not_name_the_red(self):
+        self.flaky_red_with_unrelated_pr()
+        for text in (f"Handles: {self.c2}", f"Handles: {self.c3[:12]}", f"fixes the red on {self.c3}", f"see Handles: {self.c3}"):
+            with self.subTest(text=text):
+                self.prs["7"]["commits"] = [{"messageHeadline": "the fix", "messageBody": text}]
+                rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+                self.assertEqual(rc, 1, out + err)
+                self.assertIn("does not name this red", err)
+
+    def test_a_pr_that_names_the_red_still_needs_its_own_run_to_have_passed_what_failed(self):
+        self.dotfiles_world((run(3, self.head, "failure", event="pull_request", age=7, branch="fix"), "failure"))   # names(c3) is the fixture default
+        rc, out, err = self.gate("--pr", "7", repo="dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("run 3 did not pass tests", err)
+
+    def test_the_refusal_is_one_read_of_the_pr_before_its_own_run_is_read(self):
+        self.flaky_red_with_unrelated_pr()
+        self.gate("--pr", "7", repo="dotfiles")
+        calls = self.log.read_text().splitlines()
+        self.assertEqual(len([c for c in calls if c.startswith("pr view 7")]), 1, calls)   # the PR is read once, for its commits and description
+        self.assertFalse([c for c in calls if c.startswith("run view 3")], calls)   # the PR's own run is never read: no tie, no need
+
+    def storycraft_world(self):
+        """storycraft squashes from the PR body: the line counts there, not in a commit."""
+        rows = [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1),
+                run(3, self.head, "success", event="pull_request", age=7, branch="fix")]
+        self.runs = {"StoryCraftTW/storycraft|ci.yml": rows}
+        self.jobs = {"2": red_unit_jobs(), "3": full_suite_jobs()}
+        self.prs = {"7": {"headRefOid": self.head, "headRefName": "fix"}}
+
+    def test_storycraft_reads_the_line_in_the_pr_description_not_in_a_commit(self):
+        self.storycraft_world()
+        self.prs["7"].update(names(self.c3, in_body=True))
+        rc, out, err = self.gate("--pr", "7", repo="storycraft")
+        self.assertEqual(rc, 0, out + err)
+        self.prs["7"].update(names(self.c3))   # the line in a commit only: the squash would not carry it
+        rc, out, err = self.gate("--pr", "7", repo="storycraft")
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"put `Handles: {self.c3}` in the PR description (storycraft squashes from the PR body)", err)
+
+    def test_the_log_line_for_a_pass_on_a_red_main_names_the_rule(self):
+        self.flaky_red_with_unrelated_pr()
+        log = Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"])
+        self.gate("--pr", "7", repo="dotfiles")   # refused
+        self.prs["7"].update(names(self.c3))
+        self.gate("--pr", "7", repo="dotfiles")   # passed by the named-red rule
+        self.gate(repo="dotfiles")                # no --pr
+        rows = [json.loads(l) for l in log.read_text().splitlines()]
+        self.assertEqual([(r["pr"], r["exit"], r["passed_by"]) for r in rows], [(7, 1, None), (7, 0, ["named-red+own-run"]), (None, 1, None)])
+
+    def test_the_log_line_for_a_refusal_says_which_rule_said_no_and_why(self):
+        self.flaky_red_with_unrelated_pr()
+        self.gate("--pr", "7", repo="dotfiles")   # refused: the pin rule (more than the pins step failed) and the named-red rule
+        self.gate(repo="dotfiles")                # no --pr: refused for being red, no rule asked
+        refused = [json.loads(l)["refused"] for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual([r["rule"] for r in refused[0]], ["pin-fix", "named-red+own-run"])
+        self.assertIn("does not name this red", refused[0][1]["why"])
+        self.assertIsNone(refused[1])
 
     def test_dotfiles_pin_fix_still_gets_the_pin_line_not_the_general_one(self):
         """The pin rule runs first: a pin fix is named as one even though its own run would also satisfy the general rule."""

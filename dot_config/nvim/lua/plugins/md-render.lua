@@ -1,7 +1,7 @@
 -- Browser-like Markdown view inside Neovim: tables, callouts, images and
 -- Mermaid in a separate read-only rendered buffer; edit in the source. In a
 -- plain kitty window (>= 0.40) headings are drawn larger with kitty's text
--- sizing protocol; inside Herdr they stay normal size. passage-review reviews
+-- sizing protocol; inside a multiplexer they stay normal size. passage-review reviews
 -- also accept <leader>zc comments in the rendered view.
 --
 -- Width: md-render caps text at 80 columns. Here the rendered text fills the

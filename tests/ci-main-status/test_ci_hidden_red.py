@@ -399,7 +399,7 @@ class HiddenRed(base.Fixture):
         git(self.src, "add", "f.txt")
         head = commit(self.src, "the fix")
         git(self.src, "switch", "-q", "main")
-        self.prs = {"7": {"headRefOid": head, "headRefName": "fix"}}
+        self.prs = {"7": {"headRefOid": head, "headRefName": "fix", **base.names(self.c2)}}
         return head
 
     def test_a_pr_whose_full_suite_run_passed_what_failed_passes_a_hidden_red(self):
@@ -418,6 +418,19 @@ class HiddenRed(base.Fixture):
                     self.assertIn("its own full-suite run 4", out)
                     self.assertIn("unhandled red(s)", out)   # the RED lines print as without --pr
 
+    def test_a_pr_that_names_only_one_of_two_reds_is_refused_and_told_which_line_is_missing(self):
+        head = self.fix_pr()   # names c2 only
+        second = commit(self.src, "second red")
+        tip = commit(self.src, "tip")
+        self.runs = {self.AK: [run(5, tip, "success", age=5), run(4, head, "success", event="workflow_dispatch", age=4, branch="fix"),
+                               run(3, second, "failure", age=3), run(1, self.c2, "failure", age=1)]}
+        self.jobs = {"1": red_unit_jobs(), "3": red_unit_jobs(), "4": full_suite_jobs()}   # its own run passed everything: only the tie is missing
+        rc, out, err = self.streams("--merge-gate", "agent-kit", "--pr", "7")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("does not name this red", err)
+        self.assertIn(f"put `Handles: {second}`", err)
+        self.assertNotIn(f"put `Handles: {self.c2}`", err)   # the one it names is not asked for again
+
     def test_two_reds_that_failed_in_different_jobs_need_a_run_that_passed_both(self):
         head = self.fix_pr()
         second = commit(self.src, "second red")
@@ -429,6 +442,7 @@ class HiddenRed(base.Fixture):
         self.runs = {self.AK: [run(5, tip, "success", age=5), run(4, head, "success", event="workflow_dispatch", age=4, branch="fix"),
                                run(3, second, "failure", age=3), run(1, self.c2, "failure", age=1)]}
         self.jobs = {"1": unit_red, "3": node_floor_red}
+        self.prs["7"].update(base.names(self.c2, second))   # it names both reds, so only its run decides below
         self.jobs["4"] = [{"databaseId": 21, "name": "unit", "conclusion": "success", "steps": [{"name": UNIT_STEP, "conclusion": "success"}]},
                           {"databaseId": 22, "name": "node-floor", "conclusion": "skipped", "steps": []}]   # passes unit, skips node-floor
         rc, out = self.three_ways("--merge-gate", "agent-kit", "--pr", "7")
@@ -455,7 +469,7 @@ class HiddenRed(base.Fixture):
         mise = {"name": "mise-tests", "conclusion": "success", "steps": []}
         self.jobs = {"1": [*ci_jobs(steps(pins="failure", linux="skipped")), mise], "3": [*ci_jobs(steps(linux="failure")), mise],
                      "5": [*ci_jobs(steps()), {**mise, "conclusion": "skipped"}]}
-        self.prs = {"7": {"files": [{"path": f} for f in KIT_FILES], "changedFiles": 2, "headRefOid": head, "headRefName": "fix"}}
+        self.prs = {"7": {"files": [{"path": f} for f in KIT_FILES], "changedFiles": 2, "headRefOid": head, "headRefName": "fix", **base.names(self.c3)}}
         rc, out = self.three_ways("--merge-gate", "dotfiles", "--pr", "7")
         self.assertEqual(rc, 0, out)
         self.assertEqual([l for l in out.splitlines() if "pin-fix-red:" in l], [f"  pin-fix-red: {self.c2}"], out)

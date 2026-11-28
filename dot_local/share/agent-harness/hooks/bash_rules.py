@@ -15,8 +15,10 @@
               --merge-gate exits 0 for UNTESTED and 1 for RED, as playbook fab9b713 allows an untested merge; a bare `ci-main-status`
               exits 2 for UNTESTED and blocks it. `--match-head-commit <head sha>` makes the merge refuse unless the PR head is still
               the commit the checks read. The PR that fixes a red main adds `--pr N`: `--merge-gate <repo> --pr N` passes a red
-              GitHub-run main when PR N's own full-suite run on its head tree succeeded (a pull_request run that skips the suite
-              does not count; a workflow_dispatch run does). dotfiles tries its release-pins fix rule first, then that same rule.
+              GitHub-run main only when PR N names that red (a `Handles: <full sha>` line in a commit message of the PR, or in its
+              description for storycraft) and its own full-suite run on its head tree succeeded (a pull_request run that skips the
+              suite does not count; a workflow_dispatch run does). A green PR that does not name the red is refused. dotfiles tries
+              its release-pins fix rule first, then that same rule.
               Never for cartwmic/coordinator (`-R`, else the git origin of the directory it runs in): use merge-pr.sh,
               which runs both checks itself. Never for cartwmic/cartwmic-homelab-v2 either, found the same way and refused even
               before the gates: use `~/git/cartwmic-homelab-v2/scripts/merge-pr.sh N SHA` (it adds the RED-line check the chained
@@ -88,7 +90,7 @@
               `leader-1` are not) or on the coordinator's run (`coordinator-loop-...`): the workflow commands change those runs, and a raw write skips the checks they make.
               The run id is the first word after the verb (`start`: the `--id` flag), read after every flag spelling and through wrappers, `mise exec`, `sh -c`. Reads (`list`, `show`,
               `history`, `read`, `explore`, `monitor`, `reclaim`), `change` runs and any other id pass; so does a write whose command names no id (`start` without `--id`).
-              An id the hook cannot read (`$RUN`, a glob) is refused too: write it out. The refusal names the `workflows lead|coordinator` command for the verb. The way past
+              An id the hook cannot read (`$RUN`, a glob) is refused too: write it out. The refusal names the `workflows lead|coordinator` command for the verb; while `workflows lead catch-up` and `workflows lead note` are not built (ENGINE_NOT_BUILT), it says so. The way past
               is `BASH_ENGINE_OVERRIDE='<why>'` on the same command (an assignment before the command, or `env` with it; an exported value does not count: one use); the use is logged
               as `action: "override"` with the why. The rule judges the id and ignores the catalog (`--database`).
 
@@ -151,8 +153,8 @@ MERGE_BARE = (
     "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
-    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main for the PR that fixes it, when that PR's "
-    "own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
+    "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main only for the PR that fixes it: one that names the red with a `Handles: <full sha>` line "
+    "(in a commit message of the PR; in its description for storycraft) and whose own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
     "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
     "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits use the playbook CLI with --pr --merge."
 )
@@ -1435,6 +1437,7 @@ ENGINE_FIX = {  # (kind of run, verb) -> the workflow command that does the move
     ("coordinator", "event"): "`workflows coordinator release EVENT --why TEXT` puts a wedged loop back to waiting, `workflows lead catch-up NAME` repairs a claim with no settle",
     ("coordinator", "terminate"): "`workflows coordinator retire` ends the loop, `workflows coordinator roll` replaces it",
 }
+ENGINE_NOT_BUILT = ("workflows lead catch-up", "workflows lead note")  # commands a refusal names that are not deployed yet; when they are, make this `()` and the sentence is gone
 BASH_ENGINE = (
     "`loop-engine %s %s` is refused in agent sessions: that is %s, whose record the workflow commands keep, and a hand-typed engine write on it skips their checks. "
     "Use %s. If none of them can make the move, one command takes this refusal with a logged reason: put the reason on that command, "
@@ -1445,6 +1448,14 @@ BASH_ENGINE_UNREAD = (
     "Write the run id out in the command. For a lead's or the coordinator's run use the `workflows lead|coordinator` commands: `workflows lead catch-up NAME`, `cancel RUN --why TEXT`, `retire NAME`, `workflows coordinator release|retire|roll`. "
     "If a variable is what the job needs, one command takes this refusal with a logged reason: `" + ENGINE_OVERRIDE + "='<why>' loop-engine %s ...` (logged with the reason and counted)."
 )
+
+
+def _with_not_built(message):
+    """The refusal text, with one sentence added when it names a command that is not built yet (ENGINE_NOT_BUILT): say so, and that the way past today is the override on that one command."""
+    if not any(name in message for name in ENGINE_NOT_BUILT):
+        return message
+    names = " and ".join("`%s`" % name for name in ENGINE_NOT_BUILT)
+    return message + " Note: %s are not built yet, so until they are the way past is `%s='<why>'` on that one command." % (names, ENGINE_OVERRIDE)
 
 
 def _run_kind(word):
@@ -1504,10 +1515,10 @@ def bash_engine_rule(walk, ctx):
             continue
         if kind:
             run = next(w for w, k in kinds.items() if k)
-            message = Matched(BASH_ENGINE % (verb, run, "a lead's run" if kind == "lead" else "the coordinator's run", ENGINE_FIX[(kind, verb)], verb), "loop-engine " + verb)
+            message = Matched(_with_not_built(BASH_ENGINE % (verb, run, "a lead's run" if kind == "lead" else "the coordinator's run", ENGINE_FIX[(kind, verb)], verb)), "loop-engine " + verb)
             message.log = {"reason": "write on a %s run" % kind, "run_kind": kind}
         else:
-            message = Matched(BASH_ENGINE_UNREAD % (verb, unread, verb), "loop-engine " + verb)
+            message = Matched(_with_not_built(BASH_ENGINE_UNREAD % (verb, unread, verb)), "loop-engine " + verb)
             message.log = {"reason": "run id not readable", "run_kind": "unread"}
         return message
     return None
