@@ -7,10 +7,20 @@ usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, ag
        ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
        ci-main-status --merge-gate OWNER/REPO --pr N --owner-approved ASK   (Michael's answered ask for this PR; below)
        ci-main-status --threads REPO PR                (the PR's unresolved review threads, below)
+       ci-main-status --tip REPO --contains SHA        (is there a main commit with its own green run that contains SHA? below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main, or a red an older push left on it that nothing handled, stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
+
+--tip REPO --contains SHA answers one question for a deploy: is there a main commit whose own run finished green and that contains commit SHA (7 to 40
+hex digits)? Exit 0 yes, with one line `REPO: GREEN  run N passed on <short>, which contains <short>; commit <full sha>` (the full sha is the commit to
+apply); exit 1 no: no main commit has a finished green run, the newest one does not contain SHA yet (its line names it; a run may be going), or main
+could not be read; exit 2 wrong usage (anything but --tip, one GitHub table repo and a SHA; a SHA that is no commit of the repo). Plain --tip says
+UNTESTED whenever the tip itself has no finished run, which a newer push causes by cancelling the tip's run; --contains is not tied to the tip: the newest
+green main commit is the answer, and a green commit that comes after SHA contains it. Pass the commit as it sits on main: after a squash merge that is the squash
+commit (`gh pr view N --json mergeCommit`), never the PR's own head, which main does not contain. Each call, a refused one too, appends one JSON line (action
+"contains", verdict USAGE when refused) to the log below. An --owner-approved ask given with --contains is refused and leaves its line in owner-approved.jsonl.
 
 --pr N (only with --merge-gate and one REPO) is for the PR that fixes a red main (fab9b713 lets the revert or fix merge into
 a red main). A red main takes one kind of merge: the change that fixes it. Without --pr nothing changes. With it, a red main passes only under the rule for that repo; then the RED lines print as
@@ -220,7 +230,7 @@ main red). The line is a warning: it never changes the exit code, it is also pri
 hidden-red log line (below) carries the line as "pin_lag" (null when none) and, when the issue could not be read, the reason as "pin_lag_error".
 Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
-all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
+all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate, contains), pr, verdict (the first line's word; USAGE for a refused --contains call), exit, hidden (sha, run and
 attempt of each hidden red), cache (warm, cold, dropped:<why>, unwritable), reads (gh calls made), skipped ("newest red", when the
 hidden-red reads were skipped), passed_by (null, or for a --pr pass on a red main the rules that passed it: "pin-fix", "named-red+own-run") and refused
 (null, or for a --pr call that a red main refused, each rule that said no as {"rule", "why"}: the sentence on stderr, kept after the terminal is gone; a Handles line with no backing issue is the rule "handles-no-issue"), and handles_issues (null, or {red sha: issue number} for each Handles line an issue backed). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
@@ -235,7 +245,7 @@ attempt is treated like a flake ruling: the line reads "UNTESTED  run N on SHA: 
 and it exits 2 in plain mode and with --tip, 0 with --merge-gate. A red commit below it stays red. The jobs of a failed
 run are read only for the commits the walk reaches.
 
-Exit codes:
+Exit codes (--tip REPO --contains SHA has its own: 0 yes, 1 no, 2 wrong usage; see above):
   0  green: the newest conclusive commit passed (it may be followed by untested commits while a run is going).
      With --tip: main's tip itself passed.
   1  red: the newest conclusive commit failed. Also any state it cannot read (gh or git error, bad journal, a run on
@@ -1941,7 +1951,7 @@ def hidden_log_path():
 
 def log_hidden(name, spec, action, pr, started, code, lines, rec):
     """One JSON line per call of a repo with a grandfather commit, kept after the terminal is gone, in hidden-red.jsonl: ts (UTC),
-    duration_ms, repo, action (status, tip or merge-gate), pr, verdict (GREEN, RED, UNTESTED or ERROR: the first line's word), exit, hidden
+    duration_ms, repo, action (status, tip, merge-gate; contains_main writes its own rows with action contains, contains, answer, verdict GREEN, NO, ERROR or USAGE), pr, verdict (GREEN, RED, UNTESTED or ERROR: the first line's word), exit, hidden
     (the sha, run and attempt of each hidden red), cache (warm, cold, dropped:<why> or unwritable), reads (gh calls this call made),
     skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
     pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
@@ -1974,6 +1984,66 @@ def log_gitea(name, spec, action, pr, started, code, lines, rec):
            "sha": rec.get("sha"), "tree": rec.get("tree"), "verdict": m.group(1) if m else "ERROR", "exit": code,
            "evidence": rec.get("evidence"), "detail": out.splitlines()[0][:300] if out else ""}
     append_log(gitea_log_path(), row)
+
+
+def green_containing(name, sha):
+    """(exit code, lines, answer sha or None): is there a main commit whose own run finished green and that contains `sha`?
+
+    Main's newest green commit is the only candidate worth asking about: any older green commit is an ancestor of it and contains less.
+    A cancelled run gives its commit no verdict, so the walk passes over it to the commit below."""
+    spec = REPOS[name]
+    repo = spec["github"]
+    try:
+        verdicts, going = github_verdicts(spec)
+        walked = first_parent_walk(repo, main_tip(repo), verdicts)
+        green = walked[-1] if walked and walked[-1][2] and walked[-1][2].verdict == "pass" else None
+        if green is None:
+            return 1, [f"{name}: NO  no main commit has a finished green run" + ("; a run is going" if going else "") + f", so none contains {sha[:7]}"], None
+        found, _, rec = green
+        try:
+            status = gh(["api", f"repos/{repo}/compare/{sha}...{found}?per_page=1"])["status"]
+        except Unreadable as e:
+            if "HTTP 404" in str(e) or "No common ancestor" in str(e):
+                return 2, [f"{name}: ERROR  {sha} is not a commit of {repo}"], None
+            raise
+    except Unreadable as e:
+        return 1, [f"{name}: ERROR  cannot read state: {e}"], None
+    if status in ("ahead", "identical"):
+        return 0, [f"{name}: GREEN  {rec.label} passed on {found[:7]}, which contains {sha[:7]}; commit {found}"], found
+    return 1, [f"{name}: NO  main's newest green commit {found[:7]} ({rec.label}) does not contain {sha[:7]}" + ("; a run is going" if going else "")], None
+
+
+CONTAINS_USAGE = "usage: ci-main-status --tip REPO --contains SHA   (REPO: a GitHub repo of the table; SHA: 7 to 40 hex digits)"
+
+
+def contains_main(argv):
+    """`--tip REPO --contains SHA`, given the whole command line: the exit code is 0 yes, 1 no, 2 wrong usage.
+    Any other flag, a repeated flag or a form like --contains=SHA is wrong usage; so is a call that names no table repo. Every call, a refused one too, leaves a log line."""
+    started = time.time()
+    k = argv.index("--contains") if argv.count("--contains") == 1 else None
+    sha = (argv[k + 1] if k is not None and k + 1 < len(argv) else "").lower()
+    rest = [] if k is None else argv[:k] + argv[k + 2:]
+    names = [a for a in rest if a != "--tip"]
+    by_slug = {(v.get("github") or v["gitea"]).lower(): n for n, v in REPOS.items() if v}
+    name = by_slug.get(names[0].lower(), names[0]) if len(names) == 1 else None
+    spec = REPOS.get(name) if name else None
+    ok = (rest.count("--tip") == 1 and len(rest) == 2 and re.fullmatch(r"[0-9a-f]{7,40}", sha) and spec and "github" in spec
+          and "journal" not in spec and "gitea" not in spec and not spec.get("no_ci"))
+    if not ok:
+        print(CONTAINS_USAGE, file=sys.stderr)
+        for i, a in enumerate(argv):   # an --owner-approved ask given with --contains is refused, and its refusal leaves its line like any other
+            if a == "--owner-approved" or a.startswith("--owner-approved="):
+                ask = a.split("=", 1)[1] if "=" in a else (argv[i + 1] if i + 1 < len(argv) else "")
+                owner_refused(ask, None, "usage: --owner-approved ASK goes with --merge-gate OWNER/REPO --pr N and nothing else")
+        append_log(hidden_log_path(), {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": (spec.get("github") or spec.get("gitea")) if spec else None,
+                                       "action": "contains", "contains": " ".join(argv)[:120], "answer": None, "verdict": "USAGE", "exit": 2, "reads": READS[0]})
+        return 2
+    code, lines, found = green_containing(name, sha)
+    print("\n".join(lines))
+    append_log(hidden_log_path(), {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": "contains",
+                                   "contains": sha, "answer": found, "verdict": "GREEN" if code == 0 else "ERROR" if code == 2 or "ERROR" in lines[0] else "NO",
+                                   "exit": code, "reads": READS[0]})
+    return code
 
 
 PIN_LAG_REPO = "cartwmic/dotfiles"
@@ -2029,6 +2099,9 @@ def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
 
 def main(argv):
     global URGENT
+    if any(a == "--contains" or a.startswith("--contains=") for a in argv):
+        URGENT = True   # a deploy's read: the gh budget guard must not refuse it
+        return contains_main(argv)
     if "--threads" in argv:
         rest = [a for a in argv if a != "--threads"]
         if len(rest) != 2 or not rest[1].isdigit() or int(rest[1]) < 1 or rest[0].startswith("-"):
