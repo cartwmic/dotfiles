@@ -8,7 +8,8 @@
               use-context`, `kubectx X`, or no flag while the current context (--kubeconfig, an inline KUBECONFIG=, the hook's KUBECONFIG,
               else ~/.kube/config) is another. kubectl inside an ssh string is not inspected. No kubeconfig or no current-context: allowed.
   merge       (personal and work)  `gh pr merge` unless BOTH gates, in their real form, are joined to it by `&&` earlier in the same and-list
-              (any order): `ci-main-status --merge-gate <repo> [--pr N]` (a bare one or `--tip` is not the gate) and
+              (any order; a check counts only when the command runs on its success: not after `!`, not on either side of `||`, not before a
+              `;`, `&` or a pipe, not inside brackets): `ci-main-status --merge-gate <repo> [--pr N]` (a bare one or `--tip` is not the gate) and
               `pr-body-check <repo> <pr>` (two plain words; `pr-body-check --body-file F` is not the merge check, it never reads the PR's
               head runs), with <pr> the PR number `gh pr merge` names when it names one (a branch or no PR cannot be matched); the refusal names
               `ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...`:
@@ -149,15 +150,18 @@ BODY_FILE = "pr-body-check --body-file "  # prefix of the gated entry that names
 BODY_TITLE = "pr-body-check --title "  # prefix of the gated entry that names a title a body check already read
 BODY_PAIR = "pr-body-check --body-file+title "  # prefix of the gated entry for one check that read both a file and a title: BODY_PAIR + F + "\0" + T
 PUBLIC_FILE = "public-text-check --file comment="  # prefix of the gated entry for a comment file that public-text-check already read: PUBLIC_FILE + F + "\0" + the lower-case repo it was given
+CHECK_COUNTS = "A check counts only when the command it guards runs on the check's success: join it with `&&` and nothing else (not after `!`, not before or after `||`, not with `;`, a pipe or `&`, not inside brackets). "
 MERGE_BARE = (
     "`gh pr merge` without both gates in their real form is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
     "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
+    + CHECK_COUNTS +
     "For cartwmic/coordinator use `" + MERGE_PR + " PR`; for other repos run "
     "`ci-main-status --merge-gate <repo> && pr-body-check <repo> <pr> && gh pr merge <pr> --match-head-commit <head sha> ...` "
     "(--merge-gate lets an untested tip merge and stops only red; `--pr <pr>` after it passes a red main only for the PR that fixes it: one that names the red with a `Handles: <full sha>` line "
     "(in a commit message of the PR; in its description for storycraft) and whose own full-suite run on its head tree passed; pr-body-check enforces playbook rules ecd63156, 385acc43, ccc6c94b and 5a05bfe8; it reads the principles table, the Decisions line and the `Promises:` line (each promise `=>` its evidence, or `none, <reason>`) from the PR's agent record, `pr-record path <repo>#N` prints where, and a PR with none is refused; it also refuses a PR with an unresolved review thread, and a description with no Proven section); "
     "a one-time admin merge Michael approved (an answered ledger ask naming this PR) adds `--owner-approved ASK` to both checks, and `gh pr merge <pr> --admin`; the ledger decides whether the ask holds; "
-    "pin bumps use loop_engine_bump.py or agent_kit_bump.py; playbook edits: open the PR with the playbook CLI's `--pr` alone (it no longer merges), then merge it with `" + MERGE_PR + " PR`."
+    "pin bumps use loop_engine_bump.py or agent_kit_bump.py; a playbook edit is made only by the coordinator (any other session sends it to the coordinator by agent message): run the playbook verb on a branch in a worktree, without `--pr`, then `issue-open`, `pr-open` and `" + MERGE_PR + " PR`; never add `--merge` to the playbook CLI: the pinned kit refuses it, and an older kit that accepted it merged by itself and skipped both gates and the whole suite (playbook fab9b713). "
+    "An edit with Michael's own words goes out at once in its own PR; a bookkeeping edit (seats, tag, enforced) waits on branch `playbook/batch` for the coordinator's daily digest."
 )
 PR_BODY = (
     "`gh pr %s` without a checked body file is refused in agent sessions: a description with agent bookkeeping (the principles table or a table in the Proven section, a Decisions: line, "
@@ -293,7 +297,22 @@ def origin_of(directory):
         return None
 
 
-Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd")
+Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd seen", defaults=(frozenset(),))  # seen: the checks, in their real form, that stand earlier in the same text, whether or not they guard this command (gated holds only those that do)
+
+
+PIPE_JOINS = ("|", "|&")
+CHAIN_JOINS = ("&&", "||") + PIPE_JOINS  # the joins inside one and-or list; every other join (`;`, `&`, a newline, a bracket) starts a new one
+
+
+def _join(scan, index):
+    """The operators between command `index` and the one before it, newlines and spaces dropped."""
+    return scan.joins[index].replace("\n", "").strip()
+
+
+def _negated(scan, index):
+    """True when a `!` stands before the command's own words: it runs, or its pipeline runs, with the exit status turned round."""
+    raw = scan.commands[index]
+    return "!" in raw[:len(raw) - len(_command_words(raw))]
 
 
 class Walk:
@@ -334,7 +353,8 @@ class Walk:
             assigns = tuple(w for w in raw[:len(raw) - len(words)] if ASSIGN.match(w))
             here = gated | self._and_listed(scan, index)
             polling = loop or any(loops)
-            self._command(words, assigns, polling, waking, here, cwd, depth, scan, index)
+            seen = frozenset().union(*(Walk._checks(_command_words(c)) for c in scan.commands[:index]))
+            self._command(words, assigns, polling, waking, here, cwd, depth, scan, index, seen)
             if _base(words[0]) in ("cd", "pushd"):
                 target = next((w for w in words[1:] if w != "--" and not w.startswith("-")), None)
                 cwd = _resolve(target, cwd, self.home)
@@ -348,41 +368,63 @@ class Walk:
 
     @staticmethod
     def _and_listed(scan, index):
-        """The checks earlier in this command's and-list, joined to it only by `&&`: CI_GATE for a real `ci-main-status --merge-gate <repo>`,
-        PR_CHECK + N for a real `pr-body-check <repo> N`, and BODY_FILE + F for each `pr-body-check --body-file F` (which is not a merge check)."""
-        found = set()
-        j = index
-        while j > 0 and scan.joins[j].strip() == "&&":
-            j -= 1
-            earlier = _command_words(scan.commands[j])
-            if not earlier:
-                continue
-            name, args = _base(earlier[0]), earlier[1:]
-            if name == "public-text-check":
-                read = normalise([("public-text-check", "")], args)
-                if not read.unknown and not read.has("visibility"):  # --visibility reads no text, so it checks nothing
-                    for spec in read.values("file"):
-                        surface, _, path = spec.partition("=")
-                        if surface == "comment" and path:
-                            found.add(PUBLIC_FILE + path + "\0" + (read.value("repo") or "").lower())
-            if name == "ci-main-status" and _is_merge_gate(args):
-                found.add(CI_GATE)
-            elif name == "pr-body-check":
-                number = _is_pr_check(args)
-                if number:
-                    found.add(PR_CHECK + number)
-                read = normalise([("pr-body-check", "")], args)
-                body_file, title = read.value("body-file"), read.value("title")
-                if body_file is not None:
-                    found.add(BODY_FILE + body_file)
-                if title is not None:
-                    found.add(BODY_TITLE + title)
-                    if body_file is not None:
-                        found.add(BODY_PAIR + body_file + "\0" + title)  # one check saw both, not a file from one check and a title from another
-        return frozenset(found)
+        """The checks that have passed whenever this command runs. A check counts only when this command runs on the check's success: it is the last
+        command of its pipeline (a pipe throws its exit status away), the pipeline is not negated (`! check` runs what follows when the check fails), and
+        no `||` between the check and this command lets the command run without it. The chain is read from the left as the shell reads it:
+        `a && b` keeps what `a` passed and adds `b`, and `a || b` keeps nothing. Anything joined by `;`, `&`, a newline or a bracket is a new chain."""
+        start = index
+        while start > 0 and _join(scan, start) in CHAIN_JOINS:
+            start -= 1
+        first = index
+        while first > start and _join(scan, first) in PIPE_JOINS:
+            first -= 1  # this command may itself be in a pipeline: the checks that count are the ones before the pipeline
+        passed, at = set(), start
+        while at < first:
+            last = at
+            while last + 1 < first and _join(scan, last + 1) in PIPE_JOINS:
+                last += 1
+            joined = _join(scan, at) if at > start else None
+            negated = any(_negated(scan, k) for k in range(at, last + 1))
+            checks = set() if negated else Walk._checks(_command_words(scan.commands[last]))
+            passed = checks if joined is None else (passed | checks if joined == "&&" else set())
+            at = last + 1
+        if first > start and _join(scan, first) != "&&":
+            passed = set()  # this command is the right side of `||`: it runs when what is before it failed
+        return frozenset(passed)
 
-    def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
-        self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd))
+    @staticmethod
+    def _checks(earlier):
+        """What one command checks when it exits 0: CI_GATE for a real `ci-main-status --merge-gate <repo>`, PR_CHECK + N for a real `pr-body-check <repo> N`,
+        BODY_FILE + F for each `pr-body-check --body-file F` (which is not a merge check), and the title, pair and comment-file entries."""
+        found = set()
+        if not earlier:
+            return found
+        name, args = _base(earlier[0]), earlier[1:]
+        if name == "public-text-check":
+            read = normalise([("public-text-check", "")], args)
+            if not read.unknown and not read.has("visibility"):  # --visibility reads no text, so it checks nothing
+                for spec in read.values("file"):
+                    surface, _, path = spec.partition("=")
+                    if surface == "comment" and path:
+                        found.add(PUBLIC_FILE + path + "\0" + (read.value("repo") or "").lower())
+        if name == "ci-main-status" and _is_merge_gate(args):
+            found.add(CI_GATE)
+        elif name == "pr-body-check":
+            number = _is_pr_check(args)
+            if number:
+                found.add(PR_CHECK + number)
+            read = normalise([("pr-body-check", "")], args)
+            body_file, title = read.value("body-file"), read.value("title")
+            if body_file is not None:
+                found.add(BODY_FILE + body_file)
+            if title is not None:
+                found.add(BODY_TITLE + title)
+                if body_file is not None:
+                    found.add(BODY_PAIR + body_file + "\0" + title)  # one check saw both, not a file from one check and a title from another
+        return found
+
+    def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None, seen=frozenset()):
+        self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd, seen))
         name, rest = _base(words[0]), words[1:]
         if "kgate" in [_base(w) for w in rest]:
             rest = rest[:[_base(w) for w in rest].index("kgate")]  # what follows runs on the cluster, not here
@@ -834,16 +876,28 @@ def merge_rule(walk, ctx):
         if repo is None:
             repo = (ctx.origin_of or origin_of)(cmd.cwd)
         if repo and HOMELAB_REPO.search(repo):
-            return MERGE_HOMELAB  # before the gates: the chained form skips the homelab RED-line check, so it is no way through
+            return _merge_refusal(MERGE_HOMELAB, "homelab merge goes through its merge script")  # before the gates: the chained form skips the homelab RED-line check, so it is no way through
         checked = {e[len(PR_CHECK):] for e in cmd.gated if e.startswith(PR_CHECK)}
         if CI_GATE not in cmd.gated or not checked:
-            return MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx))
+            return _merge_refusal(MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx)),
+                                  MERGE_UNGUARDED if (CI_GATE in cmd.seen and CI_GATE not in cmd.gated) or (not checked and any(e.startswith(PR_CHECK) for e in cmd.seen)) else MERGE_MISSING)
         merged = _pr_number(gh)  # None when it names a branch or no PR: the hook cannot see which
         if merged and str(int(merged)) not in checked:
-            return MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx))
+            return _merge_refusal(MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx)), "the check names another pull request")
         if repo and COORDINATOR.search(repo):
-            return MERGE_COORDINATOR.replace(MERGE_PR, _merge_pr(ctx))
+            return _merge_refusal(MERGE_COORDINATOR.replace(MERGE_PR, _merge_pr(ctx)), "coordinator merge goes through its merge script")
     return None
+
+
+MERGE_UNGUARDED = "a check is written before the merge but the merge does not run on its success"
+MERGE_MISSING = "a check is missing, or is not in its real form"
+
+
+def _merge_refusal(message, reason):
+    """A merge refusal with the reason the guard log writes beside the rule name."""
+    refusal = Matched(message, "gh pr merge")
+    refusal.log = {"reason": reason, "command": "gh pr merge"}
+    return refusal
 
 
 def _pr_number(gh):
@@ -1041,6 +1095,7 @@ def _title_refusal(verb, title, message=None):
 PUBLIC_COMMENT = (
     "`gh %s %s` with text posts it publicly where the repository is public or its visibility cannot be read, and nothing has checked this text for private details (home paths, host and user names, ids, "
     "the owner's name). Write it to a file made by mktemp, check the file, and post from it: `public-text-check --repo %s --file comment=F && gh %s %s ... --body-file F`. "
+    + CHECK_COUNTS +
     "The check names the class and the line of each hit and never prints the text; a false hit passes with PUBLIC_TEXT_SKIP=\"reason\" in front of it, and each use is logged and counted.")
 COMMENT_VERBS = (("pr", "comment"), ("issue", "comment"), ("pr", "review"))
 
@@ -1084,7 +1139,7 @@ def public_comment_rule(walk, ctx):
         if body_file not in (None, "-") and inline is None and PUBLIC_FILE + body_file + "\0" + (repo or "").lower() in cmd.gated:
             continue
         message = Matched(PUBLIC_COMMENT % (gh.group, gh.verb, repo or "OWNER/REPO", gh.group, gh.verb), "gh " + command)
-        message.log = {"reason": "comment text not checked for private details", "command": "gh " + command}
+        message.log = {"reason": "the comment check is written before the comment but the comment does not run on its success" if body_file is not None and (PUBLIC_FILE + body_file + "\0" + (repo or "").lower()) in cmd.seen else "the comment check is missing, or is not in its real form", "command": "gh " + command}
         return message
     return None
 

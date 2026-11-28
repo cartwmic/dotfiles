@@ -240,14 +240,6 @@ class Merge(unittest.TestCase):
         self.assertIsNotNone(message)
         self.assertIn("merge-pr.sh", message)
 
-    def test_the_playbook_advice_opens_the_pr_with_the_cli_alone_and_merges_through_the_merge_script(self):
-        """The playbook CLI no longer merges: `--pr --merge` stops with exit 1. The refusal says to open the PR with `--pr` and merge through the merge script."""
-        message = check("gh pr merge 12 --squash")
-        self.assertIn("playbook edits: open the PR with the playbook CLI's `--pr` alone", message)
-        self.assertIn("then merge it with `" + bash_rules.MERGE_PR + " PR`", message)
-        self.assertNotIn("--pr --merge", message)
-        self.assertNotIn("--red-main-fix", message)
-
     def test_a_body_file_check_does_not_satisfy_the_merge_rule(self):
         # `pr-body-check --body-file F` is the PR-body create/edit check; it never reads the PR's head runs.
         for text in ["ci-main-status --merge-gate dotfiles && pr-body-check --body-file /tmp/b && gh pr merge 5 -R cartwmic/dotfiles",
@@ -284,6 +276,17 @@ class Merge(unittest.TestCase):
                 message = check(text)
                 self.assertIn("checked PR 7, but `gh pr merge` merges PR 5", message)
                 self.assertIn("pr-body-check <repo> <pr>", message)
+
+    def test_the_refusal_sends_a_playbook_edit_to_a_branch_then_merge_pr_and_never_to_merge(self):
+        # The kit's `--merge` runs `gh pr merge` as a child process the hook never sees, so the refusal must not tell anyone to use it.
+        message = check("gh pr merge 12")
+        self.assertIn("a playbook edit is made only by the coordinator (any other session sends it to the coordinator by agent message)", message)
+        self.assertIn("on a branch in a worktree, without `--pr`, then `issue-open`, `pr-open` and `~/git/coordinator/scripts/merge-pr.sh PR`", message)
+        self.assertIn("never add `--merge` to the playbook CLI", message)
+        self.assertIn("goes out at once in its own PR", message)
+        self.assertIn("waits on branch `playbook/batch` for the coordinator's daily digest", message)
+        self.assertNotIn("--pr --merge", message)
+        self.assertNotIn("--red-main-fix", message)
 
     def test_the_refusal_names_a_command_that_satisfies_both_gates(self):
         # The command the refusal prints, with <repo>/<pr> filled in, must itself pass the hook.
@@ -2104,6 +2107,111 @@ class LiveGitWorkCheckout(unittest.TestCase):
 
     def test_without_the_file_the_work_checkout_is_not_known(self):
         self.assertIsNone(self.work("git -C /Users/test/coordinator-work commit -m x", repo=None))
+
+
+class CheckMustGuard(unittest.TestCase):
+    """A check counts only when the command it guards runs on the check's success. `! check && cmd` runs cmd when the check refused, and `true || check && cmd` runs
+    it with the check skipped, so neither is a check; the plain `a && b && c` chain still is."""
+    GATE, BODY, MERGE = "ci-main-status --merge-gate o/r", "pr-body-check o/r 5", "gh pr merge 5 --squash"
+    F = "/tmp/comment.aB3xY9"
+    CHECK, POST = "public-text-check --repo cartwmic/dotfiles --file comment=" + F, "gh pr comment 5 --body-file " + F
+    ORIGINS = {"/work": "https://github.com/cartwmic/dotfiles.git"}
+
+    def merge(self, text):
+        return check(text)
+
+    def comment(self, text):
+        return check(text, origins=self.ORIGINS, visibility=lambda repo: "public")
+
+    def shapes(self, first, second, last):
+        """The shapes that must not count `first` (and, for a merge, `second`) as a check of `last`."""
+        return [
+            "! %s && %s && %s" % (first, second, last),                    # negated
+            "%s && ! %s && %s" % (second, first, last),
+            "%s && ! ! %s && %s" % (second, first, last),
+            "! %s && %s" % (first, last),
+            "%s || true && %s" % (first, last),                             # the exit status is dropped by `|| true`
+            "true || %s && %s" % (first, last),                             # the check is skipped when the left side passes
+            "%s && true || %s && %s" % (second, first, last),
+            "%s; %s" % (first, last),                                       # a new statement
+            "%s\n%s" % (first, last),
+            "(%s) && %s" % (first, last),                                   # a subshell or group
+            "( %s; true ) && %s" % (first, last),
+            "{ %s; } && %s" % (first, last),
+            "%s | cat && %s" % (first, last),                               # a pipe throws the exit status away
+            "%s |& cat && %s" % (first, last),
+            "%s | %s" % (first, last),                                      # the check runs beside the command, not before it
+            "%s & %s" % (first, last),                                      # in the background
+            "if ! %s; then %s; fi" % (first, last),                         # runs when the check refused
+            "if %s; then %s; fi" % (first, last),
+            "%s || %s" % (first, last),
+            "sh -c '! %s && %s'" % (first, last),                           # the same, in a nested shell
+            "%s && sh -c '! %s && %s'" % (second, first, last),
+        ]
+
+    def test_a_merge_after_a_check_that_does_not_guard_it_is_refused(self):
+        for text in self.shapes(self.BODY, self.GATE, self.MERGE) + self.shapes(self.GATE, self.BODY, self.MERGE):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.merge(text))
+
+    def test_the_refusal_says_what_makes_a_check_count(self):
+        sentence = "A check counts only when the command it guards runs on the check's success"
+        self.assertIn(sentence, self.merge("! %s && %s" % (self.BODY, self.MERGE)))
+        self.assertIn(sentence, self.comment("! %s && %s" % (self.CHECK, self.POST)))
+
+    def test_a_comment_after_a_check_that_does_not_guard_it_is_refused(self):
+        for text in self.shapes(self.CHECK, "true", self.POST):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.comment(text))
+
+    def test_the_plain_chain_and_the_shapes_that_guard_still_pass(self):
+        for text in ["%s && %s && %s" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && %s" % (self.BODY, self.GATE, self.MERGE),
+                     "%s &&\n %s &&\n %s" % (self.GATE, self.BODY, self.MERGE),
+                     "echo a || echo b && %s && %s && %s" % (self.GATE, self.BODY, self.MERGE),   # an earlier `||` is a different list
+                     "echo a; %s && %s && %s" % (self.GATE, self.BODY, self.MERGE),
+                     "(%s && %s && %s)" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && %s | tee /tmp/out" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && sh -c '%s'" % (self.GATE, self.BODY, self.MERGE)]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.merge(text))
+        self.assertIsNone(self.comment("%s && %s" % (self.CHECK, self.POST)))
+        self.assertIsNone(self.comment("echo a || echo b && %s && %s" % (self.CHECK, self.POST)))
+
+    def test_a_merge_at_the_end_of_a_pipeline_after_the_checks_is_guarded(self):
+        self.assertIsNone(self.merge("%s && %s && echo x | %s" % (self.GATE, self.BODY, self.MERGE)))
+        self.assertIsNotNone(self.merge("%s && echo x | %s" % (self.GATE, self.MERGE)))
+        self.assertIsNotNone(self.merge("%s | %s" % (self.BODY, self.MERGE)))
+
+    def test_the_guard_log_says_why_a_merge_or_comment_was_refused(self):
+        def log(text, **kw):
+            context = bash_rules.Context(**dict(ctx(**kw)._asdict(), platform="linux"))
+            return bash_rules.refusal(text, context)[1].log
+        unguarded, missing = bash_rules.MERGE_UNGUARDED, bash_rules.MERGE_MISSING
+        for text, reason in [
+                (self.MERGE, missing),                                                          # no check at all
+                ("%s && %s" % (self.GATE, self.MERGE), missing),                                # the body check is absent; the gate there does guard
+                ("%s && %s" % (self.BODY, self.MERGE), missing),
+                ("%s >/dev/null && %s && %s" % (self.GATE, self.BODY, self.MERGE), missing),    # a check not in its real form is not a check seen
+                ("sh -c '%s && %s' && %s" % (self.GATE, self.BODY, self.MERGE), missing),       # checks in a nested shell do not guard a merge outside it
+                ("! %s && %s && %s" % (self.BODY, self.GATE, self.MERGE), unguarded),           # negated
+                ("%s && %s || true && %s" % (self.GATE, self.BODY, self.MERGE), unguarded),
+                ("%s; %s && %s" % (self.GATE, self.BODY, self.MERGE), unguarded),
+                ("%s | cat && %s && %s" % (self.GATE, self.BODY, self.MERGE), unguarded)]:
+            with self.subTest(text=text):
+                self.assertEqual(log(text), {"reason": reason, "command": "gh pr merge"})
+        self.assertIn("another pull request", log("%s && %s && gh pr merge 6" % (self.GATE, self.BODY))["reason"])
+        self.assertEqual(log("%s && %s && gh pr merge 5 -R cartwmic/cartwmic-homelab-v2" % (self.GATE, self.BODY)),
+                         {"reason": "homelab merge goes through its merge script", "command": "gh pr merge"})
+        self.assertEqual(log("%s && %s && gh pr merge 5 -R cartwmic/coordinator" % (self.GATE, self.BODY)),
+                         {"reason": "coordinator merge goes through its merge script", "command": "gh pr merge"})
+        kw = dict(origins=self.ORIGINS, visibility=lambda repo: "public")
+        self.assertEqual(log(self.POST, **kw)["reason"], "the comment check is missing, or is not in its real form")
+        self.assertEqual(log("! %s && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
+        self.assertEqual(log("%s || true && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
+
+    def test_the_check_that_is_negated_in_one_place_still_fails_the_chain_in_a_nested_shell(self):
+        self.assertIsNotNone(self.merge("%s && sh -c '! %s && %s'" % (self.GATE, self.BODY, self.MERGE)))
 
 
 if __name__ == "__main__":
