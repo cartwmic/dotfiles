@@ -7,14 +7,15 @@
 # chezmoi records a run_once script only when it succeeds, so a failed removal fails the apply and the next apply runs this again.
 set -eu
 log() { printf '[retire_research_mise_install] %s: %s\n' "$1" "$2"; }
-# One JSON line per removal, in $XDG_STATE_HOME/agent-harness/retire-research-mise-install.jsonl: a time, the data directory and the versions that
-# were installed. Nothing secret. Best effort: a failed write never fails the apply.
-record_removed() {
+# One JSON line per removal attempt, in $XDG_STATE_HOME/agent-harness/retire-research-mise-install.jsonl: a time, the outcome (exit status), the data
+# directory and the versions that were installed. Nothing secret. Best effort: a failed write never changes the script's exit status.
+record_outcome() {
   state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-harness"
   (umask 077 && mkdir -p "$state_dir") 2>/dev/null || return 0
   esc() { printf '%s' "$1" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-  printf '{"ts":"%s","event":"research-install-removed","data_dir":"%s","versions":"%s","script":"69_retire_research_mise_install"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(esc "$1")" "$(esc "$2")" >> "$state_dir/retire-research-mise-install.jsonl" 2>/dev/null || true
+  if [ "$1" -eq 0 ]; then event=research-install-removed; else event=research-install-remove-failed; fi
+  printf '{"ts":"%s","event":"%s","exit":%s,"data_dir":"%s","versions":"%s","script":"69_retire_research_mise_install"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$event" "$1" "$(esc "$data")" "$(esc "${versions# }")" >> "$state_dir/retire-research-mise-install.jsonl" 2>/dev/null || true
 }
 
 data="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}"
@@ -37,7 +38,8 @@ if [ -d "$installs" ] && [ ! -L "$installs" ]; then
   done
 fi
 
+# From here a failure is recorded too: the trap runs on the exit that `set -e` forces, with that exit's status.
+trap 'status=$?; record_outcome "$status"; [ "$status" -eq 0 ] || log ERROR "could not remove the research install from $data"' EXIT
 rm -rf "$installs" "$downloads"
 rm -f "$shim"
-record_removed "$data" "${versions# }"
 log INFO "removed the retired research install${versions:+ (versions:$versions)} from $data"

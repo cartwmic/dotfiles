@@ -150,10 +150,31 @@ class RetireResearchTest(unittest.TestCase):
             (research / version).mkdir(parents=True)
         run(self.home)
         (record,) = self.records()
-        self.assertEqual((record["event"], record["versions"], record["data_dir"]), ("research-install-removed", "0.70.2 0.71.2", str(self.data)))
+        self.assertEqual((record["event"], record["exit"], record["versions"], record["data_dir"]), ("research-install-removed", 0, "0.70.2 0.71.2", str(self.data)))
         self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         run(self.home)
         self.assertEqual(len(self.records()), 1)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can remove from a read-only directory")
+    def test_a_removal_that_fails_fails_the_script_and_leaves_a_record(self):
+        build(self.data, research_versions=("0.71.2",))
+        installs = self.data / "installs"
+        installs.chmod(0o555)   # research cannot be unlinked from a read-only parent
+        self.addCleanup(installs.chmod, 0o755)
+        r = run(self.home)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("could not remove the research install", r.stdout + r.stderr)
+        (record,) = self.records()
+        self.assertEqual((record["event"], record["versions"]), ("research-install-remove-failed", "0.71.2"))
+        self.assertNotEqual(record["exit"], 0)
+
+    def test_a_tool_whose_name_starts_with_research_is_left_alone(self):
+        build(self.data, research_versions=("0.71.2",))
+        (self.data / "installs" / "research-other" / "1.0").mkdir(parents=True)
+        (self.data / "shims" / "research-other").write_text("shim\n")
+        self.assertEqual(run(self.home).returncode, 0)
+        self.assertTrue((self.data / "installs" / "research-other" / "1.0").is_dir())
+        self.assertTrue((self.data / "shims" / "research-other").is_file())
 
 
 if __name__ == "__main__":
