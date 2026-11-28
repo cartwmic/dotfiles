@@ -1066,12 +1066,20 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([r["event"] for r in records_a], ["start", "end", "read", "skip"])
         self.assertEqual(records_a[-1]["reason"], "waited")
 
+    def wait_until_queued(self, count, timeout=20):
+        """Returns once `count` finished jobs wait in the merge window's queue (the spool)."""
+        spool = self.state / "run-and-wake/spool"
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and sum(len(f.read_text().splitlines()) for f in spool.glob("*.jsonl")) < count:
+            time.sleep(0.02)
+
     def test_a_stop_signal_during_the_window_sends_at_once(self):
         result = self.launch("--", "sleep", "1", env=self.t3_env(RUN_AND_WAKE_COALESCE="60"))
         job = self.job_id(result)
         group = os.getpgid(int(result.stdout.split(", pid ")[1].split(",")[0]))  # the watcher's group, still there after the job is gone
         self.final_records(job, "end")
-        time.sleep(0.3)
+        self.wait_until_queued(1)  # the watcher is in its window now: it asked the thread's state first, which can take a while on a slow host
+        time.sleep(0.2)  # and has put its signal handler in place
         self.assertEqual(self.t3_sends(), [], "held for the window")
         os.killpg(group, signal.SIGTERM)  # the host is going down: do not sit out the window
         records = self.replay(job, timeout=5)
@@ -1471,7 +1479,9 @@ class RunAndWake(unittest.TestCase):
         self.thread_in_a_turn()
         job = self.job_id(self.launch("--", "true", env=self.busy()))
         self.final_records(job, "end")
-        time.sleep(0.8)
+        end = time.monotonic() + 20
+        while len(self.t3_shows()) <= 2 and time.monotonic() < end:
+            time.sleep(0.05)
         self.assertEqual(self.t3_sends(), [], "nothing is sent while the turn runs")
         self.assertGreater(len(self.t3_shows()), 2, "the watcher keeps asking")
         self.assertEqual(self.t3_shows()[0].split()[:3], ['["thread",', '"show",', '"--json",'], "it asks for the JSON")
@@ -1516,10 +1526,7 @@ class RunAndWake(unittest.TestCase):
         time.sleep(0.5)
         self.assertEqual(self.t3_sends(), [], "nothing is sent while the turn runs")
         self.leave_the_turn()
-        spool = self.state / "run-and-wake/spool"
-        end = time.monotonic() + 10
-        while time.monotonic() < end and sum(len(f.read_text().splitlines()) for f in spool.glob("*.jsonl")) < 3:
-            time.sleep(0.02)  # all three are queued in the window now
+        self.wait_until_queued(3)  # all three are in the window now
         self.read_output_after_the_end(read)  # read inside the window, after the turn
         dropped, sent_first, sent_second = self.replay(read)[-1], self.replay(first)[-1], self.replay(second)[-1]
         self.assertEqual([dropped["event"], dropped["reason"]], ["skip", "seen"])
