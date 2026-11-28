@@ -62,8 +62,10 @@ class SourceTreeTest(unittest.TestCase):
                 self.assertIn("127.0.0.1:1", r.stderr)
 
     def test_ci_linux_puts_the_offline_chezmoi_first_on_path_and_the_wrapper_runs(self):
-        self.assertIn('PATH="$(pwd)/scripts/ci-offline:$PATH"', (source_tree.REPO / "scripts/ci-linux.sh").read_text())
-        self.assertIn("CI_OFFLINE_REAL_CHEZMOI", (source_tree.REPO / "scripts/ci-linux.sh").read_text())
+        text = (source_tree.REPO / "scripts/ci-linux.sh").read_text()
+        path_at = text.index('PATH="$(pwd)/scripts/ci-offline:$PATH"')
+        self.assertIn("CI_OFFLINE_REAL_CHEZMOI", text)
+        self.assertLess(path_at, text.index("python3 scripts/ci-par.py"), "the guard must be on PATH before the first suite starts")
         self.assertTrue(os.access(OFFLINE / "chezmoi", os.X_OK))
 
     def test_the_offline_chezmoi_linked_into_a_folder_of_its_own_still_finds_the_real_one_and_still_refuses(self):
