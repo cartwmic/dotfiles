@@ -31,6 +31,24 @@ from test_heavy_gate import FAKES as GATE_FAKES, QUIET as GATE_QUIET  # noqa: E4
 FAKE_T3 = r'''#!/usr/bin/env python3
 import json, os, sys
 fake = os.environ["FAKE"]
+if sys.argv[1:3] == ["thread", "show"]:
+    # `thread show --json` is what the watcher asks before it wakes a thread: is it in a turn? Recorded apart from the sends. Answers, by file:
+    # t3_show_fail (exit 1), t3_show_raw (printed as it is), t3_show_busy ("all", or how many more answers say a run is active), else idle.
+    with open(os.path.join(fake, "t3_shows"), "a") as f:
+        f.write(json.dumps(sys.argv[1:]) + "\n")
+    if os.path.exists(os.path.join(fake, "t3_show_fail")):
+        print("Could not reach the T3 Code server at http://127.0.0.1:3773. fetch failed", file=sys.stderr)
+        sys.exit(1)
+    if os.path.exists(os.path.join(fake, "t3_show_raw")):
+        sys.stdout.write(open(os.path.join(fake, "t3_show_raw")).read())
+        sys.exit(0)
+    busy = os.path.join(fake, "t3_show_busy")
+    left = open(busy).read().strip() if os.path.exists(busy) else "0"
+    if left not in ("0", "all"):
+        open(busy, "w").write(str(int(left) - 1))
+    run = "run:thread:t:ordinal:1" if left != "0" else None
+    print(json.dumps({"thread": {"threadId": sys.argv[-1], "status": "running" if run else "completed", "activeRunId": run, "latestRunId": "run:thread:t:ordinal:1"}, "messages": []}))
+    sys.exit(0)
 with open(os.path.join(fake, "t3_sends"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}) + "\n")
 # The two answers the real CLI gives (probed 2026-11-15, t3 0.1.10-nightly.20261113.4643), both exit 1:
@@ -132,6 +150,17 @@ class RunAndWake(unittest.TestCase):
 
     def texts(self):
         return [send["stdin"] for send in self.t3_sends()]
+
+    def thread_in_a_turn(self, answer="all"):
+        """The scripted thread is in a turn for `answer` more asks ("all": until leave_the_turn)."""
+        (self.fake / "t3_show_busy").write_text(str(answer))
+
+    def leave_the_turn(self):
+        (self.fake / "t3_show_busy").unlink()
+
+    def t3_shows(self):
+        path = self.fake / "t3_shows"
+        return path.read_text().splitlines() if path.exists() else []
 
     # --- the script ---
     def launch(self, *cmd, env=None):
@@ -1401,6 +1430,152 @@ class RunAndWake(unittest.TestCase):
             self.assertIsNone(mod.proc_start(31338))
         self.assertIsNone(mod.proc_start(2**22 + 5), "no such process on Linux")
         self.assertIsNone(mod.proc_start(0 or 2**22 + 6))
+
+    # --- a wake is sent when the thread can act on it ---
+    def busy(self, **extra):
+        """The environment of a thread whose turn the test controls; the watcher asks again every 0.2 s."""
+        return self.t3_env(RUN_AND_WAKE_BUSY_POLL="0.2", **extra)
+
+    def read_output_after_the_end(self, job):
+        """What an agent does with a finished job: read its output file. The access time of a file read now is later than the job's end."""
+        self.final_records(job, "end")
+        time.sleep(0.05)  # the kernel stamps files with a clock that can trail by a few milliseconds
+        (self.state / f"run-and-wake/jobs/{job}.log").read_text()
+
+    def requires_atime(self):
+        """The file system updates access times on a read (relatime does, noatime does not): without that no read can be seen and every wake goes out."""
+        probe = self.root / "atime-probe"
+        probe.write_text("x")
+        os.utime(probe, (0, 0))
+        probe.read_text()
+        if probe.stat().st_atime == 0:
+            self.skipTest("this file system keeps no access times, so a read cannot be seen")
+
+    def test_busy_thread_wake_is_dropped_when_the_output_was_read(self):
+        # The real case (agent-kit 259): a job that ended in under a second while the child was in a long turn, read by the child a moment later.
+        # The old script sent the wake at once; T3 queued it behind the turn and ran it as a new turn that replaced the final report.
+        self.requires_atime()
+        self.thread_in_a_turn()
+        job = self.job_id(self.launch("--", "sh", "-c", "exit 64", env=self.busy()))
+        self.read_output_after_the_end(job)
+        time.sleep(0.5)
+        self.assertEqual(self.t3_sends(), [], "nothing is queued behind the turn")
+        self.leave_the_turn()
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "skip")
+        self.assertEqual(records[-1]["reason"], "seen")
+        self.assertGreater(records[-1]["held_s"], 0, "the wake was held for the turn")
+        self.assertEqual(self.t3_sends(), [], "and never sent")
+
+    def test_busy_thread_wake_waits_for_the_turn_to_end_and_is_sent_if_unread(self):
+        self.thread_in_a_turn()
+        job = self.job_id(self.launch("--", "true", env=self.busy()))
+        self.final_records(job, "end")
+        time.sleep(0.8)
+        self.assertEqual(self.t3_sends(), [], "nothing is sent while the turn runs")
+        self.assertGreater(len(self.t3_shows()), 2, "the watcher keeps asking")
+        self.assertEqual(self.t3_shows()[0].split()[:3], ['["thread",', '"show",', '"--json",'], "it asks for the JSON")
+        self.leave_the_turn()
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "wake")
+        self.assertEqual([records[-1]["result"], len(self.t3_sends())], ["sent", 1], "one send, after the turn")
+        self.assertGreater(records[-1]["held_s"], 0)
+
+    def test_idle_thread_wake_is_dropped_when_the_output_was_read_inside_the_window(self):
+        self.requires_atime()
+        job = self.job_id(self.launch("--", "true", env=self.busy(RUN_AND_WAKE_COALESCE="1.5")))
+        self.read_output_after_the_end(job)
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "skip")
+        self.assertEqual(records[-1]["reason"], "seen")
+        self.assertNotIn("held_s", records[-1], "the thread was not in a turn")
+        self.assertEqual(self.t3_sends(), [])
+
+    def test_a_burst_sends_the_job_that_was_not_read_and_drops_the_one_that_was(self):
+        self.requires_atime()
+        env = self.busy(RUN_AND_WAKE_COALESCE="1.5")
+        read = self.job_id(self.launch("--", "true", env=env))
+        unread = self.job_id(self.launch("--", "sh", "-c", "exit 4", env=env))
+        self.read_output_after_the_end(read)
+        self.assertEqual(self.replay(read)[-1]["reason"], "seen")
+        self.assertEqual(self.replay(unread)[-1]["result"], "sent")
+        (text,) = self.texts()
+        self.assertIn(f"k:{unread}]", text)
+        self.assertNotIn(f"k:{read}]", text)
+
+    def test_stopped_job_on_a_busy_thread_is_dropped_when_read(self):
+        # The third real case: the agent stopped its own job (SIGTERM), then read the output; the wake ran 40 minutes later as a stale turn.
+        self.requires_atime()
+        self.thread_in_a_turn()
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd, env=self.busy(RUN_AND_WAKE_COALESCE="60"))
+        job = self.job_id(result)
+        os.killpg(os.getpgid(int(result.stdout.split(", pid ")[1].split(",")[0])), signal.SIGTERM)
+        self.read_output_after_the_end(job)
+        self.assertEqual(self.t3_sends(), [])
+        self.leave_the_turn()
+        records = self.replay(job)
+        self.assertEqual([r["event"] for r in records], ["start", "end", "skip"])
+        self.assertEqual(records[1]["stopped"], ["SIGTERM"])
+        self.assertEqual(records[-1]["reason"], "seen")
+
+    def test_a_wait_during_the_hold_still_drops_the_wake_as_waited(self):
+        self.thread_in_a_turn()
+        cmd, release = self.held_job()
+        job = self.job_id(self.launch("--", *cmd, env=self.busy()))
+        release.write_text("")
+        self.final_records(job, "end")
+        out = subprocess.run([sys.executable, str(SCRIPT), "--wait", job], env={**self.env, **self.t3_env()}, cwd=self.root, text=True, capture_output=True, timeout=10)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.leave_the_turn()
+        self.assertEqual(self.replay(job)[-1]["reason"], "waited")
+        self.assertEqual(self.t3_sends(), [])
+
+    def test_unknown_thread_state_sends_the_wake(self):
+        for name, setup in (("show fails", lambda: (self.fake / "t3_show_fail").write_text("")),
+                            ("prints nothing", lambda: (self.fake / "t3_show_raw").write_text("")),
+                            ("prints text", lambda: (self.fake / "t3_show_raw").write_text("not json")),
+                            ("prints another shape", lambda: (self.fake / "t3_show_raw").write_text('{"thread": {}}')),
+                            ("no active run", lambda: (self.fake / "t3_show_raw").write_text('{"thread": {"activeRunId": null}}'))):
+            with self.subTest(name):
+                for stale in ("t3_show_fail", "t3_show_raw"):
+                    (self.fake / stale).unlink(missing_ok=True)
+                setup()
+                before = len(self.t3_sends())
+                job = self.job_id(self.launch("--", "true", env=self.busy()))
+                records = self.replay(job)
+                self.assertEqual([r["event"] for r in records], ["start", "end", "wake"])
+                self.assertNotIn("held_s", records[-1])
+                self.assertEqual(len(self.t3_sends()), before + 1)
+
+    def test_a_read_before_the_job_ended_does_not_drop_the_wake(self):
+        self.requires_atime()
+        script = f"echo started; while [ ! -f {self.root}/release ]; do sleep 0.05; done; echo done"
+        job = self.job_id(self.launch("--", "sh", "-c", script, env=self.busy()))
+        output = self.state / f"run-and-wake/jobs/{job}.log"
+        end = time.monotonic() + 10
+        while "started" not in (output.read_text() if output.exists() else "") and time.monotonic() < end:
+            time.sleep(0.05)
+        (self.root / "release").write_text("")  # the agent looked at the running job; the job then ended and nobody read it again
+        records = self.replay(job)
+        self.assertEqual([records[-1]["event"], records[-1]["result"]], ["wake", "sent"])
+        self.assertEqual(len(self.t3_sends()), 1)
+
+    def test_the_busy_poll_setting(self):
+        spec = importlib.machinery.SourceFileLoader("run_and_wake_mod", str(SCRIPT))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("run_and_wake_mod", spec))
+        spec.exec_module(mod)
+        for setting, want in ((None, 30.0), ("", 30.0), ("0.2", 0.2), ("abc", 30.0), ("0", 30.0), ("-1", 30.0)):
+            with self.subTest(setting=setting):
+                old = os.environ.pop("RUN_AND_WAKE_BUSY_POLL", None)
+                if setting is not None:
+                    os.environ["RUN_AND_WAKE_BUSY_POLL"] = setting
+                try:
+                    self.assertEqual(mod.busy_poll(), want)
+                finally:
+                    os.environ.pop("RUN_AND_WAKE_BUSY_POLL", None)
+                    if old is not None:
+                        os.environ["RUN_AND_WAKE_BUSY_POLL"] = old
 
     def test_usage(self):
         for args in ([], ["--"], ["--log", "x", "--", "true"]):
