@@ -131,6 +131,21 @@ class CiParTest(unittest.TestCase):
         rc, out, _ = self.run_marking("--shards", "2", "five", "--hold", ids[2])
         self.assertIn("five: 5 ids, 1 held, the other 4 dealt round-robin to 2 parts: 2, 2\n", out)
 
+    def test_a_hold_file_holds_every_id_in_it_and_a_stale_one_fails_closed(self):
+        ids = self.marking_dir()
+        held = self.root / "held.txt"
+        held.write_text(f"{ids[0]}\n\n{ids[4]}\n")
+        rc, out, ran = self.run_marking("--shards", "2", "five", "--hold-file", str(held))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(ran, sorted(ids[1:4]))
+        self.assertIn("five: 5 ids, 2 held, the other 3 dealt round-robin to 2 parts: 2, 1\n", out)
+        self.marks.unlink()
+        held.write_text(f"{ids[0]}\ntest_one.A.test_gone\n")
+        rc, out, ran = self.run_marking("--shards", "2", "five", "--hold-file", str(held))
+        self.assertEqual((rc, ran), (1, []), out)
+        rc, out, _ = self.run_marking("--shards", "2", "five", "--hold-file", str(self.root / "no-such-file"))
+        self.assertEqual(rc, 2, out)
+
     def test_a_failing_test_in_a_shard_exits_one_and_is_named(self):
         rc, out = self.run_runner("--shards", "2", "many")
         self.assertEqual(rc, 1, out)

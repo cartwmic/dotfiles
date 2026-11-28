@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the Linux unittest suites in parallel (CI).
 
-usage: ci-par.py [--per-test DIR]... [--shards N DIR [--hold ID]...] [SUITE[:PATTERN]]...
+usage: ci-par.py [--per-test DIR]... [--shards N DIR [--hold ID]... [--hold-file FILE]] [SUITE[:PATTERN]]...
 
 --per-test DIR   every test id that `unittest discover -s DIR` finds runs in its own process,
                  16 at a time, with DIR as the working directory.
@@ -11,6 +11,7 @@ usage: ci-par.py [--per-test DIR]... [--shards N DIR [--hold ID]...] [SUITE[:PAT
                  `tests/kgate: 612 ids, 1 held, the other 611 dealt round-robin to 4 parts: 153, 153, 153, 152`.
 --hold ID        with --shards: leave this test id out of the shards (a timing-bound test that fails under load). The caller runs
                  it, and an id that DIR does not hold is an error, so a stale name cannot drop a test unseen.
+--hold-file FILE one test id a line, each held as --hold ID holds it (blank lines are skipped).
 SUITE[:PATTERN]  one `python3 -m unittest discover -s SUITE [-p PATTERN] -v` process, one per CPU at a time
                  run from the current directory (the repo root in CI).
 
@@ -100,10 +101,16 @@ def main():
     ap.add_argument("--per-test", action="append", default=[], metavar="DIR")
     ap.add_argument("--shards", nargs=2, metavar=("N", "DIR"))
     ap.add_argument("--hold", action="append", default=[], metavar="ID")
+    ap.add_argument("--hold-file", metavar="FILE")
     ap.add_argument("suites", nargs="*", metavar="SUITE[:PATTERN]")
     args = ap.parse_args()
+    if args.hold_file:
+        try:
+            args.hold += [line.strip() for line in open(args.hold_file) if line.strip()]
+        except OSError as e:
+            ap.error(f"--hold-file: {e}")
     if args.hold and not args.shards:
-        ap.error("--hold needs --shards")
+        ap.error("--hold and --hold-file need --shards")
     if args.shards and not (args.shards[0].isdigit() and int(args.shards[0]) > 0):
         ap.error("--shards N must be a positive integer")
 
